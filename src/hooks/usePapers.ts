@@ -279,6 +279,64 @@ export function usePapers(userId: string | undefined) {
     }
   };
 
+  const addPaperManually = async (paperData: {
+    title: string;
+    authors: string;
+    year: string;
+    journal: string;
+    pmid: string;
+    doi: string;
+    abstract: string;
+    keywords: string;
+    driveUrl: string;
+  }) => {
+    if (!userId) return;
+
+    const authorsArray = paperData.authors
+      .split(",")
+      .map((a) => a.trim())
+      .filter((a) => a.length > 0);
+
+    const keywordsArray = paperData.keywords
+      .split(",")
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
+
+    const yearNum = paperData.year ? parseInt(paperData.year) : null;
+
+    const insertData = {
+      user_id: userId,
+      title: paperData.title.trim(),
+      authors: authorsArray,
+      year: yearNum,
+      journal: paperData.journal.trim() || null,
+      pmid: paperData.pmid.trim() || null,
+      doi: paperData.doi.trim() || null,
+      abstract: paperData.abstract.trim() || null,
+      keywords: keywordsArray,
+      drive_url: paperData.driveUrl.trim() || null,
+      pubmed_url: paperData.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paperData.pmid.trim()}/` : null,
+    };
+
+    const { data: insertedPaper, error } = await supabase
+      .from("papers")
+      .insert(insertData)
+      .select()
+      .single();
+
+    if (error) {
+      toast({
+        title: "Error adding paper",
+        description: error.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setPapers((prev) => [{ ...(insertedPaper as Paper), tags: [], project: null }, ...prev]);
+    toast({ title: "Paper added manually" });
+  };
+
   const updatePaper = async (
     paperId: string,
     updates: Partial<Paper> & { tagIds?: string[] }
@@ -368,6 +426,7 @@ export function usePapers(userId: string | undefined) {
     updateTag,
     deleteTag,
     addPapers,
+    addPaperManually,
     updatePaper,
     deletePaper,
     refetch: fetchData,

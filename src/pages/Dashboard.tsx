@@ -34,6 +34,7 @@ export function Dashboard() {
     updateTag,
     deleteTag,
     addPapers,
+    addPaperManually,
     updatePaper,
     deletePaper,
   } = usePapers(user?.id);
@@ -325,6 +326,7 @@ export function Dashboard() {
         open={addPaperOpen}
         onOpenChange={setAddPaperOpen}
         onSubmit={addPapers}
+        onSubmitManual={addPaperManually}
       />
 
       <EditPaperDialog
