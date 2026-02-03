@@ -48,12 +48,12 @@ export function ResizableTableHeader({
   return (
     <TableHead
       ref={headerRef}
-      className={cn("relative select-none", className)}
+      className={cn("relative select-none border-r border-border", className)}
       style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
     >
-      <div className="truncate pr-2">{label}</div>
+      <div className="truncate pr-3">{label}</div>
       <div
-        className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-primary/50 active:bg-primary"
+        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-border hover:bg-primary/70 active:bg-primary transition-colors"
         onMouseDown={handleMouseDown}
       />
     </TableHead>
