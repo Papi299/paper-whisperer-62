@@ -41,11 +41,20 @@ export function SynonymPoolSection({
   const [canonicalTerm, setCanonicalTerm] = useState("");
   const [synonymsText, setSynonymsText] = useState("");
 
+  // Parse synonyms from square bracket format: [term1][term2][term3]
+  const parseSynonyms = (text: string): string[] => {
+    const matches = text.match(/\[([^\]]+)\]/g);
+    if (!matches) return [];
+    return matches.map((m) => m.slice(1, -1).trim()).filter((s) => s.length > 0);
+  };
+
+  // Format synonyms to square bracket format
+  const formatSynonyms = (synonyms: string[]): string => {
+    return synonyms.map((s) => `[${s}]`).join("");
+  };
+
   const handleSubmit = async () => {
-    const synonyms = synonymsText
-      .split(/[,\n]/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    const synonyms = parseSynonyms(synonymsText);
 
     if (!canonicalTerm.trim()) return;
 
@@ -64,7 +73,7 @@ export function SynonymPoolSection({
   const handleEdit = (group: Synonym) => {
     setEditingGroup(group);
     setCanonicalTerm(group.canonical_term);
-    setSynonymsText(group.synonyms.join(", "));
+    setSynonymsText(formatSynonyms(group.synonyms));
     setDialogOpen(true);
   };
 
@@ -122,11 +131,11 @@ export function SynonymPoolSection({
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="synonyms">
-                  Synonyms (comma or newline separated)
+                  Synonyms (wrap each in square brackets)
                 </Label>
                 <Textarea
                   id="synonyms"
-                  placeholder="e.g., Low-Density Lipoprotein, LDL-Cholesterol, LDL-C"
+                  placeholder="e.g., [Low-Density Lipoprotein][LDL-Cholesterol][LDL-C][Diabetes Mellitus, Type 2]"
                   value={synonymsText}
                   onChange={(e) => setSynonymsText(e.target.value)}
                   rows={4}
