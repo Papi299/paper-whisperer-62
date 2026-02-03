@@ -42,8 +42,8 @@ export function PaperList({
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
   };
 
-  const isVisible = (columnId: ColumnId) => visibleColumns.includes(columnId);
-  const getWidth = (columnId: ColumnId) => columnWidths[columnId] || 150;
+  const isVisible = (columnId: ColumnId) => visibleColumns?.includes(columnId) ?? true;
+  const getWidth = (columnId: ColumnId) => columnWidths?.[columnId] || 150;
 
   if (papers.length === 0) {
     return (
