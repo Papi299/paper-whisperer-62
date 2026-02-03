@@ -236,21 +236,37 @@ export function PaperList({
                     style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
                   >
                     {(() => {
-                      // Check if any excluded study type is contained in the paper's study type
-                      const studyTypeLower = paper.study_type?.toLowerCase() ?? "";
-                      const isExcluded = studyTypeLower && Array.from(excludedStudyTypes ?? []).some(
-                        (excluded) => studyTypeLower.includes(excluded)
-                      );
+                      // Token-based filtering: only remove excluded study types, keep the rest
+                      if (!paper.study_type) return <span>-</span>;
                       
-                      if (paper.study_type && !isExcluded) {
+                      // Parse into tokens (split on comma/semicolon, trim, remove empty)
+                      const tokens = paper.study_type
+                        .split(/[,;]+/)
+                        .map(t => t.trim())
+                        .filter(Boolean);
+                      
+                      // Filter out excluded tokens (case-insensitive exact match, with fallback includes)
+                      const excludedSet = excludedStudyTypes ?? new Set<string>();
+                      const filteredTokens = tokens.filter(token => {
+                        const lowerToken = token.toLowerCase();
+                        // Exclude if exact match OR if token contains any excluded term
+                        return !Array.from(excludedSet).some(
+                          excluded => lowerToken === excluded || lowerToken.includes(excluded)
+                        );
+                      });
+                      
+                      // Join remaining tokens for display
+                      const displayStudyType = filteredTokens.join(", ");
+                      
+                      if (displayStudyType) {
                         return (
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <div className="truncate cursor-default">{paper.study_type}</div>
+                                <div className="truncate cursor-default">{displayStudyType}</div>
                               </TooltipTrigger>
                               <TooltipContent side="bottom" className="bg-popover">
-                                {paper.study_type}
+                                {displayStudyType}
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
