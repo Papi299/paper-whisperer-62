@@ -1,0 +1,149 @@
+import { PaperWithTags, Tag } from "@/types/database";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ExternalLink, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+
+interface PaperListProps {
+  papers: PaperWithTags[];
+  onEdit: (paper: PaperWithTags) => void;
+  onDelete: (paperId: string) => void;
+}
+
+export function PaperList({ papers, onEdit, onDelete }: PaperListProps) {
+  const generateGoogleScholarUrl = (title: string) => {
+    return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
+  };
+
+  if (papers.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <p className="text-muted-foreground mb-2">No papers yet</p>
+        <p className="text-sm text-muted-foreground">
+          Add papers using PMIDs, DOIs, or titles
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[40%]">Title</TableHead>
+            <TableHead>Authors</TableHead>
+            <TableHead>Year</TableHead>
+            <TableHead>Journal</TableHead>
+            <TableHead>Tags</TableHead>
+            <TableHead>Links</TableHead>
+            <TableHead className="w-[50px]"></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {papers.map((paper) => (
+            <TableRow key={paper.id}>
+              <TableCell className="font-medium">
+                <div className="space-y-1">
+                  <p className="line-clamp-2">{paper.title}</p>
+                  {paper.project && (
+                    <Badge variant="outline" className="text-xs">
+                      <div
+                        className="w-2 h-2 rounded-full mr-1"
+                        style={{ backgroundColor: paper.project.color }}
+                      />
+                      {paper.project.name}
+                    </Badge>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell className="text-sm text-muted-foreground">
+                {paper.authors.slice(0, 3).join(", ")}
+                {paper.authors.length > 3 && " et al."}
+              </TableCell>
+              <TableCell>{paper.year || "-"}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">
+                {paper.journal || "-"}
+              </TableCell>
+              <TableCell>
+                <div className="flex flex-wrap gap-1">
+                  {paper.tags.slice(0, 3).map((tag) => (
+                    <Badge
+                      key={tag.id}
+                      variant="secondary"
+                      className="text-xs"
+                      style={{ borderColor: tag.color }}
+                    >
+                      {tag.name}
+                    </Badge>
+                  ))}
+                  {paper.tags.length > 3 && (
+                    <Badge variant="secondary" className="text-xs">
+                      +{paper.tags.length - 3}
+                    </Badge>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell>
+                <div className="flex gap-1">
+                  {paper.pubmed_url && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                      <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                    <a
+                      href={generateGoogleScholarUrl(paper.title)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Search on Google Scholar"
+                    >
+                      <span className="text-xs font-bold">GS</span>
+                    </a>
+                  </Button>
+                </div>
+              </TableCell>
+              <TableCell>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => onEdit(paper)}>
+                      <Pencil className="mr-2 h-4 w-4" />
+                      Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="text-destructive"
+                      onClick={() => onDelete(paper.id)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
