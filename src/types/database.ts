@@ -41,6 +41,7 @@ export interface Paper {
   keywords: string[];
   pubmed_url: string | null;
   journal_url: string | null;
+  drive_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -68,4 +69,5 @@ export interface PaperMetadata {
   keywords: string[];
   pubmed_url: string | null;
   journal_url: string | null;
+  drive_url?: string | null;
 }

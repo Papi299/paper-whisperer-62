@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PaperWithTags, Project, Tag } from "@/types/database";
-import { Loader2, X } from "lucide-react";
+import { Loader2, X, Link as LinkIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 interface EditPaperDialogProps {
@@ -47,6 +47,7 @@ export function EditPaperDialog({
   const [studyType, setStudyType] = useState("");
   const [statisticalMethods, setStatisticalMethods] = useState("");
   const [keywords, setKeywords] = useState("");
+  const [driveUrl, setDriveUrl] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -63,6 +64,7 @@ export function EditPaperDialog({
       setStudyType(paper.study_type || "");
       setStatisticalMethods(paper.statistical_methods || "");
       setKeywords(paper.keywords.join(", "));
+      setDriveUrl(paper.drive_url || "");
       setProjectId(paper.project_id);
       setSelectedTagIds(paper.tags.map((t) => t.id));
     }
@@ -85,6 +87,7 @@ export function EditPaperDialog({
         study_type: studyType || null,
         statistical_methods: statisticalMethods || null,
         keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean),
+        drive_url: driveUrl || null,
         project_id: projectId,
         tagIds: selectedTagIds,
       });
@@ -210,6 +213,20 @@ export function EditPaperDialog({
               id="keywords"
               value={keywords}
               onChange={(e) => setKeywords(e.target.value)}
+              disabled={loading}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="driveUrl" className="flex items-center gap-2">
+              <LinkIcon className="h-4 w-4" />
+              Google Drive Link
+            </Label>
+            <Input
+              id="driveUrl"
+              value={driveUrl}
+              onChange={(e) => setDriveUrl(e.target.value)}
+              placeholder="https://drive.google.com/file/d/..."
               disabled={loading}
             />
           </div>

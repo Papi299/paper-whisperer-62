@@ -128,7 +128,28 @@ async function fetchFromPubMed(pmid: string): Promise<PaperMetadata | null> {
   }
 }
 
-// Fetch from Crossref API (for DOIs)
+// Search PubMed by DOI
+async function searchPubMedByDoi(doi: string): Promise<string | null> {
+  try {
+    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(
+      doi
+    )}[doi]&retmode=json`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    const pmid = data.esearchresult?.idlist?.[0];
+    return pmid || null;
+  } catch (error) {
+    console.error("PubMed DOI search error:", error);
+    return null;
+  }
+}
+
+// Fetch from Crossref API (for DOIs), then cross-reference with PubMed
 async function fetchFromCrossref(doi: string): Promise<PaperMetadata | null> {
   try {
     const cleanedDoi = cleanDoi(doi);
@@ -165,17 +186,34 @@ async function fetchFromCrossref(doi: string): Promise<PaperMetadata | null> {
       return null;
     }
 
+    // Try to find PMID via PubMed search by DOI
+    console.log(`Searching PubMed for DOI: ${cleanedDoi}`);
+    const pmid = await searchPubMedByDoi(cleanedDoi);
+    
+    let keywords: string[] = [];
+    let pubmedUrl: string | null = null;
+
+    // If we found a PMID, fetch additional data from PubMed
+    if (pmid) {
+      console.log(`Found PMID ${pmid} for DOI ${cleanedDoi}, fetching PubMed data`);
+      const pubmedData = await fetchFromPubMed(pmid);
+      if (pubmedData) {
+        keywords = pubmedData.keywords || [];
+        pubmedUrl = pubmedData.pubmed_url || null;
+      }
+    }
+
     return {
       identifier: doi,
       title,
       authors,
       year,
       journal,
-      pmid: null,
+      pmid: pmid || null,
       doi: cleanedDoi,
       abstract,
-      keywords: [],
-      pubmed_url: null,
+      keywords,
+      pubmed_url: pubmedUrl,
       journal_url: `https://doi.org/${cleanedDoi}`,
     };
   } catch (error) {

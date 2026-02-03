@@ -203,7 +203,7 @@ export function usePapers(userId: string | undefined) {
     );
   };
 
-  const addPapers = async (identifiers: string[]) => {
+  const addPapers = async (identifiers: string[], driveUrl?: string) => {
     if (!userId) return;
 
     try {
@@ -238,6 +238,7 @@ export function usePapers(userId: string | undefined) {
           keywords: result.keywords || [],
           pubmed_url: result.pubmed_url,
           journal_url: result.journal_url,
+          drive_url: driveUrl || null,
         };
 
         const { data: insertedPaper, error: insertError } = await supabase
