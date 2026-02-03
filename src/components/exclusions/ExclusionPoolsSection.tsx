@@ -9,13 +9,6 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -40,17 +33,6 @@ interface ExclusionPoolsSectionProps {
   onClearExcludedStudyTypes: () => Promise<void>;
 }
 
-const STUDY_TYPES = [
-  "RCT",
-  "Meta-analysis",
-  "Systematic Review",
-  "Cohort Study",
-  "Case-Control",
-  "Cross-sectional",
-  "Case Report",
-  "Review",
-];
-
 export function ExclusionPoolsSection({
   excludedKeywords,
   excludedStudyTypes,
@@ -63,7 +45,7 @@ export function ExclusionPoolsSection({
 }: ExclusionPoolsSectionProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [newKeyword, setNewKeyword] = useState("");
-  const [selectedStudyType, setSelectedStudyType] = useState("");
+  const [newStudyType, setNewStudyType] = useState("");
 
   const handleAddKeyword = async () => {
     if (newKeyword.trim()) {
@@ -75,10 +57,10 @@ export function ExclusionPoolsSection({
   };
 
   const handleAddStudyType = async () => {
-    if (selectedStudyType) {
-      const success = await onAddExcludedStudyType(selectedStudyType);
+    if (newStudyType.trim()) {
+      const success = await onAddExcludedStudyType(newStudyType.trim());
       if (success) {
-        setSelectedStudyType("");
+        setNewStudyType("");
       }
     }
   };
@@ -208,29 +190,14 @@ export function ExclusionPoolsSection({
           </div>
 
           <div className="flex gap-1">
-            <Select value={selectedStudyType} onValueChange={setSelectedStudyType}>
-              <SelectTrigger className="h-8 text-sm flex-1">
-                <SelectValue placeholder="Select study type..." />
-              </SelectTrigger>
-              <SelectContent className="bg-popover">
-                {STUDY_TYPES.filter(
-                  (type) =>
-                    !excludedStudyTypes.some(
-                      (est) => est.study_type.toLowerCase() === type.toLowerCase()
-                    )
-                ).map((type) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              size="sm"
-              className="h-8 px-2"
-              onClick={handleAddStudyType}
-              disabled={!selectedStudyType}
-            >
+            <Input
+              placeholder="Type study type to exclude..."
+              value={newStudyType}
+              onChange={(e) => setNewStudyType(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAddStudyType()}
+              className="h-8 text-sm"
+            />
+            <Button size="sm" className="h-8 px-2" onClick={handleAddStudyType}>
               <Plus className="h-4 w-4" />
             </Button>
           </div>
@@ -258,7 +225,7 @@ export function ExclusionPoolsSection({
 
         {totalExclusions > 0 && (
           <p className="text-xs text-muted-foreground italic">
-            Papers with excluded keywords or study types are hidden from the main table.
+            Excluded keywords are hidden from display. Papers with excluded study types are hidden entirely.
           </p>
         )}
       </CollapsibleContent>

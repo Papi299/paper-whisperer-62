@@ -246,17 +246,10 @@ export function useExclusionPools(userId: string | undefined) {
     }
   };
 
-  // Check if a paper should be excluded
+  // Check if a paper should be excluded (only checks study type now)
   const shouldExcludePaper = useCallback(
-    (keywords: string[], studyType: string | null): boolean => {
-      // Check keyword exclusions
-      const excludedKeywordSet = new Set(excludedKeywords.map((ek) => ek.keyword.toLowerCase()));
-      const hasExcludedKeyword = keywords.some((kw) =>
-        excludedKeywordSet.has(kw.toLowerCase())
-      );
-      if (hasExcludedKeyword) return true;
-
-      // Check study type exclusions
+    (studyType: string | null): boolean => {
+      // Check study type exclusions only
       if (studyType) {
         const isStudyTypeExcluded = excludedStudyTypes.some(
           (est) => est.study_type.toLowerCase() === studyType.toLowerCase()
@@ -266,8 +259,13 @@ export function useExclusionPools(userId: string | undefined) {
 
       return false;
     },
-    [excludedKeywords, excludedStudyTypes]
+    [excludedStudyTypes]
   );
+
+  // Get the set of excluded keywords for display filtering
+  const getExcludedKeywordSet = useCallback(() => {
+    return new Set(excludedKeywords.map((ek) => ek.keyword.toLowerCase()));
+  }, [excludedKeywords]);
 
   return {
     excludedKeywords,
@@ -280,6 +278,7 @@ export function useExclusionPools(userId: string | undefined) {
     deleteExcludedStudyType,
     clearExcludedStudyTypes,
     shouldExcludePaper,
+    getExcludedKeywordSet,
     refetch: fetchExclusions,
   };
 }

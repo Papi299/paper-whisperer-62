@@ -34,6 +34,7 @@ interface PaperListProps {
   columnWidths: { [key: string]: number };
   onColumnResize: (columnId: ColumnId, width: number) => void;
   normalizeKeyword: (keyword: string) => string;
+  excludedKeywords: Set<string>;
 }
 
 export function PaperList({
@@ -45,6 +46,7 @@ export function PaperList({
   columnWidths,
   onColumnResize,
   normalizeKeyword,
+  excludedKeywords,
 }: PaperListProps) {
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
@@ -64,13 +66,17 @@ export function PaperList({
     );
   }
 
-  // Helper function to get unique combined keywords with normalization
+  // Helper function to get unique combined keywords with normalization (excludes filtered keywords)
   const getCombinedKeywords = (paper: PaperWithTags, matchedPoolKeywords: string[]) => {
     const seenNormalized = new Set<string>();
     const result: { keyword: string; displayName: string; source: 'pool' | 'mesh' | 'substance' }[] = [];
     
+    // Helper to check if keyword should be excluded
+    const isExcluded = (kw: string) => excludedKeywords.has(kw.toLowerCase());
+    
     // Add matched pool keywords first (highest priority)
     matchedPoolKeywords.forEach(kw => {
+      if (isExcluded(kw)) return; // Skip excluded keywords
       const displayName = normalizeKeyword(kw);
       const normalizedKey = displayName.toLowerCase();
       if (!seenNormalized.has(normalizedKey)) {
@@ -79,8 +85,9 @@ export function PaperList({
       }
     });
     
-    // Add MeSH terms (skip if already present after normalization)
+    // Add MeSH terms (skip if already present after normalization or excluded)
     (paper.mesh_terms || []).forEach(kw => {
+      if (isExcluded(kw)) return; // Skip excluded keywords
       const displayName = normalizeKeyword(kw);
       const normalizedKey = displayName.toLowerCase();
       if (!seenNormalized.has(normalizedKey)) {
@@ -89,8 +96,9 @@ export function PaperList({
       }
     });
     
-    // Add Substances (skip if already present after normalization)
+    // Add Substances (skip if already present after normalization or excluded)
     (paper.substances || []).forEach(kw => {
+      if (isExcluded(kw)) return; // Skip excluded keywords
       const displayName = normalizeKeyword(kw);
       const normalizedKey = displayName.toLowerCase();
       if (!seenNormalized.has(normalizedKey)) {
@@ -225,7 +233,20 @@ export function PaperList({
                     className="text-sm"
                     style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
                   >
-                    <div className="truncate">{paper.study_type || "-"}</div>
+                    {paper.study_type ? (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="truncate cursor-default">{paper.study_type}</div>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" className="bg-popover">
+                            {paper.study_type}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : (
+                      <span>-</span>
+                    )}
                   </TableCell>
                 )}
                 {isVisible("tags") && (
