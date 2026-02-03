@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
 import { useKeywordPool } from "@/hooks/useKeywordPool";
 import { useSynonymPool } from "@/hooks/useSynonymPool";
+import { useExclusionPools } from "@/hooks/useExclusionPools";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { Header } from "@/components/layout/Header";
@@ -55,6 +56,19 @@ export function Dashboard() {
     deleteSynonymGroup,
     normalizeKeyword,
   } = useSynonymPool(user?.id);
+
+  const {
+    excludedKeywords,
+    excludedStudyTypes,
+    addExcludedKeyword,
+    deleteExcludedKeyword,
+    clearExcludedKeywords,
+    addExcludedStudyType,
+    deleteExcludedStudyType,
+    clearExcludedStudyTypes,
+    shouldExcludePaper,
+  } = useExclusionPools(user?.id);
+
   const {
     visibleColumns,
     toggleColumn,
@@ -92,6 +106,16 @@ export function Dashboard() {
   // Filter papers
   const filteredPapers = useMemo(() => {
     return papers.filter((paper) => {
+      // Exclusion filters - check first for efficiency
+      const allKeywords = [
+        ...paper.keywords,
+        ...paper.mesh_terms,
+        ...paper.substances,
+      ];
+      if (shouldExcludePaper(allKeywords, paper.study_type)) {
+        return false;
+      }
+
       // Project filter
       if (selectedProjectId && paper.project_id !== selectedProjectId) {
         return false;
@@ -145,6 +169,7 @@ export function Dashboard() {
     yearTo,
     studyType,
     selectedKeywords,
+    shouldExcludePaper,
   ]);
 
   const hasActiveFilters =
@@ -262,6 +287,14 @@ export function Dashboard() {
           onAddSynonymGroup={addSynonymGroup}
           onUpdateSynonymGroup={updateSynonymGroup}
           onDeleteSynonymGroup={deleteSynonymGroup}
+          excludedKeywords={excludedKeywords}
+          excludedStudyTypes={excludedStudyTypes}
+          onAddExcludedKeyword={addExcludedKeyword}
+          onDeleteExcludedKeyword={deleteExcludedKeyword}
+          onClearExcludedKeywords={clearExcludedKeywords}
+          onAddExcludedStudyType={addExcludedStudyType}
+          onDeleteExcludedStudyType={deleteExcludedStudyType}
+          onClearExcludedStudyTypes={clearExcludedStudyTypes}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">

@@ -14,6 +14,27 @@ export type Database = {
   }
   public: {
     Tables: {
+      keyword_exclusion_pool: {
+        Row: {
+          created_at: string
+          id: string
+          keyword: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          keyword: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          keyword?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       keyword_pool: {
         Row: {
           created_at: string
@@ -201,6 +222,27 @@ export type Database = {
           id?: string
           name?: string
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      study_type_exclusion_pool: {
+        Row: {
+          created_at: string
+          id: string
+          study_type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          study_type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          study_type?: string
           user_id?: string
         }
         Relationships: []
