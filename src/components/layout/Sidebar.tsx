@@ -6,6 +6,7 @@ import { Project, Tag } from "@/types/database";
 import { PoolKeyword } from "@/hooks/useKeywordPool";
 import { Synonym } from "@/hooks/useSynonymPool";
 import { ExcludedKeyword, ExcludedStudyType } from "@/hooks/useExclusionPools";
+import { PoolStudyType } from "@/hooks/useStudyTypePool";
 import {
   FolderOpen,
   Tag as TagIcon,
@@ -31,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { KeywordPoolSection } from "@/components/keywords/KeywordPoolSection";
 import { SynonymPoolSection } from "@/components/synonyms/SynonymPoolSection";
 import { ExclusionPoolsSection } from "@/components/exclusions/ExclusionPoolsSection";
+import { StudyTypePoolSection } from "@/components/study-types/StudyTypePoolSection";
 
 interface SidebarProps {
   projects: Project[];
@@ -66,6 +68,13 @@ interface SidebarProps {
   onAddExcludedStudyType: (studyType: string) => Promise<boolean>;
   onDeleteExcludedStudyType: (id: string) => Promise<void>;
   onClearExcludedStudyTypes: () => Promise<void>;
+  // Study type pool props
+  poolStudyTypes: PoolStudyType[];
+  availableStudyTypes: string[];
+  onAddPoolStudyType: (studyType: string) => Promise<boolean>;
+  onAddMultiplePoolStudyTypes: (studyTypes: string[]) => Promise<number>;
+  onDeletePoolStudyType: (id: string) => void;
+  onDeleteAllPoolStudyTypes: () => void;
 }
 
 export function Sidebar({
@@ -99,6 +108,12 @@ export function Sidebar({
   onAddExcludedStudyType,
   onDeleteExcludedStudyType,
   onClearExcludedStudyTypes,
+  poolStudyTypes,
+  availableStudyTypes,
+  onAddPoolStudyType,
+  onAddMultiplePoolStudyTypes,
+  onDeletePoolStudyType,
+  onDeleteAllPoolStudyTypes,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -328,6 +343,16 @@ export function Sidebar({
             onAddMultipleKeywords={onAddMultiplePoolKeywords}
             onDeleteKeyword={onDeletePoolKeyword}
             onDeleteAllKeywords={onDeleteAllPoolKeywords}
+          />
+
+          {/* Study Type Pool */}
+          <StudyTypePoolSection
+            poolStudyTypes={poolStudyTypes}
+            availableStudyTypes={availableStudyTypes}
+            onAddStudyType={onAddPoolStudyType}
+            onAddMultipleStudyTypes={onAddMultiplePoolStudyTypes}
+            onDeleteStudyType={onDeletePoolStudyType}
+            onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
           />
 
           {/* Synonym Pool */}
