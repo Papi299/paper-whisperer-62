@@ -7,8 +7,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { Search, X, Download } from "lucide-react";
+import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
 
 interface SearchFiltersProps {
   searchQuery: string;
@@ -56,7 +56,7 @@ export function SearchFilters({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-wrap gap-4 items-center">
         {/* Search */}
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -92,7 +92,7 @@ export function SearchFilters({
           <SelectTrigger className="w-[180px]">
             <SelectValue placeholder="Study Type" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="bg-popover">
             <SelectItem value="all">All Types</SelectItem>
             {studyTypes.map((type) => (
               <SelectItem key={type} value={type}>
@@ -101,6 +101,13 @@ export function SearchFilters({
             ))}
           </SelectContent>
         </Select>
+
+        {/* Keywords Dropdown */}
+        <KeywordFilterDropdown
+          selectedKeywords={selectedKeywords}
+          availableKeywords={availableKeywords}
+          onKeywordToggle={onKeywordToggle}
+        />
 
         {/* Actions */}
         <div className="flex gap-2">
@@ -116,33 +123,6 @@ export function SearchFilters({
           </Button>
         </div>
       </div>
-
-      {/* Keywords */}
-      {availableKeywords.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">Filter by keywords:</p>
-          <div className="flex flex-wrap gap-2">
-            {availableKeywords.slice(0, 20).map((keyword) => (
-              <Badge
-                key={keyword}
-                variant={selectedKeywords.includes(keyword) ? "default" : "outline"}
-                className="cursor-pointer"
-                onClick={() => onKeywordToggle(keyword)}
-              >
-                {keyword}
-                {selectedKeywords.includes(keyword) && (
-                  <X className="ml-1 h-3 w-3" />
-                )}
-              </Badge>
-            ))}
-            {availableKeywords.length > 20 && (
-              <Badge variant="outline" className="opacity-50">
-                +{availableKeywords.length - 20} more
-              </Badge>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
