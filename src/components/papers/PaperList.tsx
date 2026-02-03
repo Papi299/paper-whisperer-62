@@ -21,7 +21,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, MoreHorizontal, Pencil, Trash2, FolderOpen, Sparkles } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Pencil, Trash2, FolderOpen, Sparkles, X } from "lucide-react";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader } from "./ResizableTableHeader";
 
@@ -36,6 +36,7 @@ interface PaperListProps {
   normalizeKeyword: (keyword: string) => string;
   excludedKeywords: Set<string>;
   excludedStudyTypes: Set<string>;
+  onExcludeStudyType: (studyType: string) => Promise<boolean>;
 }
 
 export function PaperList({
@@ -49,6 +50,7 @@ export function PaperList({
   normalizeKeyword,
   excludedKeywords,
   excludedStudyTypes,
+  onExcludeStudyType,
 }: PaperListProps) {
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
@@ -71,7 +73,7 @@ export function PaperList({
   // Helper function to get unique combined keywords with normalization (excludes filtered keywords)
   const getCombinedKeywords = (paper: PaperWithTags, matchedPoolKeywords: string[]) => {
     const seenNormalized = new Set<string>();
-    const result: { keyword: string; displayName: string; source: 'pool' | 'mesh' | 'substance' }[] = [];
+    const result: { keyword: string; displayName: string; source: 'pool' | 'pubmed' | 'mesh' | 'substance' }[] = [];
     
     // Helper to check if keyword should be excluded (with fallback for undefined)
     const isExcluded = (kw: string) => excludedKeywords?.has(kw.toLowerCase()) ?? false;
@@ -84,6 +86,17 @@ export function PaperList({
       if (!seenNormalized.has(normalizedKey)) {
         seenNormalized.add(normalizedKey);
         result.push({ keyword: kw, displayName, source: 'pool' });
+      }
+    });
+    
+    // Add PubMed keywords (author-designated, second priority)
+    (paper.keywords || []).forEach(kw => {
+      if (isExcluded(kw)) return; // Skip excluded keywords
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'pubmed' });
       }
     });
     
@@ -108,6 +121,9 @@ export function PaperList({
         result.push({ keyword: kw, displayName, source: 'substance' });
       }
     });
+    
+    // Sort alphabetically by display name
+    result.sort((a, b) => a.displayName.localeCompare(b.displayName));
     
     return result;
   };
@@ -255,24 +271,46 @@ export function PaperList({
                         );
                       });
                       
-                      // Join remaining tokens for display
-                      const displayStudyType = filteredTokens.join(", ");
+                      if (filteredTokens.length === 0) return <span>-</span>;
                       
-                      if (displayStudyType) {
-                        return (
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div className="truncate cursor-default">{displayStudyType}</div>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom" className="bg-popover">
-                                {displayStudyType}
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        );
-                      }
-                      return <span>-</span>;
+                      return (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="flex flex-wrap gap-1 cursor-default">
+                                {filteredTokens.map((token, index) => (
+                                  <Badge
+                                    key={`${token}-${index}`}
+                                    variant="outline"
+                                    className="text-xs group/badge hover:pr-1"
+                                  >
+                                    <span className="truncate max-w-[150px]">{token}</span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onExcludeStudyType(token);
+                                      }}
+                                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                                      title={`Exclude "${token}"`}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </Badge>
+                                ))}
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
+                              <div className="flex flex-wrap gap-1 p-1">
+                                {filteredTokens.map((token, index) => (
+                                  <Badge key={`tooltip-${token}-${index}`} variant="outline" className="text-xs">
+                                    {token}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      );
                     })()}
                   </TableCell>
                 )}
@@ -303,13 +341,15 @@ export function PaperList({
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <div className="flex flex-wrap gap-1 cursor-default">
-                            {combinedKeywords.slice(0, 4).map(({ keyword, displayName, source }) => (
+                            {combinedKeywords.map(({ keyword, displayName, source }) => (
                               <Badge
                                 key={`${source}-${keyword}`}
                                 variant="outline"
                                 className={`text-xs ${
                                   source === 'pool' 
                                     ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
+                                    : source === 'pubmed'
+                                    ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
                                     : source === 'mesh'
                                     ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
                                     : 'border-green-500/50 text-green-600 dark:text-green-400'
@@ -319,11 +359,6 @@ export function PaperList({
                                 {displayName}
                               </Badge>
                             ))}
-                            {combinedKeywords.length > 4 && (
-                              <Badge variant="outline" className="text-xs">
-                                +{combinedKeywords.length - 4}
-                              </Badge>
-                            )}
                           </div>
                         </TooltipTrigger>
                         {combinedKeywords.length > 0 && (
@@ -336,6 +371,8 @@ export function PaperList({
                                   className={`text-xs ${
                                     source === 'pool' 
                                       ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
+                                      : source === 'pubmed'
+                                      ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
                                       : source === 'mesh'
                                       ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
                                       : 'border-green-500/50 text-green-600 dark:text-green-400'

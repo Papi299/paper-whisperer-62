@@ -344,6 +344,7 @@ export function Dashboard() {
             normalizeKeyword={normalizeKeyword}
             excludedKeywords={getExcludedKeywordSet()}
             excludedStudyTypes={getExcludedStudyTypeSet()}
+            onExcludeStudyType={addExcludedStudyType}
           />
         </main>
       </div>
