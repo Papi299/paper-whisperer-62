@@ -1,93 +1,160 @@
 
-## What’s happening (root cause)
-Right now the Study Type cell logic works like this:
-- Take the full `paper.study_type` string (often a comma-separated list)
-- If it contains any excluded study type term, the UI replaces the entire Study Type cell with `"-"`
 
-So when you exclude **“Journal Article”**, and a paper has:
-- `Journal Article, Randomized Controlled Trial, Multicenter Study`
+# Implementation Plan: Quick-Exclude Buttons, Full Keywords Display, and PubMed Keywords Integration
 
-…the code detects the excluded term and hides the whole Study Type field, instead of removing only that one item.
+## Summary
 
-## Goal
-Make study type exclusions **display-level and item-level**:
-- Only remove the excluded study type(s) from the displayed list
-- Keep the remaining study types visible
-- Keep the hover tooltip showing the full remaining (non-excluded) list
+This plan covers three related improvements:
 
-Example:
-- Excluded: `Journal Article`
-- Paper study types: `Journal Article, Randomized Controlled Trial, Multicenter Study`
-- Display: `Randomized Controlled Trial, Multicenter Study`
-
-If all study types are excluded, display `"-"`.
+1. **Quick-exclude button for study types** - Add a small button next to each study type in the table that instantly adds it to the exclusion pool
+2. **Display all keywords alphabetically** - Show all keywords in the row instead of truncating to 4, organized alphabetically
+3. **Combine PubMed Keywords with MeSH Terms and Substances** - The database already has a `keywords` field (from PubMed's dedicated Keywords section), but it's not being displayed. We'll include these alongside MeSH Terms and Substances
 
 ---
 
-## Implementation approach (no backend/schema changes)
-### 1) Update Study Type display logic in `src/components/papers/PaperList.tsx`
-Replace the current “if any excluded term exists => show '-'” logic with:
-1. Parse the study type string into individual items (tokens)
-   - Split on commas and semicolons: `/,|;/` (more robust: `/[,;]+/`)
-   - Trim whitespace
-   - Remove empty tokens
-2. Filter tokens against excluded study types (case-insensitive)
-   - Preferred behavior: exclude token when it matches an excluded term exactly
-   - Add a safe fallback: also exclude token if it *contains* an excluded term (helps with cases like parentheses or extra text), but still only removes that token, not the whole field
-3. Join remaining tokens back into a string for display: `kept.join(", ")`
-4. Render:
-   - If result is empty => `"-"`
-   - Else show truncated display + tooltip containing the full kept string
+## Change 1: Quick-Exclude Button for Study Types
 
-Proposed helper (inside `PaperList.tsx`, near `getCombinedKeywords`):
-- `getDisplayStudyType(studyType: string | null | undefined): string | null`
-  - returns the filtered string or `null` if nothing should display
+### Current Behavior
+Study types are displayed as text. Users must manually type them into the sidebar exclusion input to exclude them.
 
-### 2) Keep tooltip behavior, but show filtered (remaining) study types
-Update tooltip content + trigger text to use:
-- `displayStudyType` (filtered)
-instead of:
-- `paper.study_type` (original)
+### New Behavior
+Each study type token will have a small "X" button that instantly excludes it when clicked.
 
-This ensures the tooltip matches what’s actually displayed.
+### Technical Changes
+
+**File: `src/pages/Dashboard.tsx`**
+- Pass `addExcludedStudyType` to `PaperList` as a new prop `onExcludeStudyType`
+
+**File: `src/components/papers/PaperList.tsx`**
+- Add `onExcludeStudyType: (studyType: string) => Promise<boolean>` to props interface
+- Render each study type token as a `Badge` with an "X" button (using `Ban` or `X` icon from lucide-react)
+- Clicking the button calls `onExcludeStudyType(token)` and the UI updates automatically
 
 ---
 
-## Edge cases to handle
-- `paper.study_type` is `null`/empty → show `"-"`
-- Excluded set is empty → show original study type string unchanged
-- Study type string has no commas/semicolons (single type) → treat as one token
-- Extra spacing variations → normalization via `trim()` + lowercase comparison
-- If excluded term is a substring of another token:
-  - We will only remove tokens that match exactly, plus optional fallback `includes` matching for “token contains excluded term” (still token-level only)
+## Change 2: Display All Keywords Alphabetically
 
-If you want *only exact matches* and never substring matching, we can set it to exact-only; I’ll implement it with exact-first + substring fallback to be resilient, but I’ll keep it clearly isolated so it’s easy to adjust.
+### Current Behavior
+Only 4 keywords are shown in the cell, with a "+X more" badge for overflow. Keywords are sorted by source priority (pool > mesh > substance).
 
----
+### New Behavior
+Show all keywords in the cell (no truncation), sorted alphabetically by display name.
 
-## Files to change
-- `src/components/papers/PaperList.tsx`
-  - Replace the current Study Type exclusion IIFE logic with token-based filtering
-  - Tooltip uses filtered string
+### Technical Changes
 
-No changes needed in:
-- `src/hooks/useExclusionPools.ts` (already provides `getExcludedStudyTypeSet()` as lowercase)
-- `src/pages/Dashboard.tsx` (already passes the set into `PaperList`)
+**File: `src/components/papers/PaperList.tsx`**
+- Modify `getCombinedKeywords` to sort results alphabetically by `displayName`
+- Remove the `.slice(0, 4)` truncation in the cell rendering
+- Keep the tooltip for hover to show all keywords in a larger, more readable format
+- Add `flex-wrap` styling to allow keywords to flow across multiple lines in the cell
 
 ---
 
-## Acceptance criteria (what you should see)
-1. Add excluded study type: `Journal Article`
-2. A paper with `Journal Article, Randomized Controlled Trial, Multicenter Study` shows:
-   - `Randomized Controlled Trial, Multicenter Study` (not `"-"`)
-3. Hovering over Study Type shows tooltip with the full remaining list (non-truncated)
-4. If a paper has only `Journal Article`, it becomes `"-"`
+## Change 3: Combine PubMed Keywords with MeSH Terms and Substances
+
+### Current State
+The database already stores `keywords` (from PubMed's "Keywords:" section), `mesh_terms`, and `substances` as separate arrays. However, the display logic in `getCombinedKeywords` only uses:
+- Matched pool keywords (from abstract matching)
+- MeSH Terms
+- Substances
+
+The `paper.keywords` field is not being included!
+
+### New Behavior
+Include `paper.keywords` in the combined display, treating them the same as MeSH Terms with a distinct visual style (purple color).
+
+### Technical Changes
+
+**File: `src/components/papers/PaperList.tsx`**
+- Update `getCombinedKeywords` to add a fourth source: `'pubmed'` for keywords from `paper.keywords`
+- Add these after pool keywords but before MeSH terms (they're author-designated, so higher priority than MeSH)
+- Apply distinct styling: purple color (`border-purple-500/50 text-purple-600 dark:text-purple-400`)
 
 ---
 
-## Quick test checklist (end-to-end)
-- Add an excluded study type
-- Confirm the sidebar exclusion badge appears
-- Confirm the table updates immediately (no refresh needed)
-- Confirm only the excluded token disappears, not the entire Study Type field
-- Confirm tooltip shows the remaining list
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `src/pages/Dashboard.tsx` | Pass `addExcludedStudyType` as `onExcludeStudyType` prop to `PaperList` |
+| `src/components/papers/PaperList.tsx` | Add quick-exclude buttons, show all keywords alphabetically, include `paper.keywords` in combined display |
+
+---
+
+## Visual Design
+
+### Study Type Cell (with quick-exclude)
+```
+[Randomized Controlled Trial ×] [Multicenter Study ×]
+```
+Each token is a badge with a small "×" button. Clicking "×" adds that study type to the exclusion pool.
+
+### Keywords Cell (all keywords, alphabetical)
+```
+[Cholesterol] [Diabetes] [GLP-1 ★] [HDL] [Insulin] [LDL] [Obesity] ...
+```
+- Pool keywords: amber with sparkle icon (★)
+- PubMed keywords: purple
+- MeSH terms: blue
+- Substances: green
+
+All displayed in alphabetical order.
+
+---
+
+## Technical Details
+
+### Updated PaperListProps Interface
+```text
+interface PaperListProps {
+  ...existing props...
+  onExcludeStudyType: (studyType: string) => Promise<boolean>;
+}
+```
+
+### Updated getCombinedKeywords Sources
+```text
+sources (in order of deduplication priority):
+1. 'pool' - Matched from keyword pool (amber, sparkle icon)
+2. 'pubmed' - From paper.keywords array (purple, new!)
+3. 'mesh' - From paper.mesh_terms (blue)
+4. 'substance' - From paper.substances (green)
+```
+
+### Sorting Logic
+After collecting all keywords, sort alphabetically:
+```text
+result.sort((a, b) => a.displayName.localeCompare(b.displayName))
+```
+
+---
+
+## Acceptance Criteria
+
+1. **Quick-exclude study type**
+   - Hover over a study type shows a small "×" button
+   - Clicking "×" immediately adds that study type to the exclusion pool
+   - The study type disappears from the display (but the paper stays visible)
+
+2. **All keywords displayed alphabetically**
+   - No "+X more" truncation in the keyword cell
+   - Keywords are sorted A-Z by display name
+   - Colors remain distinct by source type
+
+3. **PubMed keywords included**
+   - Keywords from the dedicated "Keywords:" section in PubMed appear in the combined list
+   - They display in purple color to distinguish from MeSH/Substances
+   - They are deduplicated against other sources using normalization
+
+---
+
+## Test Checklist
+
+- Add a paper with known keywords from PubMed's Keywords section
+- Verify purple-colored keyword badges appear for PubMed keywords
+- Verify all keywords are shown (no truncation)
+- Verify alphabetical sorting works
+- Click "×" on a study type and verify it gets excluded
+- Verify the sidebar exclusion badge count increases
+- Verify the excluded study type disappears from the paper row
+
