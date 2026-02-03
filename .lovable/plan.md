@@ -1,14 +1,16 @@
+# ✅ IMPLEMENTED - Quick-Exclude Keywords, Edit Projects/Tags, Study Type Pool with Title Matching
 
+## Status: Complete
 
-# Implementation Plan: Quick-Exclude Keywords, Edit Projects/Tags, Study Type Pool with Title Matching
+All features from this plan have been implemented:
+1. ✅ **Quick-exclude button for keywords** - Added "X" button to each keyword badge
+2. ✅ **Fix Edit functionality for Projects and Tags** - Created EditProjectDialog and EditTagDialog components
+3. ✅ **Study Type Interest Pool** - New pool in sidebar for manually adding study types of interest
+4. ✅ **Title-based Study Type Detection** - Study types from pool matched against paper titles, combined with Publication Types, with specificity deduplication
 
-## Summary
+---
 
-This plan addresses four features:
-1. **Quick-exclude button for keywords** - Add an "X" button to each keyword badge (similar to study types)
-2. **Fix Edit functionality for Projects and Tags** - Create missing edit dialogs that are triggered but never rendered
-3. **Study Type Interest Pool** - A new pool for manually adding study types of interest
-4. **Title-based Study Type Detection** - Match study types from the pool against paper titles and combine with Publication Types
+## Summary (Original Plan)
 
 ---
 

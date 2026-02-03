@@ -30,6 +30,7 @@ interface PaperListProps {
   onEdit: (paper: PaperWithTags) => void;
   onDelete: (paperId: string) => void;
   findMatchingKeywords: (abstract: string | null) => string[];
+  findMatchingStudyTypes: (title: string) => string[];
   visibleColumns: ColumnId[];
   columnWidths: { [key: string]: number };
   onColumnResize: (columnId: ColumnId, width: number) => void;
@@ -37,6 +38,29 @@ interface PaperListProps {
   excludedKeywords: Set<string>;
   excludedStudyTypes: Set<string>;
   onExcludeStudyType: (studyType: string) => Promise<boolean>;
+  onExcludeKeyword: (keyword: string) => Promise<boolean>;
+}
+
+// Helper function to deduplicate by specificity - prefer longer/more specific matches
+function deduplicateBySpecificity(types: string[]): string[] {
+  // Sort by length descending (longer = more specific)
+  const sorted = [...types].sort((a, b) => b.length - a.length);
+  const result: string[] = [];
+  
+  for (const type of sorted) {
+    const lowerType = type.toLowerCase();
+    // Add if no existing result contains this type as a substring
+    // AND this type doesn't contain any existing result as substring
+    const isDuplicate = result.some(existing => {
+      const lowerExisting = existing.toLowerCase();
+      return lowerExisting.includes(lowerType) || lowerType.includes(lowerExisting);
+    });
+    if (!isDuplicate) {
+      result.push(type);
+    }
+  }
+  
+  return result;
 }
 
 export function PaperList({
@@ -44,6 +68,7 @@ export function PaperList({
   onEdit,
   onDelete,
   findMatchingKeywords,
+  findMatchingStudyTypes,
   visibleColumns,
   columnWidths,
   onColumnResize,
@@ -51,6 +76,7 @@ export function PaperList({
   excludedKeywords,
   excludedStudyTypes,
   onExcludeStudyType,
+  onExcludeKeyword,
 }: PaperListProps) {
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
@@ -252,20 +278,23 @@ export function PaperList({
                     style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
                   >
                     {(() => {
-                      // Token-based filtering: only remove excluded study types, keep the rest
-                      if (!paper.study_type) return <span>-</span>;
-                      
-                      // Parse into tokens (split on comma/semicolon, trim, remove empty)
-                      const tokens = paper.study_type
-                        .split(/[,;]+/)
+                      // Get study types from Publication Types (existing data)
+                      const publicationTypes = paper.study_type
+                        ?.split(/[,;]+/)
                         .map(t => t.trim())
-                        .filter(Boolean);
+                        .filter(Boolean) || [];
                       
-                      // Filter out excluded tokens (case-insensitive exact match, with fallback includes)
+                      // Find matching study types from pool in title
+                      const titleMatches = findMatchingStudyTypes(paper.title);
+                      
+                      // Combine and deduplicate by specificity
+                      const allTypes = [...titleMatches, ...publicationTypes];
+                      const deduplicatedTypes = deduplicateBySpecificity(allTypes);
+                      
+                      // Filter out excluded tokens
                       const excludedSet = excludedStudyTypes ?? new Set<string>();
-                      const filteredTokens = tokens.filter(token => {
+                      const filteredTokens = deduplicatedTypes.filter(token => {
                         const lowerToken = token.toLowerCase();
-                        // Exclude if exact match OR if token contains any excluded term
                         return !Array.from(excludedSet).some(
                           excluded => lowerToken === excluded || lowerToken.includes(excluded)
                         );
@@ -273,39 +302,61 @@ export function PaperList({
                       
                       if (filteredTokens.length === 0) return <span>-</span>;
                       
+                      // Determine which tokens came from title matching
+                      const titleMatchLower = new Set(titleMatches.map(t => t.toLowerCase()));
+                      
                       return (
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <div className="flex flex-wrap gap-1 cursor-default">
-                                {filteredTokens.map((token, index) => (
-                                  <Badge
-                                    key={`${token}-${index}`}
-                                    variant="outline"
-                                    className="text-xs group/badge hover:pr-1"
-                                  >
-                                    <span className="truncate max-w-[150px]">{token}</span>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onExcludeStudyType(token);
-                                      }}
-                                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                                      title={`Exclude "${token}"`}
+                                {filteredTokens.map((token, index) => {
+                                  const isFromTitle = titleMatchLower.has(token.toLowerCase());
+                                  return (
+                                    <Badge
+                                      key={`${token}-${index}`}
+                                      variant="outline"
+                                      className={`text-xs group/badge hover:pr-1 ${
+                                        isFromTitle
+                                          ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
+                                          : ''
+                                      }`}
                                     >
-                                      <X className="h-3 w-3" />
-                                    </button>
-                                  </Badge>
-                                ))}
+                                      <span className="truncate max-w-[150px]">{token}</span>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onExcludeStudyType(token);
+                                        }}
+                                        className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                                        title={`Exclude "${token}"`}
+                                      >
+                                        <X className="h-3 w-3" />
+                                      </button>
+                                    </Badge>
+                                  );
+                                })}
                               </div>
                             </TooltipTrigger>
                             <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
                               <div className="flex flex-wrap gap-1 p-1">
-                                {filteredTokens.map((token, index) => (
-                                  <Badge key={`tooltip-${token}-${index}`} variant="outline" className="text-xs">
-                                    {token}
-                                  </Badge>
-                                ))}
+                                {filteredTokens.map((token, index) => {
+                                  const isFromTitle = titleMatchLower.has(token.toLowerCase());
+                                  return (
+                                    <Badge
+                                      key={`tooltip-${token}-${index}`}
+                                      variant="outline"
+                                      className={`text-xs ${
+                                        isFromTitle
+                                          ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
+                                          : ''
+                                      }`}
+                                    >
+                                      {isFromTitle && <span className="mr-1 text-[10px] opacity-70">T:</span>}
+                                      {token}
+                                    </Badge>
+                                  );
+                                })}
                               </div>
                             </TooltipContent>
                           </Tooltip>
@@ -345,7 +396,7 @@ export function PaperList({
                               <Badge
                                 key={`${source}-${keyword}`}
                                 variant="outline"
-                                className={`text-xs ${
+                                className={`text-xs group/badge hover:pr-1 ${
                                   source === 'pool' 
                                     ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
                                     : source === 'pubmed'
@@ -357,6 +408,16 @@ export function PaperList({
                               >
                                 {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
                                 {displayName}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onExcludeKeyword(keyword);
+                                  }}
+                                  className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                                  title={`Exclude "${keyword}"`}
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
                               </Badge>
                             ))}
                           </div>

@@ -7,11 +7,14 @@ import { useSynonymPool } from "@/hooks/useSynonymPool";
 import { useExclusionPools } from "@/hooks/useExclusionPools";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
+import { useStudyTypePool } from "@/hooks/useStudyTypePool";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
 import { AddPaperDialog } from "@/components/papers/AddPaperDialog";
 import { EditPaperDialog } from "@/components/papers/EditPaperDialog";
+import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
+import { EditTagDialog } from "@/components/tags/EditTagDialog";
 import { SearchFilters } from "@/components/papers/SearchFilters";
 import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDropdown";
 import { Button } from "@/components/ui/button";
@@ -71,6 +74,15 @@ export function Dashboard() {
   } = useExclusionPools(user?.id);
 
   const {
+    poolStudyTypes,
+    addStudyType: addPoolStudyType,
+    addMultipleStudyTypes: addMultiplePoolStudyTypes,
+    deleteStudyType: deletePoolStudyType,
+    deleteAllStudyTypes: deleteAllPoolStudyTypes,
+    findMatchingStudyTypes,
+  } = useStudyTypePool(user?.id);
+
+  const {
     visibleColumns,
     toggleColumn,
     availableColumns,
@@ -80,6 +92,21 @@ export function Dashboard() {
     columnWidths,
     setColumnWidth,
   } = useColumnWidths();
+
+  // Extract unique study types from papers for import functionality
+  const allStudyTypes = useMemo(() => {
+    const studyTypeSet = new Set<string>();
+    papers.forEach((paper) => {
+      if (paper.study_type) {
+        paper.study_type
+          .split(/[,;]+/)
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .forEach((t) => studyTypeSet.add(t));
+      }
+    });
+    return Array.from(studyTypeSet).sort();
+  }, [papers]);
 
   // Selection state
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -286,6 +313,12 @@ export function Dashboard() {
           onAddExcludedStudyType={addExcludedStudyType}
           onDeleteExcludedStudyType={deleteExcludedStudyType}
           onClearExcludedStudyTypes={clearExcludedStudyTypes}
+          poolStudyTypes={poolStudyTypes}
+          availableStudyTypes={allStudyTypes}
+          onAddPoolStudyType={addPoolStudyType}
+          onAddMultiplePoolStudyTypes={addMultiplePoolStudyTypes}
+          onDeletePoolStudyType={deletePoolStudyType}
+          onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
@@ -338,6 +371,7 @@ export function Dashboard() {
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
+            findMatchingStudyTypes={findMatchingStudyTypes}
             visibleColumns={visibleColumns}
             columnWidths={columnWidths}
             onColumnResize={setColumnWidth}
@@ -345,6 +379,7 @@ export function Dashboard() {
             excludedKeywords={getExcludedKeywordSet()}
             excludedStudyTypes={getExcludedStudyTypeSet()}
             onExcludeStudyType={addExcludedStudyType}
+            onExcludeKeyword={addExcludedKeyword}
           />
         </main>
       </div>
@@ -363,6 +398,20 @@ export function Dashboard() {
         open={!!editingPaper}
         onOpenChange={(open) => !open && setEditingPaper(null)}
         onSave={handleSavePaper}
+      />
+
+      <EditProjectDialog
+        project={editingProject}
+        open={!!editingProject}
+        onOpenChange={(open) => !open && setEditingProject(null)}
+        onSave={updateProject}
+      />
+
+      <EditTagDialog
+        tag={editingTag}
+        open={!!editingTag}
+        onOpenChange={(open) => !open && setEditingTag(null)}
+        onSave={updateTag}
       />
     </div>
   );

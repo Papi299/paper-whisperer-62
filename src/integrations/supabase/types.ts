@@ -247,6 +247,27 @@ export type Database = {
         }
         Relationships: []
       }
+      study_type_pool: {
+        Row: {
+          created_at: string | null
+          id: string
+          study_type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          study_type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          study_type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       synonym_pool: {
         Row: {
           canonical_term: string
