@@ -1,108 +1,93 @@
 
+## What’s happening (root cause)
+Right now the Study Type cell logic works like this:
+- Take the full `paper.study_type` string (often a comma-separated list)
+- If it contains any excluded study type term, the UI replaces the entire Study Type cell with `"-"`
 
-# Implementation Plan: Keyword Display Exclusion, Study Type Tooltip, and Manual Study Type Input
+So when you exclude **“Journal Article”**, and a paper has:
+- `Journal Article, Randomized Controlled Trial, Multicenter Study`
 
-## Summary of Changes
+…the code detects the excluded term and hides the whole Study Type field, instead of removing only that one item.
 
-This plan addresses three related improvements to the paper table and exclusion system:
+## Goal
+Make study type exclusions **display-level and item-level**:
+- Only remove the excluded study type(s) from the displayed list
+- Keep the remaining study types visible
+- Keep the hover tooltip showing the full remaining (non-excluded) list
 
-1. **Change how keyword exclusion works** - Instead of hiding entire paper rows, only hide the excluded keywords from appearing in the Keywords column
-2. **Add study type tooltip** - Show the full study type text when hovering over the badge
-3. **Allow manual study type exclusion input** - Replace the dropdown with a text input field
+Example:
+- Excluded: `Journal Article`
+- Paper study types: `Journal Article, Randomized Controlled Trial, Multicenter Study`
+- Display: `Randomized Controlled Trial, Multicenter Study`
 
----
-
-## Change 1: Keyword Exclusion Displays Only (Not Row Filtering)
-
-### Current Behavior
-When you add a keyword to the exclusion pool, any paper containing that keyword is completely hidden from the table.
-
-### New Behavior
-Papers will remain visible, but excluded keywords will not appear in the Keywords column display.
-
-### Technical Changes
-
-**File: `src/hooks/useExclusionPools.ts`**
-- Rename `shouldExcludePaper` to `shouldExcludeKeyword` 
-- Add a new helper function `isKeywordExcluded(keyword: string)` that checks if a single keyword is in the exclusion list
-- Keep the study type exclusion logic for hiding entire papers (since that still makes sense)
-
-**File: `src/pages/Dashboard.tsx`**
-- Remove the keyword exclusion check from the paper filtering logic
-- Keep study type exclusion check (entire paper is hidden if study type is excluded)
-- Pass the list of excluded keywords to PaperList for display filtering
-
-**File: `src/components/papers/PaperList.tsx`**
-- Add a new prop: `excludedKeywords: string[]`
-- Filter out excluded keywords from `getCombinedKeywords` before displaying them
-- Keywords that match the exclusion list will simply not appear in the cell or tooltip
+If all study types are excluded, display `"-"`.
 
 ---
 
-## Change 2: Study Type Tooltip
+## Implementation approach (no backend/schema changes)
+### 1) Update Study Type display logic in `src/components/papers/PaperList.tsx`
+Replace the current “if any excluded term exists => show '-'” logic with:
+1. Parse the study type string into individual items (tokens)
+   - Split on commas and semicolons: `/,|;/` (more robust: `/[,;]+/`)
+   - Trim whitespace
+   - Remove empty tokens
+2. Filter tokens against excluded study types (case-insensitive)
+   - Preferred behavior: exclude token when it matches an excluded term exactly
+   - Add a safe fallback: also exclude token if it *contains* an excluded term (helps with cases like parentheses or extra text), but still only removes that token, not the whole field
+3. Join remaining tokens back into a string for display: `kept.join(", ")`
+4. Render:
+   - If result is empty => `"-"`
+   - Else show truncated display + tooltip containing the full kept string
 
-### Technical Changes
+Proposed helper (inside `PaperList.tsx`, near `getCombinedKeywords`):
+- `getDisplayStudyType(studyType: string | null | undefined): string | null`
+  - returns the filtered string or `null` if nothing should display
 
-**File: `src/components/papers/PaperList.tsx`**
-- Wrap the study type cell content with `TooltipProvider`, `Tooltip`, `TooltipTrigger`, and `TooltipContent`
-- When hovering over the study type badge, show the full untruncated text
+### 2) Keep tooltip behavior, but show filtered (remaining) study types
+Update tooltip content + trigger text to use:
+- `displayStudyType` (filtered)
+instead of:
+- `paper.study_type` (original)
 
----
-
-## Change 3: Manual Study Type Exclusion Input
-
-### Current Behavior
-Users can only select study types from a predefined dropdown list.
-
-### New Behavior
-Users can type any study type text manually (similar to keyword exclusion input).
-
-### Technical Changes
-
-**File: `src/components/exclusions/ExclusionPoolsSection.tsx`**
-- Replace the `Select` component with an `Input` component
-- Add state for `newStudyType` text input
-- Handle Enter key and button click to add the typed study type
-- Remove the `STUDY_TYPES` constant and dropdown logic
-
----
-
-## Technical Details
-
-### Updated `useExclusionPools.ts` Logic
-
-```text
-// New helper function
-isKeywordExcluded(keyword: string): boolean
-  - Returns true if keyword (case-insensitive) is in excludedKeywords list
-
-// Updated shouldExcludePaper - only checks study type now
-shouldExcludePaper(studyType: string | null): boolean
-  - Only returns true if the study type is in excludedStudyTypes
-  - No longer checks keywords (keywords are filtered at display level)
-```
-
-### Updated PaperList Props
-
-```text
-interface PaperListProps {
-  ...existing props...
-  excludedKeywords: string[];  // New prop for display filtering
-}
-```
-
-### Keyword Filtering in getCombinedKeywords
-
-The function will filter out any keywords whose normalized lowercase form matches an excluded keyword before returning the display list.
+This ensures the tooltip matches what’s actually displayed.
 
 ---
 
-## Files to Modify
+## Edge cases to handle
+- `paper.study_type` is `null`/empty → show `"-"`
+- Excluded set is empty → show original study type string unchanged
+- Study type string has no commas/semicolons (single type) → treat as one token
+- Extra spacing variations → normalization via `trim()` + lowercase comparison
+- If excluded term is a substring of another token:
+  - We will only remove tokens that match exactly, plus optional fallback `includes` matching for “token contains excluded term” (still token-level only)
 
-| File | Changes |
-|------|---------|
-| `src/hooks/useExclusionPools.ts` | Add `isKeywordExcluded`, update `shouldExcludePaper` to only check study types |
-| `src/pages/Dashboard.tsx` | Remove keyword check from filtering, pass `excludedKeywords` to PaperList |
-| `src/components/papers/PaperList.tsx` | Add `excludedKeywords` prop, filter keywords in display, add study type tooltip |
-| `src/components/exclusions/ExclusionPoolsSection.tsx` | Replace Select with Input for study type exclusion |
+If you want *only exact matches* and never substring matching, we can set it to exact-only; I’ll implement it with exact-first + substring fallback to be resilient, but I’ll keep it clearly isolated so it’s easy to adjust.
 
+---
+
+## Files to change
+- `src/components/papers/PaperList.tsx`
+  - Replace the current Study Type exclusion IIFE logic with token-based filtering
+  - Tooltip uses filtered string
+
+No changes needed in:
+- `src/hooks/useExclusionPools.ts` (already provides `getExcludedStudyTypeSet()` as lowercase)
+- `src/pages/Dashboard.tsx` (already passes the set into `PaperList`)
+
+---
+
+## Acceptance criteria (what you should see)
+1. Add excluded study type: `Journal Article`
+2. A paper with `Journal Article, Randomized Controlled Trial, Multicenter Study` shows:
+   - `Randomized Controlled Trial, Multicenter Study` (not `"-"`)
+3. Hovering over Study Type shows tooltip with the full remaining list (non-truncated)
+4. If a paper has only `Journal Article`, it becomes `"-"`
+
+---
+
+## Quick test checklist (end-to-end)
+- Add an excluded study type
+- Confirm the sidebar exclusion badge appears
+- Confirm the table updates immediately (no refresh needed)
+- Confirm only the excluded token disappears, not the entire Study Type field
+- Confirm tooltip shows the remaining list
