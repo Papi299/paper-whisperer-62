@@ -56,6 +56,7 @@ export type Database = {
           authors: string[] | null
           created_at: string
           doi: string | null
+          drive_url: string | null
           id: string
           journal: string | null
           journal_url: string | null
@@ -75,6 +76,7 @@ export type Database = {
           authors?: string[] | null
           created_at?: string
           doi?: string | null
+          drive_url?: string | null
           id?: string
           journal?: string | null
           journal_url?: string | null
@@ -94,6 +96,7 @@ export type Database = {
           authors?: string[] | null
           created_at?: string
           doi?: string | null
+          drive_url?: string | null
           id?: string
           journal?: string | null
           journal_url?: string | null

@@ -15,7 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ExternalLink, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Pencil, Trash2, FolderOpen } from "lucide-react";
 
 interface PaperListProps {
   papers: PaperWithTags[];
@@ -99,10 +99,29 @@ export function PaperList({ papers, onEdit, onDelete }: PaperListProps) {
               </TableCell>
               <TableCell>
                 <div className="flex gap-1">
+                  {paper.drive_url && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                      <a
+                        href={paper.drive_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open in Google Drive"
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                      </a>
+                    </Button>
+                  )}
                   {paper.pubmed_url && (
                     <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                      <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer">
+                      <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer" title="PubMed">
                         <ExternalLink className="h-4 w-4" />
+                      </a>
+                    </Button>
+                  )}
+                  {paper.journal_url && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                      <a href={paper.journal_url} target="_blank" rel="noopener noreferrer" title="Journal">
+                        <span className="text-xs font-bold">J</span>
                       </a>
                     </Button>
                   )}
