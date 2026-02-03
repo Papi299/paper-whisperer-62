@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
+import { useKeywordPool } from "@/hooks/useKeywordPool";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -32,6 +33,15 @@ export function Dashboard() {
     updatePaper,
     deletePaper,
   } = usePapers(user?.id);
+
+  const {
+    poolKeywords,
+    addKeyword: addPoolKeyword,
+    addMultipleKeywords: addMultiplePoolKeywords,
+    deleteKeyword: deletePoolKeyword,
+    deleteAllKeywords: deleteAllPoolKeywords,
+    findMatchingKeywords,
+  } = useKeywordPool(user?.id);
 
   // Selection state
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -219,6 +229,12 @@ export function Dashboard() {
           onDeleteProject={deleteProject}
           onEditTag={(t) => setEditingTag(t)}
           onDeleteTag={deleteTag}
+          poolKeywords={poolKeywords}
+          availableKeywords={allKeywords}
+          onAddPoolKeyword={addPoolKeyword}
+          onAddMultiplePoolKeywords={addMultiplePoolKeywords}
+          onDeletePoolKeyword={deletePoolKeyword}
+          onDeleteAllPoolKeywords={deleteAllPoolKeywords}
         />
         <main className="flex-1 p-6">
           <div className="mb-6 flex items-center justify-between">
@@ -263,6 +279,7 @@ export function Dashboard() {
             papers={filteredPapers}
             onEdit={setEditingPaper}
             onDelete={deletePaper}
+            findMatchingKeywords={findMatchingKeywords}
           />
         </main>
       </div>

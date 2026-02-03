@@ -15,15 +15,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ExternalLink, MoreHorizontal, Pencil, Trash2, FolderOpen } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Pencil, Trash2, FolderOpen, Sparkles } from "lucide-react";
 
 interface PaperListProps {
   papers: PaperWithTags[];
   onEdit: (paper: PaperWithTags) => void;
   onDelete: (paperId: string) => void;
+  findMatchingKeywords: (abstract: string | null) => string[];
 }
 
-export function PaperList({ papers, onEdit, onDelete }: PaperListProps) {
+export function PaperList({ papers, onEdit, onDelete, findMatchingKeywords }: PaperListProps) {
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
   };
@@ -54,49 +55,68 @@ export function PaperList({ papers, onEdit, onDelete }: PaperListProps) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {papers.map((paper) => (
-            <TableRow key={paper.id}>
-              <TableCell className="font-medium">
-                <div className="space-y-1">
-                  <p className="line-clamp-2">{paper.title}</p>
-                  {paper.project && (
-                    <Badge variant="outline" className="text-xs">
-                      <div
-                        className="w-2 h-2 rounded-full mr-1"
-                        style={{ backgroundColor: paper.project.color }}
-                      />
-                      {paper.project.name}
-                    </Badge>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
-                {paper.authors.slice(0, 3).join(", ")}
-                {paper.authors.length > 3 && " et al."}
-              </TableCell>
-              <TableCell>{paper.year || "-"}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">
-                {paper.journal || "-"}
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-wrap gap-1">
-                  {paper.tags.slice(0, 3).map((tag) => (
-                    <Badge
-                      key={tag.id}
-                      variant="secondary"
-                      className="text-xs"
-                      style={{ borderColor: tag.color }}
-                    >
-                      {tag.name}
-                    </Badge>
-                  ))}
-                  {paper.tags.length > 3 && (
-                    <Badge variant="secondary" className="text-xs">
-                      +{paper.tags.length - 3}
-                    </Badge>
-                  )}
-                </div>
-              </TableCell>
+          {papers.map((paper) => {
+            const matchedPoolKeywords = findMatchingKeywords(paper.abstract);
+            return (
+              <TableRow key={paper.id}>
+                <TableCell className="font-medium">
+                  <div className="space-y-1">
+                    <p className="line-clamp-2">{paper.title}</p>
+                    {paper.project && (
+                      <Badge variant="outline" className="text-xs">
+                        <div
+                          className="w-2 h-2 rounded-full mr-1"
+                          style={{ backgroundColor: paper.project.color }}
+                        />
+                        {paper.project.name}
+                      </Badge>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {paper.authors.slice(0, 3).join(", ")}
+                  {paper.authors.length > 3 && " et al."}
+                </TableCell>
+                <TableCell>{paper.year || "-"}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {paper.journal || "-"}
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1">
+                    {/* Regular keywords from metadata */}
+                    {paper.tags.slice(0, 3).map((tag) => (
+                      <Badge
+                        key={tag.id}
+                        variant="secondary"
+                        className="text-xs"
+                        style={{ borderColor: tag.color }}
+                      >
+                        {tag.name}
+                      </Badge>
+                    ))}
+                    {paper.tags.length > 3 && (
+                      <Badge variant="secondary" className="text-xs">
+                        +{paper.tags.length - 3}
+                      </Badge>
+                    )}
+                    {/* Matched pool keywords */}
+                    {matchedPoolKeywords.slice(0, 3).map((keyword) => (
+                      <Badge
+                        key={`pool-${keyword}`}
+                        variant="outline"
+                        className="text-xs border-amber-500/50 text-amber-600 dark:text-amber-400"
+                      >
+                        <Sparkles className="h-2.5 w-2.5 mr-1" />
+                        {keyword}
+                      </Badge>
+                    ))}
+                    {matchedPoolKeywords.length > 3 && (
+                      <Badge variant="outline" className="text-xs border-amber-500/50 text-amber-600 dark:text-amber-400">
+                        +{matchedPoolKeywords.length - 3}
+                      </Badge>
+                    )}
+                  </div>
+                </TableCell>
               <TableCell>
                 <div className="flex gap-1">
                   {paper.drive_url && (
@@ -160,7 +180,8 @@ export function PaperList({ papers, onEdit, onDelete }: PaperListProps) {
                 </DropdownMenu>
               </TableCell>
             </TableRow>
-          ))}
+            );
+          })}
         </TableBody>
       </Table>
     </div>
