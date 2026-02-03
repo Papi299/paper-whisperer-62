@@ -67,6 +67,7 @@ export function Dashboard() {
     deleteExcludedStudyType,
     clearExcludedStudyTypes,
     shouldExcludePaper,
+    getExcludedKeywordSet,
   } = useExclusionPools(user?.id);
 
   const {
@@ -106,13 +107,8 @@ export function Dashboard() {
   // Filter papers
   const filteredPapers = useMemo(() => {
     return papers.filter((paper) => {
-      // Exclusion filters - check first for efficiency
-      const allKeywords = [
-        ...paper.keywords,
-        ...paper.mesh_terms,
-        ...paper.substances,
-      ];
-      if (shouldExcludePaper(allKeywords, paper.study_type)) {
+      // Check study type exclusion (keywords are filtered at display level)
+      if (shouldExcludePaper(paper.study_type)) {
         return false;
       }
 
@@ -351,6 +347,7 @@ export function Dashboard() {
             columnWidths={columnWidths}
             onColumnResize={setColumnWidth}
             normalizeKeyword={normalizeKeyword}
+            excludedKeywords={getExcludedKeywordSet()}
           />
         </main>
       </div>
