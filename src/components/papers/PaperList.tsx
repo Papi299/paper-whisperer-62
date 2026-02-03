@@ -71,8 +71,8 @@ export function PaperList({
     const seenNormalized = new Set<string>();
     const result: { keyword: string; displayName: string; source: 'pool' | 'mesh' | 'substance' }[] = [];
     
-    // Helper to check if keyword should be excluded
-    const isExcluded = (kw: string) => excludedKeywords.has(kw.toLowerCase());
+    // Helper to check if keyword should be excluded (with fallback for undefined)
+    const isExcluded = (kw: string) => excludedKeywords?.has(kw.toLowerCase()) ?? false;
     
     // Add matched pool keywords first (highest priority)
     matchedPoolKeywords.forEach(kw => {
