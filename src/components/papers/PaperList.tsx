@@ -235,20 +235,29 @@ export function PaperList({
                     className="text-sm"
                     style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
                   >
-                    {paper.study_type && !excludedStudyTypes?.has(paper.study_type.toLowerCase()) ? (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="truncate cursor-default">{paper.study_type}</div>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" className="bg-popover">
-                            {paper.study_type}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    ) : (
-                      <span>-</span>
-                    )}
+                    {(() => {
+                      // Check if any excluded study type is contained in the paper's study type
+                      const studyTypeLower = paper.study_type?.toLowerCase() ?? "";
+                      const isExcluded = studyTypeLower && Array.from(excludedStudyTypes ?? []).some(
+                        (excluded) => studyTypeLower.includes(excluded)
+                      );
+                      
+                      if (paper.study_type && !isExcluded) {
+                        return (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="truncate cursor-default">{paper.study_type}</div>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom" className="bg-popover">
+                                {paper.study_type}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        );
+                      }
+                      return <span>-</span>;
+                    })()}
                   </TableCell>
                 )}
                 {isVisible("tags") && (
