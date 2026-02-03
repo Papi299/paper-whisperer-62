@@ -3,12 +3,15 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
 import { useKeywordPool } from "@/hooks/useKeywordPool";
+import { useColumnVisibility } from "@/hooks/useColumnVisibility";
+import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
 import { AddPaperDialog } from "@/components/papers/AddPaperDialog";
 import { EditPaperDialog } from "@/components/papers/EditPaperDialog";
 import { SearchFilters } from "@/components/papers/SearchFilters";
+import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDropdown";
 import { Button } from "@/components/ui/button";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { Plus, Loader2 } from "lucide-react";
@@ -42,6 +45,17 @@ export function Dashboard() {
     deleteAllKeywords: deleteAllPoolKeywords,
     findMatchingKeywords,
   } = useKeywordPool(user?.id);
+
+  const {
+    visibleColumns,
+    toggleColumn,
+    availableColumns,
+  } = useColumnVisibility();
+
+  const {
+    columnWidths,
+    setColumnWidth,
+  } = useColumnWidths();
 
   // Selection state
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -236,7 +250,7 @@ export function Dashboard() {
           onDeletePoolKeyword={deletePoolKeyword}
           onDeleteAllPoolKeywords={deleteAllPoolKeywords}
         />
-        <main className="flex-1 p-6">
+        <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold">
@@ -250,10 +264,17 @@ export function Dashboard() {
                 {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
               </p>
             </div>
-            <Button onClick={() => setAddPaperOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Papers
-            </Button>
+            <div className="flex items-center gap-2">
+              <ColumnVisibilityDropdown
+                availableColumns={availableColumns}
+                visibleColumns={visibleColumns}
+                onToggleColumn={toggleColumn}
+              />
+              <Button onClick={() => setAddPaperOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Papers
+              </Button>
+            </div>
           </div>
 
           <div className="mb-6">
@@ -280,6 +301,9 @@ export function Dashboard() {
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
+            visibleColumns={visibleColumns}
+            columnWidths={columnWidths}
+            onColumnResize={setColumnWidth}
           />
         </main>
       </div>
