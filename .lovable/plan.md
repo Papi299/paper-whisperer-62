@@ -1,74 +1,60 @@
 
 
-# Implementation Plan: Quick-Exclude Buttons, Full Keywords Display, and PubMed Keywords Integration
+# Implementation Plan: Quick-Exclude Keywords, Edit Projects/Tags, Study Type Pool with Title Matching
 
 ## Summary
 
-This plan covers three related improvements:
-
-1. **Quick-exclude button for study types** - Add a small button next to each study type in the table that instantly adds it to the exclusion pool
-2. **Display all keywords alphabetically** - Show all keywords in the row instead of truncating to 4, organized alphabetically
-3. **Combine PubMed Keywords with MeSH Terms and Substances** - The database already has a `keywords` field (from PubMed's dedicated Keywords section), but it's not being displayed. We'll include these alongside MeSH Terms and Substances
-
----
-
-## Change 1: Quick-Exclude Button for Study Types
-
-### Current Behavior
-Study types are displayed as text. Users must manually type them into the sidebar exclusion input to exclude them.
-
-### New Behavior
-Each study type token will have a small "X" button that instantly excludes it when clicked.
-
-### Technical Changes
-
-**File: `src/pages/Dashboard.tsx`**
-- Pass `addExcludedStudyType` to `PaperList` as a new prop `onExcludeStudyType`
-
-**File: `src/components/papers/PaperList.tsx`**
-- Add `onExcludeStudyType: (studyType: string) => Promise<boolean>` to props interface
-- Render each study type token as a `Badge` with an "X" button (using `Ban` or `X` icon from lucide-react)
-- Clicking the button calls `onExcludeStudyType(token)` and the UI updates automatically
+This plan addresses four features:
+1. **Quick-exclude button for keywords** - Add an "X" button to each keyword badge (similar to study types)
+2. **Fix Edit functionality for Projects and Tags** - Create missing edit dialogs that are triggered but never rendered
+3. **Study Type Interest Pool** - A new pool for manually adding study types of interest
+4. **Title-based Study Type Detection** - Match study types from the pool against paper titles and combine with Publication Types
 
 ---
 
-## Change 2: Display All Keywords Alphabetically
+## Issue 1: Projects/Tags Edit Not Working
 
-### Current Behavior
-Only 4 keywords are shown in the cell, with a "+X more" badge for overflow. Keywords are sorted by source priority (pool > mesh > substance).
+### Root Cause
+In `Dashboard.tsx`, clicking "Edit" on a project or tag sets state:
+- `setEditingProject(p)` / `setEditingTag(t)`
 
-### New Behavior
-Show all keywords in the cell (no truncation), sorted alphabetically by display name.
+However, **no edit dialogs exist** to consume these states. The states are set but never rendered anywhere in the UI.
 
-### Technical Changes
-
-**File: `src/components/papers/PaperList.tsx`**
-- Modify `getCombinedKeywords` to sort results alphabetically by `displayName`
-- Remove the `.slice(0, 4)` truncation in the cell rendering
-- Keep the tooltip for hover to show all keywords in a larger, more readable format
-- Add `flex-wrap` styling to allow keywords to flow across multiple lines in the cell
+### Solution
+Create `EditProjectDialog` and `EditTagDialog` components, and render them in Dashboard.
 
 ---
 
-## Change 3: Combine PubMed Keywords with MeSH Terms and Substances
+## Issue 2: Quick-Exclude Button for Keywords
 
 ### Current State
-The database already stores `keywords` (from PubMed's "Keywords:" section), `mesh_terms`, and `substances` as separate arrays. However, the display logic in `getCombinedKeywords` only uses:
-- Matched pool keywords (from abstract matching)
-- MeSH Terms
-- Substances
+Keywords are displayed as badges without any quick-exclude functionality. Users must go to the sidebar exclusion pool to type in keywords manually.
 
-The `paper.keywords` field is not being included!
+### Solution
+Add an "X" button to each keyword badge (matching the study type pattern), passing `onExcludeKeyword` prop from Dashboard.
 
-### New Behavior
-Include `paper.keywords` in the combined display, treating them the same as MeSH Terms with a distinct visual style (purple color).
+---
 
-### Technical Changes
+## Issue 3: Study Type Interest Pool
 
-**File: `src/components/papers/PaperList.tsx`**
-- Update `getCombinedKeywords` to add a fourth source: `'pubmed'` for keywords from `paper.keywords`
-- Add these after pool keywords but before MeSH terms (they're author-designated, so higher priority than MeSH)
-- Apply distinct styling: purple color (`border-purple-500/50 text-purple-600 dark:text-purple-400`)
+### Requirements
+1. Create a new pool for "Study Types of Interest" (similar to Keyword Pool)
+2. Store in a new database table: `study_type_pool`
+3. Match study types from the pool against paper **titles**
+4. Combine detected study types with existing Publication Types
+5. Handle duplicates: show each study type only once
+6. Handle specificity: if title has "Systematic Review of Randomized Controlled Trials" and Publication Type has "Systematic Review", show the more specific one from the title
+
+---
+
+## Files to Create
+
+| File | Purpose |
+|------|---------|
+| `src/components/projects/EditProjectDialog.tsx` | Dialog to edit project name, description, color |
+| `src/components/tags/EditTagDialog.tsx` | Dialog to edit tag name and color |
+| `src/components/study-types/StudyTypePoolSection.tsx` | Sidebar section for managing study type interest pool |
+| `src/hooks/useStudyTypePool.ts` | Hook for CRUD operations on study type pool |
 
 ---
 
@@ -76,85 +62,252 @@ Include `paper.keywords` in the combined display, treating them the same as MeSH
 
 | File | Changes |
 |------|---------|
-| `src/pages/Dashboard.tsx` | Pass `addExcludedStudyType` as `onExcludeStudyType` prop to `PaperList` |
-| `src/components/papers/PaperList.tsx` | Add quick-exclude buttons, show all keywords alphabetically, include `paper.keywords` in combined display |
+| `src/pages/Dashboard.tsx` | Render EditProjectDialog, EditTagDialog; pass keyword exclusion to PaperList; integrate study type pool |
+| `src/components/papers/PaperList.tsx` | Add quick-exclude button to keywords; integrate title-based study type detection |
+| `src/components/layout/Sidebar.tsx` | Add StudyTypePoolSection |
 
 ---
 
-## Visual Design
+## Database Migration
 
-### Study Type Cell (with quick-exclude)
-```
-[Randomized Controlled Trial ×] [Multicenter Study ×]
-```
-Each token is a badge with a small "×" button. Clicking "×" adds that study type to the exclusion pool.
+Create `study_type_pool` table:
 
-### Keywords Cell (all keywords, alphabetical)
-```
-[Cholesterol] [Diabetes] [GLP-1 ★] [HDL] [Insulin] [LDL] [Obesity] ...
-```
-- Pool keywords: amber with sparkle icon (★)
-- PubMed keywords: purple
-- MeSH terms: blue
-- Substances: green
+```sql
+CREATE TABLE public.study_type_pool (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  study_type TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
-All displayed in alphabetical order.
+-- Enable RLS
+ALTER TABLE public.study_type_pool ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies
+CREATE POLICY "Users can view own study type pool"
+  ON public.study_type_pool FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own study type pool"
+  ON public.study_type_pool FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own study type pool"
+  ON public.study_type_pool FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- Unique constraint
+CREATE UNIQUE INDEX study_type_pool_user_study_type_idx
+  ON public.study_type_pool (user_id, lower(study_type));
+```
 
 ---
 
 ## Technical Details
 
-### Updated PaperListProps Interface
+### 1. Quick-Exclude for Keywords
+
+**PaperList.tsx changes:**
+- Add `onExcludeKeyword: (keyword: string) => Promise<boolean>` to props
+- Wrap each keyword badge with a group/hover button similar to study types:
+
 ```text
-interface PaperListProps {
-  ...existing props...
-  onExcludeStudyType: (studyType: string) => Promise<boolean>;
+<Badge className="group/badge hover:pr-1">
+  {displayName}
+  <button
+    onClick={() => onExcludeKeyword(keyword)}
+    className="ml-1 opacity-0 group-hover/badge:opacity-100"
+  >
+    <X className="h-3 w-3" />
+  </button>
+</Badge>
+```
+
+### 2. EditProjectDialog
+
+Simple dialog with:
+- Name input (required)
+- Description textarea (optional)
+- Color picker (hex input or preset colors)
+- Save/Cancel buttons
+- Calls `updateProject(projectId, { name, description, color })`
+
+### 3. EditTagDialog
+
+Simple dialog with:
+- Name input (required)
+- Color picker
+- Save/Cancel buttons
+- Calls `updateTag(tagId, { name, color })`
+
+### 4. Study Type Pool Hook (`useStudyTypePool.ts`)
+
+```text
+interface PoolStudyType {
+  id: string;
+  user_id: string;
+  study_type: string;
+  created_at: string;
+}
+
+Returns:
+- poolStudyTypes: PoolStudyType[]
+- addStudyType(studyType: string): Promise<boolean>
+- addMultipleStudyTypes(studyTypes: string[]): Promise<number>
+- deleteStudyType(id: string): Promise<void>
+- deleteAllStudyTypes(): Promise<void>
+- findMatchingStudyTypes(title: string): string[]
+```
+
+### 5. Title-Based Study Type Detection
+
+**Logic in PaperList.tsx:**
+
+```text
+function getCombinedStudyTypes(paper, poolStudyTypes) {
+  // 1. Get study types from Publication Types (existing)
+  const publicationTypes = paper.study_type
+    ?.split(/[,;]+/)
+    .map(t => t.trim())
+    .filter(Boolean) || [];
+
+  // 2. Find matching study types from pool in title
+  const titleMatches = poolStudyTypes
+    .filter(st => paper.title.toLowerCase().includes(st.toLowerCase()))
+    .map(st => st);
+
+  // 3. Combine and deduplicate
+  const allTypes = [...titleMatches, ...publicationTypes];
+  
+  // 4. Handle specificity - prefer longer/more specific matches
+  const result = deduplicateBySpecificity(allTypes);
+  
+  return result;
+}
+
+function deduplicateBySpecificity(types) {
+  // Sort by length descending (longer = more specific)
+  const sorted = [...types].sort((a, b) => b.length - a.length);
+  const result = [];
+  
+  for (const type of sorted) {
+    const lowerType = type.toLowerCase();
+    // Add if no existing result contains this type as a substring
+    // AND this type doesn't contain any existing result as substring
+    const isDuplicate = result.some(existing => {
+      const lowerExisting = existing.toLowerCase();
+      return lowerExisting.includes(lowerType) || lowerType.includes(lowerExisting);
+    });
+    if (!isDuplicate) {
+      result.push(type);
+    }
+  }
+  
+  return result;
 }
 ```
 
-### Updated getCombinedKeywords Sources
-```text
-sources (in order of deduplication priority):
-1. 'pool' - Matched from keyword pool (amber, sparkle icon)
-2. 'pubmed' - From paper.keywords array (purple, new!)
-3. 'mesh' - From paper.mesh_terms (blue)
-4. 'substance' - From paper.substances (green)
+**Example:**
+- Pool contains: `["Systematic Review", "Randomized Controlled Trial", "Meta-Analysis"]`
+- Paper title: "Efficacy of GLP-1 Agonists: A Systematic Review of Randomized Controlled Trials"
+- Publication Type: "Systematic Review"
+
+Detection:
+1. Title matches: "Systematic Review of Randomized Controlled Trials" (matched via "Systematic Review" and "Randomized Controlled Trial")
+2. Wait - the pool items are individual terms. Let me refine:
+
+**Refined Logic:**
+- Match pool study types against the title
+- For specificity: if both "Systematic Review" appears in title AND in Publication Type, keep the one that's part of a longer phrase
+
+Actually, the specificity should work like this:
+- Title: "...Systematic Review of Randomized Controlled Trials..."
+- Publication Type: "Systematic Review"
+- Pool: ["Systematic Review", "Randomized Controlled Trial"]
+
+From title, we find "Systematic Review" and "Randomized Controlled Trial" as matches.
+From Publication Type: "Systematic Review"
+
+When combining:
+- "Systematic Review" appears twice - dedupe to one
+- "Randomized Controlled Trial" from title stays
+- Result: ["Systematic Review", "Randomized Controlled Trial"]
+
+For the case where title has MORE context (like "Systematic Review of Randomized Controlled Trials" as a continuous phrase), we'd need phrase matching. For simplicity, we'll match individual pool terms and deduplicate.
+
+### 6. StudyTypePoolSection Component
+
+Similar to KeywordPoolSection:
+- Collapsible section in sidebar
+- Add single study type
+- Add multiple study types (bulk)
+- Import from existing papers (extract unique Publication Types)
+- Clear all
+- Display as badges with delete buttons
+
+---
+
+## Visual Design
+
+### Keywords Cell (with quick-exclude)
+```
+[Cholesterol x] [Diabetes x] [GLP-1 ★ x] [HDL x]
+```
+Each keyword now shows an "x" on hover to quick-exclude.
+
+### Study Type Pool (sidebar)
+```
+[v] Study Type Pool (3)
+    [Randomized Controlled Trial x]
+    [Meta-Analysis x]
+    [Cohort Study x]
 ```
 
-### Sorting Logic
-After collecting all keywords, sort alphabetically:
-```text
-result.sort((a, b) => a.displayName.localeCompare(b.displayName))
+### Study Type Cell (with title matches)
+Study types from title detection are styled differently (e.g., with a "T" icon for "from title"):
 ```
+[T: Randomized Controlled Trial ×] [Meta-Analysis ×]
+```
+- Pool matches from title: cyan/teal color with title indicator
+- Publication Types: default outline style
 
 ---
 
 ## Acceptance Criteria
 
-1. **Quick-exclude study type**
-   - Hover over a study type shows a small "×" button
-   - Clicking "×" immediately adds that study type to the exclusion pool
-   - The study type disappears from the display (but the paper stays visible)
+1. **Quick-exclude keywords**
+   - Hover over a keyword shows "×" button
+   - Clicking "×" adds keyword to exclusion pool
+   - Keyword disappears from display
 
-2. **All keywords displayed alphabetically**
-   - No "+X more" truncation in the keyword cell
-   - Keywords are sorted A-Z by display name
-   - Colors remain distinct by source type
+2. **Edit Projects**
+   - Click Edit on project dropdown opens dialog
+   - Can change name, description, color
+   - Save updates the project
 
-3. **PubMed keywords included**
-   - Keywords from the dedicated "Keywords:" section in PubMed appear in the combined list
-   - They display in purple color to distinguish from MeSH/Substances
-   - They are deduplicated against other sources using normalization
+3. **Edit Tags**
+   - Click Edit on tag dropdown opens dialog
+   - Can change name and color
+   - Save updates the tag
+
+4. **Study Type Pool**
+   - Can add study types of interest manually
+   - Study types from pool matched against paper titles appear in Study Type column
+   - Title matches combined with Publication Types
+   - Duplicates are removed (prefer more specific versions)
+   - Excluded study types still hidden from display
 
 ---
 
 ## Test Checklist
 
-- Add a paper with known keywords from PubMed's Keywords section
-- Verify purple-colored keyword badges appear for PubMed keywords
-- Verify all keywords are shown (no truncation)
-- Verify alphabetical sorting works
-- Click "×" on a study type and verify it gets excluded
-- Verify the sidebar exclusion badge count increases
-- Verify the excluded study type disappears from the paper row
+- Add a keyword exclusion via quick-exclude button
+- Verify keyword disappears immediately
+- Edit a project name and verify it updates in sidebar
+- Edit a tag color and verify it updates
+- Add "Randomized Controlled Trial" to study type pool
+- Add a paper with that phrase in the title
+- Verify the study type appears even if Publication Type is empty
+- Add a paper with "Systematic Review" in Publication Type and "Systematic Review of RCTs" in title
+- Verify only the more specific version appears
 
