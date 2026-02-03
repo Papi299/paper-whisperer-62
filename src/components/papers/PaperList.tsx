@@ -35,6 +35,7 @@ interface PaperListProps {
   onColumnResize: (columnId: ColumnId, width: number) => void;
   normalizeKeyword: (keyword: string) => string;
   excludedKeywords: Set<string>;
+  excludedStudyTypes: Set<string>;
 }
 
 export function PaperList({
@@ -47,6 +48,7 @@ export function PaperList({
   onColumnResize,
   normalizeKeyword,
   excludedKeywords,
+  excludedStudyTypes,
 }: PaperListProps) {
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
@@ -233,7 +235,7 @@ export function PaperList({
                     className="text-sm"
                     style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
                   >
-                    {paper.study_type ? (
+                    {paper.study_type && !excludedStudyTypes?.has(paper.study_type.toLowerCase()) ? (
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
