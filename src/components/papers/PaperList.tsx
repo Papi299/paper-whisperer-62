@@ -40,16 +40,52 @@ export function PaperList({ papers, onEdit, onDelete, findMatchingKeywords }: Pa
     );
   }
 
+  // Helper function to get unique combined keywords
+  const getCombinedKeywords = (paper: PaperWithTags, matchedPoolKeywords: string[]) => {
+    const allKeywords = new Set<string>();
+    const result: { keyword: string; source: 'pool' | 'mesh' | 'substance' }[] = [];
+    
+    // Add matched pool keywords first (highest priority)
+    matchedPoolKeywords.forEach(kw => {
+      const normalizedKw = kw.toLowerCase();
+      if (!allKeywords.has(normalizedKw)) {
+        allKeywords.add(normalizedKw);
+        result.push({ keyword: kw, source: 'pool' });
+      }
+    });
+    
+    // Add MeSH terms (skip if already present)
+    (paper.mesh_terms || []).forEach(kw => {
+      const normalizedKw = kw.toLowerCase();
+      if (!allKeywords.has(normalizedKw)) {
+        allKeywords.add(normalizedKw);
+        result.push({ keyword: kw, source: 'mesh' });
+      }
+    });
+    
+    // Add Substances (skip if already present)
+    (paper.substances || []).forEach(kw => {
+      const normalizedKw = kw.toLowerCase();
+      if (!allKeywords.has(normalizedKw)) {
+        allKeywords.add(normalizedKw);
+        result.push({ keyword: kw, source: 'substance' });
+      }
+    });
+    
+    return result;
+  };
+
   return (
     <div className="rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[40%]">Title</TableHead>
+            <TableHead className="w-[35%]">Title</TableHead>
             <TableHead>Authors</TableHead>
             <TableHead>Year</TableHead>
             <TableHead>Journal</TableHead>
             <TableHead>Tags</TableHead>
+            <TableHead>Keywords</TableHead>
             <TableHead>Links</TableHead>
             <TableHead className="w-[50px]"></TableHead>
           </TableRow>
@@ -57,6 +93,7 @@ export function PaperList({ papers, onEdit, onDelete, findMatchingKeywords }: Pa
         <TableBody>
           {papers.map((paper) => {
             const matchedPoolKeywords = findMatchingKeywords(paper.abstract);
+            const combinedKeywords = getCombinedKeywords(paper, matchedPoolKeywords);
             return (
               <TableRow key={paper.id}>
                 <TableCell className="font-medium">
@@ -83,7 +120,6 @@ export function PaperList({ papers, onEdit, onDelete, findMatchingKeywords }: Pa
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
-                    {/* Regular keywords from metadata */}
                     {paper.tags.slice(0, 3).map((tag) => (
                       <Badge
                         key={tag.id}
@@ -99,20 +135,29 @@ export function PaperList({ papers, onEdit, onDelete, findMatchingKeywords }: Pa
                         +{paper.tags.length - 3}
                       </Badge>
                     )}
-                    {/* Matched pool keywords */}
-                    {matchedPoolKeywords.slice(0, 3).map((keyword) => (
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1 max-w-[200px]">
+                    {combinedKeywords.slice(0, 4).map(({ keyword, source }) => (
                       <Badge
-                        key={`pool-${keyword}`}
+                        key={`${source}-${keyword}`}
                         variant="outline"
-                        className="text-xs border-amber-500/50 text-amber-600 dark:text-amber-400"
+                        className={`text-xs ${
+                          source === 'pool' 
+                            ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
+                            : source === 'mesh'
+                            ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
+                            : 'border-green-500/50 text-green-600 dark:text-green-400'
+                        }`}
                       >
-                        <Sparkles className="h-2.5 w-2.5 mr-1" />
+                        {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
                         {keyword}
                       </Badge>
                     ))}
-                    {matchedPoolKeywords.length > 3 && (
-                      <Badge variant="outline" className="text-xs border-amber-500/50 text-amber-600 dark:text-amber-400">
-                        +{matchedPoolKeywords.length - 3}
+                    {combinedKeywords.length > 4 && (
+                      <Badge variant="outline" className="text-xs">
+                        +{combinedKeywords.length - 4}
                       </Badge>
                     )}
                   </div>

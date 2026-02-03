@@ -16,6 +16,9 @@ interface PaperMetadata {
   doi?: string | null;
   abstract?: string | null;
   keywords?: string[];
+  mesh_terms?: string[];
+  substances?: string[];
+  study_type?: string | null;
   pubmed_url?: string | null;
   journal_url?: string | null;
   error?: string;
@@ -105,6 +108,28 @@ async function fetchFromPubMed(pmid: string): Promise<PaperMetadata | null> {
       keywords.push(match[1]);
     }
 
+    // Extract MeSH Terms
+    const meshMatches = xml.matchAll(/<DescriptorName[^>]*>([^<]+)<\/DescriptorName>/g);
+    const meshTerms: string[] = [];
+    for (const match of meshMatches) {
+      meshTerms.push(match[1]);
+    }
+
+    // Extract Substances
+    const substanceMatches = xml.matchAll(/<NameOfSubstance[^>]*>([^<]+)<\/NameOfSubstance>/g);
+    const substances: string[] = [];
+    for (const match of substanceMatches) {
+      substances.push(match[1]);
+    }
+
+    // Extract Publication Types (for study type)
+    const pubTypeMatches = xml.matchAll(/<PublicationType[^>]*>([^<]+)<\/PublicationType>/g);
+    const publicationTypes: string[] = [];
+    for (const match of pubTypeMatches) {
+      publicationTypes.push(match[1]);
+    }
+    const studyType = publicationTypes.length > 0 ? publicationTypes.join(", ") : null;
+
     if (!title) {
       return null;
     }
@@ -119,6 +144,9 @@ async function fetchFromPubMed(pmid: string): Promise<PaperMetadata | null> {
       doi,
       abstract,
       keywords,
+      mesh_terms: meshTerms,
+      substances,
+      study_type: studyType,
       pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
       journal_url: doi ? `https://doi.org/${doi}` : null,
     };
@@ -191,6 +219,9 @@ async function fetchFromCrossref(doi: string): Promise<PaperMetadata | null> {
     const pmid = await searchPubMedByDoi(cleanedDoi);
     
     let keywords: string[] = [];
+    let meshTerms: string[] = [];
+    let substances: string[] = [];
+    let studyType: string | null = null;
     let pubmedUrl: string | null = null;
 
     // If we found a PMID, fetch additional data from PubMed
@@ -199,6 +230,9 @@ async function fetchFromCrossref(doi: string): Promise<PaperMetadata | null> {
       const pubmedData = await fetchFromPubMed(pmid);
       if (pubmedData) {
         keywords = pubmedData.keywords || [];
+        meshTerms = pubmedData.mesh_terms || [];
+        substances = pubmedData.substances || [];
+        studyType = pubmedData.study_type || null;
         pubmedUrl = pubmedData.pubmed_url || null;
       }
     }
@@ -213,6 +247,9 @@ async function fetchFromCrossref(doi: string): Promise<PaperMetadata | null> {
       doi: cleanedDoi,
       abstract,
       keywords,
+      mesh_terms: meshTerms,
+      substances,
+      study_type: studyType,
       pubmed_url: pubmedUrl,
       journal_url: `https://doi.org/${cleanedDoi}`,
     };

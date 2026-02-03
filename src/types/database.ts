@@ -39,6 +39,8 @@ export interface Paper {
   study_type: string | null;
   statistical_methods: string | null;
   keywords: string[];
+  mesh_terms: string[];
+  substances: string[];
   pubmed_url: string | null;
   journal_url: string | null;
   drive_url: string | null;
@@ -67,6 +69,9 @@ export interface PaperMetadata {
   doi: string | null;
   abstract: string | null;
   keywords: string[];
+  mesh_terms: string[];
+  substances: string[];
+  study_type: string | null;
   pubmed_url: string | null;
   journal_url: string | null;
   drive_url?: string | null;

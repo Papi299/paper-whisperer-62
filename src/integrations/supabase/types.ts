@@ -82,11 +82,13 @@ export type Database = {
           journal: string | null
           journal_url: string | null
           keywords: string[] | null
+          mesh_terms: string[] | null
           pmid: string | null
           project_id: string | null
           pubmed_url: string | null
           statistical_methods: string | null
           study_type: string | null
+          substances: string[] | null
           title: string
           updated_at: string
           user_id: string
@@ -102,11 +104,13 @@ export type Database = {
           journal?: string | null
           journal_url?: string | null
           keywords?: string[] | null
+          mesh_terms?: string[] | null
           pmid?: string | null
           project_id?: string | null
           pubmed_url?: string | null
           statistical_methods?: string | null
           study_type?: string | null
+          substances?: string[] | null
           title: string
           updated_at?: string
           user_id: string
@@ -122,11 +126,13 @@ export type Database = {
           journal?: string | null
           journal_url?: string | null
           keywords?: string[] | null
+          mesh_terms?: string[] | null
           pmid?: string | null
           project_id?: string | null
           pubmed_url?: string | null
           statistical_methods?: string | null
           study_type?: string | null
+          substances?: string[] | null
           title?: string
           updated_at?: string
           user_id?: string
