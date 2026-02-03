@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Project, Tag } from "@/types/database";
 import { PoolKeyword } from "@/hooks/useKeywordPool";
+import { Synonym } from "@/hooks/useSynonymPool";
 import {
   FolderOpen,
   Tag as TagIcon,
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { KeywordPoolSection } from "@/components/keywords/KeywordPoolSection";
+import { SynonymPoolSection } from "@/components/synonyms/SynonymPoolSection";
 
 interface SidebarProps {
   projects: Project[];
@@ -48,6 +50,11 @@ interface SidebarProps {
   onAddMultiplePoolKeywords: (keywords: string[]) => Promise<number>;
   onDeletePoolKeyword: (keywordId: string) => void;
   onDeleteAllPoolKeywords: () => void;
+  // Synonym pool props
+  synonymGroups: Synonym[];
+  onAddSynonymGroup: (canonicalTerm: string, synonyms: string[]) => Promise<void>;
+  onUpdateSynonymGroup: (id: string, canonicalTerm: string, synonyms: string[]) => Promise<void>;
+  onDeleteSynonymGroup: (id: string) => Promise<void>;
 }
 
 export function Sidebar({
@@ -69,6 +76,10 @@ export function Sidebar({
   onAddMultiplePoolKeywords,
   onDeletePoolKeyword,
   onDeleteAllPoolKeywords,
+  synonymGroups,
+  onAddSynonymGroup,
+  onUpdateSynonymGroup,
+  onDeleteSynonymGroup,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -298,6 +309,14 @@ export function Sidebar({
             onAddMultipleKeywords={onAddMultiplePoolKeywords}
             onDeleteKeyword={onDeletePoolKeyword}
             onDeleteAllKeywords={onDeleteAllPoolKeywords}
+          />
+
+          {/* Synonym Pool */}
+          <SynonymPoolSection
+            synonymGroups={synonymGroups}
+            onAdd={onAddSynonymGroup}
+            onUpdate={onUpdateSynonymGroup}
+            onDelete={onDeleteSynonymGroup}
           />
         </div>
       </ScrollArea>

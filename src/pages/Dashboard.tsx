@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
 import { useKeywordPool } from "@/hooks/useKeywordPool";
+import { useSynonymPool } from "@/hooks/useSynonymPool";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { Header } from "@/components/layout/Header";
@@ -46,6 +47,13 @@ export function Dashboard() {
     findMatchingKeywords,
   } = useKeywordPool(user?.id);
 
+  const {
+    synonymGroups,
+    addSynonymGroup,
+    updateSynonymGroup,
+    deleteSynonymGroup,
+    normalizeKeyword,
+  } = useSynonymPool(user?.id);
   const {
     visibleColumns,
     toggleColumn,
@@ -249,6 +257,10 @@ export function Dashboard() {
           onAddMultiplePoolKeywords={addMultiplePoolKeywords}
           onDeletePoolKeyword={deletePoolKeyword}
           onDeleteAllPoolKeywords={deleteAllPoolKeywords}
+          synonymGroups={synonymGroups}
+          onAddSynonymGroup={addSynonymGroup}
+          onUpdateSynonymGroup={updateSynonymGroup}
+          onDeleteSynonymGroup={deleteSynonymGroup}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
@@ -304,6 +316,7 @@ export function Dashboard() {
             visibleColumns={visibleColumns}
             columnWidths={columnWidths}
             onColumnResize={setColumnWidth}
+            normalizeKeyword={normalizeKeyword}
           />
         </main>
       </div>

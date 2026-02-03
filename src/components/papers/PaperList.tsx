@@ -15,6 +15,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ExternalLink, MoreHorizontal, Pencil, Trash2, FolderOpen, Sparkles } from "lucide-react";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader } from "./ResizableTableHeader";
@@ -27,6 +33,7 @@ interface PaperListProps {
   visibleColumns: ColumnId[];
   columnWidths: { [key: string]: number };
   onColumnResize: (columnId: ColumnId, width: number) => void;
+  normalizeKeyword: (keyword: string) => string;
 }
 
 export function PaperList({
@@ -37,6 +44,7 @@ export function PaperList({
   visibleColumns,
   columnWidths,
   onColumnResize,
+  normalizeKeyword,
 }: PaperListProps) {
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
@@ -56,35 +64,38 @@ export function PaperList({
     );
   }
 
-  // Helper function to get unique combined keywords
+  // Helper function to get unique combined keywords with normalization
   const getCombinedKeywords = (paper: PaperWithTags, matchedPoolKeywords: string[]) => {
-    const allKeywords = new Set<string>();
-    const result: { keyword: string; source: 'pool' | 'mesh' | 'substance' }[] = [];
+    const seenNormalized = new Set<string>();
+    const result: { keyword: string; displayName: string; source: 'pool' | 'mesh' | 'substance' }[] = [];
     
     // Add matched pool keywords first (highest priority)
     matchedPoolKeywords.forEach(kw => {
-      const normalizedKw = kw.toLowerCase();
-      if (!allKeywords.has(normalizedKw)) {
-        allKeywords.add(normalizedKw);
-        result.push({ keyword: kw, source: 'pool' });
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'pool' });
       }
     });
     
-    // Add MeSH terms (skip if already present)
+    // Add MeSH terms (skip if already present after normalization)
     (paper.mesh_terms || []).forEach(kw => {
-      const normalizedKw = kw.toLowerCase();
-      if (!allKeywords.has(normalizedKw)) {
-        allKeywords.add(normalizedKw);
-        result.push({ keyword: kw, source: 'mesh' });
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'mesh' });
       }
     });
     
-    // Add Substances (skip if already present)
+    // Add Substances (skip if already present after normalization)
     (paper.substances || []).forEach(kw => {
-      const normalizedKw = kw.toLowerCase();
-      if (!allKeywords.has(normalizedKw)) {
-        allKeywords.add(normalizedKw);
-        result.push({ keyword: kw, source: 'substance' });
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'substance' });
       }
     });
     
@@ -240,29 +251,57 @@ export function PaperList({
                 )}
                 {isVisible("keywords") && (
                   <TableCell style={{ width: getWidth("keywords"), minWidth: getWidth("keywords"), maxWidth: getWidth("keywords") }}>
-                    <div className="flex flex-wrap gap-1">
-                      {combinedKeywords.slice(0, 4).map(({ keyword, source }) => (
-                        <Badge
-                          key={`${source}-${keyword}`}
-                          variant="outline"
-                          className={`text-xs ${
-                            source === 'pool' 
-                              ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
-                              : source === 'mesh'
-                              ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
-                              : 'border-green-500/50 text-green-600 dark:text-green-400'
-                          }`}
-                        >
-                          {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
-                          {keyword}
-                        </Badge>
-                      ))}
-                      {combinedKeywords.length > 4 && (
-                        <Badge variant="outline" className="text-xs">
-                          +{combinedKeywords.length - 4}
-                        </Badge>
-                      )}
-                    </div>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex flex-wrap gap-1 cursor-default">
+                            {combinedKeywords.slice(0, 4).map(({ keyword, displayName, source }) => (
+                              <Badge
+                                key={`${source}-${keyword}`}
+                                variant="outline"
+                                className={`text-xs ${
+                                  source === 'pool' 
+                                    ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
+                                    : source === 'mesh'
+                                    ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
+                                    : 'border-green-500/50 text-green-600 dark:text-green-400'
+                                }`}
+                              >
+                                {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
+                                {displayName}
+                              </Badge>
+                            ))}
+                            {combinedKeywords.length > 4 && (
+                              <Badge variant="outline" className="text-xs">
+                                +{combinedKeywords.length - 4}
+                              </Badge>
+                            )}
+                          </div>
+                        </TooltipTrigger>
+                        {combinedKeywords.length > 0 && (
+                          <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
+                            <div className="flex flex-wrap gap-1 p-1">
+                              {combinedKeywords.map(({ keyword, displayName, source }) => (
+                                <Badge
+                                  key={`tooltip-${source}-${keyword}`}
+                                  variant="outline"
+                                  className={`text-xs ${
+                                    source === 'pool' 
+                                      ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
+                                      : source === 'mesh'
+                                      ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
+                                      : 'border-green-500/50 text-green-600 dark:text-green-400'
+                                  }`}
+                                >
+                                  {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
+                                  {displayName}
+                                </Badge>
+                              ))}
+                            </div>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
                   </TableCell>
                 )}
                 {isVisible("links") && (
