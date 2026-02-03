@@ -246,26 +246,15 @@ export function useExclusionPools(userId: string | undefined) {
     }
   };
 
-  // Check if a paper should be excluded (only checks study type now)
-  const shouldExcludePaper = useCallback(
-    (studyType: string | null): boolean => {
-      // Check study type exclusions only
-      if (studyType) {
-        const isStudyTypeExcluded = excludedStudyTypes.some(
-          (est) => est.study_type.toLowerCase() === studyType.toLowerCase()
-        );
-        if (isStudyTypeExcluded) return true;
-      }
-
-      return false;
-    },
-    [excludedStudyTypes]
-  );
-
   // Get the set of excluded keywords for display filtering
   const getExcludedKeywordSet = useCallback(() => {
     return new Set(excludedKeywords.map((ek) => ek.keyword.toLowerCase()));
   }, [excludedKeywords]);
+
+  // Get the set of excluded study types for display filtering
+  const getExcludedStudyTypeSet = useCallback(() => {
+    return new Set(excludedStudyTypes.map((est) => est.study_type.toLowerCase()));
+  }, [excludedStudyTypes]);
 
   return {
     excludedKeywords,
@@ -277,8 +266,8 @@ export function useExclusionPools(userId: string | undefined) {
     addExcludedStudyType,
     deleteExcludedStudyType,
     clearExcludedStudyTypes,
-    shouldExcludePaper,
     getExcludedKeywordSet,
+    getExcludedStudyTypeSet,
     refetch: fetchExclusions,
   };
 }

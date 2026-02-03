@@ -225,7 +225,7 @@ export function ExclusionPoolsSection({
 
         {totalExclusions > 0 && (
           <p className="text-xs text-muted-foreground italic">
-            Excluded keywords are hidden from display. Papers with excluded study types are hidden entirely.
+            Excluded keywords and study types are hidden from display.
           </p>
         )}
       </CollapsibleContent>
