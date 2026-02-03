@@ -5,6 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Project, Tag } from "@/types/database";
 import { PoolKeyword } from "@/hooks/useKeywordPool";
 import { Synonym } from "@/hooks/useSynonymPool";
+import { ExcludedKeyword, ExcludedStudyType } from "@/hooks/useExclusionPools";
 import {
   FolderOpen,
   Tag as TagIcon,
@@ -29,6 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import { KeywordPoolSection } from "@/components/keywords/KeywordPoolSection";
 import { SynonymPoolSection } from "@/components/synonyms/SynonymPoolSection";
+import { ExclusionPoolsSection } from "@/components/exclusions/ExclusionPoolsSection";
 
 interface SidebarProps {
   projects: Project[];
@@ -55,6 +57,15 @@ interface SidebarProps {
   onAddSynonymGroup: (canonicalTerm: string, synonyms: string[]) => Promise<void>;
   onUpdateSynonymGroup: (id: string, canonicalTerm: string, synonyms: string[]) => Promise<void>;
   onDeleteSynonymGroup: (id: string) => Promise<void>;
+  // Exclusion pool props
+  excludedKeywords: ExcludedKeyword[];
+  excludedStudyTypes: ExcludedStudyType[];
+  onAddExcludedKeyword: (keyword: string) => Promise<boolean>;
+  onDeleteExcludedKeyword: (id: string) => Promise<void>;
+  onClearExcludedKeywords: () => Promise<void>;
+  onAddExcludedStudyType: (studyType: string) => Promise<boolean>;
+  onDeleteExcludedStudyType: (id: string) => Promise<void>;
+  onClearExcludedStudyTypes: () => Promise<void>;
 }
 
 export function Sidebar({
@@ -80,6 +91,14 @@ export function Sidebar({
   onAddSynonymGroup,
   onUpdateSynonymGroup,
   onDeleteSynonymGroup,
+  excludedKeywords,
+  excludedStudyTypes,
+  onAddExcludedKeyword,
+  onDeleteExcludedKeyword,
+  onClearExcludedKeywords,
+  onAddExcludedStudyType,
+  onDeleteExcludedStudyType,
+  onClearExcludedStudyTypes,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -317,6 +336,18 @@ export function Sidebar({
             onAdd={onAddSynonymGroup}
             onUpdate={onUpdateSynonymGroup}
             onDelete={onDeleteSynonymGroup}
+          />
+
+          {/* Exclusion Pools */}
+          <ExclusionPoolsSection
+            excludedKeywords={excludedKeywords}
+            excludedStudyTypes={excludedStudyTypes}
+            onAddExcludedKeyword={onAddExcludedKeyword}
+            onDeleteExcludedKeyword={onDeleteExcludedKeyword}
+            onClearExcludedKeywords={onClearExcludedKeywords}
+            onAddExcludedStudyType={onAddExcludedStudyType}
+            onDeleteExcludedStudyType={onDeleteExcludedStudyType}
+            onClearExcludedStudyTypes={onClearExcludedStudyTypes}
           />
         </div>
       </ScrollArea>
