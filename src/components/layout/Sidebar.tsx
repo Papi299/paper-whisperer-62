@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Project, Tag } from "@/types/database";
+import { PoolKeyword } from "@/hooks/useKeywordPool";
 import {
   FolderOpen,
   Tag as TagIcon,
@@ -25,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { KeywordPoolSection } from "@/components/keywords/KeywordPoolSection";
 
 interface SidebarProps {
   projects: Project[];
@@ -39,6 +41,13 @@ interface SidebarProps {
   onDeleteProject: (projectId: string) => void;
   onEditTag: (tag: Tag) => void;
   onDeleteTag: (tagId: string) => void;
+  // Keyword pool props
+  poolKeywords: PoolKeyword[];
+  availableKeywords: string[];
+  onAddPoolKeyword: (keyword: string) => Promise<boolean>;
+  onAddMultiplePoolKeywords: (keywords: string[]) => Promise<number>;
+  onDeletePoolKeyword: (keywordId: string) => void;
+  onDeleteAllPoolKeywords: () => void;
 }
 
 export function Sidebar({
@@ -54,6 +63,12 @@ export function Sidebar({
   onDeleteProject,
   onEditTag,
   onDeleteTag,
+  poolKeywords,
+  availableKeywords,
+  onAddPoolKeyword,
+  onAddMultiplePoolKeywords,
+  onDeletePoolKeyword,
+  onDeleteAllPoolKeywords,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -274,6 +289,16 @@ export function Sidebar({
               ))}
             </CollapsibleContent>
           </Collapsible>
+
+          {/* Keyword Pool */}
+          <KeywordPoolSection
+            poolKeywords={poolKeywords}
+            availableKeywords={availableKeywords}
+            onAddKeyword={onAddPoolKeyword}
+            onAddMultipleKeywords={onAddMultiplePoolKeywords}
+            onDeleteKeyword={onDeletePoolKeyword}
+            onDeleteAllKeywords={onDeleteAllPoolKeywords}
+          />
         </div>
       </ScrollArea>
     </aside>

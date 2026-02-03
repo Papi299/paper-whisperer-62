@@ -14,6 +14,27 @@ export type Database = {
   }
   public: {
     Tables: {
+      keyword_pool: {
+        Row: {
+          created_at: string
+          id: string
+          keyword: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          keyword: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          keyword?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       paper_tags: {
         Row: {
           created_at: string
