@@ -205,6 +205,30 @@ export type Database = {
         }
         Relationships: []
       }
+      synonym_pool: {
+        Row: {
+          canonical_term: string
+          created_at: string
+          id: string
+          synonyms: string[]
+          user_id: string
+        }
+        Insert: {
+          canonical_term: string
+          created_at?: string
+          id?: string
+          synonyms?: string[]
+          user_id: string
+        }
+        Update: {
+          canonical_term?: string
+          created_at?: string
+          id?: string
+          synonyms?: string[]
+          user_id?: string
+        }
+        Relationships: []
+      }
       tags: {
         Row: {
           color: string | null

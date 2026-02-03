@@ -10,43 +10,51 @@ export interface Synonym {
   created_at: string;
 }
 
+interface SynonymPoolRow {
+  id: string;
+  canonical_term: string;
+  synonyms: string[];
+  user_id: string;
+  created_at: string;
+}
+
 export function useSynonymPool(userId: string | undefined) {
   const [synonymGroups, setSynonymGroups] = useState<Synonym[]>([]);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!userId) return;
-    fetchSynonymGroups();
-  }, [userId]);
-
-  const fetchSynonymGroups = async () => {
+  const fetchSynonymGroups = useCallback(async () => {
     if (!userId) return;
     setLoading(true);
     try {
       const { data, error } = await supabase
-        .from("synonym_pool")
+        .from("synonym_pool" as any)
         .select("*")
         .eq("user_id", userId)
         .order("canonical_term", { ascending: true });
 
       if (error) throw error;
-      setSynonymGroups(data || []);
+      setSynonymGroups((data as unknown as SynonymPoolRow[]) || []);
     } catch (error) {
       console.error("Error fetching synonym groups:", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    fetchSynonymGroups();
+  }, [userId, fetchSynonymGroups]);
 
   const addSynonymGroup = useCallback(
     async (canonicalTerm: string, synonyms: string[]) => {
       if (!userId) return;
       try {
-        const { error } = await supabase.from("synonym_pool").insert({
+        const { error } = await supabase.from("synonym_pool" as any).insert({
           user_id: userId,
           canonical_term: canonicalTerm,
           synonyms: synonyms.map((s) => s.toLowerCase()),
-        });
+        } as any);
 
         if (error) throw error;
         await fetchSynonymGroups();
@@ -56,7 +64,7 @@ export function useSynonymPool(userId: string | undefined) {
         toast.error("Failed to add synonym group");
       }
     },
-    [userId]
+    [userId, fetchSynonymGroups]
   );
 
   const updateSynonymGroup = useCallback(
@@ -64,11 +72,11 @@ export function useSynonymPool(userId: string | undefined) {
       if (!userId) return;
       try {
         const { error } = await supabase
-          .from("synonym_pool")
+          .from("synonym_pool" as any)
           .update({
             canonical_term: canonicalTerm,
             synonyms: synonyms.map((s) => s.toLowerCase()),
-          })
+          } as any)
           .eq("id", id)
           .eq("user_id", userId);
 
@@ -80,7 +88,7 @@ export function useSynonymPool(userId: string | undefined) {
         toast.error("Failed to update synonym group");
       }
     },
-    [userId]
+    [userId, fetchSynonymGroups]
   );
 
   const deleteSynonymGroup = useCallback(
@@ -88,7 +96,7 @@ export function useSynonymPool(userId: string | undefined) {
       if (!userId) return;
       try {
         const { error } = await supabase
-          .from("synonym_pool")
+          .from("synonym_pool" as any)
           .delete()
           .eq("id", id)
           .eq("user_id", userId);
@@ -101,7 +109,7 @@ export function useSynonymPool(userId: string | undefined) {
         toast.error("Failed to delete synonym group");
       }
     },
-    [userId]
+    [userId, fetchSynonymGroups]
   );
 
   // Build a lookup map from synonyms -> canonical term
