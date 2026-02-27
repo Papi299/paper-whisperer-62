@@ -77,6 +77,7 @@ export function Dashboard() {
     poolStudyTypes,
     addStudyType: addPoolStudyType,
     addMultipleStudyTypes: addMultiplePoolStudyTypes,
+    updateStudyTypeWeight,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
     findMatchingStudyTypes,
@@ -319,6 +320,7 @@ export function Dashboard() {
           onAddMultiplePoolStudyTypes={addMultiplePoolStudyTypes}
           onDeletePoolStudyType={deletePoolStudyType}
           onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
+          onUpdateStudyTypeWeight={updateStudyTypeWeight}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
@@ -372,6 +374,7 @@ export function Dashboard() {
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
             findMatchingStudyTypes={findMatchingStudyTypes}
+            poolStudyTypes={poolStudyTypes.map(st => ({ study_type: st.study_type, specificity_weight: st.specificity_weight }))}
             visibleColumns={visibleColumns}
             columnWidths={columnWidths}
             onColumnResize={setColumnWidth}

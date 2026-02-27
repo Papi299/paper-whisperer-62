@@ -1,4 +1,5 @@
 import { PaperWithTags } from "@/types/database";
+import { WeightedStudyType } from "@/hooks/useStudyTypePool";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -30,7 +31,8 @@ interface PaperListProps {
   onEdit: (paper: PaperWithTags) => void;
   onDelete: (paperId: string) => void;
   findMatchingKeywords: (abstract: string | null) => string[];
-  findMatchingStudyTypes: (title: string) => string[];
+  findMatchingStudyTypes: (title: string) => WeightedStudyType[];
+  poolStudyTypes: { study_type: string; specificity_weight: number }[];
   visibleColumns: ColumnId[];
   columnWidths: { [key: string]: number };
   onColumnResize: (columnId: ColumnId, width: number) => void;
@@ -41,26 +43,47 @@ interface PaperListProps {
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
 }
 
-// Helper function to deduplicate by specificity - prefer longer/more specific matches
-function deduplicateBySpecificity(types: string[]): string[] {
-  // Sort by length descending (longer = more specific)
-  const sorted = [...types].sort((a, b) => b.length - a.length);
-  const result: string[] = [];
+// Weight-based merge: combine API types with title matches, override by weight
+function mergeStudyTypesByWeight(
+  publicationTypes: string[],
+  titleMatches: WeightedStudyType[],
+  poolStudyTypes: { study_type: string; specificity_weight: number }[]
+): { type: string; weight: number; isFromTitle: boolean }[] {
+  const poolMap = new Map(poolStudyTypes.map(p => [p.study_type.toLowerCase(), p.specificity_weight]));
   
-  for (const type of sorted) {
-    const lowerType = type.toLowerCase();
-    // Add if no existing result contains this type as a substring
-    // AND this type doesn't contain any existing result as substring
-    const isDuplicate = result.some(existing => {
-      const lowerExisting = existing.toLowerCase();
-      return lowerExisting.includes(lowerType) || lowerType.includes(lowerExisting);
-    });
-    if (!isDuplicate) {
-      result.push(type);
+  // Build weighted entries for API types
+  const apiEntries = publicationTypes.map(t => ({
+    type: t,
+    weight: poolMap.get(t.toLowerCase()) ?? 1,
+    isFromTitle: false,
+  }));
+  
+  // Build weighted entries for title matches
+  const titleEntries = titleMatches.map(t => ({
+    type: t.study_type,
+    weight: t.specificity_weight,
+    isFromTitle: true,
+  }));
+  
+  // Group by normalized name, keep highest weight
+  const merged = new Map<string, { type: string; weight: number; isFromTitle: boolean }>();
+  
+  for (const entry of [...apiEntries, ...titleEntries]) {
+    const key = entry.type.toLowerCase();
+    const existing = merged.get(key);
+    if (!existing || entry.weight > existing.weight) {
+      merged.set(key, entry);
     }
   }
   
-  return result;
+  // Override rule: if a title match has higher weight than any API type, it replaces
+  // Also deduplicate substring overlaps — prefer higher weight
+  const entries = Array.from(merged.values());
+  
+  // Sort by weight desc, then alphabetical
+  entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
+  
+  return entries;
 }
 
 export function PaperList({
@@ -69,6 +92,7 @@ export function PaperList({
   onDelete,
   findMatchingKeywords,
   findMatchingStudyTypes,
+  poolStudyTypes,
   visibleColumns,
   columnWidths,
   onColumnResize,
@@ -287,14 +311,13 @@ export function PaperList({
                       // Find matching study types from pool in title
                       const titleMatches = findMatchingStudyTypes(paper.title);
                       
-                      // Combine and deduplicate by specificity
-                      const allTypes = [...titleMatches, ...publicationTypes];
-                      const deduplicatedTypes = deduplicateBySpecificity(allTypes);
+                      // Merge using weight-based logic
+                      const mergedTypes = mergeStudyTypesByWeight(publicationTypes, titleMatches, poolStudyTypes);
                       
                       // Filter out excluded tokens
                       const excludedSet = excludedStudyTypes ?? new Set<string>();
-                      const filteredTokens = deduplicatedTypes.filter(token => {
-                        const lowerToken = token.toLowerCase();
+                      const filteredTokens = mergedTypes.filter(entry => {
+                        const lowerToken = entry.type.toLowerCase();
                         return !Array.from(excludedSet).some(
                           excluded => lowerToken === excluded || lowerToken.includes(excluded)
                         );
@@ -302,61 +325,53 @@ export function PaperList({
                       
                       if (filteredTokens.length === 0) return <span>-</span>;
                       
-                      // Determine which tokens came from title matching
-                      const titleMatchLower = new Set(titleMatches.map(t => t.toLowerCase()));
-                      
                       return (
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <div className="flex flex-wrap gap-1 cursor-default">
-                                {filteredTokens.map((token, index) => {
-                                  const isFromTitle = titleMatchLower.has(token.toLowerCase());
-                                  return (
-                                    <Badge
-                                      key={`${token}-${index}`}
-                                      variant="outline"
-                                      className={`text-xs group/badge hover:pr-1 ${
-                                        isFromTitle
-                                          ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
-                                          : ''
-                                      }`}
+                                {filteredTokens.map((entry, index) => (
+                                  <Badge
+                                    key={`${entry.type}-${index}`}
+                                    variant="outline"
+                                    className={`text-xs group/badge hover:pr-1 ${
+                                      entry.isFromTitle
+                                        ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
+                                        : ''
+                                    }`}
+                                  >
+                                    <span className="truncate max-w-[150px]">{entry.type}</span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onExcludeStudyType(entry.type);
+                                      }}
+                                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                                      title={`Exclude "${entry.type}"`}
                                     >
-                                      <span className="truncate max-w-[150px]">{token}</span>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          onExcludeStudyType(token);
-                                        }}
-                                        className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                                        title={`Exclude "${token}"`}
-                                      >
-                                        <X className="h-3 w-3" />
-                                      </button>
-                                    </Badge>
-                                  );
-                                })}
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </Badge>
+                                ))}
                               </div>
                             </TooltipTrigger>
                             <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
                               <div className="flex flex-wrap gap-1 p-1">
-                                {filteredTokens.map((token, index) => {
-                                  const isFromTitle = titleMatchLower.has(token.toLowerCase());
-                                  return (
-                                    <Badge
-                                      key={`tooltip-${token}-${index}`}
-                                      variant="outline"
-                                      className={`text-xs ${
-                                        isFromTitle
-                                          ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
-                                          : ''
-                                      }`}
-                                    >
-                                      {isFromTitle && <span className="mr-1 text-[10px] opacity-70">T:</span>}
-                                      {token}
-                                    </Badge>
-                                  );
-                                })}
+                                {filteredTokens.map((entry, index) => (
+                                  <Badge
+                                    key={`tooltip-${entry.type}-${index}`}
+                                    variant="outline"
+                                    className={`text-xs ${
+                                      entry.isFromTitle
+                                        ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
+                                        : ''
+                                    }`}
+                                  >
+                                    {entry.isFromTitle && <span className="mr-1 text-[10px] opacity-70">T:</span>}
+                                    {entry.type}
+                                    <span className="ml-1 text-[10px] opacity-50">w:{entry.weight}</span>
+                                  </Badge>
+                                ))}
                               </div>
                             </TooltipContent>
                           </Tooltip>

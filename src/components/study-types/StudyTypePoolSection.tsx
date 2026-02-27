@@ -43,6 +43,7 @@ interface StudyTypePoolSectionProps {
   onAddMultipleStudyTypes: (studyTypes: string[]) => Promise<number>;
   onDeleteStudyType: (id: string) => void;
   onDeleteAllStudyTypes: () => void;
+  onUpdateStudyTypeWeight: (id: string, weight: number) => Promise<void>;
 }
 
 export function StudyTypePoolSection({
@@ -52,6 +53,7 @@ export function StudyTypePoolSection({
   onAddMultipleStudyTypes,
   onDeleteStudyType,
   onDeleteAllStudyTypes,
+  onUpdateStudyTypeWeight,
 }: StudyTypePoolSectionProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [showInput, setShowInput] = useState(false);
@@ -218,19 +220,32 @@ export function StudyTypePoolSection({
           ) : (
             <div className="flex flex-wrap gap-1 pt-1">
               {poolStudyTypes.map((st) => (
-                <Badge
-                  key={st.id}
-                  variant="outline"
-                  className="text-xs group cursor-default pr-1 border-cyan-500/50 text-cyan-600 dark:text-cyan-400"
-                >
-                  {st.study_type}
-                  <button
-                    className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => onDeleteStudyType(st.id)}
+                <div key={st.id} className="flex items-center gap-0.5">
+                  <Badge
+                    variant="outline"
+                    className="text-xs group cursor-default pr-1 border-cyan-500/50 text-cyan-600 dark:text-cyan-400"
                   >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
+                    {st.study_type}
+                    <button
+                      className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => onDeleteStudyType(st.id)}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={st.specificity_weight}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      if (val >= 1) onUpdateStudyTypeWeight(st.id, val);
+                    }}
+                    className="h-5 w-10 text-[10px] text-center p-0 border-muted"
+                    title="Specificity weight"
+                  />
+                </div>
               ))}
             </div>
           )}

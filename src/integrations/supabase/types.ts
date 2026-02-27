@@ -251,18 +251,21 @@ export type Database = {
         Row: {
           created_at: string | null
           id: string
+          specificity_weight: number
           study_type: string
           user_id: string
         }
         Insert: {
           created_at?: string | null
           id?: string
+          specificity_weight?: number
           study_type: string
           user_id: string
         }
         Update: {
           created_at?: string | null
           id?: string
+          specificity_weight?: number
           study_type?: string
           user_id?: string
         }
