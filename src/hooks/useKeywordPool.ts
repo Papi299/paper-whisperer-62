@@ -180,19 +180,11 @@ export function useKeywordPool(userId: string | undefined) {
     }
   };
 
-  // Function to find matching pool keywords in an abstract
+  // Context-aware keyword scanner with negation detection
   const findMatchingKeywords = useCallback(
     (abstract: string | null): string[] => {
       if (!abstract) return [];
-
-      const lowerAbstract = abstract.toLowerCase();
-      return poolKeywords
-        .filter((pk) => {
-          // Match whole words only using word boundaries
-          const regex = new RegExp(`\\b${escapeRegExp(pk.keyword)}\\b`, "i");
-          return regex.test(lowerAbstract);
-        })
-        .map((pk) => pk.keyword);
+      return extractContextualKeywords(abstract, poolKeywords.map(pk => pk.keyword));
     },
     [poolKeywords]
   );
@@ -212,4 +204,62 @@ export function useKeywordPool(userId: string | undefined) {
 // Helper to escape special regex characters
 function escapeRegExp(string: string): string {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Negation trigger phrases for academic text
+const NEGATION_TRIGGERS = [
+  "no", "not", "without", "excluding", "excluded",
+  "lack of", "ruled out", "absence of", "neither",
+  "nor", "unable to", "failed to", "non"
+];
+
+// Normalize abstract text: lowercase, collapse whitespace, standardize punctuation spacing
+function normalizeAbstract(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/['']/g, "'")
+    .replace(/[""]/g, '"')
+    .replace(/[-–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Context-aware keyword extraction from abstract text.
+ * Uses word-boundary regex matching and checks a 4-word preceding window
+ * for negation triggers to prevent false positives.
+ */
+function extractContextualKeywords(
+  abstract: string,
+  poolKeywordStrings: string[]
+): string[] {
+  const normalized = normalizeAbstract(abstract);
+  const matched: string[] = [];
+
+  for (const keyword of poolKeywordStrings) {
+    const pattern = new RegExp(`\\b${escapeRegExp(keyword.toLowerCase())}\\b`, "gi");
+    let match: RegExpExecArray | null;
+    let hasValidMatch = false;
+
+    while ((match = pattern.exec(normalized)) !== null) {
+      const precedingText = normalized.slice(0, match.index).trimEnd();
+      const precedingWords = precedingText.split(/\s+/).slice(-4).join(" ");
+
+      const isNegated = NEGATION_TRIGGERS.some(trigger => {
+        const triggerPattern = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, "i");
+        return triggerPattern.test(precedingWords);
+      });
+
+      if (!isNegated) {
+        hasValidMatch = true;
+        break;
+      }
+    }
+
+    if (hasValidMatch) {
+      matched.push(keyword);
+    }
+  }
+
+  return matched;
 }
