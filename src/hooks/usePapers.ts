@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
+import { normalizePaperData, NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
 
-export function usePapers(userId: string | undefined) {
+export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
   const [papers, setPapers] = useState<PaperWithTags[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -226,8 +227,7 @@ export function usePapers(userId: string | undefined) {
           continue;
         }
 
-        const paperData = {
-          user_id: userId,
+        const rawPaper: RawPaperData = {
           title: result.title,
           authors: result.authors || [],
           year: result.year,
@@ -242,6 +242,17 @@ export function usePapers(userId: string | undefined) {
           pubmed_url: result.pubmed_url,
           journal_url: result.journal_url,
           drive_url: driveUrl || null,
+        };
+
+        const normalized = normalizationConfig
+          ? normalizePaperData(rawPaper, normalizationConfig)
+          : rawPaper;
+
+        const paperData = {
+          user_id: userId,
+          ...normalized,
+          mesh_terms: normalized.mesh_terms || [],
+          substances: normalized.substances || [],
         };
 
         const { data: insertedPaper, error: insertError } = await supabase
@@ -304,8 +315,7 @@ export function usePapers(userId: string | undefined) {
 
     const yearNum = paperData.year ? parseInt(paperData.year) : null;
 
-    const insertData = {
-      user_id: userId,
+    const rawPaper: RawPaperData = {
       title: paperData.title.trim(),
       authors: authorsArray,
       year: yearNum,
@@ -314,8 +324,21 @@ export function usePapers(userId: string | undefined) {
       doi: paperData.doi.trim() || null,
       abstract: paperData.abstract.trim() || null,
       keywords: keywordsArray,
-      drive_url: paperData.driveUrl.trim() || null,
+      mesh_terms: [],
+      substances: [],
+      study_type: null,
       pubmed_url: paperData.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paperData.pmid.trim()}/` : null,
+      journal_url: null,
+      drive_url: paperData.driveUrl.trim() || null,
+    };
+
+    const normalized = normalizationConfig
+      ? normalizePaperData(rawPaper, normalizationConfig)
+      : rawPaper;
+
+    const insertData = {
+      user_id: userId,
+      ...normalized,
     };
 
     const { data: insertedPaper, error } = await supabase

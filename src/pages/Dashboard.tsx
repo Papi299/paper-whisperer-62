@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
@@ -20,11 +20,65 @@ import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDr
 import { Button } from "@/components/ui/button";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { Plus, Loader2 } from "lucide-react";
+import { NormalizationConfig } from "@/lib/normalizePaperData";
 
 export function Dashboard() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
+  // Initialize pools FIRST so normalization config is available for usePapers
+  const {
+    poolKeywords,
+    addKeyword: addPoolKeyword,
+    addMultipleKeywords: addMultiplePoolKeywords,
+    deleteKeyword: deletePoolKeyword,
+    deleteAllKeywords: deleteAllPoolKeywords,
+    findMatchingKeywords,
+  } = useKeywordPool(user?.id);
+
+  const {
+    synonymGroups,
+    addSynonymGroup,
+    updateSynonymGroup,
+    deleteSynonymGroup,
+    normalizeKeyword,
+    synonymLookup,
+  } = useSynonymPool(user?.id);
+
+  const {
+    poolStudyTypes,
+    addStudyType: addPoolStudyType,
+    addMultipleStudyTypes: addMultiplePoolStudyTypes,
+    updateStudyTypeWeight,
+    deleteStudyType: deletePoolStudyType,
+    deleteAllStudyTypes: deleteAllPoolStudyTypes,
+    findMatchingStudyTypes,
+  } = useStudyTypePool(user?.id);
+
+  const {
+    excludedKeywords,
+    excludedStudyTypes,
+    addExcludedKeyword,
+    deleteExcludedKeyword,
+    clearExcludedKeywords,
+    addExcludedStudyType,
+    deleteExcludedStudyType,
+    clearExcludedStudyTypes,
+    getExcludedKeywordSet,
+    getExcludedStudyTypeSet,
+  } = useExclusionPools(user?.id);
+
+  // Build normalization config from pool data
+  const normalizationConfig = useMemo<NormalizationConfig>(() => ({
+    synonymLookup: synonymLookup || {},
+    poolStudyTypes: poolStudyTypes.map(st => ({
+      study_type: st.study_type,
+      specificity_weight: st.specificity_weight,
+    })),
+    poolKeywords: poolKeywords.map(pk => pk.keyword),
+  }), [synonymLookup, poolStudyTypes, poolKeywords]);
+
+  // usePapers now receives the normalization config
   const {
     papers,
     projects,
@@ -41,47 +95,7 @@ export function Dashboard() {
     addPaperManually,
     updatePaper,
     deletePaper,
-  } = usePapers(user?.id);
-
-  const {
-    poolKeywords,
-    addKeyword: addPoolKeyword,
-    addMultipleKeywords: addMultiplePoolKeywords,
-    deleteKeyword: deletePoolKeyword,
-    deleteAllKeywords: deleteAllPoolKeywords,
-    findMatchingKeywords,
-  } = useKeywordPool(user?.id);
-
-  const {
-    synonymGroups,
-    addSynonymGroup,
-    updateSynonymGroup,
-    deleteSynonymGroup,
-    normalizeKeyword,
-  } = useSynonymPool(user?.id);
-
-  const {
-    excludedKeywords,
-    excludedStudyTypes,
-    addExcludedKeyword,
-    deleteExcludedKeyword,
-    clearExcludedKeywords,
-    addExcludedStudyType,
-    deleteExcludedStudyType,
-    clearExcludedStudyTypes,
-    getExcludedKeywordSet,
-    getExcludedStudyTypeSet,
-  } = useExclusionPools(user?.id);
-
-  const {
-    poolStudyTypes,
-    addStudyType: addPoolStudyType,
-    addMultipleStudyTypes: addMultiplePoolStudyTypes,
-    updateStudyTypeWeight,
-    deleteStudyType: deletePoolStudyType,
-    deleteAllStudyTypes: deleteAllPoolStudyTypes,
-    findMatchingStudyTypes,
-  } = useStudyTypePool(user?.id);
+  } = usePapers(user?.id, normalizationConfig);
 
   const {
     visibleColumns,
