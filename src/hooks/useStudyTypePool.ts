@@ -6,7 +6,17 @@ export interface PoolStudyType {
   id: string;
   user_id: string;
   study_type: string;
+  specificity_weight: number;
   created_at: string;
+}
+
+export interface WeightedStudyType {
+  study_type: string;
+  specificity_weight: number;
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function useStudyTypePool(userId: string | undefined) {
@@ -49,7 +59,6 @@ export function useStudyTypePool(userId: string | undefined) {
     const trimmed = studyType.trim();
     if (!trimmed) return false;
 
-    // Check if already exists
     if (poolStudyTypes.some((st) => st.study_type.toLowerCase() === trimmed.toLowerCase())) {
       toast({
         title: "Study type exists",
@@ -141,6 +150,27 @@ export function useStudyTypePool(userId: string | undefined) {
     }
   };
 
+  const updateStudyTypeWeight = async (id: string, weight: number) => {
+    try {
+      const { error } = await supabase
+        .from("study_type_pool")
+        .update({ specificity_weight: weight } as any)
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setPoolStudyTypes((prev) =>
+        prev.map((st) => (st.id === id ? { ...st, specificity_weight: weight } : st))
+      );
+    } catch (error: any) {
+      toast({
+        title: "Error updating weight",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
   const deleteStudyType = async (id: string) => {
     try {
       const { error } = await supabase
@@ -182,14 +212,20 @@ export function useStudyTypePool(userId: string | undefined) {
     }
   };
 
-  // Find study types from the pool that appear in a paper title
+  // Find study types from the pool that appear in a paper title using word boundary regex
   const findMatchingStudyTypes = useCallback(
-    (title: string): string[] => {
+    (title: string): WeightedStudyType[] => {
       if (!title) return [];
-      const lowerTitle = title.toLowerCase();
       return poolStudyTypes
-        .filter((st) => lowerTitle.includes(st.study_type.toLowerCase()))
-        .map((st) => st.study_type);
+        .filter((st) => {
+          try {
+            const regex = new RegExp('\\b' + escapeRegex(st.study_type) + '\\b', 'i');
+            return regex.test(title);
+          } catch {
+            return false;
+          }
+        })
+        .map((st) => ({ study_type: st.study_type, specificity_weight: st.specificity_weight }));
     },
     [poolStudyTypes]
   );
@@ -199,6 +235,7 @@ export function useStudyTypePool(userId: string | undefined) {
     loading,
     addStudyType,
     addMultipleStudyTypes,
+    updateStudyTypeWeight,
     deleteStudyType,
     deleteAllStudyTypes,
     findMatchingStudyTypes,

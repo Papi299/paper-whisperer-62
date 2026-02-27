@@ -75,6 +75,7 @@ interface SidebarProps {
   onAddMultiplePoolStudyTypes: (studyTypes: string[]) => Promise<number>;
   onDeletePoolStudyType: (id: string) => void;
   onDeleteAllPoolStudyTypes: () => void;
+  onUpdateStudyTypeWeight: (id: string, weight: number) => Promise<void>;
 }
 
 export function Sidebar({
@@ -114,6 +115,7 @@ export function Sidebar({
   onAddMultiplePoolStudyTypes,
   onDeletePoolStudyType,
   onDeleteAllPoolStudyTypes,
+  onUpdateStudyTypeWeight,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -353,6 +355,7 @@ export function Sidebar({
             onAddMultipleStudyTypes={onAddMultiplePoolStudyTypes}
             onDeleteStudyType={onDeletePoolStudyType}
             onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
+            onUpdateStudyTypeWeight={onUpdateStudyTypeWeight}
           />
 
           {/* Synonym Pool */}
