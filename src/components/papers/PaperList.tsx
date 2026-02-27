@@ -43,7 +43,7 @@ interface PaperListProps {
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
 }
 
-// Weight-based merge: combine API types with title matches, override by weight
+// Weight-based merge: combine API types with title matches, then strictly deduplicate
 function mergeStudyTypesByWeight(
   publicationTypes: string[],
   titleMatches: WeightedStudyType[],
@@ -65,9 +65,8 @@ function mergeStudyTypesByWeight(
     isFromTitle: true,
   }));
   
-  // Group by normalized name, keep highest weight
+  // Step 1: Group by normalized name, keep highest weight
   const merged = new Map<string, { type: string; weight: number; isFromTitle: boolean }>();
-  
   for (const entry of [...apiEntries, ...titleEntries]) {
     const key = entry.type.toLowerCase();
     const existing = merged.get(key);
@@ -76,11 +75,23 @@ function mergeStudyTypesByWeight(
     }
   }
   
-  // Override rule: if a title match has higher weight than any API type, it replaces
-  // Also deduplicate substring overlaps — prefer higher weight
-  const entries = Array.from(merged.values());
+  let entries = Array.from(merged.values());
   
-  // Sort by weight desc, then alphabetical
+  // Step 2: Strict substring deduplication — remove shorter strings contained in longer ones
+  entries = entries.filter((entry, _i, arr) => {
+    const lower = entry.type.toLowerCase();
+    for (const other of arr) {
+      if (other === entry) continue;
+      const otherLower = other.type.toLowerCase();
+      // If this entry's text is a substring of another entry's text, remove this one
+      if (otherLower.includes(lower) && otherLower !== lower) {
+        return false;
+      }
+    }
+    return true;
+  });
+  
+  // Step 3: Sort by weight desc, then alphabetical
   entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
   
   return entries;
@@ -367,9 +378,7 @@ export function PaperList({
                                         : ''
                                     }`}
                                   >
-                                    {entry.isFromTitle && <span className="mr-1 text-[10px] opacity-70">T:</span>}
                                     {entry.type}
-                                    <span className="ml-1 text-[10px] opacity-50">w:{entry.weight}</span>
                                   </Badge>
                                 ))}
                               </div>
