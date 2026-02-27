@@ -1,3 +1,5 @@
+import { useRef, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
 import { WeightedStudyType } from "@/hooks/useStudyTypePool";
 import { Button } from "@/components/ui/button";
@@ -51,21 +53,18 @@ function mergeStudyTypesByWeight(
 ): { type: string; weight: number; isFromTitle: boolean }[] {
   const poolMap = new Map(poolStudyTypes.map(p => [p.study_type.toLowerCase(), p.specificity_weight]));
   
-  // Build weighted entries for API types
   const apiEntries = publicationTypes.map(t => ({
     type: t,
     weight: poolMap.get(t.toLowerCase()) ?? 1,
     isFromTitle: false,
   }));
   
-  // Build weighted entries for title matches
   const titleEntries = titleMatches.map(t => ({
     type: t.study_type,
     weight: t.specificity_weight,
     isFromTitle: true,
   }));
   
-  // Step 1: Group by normalized name, keep highest weight
   const merged = new Map<string, { type: string; weight: number; isFromTitle: boolean }>();
   for (const entry of [...apiEntries, ...titleEntries]) {
     const key = entry.type.toLowerCase();
@@ -77,13 +76,11 @@ function mergeStudyTypesByWeight(
   
   let entries = Array.from(merged.values());
   
-  // Step 2: Strict substring deduplication — remove shorter strings contained in longer ones
   entries = entries.filter((entry, _i, arr) => {
     const lower = entry.type.toLowerCase();
     for (const other of arr) {
       if (other === entry) continue;
       const otherLower = other.type.toLowerCase();
-      // If this entry's text is a substring of another entry's text, remove this one
       if (otherLower.includes(lower) && otherLower !== lower) {
         return false;
       }
@@ -91,7 +88,6 @@ function mergeStudyTypesByWeight(
     return true;
   });
   
-  // Step 3: Sort by weight desc, then alphabetical
   entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
   
   return entries;
@@ -113,12 +109,75 @@ export function PaperList({
   onExcludeStudyType,
   onExcludeKeyword,
 }: PaperListProps) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const rowVirtualizer = useVirtualizer({
+    count: papers.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => 72,
+    overscan: 10,
+    measureElement: (element) => {
+      return element.getBoundingClientRect().height;
+    },
+  });
+
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
   };
 
   const isVisible = (columnId: ColumnId) => visibleColumns?.includes(columnId) ?? true;
   const getWidth = (columnId: ColumnId) => columnWidths?.[columnId] || 150;
+
+  const getCombinedKeywords = useCallback((paper: PaperWithTags, matchedPoolKeywords: string[]) => {
+    const seenNormalized = new Set<string>();
+    const result: { keyword: string; displayName: string; source: 'pool' | 'pubmed' | 'mesh' | 'substance' }[] = [];
+    
+    const isExcluded = (kw: string) => excludedKeywords?.has(kw.toLowerCase()) ?? false;
+    
+    matchedPoolKeywords.forEach(kw => {
+      if (isExcluded(kw)) return;
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'pool' });
+      }
+    });
+    
+    (paper.keywords || []).forEach(kw => {
+      if (isExcluded(kw)) return;
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'pubmed' });
+      }
+    });
+    
+    (paper.mesh_terms || []).forEach(kw => {
+      if (isExcluded(kw)) return;
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'mesh' });
+      }
+    });
+    
+    (paper.substances || []).forEach(kw => {
+      if (isExcluded(kw)) return;
+      const displayName = normalizeKeyword(kw);
+      const normalizedKey = displayName.toLowerCase();
+      if (!seenNormalized.has(normalizedKey)) {
+        seenNormalized.add(normalizedKey);
+        result.push({ keyword: kw, displayName, source: 'substance' });
+      }
+    });
+    
+    result.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    
+    return result;
+  }, [excludedKeywords, normalizeKeyword]);
 
   if (papers.length === 0) {
     return (
@@ -131,142 +190,66 @@ export function PaperList({
     );
   }
 
-  // Helper function to get unique combined keywords with normalization (excludes filtered keywords)
-  const getCombinedKeywords = (paper: PaperWithTags, matchedPoolKeywords: string[]) => {
-    const seenNormalized = new Set<string>();
-    const result: { keyword: string; displayName: string; source: 'pool' | 'pubmed' | 'mesh' | 'substance' }[] = [];
-    
-    // Helper to check if keyword should be excluded (with fallback for undefined)
-    const isExcluded = (kw: string) => excludedKeywords?.has(kw.toLowerCase()) ?? false;
-    
-    // Add matched pool keywords first (highest priority)
-    matchedPoolKeywords.forEach(kw => {
-      if (isExcluded(kw)) return; // Skip excluded keywords
-      const displayName = normalizeKeyword(kw);
-      const normalizedKey = displayName.toLowerCase();
-      if (!seenNormalized.has(normalizedKey)) {
-        seenNormalized.add(normalizedKey);
-        result.push({ keyword: kw, displayName, source: 'pool' });
-      }
-    });
-    
-    // Add PubMed keywords (author-designated, second priority)
-    (paper.keywords || []).forEach(kw => {
-      if (isExcluded(kw)) return; // Skip excluded keywords
-      const displayName = normalizeKeyword(kw);
-      const normalizedKey = displayName.toLowerCase();
-      if (!seenNormalized.has(normalizedKey)) {
-        seenNormalized.add(normalizedKey);
-        result.push({ keyword: kw, displayName, source: 'pubmed' });
-      }
-    });
-    
-    // Add MeSH terms (skip if already present after normalization or excluded)
-    (paper.mesh_terms || []).forEach(kw => {
-      if (isExcluded(kw)) return; // Skip excluded keywords
-      const displayName = normalizeKeyword(kw);
-      const normalizedKey = displayName.toLowerCase();
-      if (!seenNormalized.has(normalizedKey)) {
-        seenNormalized.add(normalizedKey);
-        result.push({ keyword: kw, displayName, source: 'mesh' });
-      }
-    });
-    
-    // Add Substances (skip if already present after normalization or excluded)
-    (paper.substances || []).forEach(kw => {
-      if (isExcluded(kw)) return; // Skip excluded keywords
-      const displayName = normalizeKeyword(kw);
-      const normalizedKey = displayName.toLowerCase();
-      if (!seenNormalized.has(normalizedKey)) {
-        seenNormalized.add(normalizedKey);
-        result.push({ keyword: kw, displayName, source: 'substance' });
-      }
-    });
-    
-    // Sort alphabetically by display name
-    result.sort((a, b) => a.displayName.localeCompare(b.displayName));
-    
-    return result;
-  };
+  const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
-    <div className="rounded-md border overflow-x-auto">
+    <div
+      ref={scrollContainerRef}
+      className="rounded-md border overflow-auto"
+      style={{ maxHeight: "calc(100vh - 220px)" }}
+    >
       <Table style={{ tableLayout: "fixed" }}>
-        <TableHeader>
+        <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow>
             {isVisible("title") && (
-              <ResizableTableHeader
-                columnId="title"
-                label="Title"
-                width={getWidth("title")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} />
             )}
             {isVisible("authors") && (
-              <ResizableTableHeader
-                columnId="authors"
-                label="Authors"
-                width={getWidth("authors")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="authors" label="Authors" width={getWidth("authors")} onResize={onColumnResize} />
             )}
             {isVisible("year") && (
-              <ResizableTableHeader
-                columnId="year"
-                label="Year"
-                width={getWidth("year")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="year" label="Year" width={getWidth("year")} onResize={onColumnResize} />
             )}
             {isVisible("journal") && (
-              <ResizableTableHeader
-                columnId="journal"
-                label="Journal"
-                width={getWidth("journal")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="journal" label="Journal" width={getWidth("journal")} onResize={onColumnResize} />
             )}
             {isVisible("studyType") && (
-              <ResizableTableHeader
-                columnId="studyType"
-                label="Study Type"
-                width={getWidth("studyType")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="studyType" label="Study Type" width={getWidth("studyType")} onResize={onColumnResize} />
             )}
             {isVisible("tags") && (
-              <ResizableTableHeader
-                columnId="tags"
-                label="Tags"
-                width={getWidth("tags")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="tags" label="Tags" width={getWidth("tags")} onResize={onColumnResize} />
             )}
             {isVisible("keywords") && (
-              <ResizableTableHeader
-                columnId="keywords"
-                label="Keywords"
-                width={getWidth("keywords")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="keywords" label="Keywords" width={getWidth("keywords")} onResize={onColumnResize} />
             )}
             {isVisible("links") && (
-              <ResizableTableHeader
-                columnId="links"
-                label="Links"
-                width={getWidth("links")}
-                onResize={onColumnResize}
-              />
+              <ResizableTableHeader columnId="links" label="Links" width={getWidth("links")} onResize={onColumnResize} />
             )}
             <TableHead className="w-[50px]"></TableHead>
           </TableRow>
         </TableHeader>
-        <TableBody>
-          {papers.map((paper) => {
+        <TableBody
+          style={{
+            height: `${rowVirtualizer.getTotalSize()}px`,
+            position: "relative",
+          }}
+        >
+          {/* Spacer for items before visible window */}
+          {virtualItems.length > 0 && (
+            <tr style={{ height: `${virtualItems[0].start}px` }} aria-hidden="true">
+              <td />
+            </tr>
+          )}
+          {virtualItems.map((virtualRow) => {
+            const paper = papers[virtualRow.index];
             const matchedPoolKeywords = findMatchingKeywords(paper.abstract);
             const combinedKeywords = getCombinedKeywords(paper, matchedPoolKeywords);
             return (
-              <TableRow key={paper.id}>
+              <TableRow
+                key={paper.id}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+              >
                 {isVisible("title") && (
                   <TableCell style={{ width: getWidth("title"), minWidth: getWidth("title"), maxWidth: getWidth("title") }}>
                     <div className="space-y-1">
@@ -313,19 +296,14 @@ export function PaperList({
                     style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
                   >
                     {(() => {
-                      // Get study types from Publication Types (existing data)
                       const publicationTypes = paper.study_type
                         ?.split(/[,;]+/)
                         .map(t => t.trim())
                         .filter(Boolean) || [];
                       
-                      // Find matching study types from pool in title
                       const titleMatches = findMatchingStudyTypes(paper.title);
-                      
-                      // Merge using weight-based logic
                       const mergedTypes = mergeStudyTypesByWeight(publicationTypes, titleMatches, poolStudyTypes);
                       
-                      // Filter out excluded tokens
                       const excludedSet = excludedStudyTypes ?? new Set<string>();
                       const filteredTokens = mergedTypes.filter(entry => {
                         const lowerToken = entry.type.toLowerCase();
@@ -479,12 +457,7 @@ export function PaperList({
                     <div className="flex gap-1">
                       {paper.drive_url && (
                         <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                          <a
-                            href={paper.drive_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title="Open in Google Drive"
-                          >
+                          <a href={paper.drive_url} target="_blank" rel="noopener noreferrer" title="Open in Google Drive">
                             <FolderOpen className="h-4 w-4" />
                           </a>
                         </Button>
@@ -541,6 +514,17 @@ export function PaperList({
               </TableRow>
             );
           })}
+          {/* Spacer for items after visible window */}
+          {virtualItems.length > 0 && (
+            <tr
+              style={{
+                height: `${rowVirtualizer.getTotalSize() - (virtualItems[virtualItems.length - 1].end)}px`,
+              }}
+              aria-hidden="true"
+            >
+              <td />
+            </tr>
+          )}
         </TableBody>
       </Table>
     </div>
