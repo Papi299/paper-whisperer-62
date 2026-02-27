@@ -114,8 +114,15 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
+    const updatedProject = { ...projects.find(p => p.id === projectId)!, ...updates };
     setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, ...updates } : p))
+      prev.map((p) => (p.id === projectId ? updatedProject : p))
+    );
+    // Propagate to embedded paper references
+    setPapers((prev) =>
+      prev.map((p) =>
+        p.project_id === projectId ? { ...p, project: updatedProject } : p
+      )
     );
   };
 
@@ -183,7 +190,15 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    setTags((prev) => prev.map((t) => (t.id === tagId ? { ...t, ...updates } : t)));
+    const updatedTag = { ...tags.find(t => t.id === tagId)!, ...updates };
+    setTags((prev) => prev.map((t) => (t.id === tagId ? updatedTag : t)));
+    // Propagate to embedded paper references
+    setPapers((prev) =>
+      prev.map((p) => ({
+        ...p,
+        tags: p.tags.map((t) => (t.id === tagId ? updatedTag : t)),
+      }))
+    );
   };
 
   const deleteTag = async (tagId: string) => {
