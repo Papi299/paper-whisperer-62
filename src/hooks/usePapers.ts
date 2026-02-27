@@ -227,6 +227,14 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           continue;
         }
 
+        // Notify user if data came from Crossref fallback
+        if (result.source === "crossref") {
+          toast({
+            title: "Paper fetched via Crossref",
+            description: `"${result.title}" — PubMed unavailable. Some metadata (MeSH terms, keywords) may be limited.`,
+          });
+        }
+
         const rawPaper: RawPaperData = {
           title: result.title,
           authors: result.authors || [],
