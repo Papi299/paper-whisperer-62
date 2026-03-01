@@ -242,6 +242,23 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           continue;
         }
 
+        // Duplicate check against current local state
+        const isDuplicate = papers.some(existing => {
+          if (result.pmid && existing.pmid && result.pmid === existing.pmid) return true;
+          if (result.doi && existing.doi && result.doi.toLowerCase() === existing.doi.toLowerCase()) return true;
+          if (result.title && existing.title && result.title.replace(/\.\s*$/, '').trim().toLowerCase() === existing.title.toLowerCase()) return true;
+          return false;
+        });
+
+        if (isDuplicate) {
+          toast({
+            title: "Duplicate paper",
+            description: `"${result.title}" already exists in the index.`,
+            variant: "destructive",
+          });
+          continue;
+        }
+
         // Notify user if data came from Crossref fallback
         if (result.source === "crossref") {
           toast({
@@ -338,19 +355,39 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
     const yearNum = paperData.year ? parseInt(paperData.year) : null;
 
+    // Duplicate check for manual entry
+    const manualTitle = paperData.title.trim();
+    const manualPmid = paperData.pmid.trim();
+    const manualDoi = paperData.doi.trim();
+    const isDuplicate = papers.some(existing => {
+      if (manualPmid && existing.pmid && manualPmid === existing.pmid) return true;
+      if (manualDoi && existing.doi && manualDoi.toLowerCase() === existing.doi.toLowerCase()) return true;
+      if (manualTitle && existing.title && manualTitle.toLowerCase() === existing.title.toLowerCase()) return true;
+      return false;
+    });
+
+    if (isDuplicate) {
+      toast({
+        title: "Duplicate paper",
+        description: `"${manualTitle}" already exists in the index.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     const rawPaper: RawPaperData = {
-      title: paperData.title.trim(),
+      title: manualTitle,
       authors: authorsArray,
       year: yearNum,
       journal: paperData.journal.trim() || null,
-      pmid: paperData.pmid.trim() || null,
-      doi: paperData.doi.trim() || null,
+      pmid: manualPmid || null,
+      doi: manualDoi || null,
       abstract: paperData.abstract.trim() || null,
       keywords: keywordsArray,
       mesh_terms: [],
       substances: [],
       study_type: null,
-      pubmed_url: paperData.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paperData.pmid.trim()}/` : null,
+      pubmed_url: manualPmid ? `https://pubmed.ncbi.nlm.nih.gov/${manualPmid}/` : null,
       journal_url: null,
       drive_url: paperData.driveUrl.trim() || null,
     };
