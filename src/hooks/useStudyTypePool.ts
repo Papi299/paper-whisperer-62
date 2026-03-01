@@ -234,6 +234,54 @@ export function useStudyTypePool(userId: string | undefined) {
     }
   };
 
+  const renameGroup = async (oldName: string, newName: string) => {
+    if (!userId) return;
+    try {
+      const { error } = await (supabase
+        .from("study_type_pool")
+        .update({ group_name: newName } as any)
+        .eq("user_id", userId) as any)
+        .eq("group_name", oldName);
+
+      if (error) throw error;
+
+      setPoolStudyTypes((prev) =>
+        prev.map((st) => (st.group_name === oldName ? { ...st, group_name: newName } : st))
+      );
+      toast({ title: "Group renamed" });
+    } catch (error: any) {
+      toast({
+        title: "Error renaming group",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const deleteGroup = async (groupName: string) => {
+    if (!userId) return;
+    try {
+      const { error } = await (supabase
+        .from("study_type_pool")
+        .update({ group_name: null } as any)
+        .eq("user_id", userId) as any)
+        .eq("group_name", groupName);
+
+      if (error) throw error;
+
+      setPoolStudyTypes((prev) =>
+        prev.map((st) => (st.group_name === groupName ? { ...st, group_name: null } : st))
+      );
+      toast({ title: "Group deleted", description: "Study types moved to standalone." });
+    } catch (error: any) {
+      toast({
+        title: "Error deleting group",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
   // Find study types from the pool that appear in a paper title using word boundary regex
   const findMatchingStudyTypes = useCallback(
     (title: string): WeightedStudyType[] => {
@@ -259,6 +307,8 @@ export function useStudyTypePool(userId: string | undefined) {
     addMultipleStudyTypes,
     updateStudyTypeWeight,
     updateStudyTypeGroup,
+    renameGroup,
+    deleteGroup,
     deleteStudyType,
     deleteAllStudyTypes,
     findMatchingStudyTypes,

@@ -55,6 +55,8 @@ export function Dashboard() {
     addMultipleStudyTypes: addMultiplePoolStudyTypes,
     updateStudyTypeWeight,
     updateStudyTypeGroup,
+    renameGroup: renameStudyTypeGroup,
+    deleteGroup: deleteStudyTypeGroup,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
     findMatchingStudyTypes,
@@ -345,6 +347,8 @@ export function Dashboard() {
           onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
           onUpdateStudyTypeWeight={updateStudyTypeWeight}
           onUpdateStudyTypeGroup={updateStudyTypeGroup}
+          onRenameStudyTypeGroup={renameStudyTypeGroup}
+          onDeleteStudyTypeGroup={deleteStudyTypeGroup}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
