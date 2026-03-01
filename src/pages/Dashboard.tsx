@@ -380,7 +380,6 @@ export function Dashboard() {
       <AddPaperDialog
         open={addPaperOpen}
         onOpenChange={setAddPaperOpen}
-        onSubmit={addPapers}
         onSubmitManual={addPaperManually}
         onBulkImport={bulkImportPapers}
       />
