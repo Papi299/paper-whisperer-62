@@ -5,6 +5,8 @@
  * Both API fetches and manual entries MUST pass through this pipeline.
  */
 
+import { decodeHTMLEntities } from "./decodeHTMLEntities";
+
 // ── Helpers ──
 
 function escapeRegExp(str: string): string {
@@ -235,31 +237,35 @@ export function normalizePaperData(
   raw: RawPaperData,
   config: NormalizationConfig
 ): NormalizedPaperData {
+  // Step 0: Decode HTML entities in text fields (PubMed returns encoded entities)
+  const decodedTitle = decodeHTMLEntities(raw.title) || raw.title;
+  const decodedAbstract = decodeHTMLEntities(raw.abstract) || null;
+
   // Step 1: Normalize keywords through synonym lookup
   let normalizedKeywords = normalizeKeywords(raw.keywords, config.synonymLookup);
 
   // Step 2: Filter out keywords that are negated in the abstract
   normalizedKeywords = filterKeywordsByAbstractContext(
     normalizedKeywords,
-    raw.abstract,
+    decodedAbstract,
     config.poolKeywords
   );
 
   // Step 3: Deduplicate study types using specificity weights
   const deduplicatedStudyType = deduplicateStudyTypes(
     raw.study_type,
-    raw.title,
+    decodedTitle,
     config.poolStudyTypes
   );
 
   return {
-    title: raw.title,
+    title: decodedTitle,
     authors: raw.authors,
     year: raw.year,
     journal: raw.journal,
     pmid: raw.pmid,
     doi: raw.doi,
-    abstract: raw.abstract,
+    abstract: decodedAbstract,
     keywords: normalizedKeywords,
     mesh_terms: raw.mesh_terms || [],
     substances: raw.substances || [],
