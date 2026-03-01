@@ -116,9 +116,6 @@ export function PaperList({
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => 72,
     overscan: 10,
-    measureElement: (element) => {
-      return element.getBoundingClientRect().height;
-    },
   });
 
   const generateGoogleScholarUrl = (title: string) => {
@@ -248,9 +245,6 @@ export function PaperList({
               <TableRow
                 key={paper.id}
                 data-index={virtualRow.index}
-                ref={(node) => {
-                  if (node) rowVirtualizer.measureElement(node);
-                }}
               >
                 {isVisible("title") && (
                   <TableCell style={{ width: getWidth("title"), minWidth: getWidth("title"), maxWidth: getWidth("title") }}>
