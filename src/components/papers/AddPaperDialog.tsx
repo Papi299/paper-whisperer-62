@@ -11,7 +11,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, Link as LinkIcon, Search, PenLine } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { Loader2, Link as LinkIcon, Search, PenLine, Upload } from "lucide-react";
 
 interface ManualPaperData {
   title: string;
@@ -30,6 +31,10 @@ interface AddPaperDialogProps {
   onOpenChange: (open: boolean) => void;
   onSubmit: (identifiers: string[], driveUrl?: string) => Promise<void>;
   onSubmitManual?: (paperData: ManualPaperData) => Promise<void>;
+  onBulkImport?: (
+    identifiers: string[],
+    onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void
+  ) => Promise<void>;
 }
 
 // Check if a string is a Google Drive link
@@ -51,6 +56,15 @@ function extractIdentifiers(text: string): string[] {
     .filter((id) => id.length > 0 && !isGoogleDriveLink(id));
 }
 
+// Parse bulk input: split on commas, newlines, or whitespace (but preserve DOIs with dots)
+function parseBulkIdentifiers(text: string): string[] {
+  return text
+    .split(/[\n,]+/)
+    .flatMap((line) => line.trim().split(/\s+/))
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+}
+
 const emptyManualData: ManualPaperData = {
   title: "",
   authors: "",
@@ -63,8 +77,8 @@ const emptyManualData: ManualPaperData = {
   driveUrl: "",
 };
 
-export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual }: AddPaperDialogProps) {
-  const [activeTab, setActiveTab] = useState<"search" | "manual">("search");
+export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual, onBulkImport }: AddPaperDialogProps) {
+  const [activeTab, setActiveTab] = useState<"search" | "manual" | "bulk">("search");
   
   // Search mode state
   const [input, setInput] = useState("");
@@ -74,6 +88,11 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual }:
 
   // Manual mode state
   const [manualData, setManualData] = useState<ManualPaperData>(emptyManualData);
+
+  // Bulk import state
+  const [bulkInput, setBulkInput] = useState("");
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
 
   // Auto-detect Drive links when input changes
   useEffect(() => {
@@ -88,7 +107,6 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual }:
   const handleUseDriveLink = () => {
     if (detectedDriveLink) {
       setDriveUrl(detectedDriveLink);
-      // Remove the drive link from input
       setInput((prev) => prev.replace(detectedDriveLink, "").trim());
       setDetectedDriveLink(null);
     }
@@ -96,7 +114,6 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual }:
 
   const handleSearchSubmit = async () => {
     const identifiers = extractIdentifiers(input);
-
     if (identifiers.length === 0) return;
 
     setLoading(true);
@@ -121,11 +138,32 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual }:
     }
   };
 
+  const handleBulkImport = async () => {
+    if (!onBulkImport) return;
+    const ids = parseBulkIdentifiers(bulkInput);
+    if (ids.length === 0) return;
+
+    setBulkRunning(true);
+    setBulkProgress({ current: 0, total: ids.length, added: 0, skipped: 0, failed: 0 });
+
+    try {
+      await onBulkImport(ids, (current, total, added, skipped, failed) => {
+        setBulkProgress({ current, total, added, skipped, failed });
+      });
+    } finally {
+      setBulkRunning(false);
+      // Don't auto-close so user can see the final summary
+    }
+  };
+
   const resetAndClose = () => {
     setInput("");
     setDriveUrl("");
     setDetectedDriveLink(null);
     setManualData(emptyManualData);
+    setBulkInput("");
+    setBulkRunning(false);
+    setBulkProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
     setActiveTab("search");
     onOpenChange(false);
   };
@@ -134,25 +172,32 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual }:
     setManualData((prev) => ({ ...prev, [field]: value }));
   };
 
+  const bulkIds = parseBulkIdentifiers(bulkInput);
+  const progressPercent = bulkProgress.total > 0 ? Math.round((bulkProgress.current / bulkProgress.total) * 100) : 0;
+
   return (
-    <Dialog open={open} onOpenChange={resetAndClose}>
+    <Dialog open={open} onOpenChange={bulkRunning ? undefined : resetAndClose}>
       <DialogContent className="sm:max-w-[550px]">
         <DialogHeader>
           <DialogTitle>Add Papers</DialogTitle>
           <DialogDescription>
-            Search by identifier or add paper details manually.
+            Search by identifier, add manually, or bulk import.
           </DialogDescription>
         </DialogHeader>
         
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "search" | "manual")}>
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="search" className="flex items-center gap-2">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "search" | "manual" | "bulk")}>
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="search" className="flex items-center gap-2" disabled={bulkRunning}>
               <Search className="h-4 w-4" />
               Search
             </TabsTrigger>
-            <TabsTrigger value="manual" className="flex items-center gap-2">
+            <TabsTrigger value="manual" className="flex items-center gap-2" disabled={bulkRunning}>
               <PenLine className="h-4 w-4" />
-              Manual Entry
+              Manual
+            </TabsTrigger>
+            <TabsTrigger value="bulk" className="flex items-center gap-2" disabled={bulkRunning}>
+              <Upload className="h-4 w-4" />
+              Bulk Import
             </TabsTrigger>
           </TabsList>
 
@@ -325,6 +370,65 @@ Paper title to search for`}
               <Button onClick={handleManualSubmit} disabled={loading || !manualData.title.trim() || !onSubmitManual}>
                 {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Add Paper
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="bulk" className="space-y-4 mt-4">
+            <div className="space-y-2">
+              <Label htmlFor="bulk-identifiers">
+                Paste PMIDs or DOIs (comma, space, or newline separated)
+              </Label>
+              <Textarea
+                id="bulk-identifiers"
+                placeholder={`Paste your list of identifiers here, e.g.:
+38237512
+37654321, 36543210
+10.1000/xyz123
+10.1016/j.example.2024.01.001`}
+                value={bulkInput}
+                onChange={(e) => setBulkInput(e.target.value)}
+                rows={6}
+                disabled={bulkRunning}
+              />
+              {bulkIds.length > 0 && !bulkRunning && (
+                <p className="text-sm text-muted-foreground">
+                  {bulkIds.length} identifier{bulkIds.length !== 1 ? "s" : ""} detected
+                </p>
+              )}
+            </div>
+
+            {bulkRunning && (
+              <div className="space-y-3">
+                <Progress value={progressPercent} className="h-2" />
+                <p className="text-sm text-muted-foreground text-center">
+                  Processing {bulkProgress.current} of {bulkProgress.total}…
+                  {bulkProgress.added > 0 && <span className="text-foreground"> · {bulkProgress.added} added</span>}
+                  {bulkProgress.skipped > 0 && <span className="text-muted-foreground"> · {bulkProgress.skipped} skipped</span>}
+                  {bulkProgress.failed > 0 && <span className="text-destructive"> · {bulkProgress.failed} failed</span>}
+                </p>
+              </div>
+            )}
+
+            {!bulkRunning && bulkProgress.total > 0 && bulkProgress.current === bulkProgress.total && (
+              <div className="rounded-md border border-border bg-muted/50 p-3 text-sm space-y-1">
+                <p className="font-medium">Import complete</p>
+                <p className="text-muted-foreground">
+                  {bulkProgress.added} added · {bulkProgress.skipped} skipped · {bulkProgress.failed} failed
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={resetAndClose} disabled={bulkRunning}>
+                {bulkRunning ? "Running…" : (bulkProgress.current === bulkProgress.total && bulkProgress.total > 0 ? "Close" : "Cancel")}
+              </Button>
+              <Button
+                onClick={handleBulkImport}
+                disabled={bulkRunning || bulkIds.length === 0 || !onBulkImport}
+              >
+                {bulkRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Import {bulkIds.length > 0 ? `${bulkIds.length} Papers` : "Papers"}
               </Button>
             </div>
           </TabsContent>

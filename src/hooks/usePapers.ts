@@ -504,6 +504,120 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     toast({ title: "Paper deleted" });
   };
 
+  const bulkImportPapers = async (
+    identifiers: string[],
+    onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void
+  ) => {
+    if (!userId || identifiers.length === 0) return;
+
+    let added = 0;
+    let skipped = 0;
+    let failed = 0;
+    const total = identifiers.length;
+    const newPapers: PaperWithTags[] = [];
+
+    for (let i = 0; i < identifiers.length; i++) {
+      const id = identifiers[i];
+      onProgress?.(i + 1, total, added, skipped, failed);
+
+      // Pre-fetch dedup check (local state + freshly added in this batch)
+      const allCurrent = [...papers, ...newPapers];
+      const alreadyExists = allCurrent.some(existing => {
+        const trimmedId = id.trim();
+        if (/^\d+$/.test(trimmedId) && existing.pmid === trimmedId) return true;
+        if (trimmedId.startsWith("10.") && existing.doi?.toLowerCase() === trimmedId.toLowerCase()) return true;
+        if (existing.title?.replace(/\.\s*$/, '').trim().toLowerCase() === trimmedId.toLowerCase()) return true;
+        return false;
+      });
+
+      if (alreadyExists) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const fetchedPapers = await fetchPaperMetadata([id]);
+        const result = fetchedPapers[0];
+
+        if (!result || result.error) {
+          failed++;
+          continue;
+        }
+
+        // Post-fetch dedup check
+        const allCurrentPost = [...papers, ...newPapers];
+        const isDupPost = allCurrentPost.some(existing => {
+          if (result.pmid && existing.pmid && result.pmid === existing.pmid) return true;
+          if (result.doi && existing.doi && result.doi.toLowerCase() === existing.doi.toLowerCase()) return true;
+          if (result.title && existing.title && result.title.replace(/\.\s*$/, '').trim().toLowerCase() === existing.title.toLowerCase()) return true;
+          return false;
+        });
+
+        if (isDupPost) {
+          skipped++;
+          continue;
+        }
+
+        const rawPaper: RawPaperData = {
+          title: result.title,
+          authors: result.authors || [],
+          year: result.year,
+          journal: result.journal,
+          pmid: result.pmid,
+          doi: result.doi,
+          abstract: result.abstract,
+          keywords: result.keywords || [],
+          mesh_terms: result.mesh_terms || [],
+          substances: result.substances || [],
+          study_type: result.study_type || null,
+          pubmed_url: result.pubmed_url,
+          journal_url: result.journal_url,
+          drive_url: null,
+        };
+
+        const normalized = normalizationConfig
+          ? normalizePaperData(rawPaper, normalizationConfig)
+          : rawPaper;
+
+        const paperData = {
+          user_id: userId,
+          ...normalized,
+          mesh_terms: normalized.mesh_terms || [],
+          substances: normalized.substances || [],
+        };
+
+        const { data: insertedPaper, error: insertError } = await supabase
+          .from("papers")
+          .insert(paperData)
+          .select()
+          .single();
+
+        if (insertError) {
+          failed++;
+          continue;
+        }
+
+        const newPaper: PaperWithTags = { ...(insertedPaper as Paper), tags: [], projects: [] };
+        newPapers.push(newPaper);
+        added++;
+      } catch {
+        failed++;
+      }
+    }
+
+    // Final progress callback
+    onProgress?.(total, total, added, skipped, failed);
+
+    if (newPapers.length > 0) {
+      setPapers((prev) => [...newPapers, ...prev]);
+    }
+
+    toast({
+      title: "Bulk import complete",
+      description: `${added} added, ${skipped} skipped (duplicates), ${failed} failed.`,
+    });
+  };
+
   // Extract all unique keywords from papers
   const allKeywords = useMemo(() => {
     const keywordSet = new Set<string>();
@@ -527,6 +641,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     deleteTag,
     addPapers,
     addPaperManually,
+    bulkImportPapers,
     updatePaper,
     deletePaper,
     refetch: fetchData,
