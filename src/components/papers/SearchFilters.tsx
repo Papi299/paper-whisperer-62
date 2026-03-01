@@ -25,6 +25,7 @@ interface SearchFiltersProps {
   onYearToChange: (year: string) => void;
   studyType: string;
   onStudyTypeChange: (type: string) => void;
+  studyTypeFilterOptions: string[];
   selectedKeywords: string[];
   availableKeywords: string[];
   onKeywordToggle: (keyword: string) => void;
@@ -43,6 +44,7 @@ export function SearchFilters({
   onYearToChange,
   studyType,
   onStudyTypeChange,
+  studyTypeFilterOptions,
   selectedKeywords,
   availableKeywords,
   onKeywordToggle,
@@ -51,16 +53,6 @@ export function SearchFilters({
   onExportRIS,
   hasActiveFilters,
 }: SearchFiltersProps) {
-  const studyTypes = [
-    "RCT",
-    "Meta-analysis",
-    "Systematic Review",
-    "Cohort Study",
-    "Case-Control",
-    "Cross-sectional",
-    "Case Report",
-    "Review",
-  ];
 
   return (
     <div className="space-y-4">
@@ -102,7 +94,7 @@ export function SearchFilters({
           </SelectTrigger>
           <SelectContent className="bg-popover">
             <SelectItem value="all">All Types</SelectItem>
-            {studyTypes.map((type) => (
+            {studyTypeFilterOptions.map((type) => (
               <SelectItem key={type} value={type}>
                 {type}
               </SelectItem>
