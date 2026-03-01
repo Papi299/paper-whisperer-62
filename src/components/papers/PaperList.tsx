@@ -24,7 +24,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, MoreHorizontal, Pencil, Trash2, FolderOpen, Sparkles, X } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Pencil, Trash2, Sparkles, X } from "lucide-react";
+import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader } from "./ResizableTableHeader";
 
@@ -43,6 +44,7 @@ interface PaperListProps {
   excludedStudyTypes: Set<string>;
   onExcludeStudyType: (studyType: string) => Promise<boolean>;
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
+  onUpdateDriveUrl: (paperId: string, driveUrl: string) => Promise<void>;
 }
 
 // Weight-based merge: combine API types with title matches, then strictly deduplicate
@@ -108,6 +110,7 @@ export function PaperList({
   excludedStudyTypes,
   onExcludeStudyType,
   onExcludeKeyword,
+  onUpdateDriveUrl,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -451,13 +454,11 @@ export function PaperList({
                 {isVisible("links") && (
                   <TableCell style={{ width: getWidth("links"), minWidth: getWidth("links"), maxWidth: getWidth("links") }}>
                     <div className="flex gap-1">
-                      {paper.drive_url && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                          <a href={paper.drive_url} target="_blank" rel="noopener noreferrer" title="Open in Google Drive">
-                            <FolderOpen className="h-4 w-4" />
-                          </a>
-                        </Button>
-                      )}
+                      <QuickAddDriveLink
+                        paperId={paper.id}
+                        driveUrl={paper.drive_url}
+                        onSave={onUpdateDriveUrl}
+                      />
                       {paper.pubmed_url && (
                         <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
                           <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer" title="PubMed">

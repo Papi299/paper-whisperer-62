@@ -366,6 +366,9 @@ export function Dashboard() {
             excludedStudyTypes={getExcludedStudyTypeSet()}
             onExcludeStudyType={addExcludedStudyType}
             onExcludeKeyword={addExcludedKeyword}
+            onUpdateDriveUrl={async (paperId, driveUrl) => {
+              await updatePaper(paperId, { drive_url: driveUrl });
+            }}
           />
         </main>
       </div>
