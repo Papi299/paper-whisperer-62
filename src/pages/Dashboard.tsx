@@ -1,5 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { exportToCSV, exportToRIS } from "@/lib/exportUtils";
+import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
 import { useKeywordPool } from "@/hooks/useKeywordPool";
@@ -24,6 +26,7 @@ import { NormalizationConfig } from "@/lib/normalizePaperData";
 
 export function Dashboard() {
   const { user, loading: authLoading } = useAuth();
+  const { toast } = useToast();
   const navigate = useNavigate();
 
   // Initialize pools FIRST so normalization config is available for usePapers
@@ -220,49 +223,14 @@ export function Dashboard() {
     setSelectedKeywords([]);
   };
 
-  const handleExport = () => {
-    const headers = [
-      "Title",
-      "Authors",
-      "Year",
-      "Journal",
-      "PMID",
-      "DOI",
-      "Study Type",
-      "Statistical Methods",
-      "Keywords",
-      "Tags",
-      "Project",
-    ];
+  const handleExportCSV = () => {
+    exportToCSV(filteredPapers);
+    toast({ title: "Export started", description: `Downloading ${filteredPapers.length} papers as CSV.` });
+  };
 
-    const rows = filteredPapers.map((paper) => [
-      paper.title,
-      paper.authors.join("; "),
-      paper.year?.toString() || "",
-      paper.journal || "",
-      paper.pmid || "",
-      paper.doi || "",
-      paper.study_type || "",
-      paper.statistical_methods || "",
-      paper.keywords.join("; "),
-      paper.tags.map((t) => t.name).join("; "),
-      paper.project?.name || "",
-    ]);
-
-    const csvContent = [
-      headers.join(","),
-      ...rows.map((row) =>
-        row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(",")
-      ),
-    ].join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `paper-index-${new Date().toISOString().split("T")[0]}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+  const handleExportRIS = () => {
+    exportToRIS(filteredPapers);
+    toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as RIS.` });
   };
 
   const handleKeywordToggle = (keyword: string) => {
@@ -377,7 +345,8 @@ export function Dashboard() {
               availableKeywords={allKeywords}
               onKeywordToggle={handleKeywordToggle}
               onClearFilters={clearFilters}
-              onExport={handleExport}
+              onExportCSV={handleExportCSV}
+              onExportRIS={handleExportRIS}
               hasActiveFilters={hasActiveFilters}
             />
           </div>

@@ -7,7 +7,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, X, Download } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Search, X, Download, FileText, FileSpreadsheet } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
 
 interface SearchFiltersProps {
@@ -23,7 +29,8 @@ interface SearchFiltersProps {
   availableKeywords: string[];
   onKeywordToggle: (keyword: string) => void;
   onClearFilters: () => void;
-  onExport: () => void;
+  onExportCSV: () => void;
+  onExportRIS: () => void;
   hasActiveFilters: boolean;
 }
 
@@ -40,7 +47,8 @@ export function SearchFilters({
   availableKeywords,
   onKeywordToggle,
   onClearFilters,
-  onExport,
+  onExportCSV,
+  onExportRIS,
   hasActiveFilters,
 }: SearchFiltersProps) {
   const studyTypes = [
@@ -117,10 +125,24 @@ export function SearchFilters({
               Clear
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={onExport}>
-            <Download className="mr-1 h-4 w-4" />
-            Export
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <Download className="mr-1 h-4 w-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="bg-popover">
+              <DropdownMenuItem onClick={onExportCSV}>
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                Export as CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onExportRIS}>
+                <FileText className="mr-2 h-4 w-4" />
+                Export as RIS
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
     </div>
