@@ -1,0 +1,98 @@
+import { useState, useRef, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { FolderOpen, Plus, Check, X, Loader2 } from "lucide-react";
+
+interface QuickAddDriveLinkProps {
+  paperId: string;
+  driveUrl: string | null;
+  onSave: (paperId: string, driveUrl: string) => Promise<void>;
+}
+
+export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLinkProps) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setValue("");
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [open]);
+
+  const handleSave = async () => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    try {
+      await onSave(paperId, trimmed);
+      setOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (driveUrl) {
+    return (
+      <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+        <a href={driveUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Drive">
+          <FolderOpen className="h-4 w-4" />
+        </a>
+      </Button>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 opacity-40 hover:opacity-100 transition-opacity"
+          title="Add Google Drive link"
+        >
+          <div className="relative">
+            <FolderOpen className="h-4 w-4" />
+            <Plus className="h-2.5 w-2.5 absolute -bottom-0.5 -right-0.5 bg-background rounded-full" />
+          </div>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-3" align="start" side="bottom">
+        <div className="flex gap-2">
+          <Input
+            ref={inputRef}
+            placeholder="Paste Google Drive URL..."
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSave();
+              if (e.key === "Escape") setOpen(false);
+            }}
+            className="h-8 text-sm"
+            disabled={saving}
+          />
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 shrink-0"
+            onClick={handleSave}
+            disabled={!value.trim() || saving}
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 shrink-0"
+            onClick={() => setOpen(false)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
