@@ -66,86 +66,47 @@ function extractContextualKeywords(
   return matched;
 }
 
-// ── Study type deduplication with specificity weights ──
+// ── Flat multi-match study type detection ──
 
 interface PoolStudyTypeEntry {
   study_type: string;
   specificity_weight: number;
 }
 
-function deduplicateStudyTypes(
+function findAllMatchingStudyTypes(
   rawStudyTypeString: string | null,
   title: string,
   abstract: string | null,
   poolStudyTypes: PoolStudyTypeEntry[]
 ): string {
-  if (!rawStudyTypeString && poolStudyTypes.length === 0) return "";
-
-  const poolMap = new Map(
-    poolStudyTypes.map(p => [p.study_type.toLowerCase(), p.specificity_weight])
-  );
+  const matched = new Set<string>();
 
   // Parse API publication types
-  const apiTypes = (rawStudyTypeString || "")
+  (rawStudyTypeString || "")
     .split(/[,;]+/)
     .map(t => t.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .forEach(t => matched.add(t));
 
-  const apiEntries = apiTypes.map(t => ({
-    type: t,
-    weight: poolMap.get(t.toLowerCase()) ?? 1,
-  }));
-
-  // Find matches in title AND abstract using word boundary regex
+  // Find matches from pool in title + abstract
   const textToSearch = [title, abstract || ""].join(" ");
-  const textMatchEntries: { type: string; weight: number }[] = [];
   for (const st of poolStudyTypes) {
     try {
       const regex = new RegExp('\\b' + escapeRegExp(st.study_type) + '\\b', 'i');
       if (regex.test(textToSearch)) {
-        textMatchEntries.push({ type: st.study_type, weight: st.specificity_weight });
+        matched.add(st.study_type);
       }
     } catch {
       // skip invalid regex
     }
   }
 
-  // Merge: group by normalized name, keep highest weight
-  const merged = new Map<string, { type: string; weight: number }>();
-  for (const entry of [...apiEntries, ...textMatchEntries]) {
-    const key = entry.type.toLowerCase();
-    const existing = merged.get(key);
-    if (!existing || entry.weight > existing.weight) {
-      merged.set(key, entry);
-    }
+  const result = Array.from(matched).sort((a, b) => a.localeCompare(b));
+  if (result.length > 0) {
+    console.log('Matched Study Types:', result);
   }
 
-  let entries = Array.from(merged.values());
-
-  // Substring deduplication: remove shorter strings contained in longer ones
-  // BUT only if the longer string has equal or higher weight
-  entries = entries.filter((entry, _i, arr) => {
-    const lower = entry.type.toLowerCase();
-    for (const other of arr) {
-      if (other === entry) continue;
-      const otherLower = other.type.toLowerCase();
-      if (otherLower.includes(lower) && otherLower !== lower && other.weight >= entry.weight) {
-        return false;
-      }
-    }
-    return true;
-  });
-
-  // Sort by weight desc, then alphabetical
-  entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
-
-  // Debug: log matched study types and the winner
-  if (entries.length > 0) {
-    console.log('Matched Types:', entries.map(e => `${e.type} (w:${e.weight})`), 'Winner:', entries[0].type);
-  }
-
-  // Return ONLY the single highest-weight match as the dominant study type
-  return entries.length > 0 ? entries[0].type : "";
+  return result.join(", ");
 }
 
 // ── Keyword normalization via synonym lookup ──
@@ -262,8 +223,8 @@ export function normalizePaperData(
     config.poolKeywords
   );
 
-  // Step 3: Deduplicate study types using specificity weights (scan title + abstract)
-  const deduplicatedStudyType = deduplicateStudyTypes(
+  // Step 3: Find all matching study types (flat multi-match)
+  const matchedStudyTypes = findAllMatchingStudyTypes(
     raw.study_type,
     decodedTitle,
     decodedAbstract,
@@ -281,7 +242,7 @@ export function normalizePaperData(
     keywords: normalizedKeywords,
     mesh_terms: raw.mesh_terms || [],
     substances: raw.substances || [],
-    study_type: deduplicatedStudyType || null,
+    study_type: matchedStudyTypes || null,
     pubmed_url: raw.pubmed_url,
     journal_url: raw.journal_url,
     drive_url: raw.drive_url,
