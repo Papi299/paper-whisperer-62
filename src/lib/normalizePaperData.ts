@@ -139,9 +139,8 @@ function deduplicateStudyTypes(
   // Sort by weight desc, then alphabetical
   entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
 
-  // Return the highest-weight match as the primary study type
-  // If multiple remain after dedup, join with semicolons but highest weight is first
-  return entries.map(e => e.type).join("; ");
+  // Return ONLY the single highest-weight match as the dominant study type
+  return entries.length > 0 ? entries[0].type : "";
 }
 
 // ── Keyword normalization via synonym lookup ──
