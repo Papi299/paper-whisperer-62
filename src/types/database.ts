@@ -25,10 +25,16 @@ export interface Tag {
   created_at: string;
 }
 
+export interface PaperProject {
+  id: string;
+  paper_id: string;
+  project_id: string;
+  created_at: string;
+}
+
 export interface Paper {
   id: string;
   user_id: string;
-  project_id: string | null;
   title: string;
   authors: string[];
   year: number | null;
@@ -57,7 +63,7 @@ export interface PaperTag {
 
 export interface PaperWithTags extends Paper {
   tags: Tag[];
-  project?: Project | null;
+  projects: Project[];
 }
 
 export interface PaperMetadata {

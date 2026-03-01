@@ -385,14 +385,18 @@ function PaperRow({
           <TableCell style={{ width: getWidth("title"), minWidth: getWidth("title"), maxWidth: getWidth("title") }}>
             <div className="space-y-1">
               <p className="font-medium whitespace-normal break-words leading-snug">{paper.title}</p>
-              {paper.project && (
-                <Badge variant="outline" className="text-xs">
-                  <div
-                    className="w-2 h-2 rounded-full mr-1"
-                    style={{ backgroundColor: paper.project.color }}
-                  />
-                  {paper.project.name}
-                </Badge>
+              {paper.projects.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {paper.projects.map((proj) => (
+                    <Badge key={proj.id} variant="outline" className="text-xs">
+                      <div
+                        className="w-2 h-2 rounded-full mr-1"
+                        style={{ backgroundColor: proj.color }}
+                      />
+                      {proj.name}
+                    </Badge>
+                  ))}
+                </div>
               )}
             </div>
           </TableCell>
