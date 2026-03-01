@@ -56,6 +56,42 @@ export type Database = {
         }
         Relationships: []
       }
+      paper_projects: {
+        Row: {
+          created_at: string
+          id: string
+          paper_id: string
+          project_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          paper_id: string
+          project_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          paper_id?: string
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "paper_projects_paper_id_fkey"
+            columns: ["paper_id"]
+            isOneToOne: false
+            referencedRelation: "papers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "paper_projects_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       paper_tags: {
         Row: {
           created_at: string
@@ -105,7 +141,6 @@ export type Database = {
           keywords: string[] | null
           mesh_terms: string[] | null
           pmid: string | null
-          project_id: string | null
           pubmed_url: string | null
           statistical_methods: string | null
           study_type: string | null
@@ -127,7 +162,6 @@ export type Database = {
           keywords?: string[] | null
           mesh_terms?: string[] | null
           pmid?: string | null
-          project_id?: string | null
           pubmed_url?: string | null
           statistical_methods?: string | null
           study_type?: string | null
@@ -149,7 +183,6 @@ export type Database = {
           keywords?: string[] | null
           mesh_terms?: string[] | null
           pmid?: string | null
-          project_id?: string | null
           pubmed_url?: string | null
           statistical_methods?: string | null
           study_type?: string | null
@@ -159,15 +192,7 @@ export type Database = {
           user_id?: string
           year?: number | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "papers_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       profiles: {
         Row: {

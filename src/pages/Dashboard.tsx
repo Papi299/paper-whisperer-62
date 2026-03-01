@@ -155,7 +155,7 @@ export function Dashboard() {
     return papers.filter((paper) => {
 
       // Project filter
-      if (selectedProjectId && paper.project_id !== selectedProjectId) {
+      if (selectedProjectId && !paper.projects.some((p) => p.id === selectedProjectId)) {
         return false;
       }
 

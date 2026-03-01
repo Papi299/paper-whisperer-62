@@ -26,7 +26,7 @@ interface EditPaperDialogProps {
   tags: Tag[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (paper: Partial<PaperWithTags> & { tagIds: string[] }) => Promise<void>;
+  onSave: (paper: Partial<PaperWithTags> & { tagIds: string[]; projectIds: string[] }) => Promise<void>;
 }
 
 export function EditPaperDialog({
@@ -48,7 +48,7 @@ export function EditPaperDialog({
   const [statisticalMethods, setStatisticalMethods] = useState("");
   const [keywords, setKeywords] = useState("");
   const [driveUrl, setDriveUrl] = useState("");
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -65,7 +65,7 @@ export function EditPaperDialog({
       setStatisticalMethods(paper.statistical_methods || "");
       setKeywords(paper.keywords.join(", "));
       setDriveUrl(paper.drive_url || "");
-      setProjectId(paper.project_id);
+      setSelectedProjectIds(paper.projects.map((p) => p.id));
       setSelectedTagIds(paper.tags.map((t) => t.id));
     }
   }, [paper]);
@@ -88,8 +88,8 @@ export function EditPaperDialog({
         statistical_methods: statisticalMethods || null,
         keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean),
         drive_url: driveUrl || null,
-        project_id: projectId,
         tagIds: selectedTagIds,
+        projectIds: selectedProjectIds,
       });
       onOpenChange(false);
     } finally {
@@ -232,30 +232,32 @@ export function EditPaperDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Project</Label>
-            <Select
-              value={projectId || "none"}
-              onValueChange={(v) => setProjectId(v === "none" ? null : v)}
-              disabled={loading}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select a project" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No project</SelectItem>
-                {projects.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: project.color }}
-                      />
-                      {project.name}
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label>Projects</Label>
+            <div className="flex flex-wrap gap-2">
+              {projects.map((project) => (
+                <Badge
+                  key={project.id}
+                  variant={selectedProjectIds.includes(project.id) ? "default" : "outline"}
+                  className="cursor-pointer"
+                  onClick={() =>
+                    setSelectedProjectIds((prev) =>
+                      prev.includes(project.id)
+                        ? prev.filter((id) => id !== project.id)
+                        : [...prev, project.id]
+                    )
+                  }
+                  style={
+                    selectedProjectIds.includes(project.id)
+                      ? { backgroundColor: project.color }
+                      : { borderColor: project.color }
+                  }
+                >
+                  <div className="w-2 h-2 rounded-full mr-1" style={{ backgroundColor: project.color }} />
+                  {project.name}
+                  {selectedProjectIds.includes(project.id) && <X className="ml-1 h-3 w-3" />}
+                </Badge>
+              ))}
+            </div>
           </div>
 
           <div className="space-y-2">

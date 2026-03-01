@@ -36,7 +36,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       if (tagsError) throw tagsError;
       setTags((tagsData as Tag[]) || []);
 
-      // Fetch papers with their tags
+      // Fetch papers
       const { data: papersData, error: papersError } = await supabase
         .from("papers")
         .select("*")
@@ -52,14 +52,26 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
       if (paperTagsError) throw paperTagsError;
 
+      // Fetch paper_projects
+      const { data: paperProjectsData, error: paperProjectsError } = await supabase
+        .from("paper_projects")
+        .select("*");
+
+      if (paperProjectsError) throw paperProjectsError;
+
       // Combine papers with their tags and projects
       const papersWithTags: PaperWithTags[] = ((papersData as Paper[]) || []).map((paper) => {
         const paperTagIds = (paperTagsData || [])
           .filter((pt: { paper_id: string; tag_id: string }) => pt.paper_id === paper.id)
           .map((pt: { tag_id: string }) => pt.tag_id);
         const paperTags = (tagsData as Tag[] || []).filter((t) => paperTagIds.includes(t.id));
-        const project = (projectsData as Project[] || []).find((p) => p.id === paper.project_id) || null;
-        return { ...paper, tags: paperTags, project };
+        
+        const paperProjectIds = (paperProjectsData || [])
+          .filter((pp: { paper_id: string; project_id: string }) => pp.paper_id === paper.id)
+          .map((pp: { project_id: string }) => pp.project_id);
+        const paperProjects = (projectsData as Project[] || []).filter((p) => paperProjectIds.includes(p.id));
+        
+        return { ...paper, tags: paperTags, projects: paperProjects };
       });
 
       setPapers(papersWithTags);
@@ -120,9 +132,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     );
     // Propagate to embedded paper references
     setPapers((prev) =>
-      prev.map((p) =>
-        p.project_id === projectId ? { ...p, project: updatedProject } : p
-      )
+      prev.map((p) => ({
+        ...p,
+        projects: p.projects.map((proj) => proj.id === projectId ? updatedProject : proj),
+      }))
     );
   };
 
@@ -143,9 +156,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
     setProjects((prev) => prev.filter((p) => p.id !== projectId));
     setPapers((prev) =>
-      prev.map((p) =>
-        p.project_id === projectId ? { ...p, project_id: null, project: null } : p
-      )
+      prev.map((p) => ({
+        ...p,
+        projects: p.projects.filter((proj) => proj.id !== projectId),
+      }))
     );
   };
 
@@ -192,7 +206,6 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
     const updatedTag = { ...tags.find(t => t.id === tagId)!, ...updates };
     setTags((prev) => prev.map((t) => (t.id === tagId ? updatedTag : t)));
-    // Propagate to embedded paper references
     setPapers((prev) =>
       prev.map((p) => ({
         ...p,
@@ -310,7 +323,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           continue;
         }
 
-        successfulPapers.push({ ...(insertedPaper as Paper), tags: [], project: null });
+        successfulPapers.push({ ...(insertedPaper as Paper), tags: [], projects: [] });
       }
 
       setPapers((prev) => [...successfulPapers, ...prev]);
@@ -416,39 +429,49 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    setPapers((prev) => [{ ...(insertedPaper as Paper), tags: [], project: null }, ...prev]);
+    setPapers((prev) => [{ ...(insertedPaper as Paper), tags: [], projects: [] }, ...prev]);
     toast({ title: "Paper added manually" });
   };
 
   const updatePaper = async (
     paperId: string,
-    updates: Partial<Paper> & { tagIds?: string[] }
+    updates: Partial<Paper> & { tagIds?: string[]; projectIds?: string[] }
   ) => {
-    const { tagIds, ...paperUpdates } = updates;
+    const { tagIds, projectIds, ...paperUpdates } = updates;
 
-    const { error } = await supabase
-      .from("papers")
-      .update(paperUpdates)
-      .eq("id", paperId);
+    // Only send paper column updates if there are any
+    if (Object.keys(paperUpdates).length > 0) {
+      const { error } = await supabase
+        .from("papers")
+        .update(paperUpdates)
+        .eq("id", paperId);
 
-    if (error) {
-      toast({
-        title: "Error updating paper",
-        description: error.message,
-        variant: "destructive",
-      });
-      return;
+      if (error) {
+        toast({
+          title: "Error updating paper",
+          description: error.message,
+          variant: "destructive",
+        });
+        return;
+      }
     }
 
     // Update tags if provided
     if (tagIds !== undefined) {
-      // Delete existing tags
       await supabase.from("paper_tags").delete().eq("paper_id", paperId);
-
-      // Insert new tags
       if (tagIds.length > 0) {
         await supabase.from("paper_tags").insert(
           tagIds.map((tagId) => ({ paper_id: paperId, tag_id: tagId }))
+        );
+      }
+    }
+
+    // Update projects if provided
+    if (projectIds !== undefined) {
+      await supabase.from("paper_projects").delete().eq("paper_id", paperId);
+      if (projectIds.length > 0) {
+        await supabase.from("paper_projects").insert(
+          projectIds.map((projId) => ({ paper_id: paperId, project_id: projId }))
         );
       }
     }
@@ -460,11 +483,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         const updatedTags = tagIds
           ? tags.filter((t) => tagIds.includes(t.id))
           : p.tags;
-        const project =
-          paperUpdates.project_id !== undefined
-            ? projects.find((pr) => pr.id === paperUpdates.project_id) || null
-            : p.project;
-        return { ...p, ...paperUpdates, tags: updatedTags, project };
+        const updatedProjects = projectIds !== undefined
+          ? projects.filter((pr) => projectIds.includes(pr.id))
+          : p.projects;
+        return { ...p, ...paperUpdates, tags: updatedTags, projects: updatedProjects };
       })
     );
 
