@@ -97,6 +97,7 @@ export function Dashboard() {
     deleteTag,
     addPapers,
     addPaperManually,
+    bulkImportPapers,
     updatePaper,
     deletePaper,
   } = usePapers(user?.id, normalizationConfig);
@@ -381,6 +382,7 @@ export function Dashboard() {
         onOpenChange={setAddPaperOpen}
         onSubmit={addPapers}
         onSubmitManual={addPaperManually}
+        onBulkImport={bulkImportPapers}
       />
 
       <EditPaperDialog
