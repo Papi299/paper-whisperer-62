@@ -13,18 +13,22 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, MoreHorizontal, Pencil, Trash2, Sparkles, X, ChevronRight, ChevronDown } from "lucide-react";
+import { ExternalLink, Pencil, Trash2, Sparkles, X, ChevronRight, ChevronDown } from "lucide-react";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader } from "./ResizableTableHeader";
@@ -117,6 +121,7 @@ export function PaperList({
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const toggleRow = useCallback((paperId: string) => {
     setExpandedRows(prev => {
@@ -257,7 +262,7 @@ export function PaperList({
             {isVisible("links") && (
               <ResizableTableHeader columnId="links" label="Links" width={getWidth("links")} onResize={onColumnResize} />
             )}
-            <TableHead className="w-[50px]"></TableHead>
+            <TableHead className="w-[70px]"></TableHead>
           </TableRow>
         </TableHeader>
         {/* Spacer for items before visible window */}
@@ -287,7 +292,7 @@ export function PaperList({
               getWidth={getWidth}
               visibleColumnCount={visibleColumnCount}
               onEdit={onEdit}
-              onDelete={onDelete}
+              onRequestDelete={setDeleteConfirmId}
               findMatchingStudyTypes={findMatchingStudyTypes}
               poolStudyTypes={poolStudyTypes}
               excludedStudyTypes={excludedStudyTypes}
@@ -311,6 +316,30 @@ export function PaperList({
           </tbody>
         )}
       </Table>
+      <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Paper</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this paper? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteConfirmId) {
+                  onDelete(deleteConfirmId);
+                  setDeleteConfirmId(null);
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -326,7 +355,7 @@ interface PaperRowProps {
   getWidth: (col: ColumnId) => number;
   visibleColumnCount: number;
   onEdit: (paper: PaperWithTags) => void;
-  onDelete: (paperId: string) => void;
+  onRequestDelete: (paperId: string) => void;
   findMatchingStudyTypes: (title: string) => WeightedStudyType[];
   poolStudyTypes: { study_type: string; specificity_weight: number }[];
   excludedStudyTypes: Set<string>;
@@ -347,7 +376,7 @@ function PaperRow({
   getWidth,
   visibleColumnCount,
   onEdit,
-  onDelete,
+  onRequestDelete,
   findMatchingStudyTypes,
   poolStudyTypes,
   excludedStudyTypes,
@@ -623,26 +652,20 @@ function PaperRow({
           </TableCell>
         )}
         <TableCell>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="bg-popover">
-              <DropdownMenuItem onClick={() => onEdit(paper)}>
-                <Pencil className="mr-2 h-4 w-4" />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="text-destructive"
-                onClick={() => onDelete(paper.id)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center gap-0.5">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onEdit(paper)} title="Edit">
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-destructive hover:text-destructive/80 transition-colors"
+              onClick={() => onRequestDelete(paper.id)}
+              title="Delete"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
         </TableCell>
       </TableRow>
       {/* Expanded abstract row */}
