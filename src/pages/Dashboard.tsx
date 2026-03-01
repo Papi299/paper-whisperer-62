@@ -53,13 +53,8 @@ export function Dashboard() {
     poolStudyTypes,
     addStudyType: addPoolStudyType,
     addMultipleStudyTypes: addMultiplePoolStudyTypes,
-    updateStudyTypeWeight,
-    updateStudyTypeGroup,
-    renameGroup: renameStudyTypeGroup,
-    deleteGroup: deleteStudyTypeGroup,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
-    findMatchingStudyTypes,
   } = useStudyTypePool(user?.id);
 
   const {
@@ -131,30 +126,9 @@ export function Dashboard() {
     return Array.from(studyTypeSet).sort();
   }, [papers]);
 
-  // Build dynamic study type filter options from user's pool
+  // Build dynamic study type filter options from user's pool (flat list)
   const studyTypeFilterOptions = useMemo(() => {
-    const options = new Set<string>();
-    poolStudyTypes.forEach((st) => {
-      if (st.group_name) {
-        options.add(st.group_name);
-      } else {
-        options.add(st.study_type);
-      }
-    });
-    return Array.from(options).sort();
-  }, [poolStudyTypes]);
-
-  // Build a lookup: filter option → set of matching study_type strings
-  const studyTypeFilterLookup = useMemo(() => {
-    const lookup = new Map<string, Set<string>>();
-    poolStudyTypes.forEach((st) => {
-      const key = st.group_name || st.study_type;
-      if (!lookup.has(key)) lookup.set(key, new Set());
-      lookup.get(key)!.add(st.study_type.toLowerCase());
-      // Also add the key itself so direct matches work
-      lookup.get(key)!.add(key.toLowerCase());
-    });
-    return lookup;
+    return poolStudyTypes.map(st => st.study_type).sort();
   }, [poolStudyTypes]);
 
   // Selection state
@@ -213,15 +187,10 @@ export function Dashboard() {
         return false;
       }
 
-      // Study type (group-aware filtering)
+      // Study type filter: check if paper's comma-separated study_type includes the selected type
       if (studyType !== "all") {
-        const matchSet = studyTypeFilterLookup.get(studyType);
-        const paperType = (paper.study_type || "").trim().toLowerCase();
-        if (matchSet) {
-          if (!matchSet.has(paperType)) return false;
-        } else {
-          if (paperType !== studyType.toLowerCase()) return false;
-        }
+        const paperTypes = (paper.study_type || "").split(/[,;]+/).map(t => t.trim().toLowerCase());
+        if (!paperTypes.includes(studyType.toLowerCase())) return false;
       }
 
       // Keywords
@@ -242,7 +211,7 @@ export function Dashboard() {
     yearFrom,
     yearTo,
     studyType,
-    studyTypeFilterLookup,
+    studyTypeFilterOptions,
     selectedKeywords,
   ]);
 
@@ -340,10 +309,6 @@ export function Dashboard() {
           onAddMultiplePoolStudyTypes={addMultiplePoolStudyTypes}
           onDeletePoolStudyType={deletePoolStudyType}
           onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
-          onUpdateStudyTypeWeight={updateStudyTypeWeight}
-          onUpdateStudyTypeGroup={updateStudyTypeGroup}
-          onRenameStudyTypeGroup={renameStudyTypeGroup}
-          onDeleteStudyTypeGroup={deleteStudyTypeGroup}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
@@ -400,8 +365,6 @@ export function Dashboard() {
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
-            findMatchingStudyTypes={findMatchingStudyTypes}
-            poolStudyTypes={poolStudyTypes.map(st => ({ study_type: st.study_type, specificity_weight: st.specificity_weight }))}
             visibleColumns={visibleColumns}
             columnWidths={columnWidths}
             onColumnResize={setColumnWidth}

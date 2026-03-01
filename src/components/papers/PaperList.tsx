@@ -1,7 +1,7 @@
 import { useRef, useCallback, useState, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
-import { WeightedStudyType } from "@/hooks/useStudyTypePool";
+import type { PoolStudyType } from "@/hooks/useStudyTypePool";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -38,8 +38,8 @@ interface PaperListProps {
   onEdit: (paper: PaperWithTags) => void;
   onDelete: (paperId: string) => void;
   findMatchingKeywords: (abstract: string | null) => string[];
-  findMatchingStudyTypes: (title: string) => WeightedStudyType[];
-  poolStudyTypes: { study_type: string; specificity_weight: number }[];
+  findMatchingStudyTypes?: undefined;
+  poolStudyTypes?: undefined;
   visibleColumns: ColumnId[];
   columnWidths: { [key: string]: number };
   onColumnResize: (columnId: ColumnId, width: number) => void;
@@ -54,7 +54,7 @@ interface PaperListProps {
 const BASE_ROW_HEIGHT = 52;
 const EXPANDED_ROW_HEIGHT = 220;
 
-// mergeStudyTypesByWeight removed — pipeline now assigns a single study type
+// mergeStudyTypesByWeight and findMatchingStudyTypes removed — flat multi-select now
 
 export function PaperList({
   papers,
@@ -247,8 +247,6 @@ export function PaperList({
               visibleColumnCount={visibleColumnCount}
               onEdit={onEdit}
               onRequestDelete={setDeleteConfirmId}
-              findMatchingStudyTypes={findMatchingStudyTypes}
-              poolStudyTypes={poolStudyTypes}
               excludedStudyTypes={excludedStudyTypes}
               onExcludeStudyType={onExcludeStudyType}
               onExcludeKeyword={onExcludeKeyword}
@@ -310,8 +308,6 @@ interface PaperRowProps {
   visibleColumnCount: number;
   onEdit: (paper: PaperWithTags) => void;
   onRequestDelete: (paperId: string) => void;
-  findMatchingStudyTypes: (title: string) => WeightedStudyType[];
-  poolStudyTypes: { study_type: string; specificity_weight: number }[];
   excludedStudyTypes: Set<string>;
   onExcludeStudyType: (studyType: string) => Promise<boolean>;
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
@@ -331,8 +327,6 @@ function PaperRow({
   visibleColumnCount,
   onEdit,
   onRequestDelete,
-  findMatchingStudyTypes,
-  poolStudyTypes,
   excludedStudyTypes,
   onExcludeStudyType,
   onExcludeKeyword,
@@ -415,35 +409,37 @@ function PaperRow({
           >
             {(() => {
               const studyTypeValue = (paper.study_type || "").trim();
-              
               if (!studyTypeValue) return <span>-</span>;
               
-              // Check exclusion
+              const types = studyTypeValue.split(/[,;]+/).map(t => t.trim()).filter(Boolean);
               const excludedSet = excludedStudyTypes ?? new Set<string>();
-              const isExcluded = Array.from(excludedSet).some(
-                excluded => studyTypeValue.toLowerCase() === excluded || studyTypeValue.toLowerCase().includes(excluded)
+              const visibleTypes = types.filter(t => 
+                !Array.from(excludedSet).some(ex => t.toLowerCase() === ex)
               );
               
-              if (isExcluded) return <span>-</span>;
+              if (visibleTypes.length === 0) return <span>-</span>;
               
               return (
-                <div className="flex items-center gap-1">
-                  <Badge
-                    variant="outline"
-                    className="text-xs group/badge hover:pr-1"
-                  >
-                    <span className="truncate max-w-[150px]">{studyTypeValue}</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onExcludeStudyType(studyTypeValue);
-                      }}
-                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                      title={`Exclude "${studyTypeValue}"`}
+                <div className="flex flex-wrap items-center gap-1">
+                  {visibleTypes.map((type) => (
+                    <Badge
+                      key={type}
+                      variant="outline"
+                      className="text-xs group/badge hover:pr-1"
                     >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </Badge>
+                      <span className="truncate max-w-[120px]">{type}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onExcludeStudyType(type);
+                        }}
+                        className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                        title={`Exclude "${type}"`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
                 </div>
               );
             })()}
