@@ -76,6 +76,7 @@ interface PoolStudyTypeEntry {
 function deduplicateStudyTypes(
   rawStudyTypeString: string | null,
   title: string,
+  abstract: string | null,
   poolStudyTypes: PoolStudyTypeEntry[]
 ): string {
   if (!rawStudyTypeString && poolStudyTypes.length === 0) return "";
@@ -95,13 +96,14 @@ function deduplicateStudyTypes(
     weight: poolMap.get(t.toLowerCase()) ?? 1,
   }));
 
-  // Find title matches using word boundary regex
-  const titleEntries: { type: string; weight: number }[] = [];
+  // Find matches in title AND abstract using word boundary regex
+  const textToSearch = [title, abstract || ""].join(" ");
+  const textMatchEntries: { type: string; weight: number }[] = [];
   for (const st of poolStudyTypes) {
     try {
       const regex = new RegExp('\\b' + escapeRegExp(st.study_type) + '\\b', 'i');
-      if (regex.test(title)) {
-        titleEntries.push({ type: st.study_type, weight: st.specificity_weight });
+      if (regex.test(textToSearch)) {
+        textMatchEntries.push({ type: st.study_type, weight: st.specificity_weight });
       }
     } catch {
       // skip invalid regex
@@ -110,7 +112,7 @@ function deduplicateStudyTypes(
 
   // Merge: group by normalized name, keep highest weight
   const merged = new Map<string, { type: string; weight: number }>();
-  for (const entry of [...apiEntries, ...titleEntries]) {
+  for (const entry of [...apiEntries, ...textMatchEntries]) {
     const key = entry.type.toLowerCase();
     const existing = merged.get(key);
     if (!existing || entry.weight > existing.weight) {
@@ -121,12 +123,13 @@ function deduplicateStudyTypes(
   let entries = Array.from(merged.values());
 
   // Substring deduplication: remove shorter strings contained in longer ones
+  // BUT only if the longer string has equal or higher weight
   entries = entries.filter((entry, _i, arr) => {
     const lower = entry.type.toLowerCase();
     for (const other of arr) {
       if (other === entry) continue;
       const otherLower = other.type.toLowerCase();
-      if (otherLower.includes(lower) && otherLower !== lower) {
+      if (otherLower.includes(lower) && otherLower !== lower && other.weight >= entry.weight) {
         return false;
       }
     }
@@ -136,6 +139,8 @@ function deduplicateStudyTypes(
   // Sort by weight desc, then alphabetical
   entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
 
+  // Return the highest-weight match as the primary study type
+  // If multiple remain after dedup, join with semicolons but highest weight is first
   return entries.map(e => e.type).join("; ");
 }
 
@@ -253,10 +258,11 @@ export function normalizePaperData(
     config.poolKeywords
   );
 
-  // Step 3: Deduplicate study types using specificity weights
+  // Step 3: Deduplicate study types using specificity weights (scan title + abstract)
   const deduplicatedStudyType = deduplicateStudyTypes(
     raw.study_type,
     decodedTitle,
+    decodedAbstract,
     config.poolStudyTypes
   );
 

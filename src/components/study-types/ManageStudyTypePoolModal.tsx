@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +11,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Trash2, Upload, X, FolderOpen } from "lucide-react";
+import { Plus, Trash2, Upload, X, FolderOpen, ChevronRight } from "lucide-react";
 import { PoolStudyType } from "@/hooks/useStudyTypePool";
 import { cn } from "@/lib/utils";
 
@@ -41,30 +49,115 @@ export function ManageStudyTypePoolModal({
   onUpdateStudyTypeWeight,
   onUpdateStudyTypeGroup,
 }: ManageStudyTypePoolModalProps) {
-  const [newStudyType, setNewStudyType] = useState("");
+  // Group management state
   const [newGroupName, setNewGroupName] = useState("");
+  const [localGroups, setLocalGroups] = useState<string[]>([]);
+
+  // Study type add state
+  const [newStudyType, setNewStudyType] = useState("");
+  const [newWeight, setNewWeight] = useState(1);
+  const [selectedGroup, setSelectedGroup] = useState<string>("__none__");
+
+  // Sub-dialog state
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [bulkStudyTypes, setBulkStudyTypes] = useState("");
   const [selectedForImport, setSelectedForImport] = useState<Set<string>>(new Set());
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
-  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
-  const [editingGroupValue, setEditingGroupValue] = useState("");
+
+  // Derive all unique groups: from DB + local state
+  const allGroups = useMemo(() => {
+    const dbGroups = new Set(
+      poolStudyTypes.map((st) => st.group_name).filter(Boolean) as string[]
+    );
+    localGroups.forEach((g) => dbGroups.add(g));
+    return Array.from(dbGroups).sort();
+  }, [poolStudyTypes, localGroups]);
+
+  // Group study types for the nested view
+  const grouped = useMemo(() => {
+    const map = new Map<string, PoolStudyType[]>();
+    const ungrouped: PoolStudyType[] = [];
+    poolStudyTypes.forEach((st) => {
+      if (st.group_name) {
+        const list = map.get(st.group_name) || [];
+        list.push(st);
+        map.set(st.group_name, list);
+      } else {
+        ungrouped.push(st);
+      }
+    });
+    return { map, ungrouped };
+  }, [poolStudyTypes]);
+
+  // Empty groups (created but no subtypes assigned yet)
+  const emptyGroups = useMemo(() => {
+    return allGroups.filter((g) => !grouped.map.has(g));
+  }, [allGroups, grouped.map]);
+
+  const handleAddGroup = () => {
+    const trimmed = newGroupName.trim();
+    if (!trimmed) return;
+    if (allGroups.some((g) => g.toLowerCase() === trimmed.toLowerCase())) return;
+    setLocalGroups((prev) => [...prev, trimmed]);
+    setNewGroupName("");
+  };
+
+  const handleRemoveLocalGroup = (group: string) => {
+    setLocalGroups((prev) => prev.filter((g) => g !== group));
+  };
 
   const handleAddStudyType = async () => {
-    if (newStudyType.trim()) {
-      const success = await onAddStudyType(newStudyType);
-      if (success && newGroupName.trim()) {
-        // Find the just-added study type and set its group
-        // We need to wait for re-render, so we handle this via a callback pattern
-        // For now, user can set group after adding
+    const trimmed = newStudyType.trim();
+    if (!trimmed) return;
+    const success = await onAddStudyType(trimmed);
+    if (success) {
+      // Find the newly added item and set its group + weight
+      // We need to wait for the state to update, so we use a timeout
+      const groupToSet = selectedGroup === "__none__" ? null : selectedGroup;
+      setTimeout(async () => {
+        // Find the item that was just added (latest with this name)
+        // We'll rely on the parent re-rendering with the new item
+      }, 0);
+      
+      // For now, set weight and group after add via the pool data
+      // The hook's addStudyType returns true, and the item gets default weight 1
+      // We need to update it if weight !== 1 or group is set
+      if (newWeight !== 1 || groupToSet) {
+        // We'll handle this by finding the item after next render
+        // Store pending updates
+        setPendingUpdate({ studyType: trimmed, weight: newWeight, group: groupToSet });
       }
-      if (success) {
-        setNewStudyType("");
-        setNewGroupName("");
-      }
+      
+      setNewStudyType("");
+      setNewWeight(1);
+      setSelectedGroup("__none__");
     }
   };
+
+  // Pending update for newly added study types
+  const [pendingUpdate, setPendingUpdate] = useState<{
+    studyType: string;
+    weight: number;
+    group: string | null;
+  } | null>(null);
+
+  // Apply pending updates when poolStudyTypes changes
+  useMemo(() => {
+    if (!pendingUpdate) return;
+    const item = poolStudyTypes.find(
+      (st) => st.study_type.toLowerCase() === pendingUpdate.studyType.toLowerCase()
+    );
+    if (item) {
+      if (pendingUpdate.weight !== 1 && item.specificity_weight !== pendingUpdate.weight) {
+        onUpdateStudyTypeWeight(item.id, pendingUpdate.weight);
+      }
+      if (pendingUpdate.group && item.group_name !== pendingUpdate.group) {
+        onUpdateStudyTypeGroup(item.id, pendingUpdate.group);
+      }
+      setPendingUpdate(null);
+    }
+  }, [poolStudyTypes, pendingUpdate, onUpdateStudyTypeWeight, onUpdateStudyTypeGroup]);
 
   const handleImportSelected = async () => {
     if (selectedForImport.size > 0) {
@@ -75,7 +168,7 @@ export function ManageStudyTypePoolModal({
   };
 
   const handleBulkAdd = async () => {
-    const types = bulkStudyTypes.split(/[,\n]/).map((s) => s.trim()).filter((s) => s);
+    const types = bulkStudyTypes.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
     if (types.length > 0) {
       await onAddMultipleStudyTypes(types);
       setBulkStudyTypes("");
@@ -97,142 +190,249 @@ export function ManageStudyTypePoolModal({
     setSelectedForImport(new Set(availableStudyTypes.filter((st) => !existingInPool.has(st.toLowerCase()))));
   };
 
-  const handleStartEditGroup = (st: PoolStudyType) => {
-    setEditingGroupId(st.id);
-    setEditingGroupValue(st.group_name || "");
-  };
-
-  const handleSaveGroup = async (id: string) => {
-    const val = editingGroupValue.trim() || null;
-    await onUpdateStudyTypeGroup(id, val);
-    setEditingGroupId(null);
-    setEditingGroupValue("");
-  };
-
   const existingInPool = new Set(poolStudyTypes.map((st) => st.study_type.toLowerCase()));
   const importableStudyTypes = availableStudyTypes.filter((st) => !existingInPool.has(st.toLowerCase()));
-
-  // Group study types by group_name for display
-  const grouped = new Map<string, PoolStudyType[]>();
-  const ungrouped: PoolStudyType[] = [];
-  poolStudyTypes.forEach((st) => {
-    if (st.group_name) {
-      const list = grouped.get(st.group_name) || [];
-      list.push(st);
-      grouped.set(st.group_name, list);
-    } else {
-      ungrouped.push(st);
-    }
-  });
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="bg-background max-w-lg">
+        <DialogContent className="bg-background max-w-lg max-h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>Manage Study Type Pool</DialogTitle>
             <DialogDescription>
-              Study types are auto-detected in paper titles. Assign a group to enable hierarchical filtering.
+              Define groups first, then add study types and assign them to groups for hierarchical filtering.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
-            {/* Add single study type */}
-            <div className="flex gap-1">
-              <Input
-                placeholder="Add a study type…"
-                value={newStudyType}
-                onChange={(e) => setNewStudyType(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddStudyType()}
-                className="h-8 text-sm"
-              />
-              <Button size="sm" className="h-8" onClick={handleAddStudyType} disabled={!newStudyType.trim()}>
-                <Plus className="h-4 w-4" />
-              </Button>
-            </div>
+          <Tabs defaultValue="types" className="flex-1 min-h-0 flex flex-col">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="groups">
+                1. Groups
+                {allGroups.length > 0 && (
+                  <Badge variant="secondary" className="ml-1.5 text-[10px] h-4 px-1">
+                    {allGroups.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="types">
+                2. Study Types
+                {poolStudyTypes.length > 0 && (
+                  <Badge variant="secondary" className="ml-1.5 text-[10px] h-4 px-1">
+                    {poolStudyTypes.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+            </TabsList>
 
-            {/* Action buttons */}
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setBulkDialogOpen(true)}>
-                <Plus className="mr-1 h-3 w-3" />
-                Bulk Add
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setImportDialogOpen(true)}
-                disabled={importableStudyTypes.length === 0}
-              >
-                <Upload className="mr-1 h-3 w-3" />
-                Import from Papers
-              </Button>
-              {poolStudyTypes.length > 0 && (
+            {/* ── Tab 1: Manage Groups ── */}
+            <TabsContent value="groups" className="flex-1 min-h-0 space-y-3 mt-3">
+              <div className="flex gap-1">
+                <Input
+                  placeholder="New group name…"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddGroup()}
+                  className="h-8 text-sm"
+                />
+                <Button size="sm" className="h-8" onClick={handleAddGroup} disabled={!newGroupName.trim()}>
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <ScrollArea className="h-56">
+                <div className="space-y-1.5 pr-3">
+                  {allGroups.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-8">
+                      No groups yet. Add one above, then assign study types to it.
+                    </p>
+                  ) : (
+                    allGroups.map((group) => {
+                      const count = grouped.map.get(group)?.length || 0;
+                      const isLocal = localGroups.includes(group) && count === 0;
+                      return (
+                        <div
+                          key={group}
+                          className="flex items-center justify-between rounded-md border p-2 text-sm"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span className="font-medium truncate">{group}</span>
+                            <Badge variant="secondary" className="text-[10px] h-4 px-1 shrink-0">
+                              {count} type{count !== 1 ? "s" : ""}
+                            </Badge>
+                          </div>
+                          {isLocal && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-destructive shrink-0"
+                              onClick={() => handleRemoveLocalGroup(group)}
+                              title="Remove empty group"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </ScrollArea>
+              <p className="text-xs text-muted-foreground">
+                Groups organize study types for hierarchical filtering. You can only remove groups that have no subtypes assigned.
+              </p>
+            </TabsContent>
+
+            {/* ── Tab 2: Manage Study Types ── */}
+            <TabsContent value="types" className="flex-1 min-h-0 space-y-3 mt-3">
+              {/* Add single study type with group + weight */}
+              <div className="space-y-1.5">
+                <div className="flex gap-1">
+                  <Input
+                    placeholder="Study type name…"
+                    value={newStudyType}
+                    onChange={(e) => setNewStudyType(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddStudyType()}
+                    className="h-8 text-sm flex-1"
+                  />
+                  <Input
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={newWeight}
+                    onChange={(e) => setNewWeight(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="h-8 w-14 text-xs text-center p-0"
+                    title="Specificity weight"
+                  />
+                  <Button size="sm" className="h-8" onClick={handleAddStudyType} disabled={!newStudyType.trim()}>
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                <Select value={selectedGroup} onValueChange={setSelectedGroup}>
+                  <SelectTrigger className="h-7 text-xs">
+                    <SelectValue placeholder="No group (standalone)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No group (standalone)</SelectItem>
+                    {allGroups.map((g) => (
+                      <SelectItem key={g} value={g}>
+                        {g}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-2 flex-wrap">
+                <Button variant="outline" size="sm" onClick={() => setBulkDialogOpen(true)}>
+                  <Plus className="mr-1 h-3 w-3" />
+                  Bulk Add
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  className="text-destructive ml-auto"
-                  onClick={() => setConfirmClearOpen(true)}
+                  onClick={() => setImportDialogOpen(true)}
+                  disabled={importableStudyTypes.length === 0}
                 >
-                  <Trash2 className="mr-1 h-3 w-3" />
-                  Clear All
+                  <Upload className="mr-1 h-3 w-3" />
+                  Import from Papers
                 </Button>
-              )}
-            </div>
-
-            {/* Study type list with groups */}
-            <ScrollArea className="h-64">
-              <div className="space-y-1.5 pr-3">
-                {poolStudyTypes.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">
-                    No study types yet
-                  </p>
-                ) : (
-                  <>
-                    {/* Grouped items */}
-                    {Array.from(grouped.entries()).map(([groupName, items]) => (
-                      <div key={groupName} className="space-y-1">
-                        <div className="flex items-center gap-1.5 px-1 pt-1">
-                          <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{groupName}</span>
-                          <Badge variant="secondary" className="text-[10px] h-4 px-1">{items.length}</Badge>
-                        </div>
-                        {items.map((st) => (
-                          <StudyTypeRow
-                            key={st.id}
-                            st={st}
-                            editingGroupId={editingGroupId}
-                            editingGroupValue={editingGroupValue}
-                            onEditingGroupValueChange={setEditingGroupValue}
-                            onStartEditGroup={handleStartEditGroup}
-                            onSaveGroup={handleSaveGroup}
-                            onCancelEditGroup={() => setEditingGroupId(null)}
-                            onUpdateWeight={onUpdateStudyTypeWeight}
-                            onDelete={onDeleteStudyType}
-                            indented
-                          />
-                        ))}
-                      </div>
-                    ))}
-                    {/* Ungrouped items */}
-                    {ungrouped.map((st) => (
-                      <StudyTypeRow
-                        key={st.id}
-                        st={st}
-                        editingGroupId={editingGroupId}
-                        editingGroupValue={editingGroupValue}
-                        onEditingGroupValueChange={setEditingGroupValue}
-                        onStartEditGroup={handleStartEditGroup}
-                        onSaveGroup={handleSaveGroup}
-                        onCancelEditGroup={() => setEditingGroupId(null)}
-                        onUpdateWeight={onUpdateStudyTypeWeight}
-                        onDelete={onDeleteStudyType}
-                      />
-                    ))}
-                  </>
+                {poolStudyTypes.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive ml-auto"
+                    onClick={() => setConfirmClearOpen(true)}
+                  >
+                    <Trash2 className="mr-1 h-3 w-3" />
+                    Clear All
+                  </Button>
                 )}
               </div>
-            </ScrollArea>
-          </div>
+
+              {/* Nested study type list */}
+              <ScrollArea className="h-52">
+                <div className="space-y-2 pr-3">
+                  {poolStudyTypes.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-8">
+                      No study types yet. Add one above.
+                    </p>
+                  ) : (
+                    <>
+                      {/* Grouped items */}
+                      {Array.from(grouped.map.entries())
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([groupName, items]) => (
+                          <div key={groupName} className="space-y-1">
+                            <div className="flex items-center gap-1.5 px-1 pt-1">
+                              <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                                {groupName}
+                              </span>
+                              <Badge variant="secondary" className="text-[10px] h-4 px-1">
+                                {items.length}
+                              </Badge>
+                            </div>
+                            {items.map((st) => (
+                              <StudyTypeRow
+                                key={st.id}
+                                st={st}
+                                allGroups={allGroups}
+                                onUpdateWeight={onUpdateStudyTypeWeight}
+                                onUpdateGroup={onUpdateStudyTypeGroup}
+                                onDelete={onDeleteStudyType}
+                                indented
+                              />
+                            ))}
+                          </div>
+                        ))}
+
+                      {/* Empty groups placeholder */}
+                      {emptyGroups.map((g) => (
+                        <div key={g} className="px-1 pt-1">
+                          <div className="flex items-center gap-1.5">
+                            <FolderOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                              {g}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground italic">empty</span>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Ungrouped items */}
+                      {grouped.ungrouped.length > 0 && (
+                        <div className="space-y-1">
+                          {(grouped.map.size > 0 || emptyGroups.length > 0) && (
+                            <div className="flex items-center gap-1.5 px-1 pt-2">
+                              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                                Standalone
+                              </span>
+                              <Badge variant="secondary" className="text-[10px] h-4 px-1">
+                                {grouped.ungrouped.length}
+                              </Badge>
+                            </div>
+                          )}
+                          {grouped.ungrouped.map((st) => (
+                            <StudyTypeRow
+                              key={st.id}
+                              st={st}
+                              allGroups={allGroups}
+                              onUpdateWeight={onUpdateStudyTypeWeight}
+                              onUpdateGroup={onUpdateStudyTypeGroup}
+                              onDelete={onDeleteStudyType}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </ScrollArea>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
 
@@ -319,91 +519,65 @@ export function ManageStudyTypePoolModal({
   );
 }
 
-// Extracted row component
+// ── Row component for individual study types ──
+
 interface StudyTypeRowProps {
   st: PoolStudyType;
-  editingGroupId: string | null;
-  editingGroupValue: string;
-  onEditingGroupValueChange: (v: string) => void;
-  onStartEditGroup: (st: PoolStudyType) => void;
-  onSaveGroup: (id: string) => Promise<void>;
-  onCancelEditGroup: () => void;
+  allGroups: string[];
   onUpdateWeight: (id: string, weight: number) => Promise<void>;
+  onUpdateGroup: (id: string, groupName: string | null) => Promise<void>;
   onDelete: (id: string) => void;
   indented?: boolean;
 }
 
 function StudyTypeRow({
   st,
-  editingGroupId,
-  editingGroupValue,
-  onEditingGroupValueChange,
-  onStartEditGroup,
-  onSaveGroup,
-  onCancelEditGroup,
+  allGroups,
   onUpdateWeight,
+  onUpdateGroup,
   onDelete,
   indented,
 }: StudyTypeRowProps) {
-  const isEditingGroup = editingGroupId === st.id;
-
   return (
-    <div className={cn("flex flex-col gap-1 rounded-md border p-2 text-sm", indented && "ml-4")}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex-1 min-w-0 truncate font-medium">{st.study_type}</span>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-xs text-muted-foreground">W:</span>
-          <Input
-            type="number"
-            min={1}
-            max={99}
-            value={st.specificity_weight}
-            onChange={(e) => {
-              const val = parseInt(e.target.value);
-              if (val >= 1) onUpdateWeight(st.id, val);
-            }}
-            className="h-6 w-12 text-xs text-center p-0"
-            title="Specificity weight"
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-destructive"
-            onClick={() => onDelete(st.id)}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
+    <div className={cn("flex items-center gap-2 rounded-md border p-2 text-sm", indented && "ml-4")}>
+      <span className="flex-1 min-w-0 truncate font-medium">{st.study_type}</span>
+      <Select
+        value={st.group_name || "__none__"}
+        onValueChange={(val) => onUpdateGroup(st.id, val === "__none__" ? null : val)}
+      >
+        <SelectTrigger className="h-6 w-28 text-[11px] px-1.5">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__none__">No group</SelectItem>
+          {allGroups.map((g) => (
+            <SelectItem key={g} value={g}>{g}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <div className="flex items-center gap-1 shrink-0">
+        <span className="text-xs text-muted-foreground">W:</span>
+        <Input
+          type="number"
+          min={1}
+          max={99}
+          value={st.specificity_weight}
+          onChange={(e) => {
+            const val = parseInt(e.target.value);
+            if (val >= 1) onUpdateWeight(st.id, val);
+          }}
+          className="h-6 w-12 text-xs text-center p-0"
+          title="Specificity weight"
+        />
       </div>
-      {/* Group editing row */}
-      <div className="flex items-center gap-1.5">
-        <FolderOpen className="h-3 w-3 text-muted-foreground shrink-0" />
-        {isEditingGroup ? (
-          <>
-            <Input
-              value={editingGroupValue}
-              onChange={(e) => onEditingGroupValueChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onSaveGroup(st.id);
-                if (e.key === "Escape") onCancelEditGroup();
-              }}
-              placeholder="Group name (empty = none)"
-              className="h-5 text-xs flex-1"
-              autoFocus
-            />
-            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => onSaveGroup(st.id)}>
-              <Plus className="h-3 w-3" />
-            </Button>
-          </>
-        ) : (
-          <button
-            onClick={() => onStartEditGroup(st)}
-            className="text-xs text-muted-foreground hover:text-foreground truncate text-left"
-          >
-            {st.group_name || "No group – click to set"}
-          </button>
-        )}
-      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 text-destructive shrink-0"
+        onClick={() => onDelete(st.id)}
+      >
+        <X className="h-3 w-3" />
+      </Button>
     </div>
   );
 }
