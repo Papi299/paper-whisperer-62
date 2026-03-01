@@ -238,7 +238,9 @@ export function normalizePaperData(
   config: NormalizationConfig
 ): NormalizedPaperData {
   // Step 0: Decode HTML entities in text fields (PubMed returns encoded entities)
-  const decodedTitle = decodeHTMLEntities(raw.title) || raw.title;
+  const decodedTitleRaw = decodeHTMLEntities(raw.title) || raw.title;
+  // Step 0b: Remove trailing period (PubMed appends one to titles)
+  const decodedTitle = decodedTitleRaw.replace(/\.\s*$/, '').trim();
   const decodedAbstract = decodeHTMLEntities(raw.abstract) || null;
 
   // Step 1: Normalize keywords through synonym lookup

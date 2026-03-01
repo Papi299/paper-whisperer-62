@@ -47,7 +47,7 @@ interface PaperListProps {
   onUpdateDriveUrl: (paperId: string, driveUrl: string) => Promise<void>;
 }
 
-const ROW_HEIGHT = 72;
+const BASE_ROW_HEIGHT = 52;
 const EXPANDED_ROW_HEIGHT = 220;
 
 // Weight-based merge: combine API types with title matches, then strictly deduplicate
@@ -135,11 +135,15 @@ export function PaperList({
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: useCallback(
       (index: number) => {
-        return expandedRows.has(papers[index]?.id) ? EXPANDED_ROW_HEIGHT : ROW_HEIGHT;
+        if (expandedRows.has(papers[index]?.id)) return EXPANDED_ROW_HEIGHT;
+        return BASE_ROW_HEIGHT;
       },
       [expandedRows, papers]
     ),
     overscan: 10,
+    measureElement: useCallback((el: HTMLElement) => {
+      return el.getBoundingClientRect().height;
+    }, []),
   });
 
   const generateGoogleScholarUrl = (title: string) => {
@@ -256,58 +260,56 @@ export function PaperList({
             <TableHead className="w-[50px]"></TableHead>
           </TableRow>
         </TableHeader>
-        <TableBody
-          style={{
-            height: `${rowVirtualizer.getTotalSize()}px`,
-            position: "relative",
-          }}
-        >
-          {/* Spacer for items before visible window */}
-          {virtualItems.length > 0 && (
-            <tr style={{ height: `${virtualItems[0].start}px` }} aria-hidden="true">
+        {/* Spacer for items before visible window */}
+        {virtualItems.length > 0 && virtualItems[0].start > 0 && (
+          <tbody aria-hidden="true">
+            <tr style={{ height: `${virtualItems[0].start}px` }}>
               <td />
             </tr>
-          )}
-          {virtualItems.map((virtualRow) => {
-            const paper = papers[virtualRow.index];
-            const isExpanded = expandedRows.has(paper.id);
-            const matchedPoolKeywords = findMatchingKeywords(paper.abstract);
-            const combinedKeywords = getCombinedKeywords(paper, matchedPoolKeywords);
-            return (
-              <PaperRow
-                key={paper.id}
-                paper={paper}
-                isExpanded={isExpanded}
-                onToggleExpand={toggleRow}
-                matchedPoolKeywords={matchedPoolKeywords}
-                combinedKeywords={combinedKeywords}
-                isVisible={isVisible}
-                getWidth={getWidth}
-                visibleColumnCount={visibleColumnCount}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                findMatchingStudyTypes={findMatchingStudyTypes}
-                poolStudyTypes={poolStudyTypes}
-                excludedStudyTypes={excludedStudyTypes}
-                onExcludeStudyType={onExcludeStudyType}
-                onExcludeKeyword={onExcludeKeyword}
-                onUpdateDriveUrl={onUpdateDriveUrl}
-                generateGoogleScholarUrl={generateGoogleScholarUrl}
-              />
-            );
-          })}
-          {/* Spacer for items after visible window */}
-          {virtualItems.length > 0 && (
+          </tbody>
+        )}
+        {virtualItems.map((virtualRow) => {
+          const paper = papers[virtualRow.index];
+          const isExpanded = expandedRows.has(paper.id);
+          const matchedPoolKeywords = findMatchingKeywords(paper.abstract);
+          const combinedKeywords = getCombinedKeywords(paper, matchedPoolKeywords);
+          return (
+            <PaperRow
+              key={paper.id}
+              paper={paper}
+              virtualIndex={virtualRow.index}
+              measureElement={rowVirtualizer.measureElement}
+              isExpanded={isExpanded}
+              onToggleExpand={toggleRow}
+              matchedPoolKeywords={matchedPoolKeywords}
+              combinedKeywords={combinedKeywords}
+              isVisible={isVisible}
+              getWidth={getWidth}
+              visibleColumnCount={visibleColumnCount}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              findMatchingStudyTypes={findMatchingStudyTypes}
+              poolStudyTypes={poolStudyTypes}
+              excludedStudyTypes={excludedStudyTypes}
+              onExcludeStudyType={onExcludeStudyType}
+              onExcludeKeyword={onExcludeKeyword}
+              onUpdateDriveUrl={onUpdateDriveUrl}
+              generateGoogleScholarUrl={generateGoogleScholarUrl}
+            />
+          );
+        })}
+        {/* Spacer for items after visible window */}
+        {virtualItems.length > 0 && (
+          <tbody aria-hidden="true">
             <tr
               style={{
                 height: `${rowVirtualizer.getTotalSize() - (virtualItems[virtualItems.length - 1].end)}px`,
               }}
-              aria-hidden="true"
             >
               <td />
             </tr>
-          )}
-        </TableBody>
+          </tbody>
+        )}
       </Table>
     </div>
   );
@@ -332,6 +334,8 @@ interface PaperRowProps {
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
   onUpdateDriveUrl: (paperId: string, driveUrl: string) => Promise<void>;
   generateGoogleScholarUrl: (title: string) => string;
+  virtualIndex: number;
+  measureElement: (el: HTMLElement | null) => void;
 }
 
 function PaperRow({
@@ -351,9 +355,11 @@ function PaperRow({
   onExcludeKeyword,
   onUpdateDriveUrl,
   generateGoogleScholarUrl,
+  virtualIndex,
+  measureElement,
 }: PaperRowProps) {
   return (
-    <>
+    <tbody ref={measureElement} data-index={virtualIndex}>
       <TableRow>
         {/* Expand/Collapse chevron */}
         <TableCell className="w-[36px] px-1">
@@ -378,7 +384,7 @@ function PaperRow({
         {isVisible("title") && (
           <TableCell style={{ width: getWidth("title"), minWidth: getWidth("title"), maxWidth: getWidth("title") }}>
             <div className="space-y-1">
-              <p className="font-medium line-clamp-2">{paper.title}</p>
+              <p className="font-medium whitespace-normal break-words leading-snug">{paper.title}</p>
               {paper.project && (
                 <Badge variant="outline" className="text-xs">
                   <div
@@ -648,6 +654,6 @@ function PaperRow({
           </td>
         </tr>
       )}
-    </>
+    </tbody>
   );
 }
