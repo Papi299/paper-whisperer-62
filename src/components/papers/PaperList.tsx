@@ -1,4 +1,4 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useState, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
 import { WeightedStudyType } from "@/hooks/useStudyTypePool";
@@ -24,7 +24,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, MoreHorizontal, Pencil, Trash2, Sparkles, X } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Pencil, Trash2, Sparkles, X, ChevronRight, ChevronDown } from "lucide-react";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader } from "./ResizableTableHeader";
@@ -46,6 +46,9 @@ interface PaperListProps {
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
   onUpdateDriveUrl: (paperId: string, driveUrl: string) => Promise<void>;
 }
+
+const ROW_HEIGHT = 72;
+const EXPANDED_ROW_HEIGHT = 220;
 
 // Weight-based merge: combine API types with title matches, then strictly deduplicate
 function mergeStudyTypesByWeight(
@@ -113,11 +116,29 @@ export function PaperList({
   onUpdateDriveUrl,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleRow = useCallback((paperId: string) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(paperId)) {
+        next.delete(paperId);
+      } else {
+        next.add(paperId);
+      }
+      return next;
+    });
+  }, []);
 
   const rowVirtualizer = useVirtualizer({
     count: papers.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => 72,
+    estimateSize: useCallback(
+      (index: number) => {
+        return expandedRows.has(papers[index]?.id) ? EXPANDED_ROW_HEIGHT : ROW_HEIGHT;
+      },
+      [expandedRows, papers]
+    ),
     overscan: 10,
   });
 
@@ -127,6 +148,12 @@ export function PaperList({
 
   const isVisible = (columnId: ColumnId) => visibleColumns?.includes(columnId) ?? true;
   const getWidth = (columnId: ColumnId) => columnWidths?.[columnId] || 150;
+
+  // Count visible columns for the abstract row colspan
+  const visibleColumnCount = useMemo(() => {
+    const cols: ColumnId[] = ["title", "authors", "year", "journal", "studyType", "tags", "keywords", "links"];
+    return cols.filter(c => isVisible(c)).length + 2; // +2 for expand chevron col and actions col
+  }, [visibleColumns]);
 
   const getCombinedKeywords = useCallback((paper: PaperWithTags, matchedPoolKeywords: string[]) => {
     const seenNormalized = new Set<string>();
@@ -201,6 +228,7 @@ export function PaperList({
       <Table style={{ tableLayout: "fixed" }}>
         <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow>
+            <TableHead className="w-[36px] px-1"></TableHead>
             {isVisible("title") && (
               <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} />
             )}
@@ -242,273 +270,30 @@ export function PaperList({
           )}
           {virtualItems.map((virtualRow) => {
             const paper = papers[virtualRow.index];
+            const isExpanded = expandedRows.has(paper.id);
             const matchedPoolKeywords = findMatchingKeywords(paper.abstract);
             const combinedKeywords = getCombinedKeywords(paper, matchedPoolKeywords);
             return (
-              <TableRow
+              <PaperRow
                 key={paper.id}
-                data-index={virtualRow.index}
-              >
-                {isVisible("title") && (
-                  <TableCell style={{ width: getWidth("title"), minWidth: getWidth("title"), maxWidth: getWidth("title") }}>
-                    <div className="space-y-1">
-                      <p className="font-medium line-clamp-2">{paper.title}</p>
-                      {paper.project && (
-                        <Badge variant="outline" className="text-xs">
-                          <div
-                            className="w-2 h-2 rounded-full mr-1"
-                            style={{ backgroundColor: paper.project.color }}
-                          />
-                          {paper.project.name}
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                )}
-                {isVisible("authors") && (
-                  <TableCell
-                    className="text-sm text-muted-foreground"
-                    style={{ width: getWidth("authors"), minWidth: getWidth("authors"), maxWidth: getWidth("authors") }}
-                  >
-                    <div className="truncate">
-                      {paper.authors.slice(0, 3).join(", ")}
-                      {paper.authors.length > 3 && " et al."}
-                    </div>
-                  </TableCell>
-                )}
-                {isVisible("year") && (
-                  <TableCell style={{ width: getWidth("year"), minWidth: getWidth("year"), maxWidth: getWidth("year") }}>
-                    {paper.year || "-"}
-                  </TableCell>
-                )}
-                {isVisible("journal") && (
-                  <TableCell
-                    className="text-sm text-muted-foreground"
-                    style={{ width: getWidth("journal"), minWidth: getWidth("journal"), maxWidth: getWidth("journal") }}
-                  >
-                    <div className="truncate">{paper.journal || "-"}</div>
-                  </TableCell>
-                )}
-                {isVisible("studyType") && (
-                  <TableCell
-                    className="text-sm"
-                    style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
-                  >
-                    {(() => {
-                      const publicationTypes = paper.study_type
-                        ?.split(/[,;]+/)
-                        .map(t => t.trim())
-                        .filter(Boolean) || [];
-                      
-                      const titleMatches = findMatchingStudyTypes(paper.title);
-                      const mergedTypes = mergeStudyTypesByWeight(publicationTypes, titleMatches, poolStudyTypes);
-                      
-                      const excludedSet = excludedStudyTypes ?? new Set<string>();
-                      const filteredTokens = mergedTypes.filter(entry => {
-                        const lowerToken = entry.type.toLowerCase();
-                        return !Array.from(excludedSet).some(
-                          excluded => lowerToken === excluded || lowerToken.includes(excluded)
-                        );
-                      });
-                      
-                      if (filteredTokens.length === 0) return <span>-</span>;
-                      
-                      return (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="flex flex-wrap gap-1 cursor-default">
-                                {filteredTokens.map((entry, index) => (
-                                  <Badge
-                                    key={`${entry.type}-${index}`}
-                                    variant="outline"
-                                    className={`text-xs group/badge hover:pr-1 ${
-                                      entry.isFromTitle
-                                        ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
-                                        : ''
-                                    }`}
-                                  >
-                                    <span className="truncate max-w-[150px]">{entry.type}</span>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onExcludeStudyType(entry.type);
-                                      }}
-                                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                                      title={`Exclude "${entry.type}"`}
-                                    >
-                                      <X className="h-3 w-3" />
-                                    </button>
-                                  </Badge>
-                                ))}
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
-                              <div className="flex flex-wrap gap-1 p-1">
-                                {filteredTokens.map((entry, index) => (
-                                  <Badge
-                                    key={`tooltip-${entry.type}-${index}`}
-                                    variant="outline"
-                                    className={`text-xs ${
-                                      entry.isFromTitle
-                                        ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
-                                        : ''
-                                    }`}
-                                  >
-                                    {entry.type}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      );
-                    })()}
-                  </TableCell>
-                )}
-                {isVisible("tags") && (
-                  <TableCell style={{ width: getWidth("tags"), minWidth: getWidth("tags"), maxWidth: getWidth("tags") }}>
-                    <div className="flex flex-wrap gap-1">
-                      {paper.tags.slice(0, 3).map((tag) => (
-                        <Badge
-                          key={tag.id}
-                          variant="secondary"
-                          className="text-xs"
-                          style={{ borderColor: tag.color }}
-                        >
-                          {tag.name}
-                        </Badge>
-                      ))}
-                      {paper.tags.length > 3 && (
-                        <Badge variant="secondary" className="text-xs">
-                          +{paper.tags.length - 3}
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                )}
-                {isVisible("keywords") && (
-                  <TableCell style={{ width: getWidth("keywords"), minWidth: getWidth("keywords"), maxWidth: getWidth("keywords") }}>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="flex flex-wrap gap-1 cursor-default">
-                            {combinedKeywords.map(({ keyword, displayName, source }) => (
-                              <Badge
-                                key={`${source}-${keyword}`}
-                                variant="outline"
-                                className={`text-xs group/badge hover:pr-1 ${
-                                  source === 'pool' 
-                                    ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
-                                    : source === 'pubmed'
-                                    ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
-                                    : source === 'mesh'
-                                    ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
-                                    : 'border-green-500/50 text-green-600 dark:text-green-400'
-                                }`}
-                              >
-                                {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
-                                {displayName}
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onExcludeKeyword(keyword);
-                                  }}
-                                  className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                                  title={`Exclude "${keyword}"`}
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </Badge>
-                            ))}
-                          </div>
-                        </TooltipTrigger>
-                        {combinedKeywords.length > 0 && (
-                          <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
-                            <div className="flex flex-wrap gap-1 p-1">
-                              {combinedKeywords.map(({ keyword, displayName, source }) => (
-                                <Badge
-                                  key={`tooltip-${source}-${keyword}`}
-                                  variant="outline"
-                                  className={`text-xs ${
-                                    source === 'pool' 
-                                      ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
-                                      : source === 'pubmed'
-                                      ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
-                                      : source === 'mesh'
-                                      ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
-                                      : 'border-green-500/50 text-green-600 dark:text-green-400'
-                                  }`}
-                                >
-                                  {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
-                                  {displayName}
-                                </Badge>
-                              ))}
-                            </div>
-                          </TooltipContent>
-                        )}
-                      </Tooltip>
-                    </TooltipProvider>
-                  </TableCell>
-                )}
-                {isVisible("links") && (
-                  <TableCell style={{ width: getWidth("links"), minWidth: getWidth("links"), maxWidth: getWidth("links") }}>
-                    <div className="flex gap-1">
-                      <QuickAddDriveLink
-                        paperId={paper.id}
-                        driveUrl={paper.drive_url}
-                        onSave={onUpdateDriveUrl}
-                      />
-                      {paper.pubmed_url && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                          <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer" title="PubMed">
-                            <ExternalLink className="h-4 w-4" />
-                          </a>
-                        </Button>
-                      )}
-                      {paper.journal_url && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                          <a href={paper.journal_url} target="_blank" rel="noopener noreferrer" title="Journal">
-                            <span className="text-xs font-bold">J</span>
-                          </a>
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                        <a
-                          href={generateGoogleScholarUrl(paper.title)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Search on Google Scholar"
-                        >
-                          <span className="text-xs font-bold">GS</span>
-                        </a>
-                      </Button>
-                    </div>
-                  </TableCell>
-                )}
-                <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="bg-popover">
-                      <DropdownMenuItem onClick={() => onEdit(paper)}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-destructive"
-                        onClick={() => onDelete(paper.id)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
+                paper={paper}
+                isExpanded={isExpanded}
+                onToggleExpand={toggleRow}
+                matchedPoolKeywords={matchedPoolKeywords}
+                combinedKeywords={combinedKeywords}
+                isVisible={isVisible}
+                getWidth={getWidth}
+                visibleColumnCount={visibleColumnCount}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                findMatchingStudyTypes={findMatchingStudyTypes}
+                poolStudyTypes={poolStudyTypes}
+                excludedStudyTypes={excludedStudyTypes}
+                onExcludeStudyType={onExcludeStudyType}
+                onExcludeKeyword={onExcludeKeyword}
+                onUpdateDriveUrl={onUpdateDriveUrl}
+                generateGoogleScholarUrl={generateGoogleScholarUrl}
+              />
             );
           })}
           {/* Spacer for items after visible window */}
@@ -525,5 +310,344 @@ export function PaperList({
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+// Extracted row component to keep PaperList lean
+interface PaperRowProps {
+  paper: PaperWithTags;
+  isExpanded: boolean;
+  onToggleExpand: (id: string) => void;
+  matchedPoolKeywords: string[];
+  combinedKeywords: { keyword: string; displayName: string; source: 'pool' | 'pubmed' | 'mesh' | 'substance' }[];
+  isVisible: (col: ColumnId) => boolean;
+  getWidth: (col: ColumnId) => number;
+  visibleColumnCount: number;
+  onEdit: (paper: PaperWithTags) => void;
+  onDelete: (paperId: string) => void;
+  findMatchingStudyTypes: (title: string) => WeightedStudyType[];
+  poolStudyTypes: { study_type: string; specificity_weight: number }[];
+  excludedStudyTypes: Set<string>;
+  onExcludeStudyType: (studyType: string) => Promise<boolean>;
+  onExcludeKeyword: (keyword: string) => Promise<boolean>;
+  onUpdateDriveUrl: (paperId: string, driveUrl: string) => Promise<void>;
+  generateGoogleScholarUrl: (title: string) => string;
+}
+
+function PaperRow({
+  paper,
+  isExpanded,
+  onToggleExpand,
+  combinedKeywords,
+  isVisible,
+  getWidth,
+  visibleColumnCount,
+  onEdit,
+  onDelete,
+  findMatchingStudyTypes,
+  poolStudyTypes,
+  excludedStudyTypes,
+  onExcludeStudyType,
+  onExcludeKeyword,
+  onUpdateDriveUrl,
+  generateGoogleScholarUrl,
+}: PaperRowProps) {
+  return (
+    <>
+      <TableRow>
+        {/* Expand/Collapse chevron */}
+        <TableCell className="w-[36px] px-1">
+          {paper.abstract ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => onToggleExpand(paper.id)}
+              title={isExpanded ? "Collapse abstract" : "Expand abstract"}
+            >
+              {isExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </Button>
+          ) : (
+            <div className="h-7 w-7" />
+          )}
+        </TableCell>
+        {isVisible("title") && (
+          <TableCell style={{ width: getWidth("title"), minWidth: getWidth("title"), maxWidth: getWidth("title") }}>
+            <div className="space-y-1">
+              <p className="font-medium line-clamp-2">{paper.title}</p>
+              {paper.project && (
+                <Badge variant="outline" className="text-xs">
+                  <div
+                    className="w-2 h-2 rounded-full mr-1"
+                    style={{ backgroundColor: paper.project.color }}
+                  />
+                  {paper.project.name}
+                </Badge>
+              )}
+            </div>
+          </TableCell>
+        )}
+        {isVisible("authors") && (
+          <TableCell
+            className="text-sm text-muted-foreground"
+            style={{ width: getWidth("authors"), minWidth: getWidth("authors"), maxWidth: getWidth("authors") }}
+          >
+            <div className="truncate">
+              {paper.authors.slice(0, 3).join(", ")}
+              {paper.authors.length > 3 && " et al."}
+            </div>
+          </TableCell>
+        )}
+        {isVisible("year") && (
+          <TableCell style={{ width: getWidth("year"), minWidth: getWidth("year"), maxWidth: getWidth("year") }}>
+            {paper.year || "-"}
+          </TableCell>
+        )}
+        {isVisible("journal") && (
+          <TableCell
+            className="text-sm text-muted-foreground"
+            style={{ width: getWidth("journal"), minWidth: getWidth("journal"), maxWidth: getWidth("journal") }}
+          >
+            <div className="truncate">{paper.journal || "-"}</div>
+          </TableCell>
+        )}
+        {isVisible("studyType") && (
+          <TableCell
+            className="text-sm"
+            style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
+          >
+            {(() => {
+              const publicationTypes = paper.study_type
+                ?.split(/[,;]+/)
+                .map(t => t.trim())
+                .filter(Boolean) || [];
+              
+              const titleMatches = findMatchingStudyTypes(paper.title);
+              const mergedTypes = mergeStudyTypesByWeight(publicationTypes, titleMatches, poolStudyTypes);
+              
+              const excludedSet = excludedStudyTypes ?? new Set<string>();
+              const filteredTokens = mergedTypes.filter(entry => {
+                const lowerToken = entry.type.toLowerCase();
+                return !Array.from(excludedSet).some(
+                  excluded => lowerToken === excluded || lowerToken.includes(excluded)
+                );
+              });
+              
+              if (filteredTokens.length === 0) return <span>-</span>;
+              
+              return (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex flex-wrap gap-1 cursor-default">
+                        {filteredTokens.map((entry, index) => (
+                          <Badge
+                            key={`${entry.type}-${index}`}
+                            variant="outline"
+                            className={`text-xs group/badge hover:pr-1 ${
+                              entry.isFromTitle
+                                ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
+                                : ''
+                            }`}
+                          >
+                            <span className="truncate max-w-[150px]">{entry.type}</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onExcludeStudyType(entry.type);
+                              }}
+                              className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                              title={`Exclude "${entry.type}"`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
+                      <div className="flex flex-wrap gap-1 p-1">
+                        {filteredTokens.map((entry, index) => (
+                          <Badge
+                            key={`tooltip-${entry.type}-${index}`}
+                            variant="outline"
+                            className={`text-xs ${
+                              entry.isFromTitle
+                                ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
+                                : ''
+                            }`}
+                          >
+                            {entry.type}
+                          </Badge>
+                        ))}
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              );
+            })()}
+          </TableCell>
+        )}
+        {isVisible("tags") && (
+          <TableCell style={{ width: getWidth("tags"), minWidth: getWidth("tags"), maxWidth: getWidth("tags") }}>
+            <div className="flex flex-wrap gap-1">
+              {paper.tags.slice(0, 3).map((tag) => (
+                <Badge
+                  key={tag.id}
+                  variant="secondary"
+                  className="text-xs"
+                  style={{ borderColor: tag.color }}
+                >
+                  {tag.name}
+                </Badge>
+              ))}
+              {paper.tags.length > 3 && (
+                <Badge variant="secondary" className="text-xs">
+                  +{paper.tags.length - 3}
+                </Badge>
+              )}
+            </div>
+          </TableCell>
+        )}
+        {isVisible("keywords") && (
+          <TableCell style={{ width: getWidth("keywords"), minWidth: getWidth("keywords"), maxWidth: getWidth("keywords") }}>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex flex-wrap gap-1 cursor-default">
+                    {combinedKeywords.map(({ keyword, displayName, source }) => (
+                      <Badge
+                        key={`${source}-${keyword}`}
+                        variant="outline"
+                        className={`text-xs group/badge hover:pr-1 ${
+                          source === 'pool' 
+                            ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
+                            : source === 'pubmed'
+                            ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
+                            : source === 'mesh'
+                            ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
+                            : 'border-green-500/50 text-green-600 dark:text-green-400'
+                        }`}
+                      >
+                        {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
+                        {displayName}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onExcludeKeyword(keyword);
+                          }}
+                          className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                          title={`Exclude "${keyword}"`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </TooltipTrigger>
+                {combinedKeywords.length > 0 && (
+                  <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
+                    <div className="flex flex-wrap gap-1 p-1">
+                      {combinedKeywords.map(({ keyword, displayName, source }) => (
+                        <Badge
+                          key={`tooltip-${source}-${keyword}`}
+                          variant="outline"
+                          className={`text-xs ${
+                            source === 'pool' 
+                              ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
+                              : source === 'pubmed'
+                              ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
+                              : source === 'mesh'
+                              ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
+                              : 'border-green-500/50 text-green-600 dark:text-green-400'
+                          }`}
+                        >
+                          {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
+                          {displayName}
+                        </Badge>
+                      ))}
+                    </div>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+          </TableCell>
+        )}
+        {isVisible("links") && (
+          <TableCell style={{ width: getWidth("links"), minWidth: getWidth("links"), maxWidth: getWidth("links") }}>
+            <div className="flex gap-1">
+              <QuickAddDriveLink
+                paperId={paper.id}
+                driveUrl={paper.drive_url}
+                onSave={onUpdateDriveUrl}
+              />
+              {paper.pubmed_url && (
+                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                  <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer" title="PubMed">
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                </Button>
+              )}
+              {paper.journal_url && (
+                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                  <a href={paper.journal_url} target="_blank" rel="noopener noreferrer" title="Journal">
+                    <span className="text-xs font-bold">J</span>
+                  </a>
+                </Button>
+              )}
+              <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                <a
+                  href={generateGoogleScholarUrl(paper.title)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Search on Google Scholar"
+                >
+                  <span className="text-xs font-bold">GS</span>
+                </a>
+              </Button>
+            </div>
+          </TableCell>
+        )}
+        <TableCell>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="bg-popover">
+              <DropdownMenuItem onClick={() => onEdit(paper)}>
+                <Pencil className="mr-2 h-4 w-4" />
+                Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={() => onDelete(paper.id)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </TableCell>
+      </TableRow>
+      {/* Expanded abstract row */}
+      {isExpanded && paper.abstract && (
+        <tr>
+          <td colSpan={visibleColumnCount}>
+            <div className="px-6 py-4 bg-muted/50 border-t border-border">
+              <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">Abstract</p>
+              <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+                {paper.abstract}
+              </p>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

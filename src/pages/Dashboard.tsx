@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { Plus, Loader2 } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
+import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 
 export function Dashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -350,6 +351,8 @@ export function Dashboard() {
               hasActiveFilters={hasActiveFilters}
             />
           </div>
+
+          <AnalyticsPanel papers={filteredPapers} />
 
           <PaperList
             papers={filteredPapers}
