@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, Link as LinkIcon, Search, PenLine, Upload } from "lucide-react";
+import { Loader2, Link as LinkIcon, Search, PenLine, Upload, CheckCircle2, AlertTriangle, XCircle, RotateCcw } from "lucide-react";
 
 interface ManualPaperData {
   title: string;
@@ -33,7 +33,7 @@ interface AddPaperDialogProps {
   onSubmitManual?: (paperData: ManualPaperData) => Promise<void>;
   onBulkImport?: (
     identifiers: string[],
-    onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void
+    onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void
   ) => Promise<void>;
 }
 
@@ -92,7 +92,8 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual, o
   // Bulk import state
   const [bulkInput, setBulkInput] = useState("");
   const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
+  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
+  const [bulkResults, setBulkResults] = useState<{ addedIds: string[]; skippedIds: string[]; failedIds: string[] }>({ addedIds: [], skippedIds: [], failedIds: [] });
 
   // Auto-detect Drive links when input changes
   useEffect(() => {
@@ -144,16 +145,23 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual, o
     if (ids.length === 0) return;
 
     setBulkRunning(true);
-    setBulkProgress({ current: 0, total: ids.length, added: 0, skipped: 0, failed: 0 });
+    setBulkProgress({ current: 0, total: ids.length });
+    setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
 
     try {
-      await onBulkImport(ids, (current, total, added, skipped, failed) => {
-        setBulkProgress({ current, total, added, skipped, failed });
+      await onBulkImport(ids, (current, total, addedIds, skippedIds, failedIds) => {
+        setBulkProgress({ current, total });
+        setBulkResults({ addedIds: [...addedIds], skippedIds: [...skippedIds], failedIds: [...failedIds] });
       });
     } finally {
       setBulkRunning(false);
-      // Don't auto-close so user can see the final summary
     }
+  };
+
+  const resetBulkState = () => {
+    setBulkInput("");
+    setBulkProgress({ current: 0, total: 0 });
+    setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
   };
 
   const resetAndClose = () => {
@@ -163,7 +171,8 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual, o
     setManualData(emptyManualData);
     setBulkInput("");
     setBulkRunning(false);
-    setBulkProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
+    setBulkProgress({ current: 0, total: 0 });
+    setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
     setActiveTab("search");
     onOpenChange(false);
   };
@@ -174,6 +183,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmit, onSubmitManual, o
 
   const bulkIds = parseBulkIdentifiers(bulkInput);
   const progressPercent = bulkProgress.total > 0 ? Math.round((bulkProgress.current / bulkProgress.total) * 100) : 0;
+  const bulkComplete = !bulkRunning && bulkProgress.total > 0 && bulkProgress.current === bulkProgress.total;
 
   return (
     <Dialog open={open} onOpenChange={bulkRunning ? undefined : resetAndClose}>
@@ -403,33 +413,80 @@ Paper title to search for`}
                 <Progress value={progressPercent} className="h-2" />
                 <p className="text-sm text-muted-foreground text-center">
                   Processing {bulkProgress.current} of {bulkProgress.total}…
-                  {bulkProgress.added > 0 && <span className="text-foreground"> · {bulkProgress.added} added</span>}
-                  {bulkProgress.skipped > 0 && <span className="text-muted-foreground"> · {bulkProgress.skipped} skipped</span>}
-                  {bulkProgress.failed > 0 && <span className="text-destructive"> · {bulkProgress.failed} failed</span>}
+                  {bulkResults.addedIds.length > 0 && <span className="text-foreground"> · {bulkResults.addedIds.length} added</span>}
+                  {bulkResults.skippedIds.length > 0 && <span className="text-muted-foreground"> · {bulkResults.skippedIds.length} skipped</span>}
+                  {bulkResults.failedIds.length > 0 && <span className="text-destructive"> · {bulkResults.failedIds.length} failed</span>}
                 </p>
               </div>
             )}
 
-            {!bulkRunning && bulkProgress.total > 0 && bulkProgress.current === bulkProgress.total && (
-              <div className="rounded-md border border-border bg-muted/50 p-3 text-sm space-y-1">
-                <p className="font-medium">Import complete</p>
-                <p className="text-muted-foreground">
-                  {bulkProgress.added} added · {bulkProgress.skipped} skipped · {bulkProgress.failed} failed
-                </p>
+            {bulkComplete && (
+              <div className="rounded-md border border-border bg-muted/50 p-4 space-y-3 max-h-60 overflow-y-auto">
+                <p className="font-medium text-sm">Import Results Summary</p>
+
+                {bulkResults.addedIds.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-green-700 dark:text-green-400">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Added ({bulkResults.addedIds.length})
+                    </div>
+                    <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
+                      {bulkResults.addedIds.map((id) => (
+                        <li key={id} className="font-mono">{id}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {bulkResults.skippedIds.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-yellow-700 dark:text-yellow-400">
+                      <AlertTriangle className="h-4 w-4" />
+                      Skipped — Duplicates ({bulkResults.skippedIds.length})
+                    </div>
+                    <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
+                      {bulkResults.skippedIds.map((id) => (
+                        <li key={id} className="font-mono">{id}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {bulkResults.failedIds.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-destructive">
+                      <XCircle className="h-4 w-4" />
+                      Failed ({bulkResults.failedIds.length})
+                    </div>
+                    <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
+                      {bulkResults.failedIds.map((id) => (
+                        <li key={id} className="font-mono">{id}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 
             <div className="flex justify-end gap-2">
+              {bulkComplete && (
+                <Button variant="ghost" onClick={resetBulkState} className="mr-auto">
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Start Over
+                </Button>
+              )}
               <Button variant="outline" onClick={resetAndClose} disabled={bulkRunning}>
-                {bulkRunning ? "Running…" : (bulkProgress.current === bulkProgress.total && bulkProgress.total > 0 ? "Close" : "Cancel")}
+                {bulkRunning ? "Running…" : (bulkComplete ? "Close" : "Cancel")}
               </Button>
-              <Button
-                onClick={handleBulkImport}
-                disabled={bulkRunning || bulkIds.length === 0 || !onBulkImport}
-              >
-                {bulkRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Import {bulkIds.length > 0 ? `${bulkIds.length} Papers` : "Papers"}
-              </Button>
+              {!bulkComplete && (
+                <Button
+                  onClick={handleBulkImport}
+                  disabled={bulkRunning || bulkIds.length === 0 || !onBulkImport}
+                >
+                  {bulkRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Import {bulkIds.length > 0 ? `${bulkIds.length} Papers` : "Papers"}
+                </Button>
+              )}
             </div>
           </TabsContent>
         </Tabs>
