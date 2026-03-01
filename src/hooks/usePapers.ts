@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
 import { normalizePaperData, NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
+import { fetchPaperMetadata } from "@/lib/fetchPaperMetadata";
 
 export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
   const [papers, setPapers] = useState<PaperWithTags[]>([]);
@@ -236,13 +237,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     if (!userId) return;
 
     try {
-      const { data, error } = await supabase.functions.invoke("fetch-paper-metadata", {
-        body: { identifiers },
-      });
-
-      if (error) throw error;
-
-      const fetchedPapers = data.results || [];
+      const fetchedPapers = await fetchPaperMetadata(identifiers);
       const successfulPapers: PaperWithTags[] = [];
 
       for (const result of fetchedPapers) {
