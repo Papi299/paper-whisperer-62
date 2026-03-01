@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp } from "lucide-react";
 
 interface ManualPaperData {
   title: string;
@@ -69,6 +69,40 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
   const [bulkResults, setBulkResults] = useState<{ addedIds: string[]; skippedIds: string[]; failedIds: string[] }>({ addedIds: [], skippedIds: [], failedIds: [] });
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+
+    const isValid = file.name.endsWith(".txt") || file.name.endsWith(".csv");
+    if (!isValid) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result;
+      if (typeof text === "string") {
+        setBulkInput((prev) => (prev ? prev + "\n" + text : text));
+      }
+    };
+    reader.readAsText(file);
+  }, []);
 
   const handleManualSubmit = async () => {
     if (!manualData.title.trim()) return;
@@ -146,20 +180,37 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
           <TabsContent value="import" className="space-y-4 mt-4">
             <div className="space-y-2">
               <Label htmlFor="bulk-identifiers">
-                Paste PMIDs or DOIs (comma, space, or newline separated)
+                Paste PMIDs or DOIs, or drop a .txt/.csv file
               </Label>
-              <Textarea
-                id="bulk-identifiers"
-                placeholder={`Paste your list of identifiers here, e.g.:
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`relative rounded-md transition-colors ${
+                  isDragging
+                    ? "ring-2 ring-primary bg-primary/5"
+                    : ""
+                }`}
+              >
+                {isDragging && (
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-md border-2 border-dashed border-primary bg-primary/10 pointer-events-none">
+                    <FileUp className="h-8 w-8 text-primary mb-1" />
+                    <span className="text-sm font-medium text-primary">Drop .txt or .csv file</span>
+                  </div>
+                )}
+                <Textarea
+                  id="bulk-identifiers"
+                  placeholder={`Paste your list of identifiers here, or drag & drop a .txt/.csv file:
 38237512
 37654321, 36543210
 10.1000/xyz123
 10.1016/j.example.2024.01.001`}
-                value={bulkInput}
-                onChange={(e) => setBulkInput(e.target.value)}
-                rows={6}
-                disabled={bulkRunning}
-              />
+                  value={bulkInput}
+                  onChange={(e) => setBulkInput(e.target.value)}
+                  rows={6}
+                  disabled={bulkRunning}
+                />
+              </div>
               {bulkIds.length > 0 && !bulkRunning && !bulkComplete && (
                 <p className="text-sm text-muted-foreground">
                   {bulkIds.length} identifier{bulkIds.length !== 1 ? "s" : ""} detected
