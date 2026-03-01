@@ -20,6 +20,8 @@ import {
   RefreshCw,
   Ban,
   Settings,
+  Sparkles,
+  FileText,
 } from "lucide-react";
 import {
   Collapsible,
@@ -33,10 +35,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { KeywordPoolSection } from "@/components/keywords/KeywordPoolSection";
-import { StudyTypePoolSection } from "@/components/study-types/StudyTypePoolSection";
 import { ManageSynonymsModal } from "@/components/synonyms/ManageSynonymsModal";
 import { ManageExclusionsModal } from "@/components/exclusions/ManageExclusionsModal";
+import { ManageKeywordPoolModal } from "@/components/keywords/ManageKeywordPoolModal";
+import { ManageStudyTypePoolModal } from "@/components/study-types/ManageStudyTypePoolModal";
 
 interface SidebarProps {
   projects: Project[];
@@ -125,6 +127,8 @@ export function Sidebar({
   const [showTagInput, setShowTagInput] = useState(false);
   const [synonymsModalOpen, setSynonymsModalOpen] = useState(false);
   const [exclusionsModalOpen, setExclusionsModalOpen] = useState(false);
+  const [keywordPoolModalOpen, setKeywordPoolModalOpen] = useState(false);
+  const [studyTypePoolModalOpen, setStudyTypePoolModalOpen] = useState(false);
 
   const handleCreateProject = () => {
     if (newProjectName.trim()) {
@@ -341,26 +345,47 @@ export function Sidebar({
             </CollapsibleContent>
           </Collapsible>
 
-          {/* Keyword Pool */}
-          <KeywordPoolSection
-            poolKeywords={poolKeywords}
-            availableKeywords={availableKeywords}
-            onAddKeyword={onAddPoolKeyword}
-            onAddMultipleKeywords={onAddMultiplePoolKeywords}
-            onDeleteKeyword={onDeletePoolKeyword}
-            onDeleteAllKeywords={onDeleteAllPoolKeywords}
-          />
+          {/* Keyword Pool - compact row with Manage button */}
+          <div className="flex items-center justify-between py-1 px-2">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-amber-500" />
+              <span className="text-sm font-medium text-muted-foreground">Keyword Pool</span>
+              {poolKeywords.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {poolKeywords.length}
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setKeywordPoolModalOpen(true)}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          </div>
 
-          {/* Study Type Pool */}
-          <StudyTypePoolSection
-            poolStudyTypes={poolStudyTypes}
-            availableStudyTypes={availableStudyTypes}
-            onAddStudyType={onAddPoolStudyType}
-            onAddMultipleStudyTypes={onAddMultiplePoolStudyTypes}
-            onDeleteStudyType={onDeletePoolStudyType}
-            onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
-            onUpdateStudyTypeWeight={onUpdateStudyTypeWeight}
-          />
+          {/* Study Type Pool - compact row with Manage button */}
+          <div className="flex items-center justify-between py-1 px-2">
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-cyan-500" />
+              <span className="text-sm font-medium text-muted-foreground">Study Type Pool</span>
+              {poolStudyTypes.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {poolStudyTypes.length}
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setStudyTypePoolModalOpen(true)}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          </div>
 
           {/* Synonyms - compact row with Manage button */}
           <div className="flex items-center justify-between py-1 px-2">
@@ -424,6 +449,27 @@ export function Sidebar({
         onAddExcludedStudyType={onAddExcludedStudyType}
         onDeleteExcludedStudyType={onDeleteExcludedStudyType}
         onClearExcludedStudyTypes={onClearExcludedStudyTypes}
+      />
+      <ManageKeywordPoolModal
+        open={keywordPoolModalOpen}
+        onOpenChange={setKeywordPoolModalOpen}
+        poolKeywords={poolKeywords}
+        availableKeywords={availableKeywords}
+        onAddKeyword={onAddPoolKeyword}
+        onAddMultipleKeywords={onAddMultiplePoolKeywords}
+        onDeleteKeyword={onDeletePoolKeyword}
+        onDeleteAllKeywords={onDeleteAllPoolKeywords}
+      />
+      <ManageStudyTypePoolModal
+        open={studyTypePoolModalOpen}
+        onOpenChange={setStudyTypePoolModalOpen}
+        poolStudyTypes={poolStudyTypes}
+        availableStudyTypes={availableStudyTypes}
+        onAddStudyType={onAddPoolStudyType}
+        onAddMultipleStudyTypes={onAddMultiplePoolStudyTypes}
+        onDeleteStudyType={onDeletePoolStudyType}
+        onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
+        onUpdateStudyTypeWeight={onUpdateStudyTypeWeight}
       />
     </aside>
   );
