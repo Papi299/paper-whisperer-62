@@ -139,6 +139,11 @@ function deduplicateStudyTypes(
   // Sort by weight desc, then alphabetical
   entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
 
+  // Debug: log matched study types and the winner
+  if (entries.length > 0) {
+    console.log('Matched Types:', entries.map(e => `${e.type} (w:${e.weight})`), 'Winner:', entries[0].type);
+  }
+
   // Return ONLY the single highest-weight match as the dominant study type
   return entries.length > 0 ? entries[0].type : "";
 }

@@ -216,16 +216,11 @@ export function Dashboard() {
       // Study type (group-aware filtering)
       if (studyType !== "all") {
         const matchSet = studyTypeFilterLookup.get(studyType);
+        const paperType = (paper.study_type || "").trim().toLowerCase();
         if (matchSet) {
-          const paperTypes = (paper.study_type || "")
-            .split(/[,;]+/)
-            .map((t) => t.trim().toLowerCase())
-            .filter(Boolean);
-          const hasMatch = paperTypes.some((pt) => matchSet.has(pt));
-          if (!hasMatch) return false;
+          if (!matchSet.has(paperType)) return false;
         } else {
-          // Fallback: exact match
-          if (paper.study_type !== studyType) return false;
+          if (paperType !== studyType.toLowerCase()) return false;
         }
       }
 

@@ -54,53 +54,7 @@ interface PaperListProps {
 const BASE_ROW_HEIGHT = 52;
 const EXPANDED_ROW_HEIGHT = 220;
 
-// Weight-based merge: combine API types with title matches, then strictly deduplicate
-function mergeStudyTypesByWeight(
-  publicationTypes: string[],
-  titleMatches: WeightedStudyType[],
-  poolStudyTypes: { study_type: string; specificity_weight: number }[]
-): { type: string; weight: number; isFromTitle: boolean }[] {
-  const poolMap = new Map(poolStudyTypes.map(p => [p.study_type.toLowerCase(), p.specificity_weight]));
-  
-  const apiEntries = publicationTypes.map(t => ({
-    type: t,
-    weight: poolMap.get(t.toLowerCase()) ?? 1,
-    isFromTitle: false,
-  }));
-  
-  const titleEntries = titleMatches.map(t => ({
-    type: t.study_type,
-    weight: t.specificity_weight,
-    isFromTitle: true,
-  }));
-  
-  const merged = new Map<string, { type: string; weight: number; isFromTitle: boolean }>();
-  for (const entry of [...apiEntries, ...titleEntries]) {
-    const key = entry.type.toLowerCase();
-    const existing = merged.get(key);
-    if (!existing || entry.weight > existing.weight) {
-      merged.set(key, entry);
-    }
-  }
-  
-  let entries = Array.from(merged.values());
-  
-  entries = entries.filter((entry, _i, arr) => {
-    const lower = entry.type.toLowerCase();
-    for (const other of arr) {
-      if (other === entry) continue;
-      const otherLower = other.type.toLowerCase();
-      if (otherLower.includes(lower) && otherLower !== lower) {
-        return false;
-      }
-    }
-    return true;
-  });
-  
-  entries.sort((a, b) => b.weight - a.weight || a.type.localeCompare(b.type));
-  
-  return entries;
-}
+// mergeStudyTypesByWeight removed — pipeline now assigns a single study type
 
 export function PaperList({
   papers,
@@ -460,73 +414,37 @@ function PaperRow({
             style={{ width: getWidth("studyType"), minWidth: getWidth("studyType"), maxWidth: getWidth("studyType") }}
           >
             {(() => {
-              const publicationTypes = paper.study_type
-                ?.split(/[,;]+/)
-                .map(t => t.trim())
-                .filter(Boolean) || [];
+              const studyTypeValue = (paper.study_type || "").trim();
               
-              const titleMatches = findMatchingStudyTypes(paper.title);
-              const mergedTypes = mergeStudyTypesByWeight(publicationTypes, titleMatches, poolStudyTypes);
+              if (!studyTypeValue) return <span>-</span>;
               
+              // Check exclusion
               const excludedSet = excludedStudyTypes ?? new Set<string>();
-              const filteredTokens = mergedTypes.filter(entry => {
-                const lowerToken = entry.type.toLowerCase();
-                return !Array.from(excludedSet).some(
-                  excluded => lowerToken === excluded || lowerToken.includes(excluded)
-                );
-              });
+              const isExcluded = Array.from(excludedSet).some(
+                excluded => studyTypeValue.toLowerCase() === excluded || studyTypeValue.toLowerCase().includes(excluded)
+              );
               
-              if (filteredTokens.length === 0) return <span>-</span>;
+              if (isExcluded) return <span>-</span>;
               
               return (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="flex flex-wrap gap-1 cursor-default">
-                        {filteredTokens.map((entry, index) => (
-                          <Badge
-                            key={`${entry.type}-${index}`}
-                            variant="outline"
-                            className={`text-xs group/badge hover:pr-1 ${
-                              entry.isFromTitle
-                                ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
-                                : ''
-                            }`}
-                          >
-                            <span className="truncate max-w-[150px]">{entry.type}</span>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onExcludeStudyType(entry.type);
-                              }}
-                              className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                              title={`Exclude "${entry.type}"`}
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </Badge>
-                        ))}
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
-                      <div className="flex flex-wrap gap-1 p-1">
-                        {filteredTokens.map((entry, index) => (
-                          <Badge
-                            key={`tooltip-${entry.type}-${index}`}
-                            variant="outline"
-                            className={`text-xs ${
-                              entry.isFromTitle
-                                ? 'border-cyan-500/50 text-cyan-600 dark:text-cyan-400'
-                                : ''
-                            }`}
-                          >
-                            {entry.type}
-                          </Badge>
-                        ))}
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <div className="flex items-center gap-1">
+                  <Badge
+                    variant="outline"
+                    className="text-xs group/badge hover:pr-1"
+                  >
+                    <span className="truncate max-w-[150px]">{studyTypeValue}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onExcludeStudyType(studyTypeValue);
+                      }}
+                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                      title={`Exclude "${studyTypeValue}"`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                </div>
               );
             })()}
           </TableCell>
