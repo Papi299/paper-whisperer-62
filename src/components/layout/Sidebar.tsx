@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import { Project, Tag } from "@/types/database";
 import { PoolKeyword } from "@/hooks/useKeywordPool";
 import { Synonym } from "@/hooks/useSynonymPool";
@@ -16,6 +17,9 @@ import {
   MoreHorizontal,
   Pencil,
   Trash2,
+  RefreshCw,
+  Ban,
+  Settings,
 } from "lucide-react";
 import {
   Collapsible,
@@ -30,9 +34,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { KeywordPoolSection } from "@/components/keywords/KeywordPoolSection";
-import { SynonymPoolSection } from "@/components/synonyms/SynonymPoolSection";
-import { ExclusionPoolsSection } from "@/components/exclusions/ExclusionPoolsSection";
 import { StudyTypePoolSection } from "@/components/study-types/StudyTypePoolSection";
+import { ManageSynonymsModal } from "@/components/synonyms/ManageSynonymsModal";
+import { ManageExclusionsModal } from "@/components/exclusions/ManageExclusionsModal";
 
 interface SidebarProps {
   projects: Project[];
@@ -47,19 +51,16 @@ interface SidebarProps {
   onDeleteProject: (projectId: string) => void;
   onEditTag: (tag: Tag) => void;
   onDeleteTag: (tagId: string) => void;
-  // Keyword pool props
   poolKeywords: PoolKeyword[];
   availableKeywords: string[];
   onAddPoolKeyword: (keyword: string) => Promise<boolean>;
   onAddMultiplePoolKeywords: (keywords: string[]) => Promise<number>;
   onDeletePoolKeyword: (keywordId: string) => void;
   onDeleteAllPoolKeywords: () => void;
-  // Synonym pool props
   synonymGroups: Synonym[];
   onAddSynonymGroup: (canonicalTerm: string, synonyms: string[]) => Promise<void>;
   onUpdateSynonymGroup: (id: string, canonicalTerm: string, synonyms: string[]) => Promise<void>;
   onDeleteSynonymGroup: (id: string) => Promise<void>;
-  // Exclusion pool props
   excludedKeywords: ExcludedKeyword[];
   excludedStudyTypes: ExcludedStudyType[];
   onAddExcludedKeyword: (keyword: string) => Promise<boolean>;
@@ -68,7 +69,6 @@ interface SidebarProps {
   onAddExcludedStudyType: (studyType: string) => Promise<boolean>;
   onDeleteExcludedStudyType: (id: string) => Promise<void>;
   onClearExcludedStudyTypes: () => Promise<void>;
-  // Study type pool props
   poolStudyTypes: PoolStudyType[];
   availableStudyTypes: string[];
   onAddPoolStudyType: (studyType: string) => Promise<boolean>;
@@ -123,6 +123,8 @@ export function Sidebar({
   const [newTagName, setNewTagName] = useState("");
   const [showProjectInput, setShowProjectInput] = useState(false);
   const [showTagInput, setShowTagInput] = useState(false);
+  const [synonymsModalOpen, setSynonymsModalOpen] = useState(false);
+  const [exclusionsModalOpen, setExclusionsModalOpen] = useState(false);
 
   const handleCreateProject = () => {
     if (newProjectName.trim()) {
@@ -139,6 +141,8 @@ export function Sidebar({
       setShowTagInput(false);
     }
   };
+
+  const totalExclusions = excludedKeywords.length + excludedStudyTypes.length;
 
   return (
     <aside className="w-64 border-r bg-muted/30 flex flex-col">
@@ -358,27 +362,69 @@ export function Sidebar({
             onUpdateStudyTypeWeight={onUpdateStudyTypeWeight}
           />
 
-          {/* Synonym Pool */}
-          <SynonymPoolSection
-            synonymGroups={synonymGroups}
-            onAdd={onAddSynonymGroup}
-            onUpdate={onUpdateSynonymGroup}
-            onDelete={onDeleteSynonymGroup}
-          />
+          {/* Synonyms - compact row with Manage button */}
+          <div className="flex items-center justify-between py-1 px-2">
+            <div className="flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium text-muted-foreground">Synonyms</span>
+              <Badge variant="secondary" className="text-xs">
+                {synonymGroups.length}
+              </Badge>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setSynonymsModalOpen(true)}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          </div>
 
-          {/* Exclusion Pools */}
-          <ExclusionPoolsSection
-            excludedKeywords={excludedKeywords}
-            excludedStudyTypes={excludedStudyTypes}
-            onAddExcludedKeyword={onAddExcludedKeyword}
-            onDeleteExcludedKeyword={onDeleteExcludedKeyword}
-            onClearExcludedKeywords={onClearExcludedKeywords}
-            onAddExcludedStudyType={onAddExcludedStudyType}
-            onDeleteExcludedStudyType={onDeleteExcludedStudyType}
-            onClearExcludedStudyTypes={onClearExcludedStudyTypes}
-          />
+          {/* Exclusion Pools - compact row with Manage button */}
+          <div className="flex items-center justify-between py-1 px-2">
+            <div className="flex items-center gap-2">
+              <Ban className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium text-muted-foreground">Exclusions</span>
+              {totalExclusions > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {totalExclusions}
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setExclusionsModalOpen(true)}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </ScrollArea>
+
+      {/* Modals rendered outside scroll area to avoid clipping */}
+      <ManageSynonymsModal
+        open={synonymsModalOpen}
+        onOpenChange={setSynonymsModalOpen}
+        synonymGroups={synonymGroups}
+        onAdd={onAddSynonymGroup}
+        onUpdate={onUpdateSynonymGroup}
+        onDelete={onDeleteSynonymGroup}
+      />
+      <ManageExclusionsModal
+        open={exclusionsModalOpen}
+        onOpenChange={setExclusionsModalOpen}
+        excludedKeywords={excludedKeywords}
+        excludedStudyTypes={excludedStudyTypes}
+        onAddExcludedKeyword={onAddExcludedKeyword}
+        onDeleteExcludedKeyword={onDeleteExcludedKeyword}
+        onClearExcludedKeywords={onClearExcludedKeywords}
+        onAddExcludedStudyType={onAddExcludedStudyType}
+        onDeleteExcludedStudyType={onDeleteExcludedStudyType}
+        onClearExcludedStudyTypes={onClearExcludedStudyTypes}
+      />
     </aside>
   );
 }
