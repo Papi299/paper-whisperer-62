@@ -7,6 +7,7 @@ export interface PoolStudyType {
   user_id: string;
   study_type: string;
   specificity_weight: number;
+  group_name: string | null;
   created_at: string;
 }
 
@@ -71,7 +72,7 @@ export function useStudyTypePool(userId: string | undefined) {
     try {
       const { data, error } = await supabase
         .from("study_type_pool")
-        .insert({ user_id: userId, study_type: trimmed })
+        .insert({ user_id: userId, study_type: trimmed } as any)
         .select()
         .single();
 
@@ -123,7 +124,7 @@ export function useStudyTypePool(userId: string | undefined) {
     try {
       const { data, error } = await supabase
         .from("study_type_pool")
-        .insert(uniqueNew.map((study_type) => ({ user_id: userId, study_type })))
+        .insert(uniqueNew.map((study_type) => ({ user_id: userId, study_type })) as any)
         .select();
 
       if (error) throw error;
@@ -165,6 +166,27 @@ export function useStudyTypePool(userId: string | undefined) {
     } catch (error: any) {
       toast({
         title: "Error updating weight",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const updateStudyTypeGroup = async (id: string, groupName: string | null) => {
+    try {
+      const { error } = await supabase
+        .from("study_type_pool")
+        .update({ group_name: groupName } as any)
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setPoolStudyTypes((prev) =>
+        prev.map((st) => (st.id === id ? { ...st, group_name: groupName } : st))
+      );
+    } catch (error: any) {
+      toast({
+        title: "Error updating group",
         description: error.message,
         variant: "destructive",
       });
@@ -236,6 +258,7 @@ export function useStudyTypePool(userId: string | undefined) {
     addStudyType,
     addMultipleStudyTypes,
     updateStudyTypeWeight,
+    updateStudyTypeGroup,
     deleteStudyType,
     deleteAllStudyTypes,
     findMatchingStudyTypes,

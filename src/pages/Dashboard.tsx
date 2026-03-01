@@ -54,6 +54,7 @@ export function Dashboard() {
     addStudyType: addPoolStudyType,
     addMultipleStudyTypes: addMultiplePoolStudyTypes,
     updateStudyTypeWeight,
+    updateStudyTypeGroup,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
     findMatchingStudyTypes,
@@ -128,6 +129,32 @@ export function Dashboard() {
     return Array.from(studyTypeSet).sort();
   }, [papers]);
 
+  // Build dynamic study type filter options from user's pool
+  const studyTypeFilterOptions = useMemo(() => {
+    const options = new Set<string>();
+    poolStudyTypes.forEach((st) => {
+      if (st.group_name) {
+        options.add(st.group_name);
+      } else {
+        options.add(st.study_type);
+      }
+    });
+    return Array.from(options).sort();
+  }, [poolStudyTypes]);
+
+  // Build a lookup: filter option → set of matching study_type strings
+  const studyTypeFilterLookup = useMemo(() => {
+    const lookup = new Map<string, Set<string>>();
+    poolStudyTypes.forEach((st) => {
+      const key = st.group_name || st.study_type;
+      if (!lookup.has(key)) lookup.set(key, new Set());
+      lookup.get(key)!.add(st.study_type.toLowerCase());
+      // Also add the key itself so direct matches work
+      lookup.get(key)!.add(key.toLowerCase());
+    });
+    return lookup;
+  }, [poolStudyTypes]);
+
   // Selection state
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
@@ -184,9 +211,20 @@ export function Dashboard() {
         return false;
       }
 
-      // Study type
-      if (studyType !== "all" && paper.study_type !== studyType) {
-        return false;
+      // Study type (group-aware filtering)
+      if (studyType !== "all") {
+        const matchSet = studyTypeFilterLookup.get(studyType);
+        if (matchSet) {
+          const paperTypes = (paper.study_type || "")
+            .split(/[,;]+/)
+            .map((t) => t.trim().toLowerCase())
+            .filter(Boolean);
+          const hasMatch = paperTypes.some((pt) => matchSet.has(pt));
+          if (!hasMatch) return false;
+        } else {
+          // Fallback: exact match
+          if (paper.study_type !== studyType) return false;
+        }
       }
 
       // Keywords
@@ -207,6 +245,7 @@ export function Dashboard() {
     yearFrom,
     yearTo,
     studyType,
+    studyTypeFilterLookup,
     selectedKeywords,
   ]);
 
@@ -305,6 +344,7 @@ export function Dashboard() {
           onDeletePoolStudyType={deletePoolStudyType}
           onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
           onUpdateStudyTypeWeight={updateStudyTypeWeight}
+          onUpdateStudyTypeGroup={updateStudyTypeGroup}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
@@ -343,6 +383,7 @@ export function Dashboard() {
               onYearToChange={setYearTo}
               studyType={studyType}
               onStudyTypeChange={setStudyType}
+              studyTypeFilterOptions={studyTypeFilterOptions}
               selectedKeywords={selectedKeywords}
               availableKeywords={allKeywords}
               onKeywordToggle={handleKeywordToggle}

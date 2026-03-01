@@ -78,6 +78,7 @@ interface SidebarProps {
   onDeletePoolStudyType: (id: string) => void;
   onDeleteAllPoolStudyTypes: () => void;
   onUpdateStudyTypeWeight: (id: string, weight: number) => Promise<void>;
+  onUpdateStudyTypeGroup: (id: string, groupName: string | null) => Promise<void>;
 }
 
 export function Sidebar({
@@ -118,6 +119,7 @@ export function Sidebar({
   onDeletePoolStudyType,
   onDeleteAllPoolStudyTypes,
   onUpdateStudyTypeWeight,
+  onUpdateStudyTypeGroup,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -470,6 +472,7 @@ export function Sidebar({
         onDeleteStudyType={onDeletePoolStudyType}
         onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
         onUpdateStudyTypeWeight={onUpdateStudyTypeWeight}
+        onUpdateStudyTypeGroup={onUpdateStudyTypeGroup}
       />
     </aside>
   );
