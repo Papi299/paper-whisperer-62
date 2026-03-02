@@ -645,20 +645,26 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
    * Re-evaluate study types for all papers against the given pool.
    * Updates local state immediately and persists changes to DB.
    */
-  const reevaluateStudyTypes = useCallback(async (pool: StudyTypePoolEntry[]) => {
+  const reevaluateStudyTypes = useCallback(async (pool: StudyTypePoolEntry[], deletedTypeNames?: string[]) => {
     if (papers.length === 0) return;
 
+    const deletedSet = new Set((deletedTypeNames || []).map(n => n.toLowerCase()));
     const updates: { id: string; newType: string }[] = [];
 
     for (const paper of papers) {
+      // If the paper's current study_type matches a deleted pool entry,
+      // pass null as rawStudyType so it doesn't self-match as a fallback
+      const currentType = paper.study_type || "";
+      const rawFallback = deletedSet.has(currentType.toLowerCase()) ? null : currentType;
+
       const newType = evaluateStudyType(
         paper.title,
         paper.abstract,
-        paper.study_type,
+        rawFallback,
         pool
       );
 
-      const current = (paper.study_type || "").trim();
+      const current = currentType.trim();
       const evaluated = (newType || "").trim();
 
       if (current !== evaluated) {
