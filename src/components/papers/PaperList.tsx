@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -49,6 +50,9 @@ interface PaperListProps {
   onExcludeStudyType: (studyType: string) => Promise<boolean>;
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
   onUpdateDriveUrl: (paperId: string, driveUrl: string) => Promise<void>;
+  selectedPaperIds: Set<string>;
+  onToggleSelect: (paperId: string) => void;
+  onToggleSelectAll: () => void;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -72,6 +76,9 @@ export function PaperList({
   onExcludeStudyType,
   onExcludeKeyword,
   onUpdateDriveUrl,
+  selectedPaperIds,
+  onToggleSelect,
+  onToggleSelectAll,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -115,8 +122,11 @@ export function PaperList({
   // Count visible columns for the abstract row colspan
   const visibleColumnCount = useMemo(() => {
     const cols: ColumnId[] = ["title", "authors", "year", "journal", "studyType", "tags", "keywords", "links"];
-    return cols.filter(c => isVisible(c)).length + 2; // +2 for expand chevron col and actions col
+    return cols.filter(c => isVisible(c)).length + 3; // +3 for checkbox col, expand chevron col and actions col
   }, [visibleColumns]);
+
+  const allSelected = papers.length > 0 && papers.every(p => selectedPaperIds.has(p.id));
+  const someSelected = papers.some(p => selectedPaperIds.has(p.id));
 
   const getCombinedKeywords = useCallback((paper: PaperWithTags, matchedPoolKeywords: string[]) => {
     const seenNormalized = new Set<string>();
@@ -191,6 +201,18 @@ export function PaperList({
       <Table style={{ tableLayout: "fixed" }}>
         <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow>
+            <TableHead className="w-[40px] px-1">
+              <Checkbox
+                checked={allSelected}
+                ref={(el) => {
+                  if (el) {
+                    (el as any).indeterminate = someSelected && !allSelected;
+                  }
+                }}
+                onCheckedChange={onToggleSelectAll}
+                aria-label="Select all"
+              />
+            </TableHead>
             <TableHead className="w-[36px] px-1"></TableHead>
             {isVisible("title") && (
               <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} />
@@ -252,6 +274,8 @@ export function PaperList({
               onExcludeKeyword={onExcludeKeyword}
               onUpdateDriveUrl={onUpdateDriveUrl}
               generateGoogleScholarUrl={generateGoogleScholarUrl}
+              isSelected={selectedPaperIds.has(paper.id)}
+              onToggleSelect={onToggleSelect}
             />
           );
         })}
@@ -315,6 +339,8 @@ interface PaperRowProps {
   generateGoogleScholarUrl: (title: string) => string;
   virtualIndex: number;
   measureElement: (el: HTMLElement | null) => void;
+  isSelected: boolean;
+  onToggleSelect: (paperId: string) => void;
 }
 
 function PaperRow({
@@ -334,10 +360,20 @@ function PaperRow({
   generateGoogleScholarUrl,
   virtualIndex,
   measureElement,
+  isSelected,
+  onToggleSelect,
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
-      <TableRow>
+      <TableRow className={isSelected ? "bg-primary/5" : undefined}>
+        {/* Selection checkbox */}
+        <TableCell className="w-[40px] px-1">
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={() => onToggleSelect(paper.id)}
+            aria-label={`Select ${paper.title}`}
+          />
+        </TableCell>
         {/* Expand/Collapse chevron */}
         <TableCell className="w-[36px] px-1">
           {paper.abstract ? (

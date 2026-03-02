@@ -705,6 +705,65 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     }
   }, [papers, toast]);
 
+  const bulkDeletePapers = async (paperIds: string[]) => {
+    if (paperIds.length === 0) return;
+    const { error } = await supabase.from("papers").delete().in("id", paperIds);
+    if (error) {
+      toast({ title: "Error deleting papers", description: error.message, variant: "destructive" });
+      return;
+    }
+    const idSet = new Set(paperIds);
+    setPapers(prev => prev.filter(p => !idSet.has(p.id)));
+    toast({ title: `Deleted ${paperIds.length} paper(s)` });
+  };
+
+  const bulkSetProjects = async (paperIds: string[], projectIds: string[]) => {
+    if (paperIds.length === 0) return;
+    try {
+      // Remove existing project links for selected papers
+      await supabase.from("paper_projects").delete().in("paper_id", paperIds);
+      // Insert new links
+      if (projectIds.length > 0) {
+        const rows = paperIds.flatMap(paperId =>
+          projectIds.map(projectId => ({ paper_id: paperId, project_id: projectId }))
+        );
+        const { error } = await supabase.from("paper_projects").insert(rows);
+        if (error) throw error;
+      }
+      // Update local state
+      const newProjects = projects.filter(p => projectIds.includes(p.id));
+      setPapers(prev => prev.map(p => {
+        if (!paperIds.includes(p.id)) return p;
+        return { ...p, projects: newProjects };
+      }));
+      toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
+    } catch (err: any) {
+      toast({ title: "Error setting projects", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const bulkSetTags = async (paperIds: string[], tagIds: string[]) => {
+    if (paperIds.length === 0) return;
+    try {
+      await supabase.from("paper_tags").delete().in("paper_id", paperIds);
+      if (tagIds.length > 0) {
+        const rows = paperIds.flatMap(paperId =>
+          tagIds.map(tagId => ({ paper_id: paperId, tag_id: tagId }))
+        );
+        const { error } = await supabase.from("paper_tags").insert(rows);
+        if (error) throw error;
+      }
+      const newTags = tags.filter(t => tagIds.includes(t.id));
+      setPapers(prev => prev.map(p => {
+        if (!paperIds.includes(p.id)) return p;
+        return { ...p, tags: newTags };
+      }));
+      toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
+    } catch (err: any) {
+      toast({ title: "Error setting tags", description: err.message, variant: "destructive" });
+    }
+  };
+
   return {
     papers,
     projects,
@@ -722,6 +781,9 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     bulkImportPapers,
     updatePaper,
     deletePaper,
+    bulkDeletePapers,
+    bulkSetProjects,
+    bulkSetTags,
     reevaluateStudyTypes,
     refetch: fetchData,
   };

@@ -13,6 +13,7 @@ import { useStudyTypePool } from "@/hooks/useStudyTypePool";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
+import { BulkActionsToolbar } from "@/components/papers/BulkActionsToolbar";
 import { AddPaperDialog } from "@/components/papers/AddPaperDialog";
 import { EditPaperDialog } from "@/components/papers/EditPaperDialog";
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
@@ -126,6 +127,9 @@ export function Dashboard() {
     bulkImportPapers,
     updatePaper,
     deletePaper,
+    bulkDeletePapers,
+    bulkSetProjects,
+    bulkSetTags,
     reevaluateStudyTypes,
   } = usePapers(user?.id, normalizationConfig);
 
@@ -215,6 +219,18 @@ export function Dashboard() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
 
+  // Bulk selection state
+  const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
+
+  const handleToggleSelect = useCallback((paperId: string) => {
+    setSelectedPaperIds(prev => {
+      const next = new Set(prev);
+      if (next.has(paperId)) next.delete(paperId);
+      else next.add(paperId);
+      return next;
+    });
+  }, []);
+
   // Dialog state
   const [addPaperOpen, setAddPaperOpen] = useState(false);
   const [editingPaper, setEditingPaper] = useState<PaperWithTags | null>(null);
@@ -297,6 +313,35 @@ export function Dashboard() {
     studyTypeFilterOptions,
     selectedKeywords,
   ]);
+
+  // Bulk action handlers (must be after filteredPapers)
+  const handleToggleSelectAll = useCallback(() => {
+    setSelectedPaperIds(prev => {
+      const allFilteredIds = filteredPapers.map(p => p.id);
+      const allSelected = allFilteredIds.every(id => prev.has(id));
+      if (allSelected) return new Set<string>();
+      return new Set(allFilteredIds);
+    });
+  }, [filteredPapers]);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedPaperIds(new Set());
+  }, []);
+
+  const handleBulkDelete = useCallback(async () => {
+    await bulkDeletePapers(Array.from(selectedPaperIds));
+    setSelectedPaperIds(new Set());
+  }, [selectedPaperIds, bulkDeletePapers]);
+
+  const handleBulkSetProjects = useCallback(async (projectIds: string[]) => {
+    await bulkSetProjects(Array.from(selectedPaperIds), projectIds);
+    setSelectedPaperIds(new Set());
+  }, [selectedPaperIds, bulkSetProjects]);
+
+  const handleBulkSetTags = useCallback(async (tagIds: string[]) => {
+    await bulkSetTags(Array.from(selectedPaperIds), tagIds);
+    setSelectedPaperIds(new Set());
+  }, [selectedPaperIds, bulkSetTags]);
 
   const hasActiveFilters =
     searchQuery !== "" ||
@@ -478,6 +523,19 @@ export function Dashboard() {
             onUpdateDriveUrl={async (paperId, driveUrl) => {
               await updatePaper(paperId, { drive_url: driveUrl });
             }}
+            selectedPaperIds={selectedPaperIds}
+            onToggleSelect={handleToggleSelect}
+            onToggleSelectAll={handleToggleSelectAll}
+          />
+
+          <BulkActionsToolbar
+            selectedCount={selectedPaperIds.size}
+            onClearSelection={handleClearSelection}
+            onBulkDelete={handleBulkDelete}
+            onBulkSetProjects={handleBulkSetProjects}
+            onBulkSetTags={handleBulkSetTags}
+            projects={projects}
+            tags={tags}
           />
         </main>
       </div>
