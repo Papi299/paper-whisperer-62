@@ -121,14 +121,24 @@ export function Dashboard() {
     setColumnWidth,
   } = useColumnWidths();
 
-  // Filter available keywords: remove synonym children, keep canonical terms + standalone
+  // Filter available keywords: merge all sources, remove synonym children, keep canonical terms + standalone
   const filteredKeywords = useMemo(() => {
+    // Collect all keywords from papers, pool keywords, and synonym canonical terms
+    const keywordSet = new Set<string>();
+    allKeywords.forEach(kw => keywordSet.add(kw));
+    poolKeywords.forEach(pk => keywordSet.add(pk.keyword));
+    synonymGroups.forEach(group => keywordSet.add(group.canonical_term));
+
+    // Build set of synonym children to exclude
     const synonymChildren = new Set<string>();
     synonymGroups.forEach(group => {
       group.synonyms.forEach(syn => synonymChildren.add(syn.toLowerCase()));
     });
-    return allKeywords.filter(kw => !synonymChildren.has(kw.toLowerCase()));
-  }, [allKeywords, synonymGroups]);
+
+    return Array.from(keywordSet)
+      .filter(kw => !synonymChildren.has(kw.toLowerCase()))
+      .sort();
+  }, [allKeywords, poolKeywords, synonymGroups]);
 
   // Extract unique study types from papers for import functionality
   const allStudyTypes = useMemo(() => {
