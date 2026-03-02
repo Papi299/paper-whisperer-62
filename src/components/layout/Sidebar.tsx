@@ -80,6 +80,7 @@ interface SidebarProps {
   onDeleteAllPoolStudyTypes: () => void;
   onRenamePoolGroup: (oldName: string, newName: string, newRank?: number) => Promise<void>;
   onDeletePoolGroup: (groupName: string) => Promise<void>;
+  onStudyTypePoolModalClose?: () => void;
 }
 
 export function Sidebar({
@@ -122,6 +123,7 @@ export function Sidebar({
   onDeleteAllPoolStudyTypes,
   onRenamePoolGroup,
   onDeletePoolGroup,
+  onStudyTypePoolModalClose,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -466,7 +468,10 @@ export function Sidebar({
       />
       <ManageStudyTypePoolModal
         open={studyTypePoolModalOpen}
-        onOpenChange={setStudyTypePoolModalOpen}
+        onOpenChange={(open) => {
+          setStudyTypePoolModalOpen(open);
+          if (!open) onStudyTypePoolModalClose?.();
+        }}
         poolStudyTypes={poolStudyTypes}
         availableStudyTypes={availableStudyTypes}
         onAddStudyType={onAddPoolStudyType}
