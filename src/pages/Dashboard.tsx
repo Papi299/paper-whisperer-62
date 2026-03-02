@@ -301,6 +301,7 @@ export function Dashboard() {
           ...(paper.keywords || []),
           ...((paper.substances as string[]) || []),
           ...((paper.mesh_terms as string[]) || []),
+          ...findMatchingKeywords(paper.abstract),
         ];
         const synonymChildMap = new Map<string, string>();
         synonymGroups.forEach(group => {
