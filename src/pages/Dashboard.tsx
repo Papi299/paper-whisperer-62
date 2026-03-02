@@ -130,9 +130,13 @@ export function Dashboard() {
     return Array.from(studyTypeSet).sort();
   }, [papers]);
 
-  // Build dynamic study type filter options from user's pool (flat list)
+  // Build dynamic study type filter options: only unique group_names
   const studyTypeFilterOptions = useMemo(() => {
-    return poolStudyTypes.map(st => st.study_type).sort();
+    const groupSet = new Set<string>();
+    poolStudyTypes.forEach(st => {
+      if (st.group_name) groupSet.add(st.group_name);
+    });
+    return Array.from(groupSet).sort();
   }, [poolStudyTypes]);
 
   // Selection state
@@ -191,9 +195,13 @@ export function Dashboard() {
         return false;
       }
 
-      // Study type filter: single winner, direct string compare
+      // Study type filter: match any subtype belonging to the selected group
       if (studyType !== "all") {
-        if ((paper.study_type || "").toLowerCase() !== studyType.toLowerCase()) return false;
+        const paperType = (paper.study_type || "").toLowerCase();
+        const subtypesInGroup = poolStudyTypes
+          .filter(st => st.group_name?.toLowerCase() === studyType.toLowerCase())
+          .map(st => st.study_type.toLowerCase());
+        if (!subtypesInGroup.includes(paperType)) return false;
       }
 
       // Keywords
