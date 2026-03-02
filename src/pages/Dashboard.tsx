@@ -164,12 +164,15 @@ export function Dashboard() {
 
   // Filter available keywords: derive from papers only, apply synonym mapping, exclude, deduplicate
   const filteredKeywords = useMemo(() => {
-    // Step A: Flatten keywords + substances from ALL papers
-    const allTerms = papers.flatMap(paper => [
-      ...(paper.keywords || []),
-      ...((paper.substances as string[]) || []),
-      ...((paper.mesh_terms as string[]) || []),
-    ]);
+    // Step A: Flatten keywords + substances from ALL papers + pool keywords
+    const allTerms = [
+      ...papers.flatMap(paper => [
+        ...(paper.keywords || []),
+        ...((paper.substances as string[]) || []),
+        ...((paper.mesh_terms as string[]) || []),
+      ]),
+      ...poolKeywords.map(pk => pk.keyword),
+    ];
 
     // Step B: Map synonyms - child -> canonical (fixes self-canceling bug)
     const synonymChildMap = new Map<string, string>();
@@ -189,7 +192,7 @@ export function Dashboard() {
     return Array.from(new Set(mappedTerms))
       .filter(kw => !excludedSet.has(kw.toLowerCase()))
       .sort();
-  }, [papers, excludedKeywords, synonymGroups]);
+  }, [papers, excludedKeywords, synonymGroups, poolKeywords]);
 
   // Extract unique study types from papers for import functionality
   const allStudyTypes = useMemo(() => {

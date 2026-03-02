@@ -8,6 +8,7 @@ export interface ColumnWidths {
 const STORAGE_KEY = "paper-index-column-widths";
 
 const DEFAULT_WIDTHS: ColumnWidths = {
+  checkbox: 40,
   title: 300,
   authors: 150,
   year: 80,

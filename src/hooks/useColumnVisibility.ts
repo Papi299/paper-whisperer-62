@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 
 export type ColumnId = 
+  | "checkbox"
   | "title"
   | "authors"
   | "year"
