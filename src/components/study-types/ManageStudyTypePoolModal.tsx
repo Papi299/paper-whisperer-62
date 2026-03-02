@@ -253,8 +253,8 @@ export function ManageStudyTypePoolModal({
                 </Button>
               </div>
 
-              <ScrollArea className="flex-1 min-h-[150px]">
-                <div className="space-y-1 pr-3">
+              <ScrollArea className="flex-1 min-h-[150px] max-h-[50vh]">
+                <div className="space-y-1 pr-2">
                   {groups.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-6">
                       No groups yet. Add one above, then assign subtypes in Tab 2.
@@ -367,13 +367,13 @@ export function ManageStudyTypePoolModal({
               </div>
 
               {/* List */}
-              <ScrollArea className="flex-1 min-h-[150px]">
-                <div className="space-y-1 pr-3">
+              <ScrollArea className="flex-1 min-h-[150px] max-h-[50vh]">
+                <div className="space-y-1 pr-2">
                   {sortedSubtypes.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-6">No subtypes yet.</p>
                   ) : (
                     sortedSubtypes.map(st => (
-                      <div key={st.id} className="flex items-center gap-1 rounded-md border px-2 py-1.5 text-sm">
+                      <div key={st.id} className="flex items-start gap-1 rounded-md border px-2 py-1.5 text-sm">
                         {editingSubtype === st.id ? (
                           <>
                             <Input
@@ -412,7 +412,7 @@ export function ManageStudyTypePoolModal({
                                 R{st.hierarchy_rank}
                               </Badge>
                             )}
-                            <span className="flex-1 truncate">{st.study_type}</span>
+                            <span className="flex-1 min-w-0 whitespace-normal break-words">{st.study_type}</span>
                             <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => {
                               setEditingSubtype(st.id);
                               setEditSubtypeName(st.study_type);
