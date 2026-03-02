@@ -131,9 +131,6 @@ export function Dashboard() {
 
   // Wrap delete to immediately re-evaluate with a fresh pool (avoids stale state)
   const handleDeletePoolStudyType = useCallback(async (id: string) => {
-    // Capture the name of the deleted type BEFORE deleting
-    const deletedEntry = poolStudyTypes.find(st => st.id === id);
-    const deletedNames = deletedEntry ? [deletedEntry.study_type] : [];
     await deletePoolStudyType(id);
     const freshPool: StudyTypePoolEntry[] = poolStudyTypes
       .filter(st => st.id !== id)
@@ -142,14 +139,13 @@ export function Dashboard() {
         specificity_weight: st.specificity_weight,
         hierarchy_rank: st.hierarchy_rank,
       }));
-    reevaluateStudyTypes(freshPool, deletedNames);
+    reevaluateStudyTypes(freshPool);
   }, [deletePoolStudyType, poolStudyTypes, reevaluateStudyTypes]);
 
   const handleDeleteAllPoolStudyTypes = useCallback(async () => {
-    const allNames = poolStudyTypes.map(st => st.study_type);
     await deleteAllPoolStudyTypes();
-    reevaluateStudyTypes([], allNames);
-  }, [deleteAllPoolStudyTypes, poolStudyTypes, reevaluateStudyTypes]);
+    reevaluateStudyTypes([]);
+  }, [deleteAllPoolStudyTypes, reevaluateStudyTypes]);
 
   const {
     visibleColumns,

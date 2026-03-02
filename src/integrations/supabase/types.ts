@@ -142,6 +142,7 @@ export type Database = {
           mesh_terms: string[] | null
           pmid: string | null
           pubmed_url: string | null
+          raw_study_type: string | null
           statistical_methods: string | null
           study_type: string | null
           substances: string[] | null
@@ -163,6 +164,7 @@ export type Database = {
           mesh_terms?: string[] | null
           pmid?: string | null
           pubmed_url?: string | null
+          raw_study_type?: string | null
           statistical_methods?: string | null
           study_type?: string | null
           substances?: string[] | null
@@ -184,6 +186,7 @@ export type Database = {
           mesh_terms?: string[] | null
           pmid?: string | null
           pubmed_url?: string | null
+          raw_study_type?: string | null
           statistical_methods?: string | null
           study_type?: string | null
           substances?: string[] | null
