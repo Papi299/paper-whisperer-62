@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Project, Tag } from "@/types/database";
@@ -11,42 +10,22 @@ import { PoolStudyType } from "@/hooks/useStudyTypePool";
 import {
   FolderOpen,
   Tag as TagIcon,
-  Plus,
-  ChevronDown,
-  ChevronRight,
-  MoreHorizontal,
-  Pencil,
-  Trash2,
   RefreshCw,
   Ban,
   Settings,
   Sparkles,
   FileText,
 } from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
 import { ManageSynonymsModal } from "@/components/synonyms/ManageSynonymsModal";
 import { ManageExclusionsModal } from "@/components/exclusions/ManageExclusionsModal";
 import { ManageKeywordPoolModal } from "@/components/keywords/ManageKeywordPoolModal";
 import { ManageStudyTypePoolModal } from "@/components/study-types/ManageStudyTypePoolModal";
+import { ManageProjectsModal } from "@/components/projects/ManageProjectsModal";
+import { ManageTagsModal } from "@/components/tags/ManageTagsModal";
 
 interface SidebarProps {
   projects: Project[];
   tags: Tag[];
-  selectedProjectId: string | null;
-  selectedTagId: string | null;
-  onSelectProject: (projectId: string | null) => void;
-  onSelectTag: (tagId: string | null) => void;
   onCreateProject: (name: string) => void;
   onCreateTag: (name: string) => void;
   onEditProject: (project: Project) => void;
@@ -86,10 +65,6 @@ interface SidebarProps {
 export function Sidebar({
   projects,
   tags,
-  selectedProjectId,
-  selectedTagId,
-  onSelectProject,
-  onSelectTag,
   onCreateProject,
   onCreateTag,
   onEditProject,
@@ -125,32 +100,12 @@ export function Sidebar({
   onDeletePoolGroup,
   onStudyTypePoolModalClose,
 }: SidebarProps) {
-  const [projectsOpen, setProjectsOpen] = useState(true);
-  const [tagsOpen, setTagsOpen] = useState(true);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [newTagName, setNewTagName] = useState("");
-  const [showProjectInput, setShowProjectInput] = useState(false);
-  const [showTagInput, setShowTagInput] = useState(false);
   const [synonymsModalOpen, setSynonymsModalOpen] = useState(false);
   const [exclusionsModalOpen, setExclusionsModalOpen] = useState(false);
   const [keywordPoolModalOpen, setKeywordPoolModalOpen] = useState(false);
   const [studyTypePoolModalOpen, setStudyTypePoolModalOpen] = useState(false);
-
-  const handleCreateProject = () => {
-    if (newProjectName.trim()) {
-      onCreateProject(newProjectName.trim());
-      setNewProjectName("");
-      setShowProjectInput(false);
-    }
-  };
-
-  const handleCreateTag = () => {
-    if (newTagName.trim()) {
-      onCreateTag(newTagName.trim());
-      setNewTagName("");
-      setShowTagInput(false);
-    }
-  };
+  const [projectsModalOpen, setProjectsModalOpen] = useState(false);
+  const [tagsModalOpen, setTagsModalOpen] = useState(false);
 
   const totalExclusions = excludedKeywords.length + excludedStudyTypes.length;
 
@@ -160,196 +115,54 @@ export function Sidebar({
         <div className="space-y-4">
           {/* All Papers */}
           <Button
-            variant={selectedProjectId === null && selectedTagId === null ? "secondary" : "ghost"}
+            variant="ghost"
             className="w-full justify-start"
-            onClick={() => {
-              onSelectProject(null);
-              onSelectTag(null);
-            }}
           >
             <FolderOpen className="mr-2 h-4 w-4" />
             All Papers
           </Button>
 
-          {/* Projects */}
-          <Collapsible open={projectsOpen} onOpenChange={setProjectsOpen}>
-            <div className="flex items-center justify-between">
-              <CollapsibleTrigger asChild>
-                <Button variant="ghost" size="sm" className="p-0 h-auto hover:bg-transparent">
-                  {projectsOpen ? (
-                    <ChevronDown className="h-4 w-4 mr-1" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 mr-1" />
-                  )}
-                  <span className="text-sm font-medium text-muted-foreground">Projects</span>
-                </Button>
-              </CollapsibleTrigger>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={() => setShowProjectInput(true)}
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
-            </div>
-            <CollapsibleContent className="mt-2 space-y-1">
-              {showProjectInput && (
-                <div className="flex gap-1">
-                  <Input
-                    placeholder="Project name"
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
-                    className="h-8 text-sm"
-                    autoFocus
-                  />
-                  <Button size="sm" className="h-8" onClick={handleCreateProject}>
-                    Add
-                  </Button>
-                </div>
+          {/* Projects - compact row with Manage button */}
+          <div className="flex items-center justify-between py-1 px-2">
+            <div className="flex items-center gap-2">
+              <FolderOpen className="h-4 w-4 text-indigo-500" />
+              <span className="text-sm font-medium text-muted-foreground">Projects</span>
+              {projects.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {projects.length}
+                </Badge>
               )}
-              {projects.map((project) => (
-                <div
-                  key={project.id}
-                  className={cn(
-                    "flex items-center justify-between group rounded-md",
-                    selectedProjectId === project.id && "bg-secondary"
-                  )}
-                >
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="flex-1 justify-start h-8"
-                    onClick={() => {
-                      onSelectProject(project.id);
-                      onSelectTag(null);
-                    }}
-                  >
-                    <div
-                      className="w-2 h-2 rounded-full mr-2"
-                      style={{ backgroundColor: project.color }}
-                    />
-                    <span className="truncate">{project.name}</span>
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100"
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => onEditProject(project)}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-destructive"
-                        onClick={() => onDeleteProject(project.id)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              ))}
-            </CollapsibleContent>
-          </Collapsible>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setProjectsModalOpen(true)}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          </div>
 
-          {/* Tags */}
-          <Collapsible open={tagsOpen} onOpenChange={setTagsOpen}>
-            <div className="flex items-center justify-between">
-              <CollapsibleTrigger asChild>
-                <Button variant="ghost" size="sm" className="p-0 h-auto hover:bg-transparent">
-                  {tagsOpen ? (
-                    <ChevronDown className="h-4 w-4 mr-1" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 mr-1" />
-                  )}
-                  <span className="text-sm font-medium text-muted-foreground">Tags</span>
-                </Button>
-              </CollapsibleTrigger>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={() => setShowTagInput(true)}
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
-            </div>
-            <CollapsibleContent className="mt-2 space-y-1">
-              {showTagInput && (
-                <div className="flex gap-1">
-                  <Input
-                    placeholder="Tag name"
-                    value={newTagName}
-                    onChange={(e) => setNewTagName(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleCreateTag()}
-                    className="h-8 text-sm"
-                    autoFocus
-                  />
-                  <Button size="sm" className="h-8" onClick={handleCreateTag}>
-                    Add
-                  </Button>
-                </div>
+          {/* Tags - compact row with Manage button */}
+          <div className="flex items-center justify-between py-1 px-2">
+            <div className="flex items-center gap-2">
+              <TagIcon className="h-4 w-4 text-violet-500" />
+              <span className="text-sm font-medium text-muted-foreground">Tags</span>
+              {tags.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {tags.length}
+                </Badge>
               )}
-              {tags.map((tag) => (
-                <div
-                  key={tag.id}
-                  className={cn(
-                    "flex items-center justify-between group rounded-md",
-                    selectedTagId === tag.id && "bg-secondary"
-                  )}
-                >
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="flex-1 justify-start h-8"
-                    onClick={() => {
-                      onSelectTag(tag.id);
-                      onSelectProject(null);
-                    }}
-                  >
-                    <TagIcon
-                      className="w-3 h-3 mr-2"
-                      style={{ color: tag.color }}
-                    />
-                    <span className="truncate">{tag.name}</span>
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100"
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => onEditTag(tag)}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-destructive"
-                        onClick={() => onDeleteTag(tag.id)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              ))}
-            </CollapsibleContent>
-          </Collapsible>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setTagsModalOpen(true)}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          </div>
 
           {/* Keyword Pool - compact row with Manage button */}
           <div className="flex items-center justify-between py-1 px-2">
@@ -436,6 +249,22 @@ export function Sidebar({
       </ScrollArea>
 
       {/* Modals rendered outside scroll area to avoid clipping */}
+      <ManageProjectsModal
+        open={projectsModalOpen}
+        onOpenChange={setProjectsModalOpen}
+        projects={projects}
+        onCreateProject={onCreateProject}
+        onEditProject={onEditProject}
+        onDeleteProject={onDeleteProject}
+      />
+      <ManageTagsModal
+        open={tagsModalOpen}
+        onOpenChange={setTagsModalOpen}
+        tags={tags}
+        onCreateTag={onCreateTag}
+        onEditTag={onEditTag}
+        onDeleteTag={onDeleteTag}
+      />
       <ManageSynonymsModal
         open={synonymsModalOpen}
         onOpenChange={setSynonymsModalOpen}

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Search, X, Download, FileText, FileSpreadsheet } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
+import { Project, Tag } from "@/types/database";
 
 interface SearchFiltersProps {
   searchQuery: string;
@@ -33,6 +34,12 @@ interface SearchFiltersProps {
   onExportCSV: () => void;
   onExportRIS: () => void;
   hasActiveFilters: boolean;
+  projects: Project[];
+  tags: Tag[];
+  selectedProjectId: string | null;
+  selectedTagId: string | null;
+  onProjectChange: (projectId: string | null) => void;
+  onTagChange: (tagId: string | null) => void;
 }
 
 export function SearchFilters({
@@ -52,6 +59,12 @@ export function SearchFilters({
   onExportCSV,
   onExportRIS,
   hasActiveFilters,
+  projects,
+  tags,
+  selectedProjectId,
+  selectedTagId,
+  onProjectChange,
+  onTagChange,
 }: SearchFiltersProps) {
 
   return (
@@ -97,6 +110,54 @@ export function SearchFilters({
             {studyTypeFilterOptions.map((type) => (
               <SelectItem key={type} value={type}>
                 {type}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Project Filter */}
+        <Select
+          value={selectedProjectId ?? "all"}
+          onValueChange={(v) => onProjectChange(v === "all" ? null : v)}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="Project" />
+          </SelectTrigger>
+          <SelectContent className="bg-popover">
+            <SelectItem value="all">All Projects</SelectItem>
+            {projects.map((project) => (
+              <SelectItem key={project.id} value={project.id}>
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: project.color }}
+                  />
+                  {project.name}
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Tag Filter */}
+        <Select
+          value={selectedTagId ?? "all"}
+          onValueChange={(v) => onTagChange(v === "all" ? null : v)}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="Tag" />
+          </SelectTrigger>
+          <SelectContent className="bg-popover">
+            <SelectItem value="all">All Tags</SelectItem>
+            {tags.map((tag) => (
+              <SelectItem key={tag.id} value={tag.id}>
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: tag.color }}
+                  />
+                  {tag.name}
+                </div>
               </SelectItem>
             ))}
           </SelectContent>
