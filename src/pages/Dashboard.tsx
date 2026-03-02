@@ -292,10 +292,23 @@ export function Dashboard() {
         if (!subtypesInGroup.includes(paperType)) return false;
       }
 
-      // Keywords
+      // Keywords: combine all term sources and normalize through synonym pool
       if (selectedKeywords.length > 0) {
-        const hasAllKeywords = selectedKeywords.every((kw) =>
-          paper.keywords.includes(kw)
+        const allTerms = [
+          ...(paper.keywords || []),
+          ...((paper.substances as string[]) || []),
+          ...((paper.mesh_terms as string[]) || []),
+        ];
+        const synonymChildMap = new Map<string, string>();
+        synonymGroups.forEach(group => {
+          group.synonyms.forEach(syn => synonymChildMap.set(syn.toLowerCase(), group.canonical_term));
+        });
+        const normalizedTerms = allTerms.map(term => {
+          const canonical = synonymChildMap.get(term.toLowerCase());
+          return (canonical || term).toLowerCase();
+        });
+        const hasAllKeywords = selectedKeywords.every(kw =>
+          normalizedTerms.includes(kw.toLowerCase())
         );
         if (!hasAllKeywords) return false;
       }
@@ -312,6 +325,7 @@ export function Dashboard() {
     studyType,
     studyTypeFilterOptions,
     selectedKeywords,
+    synonymGroups,
   ]);
 
   // Bulk action handlers (must be after filteredPapers)
