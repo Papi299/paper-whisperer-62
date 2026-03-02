@@ -94,7 +94,7 @@ export function Dashboard() {
 
   // Re-evaluate study types when pool changes (triggered by modal close)
   useEffect(() => {
-    if (studyTypePoolVersion > 0 && poolStudyTypes.length > 0) {
+    if (studyTypePoolVersion > 0) {
       const pool: StudyTypePoolEntry[] = poolStudyTypes.map(st => ({
         study_type: st.study_type,
         specificity_weight: st.specificity_weight,
