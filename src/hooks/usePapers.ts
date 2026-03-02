@@ -307,6 +307,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         const paperData = {
           user_id: userId,
           ...normalized,
+          raw_study_type: result.study_type || null,
           mesh_terms: normalized.mesh_terms || [],
           substances: normalized.substances || [],
         };
@@ -415,6 +416,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     const insertData = {
       user_id: userId,
       ...normalized,
+      raw_study_type: null,
     };
 
     const { data: insertedPaper, error } = await supabase
@@ -596,6 +598,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         const paperData = {
           user_id: userId,
           ...normalized,
+          raw_study_type: result.study_type || null,
           mesh_terms: normalized.mesh_terms || [],
           substances: normalized.substances || [],
         };
@@ -648,14 +651,11 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const reevaluateStudyTypes = useCallback(async (pool: StudyTypePoolEntry[], deletedTypeNames?: string[]) => {
     if (papers.length === 0) return;
 
-    const deletedSet = new Set((deletedTypeNames || []).map(n => n.toLowerCase()));
     const updates: { id: string; newType: string }[] = [];
 
     for (const paper of papers) {
-      // If the paper's current study_type matches a deleted pool entry,
-      // pass null as rawStudyType so it doesn't self-match as a fallback
-      const currentType = paper.study_type || "";
-      const rawFallback = deletedSet.has(currentType.toLowerCase()) ? null : currentType;
+      // Use the preserved raw_study_type (original PubMed value) for re-evaluation fallback
+      const rawFallback = (paper as any).raw_study_type ?? paper.study_type;
 
       const newType = evaluateStudyType(
         paper.title,
@@ -664,7 +664,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         pool
       );
 
-      const current = currentType.trim();
+      const current = (paper.study_type || "").trim();
       const evaluated = (newType || "").trim();
 
       if (current !== evaluated) {

@@ -43,6 +43,7 @@ export interface Paper {
   doi: string | null;
   abstract: string | null;
   study_type: string | null;
+  raw_study_type: string | null;
   statistical_methods: string | null;
   keywords: string[];
   mesh_terms: string[];
