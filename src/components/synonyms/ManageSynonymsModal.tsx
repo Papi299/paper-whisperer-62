@@ -97,8 +97,7 @@ export function ManageSynonymsModal({
               Add Synonym Group
             </Button>
 
-            <ScrollArea className="h-64">
-              <div className="space-y-2 pr-3">
+            <div className="flex flex-col gap-2 overflow-y-auto max-h-[50vh] p-1">
                 {synonymGroups.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-8">
                     No synonym groups yet
@@ -111,7 +110,7 @@ export function ManageSynonymsModal({
                     >
                       <div className="flex-1 min-w-0">
                         <div className="font-medium">{group.canonical_term}</div>
-                        <div className="text-xs text-muted-foreground truncate">
+                        <div className="text-xs text-muted-foreground whitespace-normal break-words">
                           {group.synonyms.join(", ")}
                         </div>
                       </div>
@@ -136,8 +135,7 @@ export function ManageSynonymsModal({
                     </div>
                   ))
                 )}
-              </div>
-            </ScrollArea>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

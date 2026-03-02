@@ -88,6 +88,8 @@ export function Dashboard() {
     })),
   }), [synonymLookup, poolStudyTypes, poolKeywords, synonymGroups]);
 
+  
+
   // usePapers now receives the normalization config
   const {
     papers,
@@ -118,6 +120,15 @@ export function Dashboard() {
     columnWidths,
     setColumnWidth,
   } = useColumnWidths();
+
+  // Filter available keywords: remove synonym children, keep canonical terms + standalone
+  const filteredKeywords = useMemo(() => {
+    const synonymChildren = new Set<string>();
+    synonymGroups.forEach(group => {
+      group.synonyms.forEach(syn => synonymChildren.add(syn.toLowerCase()));
+    });
+    return allKeywords.filter(kw => !synonymChildren.has(kw.toLowerCase()));
+  }, [allKeywords, synonymGroups]);
 
   // Extract unique study types from papers for import functionality
   const allStudyTypes = useMemo(() => {
@@ -367,7 +378,7 @@ export function Dashboard() {
               onStudyTypeChange={setStudyType}
               studyTypeFilterOptions={studyTypeFilterOptions}
               selectedKeywords={selectedKeywords}
-              availableKeywords={allKeywords}
+               availableKeywords={filteredKeywords}
               onKeywordToggle={handleKeywordToggle}
               onClearFilters={clearFilters}
               onExportCSV={handleExportCSV}
