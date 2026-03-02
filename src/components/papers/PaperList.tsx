@@ -416,8 +416,8 @@ function PaperRow({
               
               return (
                 <div className="flex items-center gap-1">
-                  <Badge variant="outline" className="text-xs group/badge hover:pr-1">
-                    <span className="truncate max-w-[150px]">{studyTypeValue}</span>
+                  <Badge variant="outline" className="text-xs group/badge hover:pr-1 whitespace-normal break-words text-center leading-tight">
+                    <span>{studyTypeValue}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

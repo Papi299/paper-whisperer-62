@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
 import { normalizePaperData, NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
+import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadata";
 
 export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
@@ -640,6 +641,64 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     return Array.from(keywordSet).sort();
   }, [papers]);
 
+  /**
+   * Re-evaluate study types for all papers against the given pool.
+   * Updates local state immediately and persists changes to DB.
+   */
+  const reevaluateStudyTypes = useCallback(async (pool: StudyTypePoolEntry[]) => {
+    if (papers.length === 0) return;
+
+    const updates: { id: string; newType: string }[] = [];
+
+    for (const paper of papers) {
+      const newType = evaluateStudyType(
+        paper.title,
+        paper.abstract,
+        paper.study_type,
+        pool
+      );
+
+      const current = (paper.study_type || "").trim();
+      const evaluated = (newType || "").trim();
+
+      if (current !== evaluated) {
+        updates.push({ id: paper.id, newType: evaluated });
+      }
+    }
+
+    if (updates.length === 0) return;
+
+    // Update local state immediately
+    setPapers(prev =>
+      prev.map(p => {
+        const upd = updates.find(u => u.id === p.id);
+        return upd ? { ...p, study_type: upd.newType || null } : p;
+      })
+    );
+
+    // Persist to DB
+    try {
+      await Promise.all(
+        updates.map(({ id, newType }) =>
+          supabase
+            .from("papers")
+            .update({ study_type: newType || null } as any)
+            .eq("id", id)
+        )
+      );
+      toast({
+        title: "Study types updated",
+        description: `Re-classified ${updates.length} paper(s) based on updated pool.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Error saving study type updates",
+        description: err.message,
+        variant: "destructive",
+      });
+    }
+  }, [papers, toast]);
+
   return {
     papers,
     projects,
@@ -657,6 +716,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     bulkImportPapers,
     updatePaper,
     deletePaper,
+    reevaluateStudyTypes,
     refetch: fetchData,
   };
 }

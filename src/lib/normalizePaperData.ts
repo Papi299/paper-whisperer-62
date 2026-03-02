@@ -6,6 +6,7 @@
  */
 
 import { decodeHTMLEntities } from "./decodeHTMLEntities";
+import { evaluateStudyType, StudyTypePoolEntry } from "./evaluateStudyType";
 
 // ── Helpers ──
 
@@ -66,65 +67,10 @@ function extractContextualKeywords(
   return matched;
 }
 
-// ── Generic publication types to ignore ──
-
-const IGNORED_PUBLICATION_TYPES = new Set([
-  "journal article",
-]);
-
-function stripGenericTypes(raw: string): string {
-  return raw
-    .split(",")
-    .map(s => s.trim())
-    .filter(s => s && !IGNORED_PUBLICATION_TYPES.has(s.toLowerCase()))
-    .join(", ");
-}
-
 // ── Evidence Pyramid: Winner Takes All study type detection ──
+// Delegated to the standalone evaluateStudyType utility.
 
-interface PoolStudyTypeEntry {
-  study_type: string;
-  specificity_weight: number;
-  hierarchy_rank: number;
-}
-
-function findWinnerStudyType(
-  rawStudyTypeString: string | null,
-  title: string,
-  abstract: string | null,
-  poolStudyTypes: PoolStudyTypeEntry[]
-): string {
-  // Find all matching subtypes from pool in title + abstract
-  const textToSearch = [title, abstract || ""].join(" ");
-  const matches: PoolStudyTypeEntry[] = [];
-
-  for (const st of poolStudyTypes) {
-    try {
-      const regex = new RegExp('\\b' + escapeRegExp(st.study_type) + '\\b', 'i');
-      if (regex.test(textToSearch)) {
-        matches.push(st);
-      }
-    } catch {
-      // skip invalid regex
-    }
-  }
-
-  if (matches.length === 0) {
-    // Fallback: return raw API study type with generic types stripped
-    return stripGenericTypes(rawStudyTypeString || "");
-  }
-
-  // Sort by hierarchy_rank ASC (lower = better), then by string length DESC (longer = more specific)
-  matches.sort((a, b) => {
-    const rankDiff = (a.hierarchy_rank || 99) - (b.hierarchy_rank || 99);
-    if (rankDiff !== 0) return rankDiff;
-    return b.study_type.length - a.study_type.length;
-  });
-
-  console.log('Study Type Matches:', matches.map(m => `${m.study_type} (rank:${m.hierarchy_rank})`), 'Winner:', matches[0].study_type);
-
-  return matches[0].study_type;
-}
+type PoolStudyTypeEntry = StudyTypePoolEntry;
 
 // ── Keyword normalization via synonym lookup ──
 
@@ -303,10 +249,10 @@ export function normalizePaperData(
   const mergedKeywords = deduplicateKeywords([...normalizedKeywords, ...synonymExtracted]);
 
   // Step 3: Winner Takes All study type (hierarchy_rank ASC, then length DESC)
-  const winnerStudyType = findWinnerStudyType(
-    raw.study_type,
+  const winnerStudyType = evaluateStudyType(
     decodedTitle,
     decodedAbstract,
+    raw.study_type,
     config.poolStudyTypes
   );
 

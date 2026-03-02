@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { Plus, Loader2 } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
+import { StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 
 export function Dashboard() {
@@ -88,7 +89,25 @@ export function Dashboard() {
     })),
   }), [synonymLookup, poolStudyTypes, poolKeywords, synonymGroups]);
 
-  
+  // Track study type pool version to trigger re-evaluation on changes
+  const [studyTypePoolVersion, setStudyTypePoolVersion] = useState(0);
+
+  // Re-evaluate study types when pool changes (triggered by modal close)
+  useEffect(() => {
+    if (studyTypePoolVersion > 0 && poolStudyTypes.length > 0) {
+      const pool: StudyTypePoolEntry[] = poolStudyTypes.map(st => ({
+        study_type: st.study_type,
+        specificity_weight: st.specificity_weight,
+        hierarchy_rank: st.hierarchy_rank,
+      }));
+      reevaluateStudyTypes(pool);
+    }
+  }, [studyTypePoolVersion]); // intentionally only depend on version counter
+
+  const handleStudyTypePoolModalClose = useCallback(() => {
+    setStudyTypePoolVersion(v => v + 1);
+  }, []);
+
 
   // usePapers now receives the normalization config
   const {
@@ -108,6 +127,7 @@ export function Dashboard() {
     bulkImportPapers,
     updatePaper,
     deletePaper,
+    reevaluateStudyTypes,
   } = usePapers(user?.id, normalizationConfig);
 
   const {
@@ -373,6 +393,7 @@ export function Dashboard() {
           onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
           onRenamePoolGroup={renamePoolGroup}
           onDeletePoolGroup={deletePoolGroup}
+          onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
