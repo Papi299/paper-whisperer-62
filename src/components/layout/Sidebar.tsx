@@ -73,10 +73,13 @@ interface SidebarProps {
   onClearExcludedStudyTypes: () => Promise<void>;
   poolStudyTypes: PoolStudyType[];
   availableStudyTypes: string[];
-  onAddPoolStudyType: (studyType: string) => Promise<boolean>;
+  onAddPoolStudyType: (studyType: string, groupName?: string | null, hierarchyRank?: number) => Promise<boolean>;
   onAddMultiplePoolStudyTypes: (studyTypes: string[]) => Promise<number>;
+  onUpdatePoolStudyType: (id: string, updates: Partial<Pick<PoolStudyType, 'study_type' | 'group_name' | 'hierarchy_rank'>>) => Promise<void>;
   onDeletePoolStudyType: (id: string) => void;
   onDeleteAllPoolStudyTypes: () => void;
+  onRenamePoolGroup: (oldName: string, newName: string, newRank?: number) => Promise<void>;
+  onDeletePoolGroup: (groupName: string) => Promise<void>;
 }
 
 export function Sidebar({
@@ -114,8 +117,11 @@ export function Sidebar({
   availableStudyTypes,
   onAddPoolStudyType,
   onAddMultiplePoolStudyTypes,
+  onUpdatePoolStudyType,
   onDeletePoolStudyType,
   onDeleteAllPoolStudyTypes,
+  onRenamePoolGroup,
+  onDeletePoolGroup,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [tagsOpen, setTagsOpen] = useState(true);
@@ -465,8 +471,11 @@ export function Sidebar({
         availableStudyTypes={availableStudyTypes}
         onAddStudyType={onAddPoolStudyType}
         onAddMultipleStudyTypes={onAddMultiplePoolStudyTypes}
+        onUpdateStudyType={onUpdatePoolStudyType}
         onDeleteStudyType={onDeletePoolStudyType}
         onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
+        onRenameGroup={onRenamePoolGroup}
+        onDeleteGroup={onDeletePoolGroup}
       />
     </aside>
   );

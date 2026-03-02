@@ -3,6 +3,8 @@
  * Mirrors the logic previously in the fetch-paper-metadata edge function.
  */
 
+import { decodeHTMLEntities } from "./decodeHTMLEntities";
+
 export interface PaperMetadata {
   identifier: string;
   title?: string;
@@ -69,7 +71,7 @@ async function fetchFromPubMed(pmid: string): Promise<PaperMetadata | null> {
 
     const keywordMatches = xml.matchAll(/<Keyword[^>]*>([^<]+)<\/Keyword>/g);
     const keywords: string[] = [];
-    for (const match of keywordMatches) keywords.push(match[1]);
+    for (const match of keywordMatches) keywords.push(decodeHTMLEntities(match[1]) || match[1]);
 
     const meshMatches = xml.matchAll(/<DescriptorName[^>]*>([^<]+)<\/DescriptorName>/g);
     const meshTerms: string[] = [];

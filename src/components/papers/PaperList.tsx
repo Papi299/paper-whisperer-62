@@ -411,35 +411,24 @@ function PaperRow({
               const studyTypeValue = (paper.study_type || "").trim();
               if (!studyTypeValue) return <span>-</span>;
               
-              const types = studyTypeValue.split(/[,;]+/).map(t => t.trim()).filter(Boolean);
               const excludedSet = excludedStudyTypes ?? new Set<string>();
-              const visibleTypes = types.filter(t => 
-                !Array.from(excludedSet).some(ex => t.toLowerCase() === ex)
-              );
-              
-              if (visibleTypes.length === 0) return <span>-</span>;
+              if (Array.from(excludedSet).some(ex => studyTypeValue.toLowerCase() === ex)) return <span>-</span>;
               
               return (
-                <div className="flex flex-wrap items-center gap-1">
-                  {visibleTypes.map((type) => (
-                    <Badge
-                      key={type}
-                      variant="outline"
-                      className="text-xs group/badge hover:pr-1"
+                <div className="flex items-center gap-1">
+                  <Badge variant="outline" className="text-xs group/badge hover:pr-1">
+                    <span className="truncate max-w-[150px]">{studyTypeValue}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onExcludeStudyType(studyTypeValue);
+                      }}
+                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                      title={`Exclude "${studyTypeValue}"`}
                     >
-                      <span className="truncate max-w-[120px]">{type}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onExcludeStudyType(type);
-                        }}
-                        className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                        title={`Exclude "${type}"`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
                 </div>
               );
             })()}

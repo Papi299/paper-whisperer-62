@@ -275,6 +275,8 @@ export type Database = {
       study_type_pool: {
         Row: {
           created_at: string | null
+          group_name: string | null
+          hierarchy_rank: number
           id: string
           specificity_weight: number
           study_type: string
@@ -282,6 +284,8 @@ export type Database = {
         }
         Insert: {
           created_at?: string | null
+          group_name?: string | null
+          hierarchy_rank?: number
           id?: string
           specificity_weight?: number
           study_type: string
@@ -289,6 +293,8 @@ export type Database = {
         }
         Update: {
           created_at?: string | null
+          group_name?: string | null
+          hierarchy_rank?: number
           id?: string
           specificity_weight?: number
           study_type?: string

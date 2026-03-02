@@ -53,8 +53,11 @@ export function Dashboard() {
     poolStudyTypes,
     addStudyType: addPoolStudyType,
     addMultipleStudyTypes: addMultiplePoolStudyTypes,
+    updateStudyType: updatePoolStudyType,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
+    renameGroup: renamePoolGroup,
+    deleteGroup: deletePoolGroup,
   } = useStudyTypePool(user?.id);
 
   const {
@@ -76,6 +79,7 @@ export function Dashboard() {
     poolStudyTypes: poolStudyTypes.map(st => ({
       study_type: st.study_type,
       specificity_weight: st.specificity_weight,
+      hierarchy_rank: st.hierarchy_rank,
     })),
     poolKeywords: poolKeywords.map(pk => pk.keyword),
   }), [synonymLookup, poolStudyTypes, poolKeywords]);
@@ -187,10 +191,9 @@ export function Dashboard() {
         return false;
       }
 
-      // Study type filter: check if paper's comma-separated study_type includes the selected type
+      // Study type filter: single winner, direct string compare
       if (studyType !== "all") {
-        const paperTypes = (paper.study_type || "").split(/[,;]+/).map(t => t.trim().toLowerCase());
-        if (!paperTypes.includes(studyType.toLowerCase())) return false;
+        if ((paper.study_type || "").toLowerCase() !== studyType.toLowerCase()) return false;
       }
 
       // Keywords
@@ -307,8 +310,11 @@ export function Dashboard() {
           availableStudyTypes={allStudyTypes}
           onAddPoolStudyType={addPoolStudyType}
           onAddMultiplePoolStudyTypes={addMultiplePoolStudyTypes}
+          onUpdatePoolStudyType={updatePoolStudyType}
           onDeletePoolStudyType={deletePoolStudyType}
           onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
+          onRenamePoolGroup={renamePoolGroup}
+          onDeletePoolGroup={deletePoolGroup}
         />
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">

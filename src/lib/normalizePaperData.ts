@@ -66,47 +66,50 @@ function extractContextualKeywords(
   return matched;
 }
 
-// ── Flat multi-match study type detection ──
+// ── Evidence Pyramid: Winner Takes All study type detection ──
 
 interface PoolStudyTypeEntry {
   study_type: string;
   specificity_weight: number;
+  hierarchy_rank: number;
 }
 
-function findAllMatchingStudyTypes(
+function findWinnerStudyType(
   rawStudyTypeString: string | null,
   title: string,
   abstract: string | null,
   poolStudyTypes: PoolStudyTypeEntry[]
 ): string {
-  const matched = new Set<string>();
-
-  // Parse API publication types
-  (rawStudyTypeString || "")
-    .split(/[,;]+/)
-    .map(t => t.trim())
-    .filter(Boolean)
-    .forEach(t => matched.add(t));
-
-  // Find matches from pool in title + abstract
+  // Find all matching subtypes from pool in title + abstract
   const textToSearch = [title, abstract || ""].join(" ");
+  const matches: PoolStudyTypeEntry[] = [];
+
   for (const st of poolStudyTypes) {
     try {
       const regex = new RegExp('\\b' + escapeRegExp(st.study_type) + '\\b', 'i');
       if (regex.test(textToSearch)) {
-        matched.add(st.study_type);
+        matches.push(st);
       }
     } catch {
       // skip invalid regex
     }
   }
 
-  const result = Array.from(matched).sort((a, b) => a.localeCompare(b));
-  if (result.length > 0) {
-    console.log('Matched Study Types:', result);
+  if (matches.length === 0) {
+    // Fallback: return raw API study type if no pool matches
+    return (rawStudyTypeString || "").trim();
   }
 
-  return result.join(", ");
+  // Sort by hierarchy_rank ASC (lower = better), then by string length DESC (longer = more specific)
+  matches.sort((a, b) => {
+    const rankDiff = (a.hierarchy_rank || 99) - (b.hierarchy_rank || 99);
+    if (rankDiff !== 0) return rankDiff;
+    return b.study_type.length - a.study_type.length;
+  });
+
+  console.log('Study Type Matches:', matches.map(m => `${m.study_type} (rank:${m.hierarchy_rank})`), 'Winner:', matches[0].study_type);
+
+  return matches[0].study_type;
 }
 
 // ── Keyword normalization via synonym lookup ──
@@ -139,17 +142,14 @@ function filterKeywordsByAbstractContext(
 ): string[] {
   if (!abstract || poolKeywords.length === 0) return keywords;
 
-  // Find which pool keywords are negated in the abstract
   const allPoolMatches = new Set(
     extractContextualKeywords(abstract, poolKeywords).map(k => k.toLowerCase())
   );
 
-  // For manually entered keywords that also exist in the pool,
-  // only keep them if they passed the negation check
   return keywords.filter(kw => {
     const isInPool = poolKeywords.some(pk => pk.toLowerCase() === kw.toLowerCase());
-    if (!isInPool) return true; // not in pool, keep as-is
-    return allPoolMatches.has(kw.toLowerCase()); // only keep if not negated
+    if (!isInPool) return true;
+    return allPoolMatches.has(kw.toLowerCase());
   });
 }
 
@@ -198,23 +198,21 @@ export interface NormalizedPaperData {
 /**
  * Central normalization pipeline. Both API and manual entry paths
  * MUST call this before writing to the database.
- * 
- * 1. Normalizes keywords via synonym lookup (deduplicates canonical forms)
- * 2. Filters keywords against abstract negation context
- * 3. Deduplicates study types using specificity weights + substring rules
  */
 export function normalizePaperData(
   raw: RawPaperData,
   config: NormalizationConfig
 ): NormalizedPaperData {
-  // Step 0: Decode HTML entities in text fields (PubMed returns encoded entities)
+  // Decode HTML entities
   const decodedTitleRaw = decodeHTMLEntities(raw.title) || raw.title;
-  // Step 0b: Remove trailing period (PubMed appends one to titles)
   const decodedTitle = decodedTitleRaw.replace(/\.\s*$/, '').trim();
   const decodedAbstract = decodeHTMLEntities(raw.abstract) || null;
 
+  // Decode HTML entities in keywords
+  const decodedKeywords = raw.keywords.map(kw => decodeHTMLEntities(kw) || kw);
+
   // Step 1: Normalize keywords through synonym lookup
-  let normalizedKeywords = normalizeKeywords(raw.keywords, config.synonymLookup);
+  let normalizedKeywords = normalizeKeywords(decodedKeywords, config.synonymLookup);
 
   // Step 2: Filter out keywords that are negated in the abstract
   normalizedKeywords = filterKeywordsByAbstractContext(
@@ -223,8 +221,8 @@ export function normalizePaperData(
     config.poolKeywords
   );
 
-  // Step 3: Find all matching study types (flat multi-match)
-  const matchedStudyTypes = findAllMatchingStudyTypes(
+  // Step 3: Winner Takes All study type (hierarchy_rank ASC, then length DESC)
+  const winnerStudyType = findWinnerStudyType(
     raw.study_type,
     decodedTitle,
     decodedAbstract,
@@ -242,7 +240,7 @@ export function normalizePaperData(
     keywords: normalizedKeywords,
     mesh_terms: raw.mesh_terms || [],
     substances: raw.substances || [],
-    study_type: matchedStudyTypes || null,
+    study_type: winnerStudyType || null,
     pubmed_url: raw.pubmed_url,
     journal_url: raw.journal_url,
     drive_url: raw.drive_url,
