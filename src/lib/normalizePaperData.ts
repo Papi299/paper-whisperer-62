@@ -66,6 +66,34 @@ function extractContextualKeywords(
   return matched;
 }
 
+// ── Generic publication types to ignore ──
+
+const IGNORED_PUBLICATION_TYPES = new Set([
+  "journal article",
+  "english abstract",
+  "historical article",
+  "published erratum",
+  "bibliography",
+  "biography",
+  "comment",
+  "editorial",
+  "letter",
+  "news",
+  "newspaper article",
+  "personal narrative",
+  "portrait",
+  "video-audio media",
+  "webcasts",
+]);
+
+function stripGenericTypes(raw: string): string {
+  return raw
+    .split(",")
+    .map(s => s.trim())
+    .filter(s => s && !IGNORED_PUBLICATION_TYPES.has(s.toLowerCase()))
+    .join(", ");
+}
+
 // ── Evidence Pyramid: Winner Takes All study type detection ──
 
 interface PoolStudyTypeEntry {
@@ -96,8 +124,8 @@ function findWinnerStudyType(
   }
 
   if (matches.length === 0) {
-    // Fallback: return raw API study type if no pool matches
-    return (rawStudyTypeString || "").trim();
+    // Fallback: return raw API study type with generic types stripped
+    return stripGenericTypes(rawStudyTypeString || "");
   }
 
   // Sort by hierarchy_rank ASC (lower = better), then by string length DESC (longer = more specific)
