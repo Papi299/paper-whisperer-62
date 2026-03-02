@@ -114,9 +114,14 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   };
 
   const updateProject = async (projectId: string, updates: Partial<Project>) => {
+    const dbUpdates: Record<string, unknown> = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+    if (updates.color !== undefined) dbUpdates.color = updates.color;
+
     const { error } = await supabase
       .from("projects")
-      .update(updates)
+      .update(dbUpdates)
       .eq("id", projectId);
 
     if (error) {
