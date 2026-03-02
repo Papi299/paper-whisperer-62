@@ -201,7 +201,7 @@ export function PaperList({
       <Table style={{ tableLayout: "fixed" }}>
         <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow>
-            <TableHead className="w-[40px] px-1">
+            <TableHead className="w-10 min-w-[40px] max-w-[40px] px-1">
               <Checkbox
                 checked={allSelected}
                 ref={(el) => {
@@ -367,7 +367,7 @@ function PaperRow({
     <tbody ref={measureElement} data-index={virtualIndex}>
       <TableRow className={isSelected ? "bg-primary/5" : undefined}>
         {/* Selection checkbox */}
-        <TableCell className="w-[40px] px-1">
+        <TableCell className="w-10 min-w-[40px] max-w-[40px] px-1">
           <Checkbox
             checked={isSelected}
             onCheckedChange={() => onToggleSelect(paper.id)}

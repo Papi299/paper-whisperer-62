@@ -9,7 +9,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2, FolderOpen, Tags, X, Loader2 } from "lucide-react";
+import { Trash2, FolderOpen, Tags, X, Loader2, FolderMinus, TagsIcon } from "lucide-react";
 import { Project, Tag } from "@/types/database";
 
 interface BulkActionsToolbarProps {
@@ -35,6 +35,8 @@ export function BulkActionsToolbar({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [tagDialogOpen, setTagDialogOpen] = useState(false);
+  const [clearProjectsConfirmOpen, setClearProjectsConfirmOpen] = useState(false);
+  const [clearTagsConfirmOpen, setClearTagsConfirmOpen] = useState(false);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
@@ -59,6 +61,16 @@ export function BulkActionsToolbar({
     }
   };
 
+  const handleClearProjects = async () => {
+    setLoading(true);
+    try {
+      await onBulkSetProjects([]);
+    } finally {
+      setLoading(false);
+      setClearProjectsConfirmOpen(false);
+    }
+  };
+
   const handleSetTags = async () => {
     setLoading(true);
     try {
@@ -67,6 +79,16 @@ export function BulkActionsToolbar({
       setLoading(false);
       setTagDialogOpen(false);
       setSelectedTagIds([]);
+    }
+  };
+
+  const handleClearTags = async () => {
+    setLoading(true);
+    try {
+      await onBulkSetTags([]);
+    } finally {
+      setLoading(false);
+      setClearTagsConfirmOpen(false);
     }
   };
 
@@ -118,17 +140,37 @@ export function BulkActionsToolbar({
             variant="outline"
             size="sm"
             disabled={loading}
+            onClick={() => setClearProjectsConfirmOpen(true)}
+          >
+            <FolderMinus className="h-4 w-4 mr-1" />
+            Clear Projects
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loading}
             onClick={() => { setSelectedTagIds([]); setTagDialogOpen(true); }}
           >
             <Tags className="h-4 w-4 mr-1" />
             Set Tags
           </Button>
 
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loading}
+            onClick={() => setClearTagsConfirmOpen(true)}
+          >
+            <X className="h-4 w-4 mr-1" />
+            Clear Tags
+          </Button>
+
           <div className="h-5 w-px bg-border" />
 
           <Button variant="ghost" size="sm" onClick={onClearSelection} disabled={loading}>
             <X className="h-4 w-4 mr-1" />
-            Clear
+            Clear Selection
           </Button>
         </div>
       </div>
@@ -145,6 +187,40 @@ export function BulkActionsToolbar({
             <Button variant="destructive" onClick={handleDelete} disabled={loading}>
               {loading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clear Projects confirmation */}
+      <Dialog open={clearProjectsConfirmOpen} onOpenChange={setClearProjectsConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear projects from {selectedCount} paper{selectedCount !== 1 ? "s" : ""}?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">All project assignments will be removed from the selected papers.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearProjectsConfirmOpen(false)} disabled={loading}>Cancel</Button>
+            <Button variant="destructive" onClick={handleClearProjects} disabled={loading}>
+              {loading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Clear Projects
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clear Tags confirmation */}
+      <Dialog open={clearTagsConfirmOpen} onOpenChange={setClearTagsConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear tags from {selectedCount} paper{selectedCount !== 1 ? "s" : ""}?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">All tag assignments will be removed from the selected papers.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearTagsConfirmOpen(false)} disabled={loading}>Cancel</Button>
+            <Button variant="destructive" onClick={handleClearTags} disabled={loading}>
+              {loading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Clear Tags
             </Button>
           </DialogFooter>
         </DialogContent>
