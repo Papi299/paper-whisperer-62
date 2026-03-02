@@ -28,7 +28,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, Pencil, Trash2, Sparkles, X, ChevronRight, ChevronDown } from "lucide-react";
+import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown } from "lucide-react";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader } from "./ResizableTableHeader";
@@ -465,17 +465,8 @@ function PaperRow({
                       <Badge
                         key={`${source}-${keyword}`}
                         variant="outline"
-                        className={`text-xs group/badge hover:pr-1 ${
-                          source === 'pool' 
-                            ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
-                            : source === 'pubmed'
-                            ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
-                            : source === 'mesh'
-                            ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
-                            : 'border-green-500/50 text-green-600 dark:text-green-400'
-                        }`}
+                        className="text-xs group/badge hover:pr-1"
                       >
-                        {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
                         {displayName}
                         <button
                           onClick={(e) => {
@@ -498,17 +489,8 @@ function PaperRow({
                         <Badge
                           key={`tooltip-${source}-${keyword}`}
                           variant="outline"
-                          className={`text-xs ${
-                            source === 'pool' 
-                              ? 'border-amber-500/50 text-amber-600 dark:text-amber-400' 
-                              : source === 'pubmed'
-                              ? 'border-purple-500/50 text-purple-600 dark:text-purple-400'
-                              : source === 'mesh'
-                              ? 'border-blue-500/50 text-blue-600 dark:text-blue-400'
-                              : 'border-green-500/50 text-green-600 dark:text-green-400'
-                          }`}
+                          className="text-xs"
                         >
-                          {source === 'pool' && <Sparkles className="h-2.5 w-2.5 mr-1" />}
                           {displayName}
                         </Badge>
                       ))}
