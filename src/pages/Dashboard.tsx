@@ -121,50 +121,34 @@ export function Dashboard() {
     setColumnWidth,
   } = useColumnWidths();
 
-  // Filter available keywords: merge keywords + substances + mesh_terms, apply synonym mapping, exclude, deduplicate
+  // Filter available keywords: derive from papers only, apply synonym mapping, exclude, deduplicate
   const filteredKeywords = useMemo(() => {
-    // Step A: Flatten all terms from ALL papers (keywords + substances + mesh_terms) + keyword pool
-    const allTerms = [
-      ...papers.flatMap(paper => [
-        ...(paper.keywords || []),
-        ...((paper.substances as string[]) || []),
-        ...((paper.mesh_terms as string[]) || []),
-      ]),
-      ...poolKeywords.map(pk => pk.keyword),
-    ];
+    // Step A: Flatten keywords + substances from ALL papers
+    const allTerms = papers.flatMap(paper => [
+      ...(paper.keywords || []),
+      ...((paper.substances as string[]) || []),
+      ...((paper.mesh_terms as string[]) || []),
+    ]);
 
-    // Step B: Build synonym children lookup (child -> canonical)
+    // Step B: Map synonyms - child -> canonical (fixes self-canceling bug)
     const synonymChildMap = new Map<string, string>();
     synonymGroups.forEach(group => {
       group.synonyms.forEach(syn => synonymChildMap.set(syn.toLowerCase(), group.canonical_term));
     });
 
-    // Step C: Map each term through synonym lookup (child -> canonical), then deduplicate
     const mappedTerms = allTerms.map(term => {
       const canonical = synonymChildMap.get(term.toLowerCase());
       return canonical || term;
     });
 
-    const uniqueTerms = Array.from(new Set(mappedTerms));
+    // Step C: Filter exclusions
+    const excludedSet = new Set(excludedKeywords.map(ek => ek.keyword.toLowerCase()));
 
-    // Step D: Build excluded keywords set (case-insensitive)
-    const excludedSet = new Set(
-      excludedKeywords.map(ek => ek.keyword.toLowerCase())
-    );
-
-    // Step E: Build synonym children set to filter out raw children that weren't mapped
-    const synonymChildrenSet = new Set(
-      Array.from(synonymChildMap.keys())
-    );
-
-    // Step F: Keep only terms that are not excluded and not raw synonym children
-    return uniqueTerms
-      .filter(kw => {
-        const lower = kw.toLowerCase();
-        return !excludedSet.has(lower) && !synonymChildrenSet.has(lower);
-      })
+    // Step D: Deduplicate & sort
+    return Array.from(new Set(mappedTerms))
+      .filter(kw => !excludedSet.has(kw.toLowerCase()))
       .sort();
-  }, [papers, excludedKeywords, synonymGroups, poolKeywords]);
+  }, [papers, excludedKeywords, synonymGroups]);
 
   // Extract unique study types from papers for import functionality
   const allStudyTypes = useMemo(() => {
