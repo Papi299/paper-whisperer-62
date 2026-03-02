@@ -218,7 +218,7 @@ export function Dashboard() {
     return Array.from(groupSet).sort();
   }, [poolStudyTypes]);
 
-  // Selection state
+  // Filter state for project/tag (moved from sidebar selection to filter dropdowns)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
 
@@ -366,7 +366,9 @@ export function Dashboard() {
     yearFrom !== "" ||
     yearTo !== "" ||
     studyType !== "all" ||
-    selectedKeywords.length > 0;
+    selectedKeywords.length > 0 ||
+    selectedProjectId !== null ||
+    selectedTagId !== null;
 
   const clearFilters = () => {
     setSearchQuery("");
@@ -374,6 +376,8 @@ export function Dashboard() {
     setYearTo("");
     setStudyType("all");
     setSelectedKeywords([]);
+    setSelectedProjectId(null);
+    setSelectedTagId(null);
   };
 
   const handleExportCSV = () => {
@@ -436,10 +440,6 @@ export function Dashboard() {
         <Sidebar
           projects={projects}
           tags={tags}
-          selectedProjectId={selectedProjectId}
-          selectedTagId={selectedTagId}
-          onSelectProject={setSelectedProjectId}
-          onSelectTag={setSelectedTagId}
           onCreateProject={createProject}
           onCreateTag={createTag}
           onEditProject={(p) => setEditingProject(p)}
@@ -478,13 +478,7 @@ export function Dashboard() {
         <main className="flex-1 p-6 overflow-auto">
           <div className="mb-6 flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold">
-                {selectedProjectId
-                  ? projects.find((p) => p.id === selectedProjectId)?.name
-                  : selectedTagId
-                  ? tags.find((t) => t.id === selectedTagId)?.name
-                  : "All Papers"}
-              </h1>
+              <h1 className="text-2xl font-bold">Papers</h1>
               <p className="text-muted-foreground">
                 {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
               </p>
@@ -514,12 +508,18 @@ export function Dashboard() {
               onStudyTypeChange={setStudyType}
               studyTypeFilterOptions={studyTypeFilterOptions}
               selectedKeywords={selectedKeywords}
-               availableKeywords={filteredKeywords}
+              availableKeywords={filteredKeywords}
               onKeywordToggle={handleKeywordToggle}
               onClearFilters={clearFilters}
               onExportCSV={handleExportCSV}
               onExportRIS={handleExportRIS}
               hasActiveFilters={hasActiveFilters}
+              projects={projects}
+              tags={tags}
+              selectedProjectId={selectedProjectId}
+              selectedTagId={selectedTagId}
+              onProjectChange={setSelectedProjectId}
+              onTagChange={setSelectedTagId}
             />
           </div>
 
