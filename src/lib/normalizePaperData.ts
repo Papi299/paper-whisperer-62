@@ -70,20 +70,6 @@ function extractContextualKeywords(
 
 const IGNORED_PUBLICATION_TYPES = new Set([
   "journal article",
-  "english abstract",
-  "historical article",
-  "published erratum",
-  "bibliography",
-  "biography",
-  "comment",
-  "editorial",
-  "letter",
-  "news",
-  "newspaper article",
-  "personal narrative",
-  "portrait",
-  "video-audio media",
-  "webcasts",
 ]);
 
 function stripGenericTypes(raw: string): string {
