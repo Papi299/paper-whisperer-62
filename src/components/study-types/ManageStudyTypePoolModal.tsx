@@ -253,8 +253,8 @@ export function ManageStudyTypePoolModal({
                 </Button>
               </div>
 
-              <ScrollArea className="flex-1 min-h-[150px] max-h-[50vh]">
-                <div className="space-y-1 pr-2">
+              <div className="flex-1 min-h-[150px] max-h-[50vh] overflow-y-auto pr-1">
+                <div className="space-y-1">
                   {groups.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-6">
                       No groups yet. Add one above, then assign subtypes in Tab 2.
@@ -314,7 +314,7 @@ export function ManageStudyTypePoolModal({
                     ))
                   )}
                 </div>
-              </ScrollArea>
+              </div>
             </TabsContent>
 
             {/* ── Tab 2: Subtypes ── */}
@@ -367,8 +367,8 @@ export function ManageStudyTypePoolModal({
               </div>
 
               {/* List */}
-              <ScrollArea className="flex-1 min-h-[150px] max-h-[50vh]">
-                <div className="space-y-1 pr-2">
+              <div className="flex-1 min-h-[150px] max-h-[50vh] overflow-y-auto pr-1">
+                <div className="space-y-1">
                   {sortedSubtypes.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-6">No subtypes yet.</p>
                   ) : (
@@ -429,7 +429,7 @@ export function ManageStudyTypePoolModal({
                     ))
                   )}
                 </div>
-              </ScrollArea>
+              </div>
 
               <p className="text-xs text-muted-foreground">
                 {poolStudyTypes.length} subtype{poolStudyTypes.length !== 1 ? "s" : ""} in pool
