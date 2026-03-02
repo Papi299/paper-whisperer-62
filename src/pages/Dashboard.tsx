@@ -121,24 +121,32 @@ export function Dashboard() {
     setColumnWidth,
   } = useColumnWidths();
 
-  // Filter available keywords: merge all sources, remove synonym children, keep canonical terms + standalone
+  // Filter available keywords: source of truth is papers' keywords arrays
   const filteredKeywords = useMemo(() => {
-    // Collect all keywords from papers, pool keywords, and synonym canonical terms
-    const keywordSet = new Set<string>();
-    allKeywords.forEach(kw => keywordSet.add(kw));
-    poolKeywords.forEach(pk => keywordSet.add(pk.keyword));
-    synonymGroups.forEach(group => keywordSet.add(group.canonical_term));
+    // Step A: Flatten and deduplicate all keywords from ALL papers
+    const allUniqueKeywords = Array.from(
+      new Set(papers.flatMap(paper => paper.keywords || []))
+    );
 
-    // Build set of synonym children to exclude
+    // Step B: Build excluded keywords set (case-insensitive)
+    const excludedSet = new Set(
+      excludedKeywords.map(ek => ek.keyword.toLowerCase())
+    );
+
+    // Step C: Build synonym children set (case-insensitive)
     const synonymChildren = new Set<string>();
     synonymGroups.forEach(group => {
       group.synonyms.forEach(syn => synonymChildren.add(syn.toLowerCase()));
     });
 
-    return Array.from(keywordSet)
-      .filter(kw => !synonymChildren.has(kw.toLowerCase()))
+    // Step D: Keep only keywords that survive both exclusions
+    return allUniqueKeywords
+      .filter(kw => {
+        const lower = kw.toLowerCase();
+        return !excludedSet.has(lower) && !synonymChildren.has(lower);
+      })
       .sort();
-  }, [allKeywords, poolKeywords, synonymGroups]);
+  }, [papers, excludedKeywords, synonymGroups]);
 
   // Extract unique study types from papers for import functionality
   const allStudyTypes = useMemo(() => {
