@@ -41,11 +41,27 @@ export function evaluateStudyType(
   const textToSearch = [title, abstract || ""].join(" ");
   const matches: StudyTypePoolEntry[] = [];
 
+  // Split raw publication types (e.g. "Randomized Controlled Trial, Multicenter Study")
+  // into individual strings and check each against the pool
+  const rawTypes = (rawStudyType || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+
   for (const st of pool) {
     try {
+      // Check title + abstract
       const regex = new RegExp('\\b' + escapeRegExp(st.study_type) + '\\b', 'i');
       if (regex.test(textToSearch)) {
         matches.push(st);
+        continue;
+      }
+      // Check each individual publication type from the API
+      for (const rawType of rawTypes) {
+        if (rawType.toLowerCase() === st.study_type.toLowerCase()) {
+          matches.push(st);
+          break;
+        }
       }
     } catch {
       // skip invalid regex
