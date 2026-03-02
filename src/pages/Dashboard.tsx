@@ -82,7 +82,11 @@ export function Dashboard() {
       hierarchy_rank: st.hierarchy_rank,
     })),
     poolKeywords: poolKeywords.map(pk => pk.keyword),
-  }), [synonymLookup, poolStudyTypes, poolKeywords]);
+    synonymGroups: synonymGroups.map(sg => ({
+      canonical_term: sg.canonical_term,
+      synonyms: sg.synonyms,
+    })),
+  }), [synonymLookup, poolStudyTypes, poolKeywords, synonymGroups]);
 
   // usePapers now receives the normalization config
   const {

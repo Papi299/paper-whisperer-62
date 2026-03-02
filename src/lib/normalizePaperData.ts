@@ -153,12 +153,70 @@ function filterKeywordsByAbstractContext(
   });
 }
 
+// ── Synonym-based keyword extraction with negation awareness ──
+
+function extractSynonymKeywords(
+  title: string,
+  abstract: string | null,
+  synonymGroups: SynonymGroupEntry[]
+): string[] {
+  const textToSearch = normalizeText([title, abstract || ""].join(" "));
+  const matched = new Set<string>();
+
+  for (const group of synonymGroups) {
+    for (const syn of group.synonyms) {
+      const pattern = new RegExp(`\\b${escapeRegExp(syn.toLowerCase())}\\b`, "gi");
+      let match: RegExpExecArray | null;
+
+      while ((match = pattern.exec(textToSearch)) !== null) {
+        const precedingText = textToSearch.slice(0, match.index).trimEnd();
+        const precedingWords = precedingText.split(/\s+/).slice(-4).join(" ");
+
+        const isNegated = NEGATION_TRIGGERS.some(trigger => {
+          const triggerPattern = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, "i");
+          return triggerPattern.test(precedingWords);
+        });
+
+        if (!isNegated) {
+          matched.add(group.canonical_term);
+          break;
+        }
+      }
+
+      if (matched.has(group.canonical_term)) break; // already matched this group
+    }
+  }
+
+  return Array.from(matched);
+}
+
+// ── Deduplicate keywords (case-insensitive) ──
+
+function deduplicateKeywords(keywords: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const kw of keywords) {
+    const key = kw.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(kw);
+    }
+  }
+  return result;
+}
+
 // ── Main Pipeline ──
+
+export interface SynonymGroupEntry {
+  canonical_term: string;
+  synonyms: string[];
+}
 
 export interface NormalizationConfig {
   synonymLookup: Record<string, string>;
   poolStudyTypes: PoolStudyTypeEntry[];
   poolKeywords: string[];
+  synonymGroups: SynonymGroupEntry[];
 }
 
 export interface RawPaperData {
@@ -221,6 +279,15 @@ export function normalizePaperData(
     config.poolKeywords
   );
 
+  // Step 2.5: Synonym-based keyword extraction from title + abstract
+  const synonymExtracted = extractSynonymKeywords(
+    decodedTitle,
+    decodedAbstract,
+    config.synonymGroups
+  );
+  // Merge synonym-extracted canonical terms, deduplicating
+  const mergedKeywords = deduplicateKeywords([...normalizedKeywords, ...synonymExtracted]);
+
   // Step 3: Winner Takes All study type (hierarchy_rank ASC, then length DESC)
   const winnerStudyType = findWinnerStudyType(
     raw.study_type,
@@ -237,7 +304,7 @@ export function normalizePaperData(
     pmid: raw.pmid,
     doi: raw.doi,
     abstract: decodedAbstract,
-    keywords: normalizedKeywords,
+    keywords: mergedKeywords,
     mesh_terms: raw.mesh_terms || [],
     substances: raw.substances || [],
     study_type: winnerStudyType || null,
