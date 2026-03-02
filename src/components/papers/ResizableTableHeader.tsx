@@ -1,4 +1,4 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, ReactNode } from "react";
 import { TableHead } from "@/components/ui/table";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,7 @@ interface ResizableTableHeaderProps {
   width: number;
   onResize: (columnId: ColumnId, width: number) => void;
   className?: string;
+  children?: ReactNode;
 }
 
 export function ResizableTableHeader({
@@ -17,6 +18,7 @@ export function ResizableTableHeader({
   width,
   onResize,
   className,
+  children,
 }: ResizableTableHeaderProps) {
   const headerRef = useRef<HTMLTableCellElement>(null);
   const startXRef = useRef<number>(0);
@@ -51,7 +53,7 @@ export function ResizableTableHeader({
       className={cn("relative select-none border-r border-border", className)}
       style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
     >
-      <div className="truncate pr-3">{label}</div>
+      {children || <div className="truncate pr-3">{label}</div>}
       <div
         className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-border hover:bg-primary/70 active:bg-primary transition-colors"
         onMouseDown={handleMouseDown}

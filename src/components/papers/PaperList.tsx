@@ -201,7 +201,7 @@ export function PaperList({
       <Table style={{ tableLayout: "fixed" }}>
         <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow>
-            <TableHead className="w-10 min-w-[40px] max-w-[40px] px-1">
+            <ResizableTableHeader columnId="checkbox" label="" width={getWidth("checkbox")} onResize={onColumnResize} className="px-1">
               <Checkbox
                 checked={allSelected}
                 ref={(el) => {
@@ -212,7 +212,7 @@ export function PaperList({
                 onCheckedChange={onToggleSelectAll}
                 aria-label="Select all"
               />
-            </TableHead>
+            </ResizableTableHeader>
             <TableHead className="w-[36px] px-1"></TableHead>
             {isVisible("title") && (
               <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} />
@@ -367,7 +367,7 @@ function PaperRow({
     <tbody ref={measureElement} data-index={virtualIndex}>
       <TableRow className={isSelected ? "bg-primary/5" : undefined}>
         {/* Selection checkbox */}
-        <TableCell className="w-10 min-w-[40px] max-w-[40px] px-1">
+        <TableCell className="px-1" style={{ width: getWidth("checkbox"), minWidth: getWidth("checkbox"), maxWidth: getWidth("checkbox") }}>
           <Checkbox
             checked={isSelected}
             onCheckedChange={() => onToggleSelect(paper.id)}
