@@ -275,6 +275,13 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           });
         }
 
+        // Combine author keywords + MeSH terms + substances into one array for normalization
+        const combinedKeywords = [
+          ...(result.keywords || []),
+          ...(result.mesh_terms || []),
+          ...(result.substances || []),
+        ];
+
         const rawPaper: RawPaperData = {
           title: result.title,
           authors: result.authors || [],
@@ -283,7 +290,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           pmid: result.pmid,
           doi: result.doi,
           abstract: result.abstract,
-          keywords: result.keywords || [],
+          keywords: combinedKeywords,
           mesh_terms: result.mesh_terms || [],
           substances: result.substances || [],
           study_type: result.study_type || null,

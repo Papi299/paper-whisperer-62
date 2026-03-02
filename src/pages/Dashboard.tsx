@@ -121,29 +121,44 @@ export function Dashboard() {
     setColumnWidth,
   } = useColumnWidths();
 
-  // Filter available keywords: source of truth is papers' keywords arrays
+  // Filter available keywords: merge keywords + substances + mesh_terms, apply synonym mapping, exclude, deduplicate
   const filteredKeywords = useMemo(() => {
-    // Step A: Flatten and deduplicate all keywords from ALL papers
-    const allUniqueKeywords = Array.from(
-      new Set(papers.flatMap(paper => paper.keywords || []))
-    );
+    // Step A: Flatten all terms from ALL papers (keywords + substances + mesh_terms)
+    const allTerms = papers.flatMap(paper => [
+      ...(paper.keywords || []),
+      ...((paper.substances as string[]) || []),
+      ...((paper.mesh_terms as string[]) || []),
+    ]);
 
-    // Step B: Build excluded keywords set (case-insensitive)
+    // Step B: Build synonym children lookup (child -> canonical)
+    const synonymChildMap = new Map<string, string>();
+    synonymGroups.forEach(group => {
+      group.synonyms.forEach(syn => synonymChildMap.set(syn.toLowerCase(), group.canonical_term));
+    });
+
+    // Step C: Map each term through synonym lookup (child -> canonical), then deduplicate
+    const mappedTerms = allTerms.map(term => {
+      const canonical = synonymChildMap.get(term.toLowerCase());
+      return canonical || term;
+    });
+
+    const uniqueTerms = Array.from(new Set(mappedTerms));
+
+    // Step D: Build excluded keywords set (case-insensitive)
     const excludedSet = new Set(
       excludedKeywords.map(ek => ek.keyword.toLowerCase())
     );
 
-    // Step C: Build synonym children set (case-insensitive)
-    const synonymChildren = new Set<string>();
-    synonymGroups.forEach(group => {
-      group.synonyms.forEach(syn => synonymChildren.add(syn.toLowerCase()));
-    });
+    // Step E: Build synonym children set to filter out raw children that weren't mapped
+    const synonymChildrenSet = new Set(
+      Array.from(synonymChildMap.keys())
+    );
 
-    // Step D: Keep only keywords that survive both exclusions
-    return allUniqueKeywords
+    // Step F: Keep only terms that are not excluded and not raw synonym children
+    return uniqueTerms
       .filter(kw => {
         const lower = kw.toLowerCase();
-        return !excludedSet.has(lower) && !synonymChildren.has(lower);
+        return !excludedSet.has(lower) && !synonymChildrenSet.has(lower);
       })
       .sort();
   }, [papers, excludedKeywords, synonymGroups]);
@@ -296,6 +311,21 @@ export function Dashboard() {
     updates: Partial<PaperWithTags> & { tagIds: string[] }
   ) => {
     if (editingPaper) {
+      // Apply synonym mapping to manually entered keywords before saving
+      if (updates.keywords && Array.isArray(updates.keywords)) {
+        const mapped = updates.keywords.map(kw => {
+          const canonical = synonymLookup[kw.toLowerCase()];
+          return canonical || kw;
+        });
+        // Deduplicate case-insensitively
+        const seen = new Set<string>();
+        updates.keywords = mapped.filter(kw => {
+          const lower = kw.toLowerCase();
+          if (seen.has(lower)) return false;
+          seen.add(lower);
+          return true;
+        });
+      }
       await updatePaper(editingPaper.id, updates);
     }
   };
