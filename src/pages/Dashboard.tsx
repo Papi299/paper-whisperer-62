@@ -108,7 +108,6 @@ export function Dashboard() {
     setStudyTypePoolVersion(v => v + 1);
   }, []);
 
-
   // usePapers now receives the normalization config
   const {
     papers,
@@ -129,6 +128,24 @@ export function Dashboard() {
     deletePaper,
     reevaluateStudyTypes,
   } = usePapers(user?.id, normalizationConfig);
+
+  // Wrap delete to immediately re-evaluate with a fresh pool (avoids stale state)
+  const handleDeletePoolStudyType = useCallback(async (id: string) => {
+    await deletePoolStudyType(id);
+    const freshPool: StudyTypePoolEntry[] = poolStudyTypes
+      .filter(st => st.id !== id)
+      .map(st => ({
+        study_type: st.study_type,
+        specificity_weight: st.specificity_weight,
+        hierarchy_rank: st.hierarchy_rank,
+      }));
+    reevaluateStudyTypes(freshPool);
+  }, [deletePoolStudyType, poolStudyTypes, reevaluateStudyTypes]);
+
+  const handleDeleteAllPoolStudyTypes = useCallback(async () => {
+    await deleteAllPoolStudyTypes();
+    reevaluateStudyTypes([]);
+  }, [deleteAllPoolStudyTypes, reevaluateStudyTypes]);
 
   const {
     visibleColumns,
@@ -389,8 +406,8 @@ export function Dashboard() {
           onAddPoolStudyType={addPoolStudyType}
           onAddMultiplePoolStudyTypes={addMultiplePoolStudyTypes}
           onUpdatePoolStudyType={updatePoolStudyType}
-          onDeletePoolStudyType={deletePoolStudyType}
-          onDeleteAllPoolStudyTypes={deleteAllPoolStudyTypes}
+          onDeletePoolStudyType={handleDeletePoolStudyType}
+          onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
           onRenamePoolGroup={renamePoolGroup}
           onDeletePoolGroup={deletePoolGroup}
           onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
