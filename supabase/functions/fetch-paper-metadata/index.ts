@@ -151,10 +151,17 @@ function mapCrossrefToSchema(work: Record<string, unknown>, identifier: string):
     .map((a) => `${a.given || ""} ${a.family || ""}`.trim())
     .filter(Boolean);
 
+  const getYear = (dateField: unknown): number | null => {
+    if (!dateField || typeof dateField !== "object") return null;
+    const parts = (dateField as Record<string, unknown>)["date-parts"];
+    if (!Array.isArray(parts) || !Array.isArray(parts[0])) return null;
+    return (parts[0][0] as number) || null;
+  };
+
   const year =
-    (work["published-print"] as Record<string, unknown>)?.["date-parts"]?.[0]?.[0] as number ||
-    (work["published-online"] as Record<string, unknown>)?.["date-parts"]?.[0]?.[0] as number ||
-    (work.published as Record<string, unknown>)?.["date-parts"]?.[0]?.[0] as number ||
+    getYear(work["published-print"]) ||
+    getYear(work["published-online"]) ||
+    getYear(work.published) ||
     null;
 
   const journal = (work["container-title"] as string[])?.[0] || null;
