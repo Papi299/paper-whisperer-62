@@ -47,19 +47,21 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
       if (papersError) throw papersError;
 
-      // Fetch paper_tags
-      const { data: paperTagsData, error: paperTagsError } = await supabase
-        .from("paper_tags")
-        .select("*");
+      // Fetch paper_tags and paper_projects scoped to this user's papers
+      const paperIds = ((papersData as Paper[]) || []).map(p => p.id);
 
-      if (paperTagsError) throw paperTagsError;
+      const [paperTagsResult, paperProjectsResult] = paperIds.length > 0
+        ? await Promise.all([
+            supabase.from("paper_tags").select("*").in("paper_id", paperIds),
+            supabase.from("paper_projects").select("*").in("paper_id", paperIds),
+          ])
+        : [{ data: [], error: null }, { data: [], error: null }];
 
-      // Fetch paper_projects
-      const { data: paperProjectsData, error: paperProjectsError } = await supabase
-        .from("paper_projects")
-        .select("*");
+      if (paperTagsResult.error) throw paperTagsResult.error;
+      if (paperProjectsResult.error) throw paperProjectsResult.error;
 
-      if (paperProjectsError) throw paperProjectsError;
+      const paperTagsData = paperTagsResult.data;
+      const paperProjectsData = paperProjectsResult.data;
 
       // Combine papers with their tags and projects
       const papersWithTags: PaperWithTags[] = ((papersData as Paper[]) || []).map((paper) => {

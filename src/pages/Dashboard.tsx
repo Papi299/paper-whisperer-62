@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
 import { useNavigate } from "react-router-dom";
 import { exportToCSV, exportToRIS } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
@@ -26,6 +26,8 @@ import { Plus, Loader2 } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
+import { ColumnId } from "@/hooks/useColumnVisibility";
+import type { SortDirection } from "@/components/papers/ResizableTableHeader";
 
 export function Dashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -242,10 +244,30 @@ export function Dashboard() {
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
   const [studyType, setStudyType] = useState("all");
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
+
+  // Sort state
+  const [sortKey, setSortKey] = useState<ColumnId | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection | null>(null);
+
+  const handleSort = useCallback((columnId: ColumnId) => {
+    setSortKey(prev => {
+      if (prev === columnId) {
+        // Cycle: asc -> desc -> none
+        setSortDirection(prevDir => {
+          if (prevDir === "asc") return "desc";
+          return null;
+        });
+        return sortDirection === "desc" ? null : columnId;
+      }
+      setSortDirection("asc");
+      return columnId;
+    });
+  }, [sortDirection]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -267,9 +289,9 @@ export function Dashboard() {
         return false;
       }
 
-      // Search query
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
+      // Search query (uses deferred value for smoother typing)
+      if (deferredSearchQuery) {
+        const query = deferredSearchQuery.toLowerCase();
         const matchesSearch =
           paper.title.toLowerCase().includes(query) ||
           paper.authors.some((a) => a.toLowerCase().includes(query)) ||
@@ -323,7 +345,7 @@ export function Dashboard() {
     papers,
     selectedProjectId,
     selectedTagId,
-    searchQuery,
+    deferredSearchQuery,
     yearFrom,
     yearTo,
     studyType,
@@ -332,15 +354,44 @@ export function Dashboard() {
     synonymGroups,
   ]);
 
+  // Sort filtered papers
+  const sortedPapers = useMemo(() => {
+    if (!sortKey || !sortDirection) return filteredPapers;
+
+    return [...filteredPapers].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "title":
+          cmp = a.title.localeCompare(b.title);
+          break;
+        case "authors":
+          cmp = (a.authors[0] || "").localeCompare(b.authors[0] || "");
+          break;
+        case "year":
+          cmp = (a.year || 0) - (b.year || 0);
+          break;
+        case "journal":
+          cmp = (a.journal || "").localeCompare(b.journal || "");
+          break;
+        case "studyType":
+          cmp = (a.study_type || "").localeCompare(b.study_type || "");
+          break;
+        default:
+          return 0;
+      }
+      return sortDirection === "desc" ? -cmp : cmp;
+    });
+  }, [filteredPapers, sortKey, sortDirection]);
+
   // Bulk action handlers (must be after filteredPapers)
   const handleToggleSelectAll = useCallback(() => {
     setSelectedPaperIds(prev => {
-      const allFilteredIds = filteredPapers.map(p => p.id);
+      const allFilteredIds = sortedPapers.map(p => p.id);
       const allSelected = allFilteredIds.every(id => prev.has(id));
       if (allSelected) return new Set<string>();
       return new Set(allFilteredIds);
     });
-  }, [filteredPapers]);
+  }, [sortedPapers]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedPaperIds(new Set());
@@ -526,7 +577,7 @@ export function Dashboard() {
           <AnalyticsPanel papers={filteredPapers} />
 
           <PaperList
-            papers={filteredPapers}
+            papers={sortedPapers}
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
@@ -544,6 +595,9 @@ export function Dashboard() {
             selectedPaperIds={selectedPaperIds}
             onToggleSelect={handleToggleSelect}
             onToggleSelectAll={handleToggleSelectAll}
+            sortKey={sortKey}
+            sortDirection={sortDirection}
+            onSort={handleSort}
           />
 
           <BulkActionsToolbar

@@ -32,7 +32,7 @@ import {
 import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown } from "lucide-react";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
-import { ResizableTableHeader } from "./ResizableTableHeader";
+import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 
 interface PaperListProps {
   papers: PaperWithTags[];
@@ -53,6 +53,9 @@ interface PaperListProps {
   selectedPaperIds: Set<string>;
   onToggleSelect: (paperId: string) => void;
   onToggleSelectAll: () => void;
+  sortKey?: ColumnId | null;
+  sortDirection?: SortDirection | null;
+  onSort?: (columnId: ColumnId) => void;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -79,6 +82,9 @@ export function PaperList({
   selectedPaperIds,
   onToggleSelect,
   onToggleSelectAll,
+  sortKey,
+  sortDirection,
+  onSort,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -215,19 +221,19 @@ export function PaperList({
             </ResizableTableHeader>
             <TableHead className="w-[36px] px-1"></TableHead>
             {isVisible("title") && (
-              <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "title" ? sortDirection : null} />
             )}
             {isVisible("authors") && (
-              <ResizableTableHeader columnId="authors" label="Authors" width={getWidth("authors")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="authors" label="Authors" width={getWidth("authors")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "authors" ? sortDirection : null} />
             )}
             {isVisible("year") && (
-              <ResizableTableHeader columnId="year" label="Year" width={getWidth("year")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="year" label="Year" width={getWidth("year")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "year" ? sortDirection : null} />
             )}
             {isVisible("journal") && (
-              <ResizableTableHeader columnId="journal" label="Journal" width={getWidth("journal")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="journal" label="Journal" width={getWidth("journal")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "journal" ? sortDirection : null} />
             )}
             {isVisible("studyType") && (
-              <ResizableTableHeader columnId="studyType" label="Study Type" width={getWidth("studyType")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="studyType" label="Study Type" width={getWidth("studyType")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "studyType" ? sortDirection : null} />
             )}
             {isVisible("tags") && (
               <ResizableTableHeader columnId="tags" label="Tags" width={getWidth("tags")} onResize={onColumnResize} />
