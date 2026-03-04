@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { extractContextualKeywords } from "@/lib/textUtils";
 import { getErrorMessage } from "@/lib/errorUtils";
+import { queryKeys } from "@/lib/queryKeys";
 
 export interface PoolKeyword {
   id: string;
@@ -12,37 +14,25 @@ export interface PoolKeyword {
 }
 
 export function useKeywordPool(userId: string | undefined) {
-  const [poolKeywords, setPoolKeywords] = useState<PoolKeyword[]>([]);
-  const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
-  const fetchKeywords = useCallback(async () => {
-    if (!userId) return;
-
-    setLoading(true);
-    try {
+  const {
+    data: poolKeywords = [],
+    isLoading: loading,
+  } = useQuery({
+    queryKey: queryKeys.keywordPool.all(userId!),
+    queryFn: async () => {
       const { data, error } = await supabase
         .from("keyword_pool")
         .select("*")
-        .eq("user_id", userId)
+        .eq("user_id", userId!)
         .order("keyword");
-
       if (error) throw error;
-      setPoolKeywords((data as PoolKeyword[]) || []);
-    } catch (error: unknown) {
-      toast({
-        title: "Error loading keyword pool",
-        description: getErrorMessage(error),
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [userId, toast]);
-
-  useEffect(() => {
-    fetchKeywords();
-  }, [fetchKeywords]);
+      return (data as PoolKeyword[]) || [];
+    },
+    enabled: !!userId,
+  });
 
   const addKeyword = async (keyword: string) => {
     if (!userId) return false;
@@ -80,10 +70,12 @@ export function useKeywordPool(userId: string | undefined) {
         return false;
       }
 
-      setPoolKeywords((prev) =>
-        [...prev, data as PoolKeyword].sort((a, b) =>
-          a.keyword.localeCompare(b.keyword)
-        )
+      queryClient.setQueryData(
+        queryKeys.keywordPool.all(userId),
+        (old: PoolKeyword[] = []) =>
+          [...old, data as PoolKeyword].sort((a, b) =>
+            a.keyword.localeCompare(b.keyword)
+          )
       );
       return true;
     } catch (error: unknown) {
@@ -119,10 +111,12 @@ export function useKeywordPool(userId: string | undefined) {
 
       if (error) throw error;
 
-      setPoolKeywords((prev) =>
-        [...prev, ...((data as PoolKeyword[]) || [])].sort((a, b) =>
-          a.keyword.localeCompare(b.keyword)
-        )
+      queryClient.setQueryData(
+        queryKeys.keywordPool.all(userId),
+        (old: PoolKeyword[] = []) =>
+          [...old, ...((data as PoolKeyword[]) || [])].sort((a, b) =>
+            a.keyword.localeCompare(b.keyword)
+          )
       );
 
       toast({
@@ -142,6 +136,8 @@ export function useKeywordPool(userId: string | undefined) {
   };
 
   const deleteKeyword = async (keywordId: string) => {
+    if (!userId) return;
+
     try {
       const { error } = await supabase
         .from("keyword_pool")
@@ -150,7 +146,10 @@ export function useKeywordPool(userId: string | undefined) {
 
       if (error) throw error;
 
-      setPoolKeywords((prev) => prev.filter((pk) => pk.id !== keywordId));
+      queryClient.setQueryData(
+        queryKeys.keywordPool.all(userId),
+        (old: PoolKeyword[] = []) => old.filter((pk) => pk.id !== keywordId)
+      );
     } catch (error: unknown) {
       toast({
         title: "Error deleting keyword",
@@ -171,7 +170,7 @@ export function useKeywordPool(userId: string | undefined) {
 
       if (error) throw error;
 
-      setPoolKeywords([]);
+      queryClient.setQueryData(queryKeys.keywordPool.all(userId), []);
       toast({ title: "Keyword pool cleared" });
     } catch (error: unknown) {
       toast({
@@ -186,7 +185,7 @@ export function useKeywordPool(userId: string | undefined) {
   const findMatchingKeywords = useCallback(
     (abstract: string | null): string[] => {
       if (!abstract) return [];
-      return extractContextualKeywords(abstract, poolKeywords.map(pk => pk.keyword));
+      return extractContextualKeywords(abstract, poolKeywords.map((pk) => pk.keyword));
     },
     [poolKeywords]
   );
@@ -199,6 +198,6 @@ export function useKeywordPool(userId: string | undefined) {
     deleteKeyword,
     deleteAllKeywords,
     findMatchingKeywords,
-    refetch: fetchKeywords,
+    refetch: () => queryClient.invalidateQueries({ queryKey: queryKeys.keywordPool.all(userId!) }),
   };
 }

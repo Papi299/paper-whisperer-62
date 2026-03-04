@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/errorUtils";
+import { queryKeys } from "@/lib/queryKeys";
 
 export interface ExcludedKeyword {
   id: string;
@@ -17,49 +19,44 @@ export interface ExcludedStudyType {
   created_at: string;
 }
 
+interface ExclusionData {
+  excludedKeywords: ExcludedKeyword[];
+  excludedStudyTypes: ExcludedStudyType[];
+}
+
 export function useExclusionPools(userId: string | undefined) {
-  const [excludedKeywords, setExcludedKeywords] = useState<ExcludedKeyword[]>([]);
-  const [excludedStudyTypes, setExcludedStudyTypes] = useState<ExcludedStudyType[]>([]);
-  const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
-  const fetchExclusions = useCallback(async () => {
-    if (!userId) return;
-
-    setLoading(true);
-    try {
+  const { data, isLoading: loading } = useQuery({
+    queryKey: queryKeys.exclusions.all(userId!),
+    queryFn: async (): Promise<ExclusionData> => {
       const [keywordsRes, studyTypesRes] = await Promise.all([
         supabase
           .from("keyword_exclusion_pool")
           .select("*")
-          .eq("user_id", userId)
+          .eq("user_id", userId!)
           .order("keyword"),
         supabase
           .from("study_type_exclusion_pool")
           .select("*")
-          .eq("user_id", userId)
+          .eq("user_id", userId!)
           .order("study_type"),
       ]);
 
       if (keywordsRes.error) throw keywordsRes.error;
       if (studyTypesRes.error) throw studyTypesRes.error;
 
-      setExcludedKeywords((keywordsRes.data as ExcludedKeyword[]) || []);
-      setExcludedStudyTypes((studyTypesRes.data as ExcludedStudyType[]) || []);
-    } catch (error: unknown) {
-      toast({
-        title: "Error loading exclusions",
-        description: getErrorMessage(error),
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [userId, toast]);
+      return {
+        excludedKeywords: (keywordsRes.data as ExcludedKeyword[]) || [],
+        excludedStudyTypes: (studyTypesRes.data as ExcludedStudyType[]) || [],
+      };
+    },
+    enabled: !!userId,
+  });
 
-  useEffect(() => {
-    fetchExclusions();
-  }, [fetchExclusions]);
+  const excludedKeywords = data?.excludedKeywords ?? [];
+  const excludedStudyTypes = data?.excludedStudyTypes ?? [];
 
   // Keyword exclusion methods
   const addExcludedKeyword = async (keyword: string) => {
@@ -78,7 +75,7 @@ export function useExclusionPools(userId: string | undefined) {
     }
 
     try {
-      const { data, error } = await supabase
+      const { data: insertedData, error } = await supabase
         .from("keyword_exclusion_pool")
         .insert({ user_id: userId, keyword: trimmed })
         .select()
@@ -97,10 +94,14 @@ export function useExclusionPools(userId: string | undefined) {
         return false;
       }
 
-      setExcludedKeywords((prev) =>
-        [...prev, data as ExcludedKeyword].sort((a, b) =>
-          a.keyword.localeCompare(b.keyword)
-        )
+      queryClient.setQueryData(
+        queryKeys.exclusions.all(userId),
+        (old: ExclusionData | undefined) => ({
+          excludedKeywords: [...(old?.excludedKeywords ?? []), insertedData as ExcludedKeyword].sort(
+            (a, b) => a.keyword.localeCompare(b.keyword)
+          ),
+          excludedStudyTypes: old?.excludedStudyTypes ?? [],
+        })
       );
       return true;
     } catch (error: unknown) {
@@ -114,6 +115,7 @@ export function useExclusionPools(userId: string | undefined) {
   };
 
   const deleteExcludedKeyword = async (id: string) => {
+    if (!userId) return;
     try {
       const { error } = await supabase
         .from("keyword_exclusion_pool")
@@ -122,7 +124,13 @@ export function useExclusionPools(userId: string | undefined) {
 
       if (error) throw error;
 
-      setExcludedKeywords((prev) => prev.filter((ek) => ek.id !== id));
+      queryClient.setQueryData(
+        queryKeys.exclusions.all(userId),
+        (old: ExclusionData | undefined) => ({
+          excludedKeywords: (old?.excludedKeywords ?? []).filter((ek) => ek.id !== id),
+          excludedStudyTypes: old?.excludedStudyTypes ?? [],
+        })
+      );
     } catch (error: unknown) {
       toast({
         title: "Error removing excluded keyword",
@@ -143,7 +151,13 @@ export function useExclusionPools(userId: string | undefined) {
 
       if (error) throw error;
 
-      setExcludedKeywords([]);
+      queryClient.setQueryData(
+        queryKeys.exclusions.all(userId),
+        (old: ExclusionData | undefined) => ({
+          excludedKeywords: [],
+          excludedStudyTypes: old?.excludedStudyTypes ?? [],
+        })
+      );
       toast({ title: "Keyword exclusions cleared" });
     } catch (error: unknown) {
       toast({
@@ -171,7 +185,7 @@ export function useExclusionPools(userId: string | undefined) {
     }
 
     try {
-      const { data, error } = await supabase
+      const { data: insertedData, error } = await supabase
         .from("study_type_exclusion_pool")
         .insert({ user_id: userId, study_type: trimmed })
         .select()
@@ -190,10 +204,14 @@ export function useExclusionPools(userId: string | undefined) {
         return false;
       }
 
-      setExcludedStudyTypes((prev) =>
-        [...prev, data as ExcludedStudyType].sort((a, b) =>
-          a.study_type.localeCompare(b.study_type)
-        )
+      queryClient.setQueryData(
+        queryKeys.exclusions.all(userId),
+        (old: ExclusionData | undefined) => ({
+          excludedKeywords: old?.excludedKeywords ?? [],
+          excludedStudyTypes: [...(old?.excludedStudyTypes ?? []), insertedData as ExcludedStudyType].sort(
+            (a, b) => a.study_type.localeCompare(b.study_type)
+          ),
+        })
       );
       return true;
     } catch (error: unknown) {
@@ -207,6 +225,7 @@ export function useExclusionPools(userId: string | undefined) {
   };
 
   const deleteExcludedStudyType = async (id: string) => {
+    if (!userId) return;
     try {
       const { error } = await supabase
         .from("study_type_exclusion_pool")
@@ -215,7 +234,13 @@ export function useExclusionPools(userId: string | undefined) {
 
       if (error) throw error;
 
-      setExcludedStudyTypes((prev) => prev.filter((est) => est.id !== id));
+      queryClient.setQueryData(
+        queryKeys.exclusions.all(userId),
+        (old: ExclusionData | undefined) => ({
+          excludedKeywords: old?.excludedKeywords ?? [],
+          excludedStudyTypes: (old?.excludedStudyTypes ?? []).filter((est) => est.id !== id),
+        })
+      );
     } catch (error: unknown) {
       toast({
         title: "Error removing excluded study type",
@@ -236,7 +261,13 @@ export function useExclusionPools(userId: string | undefined) {
 
       if (error) throw error;
 
-      setExcludedStudyTypes([]);
+      queryClient.setQueryData(
+        queryKeys.exclusions.all(userId),
+        (old: ExclusionData | undefined) => ({
+          excludedKeywords: old?.excludedKeywords ?? [],
+          excludedStudyTypes: [],
+        })
+      );
       toast({ title: "Study type exclusions cleared" });
     } catch (error: unknown) {
       toast({
@@ -269,6 +300,6 @@ export function useExclusionPools(userId: string | undefined) {
     clearExcludedStudyTypes,
     getExcludedKeywordSet,
     getExcludedStudyTypeSet,
-    refetch: fetchExclusions,
+    refetch: () => queryClient.invalidateQueries({ queryKey: queryKeys.exclusions.all(userId!) }),
   };
 }
