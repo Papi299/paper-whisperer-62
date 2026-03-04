@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { normalizePaperData, NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadata";
+import { getErrorMessage } from "@/lib/errorUtils";
 
 export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
   const [papers, setPapers] = useState<PaperWithTags[]>([]);
@@ -79,10 +80,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       });
 
       setPapers(papersWithTags);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error loading data",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -345,10 +346,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           description: `Successfully added ${successfulPapers.length} paper(s).`,
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error fetching papers",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }

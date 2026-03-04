@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { extractContextualKeywords } from "@/lib/textUtils";
+import { getErrorMessage } from "@/lib/errorUtils";
 
 export interface PoolKeyword {
   id: string;
@@ -28,10 +29,10 @@ export function useKeywordPool(userId: string | undefined) {
 
       if (error) throw error;
       setPoolKeywords((data as PoolKeyword[]) || []);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error loading keyword pool",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -85,10 +86,10 @@ export function useKeywordPool(userId: string | undefined) {
         )
       );
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error adding keyword",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
       return false;
@@ -130,10 +131,10 @@ export function useKeywordPool(userId: string | undefined) {
       });
 
       return data?.length || 0;
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error adding keywords",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
       return 0;
@@ -150,10 +151,10 @@ export function useKeywordPool(userId: string | undefined) {
       if (error) throw error;
 
       setPoolKeywords((prev) => prev.filter((pk) => pk.id !== keywordId));
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error deleting keyword",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }
@@ -172,10 +173,10 @@ export function useKeywordPool(userId: string | undefined) {
 
       setPoolKeywords([]);
       toast({ title: "Keyword pool cleared" });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error clearing keyword pool",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }

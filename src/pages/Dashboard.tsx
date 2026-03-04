@@ -4,12 +4,8 @@ import { exportToCSV, exportToRIS } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
-import { useKeywordPool } from "@/hooks/useKeywordPool";
-import { useSynonymPool } from "@/hooks/useSynonymPool";
-import { useExclusionPools } from "@/hooks/useExclusionPools";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
-import { useStudyTypePool } from "@/hooks/useStudyTypePool";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -28,54 +24,64 @@ import { StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import type { SortDirection } from "@/components/papers/ResizableTableHeader";
+import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
+/**
+ * Outer Dashboard shell: handles auth redirect and provides PoolsProvider.
+ */
 export function Dashboard() {
   const { user, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      navigate("/auth", { replace: true });
+    }
+  }, [user, authLoading, navigate]);
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <PoolsProvider userId={user.id}>
+      <DashboardContent />
+    </PoolsProvider>
+  );
+}
+
+/**
+ * Inner Dashboard content: consumes pool data from PoolsContext.
+ */
+function DashboardContent() {
+  const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  // Initialize pools FIRST so normalization config is available for usePapers
+  // Pool data from context (replaces 4 separate hook calls)
   const {
     poolKeywords,
-    addKeyword: addPoolKeyword,
-    addMultipleKeywords: addMultiplePoolKeywords,
-    deleteKeyword: deletePoolKeyword,
-    deleteAllKeywords: deleteAllPoolKeywords,
     findMatchingKeywords,
-  } = useKeywordPool(user?.id);
-
-  const {
     synonymGroups,
-    addSynonymGroup,
-    updateSynonymGroup,
-    deleteSynonymGroup,
     normalizeKeyword,
     synonymLookup,
-  } = useSynonymPool(user?.id);
-
-  const {
     poolStudyTypes,
-    addStudyType: addPoolStudyType,
-    addMultipleStudyTypes: addMultiplePoolStudyTypes,
-    updateStudyType: updatePoolStudyType,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
-    renameGroup: renamePoolGroup,
-    deleteGroup: deletePoolGroup,
-  } = useStudyTypePool(user?.id);
-
-  const {
     excludedKeywords,
-    excludedStudyTypes,
     addExcludedKeyword,
-    deleteExcludedKeyword,
-    clearExcludedKeywords,
     addExcludedStudyType,
-    deleteExcludedStudyType,
-    clearExcludedStudyTypes,
     getExcludedKeywordSet,
     getExcludedStudyTypeSet,
-  } = useExclusionPools(user?.id);
+  } = usePools();
 
   // Build normalization config from pool data
   const normalizationConfig = useMemo<NormalizationConfig>(() => ({
@@ -268,12 +274,6 @@ export function Dashboard() {
       return columnId;
     });
   }, [sortDirection]);
-
-  useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/auth", { replace: true });
-    }
-  }, [user, authLoading, navigate]);
 
   // Filter papers (exclusions are now display-only, handled in PaperList)
   const filteredPapers = useMemo(() => {
@@ -472,16 +472,12 @@ export function Dashboard() {
     }
   };
 
-  if (authLoading || loading) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
-  }
-
-  if (!user) {
-    return null;
   }
 
   return (
@@ -497,33 +493,10 @@ export function Dashboard() {
           onDeleteProject={deleteProject}
           onEditTag={(t) => setEditingTag(t)}
           onDeleteTag={deleteTag}
-          poolKeywords={poolKeywords}
           availableKeywords={allKeywords}
-          onAddPoolKeyword={addPoolKeyword}
-          onAddMultiplePoolKeywords={addMultiplePoolKeywords}
-          onDeletePoolKeyword={deletePoolKeyword}
-          onDeleteAllPoolKeywords={deleteAllPoolKeywords}
-          synonymGroups={synonymGroups}
-          onAddSynonymGroup={addSynonymGroup}
-          onUpdateSynonymGroup={updateSynonymGroup}
-          onDeleteSynonymGroup={deleteSynonymGroup}
-          excludedKeywords={excludedKeywords}
-          excludedStudyTypes={excludedStudyTypes}
-          onAddExcludedKeyword={addExcludedKeyword}
-          onDeleteExcludedKeyword={deleteExcludedKeyword}
-          onClearExcludedKeywords={clearExcludedKeywords}
-          onAddExcludedStudyType={addExcludedStudyType}
-          onDeleteExcludedStudyType={deleteExcludedStudyType}
-          onClearExcludedStudyTypes={clearExcludedStudyTypes}
-          poolStudyTypes={poolStudyTypes}
           availableStudyTypes={allStudyTypes}
-          onAddPoolStudyType={addPoolStudyType}
-          onAddMultiplePoolStudyTypes={addMultiplePoolStudyTypes}
-          onUpdatePoolStudyType={updatePoolStudyType}
           onDeletePoolStudyType={handleDeletePoolStudyType}
           onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
-          onRenamePoolGroup={renamePoolGroup}
-          onDeletePoolGroup={deletePoolGroup}
           onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
         />
         <main className="flex-1 p-6 overflow-auto">

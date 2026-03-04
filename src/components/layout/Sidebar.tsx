@@ -3,10 +3,6 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Project, Tag } from "@/types/database";
-import { PoolKeyword } from "@/hooks/useKeywordPool";
-import { Synonym } from "@/hooks/useSynonymPool";
-import { ExcludedKeyword, ExcludedStudyType } from "@/hooks/useExclusionPools";
-import { PoolStudyType } from "@/hooks/useStudyTypePool";
 import {
   FolderOpen,
   Tag as TagIcon,
@@ -22,7 +18,13 @@ import { ManageKeywordPoolModal } from "@/components/keywords/ManageKeywordPoolM
 import { ManageStudyTypePoolModal } from "@/components/study-types/ManageStudyTypePoolModal";
 import { ManageProjectsModal } from "@/components/projects/ManageProjectsModal";
 import { ManageTagsModal } from "@/components/tags/ManageTagsModal";
+import { usePools } from "@/contexts/PoolsContext";
 
+/**
+ * Sidebar props — reduced from 37+ to 13 by using PoolsContext.
+ * Pool data (keywords, study types, synonyms, exclusions) is consumed
+ * directly from context instead of being threaded through props.
+ */
 interface SidebarProps {
   projects: Project[];
   tags: Tag[];
@@ -32,33 +34,11 @@ interface SidebarProps {
   onDeleteProject: (projectId: string) => void;
   onEditTag: (tag: Tag) => void;
   onDeleteTag: (tagId: string) => void;
-  poolKeywords: PoolKeyword[];
   availableKeywords: string[];
-  onAddPoolKeyword: (keyword: string) => Promise<boolean>;
-  onAddMultiplePoolKeywords: (keywords: string[]) => Promise<number>;
-  onDeletePoolKeyword: (keywordId: string) => void;
-  onDeleteAllPoolKeywords: () => void;
-  synonymGroups: Synonym[];
-  onAddSynonymGroup: (canonicalTerm: string, synonyms: string[]) => Promise<void>;
-  onUpdateSynonymGroup: (id: string, canonicalTerm: string, synonyms: string[]) => Promise<void>;
-  onDeleteSynonymGroup: (id: string) => Promise<void>;
-  excludedKeywords: ExcludedKeyword[];
-  excludedStudyTypes: ExcludedStudyType[];
-  onAddExcludedKeyword: (keyword: string) => Promise<boolean>;
-  onDeleteExcludedKeyword: (id: string) => Promise<void>;
-  onClearExcludedKeywords: () => Promise<void>;
-  onAddExcludedStudyType: (studyType: string) => Promise<boolean>;
-  onDeleteExcludedStudyType: (id: string) => Promise<void>;
-  onClearExcludedStudyTypes: () => Promise<void>;
-  poolStudyTypes: PoolStudyType[];
   availableStudyTypes: string[];
-  onAddPoolStudyType: (studyType: string, groupName?: string | null, hierarchyRank?: number) => Promise<boolean>;
-  onAddMultiplePoolStudyTypes: (studyTypes: string[]) => Promise<number>;
-  onUpdatePoolStudyType: (id: string, updates: Partial<Pick<PoolStudyType, 'study_type' | 'group_name' | 'hierarchy_rank'>>) => Promise<void>;
+  // Dashboard wraps these with paper re-evaluation logic
   onDeletePoolStudyType: (id: string) => void;
   onDeleteAllPoolStudyTypes: () => void;
-  onRenamePoolGroup: (oldName: string, newName: string, newRank?: number) => Promise<void>;
-  onDeletePoolGroup: (groupName: string) => Promise<void>;
   onStudyTypePoolModalClose?: () => void;
 }
 
@@ -71,35 +51,39 @@ export function Sidebar({
   onDeleteProject,
   onEditTag,
   onDeleteTag,
-  poolKeywords,
   availableKeywords,
-  onAddPoolKeyword,
-  onAddMultiplePoolKeywords,
-  onDeletePoolKeyword,
-  onDeleteAllPoolKeywords,
-  synonymGroups,
-  onAddSynonymGroup,
-  onUpdateSynonymGroup,
-  onDeleteSynonymGroup,
-  excludedKeywords,
-  excludedStudyTypes,
-  onAddExcludedKeyword,
-  onDeleteExcludedKeyword,
-  onClearExcludedKeywords,
-  onAddExcludedStudyType,
-  onDeleteExcludedStudyType,
-  onClearExcludedStudyTypes,
-  poolStudyTypes,
   availableStudyTypes,
-  onAddPoolStudyType,
-  onAddMultiplePoolStudyTypes,
-  onUpdatePoolStudyType,
   onDeletePoolStudyType,
   onDeleteAllPoolStudyTypes,
-  onRenamePoolGroup,
-  onDeletePoolGroup,
   onStudyTypePoolModalClose,
 }: SidebarProps) {
+  // Pool data from context (eliminates 24+ props)
+  const {
+    poolKeywords,
+    addKeyword,
+    addMultipleKeywords,
+    deleteKeyword,
+    deleteAllKeywords,
+    synonymGroups,
+    addSynonymGroup,
+    updateSynonymGroup,
+    deleteSynonymGroup,
+    excludedKeywords,
+    excludedStudyTypes,
+    addExcludedKeyword,
+    deleteExcludedKeyword,
+    clearExcludedKeywords,
+    addExcludedStudyType,
+    deleteExcludedStudyType,
+    clearExcludedStudyTypes,
+    poolStudyTypes,
+    addStudyType,
+    addMultipleStudyTypes,
+    updateStudyType,
+    renameGroup,
+    deleteGroup,
+  } = usePools();
+
   const [synonymsModalOpen, setSynonymsModalOpen] = useState(false);
   const [exclusionsModalOpen, setExclusionsModalOpen] = useState(false);
   const [keywordPoolModalOpen, setKeywordPoolModalOpen] = useState(false);
@@ -269,31 +253,31 @@ export function Sidebar({
         open={synonymsModalOpen}
         onOpenChange={setSynonymsModalOpen}
         synonymGroups={synonymGroups}
-        onAdd={onAddSynonymGroup}
-        onUpdate={onUpdateSynonymGroup}
-        onDelete={onDeleteSynonymGroup}
+        onAdd={addSynonymGroup}
+        onUpdate={updateSynonymGroup}
+        onDelete={deleteSynonymGroup}
       />
       <ManageExclusionsModal
         open={exclusionsModalOpen}
         onOpenChange={setExclusionsModalOpen}
         excludedKeywords={excludedKeywords}
         excludedStudyTypes={excludedStudyTypes}
-        onAddExcludedKeyword={onAddExcludedKeyword}
-        onDeleteExcludedKeyword={onDeleteExcludedKeyword}
-        onClearExcludedKeywords={onClearExcludedKeywords}
-        onAddExcludedStudyType={onAddExcludedStudyType}
-        onDeleteExcludedStudyType={onDeleteExcludedStudyType}
-        onClearExcludedStudyTypes={onClearExcludedStudyTypes}
+        onAddExcludedKeyword={addExcludedKeyword}
+        onDeleteExcludedKeyword={deleteExcludedKeyword}
+        onClearExcludedKeywords={clearExcludedKeywords}
+        onAddExcludedStudyType={addExcludedStudyType}
+        onDeleteExcludedStudyType={deleteExcludedStudyType}
+        onClearExcludedStudyTypes={clearExcludedStudyTypes}
       />
       <ManageKeywordPoolModal
         open={keywordPoolModalOpen}
         onOpenChange={setKeywordPoolModalOpen}
         poolKeywords={poolKeywords}
         availableKeywords={availableKeywords}
-        onAddKeyword={onAddPoolKeyword}
-        onAddMultipleKeywords={onAddMultiplePoolKeywords}
-        onDeleteKeyword={onDeletePoolKeyword}
-        onDeleteAllKeywords={onDeleteAllPoolKeywords}
+        onAddKeyword={addKeyword}
+        onAddMultipleKeywords={addMultipleKeywords}
+        onDeleteKeyword={deleteKeyword}
+        onDeleteAllKeywords={deleteAllKeywords}
       />
       <ManageStudyTypePoolModal
         open={studyTypePoolModalOpen}
@@ -303,13 +287,13 @@ export function Sidebar({
         }}
         poolStudyTypes={poolStudyTypes}
         availableStudyTypes={availableStudyTypes}
-        onAddStudyType={onAddPoolStudyType}
-        onAddMultipleStudyTypes={onAddMultiplePoolStudyTypes}
-        onUpdateStudyType={onUpdatePoolStudyType}
+        onAddStudyType={addStudyType}
+        onAddMultipleStudyTypes={addMultipleStudyTypes}
+        onUpdateStudyType={updateStudyType}
         onDeleteStudyType={onDeletePoolStudyType}
         onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
-        onRenameGroup={onRenamePoolGroup}
-        onDeleteGroup={onDeletePoolGroup}
+        onRenameGroup={renameGroup}
+        onDeleteGroup={deleteGroup}
       />
     </aside>
   );

@@ -1,9 +1,63 @@
 /**
  * Client-side PubMed/Crossref paper metadata fetcher.
  * Mirrors the logic previously in the fetch-paper-metadata edge function.
+ *
+ * Includes rate limiting (PubMed allows 3 req/sec without API key)
+ * and retry with exponential backoff for transient failures.
  */
 
 import { decodeHTMLEntities } from "./decodeHTMLEntities";
+
+// ── Rate Limiting & Retry ──
+
+const RATE_LIMIT_DELAY_MS = 350; // ~2.8 req/sec, safely under PubMed's 3/sec limit
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetch wrapper with retry and exponential backoff.
+ * Retries on network errors, 429 (rate limit), and 5xx (server errors).
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  maxRetries = 3,
+  baseDelayMs = 1000
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: AbortSignal.timeout(15_000), // 15s timeout per request
+      });
+
+      // Retry on rate limit or server errors
+      if (response.status === 429 || response.status >= 500) {
+        if (attempt < maxRetries) {
+          const delay = baseDelayMs * Math.pow(2, attempt);
+          console.warn(`HTTP ${response.status} on attempt ${attempt + 1}, retrying in ${delay}ms...`);
+          await sleep(delay);
+          continue;
+        }
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxRetries) {
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        console.warn(`Network error on attempt ${attempt + 1}, retrying in ${delay}ms...`, error);
+        await sleep(delay);
+      }
+    }
+  }
+
+  throw lastError ?? new Error("fetchWithRetry: all attempts failed");
+}
 
 export interface PaperMetadata {
   identifier: string;
@@ -48,7 +102,7 @@ function cleanDoi(doi: string): string {
 async function fetchFromPubMed(pmid: string): Promise<PaperMetadata | null> {
   try {
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml`;
-    const response = await fetch(url);
+    const response = await fetchWithRetry(url);
     if (!response.ok) return null;
 
     const xml = await response.text();
@@ -113,7 +167,7 @@ async function fetchFromPubMed(pmid: string): Promise<PaperMetadata | null> {
 async function searchPubMedByDoi(doi: string): Promise<string | null> {
   try {
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(doi)}[doi]&retmode=json`;
-    const response = await fetch(url);
+    const response = await fetchWithRetry(url);
     if (!response.ok) return null;
     const data = await response.json();
     return data.esearchresult?.idlist?.[0] || null;
@@ -125,7 +179,7 @@ async function searchPubMedByDoi(doi: string): Promise<string | null> {
 async function searchPubMedByTitle(title: string): Promise<string | null> {
   try {
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(title)}&retmode=json&retmax=1`;
-    const response = await fetch(url);
+    const response = await fetchWithRetry(url);
     if (!response.ok) return null;
     const data = await response.json();
     return data.esearchresult?.idlist?.[0] || null;
@@ -188,7 +242,7 @@ async function fetchFromCrossrefByDoi(doi: string): Promise<PaperMetadata | null
   try {
     const cleanedDoi = cleanDoi(doi);
     const url = `https://api.crossref.org/works/${encodeURIComponent(cleanedDoi)}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: { "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)" },
     });
     if (!response.ok) return null;
@@ -203,7 +257,7 @@ async function fetchFromCrossrefByDoi(doi: string): Promise<PaperMetadata | null
 async function searchCrossrefByTitle(title: string): Promise<PaperMetadata | null> {
   try {
     const url = `https://api.crossref.org/works?query.title=${encodeURIComponent(title)}&rows=1`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: { "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)" },
     });
     if (!response.ok) return null;
@@ -269,11 +323,17 @@ async function fetchByTitle(title: string): Promise<PaperMetadata | null> {
 export async function fetchPaperMetadata(identifiers: string[]): Promise<PaperMetadata[]> {
   const results: PaperMetadata[] = [];
 
-  for (const identifier of identifiers) {
+  for (let i = 0; i < identifiers.length; i++) {
+    const identifier = identifiers[i];
     const type = detectIdentifierType(identifier);
     let result: PaperMetadata | null = null;
 
-    console.log(`Processing identifier: ${identifier} (type: ${type})`);
+    // Rate-limit: pause between requests to stay under API limits
+    if (i > 0) {
+      await sleep(RATE_LIMIT_DELAY_MS);
+    }
+
+    console.log(`Processing identifier ${i + 1}/${identifiers.length}: ${identifier} (type: ${type})`);
 
     switch (type) {
       case "pmid":

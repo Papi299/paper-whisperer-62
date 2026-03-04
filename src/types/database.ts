@@ -67,19 +67,3 @@ export interface PaperWithTags extends Paper {
   projects: Project[];
 }
 
-export interface PaperMetadata {
-  title: string;
-  authors: string[];
-  year: number | null;
-  journal: string | null;
-  pmid: string | null;
-  doi: string | null;
-  abstract: string | null;
-  keywords: string[];
-  mesh_terms: string[];
-  substances: string[];
-  study_type: string | null;
-  pubmed_url: string | null;
-  journal_url: string | null;
-  drive_url?: string | null;
-}
