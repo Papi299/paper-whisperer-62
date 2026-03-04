@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { extractContextualKeywords } from "@/lib/textUtils";
+import { getErrorMessage } from "@/lib/errorUtils";
 
 export interface PoolKeyword {
   id: string;
@@ -27,10 +29,10 @@ export function useKeywordPool(userId: string | undefined) {
 
       if (error) throw error;
       setPoolKeywords((data as PoolKeyword[]) || []);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error loading keyword pool",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -84,10 +86,10 @@ export function useKeywordPool(userId: string | undefined) {
         )
       );
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error adding keyword",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
       return false;
@@ -129,10 +131,10 @@ export function useKeywordPool(userId: string | undefined) {
       });
 
       return data?.length || 0;
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error adding keywords",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
       return 0;
@@ -149,10 +151,10 @@ export function useKeywordPool(userId: string | undefined) {
       if (error) throw error;
 
       setPoolKeywords((prev) => prev.filter((pk) => pk.id !== keywordId));
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error deleting keyword",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }
@@ -171,10 +173,10 @@ export function useKeywordPool(userId: string | undefined) {
 
       setPoolKeywords([]);
       toast({ title: "Keyword pool cleared" });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error clearing keyword pool",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }
@@ -199,67 +201,4 @@ export function useKeywordPool(userId: string | undefined) {
     findMatchingKeywords,
     refetch: fetchKeywords,
   };
-}
-
-// Helper to escape special regex characters
-function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// Negation trigger phrases for academic text
-const NEGATION_TRIGGERS = [
-  "no", "not", "without", "excluding", "excluded",
-  "lack of", "ruled out", "absence of", "neither",
-  "nor", "unable to", "failed to", "non"
-];
-
-// Normalize abstract text: lowercase, collapse whitespace, standardize punctuation spacing
-function normalizeAbstract(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/['']/g, "'")
-    .replace(/[""]/g, '"')
-    .replace(/[-–—]/g, "-")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Context-aware keyword extraction from abstract text.
- * Uses word-boundary regex matching and checks a 4-word preceding window
- * for negation triggers to prevent false positives.
- */
-function extractContextualKeywords(
-  abstract: string,
-  poolKeywordStrings: string[]
-): string[] {
-  const normalized = normalizeAbstract(abstract);
-  const matched: string[] = [];
-
-  for (const keyword of poolKeywordStrings) {
-    const pattern = new RegExp(`\\b${escapeRegExp(keyword.toLowerCase())}\\b`, "gi");
-    let match: RegExpExecArray | null;
-    let hasValidMatch = false;
-
-    while ((match = pattern.exec(normalized)) !== null) {
-      const precedingText = normalized.slice(0, match.index).trimEnd();
-      const precedingWords = precedingText.split(/\s+/).slice(-4).join(" ");
-
-      const isNegated = NEGATION_TRIGGERS.some(trigger => {
-        const triggerPattern = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, "i");
-        return triggerPattern.test(precedingWords);
-      });
-
-      if (!isNegated) {
-        hasValidMatch = true;
-        break;
-      }
-    }
-
-    if (hasValidMatch) {
-      matched.push(keyword);
-    }
-  }
-
-  return matched;
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { getErrorMessage } from "@/lib/errorUtils";
 
 export interface ExcludedKeyword {
   id: string;
@@ -45,10 +46,10 @@ export function useExclusionPools(userId: string | undefined) {
 
       setExcludedKeywords((keywordsRes.data as ExcludedKeyword[]) || []);
       setExcludedStudyTypes((studyTypesRes.data as ExcludedStudyType[]) || []);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error loading exclusions",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -102,10 +103,10 @@ export function useExclusionPools(userId: string | undefined) {
         )
       );
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error adding excluded keyword",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
       return false;
@@ -122,10 +123,10 @@ export function useExclusionPools(userId: string | undefined) {
       if (error) throw error;
 
       setExcludedKeywords((prev) => prev.filter((ek) => ek.id !== id));
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error removing excluded keyword",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }
@@ -144,10 +145,10 @@ export function useExclusionPools(userId: string | undefined) {
 
       setExcludedKeywords([]);
       toast({ title: "Keyword exclusions cleared" });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error clearing keyword exclusions",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }
@@ -195,10 +196,10 @@ export function useExclusionPools(userId: string | undefined) {
         )
       );
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error adding excluded study type",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
       return false;
@@ -215,10 +216,10 @@ export function useExclusionPools(userId: string | undefined) {
       if (error) throw error;
 
       setExcludedStudyTypes((prev) => prev.filter((est) => est.id !== id));
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error removing excluded study type",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }
@@ -237,10 +238,10 @@ export function useExclusionPools(userId: string | undefined) {
 
       setExcludedStudyTypes([]);
       toast({ title: "Study type exclusions cleared" });
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error clearing study type exclusions",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }

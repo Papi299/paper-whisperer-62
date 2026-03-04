@@ -7,65 +7,7 @@
 
 import { decodeHTMLEntities } from "./decodeHTMLEntities";
 import { evaluateStudyType, StudyTypePoolEntry } from "./evaluateStudyType";
-
-// ── Helpers ──
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-const NEGATION_TRIGGERS = [
-  "no", "not", "without", "excluding", "excluded",
-  "lack of", "ruled out", "absence of", "neither",
-  "nor", "unable to", "failed to", "non"
-];
-
-function normalizeText(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/['']/g, "'")
-    .replace(/[""]/g, '"')
-    .replace(/[-–—]/g, "-")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// ── Context-aware keyword extraction (negation handling) ──
-
-function extractContextualKeywords(
-  abstract: string,
-  poolKeywords: string[]
-): string[] {
-  const normalized = normalizeText(abstract);
-  const matched: string[] = [];
-
-  for (const keyword of poolKeywords) {
-    const pattern = new RegExp(`\\b${escapeRegExp(keyword.toLowerCase())}\\b`, "gi");
-    let match: RegExpExecArray | null;
-    let hasValidMatch = false;
-
-    while ((match = pattern.exec(normalized)) !== null) {
-      const precedingText = normalized.slice(0, match.index).trimEnd();
-      const precedingWords = precedingText.split(/\s+/).slice(-4).join(" ");
-
-      const isNegated = NEGATION_TRIGGERS.some(trigger => {
-        const triggerPattern = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, "i");
-        return triggerPattern.test(precedingWords);
-      });
-
-      if (!isNegated) {
-        hasValidMatch = true;
-        break;
-      }
-    }
-
-    if (hasValidMatch) {
-      matched.push(keyword);
-    }
-  }
-
-  return matched;
-}
+import { escapeRegExp, NEGATION_TRIGGERS, normalizeText, extractContextualKeywords } from "./textUtils";
 
 // ── Evidence Pyramid: Winner Takes All study type detection ──
 // Delegated to the standalone evaluateStudyType utility.

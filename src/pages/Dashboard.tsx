@@ -1,15 +1,11 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
 import { useNavigate } from "react-router-dom";
 import { exportToCSV, exportToRIS } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
-import { useKeywordPool } from "@/hooks/useKeywordPool";
-import { useSynonymPool } from "@/hooks/useSynonymPool";
-import { useExclusionPools } from "@/hooks/useExclusionPools";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
-import { useStudyTypePool } from "@/hooks/useStudyTypePool";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -26,54 +22,66 @@ import { Plus, Loader2 } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
+import { ColumnId } from "@/hooks/useColumnVisibility";
+import type { SortDirection } from "@/components/papers/ResizableTableHeader";
+import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
+/**
+ * Outer Dashboard shell: handles auth redirect and provides PoolsProvider.
+ */
 export function Dashboard() {
   const { user, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      navigate("/auth", { replace: true });
+    }
+  }, [user, authLoading, navigate]);
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <PoolsProvider userId={user.id}>
+      <DashboardContent />
+    </PoolsProvider>
+  );
+}
+
+/**
+ * Inner Dashboard content: consumes pool data from PoolsContext.
+ */
+function DashboardContent() {
+  const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  // Initialize pools FIRST so normalization config is available for usePapers
+  // Pool data from context (replaces 4 separate hook calls)
   const {
     poolKeywords,
-    addKeyword: addPoolKeyword,
-    addMultipleKeywords: addMultiplePoolKeywords,
-    deleteKeyword: deletePoolKeyword,
-    deleteAllKeywords: deleteAllPoolKeywords,
     findMatchingKeywords,
-  } = useKeywordPool(user?.id);
-
-  const {
     synonymGroups,
-    addSynonymGroup,
-    updateSynonymGroup,
-    deleteSynonymGroup,
     normalizeKeyword,
     synonymLookup,
-  } = useSynonymPool(user?.id);
-
-  const {
     poolStudyTypes,
-    addStudyType: addPoolStudyType,
-    addMultipleStudyTypes: addMultiplePoolStudyTypes,
-    updateStudyType: updatePoolStudyType,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
-    renameGroup: renamePoolGroup,
-    deleteGroup: deletePoolGroup,
-  } = useStudyTypePool(user?.id);
-
-  const {
     excludedKeywords,
-    excludedStudyTypes,
     addExcludedKeyword,
-    deleteExcludedKeyword,
-    clearExcludedKeywords,
     addExcludedStudyType,
-    deleteExcludedStudyType,
-    clearExcludedStudyTypes,
     getExcludedKeywordSet,
     getExcludedStudyTypeSet,
-  } = useExclusionPools(user?.id);
+  } = usePools();
 
   // Build normalization config from pool data
   const normalizationConfig = useMemo<NormalizationConfig>(() => ({
@@ -242,16 +250,30 @@ export function Dashboard() {
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
   const [studyType, setStudyType] = useState("all");
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/auth", { replace: true });
-    }
-  }, [user, authLoading, navigate]);
+  // Sort state
+  const [sortKey, setSortKey] = useState<ColumnId | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection | null>(null);
+
+  const handleSort = useCallback((columnId: ColumnId) => {
+    setSortKey(prev => {
+      if (prev === columnId) {
+        // Cycle: asc -> desc -> none
+        setSortDirection(prevDir => {
+          if (prevDir === "asc") return "desc";
+          return null;
+        });
+        return sortDirection === "desc" ? null : columnId;
+      }
+      setSortDirection("asc");
+      return columnId;
+    });
+  }, [sortDirection]);
 
   // Filter papers (exclusions are now display-only, handled in PaperList)
   const filteredPapers = useMemo(() => {
@@ -267,9 +289,9 @@ export function Dashboard() {
         return false;
       }
 
-      // Search query
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
+      // Search query (uses deferred value for smoother typing)
+      if (deferredSearchQuery) {
+        const query = deferredSearchQuery.toLowerCase();
         const matchesSearch =
           paper.title.toLowerCase().includes(query) ||
           paper.authors.some((a) => a.toLowerCase().includes(query)) ||
@@ -323,7 +345,7 @@ export function Dashboard() {
     papers,
     selectedProjectId,
     selectedTagId,
-    searchQuery,
+    deferredSearchQuery,
     yearFrom,
     yearTo,
     studyType,
@@ -332,15 +354,44 @@ export function Dashboard() {
     synonymGroups,
   ]);
 
+  // Sort filtered papers
+  const sortedPapers = useMemo(() => {
+    if (!sortKey || !sortDirection) return filteredPapers;
+
+    return [...filteredPapers].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "title":
+          cmp = a.title.localeCompare(b.title);
+          break;
+        case "authors":
+          cmp = (a.authors[0] || "").localeCompare(b.authors[0] || "");
+          break;
+        case "year":
+          cmp = (a.year || 0) - (b.year || 0);
+          break;
+        case "journal":
+          cmp = (a.journal || "").localeCompare(b.journal || "");
+          break;
+        case "studyType":
+          cmp = (a.study_type || "").localeCompare(b.study_type || "");
+          break;
+        default:
+          return 0;
+      }
+      return sortDirection === "desc" ? -cmp : cmp;
+    });
+  }, [filteredPapers, sortKey, sortDirection]);
+
   // Bulk action handlers (must be after filteredPapers)
   const handleToggleSelectAll = useCallback(() => {
     setSelectedPaperIds(prev => {
-      const allFilteredIds = filteredPapers.map(p => p.id);
+      const allFilteredIds = sortedPapers.map(p => p.id);
       const allSelected = allFilteredIds.every(id => prev.has(id));
       if (allSelected) return new Set<string>();
       return new Set(allFilteredIds);
     });
-  }, [filteredPapers]);
+  }, [sortedPapers]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedPaperIds(new Set());
@@ -421,16 +472,12 @@ export function Dashboard() {
     }
   };
 
-  if (authLoading || loading) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
-  }
-
-  if (!user) {
-    return null;
   }
 
   return (
@@ -446,33 +493,10 @@ export function Dashboard() {
           onDeleteProject={deleteProject}
           onEditTag={(t) => setEditingTag(t)}
           onDeleteTag={deleteTag}
-          poolKeywords={poolKeywords}
           availableKeywords={allKeywords}
-          onAddPoolKeyword={addPoolKeyword}
-          onAddMultiplePoolKeywords={addMultiplePoolKeywords}
-          onDeletePoolKeyword={deletePoolKeyword}
-          onDeleteAllPoolKeywords={deleteAllPoolKeywords}
-          synonymGroups={synonymGroups}
-          onAddSynonymGroup={addSynonymGroup}
-          onUpdateSynonymGroup={updateSynonymGroup}
-          onDeleteSynonymGroup={deleteSynonymGroup}
-          excludedKeywords={excludedKeywords}
-          excludedStudyTypes={excludedStudyTypes}
-          onAddExcludedKeyword={addExcludedKeyword}
-          onDeleteExcludedKeyword={deleteExcludedKeyword}
-          onClearExcludedKeywords={clearExcludedKeywords}
-          onAddExcludedStudyType={addExcludedStudyType}
-          onDeleteExcludedStudyType={deleteExcludedStudyType}
-          onClearExcludedStudyTypes={clearExcludedStudyTypes}
-          poolStudyTypes={poolStudyTypes}
           availableStudyTypes={allStudyTypes}
-          onAddPoolStudyType={addPoolStudyType}
-          onAddMultiplePoolStudyTypes={addMultiplePoolStudyTypes}
-          onUpdatePoolStudyType={updatePoolStudyType}
           onDeletePoolStudyType={handleDeletePoolStudyType}
           onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
-          onRenamePoolGroup={renamePoolGroup}
-          onDeletePoolGroup={deletePoolGroup}
           onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
         />
         <main className="flex-1 p-6 overflow-auto">
@@ -526,7 +550,7 @@ export function Dashboard() {
           <AnalyticsPanel papers={filteredPapers} />
 
           <PaperList
-            papers={filteredPapers}
+            papers={sortedPapers}
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
@@ -544,6 +568,9 @@ export function Dashboard() {
             selectedPaperIds={selectedPaperIds}
             onToggleSelect={handleToggleSelect}
             onToggleSelectAll={handleToggleSelectAll}
+            sortKey={sortKey}
+            sortDirection={sortDirection}
+            onSort={handleSort}
           />
 
           <BulkActionsToolbar

@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { normalizePaperData, NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadata";
+import { getErrorMessage } from "@/lib/errorUtils";
 
 export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
   const [papers, setPapers] = useState<PaperWithTags[]>([]);
@@ -47,19 +48,21 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
       if (papersError) throw papersError;
 
-      // Fetch paper_tags
-      const { data: paperTagsData, error: paperTagsError } = await supabase
-        .from("paper_tags")
-        .select("*");
+      // Fetch paper_tags and paper_projects scoped to this user's papers
+      const paperIds = ((papersData as Paper[]) || []).map(p => p.id);
 
-      if (paperTagsError) throw paperTagsError;
+      const [paperTagsResult, paperProjectsResult] = paperIds.length > 0
+        ? await Promise.all([
+            supabase.from("paper_tags").select("*").in("paper_id", paperIds),
+            supabase.from("paper_projects").select("*").in("paper_id", paperIds),
+          ])
+        : [{ data: [], error: null }, { data: [], error: null }];
 
-      // Fetch paper_projects
-      const { data: paperProjectsData, error: paperProjectsError } = await supabase
-        .from("paper_projects")
-        .select("*");
+      if (paperTagsResult.error) throw paperTagsResult.error;
+      if (paperProjectsResult.error) throw paperProjectsResult.error;
 
-      if (paperProjectsError) throw paperProjectsError;
+      const paperTagsData = paperTagsResult.data;
+      const paperProjectsData = paperProjectsResult.data;
 
       // Combine papers with their tags and projects
       const papersWithTags: PaperWithTags[] = ((papersData as Paper[]) || []).map((paper) => {
@@ -77,10 +80,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       });
 
       setPapers(papersWithTags);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error loading data",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -343,10 +346,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           description: `Successfully added ${successfulPapers.length} paper(s).`,
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Error fetching papers",
-        description: error.message,
+        description: getErrorMessage(error),
         variant: "destructive",
       });
     }
@@ -660,7 +663,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
     for (const paper of papers) {
       // Use the preserved raw_study_type (original PubMed value) for re-evaluation fallback
-      const rawFallback = (paper as any).raw_study_type ?? paper.study_type;
+      const rawFallback = paper.raw_study_type ?? paper.study_type;
 
       const newType = evaluateStudyType(
         paper.title,
@@ -693,7 +696,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         updates.map(({ id, newType }) =>
           supabase
             .from("papers")
-            .update({ study_type: newType || null } as any)
+            .update({ study_type: newType || null })
             .eq("id", id)
         )
       );
@@ -701,10 +704,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         title: "Study types updated",
         description: `Re-classified ${updates.length} paper(s) based on updated pool.`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Error saving study type updates",
-        description: err.message,
+        description: getErrorMessage(err),
         variant: "destructive",
       });
     }
@@ -742,8 +745,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         return { ...p, projects: newProjects };
       }));
       toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
-    } catch (err: any) {
-      toast({ title: "Error setting projects", description: err.message, variant: "destructive" });
+    } catch (err: unknown) {
+      toast({ title: "Error setting projects", description: getErrorMessage(err), variant: "destructive" });
     }
   };
 
@@ -764,8 +767,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         return { ...p, tags: newTags };
       }));
       toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
-    } catch (err: any) {
-      toast({ title: "Error setting tags", description: err.message, variant: "destructive" });
+    } catch (err: unknown) {
+      toast({ title: "Error setting tags", description: getErrorMessage(err), variant: "destructive" });
     }
   };
 

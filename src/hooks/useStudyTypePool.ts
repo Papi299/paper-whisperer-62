@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { getErrorMessage } from "@/lib/errorUtils";
 
 export interface PoolStudyType {
   id: string;
@@ -10,10 +11,6 @@ export interface PoolStudyType {
   group_name: string | null;
   hierarchy_rank: number;
   created_at: string;
-}
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function useStudyTypePool(userId: string | undefined) {
@@ -32,8 +29,8 @@ export function useStudyTypePool(userId: string | undefined) {
         .order("study_type");
       if (error) throw error;
       setPoolStudyTypes((data as PoolStudyType[]) || []);
-    } catch (error: any) {
-      toast({ title: "Error loading study type pool", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error loading study type pool", description: getErrorMessage(error), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -52,7 +49,7 @@ export function useStudyTypePool(userId: string | undefined) {
     }
 
     try {
-      const insertData: any = { user_id: userId, study_type: trimmed };
+      const insertData: { user_id: string; study_type: string; group_name?: string | null; hierarchy_rank?: number } = { user_id: userId, study_type: trimmed };
       if (groupName !== undefined) insertData.group_name = groupName;
       if (hierarchyRank !== undefined) insertData.hierarchy_rank = hierarchyRank;
 
@@ -69,8 +66,8 @@ export function useStudyTypePool(userId: string | undefined) {
       }
       setPoolStudyTypes(prev => [...prev, data as PoolStudyType].sort((a, b) => a.study_type.localeCompare(b.study_type)));
       return true;
-    } catch (error: any) {
-      toast({ title: "Error adding study type", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error adding study type", description: getErrorMessage(error), variant: "destructive" });
       return false;
     }
   };
@@ -86,14 +83,14 @@ export function useStudyTypePool(userId: string | undefined) {
     try {
       const { data, error } = await supabase
         .from("study_type_pool")
-        .insert(uniqueNew.map(study_type => ({ user_id: userId, study_type })) as any)
+        .insert(uniqueNew.map(study_type => ({ user_id: userId, study_type })))
         .select();
       if (error) throw error;
       setPoolStudyTypes(prev => [...prev, ...((data as PoolStudyType[]) || [])].sort((a, b) => a.study_type.localeCompare(b.study_type)));
       toast({ title: "Study types added", description: `Added ${(data as PoolStudyType[])?.length || 0} study type(s).` });
       return (data as PoolStudyType[])?.length || 0;
-    } catch (error: any) {
-      toast({ title: "Error adding study types", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error adding study types", description: getErrorMessage(error), variant: "destructive" });
       return 0;
     }
   };
@@ -102,12 +99,12 @@ export function useStudyTypePool(userId: string | undefined) {
     try {
       const { error } = await supabase
         .from("study_type_pool")
-        .update(updates as any)
+        .update(updates)
         .eq("id", id);
       if (error) throw error;
       setPoolStudyTypes(prev => prev.map(st => st.id === id ? { ...st, ...updates } : st));
-    } catch (error: any) {
-      toast({ title: "Error updating study type", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error updating study type", description: getErrorMessage(error), variant: "destructive" });
     }
   };
 
@@ -116,8 +113,8 @@ export function useStudyTypePool(userId: string | undefined) {
       const { error } = await supabase.from("study_type_pool").delete().eq("id", id);
       if (error) throw error;
       setPoolStudyTypes(prev => prev.filter(st => st.id !== id));
-    } catch (error: any) {
-      toast({ title: "Error deleting study type", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error deleting study type", description: getErrorMessage(error), variant: "destructive" });
     }
   };
 
@@ -128,8 +125,8 @@ export function useStudyTypePool(userId: string | undefined) {
       if (error) throw error;
       setPoolStudyTypes([]);
       toast({ title: "Study type pool cleared" });
-    } catch (error: any) {
-      toast({ title: "Error clearing study type pool", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error clearing study type pool", description: getErrorMessage(error), variant: "destructive" });
     }
   };
 
@@ -137,13 +134,13 @@ export function useStudyTypePool(userId: string | undefined) {
   const renameGroup = async (oldName: string, newName: string, newRank?: number) => {
     if (!userId) return;
     try {
-      const updateData: any = { group_name: newName };
+      const updateData: { group_name: string; hierarchy_rank?: number } = { group_name: newName };
       if (newRank !== undefined) updateData.hierarchy_rank = newRank;
 
-      const { error } = await (supabase
+      const { error } = await supabase
         .from("study_type_pool")
         .update(updateData)
-        .eq("user_id", userId) as any)
+        .eq("user_id", userId)
         .eq("group_name", oldName);
       if (error) throw error;
 
@@ -151,8 +148,8 @@ export function useStudyTypePool(userId: string | undefined) {
         prev.map(st => st.group_name === oldName ? { ...st, group_name: newName, ...(newRank !== undefined ? { hierarchy_rank: newRank } : {}) } : st)
       );
       toast({ title: "Group updated" });
-    } catch (error: any) {
-      toast({ title: "Error updating group", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error updating group", description: getErrorMessage(error), variant: "destructive" });
     }
   };
 
@@ -160,10 +157,10 @@ export function useStudyTypePool(userId: string | undefined) {
   const deleteGroup = async (groupName: string) => {
     if (!userId) return;
     try {
-      const { error } = await (supabase
+      const { error } = await supabase
         .from("study_type_pool")
-        .update({ group_name: null, hierarchy_rank: 99 } as any)
-        .eq("user_id", userId) as any)
+        .update({ group_name: null, hierarchy_rank: 99 })
+        .eq("user_id", userId)
         .eq("group_name", groupName);
       if (error) throw error;
 
@@ -171,8 +168,8 @@ export function useStudyTypePool(userId: string | undefined) {
         prev.map(st => st.group_name === groupName ? { ...st, group_name: null, hierarchy_rank: 99 } : st)
       );
       toast({ title: "Group deleted", description: "Study types moved to standalone (rank 99)." });
-    } catch (error: any) {
-      toast({ title: "Error deleting group", description: error.message, variant: "destructive" });
+    } catch (error: unknown) {
+      toast({ title: "Error deleting group", description: getErrorMessage(error), variant: "destructive" });
     }
   };
 

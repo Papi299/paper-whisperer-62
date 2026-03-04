@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useMemo } from "react";
+import { useRef, useCallback, useState, useMemo, ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
@@ -32,7 +32,44 @@ import {
 import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown } from "lucide-react";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
-import { ResizableTableHeader } from "./ResizableTableHeader";
+import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
+import { escapeRegExp } from "@/lib/textUtils";
+
+/** Renders abstract text with matched keywords highlighted. */
+function HighlightedAbstract({ text, keywords }: { text: string; keywords: string[] }) {
+  if (keywords.length === 0) return <>{text}</>;
+
+  // Build a single regex that matches any keyword (case-insensitive, word-boundary-aware)
+  const pattern = keywords
+    .map(kw => escapeRegExp(kw))
+    .sort((a, b) => b.length - a.length) // longest first to avoid partial matches
+    .join("|");
+  const regex = new RegExp(`(${pattern})`, "gi");
+
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    // Text before match
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    // Highlighted match
+    parts.push(
+      <mark key={match.index} className="bg-yellow-200/60 rounded-sm px-0.5">
+        {match[0]}
+      </mark>
+    );
+    lastIndex = regex.lastIndex;
+  }
+  // Remaining text after last match
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return <>{parts}</>;
+}
 
 interface PaperListProps {
   papers: PaperWithTags[];
@@ -53,6 +90,9 @@ interface PaperListProps {
   selectedPaperIds: Set<string>;
   onToggleSelect: (paperId: string) => void;
   onToggleSelectAll: () => void;
+  sortKey?: ColumnId | null;
+  sortDirection?: SortDirection | null;
+  onSort?: (columnId: ColumnId) => void;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -79,6 +119,9 @@ export function PaperList({
   selectedPaperIds,
   onToggleSelect,
   onToggleSelectAll,
+  sortKey,
+  sortDirection,
+  onSort,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -204,9 +247,10 @@ export function PaperList({
             <ResizableTableHeader columnId="checkbox" label="" width={getWidth("checkbox")} onResize={onColumnResize} className="px-1">
               <Checkbox
                 checked={allSelected}
-                ref={(el) => {
+                ref={(el: HTMLButtonElement | null) => {
                   if (el) {
-                    (el as any).indeterminate = someSelected && !allSelected;
+                    const input = el.querySelector("input");
+                    if (input) input.indeterminate = someSelected && !allSelected;
                   }
                 }}
                 onCheckedChange={onToggleSelectAll}
@@ -215,19 +259,19 @@ export function PaperList({
             </ResizableTableHeader>
             <TableHead className="w-[36px] px-1"></TableHead>
             {isVisible("title") && (
-              <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="title" label="Title" width={getWidth("title")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "title" ? sortDirection : null} />
             )}
             {isVisible("authors") && (
-              <ResizableTableHeader columnId="authors" label="Authors" width={getWidth("authors")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="authors" label="Authors" width={getWidth("authors")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "authors" ? sortDirection : null} />
             )}
             {isVisible("year") && (
-              <ResizableTableHeader columnId="year" label="Year" width={getWidth("year")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="year" label="Year" width={getWidth("year")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "year" ? sortDirection : null} />
             )}
             {isVisible("journal") && (
-              <ResizableTableHeader columnId="journal" label="Journal" width={getWidth("journal")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="journal" label="Journal" width={getWidth("journal")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "journal" ? sortDirection : null} />
             )}
             {isVisible("studyType") && (
-              <ResizableTableHeader columnId="studyType" label="Study Type" width={getWidth("studyType")} onResize={onColumnResize} />
+              <ResizableTableHeader columnId="studyType" label="Study Type" width={getWidth("studyType")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "studyType" ? sortDirection : null} />
             )}
             {isVisible("tags") && (
               <ResizableTableHeader columnId="tags" label="Tags" width={getWidth("tags")} onResize={onColumnResize} />
@@ -347,6 +391,7 @@ function PaperRow({
   paper,
   isExpanded,
   onToggleExpand,
+  matchedPoolKeywords,
   combinedKeywords,
   isVisible,
   getWidth,
@@ -596,7 +641,7 @@ function PaperRow({
             <div className="px-6 py-4 bg-muted/50 border-t border-border">
               <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">Abstract</p>
               <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-                {paper.abstract}
+                <HighlightedAbstract text={paper.abstract} keywords={matchedPoolKeywords} />
               </p>
             </div>
           </td>

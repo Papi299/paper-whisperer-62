@@ -6,9 +6,7 @@
  * sort matches by hierarchy_rank ASC, break ties by string length DESC.
  */
 
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import { escapeRegExp } from "./textUtils";
 
 const IGNORED_PUBLICATION_TYPES = new Set([
   "journal article",
