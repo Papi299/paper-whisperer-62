@@ -16,14 +16,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
-import { BarChart3, ChevronDown, ChevronUp, X, Search } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronUp, X, Search, FileText, Users, Calendar, FlaskConical } from "lucide-react";
 import {
   BarChart,
   Bar,
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   ResponsiveContainer,
   Cell,
 } from "recharts";
@@ -138,10 +138,68 @@ const CHART_COLORS = [
   "hsl(0, 60%, 50%)",
 ];
 
+function PercentTooltip({ active, payload, total }: {
+  active?: boolean;
+  payload?: Array<{ value: number; name: string }>;
+  total: number;
+}) {
+  if (!active || !payload?.[0]) return null;
+  const value = payload[0].value;
+  const pct = total > 0 ? ((value / total) * 100).toFixed(1) : "0";
+  return (
+    <div className="bg-popover border border-border rounded-md px-3 py-2 text-xs shadow">
+      <span className="font-medium">{value}</span>
+      <span className="text-muted-foreground ml-1">({pct}%)</span>
+    </div>
+  );
+}
+
 export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
+
+  // Summary stats
+  const summaryStats = useMemo(() => {
+    const uniqueAuthors = new Set(papers.flatMap(p => p.authors || []));
+    const years = papers.map(p => p.year).filter((y): y is number => y != null);
+    const minYear = years.length > 0 ? Math.min(...years) : null;
+    const maxYear = years.length > 0 ? Math.max(...years) : null;
+    const uniqueStudyTypes = new Set(
+      papers.map(p => p.study_type).filter((st): st is string => !!st)
+    );
+    return {
+      totalPapers: papers.length,
+      uniqueAuthors: uniqueAuthors.size,
+      yearRange: minYear && maxYear
+        ? minYear === maxYear ? `${minYear}` : `${minYear}\u2013${maxYear}`
+        : "N/A",
+      studyTypesCount: uniqueStudyTypes.size,
+    };
+  }, [papers]);
+
+  // Study type distribution (auto, no selection needed)
+  const studyTypeStats = useMemo(() => {
+    const counts: Record<string, number> = {};
+    papers.forEach(p => {
+      const st = p.study_type?.trim();
+      if (st) counts[st] = (counts[st] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [papers]);
+
+  // Year distribution
+  const yearStats = useMemo(() => {
+    const counts: Record<number, number> = {};
+    papers.forEach(p => {
+      if (p.year) counts[p.year] = (counts[p.year] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([year, count]) => ({ name: year, count }))
+      .sort((a, b) => Number(a.name) - Number(b.name));
+  }, [papers]);
 
   // Extract unique keywords and authors from current filtered papers
   const availableKeywords = useMemo(() => {
@@ -198,7 +256,8 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
     );
   };
 
-  const hasData = keywordStats.length > 0 || authorStats.length > 0;
+  const chartHeight = (dataLength: number) =>
+    Math.max(150, Math.min(dataLength * 28 + 40, 400));
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -216,10 +275,89 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
       <CollapsibleContent>
         <Card className="mb-4">
           <CardContent className="pt-4 pb-4 space-y-4">
-            <p className="text-xs text-muted-foreground">
-              Analyzing {papers.length} currently visible paper{papers.length !== 1 ? "s" : ""}
-            </p>
+            {/* Summary stats row */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="flex items-center gap-2 rounded-md border p-2.5">
+                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-lg font-semibold leading-none">{summaryStats.totalPapers}</p>
+                  <p className="text-xs text-muted-foreground">Papers</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-md border p-2.5">
+                <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-lg font-semibold leading-none">{summaryStats.uniqueAuthors}</p>
+                  <p className="text-xs text-muted-foreground">Authors</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-md border p-2.5">
+                <Calendar className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-lg font-semibold leading-none">{summaryStats.yearRange}</p>
+                  <p className="text-xs text-muted-foreground">Year Range</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-md border p-2.5">
+                <FlaskConical className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-lg font-semibold leading-none">{summaryStats.studyTypesCount}</p>
+                  <p className="text-xs text-muted-foreground">Study Types</p>
+                </div>
+              </div>
+            </div>
 
+            {/* Study type distribution (automatic) */}
+            {studyTypeStats.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium mb-2">Study Type Distribution</h4>
+                <div style={{ height: chartHeight(studyTypeStats.length) }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={studyTypeStats} layout="vertical" margin={{ left: 10, right: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                      <XAxis type="number" allowDecimals={false} className="text-xs" />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={140}
+                        tick={{ fontSize: 11 }}
+                        className="text-xs"
+                      />
+                      <RechartsTooltip content={<PercentTooltip total={papers.length} />} />
+                      <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                        {studyTypeStats.map((_, i) => (
+                          <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {/* Year distribution (automatic) */}
+            {yearStats.length > 0 && (
+              <div>
+                <h4 className="text-sm font-medium mb-2">Publication Year Distribution</h4>
+                <div className="h-[200px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={yearStats} margin={{ left: 10, right: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                      <XAxis dataKey="name" className="text-xs" tick={{ fontSize: 11 }} />
+                      <YAxis allowDecimals={false} className="text-xs" />
+                      <RechartsTooltip content={<PercentTooltip total={papers.length} />} />
+                      <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                        {yearStats.map((_, i) => (
+                          <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {/* Keyword / Author selectors */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <MultiSelectPopover
                 label="Target Keywords"
@@ -237,16 +375,16 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
               />
             </div>
 
-            {!hasData && (
-              <p className="text-sm text-muted-foreground text-center py-6">
-                Select target keywords or authors above to see analytics.
+            {keywordStats.length === 0 && authorStats.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-2">
+                Select target keywords or authors above to compare their distribution.
               </p>
             )}
 
             {keywordStats.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium mb-2">Keyword Distribution</h4>
-                <div className="h-[200px]">
+                <div style={{ height: chartHeight(keywordStats.length) }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={keywordStats} layout="vertical" margin={{ left: 10, right: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -258,14 +396,7 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
                         tick={{ fontSize: 11 }}
                         className="text-xs"
                       />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--popover))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "var(--radius)",
-                          fontSize: 12,
-                        }}
-                      />
+                      <RechartsTooltip content={<PercentTooltip total={papers.length} />} />
                       <Bar dataKey="count" radius={[0, 4, 4, 0]}>
                         {keywordStats.map((_, i) => (
                           <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
@@ -280,7 +411,7 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
             {authorStats.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium mb-2">Author Distribution</h4>
-                <div className="h-[200px]">
+                <div style={{ height: chartHeight(authorStats.length) }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={authorStats} layout="vertical" margin={{ left: 10, right: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -292,14 +423,7 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
                         tick={{ fontSize: 11 }}
                         className="text-xs"
                       />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--popover))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "var(--radius)",
-                          fontSize: 12,
-                        }}
-                      />
+                      <RechartsTooltip content={<PercentTooltip total={papers.length} />} />
                       <Bar dataKey="count" radius={[0, 4, 4, 0]}>
                         {authorStats.map((_, i) => (
                           <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
