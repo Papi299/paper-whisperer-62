@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { queryKeys } from "@/lib/queryKeys";
 
 export interface Synonym {
   id: string;
@@ -11,32 +13,24 @@ export interface Synonym {
 }
 
 export function useSynonymPool(userId: string | undefined) {
-  const [synonymGroups, setSynonymGroups] = useState<Synonym[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
 
-  const fetchSynonymGroups = useCallback(async () => {
-    if (!userId) return;
-    setLoading(true);
-    try {
+  const {
+    data: synonymGroups = [],
+    isLoading: loading,
+  } = useQuery({
+    queryKey: queryKeys.synonymPool.all(userId!),
+    queryFn: async () => {
       const { data, error } = await supabase
         .from("synonym_pool")
         .select("*")
-        .eq("user_id", userId)
+        .eq("user_id", userId!)
         .order("canonical_term", { ascending: true });
-
       if (error) throw error;
-      setSynonymGroups((data as Synonym[]) ?? []);
-    } catch (error) {
-      console.error("Error fetching synonym groups:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [userId]);
-
-  useEffect(() => {
-    if (!userId) return;
-    fetchSynonymGroups();
-  }, [userId, fetchSynonymGroups]);
+      return (data as Synonym[]) ?? [];
+    },
+    enabled: !!userId,
+  });
 
   const addSynonymGroup = useCallback(
     async (canonicalTerm: string, synonyms: string[]) => {
@@ -49,14 +43,15 @@ export function useSynonymPool(userId: string | undefined) {
         });
 
         if (error) throw error;
-        await fetchSynonymGroups();
+        // Invalidate to refetch — insert doesn't return the new row
+        await queryClient.invalidateQueries({ queryKey: queryKeys.synonymPool.all(userId) });
         toast.success(`Synonym group "${canonicalTerm}" added`);
       } catch (error) {
         console.error("Error adding synonym group:", error);
         toast.error("Failed to add synonym group");
       }
     },
-    [userId, fetchSynonymGroups]
+    [userId, queryClient]
   );
 
   const updateSynonymGroup = useCallback(
@@ -73,14 +68,24 @@ export function useSynonymPool(userId: string | undefined) {
           .eq("user_id", userId);
 
         if (error) throw error;
-        await fetchSynonymGroups();
+
+        // Optimistic update — we know the exact change
+        queryClient.setQueryData(
+          queryKeys.synonymPool.all(userId),
+          (old: Synonym[] = []) =>
+            old.map((sg) =>
+              sg.id === id
+                ? { ...sg, canonical_term: canonicalTerm, synonyms: synonyms.map((s) => s.toLowerCase()) }
+                : sg
+            )
+        );
         toast.success(`Synonym group "${canonicalTerm}" updated`);
       } catch (error) {
         console.error("Error updating synonym group:", error);
         toast.error("Failed to update synonym group");
       }
     },
-    [userId, fetchSynonymGroups]
+    [userId, queryClient]
   );
 
   const deleteSynonymGroup = useCallback(
@@ -94,14 +99,19 @@ export function useSynonymPool(userId: string | undefined) {
           .eq("user_id", userId);
 
         if (error) throw error;
-        await fetchSynonymGroups();
+
+        // Optimistic update — remove from cache
+        queryClient.setQueryData(
+          queryKeys.synonymPool.all(userId),
+          (old: Synonym[] = []) => old.filter((sg) => sg.id !== id)
+        );
         toast.success("Synonym group deleted");
       } catch (error) {
         console.error("Error deleting synonym group:", error);
         toast.error("Failed to delete synonym group");
       }
     },
-    [userId, fetchSynonymGroups]
+    [userId, queryClient]
   );
 
   // Build a lookup map from synonyms -> canonical term

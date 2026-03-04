@@ -67,3 +67,26 @@ export interface PaperWithTags extends Paper {
   projects: Project[];
 }
 
+/**
+ * Metadata returned by the fetch-paper-metadata edge function.
+ * Each entry corresponds to one identifier lookup attempt.
+ */
+export interface PaperMetadata {
+  identifier: string;
+  title?: string;
+  authors?: string[];
+  year?: number | null;
+  journal?: string | null;
+  pmid?: string | null;
+  doi?: string | null;
+  abstract?: string | null;
+  keywords?: string[];
+  mesh_terms?: string[];
+  substances?: string[];
+  study_type?: string | null;
+  pubmed_url?: string | null;
+  journal_url?: string | null;
+  source?: "pubmed" | "crossref";
+  error?: string;
+}
+
