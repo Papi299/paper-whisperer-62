@@ -10,14 +10,6 @@ export interface Synonym {
   created_at: string;
 }
 
-interface SynonymPoolRow {
-  id: string;
-  canonical_term: string;
-  synonyms: string[];
-  user_id: string;
-  created_at: string;
-}
-
 export function useSynonymPool(userId: string | undefined) {
   const [synonymGroups, setSynonymGroups] = useState<Synonym[]>([]);
   const [loading, setLoading] = useState(false);
@@ -27,13 +19,13 @@ export function useSynonymPool(userId: string | undefined) {
     setLoading(true);
     try {
       const { data, error } = await supabase
-        .from("synonym_pool" as any)
+        .from("synonym_pool")
         .select("*")
         .eq("user_id", userId)
         .order("canonical_term", { ascending: true });
 
       if (error) throw error;
-      setSynonymGroups((data as unknown as SynonymPoolRow[]) || []);
+      setSynonymGroups((data as Synonym[]) ?? []);
     } catch (error) {
       console.error("Error fetching synonym groups:", error);
     } finally {
@@ -50,11 +42,11 @@ export function useSynonymPool(userId: string | undefined) {
     async (canonicalTerm: string, synonyms: string[]) => {
       if (!userId) return;
       try {
-        const { error } = await supabase.from("synonym_pool" as any).insert({
+        const { error } = await supabase.from("synonym_pool").insert({
           user_id: userId,
           canonical_term: canonicalTerm,
           synonyms: synonyms.map((s) => s.toLowerCase()),
-        } as any);
+        });
 
         if (error) throw error;
         await fetchSynonymGroups();
@@ -72,11 +64,11 @@ export function useSynonymPool(userId: string | undefined) {
       if (!userId) return;
       try {
         const { error } = await supabase
-          .from("synonym_pool" as any)
+          .from("synonym_pool")
           .update({
             canonical_term: canonicalTerm,
             synonyms: synonyms.map((s) => s.toLowerCase()),
-          } as any)
+          })
           .eq("id", id)
           .eq("user_id", userId);
 
@@ -96,7 +88,7 @@ export function useSynonymPool(userId: string | undefined) {
       if (!userId) return;
       try {
         const { error } = await supabase
-          .from("synonym_pool" as any)
+          .from("synonym_pool")
           .delete()
           .eq("id", id)
           .eq("user_id", userId);

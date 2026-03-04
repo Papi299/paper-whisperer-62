@@ -49,7 +49,7 @@ export function useStudyTypePool(userId: string | undefined) {
     }
 
     try {
-      const insertData: any = { user_id: userId, study_type: trimmed };
+      const insertData: { user_id: string; study_type: string; group_name?: string | null; hierarchy_rank?: number } = { user_id: userId, study_type: trimmed };
       if (groupName !== undefined) insertData.group_name = groupName;
       if (hierarchyRank !== undefined) insertData.hierarchy_rank = hierarchyRank;
 
@@ -83,7 +83,7 @@ export function useStudyTypePool(userId: string | undefined) {
     try {
       const { data, error } = await supabase
         .from("study_type_pool")
-        .insert(uniqueNew.map(study_type => ({ user_id: userId, study_type })) as any)
+        .insert(uniqueNew.map(study_type => ({ user_id: userId, study_type })))
         .select();
       if (error) throw error;
       setPoolStudyTypes(prev => [...prev, ...((data as PoolStudyType[]) || [])].sort((a, b) => a.study_type.localeCompare(b.study_type)));
@@ -99,7 +99,7 @@ export function useStudyTypePool(userId: string | undefined) {
     try {
       const { error } = await supabase
         .from("study_type_pool")
-        .update(updates as any)
+        .update(updates)
         .eq("id", id);
       if (error) throw error;
       setPoolStudyTypes(prev => prev.map(st => st.id === id ? { ...st, ...updates } : st));
@@ -134,13 +134,13 @@ export function useStudyTypePool(userId: string | undefined) {
   const renameGroup = async (oldName: string, newName: string, newRank?: number) => {
     if (!userId) return;
     try {
-      const updateData: any = { group_name: newName };
+      const updateData: { group_name: string; hierarchy_rank?: number } = { group_name: newName };
       if (newRank !== undefined) updateData.hierarchy_rank = newRank;
 
-      const { error } = await (supabase
+      const { error } = await supabase
         .from("study_type_pool")
         .update(updateData)
-        .eq("user_id", userId) as any)
+        .eq("user_id", userId)
         .eq("group_name", oldName);
       if (error) throw error;
 
@@ -157,10 +157,10 @@ export function useStudyTypePool(userId: string | undefined) {
   const deleteGroup = async (groupName: string) => {
     if (!userId) return;
     try {
-      const { error } = await (supabase
+      const { error } = await supabase
         .from("study_type_pool")
-        .update({ group_name: null, hierarchy_rank: 99 } as any)
-        .eq("user_id", userId) as any)
+        .update({ group_name: null, hierarchy_rank: 99 })
+        .eq("user_id", userId)
         .eq("group_name", groupName);
       if (error) throw error;
 

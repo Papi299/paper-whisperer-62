@@ -663,7 +663,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
     for (const paper of papers) {
       // Use the preserved raw_study_type (original PubMed value) for re-evaluation fallback
-      const rawFallback = (paper as any).raw_study_type ?? paper.study_type;
+      const rawFallback = paper.raw_study_type ?? paper.study_type;
 
       const newType = evaluateStudyType(
         paper.title,
@@ -696,7 +696,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         updates.map(({ id, newType }) =>
           supabase
             .from("papers")
-            .update({ study_type: newType || null } as any)
+            .update({ study_type: newType || null })
             .eq("id", id)
         )
       );
@@ -704,10 +704,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         title: "Study types updated",
         description: `Re-classified ${updates.length} paper(s) based on updated pool.`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Error saving study type updates",
-        description: err.message,
+        description: getErrorMessage(err),
         variant: "destructive",
       });
     }
@@ -745,8 +745,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         return { ...p, projects: newProjects };
       }));
       toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
-    } catch (err: any) {
-      toast({ title: "Error setting projects", description: err.message, variant: "destructive" });
+    } catch (err: unknown) {
+      toast({ title: "Error setting projects", description: getErrorMessage(err), variant: "destructive" });
     }
   };
 
@@ -767,8 +767,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         return { ...p, tags: newTags };
       }));
       toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
-    } catch (err: any) {
-      toast({ title: "Error setting tags", description: err.message, variant: "destructive" });
+    } catch (err: unknown) {
+      toast({ title: "Error setting tags", description: getErrorMessage(err), variant: "destructive" });
     }
   };
 

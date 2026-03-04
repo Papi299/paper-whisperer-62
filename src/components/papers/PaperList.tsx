@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useMemo } from "react";
+import { useRef, useCallback, useState, useMemo, ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
@@ -33,6 +33,43 @@ import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown } from "luci
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
+import { escapeRegExp } from "@/lib/textUtils";
+
+/** Renders abstract text with matched keywords highlighted. */
+function HighlightedAbstract({ text, keywords }: { text: string; keywords: string[] }) {
+  if (keywords.length === 0) return <>{text}</>;
+
+  // Build a single regex that matches any keyword (case-insensitive, word-boundary-aware)
+  const pattern = keywords
+    .map(kw => escapeRegExp(kw))
+    .sort((a, b) => b.length - a.length) // longest first to avoid partial matches
+    .join("|");
+  const regex = new RegExp(`(${pattern})`, "gi");
+
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    // Text before match
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    // Highlighted match
+    parts.push(
+      <mark key={match.index} className="bg-yellow-200/60 rounded-sm px-0.5">
+        {match[0]}
+      </mark>
+    );
+    lastIndex = regex.lastIndex;
+  }
+  // Remaining text after last match
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return <>{parts}</>;
+}
 
 interface PaperListProps {
   papers: PaperWithTags[];
@@ -210,9 +247,10 @@ export function PaperList({
             <ResizableTableHeader columnId="checkbox" label="" width={getWidth("checkbox")} onResize={onColumnResize} className="px-1">
               <Checkbox
                 checked={allSelected}
-                ref={(el) => {
+                ref={(el: HTMLButtonElement | null) => {
                   if (el) {
-                    (el as any).indeterminate = someSelected && !allSelected;
+                    const input = el.querySelector("input");
+                    if (input) input.indeterminate = someSelected && !allSelected;
                   }
                 }}
                 onCheckedChange={onToggleSelectAll}
@@ -353,6 +391,7 @@ function PaperRow({
   paper,
   isExpanded,
   onToggleExpand,
+  matchedPoolKeywords,
   combinedKeywords,
   isVisible,
   getWidth,
@@ -602,7 +641,7 @@ function PaperRow({
             <div className="px-6 py-4 bg-muted/50 border-t border-border">
               <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">Abstract</p>
               <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-                {paper.abstract}
+                <HighlightedAbstract text={paper.abstract} keywords={matchedPoolKeywords} />
               </p>
             </div>
           </td>
