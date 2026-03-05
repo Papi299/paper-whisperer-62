@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-export type ColumnId = 
+export type ColumnId =
   | "checkbox"
   | "title"
   | "authors"
@@ -9,6 +9,7 @@ export type ColumnId =
   | "tags"
   | "keywords"
   | "studyType"
+  | "statisticalMethods"
   | "links";
 
 export interface ColumnConfig {
@@ -24,6 +25,7 @@ export const AVAILABLE_COLUMNS: ColumnConfig[] = [
   { id: "year", label: "Year", defaultVisible: true },
   { id: "journal", label: "Journal", defaultVisible: true },
   { id: "studyType", label: "Study Type", defaultVisible: false },
+  { id: "statisticalMethods", label: "Statistical Methods", defaultVisible: false },
   { id: "tags", label: "Tags", defaultVisible: true },
   { id: "keywords", label: "Keywords", defaultVisible: true },
   { id: "links", label: "Links", defaultVisible: true },

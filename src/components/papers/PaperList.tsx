@@ -170,7 +170,7 @@ export function PaperList({
 
   // Count visible columns for the abstract row colspan
   const visibleColumnCount = useMemo(() => {
-    const cols: ColumnId[] = ["title", "authors", "year", "journal", "studyType", "tags", "keywords", "links"];
+    const cols: ColumnId[] = ["title", "authors", "year", "journal", "studyType", "statisticalMethods", "tags", "keywords", "links"];
     return cols.filter(c => isVisible(c)).length + 3; // +3 for checkbox col, expand chevron col and actions col
   }, [visibleColumns]);
 
@@ -278,6 +278,9 @@ export function PaperList({
             )}
             {isVisible("studyType") && (
               <ResizableTableHeader columnId="studyType" label="Study Type" width={getWidth("studyType")} onResize={onColumnResize} sortable onSort={onSort} sortDirection={sortKey === "studyType" ? sortDirection : null} />
+            )}
+            {isVisible("statisticalMethods") && (
+              <ResizableTableHeader columnId="statisticalMethods" label="Statistical Methods" width={getWidth("statisticalMethods")} onResize={onColumnResize} />
             )}
             {isVisible("tags") && (
               <ResizableTableHeader columnId="tags" label="Tags" width={getWidth("tags")} onResize={onColumnResize} />
@@ -537,6 +540,16 @@ function PaperRow({
                 </div>
               );
             })()}
+          </TableCell>
+        )}
+        {isVisible("statisticalMethods") && (
+          <TableCell
+            className="text-sm text-muted-foreground"
+            style={{ width: getWidth("statisticalMethods"), minWidth: getWidth("statisticalMethods"), maxWidth: getWidth("statisticalMethods") }}
+          >
+            <div className="truncate" title={paper.statistical_methods || undefined}>
+              {paper.statistical_methods || "-"}
+            </div>
           </TableCell>
         )}
         {isVisible("tags") && (
