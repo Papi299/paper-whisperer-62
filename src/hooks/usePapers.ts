@@ -1,59 +1,68 @@
 import { useMemo, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, useQueryClient, InfiniteData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
-import { normalizePaperData, NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
+import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
 import { queryKeys } from "@/lib/queryKeys";
+import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 
-/** Combined query data for papers, projects, and tags. */
-interface PapersData {
+const PAGE_SIZE = 100;
+
+/** Data returned per page of the infinite query. */
+interface PapersPage {
   papers: PaperWithTags[];
   projects: Project[];
   tags: Tag[];
+  hasMore: boolean;
 }
 
 export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { normalize } = useNormalizationWorker();
 
-  // ── Combined query: papers + projects + tags ──
-  const { data, isLoading: loading } = useQuery({
+  // ── Infinite query: papers (paginated) + projects + tags ──
+  const {
+    data,
+    isLoading: loading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<PapersPage, Error>({
     queryKey: queryKeys.papers.all(userId!),
-    queryFn: async (): Promise<PapersData> => {
-      // Fetch projects
-      const { data: projectsData, error: projectsError } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("user_id", userId!)
-        .order("name");
-      if (projectsError) throw projectsError;
-      const fetchedProjects = (projectsData as Project[]) || [];
+    queryFn: async ({ pageParam }): Promise<PapersPage> => {
+      const page = pageParam as number;
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
 
-      // Fetch tags
-      const { data: tagsData, error: tagsError } = await supabase
-        .from("tags")
-        .select("*")
-        .eq("user_id", userId!)
-        .order("name");
-      if (tagsError) throw tagsError;
-      const fetchedTags = (tagsData as Tag[]) || [];
+      // Projects and tags: always fetch all (they're small)
+      const [projectsResult, tagsResult] = await Promise.all([
+        supabase.from("projects").select("*").eq("user_id", userId!).order("name"),
+        supabase.from("tags").select("*").eq("user_id", userId!).order("name"),
+      ]);
+      if (projectsResult.error) throw projectsResult.error;
+      if (tagsResult.error) throw tagsResult.error;
 
-      // Fetch papers
+      const fetchedProjects = (projectsResult.data as Project[]) || [];
+      const fetchedTags = (tagsResult.data as Tag[]) || [];
+
+      // Papers: paginated
       const { data: papersData, error: papersError } = await supabase
         .from("papers")
         .select("*")
         .eq("user_id", userId!)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(from, to);
       if (papersError) throw papersError;
 
       const rawPapers = (papersData as Paper[]) || [];
       const paperIds = rawPapers.map((p) => p.id);
 
-      // Fetch junction tables
+      // Fetch junction tables for this page's papers
       const [paperTagsResult, paperProjectsResult] =
         paperIds.length > 0
           ? await Promise.all([
@@ -83,25 +92,91 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         return { ...paper, tags: paperTags, projects: paperProjects };
       });
 
-      return { papers: assembledPapers, projects: fetchedProjects, tags: fetchedTags };
+      return {
+        papers: assembledPapers,
+        projects: fetchedProjects,
+        tags: fetchedTags,
+        hasMore: rawPapers.length === PAGE_SIZE,
+      };
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, _allPages, lastPageParam) => {
+      if (!lastPage.hasMore) return undefined;
+      return (lastPageParam as number) + 1;
     },
     enabled: !!userId,
   });
 
-  const papers = data?.papers ?? [];
-  const projects = data?.projects ?? [];
-  const tags = data?.tags ?? [];
-
-  // ── Helper to update the combined cache ──
-  const updateCache = useCallback(
-    (updater: (old: PapersData) => PapersData) => {
-      if (!userId) return;
-      queryClient.setQueryData(queryKeys.papers.all(userId), (old: PapersData | undefined) => {
-        const current = old ?? { papers: [], projects: [], tags: [] };
-        return updater(current);
-      });
+  // ── Total paper count (separate lightweight query) ──
+  const { data: totalCount } = useQuery({
+    queryKey: queryKeys.papers.count(userId!),
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("papers")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", userId!);
+      if (error) throw error;
+      return count ?? 0;
     },
-    [userId, queryClient]
+    enabled: !!userId,
+  });
+
+  // Flatten pages into single arrays
+  const papers = useMemo(
+    () => data?.pages.flatMap((p) => p.papers) ?? [],
+    [data],
+  );
+  const projects = data?.pages[0]?.projects ?? [];
+  const tags = data?.pages[0]?.tags ?? [];
+
+  // ── Helper to update the infinite query cache (papers) ──
+  const updatePapersCache = useCallback(
+    (updater: (papers: PaperWithTags[]) => PaperWithTags[]) => {
+      if (!userId) return;
+      queryClient.setQueryData(
+        queryKeys.papers.all(userId),
+        (old: InfiniteData<PapersPage> | undefined) => {
+          if (!old) return old;
+          const allPapers = old.pages.flatMap((p) => p.papers);
+          const updated = updater(allPapers);
+          // Consolidate into first page for simplicity
+          return {
+            ...old,
+            pages: old.pages.map((page, i) =>
+              i === 0
+                ? { ...page, papers: updated }
+                : { ...page, papers: [] },
+            ),
+          };
+        },
+      );
+    },
+    [userId, queryClient],
+  );
+
+  const updateMetaCache = useCallback(
+    (updater: (projects: Project[], tags: Tag[]) => { projects: Project[]; tags: Tag[] }) => {
+      if (!userId) return;
+      queryClient.setQueryData(
+        queryKeys.papers.all(userId),
+        (old: InfiniteData<PapersPage> | undefined) => {
+          if (!old) return old;
+          const { projects: newProjects, tags: newTags } = updater(
+            old.pages[0]?.projects ?? [],
+            old.pages[0]?.tags ?? [],
+          );
+          return {
+            ...old,
+            pages: old.pages.map((page) => ({
+              ...page,
+              projects: newProjects,
+              tags: newTags,
+            })),
+          };
+        },
+      );
+    },
+    [userId, queryClient],
   );
 
   // ── Project mutations ──
@@ -120,9 +195,9 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => ({
-      ...old,
-      projects: [...old.projects, newProject as Project],
+    updateMetaCache((oldProjects, tags) => ({
+      projects: [...oldProjects, newProject as Project],
+      tags,
     }));
   };
 
@@ -140,19 +215,23 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => {
-      const existingProject = old.projects.find((p) => p.id === projectId);
-      if (!existingProject) return old;
-      const updatedProject = { ...existingProject, ...updates };
+    updateMetaCache((oldProjects, tags) => {
+      const existing = oldProjects.find((p) => p.id === projectId);
+      if (!existing) return { projects: oldProjects, tags };
+      const updated = { ...existing, ...updates };
       return {
-        ...old,
-        projects: old.projects.map((p) => (p.id === projectId ? updatedProject : p)),
-        papers: old.papers.map((p) => ({
-          ...p,
-          projects: p.projects.map((proj) => (proj.id === projectId ? updatedProject : proj)),
-        })),
+        projects: oldProjects.map((p) => (p.id === projectId ? updated : p)),
+        tags,
       };
     });
+    updatePapersCache((allPapers) =>
+      allPapers.map((p) => ({
+        ...p,
+        projects: p.projects.map((proj) =>
+          proj.id === projectId ? { ...proj, ...updates } : proj,
+        ),
+      })),
+    );
   };
 
   const deleteProject = async (projectId: string) => {
@@ -164,14 +243,16 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => ({
-      ...old,
-      projects: old.projects.filter((p) => p.id !== projectId),
-      papers: old.papers.map((p) => ({
+    updateMetaCache((oldProjects, tags) => ({
+      projects: oldProjects.filter((p) => p.id !== projectId),
+      tags,
+    }));
+    updatePapersCache((allPapers) =>
+      allPapers.map((p) => ({
         ...p,
         projects: p.projects.filter((proj) => proj.id !== projectId),
       })),
-    }));
+    );
   };
 
   // ── Tag mutations ──
@@ -194,9 +275,9 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => ({
-      ...old,
-      tags: [...old.tags, newTag as Tag],
+    updateMetaCache((projects, oldTags) => ({
+      projects,
+      tags: [...oldTags, newTag as Tag],
     }));
   };
 
@@ -209,19 +290,23 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => {
-      const existingTag = old.tags.find((t) => t.id === tagId);
-      if (!existingTag) return old;
-      const updatedTag = { ...existingTag, ...updates };
+    updateMetaCache((projects, oldTags) => {
+      const existing = oldTags.find((t) => t.id === tagId);
+      if (!existing) return { projects, tags: oldTags };
+      const updated = { ...existing, ...updates };
       return {
-        ...old,
-        tags: old.tags.map((t) => (t.id === tagId ? updatedTag : t)),
-        papers: old.papers.map((p) => ({
-          ...p,
-          tags: p.tags.map((t) => (t.id === tagId ? updatedTag : t)),
-        })),
+        projects,
+        tags: oldTags.map((t) => (t.id === tagId ? updated : t)),
       };
     });
+    updatePapersCache((allPapers) =>
+      allPapers.map((p) => ({
+        ...p,
+        tags: p.tags.map((t) =>
+          t.id === tagId ? { ...t, ...updates } : t,
+        ),
+      })),
+    );
   };
 
   const deleteTag = async (tagId: string) => {
@@ -233,11 +318,13 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => ({
-      ...old,
-      tags: old.tags.filter((t) => t.id !== tagId),
-      papers: old.papers.map((p) => ({ ...p, tags: p.tags.filter((t) => t.id !== tagId) })),
+    updateMetaCache((projects, oldTags) => ({
+      projects,
+      tags: oldTags.filter((t) => t.id !== tagId),
     }));
+    updatePapersCache((allPapers) =>
+      allPapers.map((p) => ({ ...p, tags: p.tags.filter((t) => t.id !== tagId) })),
+    );
   };
 
   // ── Paper mutations ──
@@ -249,13 +336,15 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       const fetchedPapers = await fetchPaperMetadata(identifiers);
       const successfulPapers: PaperWithTags[] = [];
 
+      // Collect non-duplicate, successfully-fetched raw papers for batch normalization
+      const rawPapersForNormalization: { raw: RawPaperData; result: typeof fetchedPapers[number] }[] = [];
+
       for (const result of fetchedPapers) {
         if (result.error) {
           toast({ title: "Could not fetch paper", description: `${result.identifier}: ${result.error}`, variant: "destructive" });
           continue;
         }
 
-        // Duplicate check against current local state
         const isDuplicate = papers.some((existing) => {
           if (result.pmid && existing.pmid && result.pmid === existing.pmid) return true;
           if (result.doi && existing.doi && result.doi.toLowerCase() === existing.doi.toLowerCase()) return true;
@@ -274,24 +363,36 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
         const combinedKeywords = [...(result.keywords || []), ...(result.mesh_terms || []), ...(result.substances || [])];
 
-        const rawPaper: RawPaperData = {
-          title: result.title,
-          authors: result.authors || [],
-          year: result.year,
-          journal: result.journal,
-          pmid: result.pmid,
-          doi: result.doi,
-          abstract: result.abstract,
-          keywords: combinedKeywords,
-          mesh_terms: result.mesh_terms || [],
-          substances: result.substances || [],
-          study_type: result.study_type || null,
-          pubmed_url: result.pubmed_url,
-          journal_url: result.journal_url,
-          drive_url: driveUrl || null,
-        };
+        rawPapersForNormalization.push({
+          result,
+          raw: {
+            title: result.title,
+            authors: result.authors || [],
+            year: result.year,
+            journal: result.journal,
+            pmid: result.pmid,
+            doi: result.doi,
+            abstract: result.abstract,
+            keywords: combinedKeywords,
+            mesh_terms: result.mesh_terms || [],
+            substances: result.substances || [],
+            study_type: result.study_type || null,
+            pubmed_url: result.pubmed_url,
+            journal_url: result.journal_url,
+            drive_url: driveUrl || null,
+          },
+        });
+      }
 
-        const normalized = normalizationConfig ? normalizePaperData(rawPaper, normalizationConfig) : rawPaper;
+      // Batch normalize via Web Worker (falls back to main thread for small batches)
+      const normalizedPapers = normalizationConfig
+        ? await normalize(rawPapersForNormalization.map((r) => r.raw), normalizationConfig)
+        : rawPapersForNormalization.map((r) => r.raw);
+
+      // Insert each normalized paper
+      for (let i = 0; i < normalizedPapers.length; i++) {
+        const normalized = normalizedPapers[i];
+        const { result } = rawPapersForNormalization[i];
 
         const paperData = {
           user_id: userId,
@@ -320,10 +421,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       }
 
       if (successfulPapers.length > 0) {
-        updateCache((old) => ({
-          ...old,
-          papers: [...successfulPapers, ...old.papers],
-        }));
+        updatePapersCache((old) => [...successfulPapers, ...old]);
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
         toast({ title: "Papers added", description: `Successfully added ${successfulPapers.length} paper(s).` });
       }
     } catch (error: unknown) {
@@ -380,7 +479,9 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       drive_url: paperData.driveUrl.trim() || null,
     };
 
-    const normalized = normalizationConfig ? normalizePaperData(rawPaper, normalizationConfig) : rawPaper;
+    const [normalized] = normalizationConfig
+      ? await normalize([rawPaper], normalizationConfig)
+      : [rawPaper];
 
     const insertData = { user_id: userId, ...normalized, raw_study_type: null };
 
@@ -395,10 +496,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => ({
-      ...old,
-      papers: [{ ...(insertedPaper as Paper), tags: [], projects: [] }, ...old.papers],
-    }));
+    updatePapersCache((old) => [{ ...(insertedPaper as Paper), tags: [], projects: [] }, ...old]);
+    queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
     toast({ title: "Paper added manually" });
   };
 
@@ -433,15 +532,14 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       }
     }
 
-    updateCache((old) => ({
-      ...old,
-      papers: old.papers.map((p) => {
+    updatePapersCache((allPapers) =>
+      allPapers.map((p) => {
         if (p.id !== paperId) return p;
-        const updatedTags = tagIds ? old.tags.filter((t) => tagIds.includes(t.id)) : p.tags;
-        const updatedProjects = projectIds !== undefined ? old.projects.filter((pr) => projectIds.includes(pr.id)) : p.projects;
+        const updatedTags = tagIds ? tags.filter((t) => tagIds.includes(t.id)) : p.tags;
+        const updatedProjects = projectIds !== undefined ? projects.filter((pr) => projectIds.includes(pr.id)) : p.projects;
         return { ...p, ...paperUpdates, tags: updatedTags, projects: updatedProjects };
       }),
-    }));
+    );
     toast({ title: "Paper updated" });
   };
 
@@ -454,10 +552,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateCache((old) => ({
-      ...old,
-      papers: old.papers.filter((p) => p.id !== paperId),
-    }));
+    updatePapersCache((old) => old.filter((p) => p.id !== paperId));
+    queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
     toast({ title: "Paper deleted" });
   };
 
@@ -475,8 +571,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       const newPapers: PaperWithTags[] = [];
 
       // Read current papers from cache for dedup
-      const currentData = queryClient.getQueryData<PapersData>(queryKeys.papers.all(userId));
-      const currentPapers = currentData?.papers ?? [];
+      const currentData = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId));
+      const currentPapers = currentData?.pages.flatMap((p) => p.papers) ?? [];
 
       const BATCH_SIZE = 3;
 
@@ -528,7 +624,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
           drive_url: null,
         };
 
-        const normalized = normalizationConfig ? normalizePaperData(rawPaper, normalizationConfig) : rawPaper;
+        // Use worker normalize (falls back to main thread for single items)
+        const [normalized] = normalizationConfig
+          ? await normalize([rawPaper], normalizationConfig)
+          : [rawPaper];
 
         const paperData = {
           user_id: userId,
@@ -575,11 +674,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       onProgress?.(total, total, addedIds, skippedIds, failedIds);
 
       if (newPapers.length > 0) {
-        queryClient.setQueryData(queryKeys.papers.all(userId), (old: PapersData | undefined) => ({
-          papers: [...newPapers, ...(old?.papers ?? [])],
-          projects: old?.projects ?? [],
-          tags: old?.tags ?? [],
-        }));
+        updatePapersCache((old) => [...newPapers, ...old]);
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
       }
 
       toast({
@@ -587,7 +683,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         description: `${addedIds.length} added, ${skippedIds.length} skipped (duplicates), ${failedIds.length} failed.`,
       });
     },
-    [userId, queryClient, normalizationConfig, toast]
+    [userId, queryClient, normalizationConfig, normalize, toast, updatePapersCache],
   );
 
   // Extract all unique keywords from papers
@@ -604,7 +700,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
    * Updates cache immediately and persists changes to DB.
    */
   const reevaluateStudyTypes = useCallback(
-    async (pool: StudyTypePoolEntry[], deletedTypeNames?: string[]) => {
+    async (pool: StudyTypePoolEntry[]) => {
       if (!userId || papers.length === 0) return;
 
       const updates: { id: string; newType: string }[] = [];
@@ -621,17 +717,13 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
       if (updates.length === 0) return;
 
-      // Update cache immediately
-      queryClient.setQueryData(queryKeys.papers.all(userId), (old: PapersData | undefined) => ({
-        papers: (old?.papers ?? []).map((p) => {
+      updatePapersCache((allPapers) =>
+        allPapers.map((p) => {
           const upd = updates.find((u) => u.id === p.id);
           return upd ? { ...p, study_type: upd.newType || null } : p;
         }),
-        projects: old?.projects ?? [],
-        tags: old?.tags ?? [],
-      }));
+      );
 
-      // Persist to DB
       try {
         const payload = updates.map(({ id, newType }) => ({ id, study_type: newType || null }));
         const { error } = await supabase.rpc("bulk_update_study_types", { updates: payload });
@@ -641,7 +733,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         toast({ title: "Error saving study type updates", description: getErrorMessage(err), variant: "destructive" });
       }
     },
-    [userId, papers, queryClient, toast]
+    [userId, papers, updatePapersCache, toast],
   );
 
   const bulkDeletePapers = async (paperIds: string[]) => {
@@ -654,10 +746,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     }
 
     const idSet = new Set(paperIds);
-    updateCache((old) => ({
-      ...old,
-      papers: old.papers.filter((p) => !idSet.has(p.id)),
-    }));
+    updatePapersCache((old) => old.filter((p) => !idSet.has(p.id)));
+    queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
     toast({ title: `Deleted ${paperIds.length} paper(s)` });
   };
 
@@ -668,13 +758,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       const { error } = await supabase.rpc("bulk_set_paper_projects", { p_paper_ids: paperIds, p_project_ids: projectIds });
       if (error) throw error;
 
-      updateCache((old) => {
-        const newProjects = old.projects.filter((p) => projectIds.includes(p.id));
-        return {
-          ...old,
-          papers: old.papers.map((p) => (paperIds.includes(p.id) ? { ...p, projects: newProjects } : p)),
-        };
-      });
+      const newProjects = projects.filter((p) => projectIds.includes(p.id));
+      updatePapersCache((allPapers) =>
+        allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, projects: newProjects } : p)),
+      );
       toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
     } catch (err: unknown) {
       toast({ title: "Error setting projects", description: getErrorMessage(err), variant: "destructive" });
@@ -688,13 +775,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       const { error } = await supabase.rpc("bulk_set_paper_tags", { p_paper_ids: paperIds, p_tag_ids: tagIds });
       if (error) throw error;
 
-      updateCache((old) => {
-        const newTags = old.tags.filter((t) => tagIds.includes(t.id));
-        return {
-          ...old,
-          papers: old.papers.map((p) => (paperIds.includes(p.id) ? { ...p, tags: newTags } : p)),
-        };
-      });
+      const newTags = tags.filter((t) => tagIds.includes(t.id));
+      updatePapersCache((allPapers) =>
+        allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, tags: newTags } : p)),
+      );
       toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
     } catch (err: unknown) {
       toast({ title: "Error setting tags", description: getErrorMessage(err), variant: "destructive" });
@@ -707,6 +791,10 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     tags,
     loading,
     allKeywords,
+    totalCount: totalCount ?? papers.length,
+    fetchNextPage,
+    hasNextPage: hasNextPage ?? false,
+    isFetchingNextPage,
     createProject,
     updateProject,
     deleteProject,

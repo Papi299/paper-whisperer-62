@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { exportToCSV, exportToRIS } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
@@ -6,6 +6,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
+import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
+import { useFilteredAndSortedPapers } from "@/hooks/useFilteredAndSortedPapers";
+import { useBulkSelection } from "@/hooks/useBulkSelection";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -20,10 +23,7 @@ import { Button } from "@/components/ui/button";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { Plus, Loader2 } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
-import { StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
-import { ColumnId } from "@/hooks/useColumnVisibility";
-import type { SortDirection } from "@/components/papers/ResizableTableHeader";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
 /**
@@ -64,9 +64,8 @@ export function Dashboard() {
 function DashboardContent() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const navigate = useNavigate();
 
-  // Pool data from context (replaces 4 separate hook calls)
+  // Pool data from context
   const {
     poolKeywords,
     findMatchingKeywords,
@@ -98,39 +97,23 @@ function DashboardContent() {
     })),
   }), [synonymLookup, poolStudyTypes, poolKeywords, synonymGroups]);
 
-  // Track study type pool version to trigger re-evaluation on changes
-  const [studyTypePoolVersion, setStudyTypePoolVersion] = useState(0);
-
-  // Re-evaluate study types when pool changes (triggered by modal close)
-  useEffect(() => {
-    if (studyTypePoolVersion > 0) {
-      const pool: StudyTypePoolEntry[] = poolStudyTypes.map(st => ({
-        study_type: st.study_type,
-        specificity_weight: st.specificity_weight,
-        hierarchy_rank: st.hierarchy_rank,
-      }));
-      reevaluateStudyTypes(pool);
-    }
-  }, [studyTypePoolVersion]); // intentionally only depend on version counter
-
-  const handleStudyTypePoolModalClose = useCallback(() => {
-    setStudyTypePoolVersion(v => v + 1);
-  }, []);
-
-  // usePapers now receives the normalization config
+  // Core paper data
   const {
     papers,
     projects,
     tags,
     loading,
     allKeywords,
+    totalCount,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
     createProject,
     updateProject,
     deleteProject,
     createTag,
     updateTag,
     deleteTag,
-    addPapers,
     addPaperManually,
     bulkImportPapers,
     updatePaper,
@@ -141,38 +124,24 @@ function DashboardContent() {
     reevaluateStudyTypes,
   } = usePapers(user?.id, normalizationConfig);
 
-  // Wrap delete to immediately re-evaluate with a fresh pool (avoids stale state)
-  const handleDeletePoolStudyType = useCallback(async (id: string) => {
-    await deletePoolStudyType(id);
-    const freshPool: StudyTypePoolEntry[] = poolStudyTypes
-      .filter(st => st.id !== id)
-      .map(st => ({
-        study_type: st.study_type,
-        specificity_weight: st.specificity_weight,
-        hierarchy_rank: st.hierarchy_rank,
-      }));
-    reevaluateStudyTypes(freshPool);
-  }, [deletePoolStudyType, poolStudyTypes, reevaluateStudyTypes]);
-
-  const handleDeleteAllPoolStudyTypes = useCallback(async () => {
-    await deleteAllPoolStudyTypes();
-    reevaluateStudyTypes([]);
-  }, [deleteAllPoolStudyTypes, reevaluateStudyTypes]);
-
+  // Study type re-evaluation on pool changes
   const {
-    visibleColumns,
-    toggleColumn,
-    availableColumns,
-  } = useColumnVisibility();
+    handleStudyTypePoolModalClose,
+    handleDeletePoolStudyType,
+    handleDeleteAllPoolStudyTypes,
+  } = useStudyTypeReevaluation({
+    poolStudyTypes,
+    reevaluateStudyTypes,
+    deleteStudyType: deletePoolStudyType,
+    deleteAllStudyTypes: deleteAllPoolStudyTypes,
+  });
 
-  const {
-    columnWidths,
-    setColumnWidth,
-  } = useColumnWidths();
+  // Column visibility & widths
+  const { visibleColumns, toggleColumn, availableColumns } = useColumnVisibility();
+  const { columnWidths, setColumnWidth } = useColumnWidths();
 
-  // Filter available keywords: derive from papers only, apply synonym mapping, exclude, deduplicate
+  // Filter available keywords: derive from papers, apply synonym mapping, exclude, deduplicate
   const filteredKeywords = useMemo(() => {
-    // Step A: Flatten keywords + substances from ALL papers + pool keywords
     const allTerms = [
       ...papers.flatMap(paper => [
         ...(paper.keywords || []),
@@ -182,25 +151,17 @@ function DashboardContent() {
       ...poolKeywords.map(pk => pk.keyword),
     ];
 
-    // Step B: Map synonyms - child -> canonical (fixes self-canceling bug)
-    const synonymChildMap = new Map<string, string>();
-    synonymGroups.forEach(group => {
-      group.synonyms.forEach(syn => synonymChildMap.set(syn.toLowerCase(), group.canonical_term));
-    });
-
     const mappedTerms = allTerms.map(term => {
-      const canonical = synonymChildMap.get(term.toLowerCase());
+      const canonical = synonymLookup[term.toLowerCase()];
       return canonical || term;
     });
 
-    // Step C: Filter exclusions
     const excludedSet = new Set(excludedKeywords.map(ek => ek.keyword.toLowerCase()));
 
-    // Step D: Deduplicate & sort
     return Array.from(new Set(mappedTerms))
       .filter(kw => !excludedSet.has(kw.toLowerCase()))
       .sort();
-  }, [papers, excludedKeywords, synonymGroups, poolKeywords]);
+  }, [papers, excludedKeywords, synonymLookup, poolKeywords]);
 
   // Extract unique study types from papers for import functionality
   const allStudyTypes = useMemo(() => {
@@ -217,219 +178,59 @@ function DashboardContent() {
     return Array.from(studyTypeSet).sort();
   }, [papers]);
 
-  // Build dynamic study type filter options: only unique group_names
-  const studyTypeFilterOptions = useMemo(() => {
-    const groupSet = new Set<string>();
-    poolStudyTypes.forEach(st => {
-      if (st.group_name) groupSet.add(st.group_name);
-    });
-    return Array.from(groupSet).sort();
-  }, [poolStudyTypes]);
+  // Filtering & sorting
+  const {
+    searchQuery,
+    setSearchQuery,
+    yearFrom,
+    setYearFrom,
+    yearTo,
+    setYearTo,
+    studyType,
+    setStudyType,
+    selectedKeywords,
+    selectedProjectId,
+    setSelectedProjectId,
+    selectedTagId,
+    setSelectedTagId,
+    studyTypeFilterOptions,
+    sortKey,
+    sortDirection,
+    handleSort,
+    filteredPapers,
+    sortedPapers,
+    handleKeywordToggle,
+    clearFilters,
+    hasActiveFilters,
+  } = useFilteredAndSortedPapers({
+    papers,
+    poolStudyTypes,
+    synonymLookup,
+    findMatchingKeywords,
+    userId: user?.id,
+  });
 
-  // Filter state for project/tag (moved from sidebar selection to filter dropdowns)
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
-
-  // Bulk selection state
-  const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
-
-  const handleToggleSelect = useCallback((paperId: string) => {
-    setSelectedPaperIds(prev => {
-      const next = new Set(prev);
-      if (next.has(paperId)) next.delete(paperId);
-      else next.add(paperId);
-      return next;
-    });
-  }, []);
+  // Bulk selection
+  const {
+    selectedPaperIds,
+    handleToggleSelect,
+    handleToggleSelectAll,
+    handleClearSelection,
+    handleBulkDelete,
+    handleBulkSetProjects,
+    handleBulkSetTags,
+  } = useBulkSelection({
+    sortedPapers,
+    bulkDeletePapers,
+    bulkSetProjects,
+    bulkSetTags,
+  });
 
   // Dialog state
   const [addPaperOpen, setAddPaperOpen] = useState(false);
   const [editingPaper, setEditingPaper] = useState<PaperWithTags | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
-
-  // Filter state
-  const [searchQuery, setSearchQuery] = useState("");
-  const deferredSearchQuery = useDeferredValue(searchQuery);
-  const [yearFrom, setYearFrom] = useState("");
-  const [yearTo, setYearTo] = useState("");
-  const [studyType, setStudyType] = useState("all");
-  const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
-
-  // Sort state
-  const [sortKey, setSortKey] = useState<ColumnId | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection | null>(null);
-
-  const handleSort = useCallback((columnId: ColumnId) => {
-    setSortKey(prev => {
-      if (prev === columnId) {
-        // Cycle: asc -> desc -> none
-        setSortDirection(prevDir => {
-          if (prevDir === "asc") return "desc";
-          return null;
-        });
-        return sortDirection === "desc" ? null : columnId;
-      }
-      setSortDirection("asc");
-      return columnId;
-    });
-  }, [sortDirection]);
-
-  // Filter papers (exclusions are now display-only, handled in PaperList)
-  const filteredPapers = useMemo(() => {
-    return papers.filter((paper) => {
-
-      // Project filter
-      if (selectedProjectId && !paper.projects.some((p) => p.id === selectedProjectId)) {
-        return false;
-      }
-
-      // Tag filter
-      if (selectedTagId && !paper.tags.some((t) => t.id === selectedTagId)) {
-        return false;
-      }
-
-      // Search query (uses deferred value for smoother typing)
-      if (deferredSearchQuery) {
-        const query = deferredSearchQuery.toLowerCase();
-        const matchesSearch =
-          paper.title.toLowerCase().includes(query) ||
-          paper.authors.some((a) => a.toLowerCase().includes(query)) ||
-          (paper.journal && paper.journal.toLowerCase().includes(query)) ||
-          (paper.abstract && paper.abstract.toLowerCase().includes(query));
-        if (!matchesSearch) return false;
-      }
-
-      // Year range
-      if (yearFrom && paper.year && paper.year < parseInt(yearFrom)) {
-        return false;
-      }
-      if (yearTo && paper.year && paper.year > parseInt(yearTo)) {
-        return false;
-      }
-
-      // Study type filter: match any subtype belonging to the selected group
-      if (studyType !== "all") {
-        const paperType = (paper.study_type || "").toLowerCase();
-        const subtypesInGroup = poolStudyTypes
-          .filter(st => st.group_name?.toLowerCase() === studyType.toLowerCase())
-          .map(st => st.study_type.toLowerCase());
-        if (!subtypesInGroup.includes(paperType)) return false;
-      }
-
-      // Keywords: combine all term sources and normalize through synonym pool
-      if (selectedKeywords.length > 0) {
-        const allTerms = [
-          ...(paper.keywords || []),
-          ...((paper.substances as string[]) || []),
-          ...((paper.mesh_terms as string[]) || []),
-          ...findMatchingKeywords(paper.abstract),
-        ];
-        const synonymChildMap = new Map<string, string>();
-        synonymGroups.forEach(group => {
-          group.synonyms.forEach(syn => synonymChildMap.set(syn.toLowerCase(), group.canonical_term));
-        });
-        const normalizedTerms = allTerms.map(term => {
-          const canonical = synonymChildMap.get(term.toLowerCase());
-          return (canonical || term).toLowerCase();
-        });
-        const hasAllKeywords = selectedKeywords.every(kw =>
-          normalizedTerms.includes(kw.toLowerCase())
-        );
-        if (!hasAllKeywords) return false;
-      }
-
-      return true;
-    });
-  }, [
-    papers,
-    selectedProjectId,
-    selectedTagId,
-    deferredSearchQuery,
-    yearFrom,
-    yearTo,
-    studyType,
-    studyTypeFilterOptions,
-    selectedKeywords,
-    synonymGroups,
-  ]);
-
-  // Sort filtered papers
-  const sortedPapers = useMemo(() => {
-    if (!sortKey || !sortDirection) return filteredPapers;
-
-    return [...filteredPapers].sort((a, b) => {
-      let cmp = 0;
-      switch (sortKey) {
-        case "title":
-          cmp = a.title.localeCompare(b.title);
-          break;
-        case "authors":
-          cmp = (a.authors[0] || "").localeCompare(b.authors[0] || "");
-          break;
-        case "year":
-          cmp = (a.year || 0) - (b.year || 0);
-          break;
-        case "journal":
-          cmp = (a.journal || "").localeCompare(b.journal || "");
-          break;
-        case "studyType":
-          cmp = (a.study_type || "").localeCompare(b.study_type || "");
-          break;
-        default:
-          return 0;
-      }
-      return sortDirection === "desc" ? -cmp : cmp;
-    });
-  }, [filteredPapers, sortKey, sortDirection]);
-
-  // Bulk action handlers (must be after filteredPapers)
-  const handleToggleSelectAll = useCallback(() => {
-    setSelectedPaperIds(prev => {
-      const allFilteredIds = sortedPapers.map(p => p.id);
-      const allSelected = allFilteredIds.every(id => prev.has(id));
-      if (allSelected) return new Set<string>();
-      return new Set(allFilteredIds);
-    });
-  }, [sortedPapers]);
-
-  const handleClearSelection = useCallback(() => {
-    setSelectedPaperIds(new Set());
-  }, []);
-
-  const handleBulkDelete = useCallback(async () => {
-    await bulkDeletePapers(Array.from(selectedPaperIds));
-    setSelectedPaperIds(new Set());
-  }, [selectedPaperIds, bulkDeletePapers]);
-
-  const handleBulkSetProjects = useCallback(async (projectIds: string[]) => {
-    await bulkSetProjects(Array.from(selectedPaperIds), projectIds);
-    setSelectedPaperIds(new Set());
-  }, [selectedPaperIds, bulkSetProjects]);
-
-  const handleBulkSetTags = useCallback(async (tagIds: string[]) => {
-    await bulkSetTags(Array.from(selectedPaperIds), tagIds);
-    setSelectedPaperIds(new Set());
-  }, [selectedPaperIds, bulkSetTags]);
-
-  const hasActiveFilters =
-    searchQuery !== "" ||
-    yearFrom !== "" ||
-    yearTo !== "" ||
-    studyType !== "all" ||
-    selectedKeywords.length > 0 ||
-    selectedProjectId !== null ||
-    selectedTagId !== null;
-
-  const clearFilters = () => {
-    setSearchQuery("");
-    setYearFrom("");
-    setYearTo("");
-    setStudyType("all");
-    setSelectedKeywords([]);
-    setSelectedProjectId(null);
-    setSelectedTagId(null);
-  };
 
   const handleExportCSV = () => {
     exportToCSV(filteredPapers);
@@ -441,25 +242,15 @@ function DashboardContent() {
     toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as RIS.` });
   };
 
-  const handleKeywordToggle = (keyword: string) => {
-    setSelectedKeywords((prev) =>
-      prev.includes(keyword)
-        ? prev.filter((k) => k !== keyword)
-        : [...prev, keyword]
-    );
-  };
-
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
   ) => {
     if (editingPaper) {
-      // Apply synonym mapping to manually entered keywords before saving
       if (updates.keywords && Array.isArray(updates.keywords)) {
         const mapped = updates.keywords.map(kw => {
           const canonical = synonymLookup[kw.toLowerCase()];
           return canonical || kw;
         });
-        // Deduplicate case-insensitively
         const seen = new Set<string>();
         updates.keywords = mapped.filter(kw => {
           const lower = kw.toLowerCase();
@@ -505,6 +296,7 @@ function DashboardContent() {
               <h1 className="text-2xl font-bold">Papers</h1>
               <p className="text-muted-foreground">
                 {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
+                {totalCount > papers.length && ` (${papers.length} of ${totalCount} loaded)`}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -571,6 +363,9 @@ function DashboardContent() {
             sortKey={sortKey}
             sortDirection={sortDirection}
             onSort={handleSort}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            onLoadMore={fetchNextPage}
           />
 
           <BulkActionsToolbar

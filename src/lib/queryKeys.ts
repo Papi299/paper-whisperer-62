@@ -8,6 +8,7 @@ export const queryKeys = {
   papers: {
     all: (userId: string) => ["papers", userId] as const,
     list: (userId: string) => ["papers", userId, "list"] as const,
+    count: (userId: string) => ["papers", userId, "count"] as const,
   },
   projects: {
     all: (userId: string) => ["projects", userId] as const,

@@ -29,7 +29,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown } from "lucide-react";
+import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2 } from "lucide-react";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
@@ -93,6 +93,9 @@ interface PaperListProps {
   sortKey?: ColumnId | null;
   sortDirection?: SortDirection | null;
   onSort?: (columnId: ColumnId) => void;
+  hasNextPage?: boolean;
+  isFetchingNextPage?: boolean;
+  onLoadMore?: () => void;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -122,6 +125,9 @@ export function PaperList({
   sortKey,
   sortDirection,
   onSort,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -360,6 +366,24 @@ export function PaperList({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {hasNextPage && (
+        <div className="flex justify-center py-4">
+          <Button
+            variant="outline"
+            onClick={onLoadMore}
+            disabled={isFetchingNextPage}
+          >
+            {isFetchingNextPage ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading...
+              </>
+            ) : (
+              "Load More Papers"
+            )}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

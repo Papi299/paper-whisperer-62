@@ -1,1 +1,8 @@
 project_id = "nvpnuxrvaicsugvmixlq"
+
+# The fetch-paper-metadata function only calls external APIs (PubMed/Crossref)
+# and has no auth logic. Disable gateway JWT verification so stale tokens
+# don't block the call. User-level access is still enforced by RLS on the
+# papers table when inserting results.
+[functions.fetch-paper-metadata]
+verify_jwt = false
