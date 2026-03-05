@@ -2,59 +2,50 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Pools & Sidebar", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: /papers/i })).toBeVisible();
+    await page.goto("/", { waitUntil: "networkidle" });
+    await expect(page.getByText(/\d+\s+paper/i)).toBeVisible({ timeout: 15_000 });
   });
 
   test("should display sidebar with projects section", async ({ page }) => {
-    await expect(
-      page.getByText(/projects/i).first(),
-    ).toBeVisible();
+    await expect(page.getByText(/projects/i).first()).toBeVisible();
   });
 
   test("should display sidebar with tags section", async ({ page }) => {
-    await expect(
-      page.getByText(/tags/i).first(),
-    ).toBeVisible();
+    await expect(page.getByText(/tags/i).first()).toBeVisible();
   });
 
   test("should open keyword pool management", async ({ page }) => {
-    // Look for keyword pool link/button in sidebar
-    const keywordPoolBtn = page.getByRole("button", { name: /keyword/i }).or(
-      page.getByText(/keyword pool/i),
-    );
+    // The Settings button is inside a justify-between row containing "Keyword Pool"
+    // Structure: div.justify-between > [div > span("Keyword Pool"), button(gear)]
+    const gearBtn = page
+      .getByText("Keyword Pool")
+      .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
+      .locator("button");
 
-    if (await keywordPoolBtn.isVisible()) {
-      await keywordPoolBtn.click();
-      // Modal or panel for keyword management
-      await expect(
-        page.getByRole("dialog").or(page.getByText(/manage.*keyword/i)),
-      ).toBeVisible();
-    }
+    await expect(gearBtn).toBeVisible();
+    await gearBtn.click();
+    await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
   });
 
   test("should open study type pool management", async ({ page }) => {
-    const studyTypeBtn = page.getByRole("button", { name: /study type/i }).or(
-      page.getByText(/study type pool/i),
-    );
+    // Same structure as keyword pool
+    const gearBtn = page
+      .getByText("Study Type Pool")
+      .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
+      .locator("button");
 
-    if (await studyTypeBtn.isVisible()) {
-      await studyTypeBtn.click();
-      await expect(
-        page.getByRole("dialog").or(page.getByText(/manage.*study/i)),
-      ).toBeVisible();
-    }
+    await expect(gearBtn).toBeVisible();
+    await gearBtn.click();
+    await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
   });
 
   test("should show create project dialog", async ({ page }) => {
-    // Look for add project button
     const addProjectBtn = page
       .locator('[aria-label*="project" i]')
       .or(page.getByRole("button", { name: /new project|add project/i }));
 
     if (await addProjectBtn.first().isVisible()) {
       await addProjectBtn.first().click();
-      // Should see a form/dialog for creating a project
       await expect(
         page.getByRole("dialog").or(page.getByPlaceholder(/project name/i)),
       ).toBeVisible();
@@ -75,13 +66,15 @@ test.describe("Pools & Sidebar", () => {
   });
 
   test("should show export options", async ({ page }) => {
-    // Export buttons in search filters area
     const exportBtn = page.getByRole("button", { name: /export/i });
     if (await exportBtn.isVisible()) {
       await exportBtn.click();
-      // Should show CSV/RIS options
+      // Use menuitem role to avoid matching "Risk Factors" tag text
       await expect(
-        page.getByText(/csv/i).or(page.getByText(/ris/i)),
+        page.getByRole("menuitem", { name: /csv/i }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("menuitem", { name: /ris/i }),
       ).toBeVisible();
     }
   });

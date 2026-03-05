@@ -2,14 +2,13 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Paper Import", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: /papers/i })).toBeVisible();
+    await page.goto("/", { waitUntil: "networkidle" });
+    await expect(page.getByText(/\d+\s+paper/i)).toBeVisible({ timeout: 15_000 });
   });
 
   test("should open add paper dialog", async ({ page }) => {
     await page.getByRole("button", { name: /add papers/i }).click();
 
-    // Dialog should be visible with tabs
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByText(/import by identifier/i)).toBeVisible();
   });
@@ -18,10 +17,9 @@ test.describe("Paper Import", () => {
     await page.getByRole("button", { name: /add papers/i }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
-    // Click on manual entry tab
-    await page.getByRole("tab", { name: /manual entry/i }).click();
+    // Tab is labeled "Manual" in the UI
+    await page.getByRole("tab", { name: /manual/i }).click();
 
-    // Should show manual form fields
     await expect(page.getByLabel(/title/i)).toBeVisible();
   });
 
@@ -29,33 +27,24 @@ test.describe("Paper Import", () => {
     await page.getByRole("button", { name: /add papers/i }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
-    // Click on bulk import tab
-    await page.getByRole("tab", { name: /bulk import/i }).click();
-
-    // Should show textarea for bulk identifiers
-    await expect(
-      page.getByPlaceholder(/enter.*identifiers/i).or(page.locator("textarea")),
-    ).toBeVisible();
+    // The "Import" tab is the default tab; ensure the textarea is visible
+    await expect(page.locator("textarea")).toBeVisible();
   });
 
   test("should validate empty identifier submission", async ({ page }) => {
     await page.getByRole("button", { name: /add papers/i }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
-    // Try to submit without entering an identifier
-    const submitButton = page.getByRole("button", { name: /import|add|fetch/i }).last();
-    if (await submitButton.isVisible()) {
-      await submitButton.click();
-      // Should remain on dialog or show a warning
-      await expect(page.getByRole("dialog")).toBeVisible();
-    }
+    // The "Import Papers" button should be disabled when the textarea is empty
+    const submitButton = page.getByRole("button", { name: /import papers/i });
+    await expect(submitButton).toBeVisible();
+    await expect(submitButton).toBeDisabled();
   });
 
   test("should close add paper dialog", async ({ page }) => {
     await page.getByRole("button", { name: /add papers/i }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
-    // Press Escape to close
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).not.toBeVisible();
   });
