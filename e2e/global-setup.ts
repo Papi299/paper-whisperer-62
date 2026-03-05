@@ -17,9 +17,12 @@ setup("authenticate", async ({ page }) => {
     );
   }
 
-  // Navigate to auth page
-  await page.goto("/auth");
-  await expect(page.getByRole("heading", { name: /paper index/i })).toBeVisible();
+  // Navigate to auth page and wait for React to hydrate
+  await page.goto("/auth", { waitUntil: "networkidle" });
+  // "Manage your scientific paper collections" is only on the auth page, not the dashboard
+  await expect(
+    page.getByText("Manage your scientific paper collections"),
+  ).toBeVisible({ timeout: 15_000 });
 
   // Fill in sign-in form
   await page.getByPlaceholder("you@example.com").fill(email);
@@ -28,9 +31,9 @@ setup("authenticate", async ({ page }) => {
   // Click sign in
   await page.getByRole("button", { name: /sign in/i }).click();
 
-  // Wait for redirect to dashboard
-  await expect(page.getByRole("heading", { name: /papers/i })).toBeVisible({
-    timeout: 15_000,
+  // Wait for dashboard to fully render (paper count like "8 papers")
+  await expect(page.getByText(/\d+\s+paper/i)).toBeVisible({
+    timeout: 20_000,
   });
 
   // Save authenticated state
