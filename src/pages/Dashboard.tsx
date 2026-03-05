@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { exportToCSV, exportToRIS } from "@/lib/exportUtils";
+import { exportToCSV, exportToRIS, exportToBibTeX } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
@@ -244,6 +244,11 @@ function DashboardContent() {
     toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as RIS.` });
   };
 
+  const handleExportBibTeX = () => {
+    exportToBibTeX(filteredPapers);
+    toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as BibTeX.` });
+  };
+
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
   ) => {
@@ -335,6 +340,7 @@ function DashboardContent() {
               onClearFilters={clearFilters}
               onExportCSV={handleExportCSV}
               onExportRIS={handleExportRIS}
+              onExportBibTeX={handleExportBibTeX}
               hasActiveFilters={hasActiveFilters}
               projects={projects}
               tags={tags}

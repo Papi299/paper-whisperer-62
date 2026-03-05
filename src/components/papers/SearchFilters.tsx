@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, X, Download, FileText, FileSpreadsheet } from "lucide-react";
+import { Search, X, Download, FileText, FileSpreadsheet, BookOpen } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
 import { Project, Tag } from "@/types/database";
 
@@ -33,6 +33,7 @@ interface SearchFiltersProps {
   onClearFilters: () => void;
   onExportCSV: () => void;
   onExportRIS: () => void;
+  onExportBibTeX: () => void;
   hasActiveFilters: boolean;
   projects: Project[];
   tags: Tag[];
@@ -58,6 +59,7 @@ export function SearchFilters({
   onClearFilters,
   onExportCSV,
   onExportRIS,
+  onExportBibTeX,
   hasActiveFilters,
   projects,
   tags,
@@ -193,6 +195,10 @@ export function SearchFilters({
               <DropdownMenuItem onClick={onExportRIS}>
                 <FileText className="mr-2 h-4 w-4" />
                 Export as RIS
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onExportBibTeX}>
+                <BookOpen className="mr-2 h-4 w-4" />
+                Export as BibTeX
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
