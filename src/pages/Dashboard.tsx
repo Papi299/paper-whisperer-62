@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { exportToCSV, exportToRIS } from "@/lib/exportUtils";
+import { exportToCSV, exportToRIS, exportToBibTeX } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
@@ -19,9 +19,10 @@ import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
 import { EditTagDialog } from "@/components/tags/EditTagDialog";
 import { SearchFilters } from "@/components/papers/SearchFilters";
 import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDropdown";
+import { DeduplicationDialog } from "@/components/papers/DeduplicationDialog";
 import { Button } from "@/components/ui/button";
 import { PaperWithTags, Project, Tag } from "@/types/database";
-import { Plus, Loader2 } from "lucide-react";
+import { Plus, Loader2, Layers } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
@@ -228,6 +229,7 @@ function DashboardContent() {
 
   // Dialog state
   const [addPaperOpen, setAddPaperOpen] = useState(false);
+  const [dedupOpen, setDedupOpen] = useState(false);
   const [editingPaper, setEditingPaper] = useState<PaperWithTags | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
@@ -240,6 +242,11 @@ function DashboardContent() {
   const handleExportRIS = () => {
     exportToRIS(filteredPapers);
     toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as RIS.` });
+  };
+
+  const handleExportBibTeX = () => {
+    exportToBibTeX(filteredPapers);
+    toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as BibTeX.` });
   };
 
   const handleSavePaper = async (
@@ -305,6 +312,10 @@ function DashboardContent() {
                 visibleColumns={visibleColumns}
                 onToggleColumn={toggleColumn}
               />
+              <Button variant="outline" onClick={() => setDedupOpen(true)}>
+                <Layers className="mr-2 h-4 w-4" />
+                Find Duplicates
+              </Button>
               <Button onClick={() => setAddPaperOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Papers
@@ -329,6 +340,7 @@ function DashboardContent() {
               onClearFilters={clearFilters}
               onExportCSV={handleExportCSV}
               onExportRIS={handleExportRIS}
+              onExportBibTeX={handleExportBibTeX}
               hasActiveFilters={hasActiveFilters}
               projects={projects}
               tags={tags}
@@ -409,6 +421,14 @@ function DashboardContent() {
         onOpenChange={(open) => !open && setEditingTag(null)}
         onSave={updateTag}
       />
+
+      {dedupOpen && (
+        <DeduplicationDialog
+          open={dedupOpen}
+          onOpenChange={setDedupOpen}
+          userId={user!.id}
+        />
+      )}
     </div>
   );
 }

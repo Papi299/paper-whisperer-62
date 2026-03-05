@@ -71,6 +71,28 @@ export interface PaperWithTags extends Paper {
  * Metadata returned by the fetch-paper-metadata edge function.
  * Each entry corresponds to one identifier lookup attempt.
  */
+/** Lightweight paper info returned by the get_duplicate_papers() RPC. */
+export interface DuplicatePaperInfo {
+  id: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  journal: string | null;
+  pmid: string | null;
+  doi: string | null;
+  abstract: string | null;
+  study_type: string | null;
+  keywords: string[];
+  created_at: string;
+}
+
+/** A group of papers sharing the same PMID or DOI, returned by get_duplicate_papers(). */
+export interface DuplicateGroup {
+  match_type: "doi" | "pmid";
+  match_value: string;
+  papers: DuplicatePaperInfo[];
+}
+
 export interface PaperMetadata {
   identifier: string;
   title?: string;
