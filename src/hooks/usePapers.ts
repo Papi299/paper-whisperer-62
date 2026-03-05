@@ -129,7 +129,42 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const projects = data?.pages[0]?.projects ?? [];
   const tags = data?.pages[0]?.tags ?? [];
 
-  // ── Helper to update the infinite query cache (papers) ──
+  // ── Cache helpers ──
+
+  /** Snapshot both papers infinite data and count for optimistic rollback. */
+  type CacheSnapshot = {
+    papers: InfiniteData<PapersPage> | undefined;
+    count: number | undefined;
+  };
+
+  const snapshotCache = useCallback((): CacheSnapshot => {
+    if (!userId) return { papers: undefined, count: undefined };
+    return {
+      papers: queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId)),
+      count: queryClient.getQueryData<number>(queryKeys.papers.count(userId)),
+    };
+  }, [userId, queryClient]);
+
+  const rollbackCache = useCallback(
+    (snapshot: CacheSnapshot) => {
+      if (!userId) return;
+      if (snapshot.papers !== undefined) {
+        queryClient.setQueryData(queryKeys.papers.all(userId), snapshot.papers);
+      }
+      if (snapshot.count !== undefined) {
+        queryClient.setQueryData(queryKeys.papers.count(userId), snapshot.count);
+      }
+    },
+    [userId, queryClient],
+  );
+
+  /** Cancel in-flight queries to prevent them from overwriting optimistic state. */
+  const cancelQueries = useCallback(async () => {
+    if (!userId) return;
+    await queryClient.cancelQueries({ queryKey: queryKeys.papers.all(userId) });
+  }, [userId, queryClient]);
+
+  /** Update the infinite query cache (papers). */
   const updatePapersCache = useCallback(
     (updater: (papers: PaperWithTags[]) => PaperWithTags[]) => {
       if (!userId) return;
@@ -154,6 +189,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     [userId, queryClient],
   );
 
+  /** Update the projects/tags metadata in all pages. */
   const updateMetaCache = useCallback(
     (updater: (projects: Project[], tags: Tag[]) => { projects: Project[]; tags: Tag[] }) => {
       if (!userId) return;
@@ -179,11 +215,24 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     [userId, queryClient],
   );
 
-  // ── Project mutations ──
+  /** Optimistically adjust the paper count cache. */
+  const adjustCount = useCallback(
+    (delta: number) => {
+      if (!userId) return;
+      queryClient.setQueryData(
+        queryKeys.papers.count(userId),
+        (old: number | undefined) => Math.max(0, (old ?? 0) + delta),
+      );
+    },
+    [userId, queryClient],
+  );
+
+  // ── Project mutations (optimistic for update/delete, post-confirm for create) ──
 
   const createProject = async (name: string) => {
     if (!userId) return;
 
+    // Create cannot be optimistic (we need the server-generated ID)
     const { data: newProject, error } = await supabase
       .from("projects")
       .insert({ user_id: userId, name })
@@ -195,33 +244,25 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateMetaCache((oldProjects, tags) => ({
+    updateMetaCache((oldProjects, oldTags) => ({
       projects: [...oldProjects, newProject as Project],
-      tags,
+      tags: oldTags,
     }));
   };
 
   const updateProject = async (projectId: string, updates: Partial<Project>) => {
     if (!userId) return;
 
-    const dbUpdates: Record<string, unknown> = {};
-    if (updates.name !== undefined) dbUpdates.name = updates.name;
-    if (updates.description !== undefined) dbUpdates.description = updates.description;
-    if (updates.color !== undefined) dbUpdates.color = updates.color;
+    await cancelQueries();
+    const snapshot = snapshotCache();
 
-    const { error } = await supabase.from("projects").update(dbUpdates).eq("id", projectId);
-    if (error) {
-      toast({ title: "Error updating project", description: error.message, variant: "destructive" });
-      return;
-    }
-
-    updateMetaCache((oldProjects, tags) => {
+    // Optimistic: apply update immediately
+    updateMetaCache((oldProjects, oldTags) => {
       const existing = oldProjects.find((p) => p.id === projectId);
-      if (!existing) return { projects: oldProjects, tags };
-      const updated = { ...existing, ...updates };
+      if (!existing) return { projects: oldProjects, tags: oldTags };
       return {
-        projects: oldProjects.map((p) => (p.id === projectId ? updated : p)),
-        tags,
+        projects: oldProjects.map((p) => (p.id === projectId ? { ...existing, ...updates } : p)),
+        tags: oldTags,
       };
     });
     updatePapersCache((allPapers) =>
@@ -232,20 +273,29 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         ),
       })),
     );
+
+    const dbUpdates: Record<string, unknown> = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+    if (updates.color !== undefined) dbUpdates.color = updates.color;
+
+    const { error } = await supabase.from("projects").update(dbUpdates).eq("id", projectId);
+    if (error) {
+      rollbackCache(snapshot);
+      toast({ title: "Error updating project", description: error.message, variant: "destructive" });
+    }
   };
 
   const deleteProject = async (projectId: string) => {
     if (!userId) return;
 
-    const { error } = await supabase.from("projects").delete().eq("id", projectId);
-    if (error) {
-      toast({ title: "Error deleting project", description: error.message, variant: "destructive" });
-      return;
-    }
+    await cancelQueries();
+    const snapshot = snapshotCache();
 
-    updateMetaCache((oldProjects, tags) => ({
+    // Optimistic: remove project immediately
+    updateMetaCache((oldProjects, oldTags) => ({
       projects: oldProjects.filter((p) => p.id !== projectId),
-      tags,
+      tags: oldTags,
     }));
     updatePapersCache((allPapers) =>
       allPapers.map((p) => ({
@@ -253,13 +303,20 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         projects: p.projects.filter((proj) => proj.id !== projectId),
       })),
     );
+
+    const { error } = await supabase.from("projects").delete().eq("id", projectId);
+    if (error) {
+      rollbackCache(snapshot);
+      toast({ title: "Error deleting project", description: error.message, variant: "destructive" });
+    }
   };
 
-  // ── Tag mutations ──
+  // ── Tag mutations (optimistic for update/delete, post-confirm for create) ──
 
   const createTag = async (name: string) => {
     if (!userId) return;
 
+    // Create cannot be optimistic (server generates ID, may reject duplicates)
     const { data: newTag, error } = await supabase
       .from("tags")
       .insert({ user_id: userId, name })
@@ -275,8 +332,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updateMetaCache((projects, oldTags) => ({
-      projects,
+    updateMetaCache((oldProjects, oldTags) => ({
+      projects: oldProjects,
       tags: [...oldTags, newTag as Tag],
     }));
   };
@@ -284,19 +341,16 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const updateTag = async (tagId: string, updates: Partial<Tag>) => {
     if (!userId) return;
 
-    const { error } = await supabase.from("tags").update(updates).eq("id", tagId);
-    if (error) {
-      toast({ title: "Error updating tag", description: error.message, variant: "destructive" });
-      return;
-    }
+    await cancelQueries();
+    const snapshot = snapshotCache();
 
-    updateMetaCache((projects, oldTags) => {
+    // Optimistic: apply update immediately
+    updateMetaCache((oldProjects, oldTags) => {
       const existing = oldTags.find((t) => t.id === tagId);
-      if (!existing) return { projects, tags: oldTags };
-      const updated = { ...existing, ...updates };
+      if (!existing) return { projects: oldProjects, tags: oldTags };
       return {
-        projects,
-        tags: oldTags.map((t) => (t.id === tagId ? updated : t)),
+        projects: oldProjects,
+        tags: oldTags.map((t) => (t.id === tagId ? { ...existing, ...updates } : t)),
       };
     });
     updatePapersCache((allPapers) =>
@@ -307,24 +361,34 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         ),
       })),
     );
+
+    const { error } = await supabase.from("tags").update(updates).eq("id", tagId);
+    if (error) {
+      rollbackCache(snapshot);
+      toast({ title: "Error updating tag", description: error.message, variant: "destructive" });
+    }
   };
 
   const deleteTag = async (tagId: string) => {
     if (!userId) return;
 
-    const { error } = await supabase.from("tags").delete().eq("id", tagId);
-    if (error) {
-      toast({ title: "Error deleting tag", description: error.message, variant: "destructive" });
-      return;
-    }
+    await cancelQueries();
+    const snapshot = snapshotCache();
 
-    updateMetaCache((projects, oldTags) => ({
-      projects,
+    // Optimistic: remove tag immediately
+    updateMetaCache((oldProjects, oldTags) => ({
+      projects: oldProjects,
       tags: oldTags.filter((t) => t.id !== tagId),
     }));
     updatePapersCache((allPapers) =>
       allPapers.map((p) => ({ ...p, tags: p.tags.filter((t) => t.id !== tagId) })),
     );
+
+    const { error } = await supabase.from("tags").delete().eq("id", tagId);
+    if (error) {
+      rollbackCache(snapshot);
+      toast({ title: "Error deleting tag", description: error.message, variant: "destructive" });
+    }
   };
 
   // ── Paper mutations ──
@@ -503,35 +567,15 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
   const updatePaper = async (
     paperId: string,
-    updates: Partial<Paper> & { tagIds?: string[]; projectIds?: string[] }
+    updates: Partial<Paper> & { tagIds?: string[]; projectIds?: string[] },
   ) => {
     if (!userId) return;
     const { tagIds, projectIds, ...paperUpdates } = updates;
 
-    if (Object.keys(paperUpdates).length > 0) {
-      const { error } = await supabase.from("papers").update(paperUpdates).eq("id", paperId);
-      if (error) {
-        toast({ title: "Error updating paper", description: error.message, variant: "destructive" });
-        return;
-      }
-    }
+    await cancelQueries();
+    const snapshot = snapshotCache();
 
-    if (tagIds !== undefined) {
-      const { error: tagError } = await supabase.rpc("set_paper_tags", { p_paper_id: paperId, p_tag_ids: tagIds });
-      if (tagError) {
-        toast({ title: "Error updating tags", description: tagError.message, variant: "destructive" });
-        return;
-      }
-    }
-
-    if (projectIds !== undefined) {
-      const { error: projError } = await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: projectIds });
-      if (projError) {
-        toast({ title: "Error updating projects", description: projError.message, variant: "destructive" });
-        return;
-      }
-    }
-
+    // Optimistic: apply all changes immediately
     updatePapersCache((allPapers) =>
       allPapers.map((p) => {
         if (p.id !== paperId) return p;
@@ -540,20 +584,55 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         return { ...p, ...paperUpdates, tags: updatedTags, projects: updatedProjects };
       }),
     );
+
+    // Persist to DB
+    if (Object.keys(paperUpdates).length > 0) {
+      const { error } = await supabase.from("papers").update(paperUpdates).eq("id", paperId);
+      if (error) {
+        rollbackCache(snapshot);
+        toast({ title: "Error updating paper", description: error.message, variant: "destructive" });
+        return;
+      }
+    }
+
+    if (tagIds !== undefined) {
+      const { error: tagError } = await supabase.rpc("set_paper_tags", { p_paper_id: paperId, p_tag_ids: tagIds });
+      if (tagError) {
+        rollbackCache(snapshot);
+        toast({ title: "Error updating tags", description: tagError.message, variant: "destructive" });
+        return;
+      }
+    }
+
+    if (projectIds !== undefined) {
+      const { error: projError } = await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: projectIds });
+      if (projError) {
+        rollbackCache(snapshot);
+        toast({ title: "Error updating projects", description: projError.message, variant: "destructive" });
+        return;
+      }
+    }
+
     toast({ title: "Paper updated" });
   };
 
   const deletePaper = async (paperId: string) => {
     if (!userId) return;
 
+    await cancelQueries();
+    const snapshot = snapshotCache();
+
+    // Optimistic: remove paper and decrement count immediately
+    updatePapersCache((old) => old.filter((p) => p.id !== paperId));
+    adjustCount(-1);
+
     const { error } = await supabase.from("papers").delete().eq("id", paperId);
     if (error) {
+      rollbackCache(snapshot);
       toast({ title: "Error deleting paper", description: error.message, variant: "destructive" });
       return;
     }
 
-    updatePapersCache((old) => old.filter((p) => p.id !== paperId));
-    queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
     toast({ title: "Paper deleted" });
   };
 
@@ -739,50 +818,66 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const bulkDeletePapers = async (paperIds: string[]) => {
     if (!userId || paperIds.length === 0) return;
 
+    await cancelQueries();
+    const snapshot = snapshotCache();
+
+    // Optimistic: remove papers and adjust count immediately
+    const idSet = new Set(paperIds);
+    updatePapersCache((old) => old.filter((p) => !idSet.has(p.id)));
+    adjustCount(-paperIds.length);
+
     const { error } = await supabase.from("papers").delete().in("id", paperIds);
     if (error) {
+      rollbackCache(snapshot);
       toast({ title: "Error deleting papers", description: error.message, variant: "destructive" });
       return;
     }
 
-    const idSet = new Set(paperIds);
-    updatePapersCache((old) => old.filter((p) => !idSet.has(p.id)));
-    queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
     toast({ title: `Deleted ${paperIds.length} paper(s)` });
   };
 
   const bulkSetProjects = async (paperIds: string[], projectIds: string[]) => {
     if (!userId || paperIds.length === 0) return;
 
-    try {
-      const { error } = await supabase.rpc("bulk_set_paper_projects", { p_paper_ids: paperIds, p_project_ids: projectIds });
-      if (error) throw error;
+    await cancelQueries();
+    const snapshot = snapshotCache();
 
-      const newProjects = projects.filter((p) => projectIds.includes(p.id));
-      updatePapersCache((allPapers) =>
-        allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, projects: newProjects } : p)),
-      );
-      toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
-    } catch (err: unknown) {
-      toast({ title: "Error setting projects", description: getErrorMessage(err), variant: "destructive" });
+    // Optimistic: assign projects immediately
+    const newProjects = projects.filter((p) => projectIds.includes(p.id));
+    updatePapersCache((allPapers) =>
+      allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, projects: newProjects } : p)),
+    );
+
+    const { error } = await supabase.rpc("bulk_set_paper_projects", { p_paper_ids: paperIds, p_project_ids: projectIds });
+    if (error) {
+      rollbackCache(snapshot);
+      toast({ title: "Error setting projects", description: getErrorMessage(error), variant: "destructive" });
+      return;
     }
+
+    toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
   };
 
   const bulkSetTags = async (paperIds: string[], tagIds: string[]) => {
     if (!userId || paperIds.length === 0) return;
 
-    try {
-      const { error } = await supabase.rpc("bulk_set_paper_tags", { p_paper_ids: paperIds, p_tag_ids: tagIds });
-      if (error) throw error;
+    await cancelQueries();
+    const snapshot = snapshotCache();
 
-      const newTags = tags.filter((t) => tagIds.includes(t.id));
-      updatePapersCache((allPapers) =>
-        allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, tags: newTags } : p)),
-      );
-      toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
-    } catch (err: unknown) {
-      toast({ title: "Error setting tags", description: getErrorMessage(err), variant: "destructive" });
+    // Optimistic: assign tags immediately
+    const newTags = tags.filter((t) => tagIds.includes(t.id));
+    updatePapersCache((allPapers) =>
+      allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, tags: newTags } : p)),
+    );
+
+    const { error } = await supabase.rpc("bulk_set_paper_tags", { p_paper_ids: paperIds, p_tag_ids: tagIds });
+    if (error) {
+      rollbackCache(snapshot);
+      toast({ title: "Error setting tags", description: getErrorMessage(error), variant: "destructive" });
+      return;
     }
+
+    toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
   };
 
   return {
