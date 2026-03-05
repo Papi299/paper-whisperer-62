@@ -4,7 +4,7 @@ ALTER TABLE papers ADD COLUMN IF NOT EXISTS search_vector tsvector
     setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
     setweight(to_tsvector('english', coalesce(abstract, '')), 'B') ||
     setweight(to_tsvector('english', coalesce(journal, '')), 'C') ||
-    setweight(to_tsvector('english', array_to_string(authors, ' ')), 'C')
+    setweight(to_tsvector('english', coalesce(authors::text, '')), 'C')
   ) STORED;
 
 -- GIN index for fast full-text queries
