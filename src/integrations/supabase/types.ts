@@ -358,7 +358,47 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      safe_bulk_insert_papers: {
+        Args: {
+          p_user_id: string
+          p_papers: Json
+        }
+        Returns: Json
+      }
+      bulk_set_paper_projects: {
+        Args: {
+          p_paper_ids: string[]
+          p_project_ids: string[]
+        }
+        Returns: undefined
+      }
+      bulk_set_paper_tags: {
+        Args: {
+          p_paper_ids: string[]
+          p_tag_ids: string[]
+        }
+        Returns: undefined
+      }
+      set_paper_projects: {
+        Args: {
+          p_paper_id: string
+          p_project_ids: string[]
+        }
+        Returns: undefined
+      }
+      set_paper_tags: {
+        Args: {
+          p_paper_id: string
+          p_tag_ids: string[]
+        }
+        Returns: undefined
+      }
+      bulk_update_study_types: {
+        Args: {
+          updates: Json
+        }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never

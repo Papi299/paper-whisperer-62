@@ -93,6 +93,14 @@ export interface DuplicateGroup {
   papers: DuplicatePaperInfo[];
 }
 
+/** Per-row result from the safe_bulk_insert_papers RPC. */
+export interface BulkInsertResult {
+  index: number;
+  id?: string;
+  status: "inserted" | "duplicate" | "error";
+  error_message?: string;
+}
+
 export interface PaperMetadata {
   identifier: string;
   title?: string;

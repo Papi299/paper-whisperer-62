@@ -108,8 +108,8 @@ export function BulkActionsToolbar({
 
   return (
     <>
-      <div className="sticky bottom-4 z-50 mx-auto w-fit">
-        <div className="flex items-center gap-3 rounded-lg border bg-background/95 backdrop-blur px-4 py-2.5 shadow-lg">
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+        <div className="flex items-center gap-3 rounded-lg border bg-background/95 backdrop-blur px-4 py-2.5 shadow-2xl">
           <Badge variant="secondary" className="text-sm font-medium">
             {selectedCount} selected
           </Badge>

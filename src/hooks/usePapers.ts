@@ -1,7 +1,8 @@
 import { useMemo, useCallback } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient, InfiniteData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
+import type { Json } from "@/integrations/supabase/types";
+import { Paper, PaperWithTags, Project, Tag, BulkInsertResult } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
 import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
@@ -504,7 +505,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     abstract: string;
     keywords: string;
     driveUrl: string;
-  }) => {
+  }, options?: { targetProjectId?: string; targetTagIds?: string[] }) => {
     if (!userId) return;
 
     const authorsArray = paperData.authors.split(",").map((a) => a.trim()).filter((a) => a.length > 0);
@@ -560,7 +561,22 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       return;
     }
 
-    updatePapersCache((old) => [{ ...(insertedPaper as Paper), tags: [], projects: [] }, ...old]);
+    const paperId = (insertedPaper as Paper).id;
+    let assignedProjects: Project[] = [];
+    let assignedTags: Tag[] = [];
+
+    // Assign project/tags if specified
+    if (options?.targetProjectId) {
+      await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: [options.targetProjectId] });
+      const proj = projects.find((p) => p.id === options.targetProjectId);
+      if (proj) assignedProjects = [proj];
+    }
+    if (options?.targetTagIds && options.targetTagIds.length > 0) {
+      await supabase.rpc("set_paper_tags", { p_paper_id: paperId, p_tag_ids: options.targetTagIds });
+      assignedTags = tags.filter((t) => options.targetTagIds!.includes(t.id));
+    }
+
+    updatePapersCache((old) => [{ ...(insertedPaper as Paper), tags: assignedTags, projects: assignedProjects }, ...old]);
     queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
     toast({ title: "Paper added manually" });
   };
@@ -639,7 +655,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const bulkImportPapers = useCallback(
     async (
       identifiers: string[],
-      onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void
+      onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
+      options?: { targetProjectId?: string; targetTagIds?: string[] }
     ) => {
       if (!userId || identifiers.length === 0) return;
 
@@ -647,112 +664,177 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       const skippedIds: string[] = [];
       const failedIds: string[] = [];
       const total = identifiers.length;
+
+      // Phase 1: Batch fetch all metadata via edge function
+      // (fetchPaperMetadata already batches by EDGE_BATCH_SIZE=10 internally)
+      onProgress?.(0, total, addedIds, skippedIds, failedIds);
+      const allMetadata = await fetchPaperMetadata(identifiers);
+
+      // Separate successful fetches from failures
+      const successfulResults: { identifier: string; meta: typeof allMetadata[0] }[] = [];
+      for (const meta of allMetadata) {
+        if (meta.error || !meta.title) {
+          failedIds.push(meta.identifier);
+        } else {
+          successfulResults.push({ identifier: meta.identifier, meta });
+        }
+      }
+
+      // Report after fetch phase
+      onProgress?.(Math.ceil(total * 0.6), total, addedIds, skippedIds, failedIds);
+
+      if (successfulResults.length === 0) {
+        onProgress?.(total, total, addedIds, skippedIds, failedIds);
+        toast({
+          title: "Bulk import complete",
+          description: `0 added, 0 skipped (duplicates), ${failedIds.length} failed.`,
+        });
+        return;
+      }
+
+      // Phase 2: Batch normalize all successful results
+      const rawPapers: RawPaperData[] = successfulResults.map(({ meta }) => ({
+        title: meta.title!,
+        authors: meta.authors || [],
+        year: meta.year ?? null,
+        journal: meta.journal ?? null,
+        pmid: meta.pmid ?? null,
+        doi: meta.doi ?? null,
+        abstract: meta.abstract ?? null,
+        keywords: meta.keywords || [],
+        mesh_terms: meta.mesh_terms || [],
+        substances: meta.substances || [],
+        study_type: meta.study_type || null,
+        pubmed_url: meta.pubmed_url ?? null,
+        journal_url: meta.journal_url ?? null,
+        drive_url: null,
+      }));
+
+      const normalizedPapers = normalizationConfig
+        ? await normalize(rawPapers, normalizationConfig)
+        : rawPapers;
+
+      // Phase 3: Build payload and call safe_bulk_insert_papers RPC
+      // Build plain objects with only the fields the SQL function reads.
+      // This avoids any extra properties from normalize() leaking in.
+      const insertPayload = normalizedPapers.map((normalized, i) => ({
+        title: normalized.title,
+        authors: normalized.authors || [],
+        year: normalized.year ?? null,
+        journal: normalized.journal ?? null,
+        pmid: normalized.pmid ?? null,
+        doi: normalized.doi ?? null,
+        abstract: normalized.abstract ?? null,
+        study_type: normalized.study_type ?? null,
+        raw_study_type: successfulResults[i].meta.study_type || null,
+        statistical_methods: null,
+        keywords: normalized.keywords || [],
+        mesh_terms: normalized.mesh_terms || [],
+        substances: normalized.substances || [],
+        pubmed_url: normalized.pubmed_url ?? null,
+        journal_url: normalized.journal_url ?? null,
+        drive_url: normalized.drive_url ?? null,
+      }));
+
+      const { data: rpcResult, error: rpcError } = await supabase.rpc(
+        "safe_bulk_insert_papers",
+        {
+          p_user_id: userId,
+          p_papers: insertPayload as unknown as Json,
+        }
+      );
+
+      if (rpcError) {
+        // Fallback: mark all as failed
+        for (const { identifier } of successfulResults) {
+          failedIds.push(identifier);
+        }
+        onProgress?.(total, total, addedIds, skippedIds, failedIds);
+        toast({
+          title: "Bulk import failed",
+          description: rpcError.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Phase 4: Process RPC results
+      const results = (typeof rpcResult === "string" ? JSON.parse(rpcResult) : rpcResult) as BulkInsertResult[];
       const newPapers: PaperWithTags[] = [];
 
-      // Read current papers from cache for dedup
-      const currentData = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId));
-      const currentPapers = currentData?.pages.flatMap((p) => p.papers) ?? [];
-
-      const BATCH_SIZE = 3;
-
-      const processOne = async (id: string): Promise<{
-        id: string;
-        status: "added" | "skipped" | "failed";
-        paper?: PaperWithTags;
-      }> => {
-        const allCurrent = [...currentPapers, ...newPapers];
-        const trimmedId = id.trim();
-        const alreadyExists = allCurrent.some((existing) => {
-          if (/^\d+$/.test(trimmedId) && existing.pmid === trimmedId) return true;
-          if (trimmedId.startsWith("10.") && existing.doi?.toLowerCase() === trimmedId.toLowerCase()) return true;
-          if (existing.title?.replace(/\.\s*$/, "").trim().toLowerCase() === trimmedId.toLowerCase()) return true;
-          return false;
-        });
-
-        if (alreadyExists) return { id, status: "skipped" };
-
-        const fetchedPapers = await fetchPaperMetadata([id]);
-        const result = fetchedPapers[0];
-
-        if (!result || result.error) return { id, status: "failed" };
-
-        const allCurrentPost = [...currentPapers, ...newPapers];
-        const isDupPost = allCurrentPost.some((existing) => {
-          if (result.pmid && existing.pmid && result.pmid === existing.pmid) return true;
-          if (result.doi && existing.doi && result.doi.toLowerCase() === existing.doi.toLowerCase()) return true;
-          if (result.title && existing.title && result.title.replace(/\.\s*$/, "").trim().toLowerCase() === existing.title.toLowerCase()) return true;
-          return false;
-        });
-
-        if (isDupPost) return { id, status: "skipped" };
-
-        const rawPaper: RawPaperData = {
-          title: result.title,
-          authors: result.authors || [],
-          year: result.year,
-          journal: result.journal,
-          pmid: result.pmid,
-          doi: result.doi,
-          abstract: result.abstract,
-          keywords: result.keywords || [],
-          mesh_terms: result.mesh_terms || [],
-          substances: result.substances || [],
-          study_type: result.study_type || null,
-          pubmed_url: result.pubmed_url,
-          journal_url: result.journal_url,
-          drive_url: null,
-        };
-
-        // Use worker normalize (falls back to main thread for single items)
-        const [normalized] = normalizationConfig
-          ? await normalize([rawPaper], normalizationConfig)
-          : [rawPaper];
-
-        const paperData = {
-          user_id: userId,
-          ...normalized,
-          raw_study_type: result.study_type || null,
-          mesh_terms: normalized.mesh_terms || [],
-          substances: normalized.substances || [],
-        };
-
-        const { data: insertedPaper, error: insertError } = await supabase.from("papers").insert(paperData).select().single();
-
-        if (insertError) {
-          return { id, status: insertError.code === "23505" ? "skipped" : "failed" };
+      for (const row of results) {
+        const { identifier } = successfulResults[row.index];
+        if (row.status === "inserted" && row.id) {
+          addedIds.push(identifier);
+          // Build a PaperWithTags from the normalized data + returned id
+          const norm = normalizedPapers[row.index];
+          newPapers.push({
+            id: row.id,
+            user_id: userId,
+            title: norm.title,
+            authors: norm.authors,
+            year: norm.year,
+            journal: norm.journal,
+            pmid: norm.pmid,
+            doi: norm.doi,
+            abstract: norm.abstract,
+            study_type: norm.study_type,
+            raw_study_type: successfulResults[row.index].meta.study_type || null,
+            statistical_methods: null,
+            keywords: norm.keywords,
+            mesh_terms: norm.mesh_terms || [],
+            substances: norm.substances || [],
+            pubmed_url: norm.pubmed_url,
+            journal_url: norm.journal_url,
+            drive_url: norm.drive_url,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            tags: [],
+            projects: [],
+          });
+        } else if (row.status === "duplicate") {
+          skippedIds.push(identifier);
+        } else {
+          failedIds.push(identifier);
         }
-
-        return {
-          id,
-          status: "added",
-          paper: { ...(insertedPaper as Paper), tags: [], projects: [] },
-        };
-      };
-
-      for (let batchStart = 0; batchStart < identifiers.length; batchStart += BATCH_SIZE) {
-        const batch = identifiers.slice(batchStart, batchStart + BATCH_SIZE);
-        const batchResults = await Promise.allSettled(batch.map(processOne));
-
-        for (const settled of batchResults) {
-          if (settled.status === "rejected") {
-            failedIds.push("unknown");
-            continue;
-          }
-          const { id: resultId, status, paper } = settled.value;
-          if (status === "skipped") skippedIds.push(resultId);
-          else if (status === "failed") failedIds.push(resultId);
-          else if (status === "added" && paper) {
-            newPapers.push(paper);
-            addedIds.push(resultId);
-          }
-        }
-
-        onProgress?.(Math.min(batchStart + BATCH_SIZE, total), total, addedIds, skippedIds, failedIds);
       }
 
       onProgress?.(total, total, addedIds, skippedIds, failedIds);
 
-      if (newPapers.length > 0) {
+      // Phase 5: Assign project/tags to newly inserted papers
+      const insertedPaperIds = newPapers.map((p) => p.id);
+      if (insertedPaperIds.length > 0) {
+        const projectId = options?.targetProjectId;
+        const tagIds = options?.targetTagIds;
+
+        if (projectId) {
+          await supabase.rpc("bulk_set_paper_projects", {
+            p_paper_ids: insertedPaperIds,
+            p_project_ids: [projectId],
+          });
+          // Update cache with project info
+          const proj = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
+            ?.pages.flatMap((p) => p.projects)
+            .find((p) => p.id === projectId);
+          if (proj) {
+            newPapers.forEach((p) => { p.projects = [proj]; });
+          }
+        }
+
+        if (tagIds && tagIds.length > 0) {
+          await supabase.rpc("bulk_set_paper_tags", {
+            p_paper_ids: insertedPaperIds,
+            p_tag_ids: tagIds,
+          });
+          // Update cache with tag info
+          const allTags = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
+            ?.pages.flatMap((p) => p.tags) ?? [];
+          const matchedTags = allTags.filter((t) => tagIds.includes(t.id));
+          if (matchedTags.length > 0) {
+            newPapers.forEach((p) => { p.tags = matchedTags; });
+          }
+        }
+
         updatePapersCache((old) => [...newPapers, ...old]);
         queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
       }
