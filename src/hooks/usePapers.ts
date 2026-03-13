@@ -1,6 +1,7 @@
 import { useMemo, useCallback } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient, InfiniteData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import { Paper, PaperWithTags, Project, Tag, BulkInsertResult } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
 import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
@@ -714,19 +715,32 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         : rawPapers;
 
       // Phase 3: Build payload and call safe_bulk_insert_papers RPC
+      // Build plain objects with only the fields the SQL function reads.
+      // This avoids any extra properties from normalize() leaking in.
       const insertPayload = normalizedPapers.map((normalized, i) => ({
-        ...normalized,
+        title: normalized.title,
+        authors: normalized.authors || [],
+        year: normalized.year ?? null,
+        journal: normalized.journal ?? null,
+        pmid: normalized.pmid ?? null,
+        doi: normalized.doi ?? null,
+        abstract: normalized.abstract ?? null,
+        study_type: normalized.study_type ?? null,
         raw_study_type: successfulResults[i].meta.study_type || null,
         statistical_methods: null,
+        keywords: normalized.keywords || [],
         mesh_terms: normalized.mesh_terms || [],
         substances: normalized.substances || [],
+        pubmed_url: normalized.pubmed_url ?? null,
+        journal_url: normalized.journal_url ?? null,
+        drive_url: normalized.drive_url ?? null,
       }));
 
       const { data: rpcResult, error: rpcError } = await supabase.rpc(
         "safe_bulk_insert_papers",
         {
           p_user_id: userId,
-          p_papers: insertPayload,
+          p_papers: insertPayload as unknown as Json,
         }
       );
 
