@@ -297,7 +297,7 @@ function DashboardContent() {
           onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
           onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
         />
-        <main className="flex-1 p-6 overflow-auto">
+        <main className="flex-1 p-6 overflow-auto flex flex-col">
           <div className="mb-6 flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold">Papers</h1>
@@ -397,6 +397,8 @@ function DashboardContent() {
         onOpenChange={setAddPaperOpen}
         onSubmitManual={addPaperManually}
         onBulkImport={bulkImportPapers}
+        projects={projects}
+        tags={tags}
       />
 
       <EditPaperDialog

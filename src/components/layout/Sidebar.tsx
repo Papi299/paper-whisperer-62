@@ -18,6 +18,7 @@ import { ManageKeywordPoolModal } from "@/components/keywords/ManageKeywordPoolM
 import { ManageStudyTypePoolModal } from "@/components/study-types/ManageStudyTypePoolModal";
 import { ManageProjectsModal } from "@/components/projects/ManageProjectsModal";
 import { ManageTagsModal } from "@/components/tags/ManageTagsModal";
+import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { usePools } from "@/contexts/PoolsContext";
 
 /**
@@ -90,6 +91,7 @@ export function Sidebar({
   const [studyTypePoolModalOpen, setStudyTypePoolModalOpen] = useState(false);
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
   const [tagsModalOpen, setTagsModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   const totalExclusions = excludedKeywords.length + excludedStudyTypes.length;
 
@@ -229,6 +231,18 @@ export function Sidebar({
               <Settings className="h-4 w-4" />
             </Button>
           </div>
+
+          {/* Settings */}
+          <div className="pt-2 border-t">
+            <Button
+              variant="ghost"
+              className="w-full justify-start"
+              onClick={() => setSettingsModalOpen(true)}
+            >
+              <Settings className="mr-2 h-4 w-4" />
+              Settings
+            </Button>
+          </div>
         </div>
       </ScrollArea>
 
@@ -294,6 +308,10 @@ export function Sidebar({
         onDeleteAllStudyTypes={onDeleteAllPoolStudyTypes}
         onRenameGroup={renameGroup}
         onDeleteGroup={deleteGroup}
+      />
+      <SettingsDialog
+        open={settingsModalOpen}
+        onOpenChange={setSettingsModalOpen}
       />
     </aside>
   );

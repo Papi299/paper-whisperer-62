@@ -141,10 +141,12 @@ function cleanDoi(doi: string): string {
 // ── PubMed API ──
 
 async function fetchFromPubMed(
-  pmid: string
+  pmid: string,
+  apiKey?: string
 ): Promise<PaperMetadata | null> {
   try {
-    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml`;
+    const apiParam = apiKey ? `&api_key=${apiKey}` : "";
+    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml${apiParam}`;
     const response = await fetchWithRetry(url);
     if (!response.ok) return null;
 
@@ -226,9 +228,10 @@ async function fetchFromPubMed(
   }
 }
 
-async function searchPubMedByDoi(doi: string): Promise<string | null> {
+async function searchPubMedByDoi(doi: string, apiKey?: string): Promise<string | null> {
   try {
-    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(doi)}[doi]&retmode=json`;
+    const apiParam = apiKey ? `&api_key=${apiKey}` : "";
+    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(doi)}[doi]&retmode=json${apiParam}`;
     const response = await fetchWithRetry(url);
     if (!response.ok) return null;
     const data = await response.json();
@@ -238,9 +241,10 @@ async function searchPubMedByDoi(doi: string): Promise<string | null> {
   }
 }
 
-async function searchPubMedByTitle(title: string): Promise<string | null> {
+async function searchPubMedByTitle(title: string, apiKey?: string): Promise<string | null> {
   try {
-    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(title)}&retmode=json&retmax=1`;
+    const apiParam = apiKey ? `&api_key=${apiKey}` : "";
+    const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(title)}&retmode=json&retmax=1${apiParam}`;
     const response = await fetchWithRetry(url);
     if (!response.ok) return null;
     const data = await response.json();
@@ -371,13 +375,13 @@ async function searchCrossrefByTitle(
  * For DOIs: PubMed first (via DOI search → PMID → full fetch), Crossref fallback.
  * Crossref results are enriched with PubMed data if a PMID cross-reference is found.
  */
-async function fetchByDoi(doi: string): Promise<PaperMetadata | null> {
+async function fetchByDoi(doi: string, apiKey?: string): Promise<PaperMetadata | null> {
   const cleanedDoi = cleanDoi(doi);
 
   // Try PubMed first
-  const pmid = await searchPubMedByDoi(cleanedDoi);
+  const pmid = await searchPubMedByDoi(cleanedDoi, apiKey);
   if (pmid) {
-    const pubmedResult = await fetchFromPubMed(pmid);
+    const pubmedResult = await fetchFromPubMed(pmid, apiKey);
     if (pubmedResult) {
       pubmedResult.doi = pubmedResult.doi || cleanedDoi;
       pubmedResult.journal_url =
@@ -395,9 +399,9 @@ async function fetchByDoi(doi: string): Promise<PaperMetadata | null> {
 
   // Try to cross-reference with PubMed for enrichment
   if (crossrefResult.doi) {
-    const enrichPmid = await searchPubMedByDoi(crossrefResult.doi);
+    const enrichPmid = await searchPubMedByDoi(crossrefResult.doi, apiKey);
     if (enrichPmid) {
-      const pubmedData = await fetchFromPubMed(enrichPmid);
+      const pubmedData = await fetchFromPubMed(enrichPmid, apiKey);
       if (pubmedData) {
         crossrefResult.pmid = enrichPmid;
         crossrefResult.keywords = pubmedData.keywords || [];
@@ -416,10 +420,10 @@ async function fetchByDoi(doi: string): Promise<PaperMetadata | null> {
 /**
  * For titles: PubMed first, Crossref fallback.
  */
-async function fetchByTitle(title: string): Promise<PaperMetadata | null> {
-  const pmid = await searchPubMedByTitle(title);
+async function fetchByTitle(title: string, apiKey?: string): Promise<PaperMetadata | null> {
+  const pmid = await searchPubMedByTitle(title, apiKey);
   if (pmid) {
-    const pubmedResult = await fetchFromPubMed(pmid);
+    const pubmedResult = await fetchFromPubMed(pmid, apiKey);
     if (pubmedResult) return pubmedResult;
   }
 
@@ -432,9 +436,12 @@ async function fetchByTitle(title: string): Promise<PaperMetadata | null> {
 // ── Internal: process all identifiers sequentially with rate limiting ──
 
 async function fetchPaperMetadata(
-  identifiers: string[]
+  identifiers: string[],
+  apiKey?: string
 ): Promise<PaperMetadata[]> {
   const results: PaperMetadata[] = [];
+  // With API key: 10 req/sec allowed (100ms delay). Without: 3 req/sec (350ms).
+  const delayMs = apiKey ? 100 : RATE_LIMIT_DELAY_MS;
 
   for (let i = 0; i < identifiers.length; i++) {
     const identifier = identifiers[i];
@@ -443,7 +450,7 @@ async function fetchPaperMetadata(
 
     // Rate-limit: pause between requests to stay under API limits
     if (i > 0) {
-      await sleep(RATE_LIMIT_DELAY_MS);
+      await sleep(delayMs);
     }
 
     console.log(
@@ -452,18 +459,18 @@ async function fetchPaperMetadata(
 
     switch (type) {
       case "pmid":
-        result = await fetchFromPubMed(identifier);
+        result = await fetchFromPubMed(identifier, apiKey);
         break;
       case "pubmed_url": {
         const pmid = extractPmidFromUrl(identifier);
-        if (pmid) result = await fetchFromPubMed(pmid);
+        if (pmid) result = await fetchFromPubMed(pmid, apiKey);
         break;
       }
       case "doi":
-        result = await fetchByDoi(identifier);
+        result = await fetchByDoi(identifier, apiKey);
         break;
       case "title":
-        result = await fetchByTitle(identifier);
+        result = await fetchByTitle(identifier, apiKey);
         break;
     }
 
@@ -485,7 +492,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { identifiers } = await req.json();
+    const { identifiers, api_key } = await req.json();
 
     if (!Array.isArray(identifiers) || identifiers.length === 0) {
       return new Response(
@@ -509,7 +516,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const results = await fetchPaperMetadata(identifiers);
+    const results = await fetchPaperMetadata(identifiers, api_key || undefined);
 
     return new Response(JSON.stringify({ results }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

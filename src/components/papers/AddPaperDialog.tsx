@@ -12,7 +12,23 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp, FolderOpen, Tags, Check, ChevronsUpDown } from "lucide-react";
+import { Project, Tag } from "@/types/database";
+import { cn } from "@/lib/utils";
 
 interface ManualPaperData {
   title: string;
@@ -29,11 +45,17 @@ interface ManualPaperData {
 interface AddPaperDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmitManual?: (paperData: ManualPaperData) => Promise<void>;
+  onSubmitManual?: (
+    paperData: ManualPaperData,
+    options?: { targetProjectId?: string; targetTagIds?: string[] }
+  ) => Promise<void>;
   onBulkImport?: (
     identifiers: string[],
-    onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void
+    onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
+    options?: { targetProjectId?: string; targetTagIds?: string[] }
   ) => Promise<void>;
+  projects?: Project[];
+  tags?: Tag[];
 }
 
 // Parse bulk input: split on commas, newlines, or whitespace (but preserve DOIs with dots)
@@ -57,7 +79,7 @@ const emptyManualData: ManualPaperData = {
   driveUrl: "",
 };
 
-export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport }: AddPaperDialogProps) {
+export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, projects = [], tags = [] }: AddPaperDialogProps) {
   const [activeTab, setActiveTab] = useState<"import" | "manual">("import");
 
   // Manual mode state
@@ -70,6 +92,27 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
   const [bulkResults, setBulkResults] = useState<{ addedIds: string[]; skippedIds: string[]; failedIds: string[] }>({ addedIds: [], skippedIds: [], failedIds: [] });
   const [isDragging, setIsDragging] = useState(false);
+
+  // Project/Tag assignment state (shared between import & manual tabs)
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [tagOpen, setTagOpen] = useState(false);
+
+  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
+  const toggleTag = (tagId: string) => {
+    setSelectedTagIds((prev) =>
+      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]
+    );
+  };
+
+  const getImportOptions = () => {
+    const opts: { targetProjectId?: string; targetTagIds?: string[] } = {};
+    if (selectedProjectId) opts.targetProjectId = selectedProjectId;
+    if (selectedTagIds.length > 0) opts.targetTagIds = selectedTagIds;
+    return Object.keys(opts).length > 0 ? opts : undefined;
+  };
 
   const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -110,7 +153,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
 
     setLoading(true);
     try {
-      await onSubmitManual(manualData);
+      await onSubmitManual(manualData, getImportOptions());
       resetAndClose();
     } finally {
       setLoading(false);
@@ -131,7 +174,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
       await onBulkImport(ids, (current, total, addedIds, skippedIds, failedIds) => {
         setBulkProgress({ current, total });
         setBulkResults({ addedIds: [...addedIds], skippedIds: [...skippedIds], failedIds: [...failedIds] });
-      });
+      }, getImportOptions());
     } finally {
       setBulkRunning(false);
     }
@@ -143,6 +186,8 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     setBulkProgress({ current: 0, total: 0 });
     setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
     setManualData(emptyManualData);
+    setSelectedProjectId(null);
+    setSelectedTagIds([]);
     setActiveTab("import");
     onOpenChange(false);
   };
@@ -154,6 +199,109 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const bulkIds = parseBulkIdentifiers(bulkInput);
   const progressPercent = bulkProgress.total > 0 ? Math.round((bulkProgress.current / bulkProgress.total) * 100) : 0;
   const bulkComplete = !bulkRunning && bulkProgress.total > 0 && bulkProgress.current === bulkProgress.total;
+
+  // Shared assign-to section rendered in both tabs
+  const assignToSection = (projects.length > 0 || tags.length > 0) ? (
+    <div className="space-y-3 rounded-md border border-dashed p-3">
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assign on Import</p>
+      <div className="flex flex-wrap gap-2">
+        {projects.length > 0 && (
+          <Popover open={projectOpen} onOpenChange={setProjectOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
+                <FolderOpen className="h-3.5 w-3.5 mr-1" />
+                {selectedProject ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: selectedProject.color }} />
+                    {selectedProject.name}
+                  </span>
+                ) : (
+                  "Project"
+                )}
+                <ChevronsUpDown className="h-3 w-3 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-52 p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search projects..." />
+                <CommandList>
+                  <CommandEmpty>No projects found.</CommandEmpty>
+                  <CommandGroup>
+                    {selectedProjectId && (
+                      <CommandItem onSelect={() => { setSelectedProjectId(null); setProjectOpen(false); }}>
+                        <span className="text-muted-foreground">Clear selection</span>
+                      </CommandItem>
+                    )}
+                    {projects.map((p) => (
+                      <CommandItem
+                        key={p.id}
+                        value={p.name}
+                        onSelect={() => { setSelectedProjectId(p.id); setProjectOpen(false); }}
+                      >
+                        <Check className={cn("mr-2 h-4 w-4", selectedProjectId === p.id ? "opacity-100" : "opacity-0")} />
+                        <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: p.color }} />
+                        {p.name}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        )}
+
+        {tags.length > 0 && (
+          <Popover open={tagOpen} onOpenChange={setTagOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
+                <Tags className="h-3.5 w-3.5 mr-1" />
+                {selectedTagIds.length > 0 ? `${selectedTagIds.length} tag${selectedTagIds.length !== 1 ? "s" : ""}` : "Tags"}
+                <ChevronsUpDown className="h-3 w-3 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-52 p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search tags..." />
+                <CommandList>
+                  <CommandEmpty>No tags found.</CommandEmpty>
+                  <CommandGroup>
+                    {tags.map((t) => (
+                      <CommandItem key={t.id} value={t.name} onSelect={() => toggleTag(t.id)}>
+                        <Check className={cn("mr-2 h-4 w-4", selectedTagIds.includes(t.id) ? "opacity-100" : "opacity-0")} />
+                        <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: t.color }} />
+                        {t.name}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
+
+      {/* Show selected items as badges */}
+      {(selectedProject || selectedTagIds.length > 0) && (
+        <div className="flex flex-wrap gap-1">
+          {selectedProject && (
+            <Badge variant="outline" className="text-xs">
+              <span className="w-2 h-2 rounded-full mr-1" style={{ backgroundColor: selectedProject.color }} />
+              {selectedProject.name}
+            </Badge>
+          )}
+          {selectedTagIds.map((id) => {
+            const tag = tags.find((t) => t.id === id);
+            return tag ? (
+              <Badge key={id} variant="secondary" className="text-xs">
+                <span className="w-2 h-2 rounded-full mr-1" style={{ backgroundColor: tag.color }} />
+                {tag.name}
+              </Badge>
+            ) : null;
+          })}
+        </div>
+      )}
+    </div>
+  ) : null;
 
   return (
     <Dialog open={open} onOpenChange={bulkRunning ? undefined : resetAndClose}>
@@ -217,6 +365,9 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 </p>
               )}
             </div>
+
+            {/* Assign to project/tags */}
+            {!bulkRunning && !bulkComplete && assignToSection}
 
             {bulkRunning && (
               <div className="space-y-3">
@@ -398,6 +549,9 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                   disabled={loading}
                 />
               </div>
+
+              {/* Assign to project/tags */}
+              {assignToSection}
             </div>
 
             <div className="flex justify-end gap-2">

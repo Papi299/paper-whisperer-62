@@ -244,11 +244,11 @@ export function PaperList({
   return (
     <div
       ref={scrollContainerRef}
-      className="rounded-md border overflow-auto"
+      className="rounded-md border overflow-auto flex-1 min-h-0"
       style={{ maxHeight: "calc(100vh - 220px)" }}
     >
       <Table style={{ tableLayout: "fixed" }}>
-        <TableHeader className="sticky top-0 z-10 bg-background">
+        <TableHeader className="sticky top-0 z-20 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
           <TableRow>
             <ResizableTableHeader columnId="checkbox" label="" width={getWidth("checkbox")} onResize={onColumnResize} className="px-1">
               <Checkbox
