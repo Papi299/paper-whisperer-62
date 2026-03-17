@@ -117,6 +117,7 @@ function DashboardContent() {
     deleteTag,
     addPaperManually,
     bulkImportPapers,
+    bulkImportFromParsedData,
     updatePaper,
     deletePaper,
     bulkDeletePapers,
@@ -397,6 +398,7 @@ function DashboardContent() {
         onOpenChange={setAddPaperOpen}
         onSubmitManual={addPaperManually}
         onBulkImport={bulkImportPapers}
+        onFileImport={bulkImportFromParsedData}
         projects={projects}
         tags={tags}
       />

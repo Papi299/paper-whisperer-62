@@ -26,8 +26,10 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp, FolderOpen, Tags, Check, ChevronsUpDown } from "lucide-react";
+import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp, FolderOpen, Tags, Check, ChevronsUpDown, FileText } from "lucide-react";
 import { Project, Tag } from "@/types/database";
+import { RawPaperData } from "@/lib/normalizePaperData";
+import { parseFile, FileParseResult } from "@/lib/importParsers";
 import { cn } from "@/lib/utils";
 
 interface ManualPaperData {
@@ -52,6 +54,11 @@ interface AddPaperDialogProps {
   onBulkImport?: (
     identifiers: string[],
     onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
+    options?: { targetProjectId?: string; targetTagIds?: string[] }
+  ) => Promise<void>;
+  onFileImport?: (
+    papers: RawPaperData[],
+    onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void,
     options?: { targetProjectId?: string; targetTagIds?: string[] }
   ) => Promise<void>;
   projects?: Project[];
@@ -79,21 +86,31 @@ const emptyManualData: ManualPaperData = {
   driveUrl: "",
 };
 
-export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, projects = [], tags = [] }: AddPaperDialogProps) {
-  const [activeTab, setActiveTab] = useState<"import" | "manual">("import");
+const ACCEPTED_FILE_EXTENSIONS = [".bib", ".ris", ".csv", ".nbib", ".enw"];
+
+export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, projects = [], tags = [] }: AddPaperDialogProps) {
+  const [activeTab, setActiveTab] = useState<"import" | "file" | "manual">("import");
 
   // Manual mode state
   const [manualData, setManualData] = useState<ManualPaperData>(emptyManualData);
   const [loading, setLoading] = useState(false);
 
-  // Import state
+  // Import state (identifier-based)
   const [bulkInput, setBulkInput] = useState("");
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
   const [bulkResults, setBulkResults] = useState<{ addedIds: string[]; skippedIds: string[]; failedIds: string[] }>({ addedIds: [], skippedIds: [], failedIds: [] });
   const [isDragging, setIsDragging] = useState(false);
 
-  // Project/Tag assignment state (shared between import & manual tabs)
+  // File import state
+  const [parsedFile, setParsedFile] = useState<FileParseResult | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileImportRunning, setFileImportRunning] = useState(false);
+  const [fileImportProgress, setFileImportProgress] = useState({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
+  const [fileImportComplete, setFileImportComplete] = useState(false);
+  const [isFileDragging, setIsFileDragging] = useState(false);
+
+  // Project/Tag assignment state (shared between all tabs)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [projectOpen, setProjectOpen] = useState(false);
@@ -113,6 +130,8 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     if (selectedTagIds.length > 0) opts.targetTagIds = selectedTagIds;
     return Object.keys(opts).length > 0 ? opts : undefined;
   };
+
+  // ── Identifier import drag handlers ──
 
   const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -147,6 +166,60 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     reader.readAsText(file);
   }, []);
 
+  // ── File import drag handlers ──
+
+  const handleFileDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFileDragging(true);
+  }, []);
+
+  const handleFileDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFileDragging(false);
+  }, []);
+
+  const handleFileDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFileDragging(false);
+
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    processImportFile(file);
+  }, []);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processImportFile(file);
+    // Reset the input so the same file can be re-selected
+    e.target.value = "";
+  }, []);
+
+  const processImportFile = (file: File) => {
+    const ext = "." + file.name.split(".").pop()?.toLowerCase();
+    if (!ACCEPTED_FILE_EXTENSIONS.includes(ext)) {
+      setParsedFile({ papers: [], warnings: [`Unsupported format: ${ext}. Supported: .bib, .ris, .csv`] });
+      setFileName(file.name);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result;
+      if (typeof text === "string") {
+        const result = parseFile(text, file.name);
+        setParsedFile(result);
+        setFileName(file.name);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // ── Handlers ──
+
   const handleManualSubmit = async () => {
     if (!manualData.title.trim()) return;
     if (!onSubmitManual) return;
@@ -165,7 +238,6 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     const ids = parseBulkIdentifiers(bulkInput);
     if (ids.length === 0) return;
 
-    // Reset results at the start of each new import
     setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
     setBulkRunning(true);
     setBulkProgress({ current: 0, total: ids.length });
@@ -180,16 +252,45 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     }
   };
 
+  const handleFileImport = async () => {
+    if (!onFileImport || !parsedFile || parsedFile.papers.length === 0) return;
+
+    setFileImportRunning(true);
+    setFileImportComplete(false);
+    setFileImportProgress({ current: 0, total: parsedFile.papers.length, added: 0, skipped: 0, failed: 0 });
+
+    try {
+      await onFileImport(parsedFile.papers, (current, total, added, skipped, failed) => {
+        setFileImportProgress({ current, total, added, skipped, failed });
+      }, getImportOptions());
+    } finally {
+      setFileImportRunning(false);
+      setFileImportComplete(true);
+    }
+  };
+
   const resetAndClose = () => {
     setBulkInput("");
     setBulkRunning(false);
     setBulkProgress({ current: 0, total: 0 });
     setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
     setManualData(emptyManualData);
+    setParsedFile(null);
+    setFileName(null);
+    setFileImportRunning(false);
+    setFileImportComplete(false);
+    setFileImportProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
     setSelectedProjectId(null);
     setSelectedTagIds([]);
     setActiveTab("import");
     onOpenChange(false);
+  };
+
+  const resetFileImport = () => {
+    setParsedFile(null);
+    setFileName(null);
+    setFileImportComplete(false);
+    setFileImportProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
   };
 
   const updateManualField = (field: keyof ManualPaperData, value: string) => {
@@ -199,8 +300,10 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const bulkIds = parseBulkIdentifiers(bulkInput);
   const progressPercent = bulkProgress.total > 0 ? Math.round((bulkProgress.current / bulkProgress.total) * 100) : 0;
   const bulkComplete = !bulkRunning && bulkProgress.total > 0 && bulkProgress.current === bulkProgress.total;
+  const fileProgressPercent = fileImportProgress.total > 0 ? Math.round((fileImportProgress.current / fileImportProgress.total) * 100) : 0;
+  const isAnyRunning = bulkRunning || fileImportRunning;
 
-  // Shared assign-to section rendered in both tabs
+  // Shared assign-to section rendered in all tabs
   const assignToSection = (projects.length > 0 || tags.length > 0) ? (
     <div className="space-y-3 rounded-md border border-dashed p-3">
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assign on Import</p>
@@ -304,27 +407,32 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   ) : null;
 
   return (
-    <Dialog open={open} onOpenChange={bulkRunning ? undefined : resetAndClose}>
-      <DialogContent className="sm:max-w-[550px]">
+    <Dialog open={open} onOpenChange={isAnyRunning ? undefined : resetAndClose}>
+      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add Papers</DialogTitle>
           <DialogDescription>
-            Import by identifier or add manually.
+            Import by identifier, upload a file, or add manually.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "import" | "manual")}>
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="import" className="flex items-center gap-2" disabled={bulkRunning}>
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "import" | "file" | "manual")}>
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="import" className="flex items-center gap-1.5" disabled={isAnyRunning}>
               <Upload className="h-4 w-4" />
-              Import
+              Import IDs
             </TabsTrigger>
-            <TabsTrigger value="manual" className="flex items-center gap-2" disabled={bulkRunning}>
+            <TabsTrigger value="file" className="flex items-center gap-1.5" disabled={isAnyRunning}>
+              <FileText className="h-4 w-4" />
+              Import File
+            </TabsTrigger>
+            <TabsTrigger value="manual" className="flex items-center gap-1.5" disabled={isAnyRunning}>
               <PenLine className="h-4 w-4" />
               Manual
             </TabsTrigger>
           </TabsList>
 
+          {/* ── Import IDs Tab ── */}
           <TabsContent value="import" className="space-y-4 mt-4">
             <div className="space-y-2">
               <Label htmlFor="bulk-identifiers">
@@ -443,6 +551,171 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
             </div>
           </TabsContent>
 
+          {/* ── Import File Tab ── */}
+          <TabsContent value="file" className="space-y-4 mt-4">
+            {!parsedFile && !fileImportRunning && (
+              <div
+                onDragOver={handleFileDragOver}
+                onDragLeave={handleFileDragLeave}
+                onDrop={handleFileDrop}
+                className={cn(
+                  "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors cursor-pointer",
+                  isFileDragging
+                    ? "border-primary bg-primary/5"
+                    : "border-muted-foreground/25 hover:border-muted-foreground/50"
+                )}
+                onClick={() => document.getElementById("file-import-input")?.click()}
+              >
+                <FileUp className={cn("h-10 w-10 mb-3", isFileDragging ? "text-primary" : "text-muted-foreground")} />
+                <p className="text-sm font-medium mb-1">
+                  {isFileDragging ? "Drop your file here" : "Drop a file or click to browse"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Supports .bib (BibTeX), .ris (RIS/NBIB), .csv
+                </p>
+                <input
+                  id="file-import-input"
+                  type="file"
+                  accept=".bib,.ris,.csv,.nbib,.enw"
+                  className="hidden"
+                  onChange={handleFileSelect}
+                />
+              </div>
+            )}
+
+            {/* Parsed file preview */}
+            {parsedFile && !fileImportRunning && !fileImportComplete && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">{fileName}</span>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={resetFileImport} className="h-7 text-xs">
+                    Change file
+                  </Button>
+                </div>
+
+                {parsedFile.papers.length > 0 && (
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <p className="text-sm font-medium text-green-700 dark:text-green-400 mb-2">
+                      <CheckCircle2 className="h-4 w-4 inline mr-1" />
+                      Found {parsedFile.papers.length} paper{parsedFile.papers.length !== 1 ? "s" : ""}
+                    </p>
+
+                    {/* Preview table — first 5 papers */}
+                    <div className="rounded border bg-background max-h-40 overflow-y-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b bg-muted/50">
+                            <th className="text-left p-1.5 font-medium">#</th>
+                            <th className="text-left p-1.5 font-medium">Title</th>
+                            <th className="text-left p-1.5 font-medium">Year</th>
+                            <th className="text-left p-1.5 font-medium">Authors</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {parsedFile.papers.slice(0, 5).map((p, i) => (
+                            <tr key={i} className="border-b last:border-0">
+                              <td className="p-1.5 text-muted-foreground">{i + 1}</td>
+                              <td className="p-1.5 max-w-[200px] truncate">{p.title}</td>
+                              <td className="p-1.5 text-muted-foreground">{p.year ?? "—"}</td>
+                              <td className="p-1.5 text-muted-foreground max-w-[120px] truncate">
+                                {p.authors.length > 0 ? p.authors[0] + (p.authors.length > 1 ? ` +${p.authors.length - 1}` : "") : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {parsedFile.papers.length > 5 && (
+                        <p className="text-xs text-muted-foreground text-center py-1.5">
+                          … and {parsedFile.papers.length - 5} more
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Warnings */}
+                {parsedFile.warnings.length > 0 && (
+                  <div className="rounded-md border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950/30 p-3 space-y-1">
+                    <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400 flex items-center gap-1.5">
+                      <AlertTriangle className="h-4 w-4" />
+                      {parsedFile.warnings.length} warning{parsedFile.warnings.length !== 1 ? "s" : ""}
+                    </p>
+                    <ul className="text-xs text-yellow-600 dark:text-yellow-500 space-y-0.5 ml-5 list-disc">
+                      {parsedFile.warnings.slice(0, 5).map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                      {parsedFile.warnings.length > 5 && (
+                        <li className="text-muted-foreground">… and {parsedFile.warnings.length - 5} more</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Assign to project/tags */}
+                {parsedFile.papers.length > 0 && assignToSection}
+              </div>
+            )}
+
+            {/* Progress during import */}
+            {fileImportRunning && (
+              <div className="space-y-3">
+                <Progress value={fileProgressPercent} className="h-2" />
+                <p className="text-sm text-muted-foreground text-center">
+                  Importing {fileImportProgress.current} of {fileImportProgress.total}…
+                  {fileImportProgress.added > 0 && <span className="text-foreground"> · {fileImportProgress.added} added</span>}
+                  {fileImportProgress.skipped > 0 && <span className="text-muted-foreground"> · {fileImportProgress.skipped} skipped</span>}
+                  {fileImportProgress.failed > 0 && <span className="text-destructive"> · {fileImportProgress.failed} failed</span>}
+                </p>
+              </div>
+            )}
+
+            {/* Import complete summary */}
+            {fileImportComplete && (
+              <div className="rounded-md border border-border bg-muted/50 p-4 space-y-2">
+                <p className="font-medium text-sm">File Import Results</p>
+                <div className="flex items-center gap-4 text-sm">
+                  {fileImportProgress.added > 0 && (
+                    <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
+                      <CheckCircle2 className="h-4 w-4" />
+                      {fileImportProgress.added} added
+                    </span>
+                  )}
+                  {fileImportProgress.skipped > 0 && (
+                    <span className="flex items-center gap-1 text-yellow-700 dark:text-yellow-400">
+                      <AlertTriangle className="h-4 w-4" />
+                      {fileImportProgress.skipped} skipped
+                    </span>
+                  )}
+                  {fileImportProgress.failed > 0 && (
+                    <span className="flex items-center gap-1 text-destructive">
+                      <XCircle className="h-4 w-4" />
+                      {fileImportProgress.failed} failed
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={fileImportComplete ? resetAndClose : (parsedFile ? resetFileImport : resetAndClose)} disabled={fileImportRunning}>
+                {fileImportRunning ? "Running…" : (fileImportComplete ? "Close" : (parsedFile ? "Back" : "Cancel"))}
+              </Button>
+              {parsedFile && parsedFile.papers.length > 0 && !fileImportComplete && (
+                <Button
+                  onClick={handleFileImport}
+                  disabled={fileImportRunning || !onFileImport}
+                >
+                  {fileImportRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Import {parsedFile.papers.length} Paper{parsedFile.papers.length !== 1 ? "s" : ""}
+                </Button>
+              )}
+            </div>
+          </TabsContent>
+
+          {/* ── Manual Tab ── */}
           <TabsContent value="manual" className="space-y-4 mt-4">
             <div className="grid gap-4">
               <div className="space-y-2">

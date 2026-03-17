@@ -847,6 +847,159 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     [userId, queryClient, normalizationConfig, normalize, toast, updatePapersCache],
   );
 
+  /**
+   * Import pre-parsed papers (from .bib, .ris, .csv file parsers).
+   * Skips the metadata fetch phase — goes directly to normalize → RPC → cache.
+   */
+  const bulkImportFromParsedData = useCallback(
+    async (
+      parsedPapers: RawPaperData[],
+      onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void,
+      options?: { targetProjectId?: string; targetTagIds?: string[] }
+    ) => {
+      if (!userId || parsedPapers.length === 0) return;
+
+      const total = parsedPapers.length;
+      let addedCount = 0;
+      let skippedCount = 0;
+      let failedCount = 0;
+
+      onProgress?.(0, total, 0, 0, 0);
+
+      // Phase 1: Normalize via Web Worker
+      const normalizedPapers = normalizationConfig
+        ? await normalize(parsedPapers, normalizationConfig)
+        : parsedPapers.map((p) => ({
+            ...p,
+            mesh_terms: p.mesh_terms || [],
+            substances: p.substances || [],
+          }));
+
+      onProgress?.(Math.ceil(total * 0.3), total, 0, 0, 0);
+
+      // Phase 2: Build payload and call safe_bulk_insert_papers RPC
+      const insertPayload = normalizedPapers.map((normalized, i) => ({
+        title: normalized.title,
+        authors: normalized.authors || [],
+        year: normalized.year ?? null,
+        journal: normalized.journal ?? null,
+        pmid: normalized.pmid ?? null,
+        doi: normalized.doi ?? null,
+        abstract: normalized.abstract ?? null,
+        study_type: normalized.study_type ?? null,
+        raw_study_type: parsedPapers[i].study_type || null,
+        statistical_methods: null,
+        keywords: normalized.keywords || [],
+        mesh_terms: normalized.mesh_terms || [],
+        substances: normalized.substances || [],
+        pubmed_url: normalized.pubmed_url ?? null,
+        journal_url: normalized.journal_url ?? null,
+        drive_url: normalized.drive_url ?? null,
+      }));
+
+      const { data: rpcResult, error: rpcError } = await supabase.rpc(
+        "safe_bulk_insert_papers",
+        {
+          p_user_id: userId,
+          p_papers: insertPayload as unknown as Json,
+        }
+      );
+
+      if (rpcError) {
+        onProgress?.(total, total, 0, 0, total);
+        toast({
+          title: "File import failed",
+          description: rpcError.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Phase 3: Process RPC results
+      const results = (typeof rpcResult === "string" ? JSON.parse(rpcResult) : rpcResult) as BulkInsertResult[];
+      const newPapers: PaperWithTags[] = [];
+
+      for (const row of results) {
+        if (row.status === "inserted" && row.id) {
+          addedCount++;
+          const norm = normalizedPapers[row.index];
+          newPapers.push({
+            id: row.id,
+            user_id: userId,
+            title: norm.title,
+            authors: norm.authors,
+            year: norm.year,
+            journal: norm.journal,
+            pmid: norm.pmid,
+            doi: norm.doi,
+            abstract: norm.abstract,
+            study_type: norm.study_type,
+            raw_study_type: parsedPapers[row.index].study_type || null,
+            statistical_methods: null,
+            keywords: norm.keywords,
+            mesh_terms: norm.mesh_terms || [],
+            substances: norm.substances || [],
+            pubmed_url: norm.pubmed_url,
+            journal_url: norm.journal_url,
+            drive_url: norm.drive_url,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            tags: [],
+            projects: [],
+          });
+        } else if (row.status === "duplicate") {
+          skippedCount++;
+        } else {
+          failedCount++;
+        }
+      }
+
+      onProgress?.(total, total, addedCount, skippedCount, failedCount);
+
+      // Phase 4: Assign project/tags to newly inserted papers
+      const insertedPaperIds = newPapers.map((p) => p.id);
+      if (insertedPaperIds.length > 0) {
+        const projectId = options?.targetProjectId;
+        const tagIds = options?.targetTagIds;
+
+        if (projectId) {
+          await supabase.rpc("bulk_set_paper_projects", {
+            p_paper_ids: insertedPaperIds,
+            p_project_ids: [projectId],
+          });
+          const proj = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
+            ?.pages.flatMap((p) => p.projects)
+            .find((p) => p.id === projectId);
+          if (proj) {
+            newPapers.forEach((p) => { p.projects = [proj]; });
+          }
+        }
+
+        if (tagIds && tagIds.length > 0) {
+          await supabase.rpc("bulk_set_paper_tags", {
+            p_paper_ids: insertedPaperIds,
+            p_tag_ids: tagIds,
+          });
+          const allTags = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
+            ?.pages.flatMap((p) => p.tags) ?? [];
+          const matchedTags = allTags.filter((t) => tagIds.includes(t.id));
+          if (matchedTags.length > 0) {
+            newPapers.forEach((p) => { p.tags = matchedTags; });
+          }
+        }
+
+        updatePapersCache((old) => [...newPapers, ...old]);
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+      }
+
+      toast({
+        title: "File import complete",
+        description: `${addedCount} added, ${skippedCount} skipped (duplicates), ${failedCount} failed.`,
+      });
+    },
+    [userId, queryClient, normalizationConfig, normalize, toast, updatePapersCache],
+  );
+
   // Extract all unique keywords from papers
   const allKeywords = useMemo(() => {
     const keywordSet = new Set<string>();
@@ -981,6 +1134,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     addPapers,
     addPaperManually,
     bulkImportPapers,
+    bulkImportFromParsedData,
     updatePaper,
     deletePaper,
     bulkDeletePapers,
