@@ -125,7 +125,7 @@ export function ManageExclusionsModal({
               </div>
 
               {excludedKeywords.length > 0 && (
-                <ScrollArea className="max-h-48 w-full rounded-md border p-2">
+                <div className="max-h-48 w-full rounded-md border p-2 overflow-y-auto overscroll-contain">
                   <div className="flex flex-wrap gap-1">
                     {excludedKeywords.map((ek) => (
                       <Badge
@@ -143,7 +143,7 @@ export function ManageExclusionsModal({
                       </Badge>
                     ))}
                   </div>
-                </ScrollArea>
+                </div>
               )}
             </div>
 
@@ -193,7 +193,7 @@ export function ManageExclusionsModal({
               </div>
 
               {excludedStudyTypes.length > 0 && (
-                <ScrollArea className="max-h-48 w-full rounded-md border p-2">
+                <div className="max-h-48 w-full rounded-md border p-2 overflow-y-auto overscroll-contain">
                   <div className="flex flex-wrap gap-1">
                     {excludedStudyTypes.map((est) => (
                       <Badge
@@ -211,7 +211,7 @@ export function ManageExclusionsModal({
                       </Badge>
                     ))}
                   </div>
-                </ScrollArea>
+                </div>
               )}
             </div>
           </div>

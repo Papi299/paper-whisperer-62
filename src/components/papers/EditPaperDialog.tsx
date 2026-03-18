@@ -55,6 +55,7 @@ export function EditPaperDialog({
   const [statisticalMethods, setStatisticalMethods] = useState("");
   const [keywords, setKeywords] = useState("");
   const [driveUrl, setDriveUrl] = useState("");
+  const [pubmedUrl, setPubmedUrl] = useState("");
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -74,6 +75,7 @@ export function EditPaperDialog({
       setStatisticalMethods(paper.statistical_methods || "");
       setKeywords(paper.keywords.join(", "));
       setDriveUrl(paper.drive_url || "");
+      setPubmedUrl(paper.pubmed_url || "");
       setSelectedProjectIds(paper.projects.map((p) => p.id));
       setSelectedTagIds(paper.tags.map((t) => t.id));
     }
@@ -97,6 +99,7 @@ export function EditPaperDialog({
         statistical_methods: statisticalMethods || null,
         keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean),
         drive_url: driveUrl || null,
+        pubmed_url: pubmedUrl || null,
         tagIds: selectedTagIds,
         projectIds: selectedProjectIds,
       });
@@ -246,6 +249,17 @@ export function EditPaperDialog({
             />
           </div>
 
+          <div className="space-y-2">
+            <Label htmlFor="pubmedUrl">PubMed URL</Label>
+            <Input
+              id="pubmedUrl"
+              value={pubmedUrl}
+              onChange={(e) => setPubmedUrl(e.target.value)}
+              placeholder="https://pubmed.ncbi.nlm.nih.gov/..."
+              disabled={loading}
+            />
+          </div>
+
           {/* Projects — Searchable Combobox */}
           <div className="space-y-2">
             <Label>Projects</Label>
@@ -261,7 +275,7 @@ export function EditPaperDialog({
                   <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4}>
                 <Command>
                   <CommandInput placeholder="Search projects..." />
                   <CommandList>
@@ -316,7 +330,7 @@ export function EditPaperDialog({
                   <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4}>
                 <Command>
                   <CommandInput placeholder="Search tags..." />
                   <CommandList>
