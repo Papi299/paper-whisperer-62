@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Trash2, Pencil } from "lucide-react";
+import { Plus, Trash2, Pencil, Search } from "lucide-react";
 import { Synonym } from "@/hooks/useSynonymPool";
 
 interface ManageSynonymsModalProps {
@@ -37,6 +37,7 @@ export function ManageSynonymsModal({
   const [editingGroup, setEditingGroup] = useState<Synonym | null>(null);
   const [canonicalTerm, setCanonicalTerm] = useState("");
   const [synonymsText, setSynonymsText] = useState("");
+  const [search, setSearch] = useState("");
 
   const parseSynonyms = (text: string): string[] => {
     const matches = text.match(/\[([^\]]+)\]/g);
@@ -48,9 +49,30 @@ export function ManageSynonymsModal({
     return synonyms.map((s) => `[${s}]`).join("");
   };
 
+  // Check if canonical term already exists (excluding current editing group)
+  const isDuplicateCanonical = useMemo(() => {
+    if (!canonicalTerm.trim()) return false;
+    return synonymGroups.some(
+      (g) =>
+        g.canonical_term.toLowerCase() === canonicalTerm.trim().toLowerCase() &&
+        g.id !== editingGroup?.id
+    );
+  }, [canonicalTerm, synonymGroups, editingGroup]);
+
+  // Filter groups by search term (matches canonical OR synonyms)
+  const filteredGroups = useMemo(() => {
+    if (!search.trim()) return synonymGroups;
+    const q = search.toLowerCase();
+    return synonymGroups.filter(
+      (g) =>
+        g.canonical_term.toLowerCase().includes(q) ||
+        g.synonyms.some((s) => s.toLowerCase().includes(q))
+    );
+  }, [synonymGroups, search]);
+
   const handleSubmit = async () => {
     const synonyms = parseSynonyms(synonymsText);
-    if (!canonicalTerm.trim()) return;
+    if (!canonicalTerm.trim() || isDuplicateCanonical) return;
 
     if (editingGroup) {
       await onUpdate(editingGroup.id, canonicalTerm.trim(), synonyms);
@@ -75,9 +97,14 @@ export function ManageSynonymsModal({
     setSynonymsText("");
   };
 
+  const handleMainClose = (o: boolean) => {
+    if (!o) setSearch("");
+    onOpenChange(o);
+  };
+
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={handleMainClose}>
         <DialogContent className="bg-background max-w-lg">
           <DialogHeader>
             <DialogTitle>Manage Synonyms</DialogTitle>
@@ -97,13 +124,24 @@ export function ManageSynonymsModal({
               Add Synonym Group
             </Button>
 
+            {/* Search filter */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search synonym groups..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="h-8 text-sm pl-8"
+              />
+            </div>
+
             <div className="flex flex-col gap-2 overflow-y-auto max-h-[50vh] p-1">
-                {synonymGroups.length === 0 ? (
+                {filteredGroups.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-8">
-                    No synonym groups yet
+                    {synonymGroups.length === 0 ? "No synonym groups yet" : "No matches found"}
                   </p>
                 ) : (
-                  synonymGroups.map((group) => (
+                  filteredGroups.map((group) => (
                     <div
                       key={group.id}
                       className="flex items-start justify-between gap-2 rounded-md border p-2 text-sm"
@@ -160,6 +198,11 @@ export function ManageSynonymsModal({
                 value={canonicalTerm}
                 onChange={(e) => setCanonicalTerm(e.target.value)}
               />
+              {isDuplicateCanonical && (
+                <p className="text-xs text-destructive">
+                  A synonym group with this canonical term already exists.
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="synonyms">
@@ -178,7 +221,7 @@ export function ManageSynonymsModal({
             <Button variant="outline" onClick={resetEditForm}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit} disabled={!canonicalTerm.trim()}>
+            <Button onClick={handleSubmit} disabled={!canonicalTerm.trim() || isDuplicateCanonical}>
               {editingGroup ? "Update" : "Add"}
             </Button>
           </DialogFooter>

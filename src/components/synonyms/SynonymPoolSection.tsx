@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -53,10 +53,20 @@ export function SynonymPoolSection({
     return synonyms.map((s) => `[${s}]`).join("");
   };
 
+  // Check if canonical term already exists (excluding current editing group)
+  const isDuplicateCanonical = useMemo(() => {
+    if (!canonicalTerm.trim()) return false;
+    return synonymGroups.some(
+      (g) =>
+        g.canonical_term.toLowerCase() === canonicalTerm.trim().toLowerCase() &&
+        g.id !== editingGroup?.id
+    );
+  }, [canonicalTerm, synonymGroups, editingGroup]);
+
   const handleSubmit = async () => {
     const synonyms = parseSynonyms(synonymsText);
 
-    if (!canonicalTerm.trim()) return;
+    if (!canonicalTerm.trim() || isDuplicateCanonical) return;
 
     if (editingGroup) {
       await onUpdate(editingGroup.id, canonicalTerm.trim(), synonyms);
@@ -128,6 +138,11 @@ export function SynonymPoolSection({
                   value={canonicalTerm}
                   onChange={(e) => setCanonicalTerm(e.target.value)}
                 />
+                {isDuplicateCanonical && (
+                  <p className="text-xs text-destructive">
+                    A synonym group with this canonical term already exists.
+                  </p>
+                )}
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="synonyms">
@@ -146,7 +161,7 @@ export function SynonymPoolSection({
               <Button variant="outline" onClick={() => handleDialogOpenChange(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleSubmit} disabled={!canonicalTerm.trim()}>
+              <Button onClick={handleSubmit} disabled={!canonicalTerm.trim() || isDuplicateCanonical}>
                 {editingGroup ? "Update" : "Add"}
               </Button>
             </DialogFooter>

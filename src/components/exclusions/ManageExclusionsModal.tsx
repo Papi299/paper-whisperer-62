@@ -125,23 +125,25 @@ export function ManageExclusionsModal({
               </div>
 
               {excludedKeywords.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {excludedKeywords.map((ek) => (
-                    <Badge
-                      key={ek.id}
-                      variant="destructive"
-                      className="text-xs flex items-center gap-1 pr-1"
-                    >
-                      {ek.keyword}
-                      <button
-                        onClick={() => onDeleteExcludedKeyword(ek.id)}
-                        className="hover:bg-destructive-foreground/20 rounded p-0.5"
+                <ScrollArea className="max-h-48 w-full rounded-md border p-2">
+                  <div className="flex flex-wrap gap-1">
+                    {excludedKeywords.map((ek) => (
+                      <Badge
+                        key={ek.id}
+                        variant="destructive"
+                        className="text-xs flex items-center gap-1 pr-1"
                       >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
+                        <span className="break-all">{ek.keyword}</span>
+                        <button
+                          onClick={() => onDeleteExcludedKeyword(ek.id)}
+                          className="hover:bg-destructive-foreground/20 rounded p-0.5 shrink-0"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </ScrollArea>
               )}
             </div>
 
@@ -191,23 +193,25 @@ export function ManageExclusionsModal({
               </div>
 
               {excludedStudyTypes.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {excludedStudyTypes.map((est) => (
-                    <Badge
-                      key={est.id}
-                      variant="destructive"
-                      className="text-xs flex items-center gap-1 pr-1"
-                    >
-                      {est.study_type}
-                      <button
-                        onClick={() => onDeleteExcludedStudyType(est.id)}
-                        className="hover:bg-destructive-foreground/20 rounded p-0.5"
+                <ScrollArea className="max-h-48 w-full rounded-md border p-2">
+                  <div className="flex flex-wrap gap-1">
+                    {excludedStudyTypes.map((est) => (
+                      <Badge
+                        key={est.id}
+                        variant="destructive"
+                        className="text-xs flex items-center gap-1 pr-1"
                       >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
+                        <span className="break-all">{est.study_type}</span>
+                        <button
+                          onClick={() => onDeleteExcludedStudyType(est.id)}
+                          className="hover:bg-destructive-foreground/20 rounded p-0.5 shrink-0"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </ScrollArea>
               )}
             </div>
           </div>
