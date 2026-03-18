@@ -23,10 +23,12 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { PaperWithTags, Project, Tag } from "@/types/database";
-import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags, Trash2, FileText, Upload } from "lucide-react";
+import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags, Trash2, FileText, Upload, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAttachments, OnAttachmentsChange } from "@/hooks/useAttachments";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface EditPaperDialogProps {
   paper: PaperWithTags | null;
@@ -61,6 +63,8 @@ export function EditPaperDialog({
   const [keywords, setKeywords] = useState("");
   const [driveUrl, setDriveUrl] = useState("");
   const [pubmedUrl, setPubmedUrl] = useState("");
+  const [tldr, setTldr] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -68,6 +72,8 @@ export function EditPaperDialog({
   const [tagOpen, setTagOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  const { toast } = useToast();
 
   const { attachments, uploading, uploadAttachments, deleteAttachment } = useAttachments(
     paper?.id,
@@ -89,6 +95,7 @@ export function EditPaperDialog({
       setKeywords(paper.keywords.join(", "));
       setDriveUrl(paper.drive_url || "");
       setPubmedUrl(paper.pubmed_url || "");
+      setTldr(paper.tldr || "");
       setSelectedProjectIds(paper.projects.map((p) => p.id));
       setSelectedTagIds(paper.tags.map((t) => t.id));
     }
@@ -113,12 +120,33 @@ export function EditPaperDialog({
         keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean),
         drive_url: driveUrl || null,
         pubmed_url: pubmedUrl || null,
+        tldr: tldr || null,
         tagIds: selectedTagIds,
         projectIds: selectedProjectIds,
       });
       onOpenChange(false);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    if (!abstract.trim()) return;
+    setAnalyzing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("analyze-paper", {
+        body: { title, abstract },
+      });
+      if (error) throw error;
+      if (data.studyType) setStudyType(data.studyType);
+      if (data.statisticalMethods) setStatisticalMethods(data.statisticalMethods);
+      if (data.tldr) setTldr(data.tldr);
+      toast({ title: "AI analysis complete" });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Analysis failed";
+      toast({ title: "AI analysis failed", description: msg, variant: "destructive" });
+    } finally {
+      setAnalyzing(false);
     }
   };
 
@@ -246,12 +274,39 @@ export function EditPaperDialog({
           {/* ── Column 2: Categorization ── */}
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="abstract">Abstract</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="abstract">Abstract</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5"
+                  disabled={!abstract.trim() || analyzing || loading}
+                  onClick={handleAnalyze}
+                >
+                  {analyzing ? (
+                    <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Analyzing...</>
+                  ) : (
+                    <><Sparkles className="h-3.5 w-3.5" /> AI Analyze</>
+                  )}
+                </Button>
+              </div>
               <Textarea
                 id="abstract"
                 value={abstract}
                 onChange={(e) => setAbstract(e.target.value)}
                 rows={5}
+                disabled={loading}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="tldr">TL;DR</Label>
+              <Input
+                id="tldr"
+                value={tldr}
+                onChange={(e) => setTldr(e.target.value)}
+                placeholder="AI-generated summary..."
                 disabled={loading}
               />
             </div>

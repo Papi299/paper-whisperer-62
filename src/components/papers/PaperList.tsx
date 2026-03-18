@@ -472,6 +472,9 @@ function PaperRow({
           <TableCell style={{ width: getWidth("title"), minWidth: getWidth("title"), maxWidth: getWidth("title") }}>
             <div className="space-y-1">
               <p className="font-medium whitespace-normal break-words leading-snug">{paper.title}</p>
+              {paper.tldr && (
+                <p className="text-xs text-muted-foreground italic whitespace-normal break-words leading-snug">{paper.tldr}</p>
+              )}
               {paper.projects.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {paper.projects.map((proj) => (
