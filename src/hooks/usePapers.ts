@@ -54,7 +54,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       // Papers: paginated
       const { data: papersData, error: papersError } = await supabase
         .from("papers")
-        .select("*")
+        .select("*, paper_attachments(id, file_name, file_path, file_type)")
         .eq("user_id", userId!)
         .order("created_at", { ascending: false })
         .range(from, to);

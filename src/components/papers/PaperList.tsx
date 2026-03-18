@@ -29,7 +29,9 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2 } from "lucide-react";
+import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2, Paperclip, FileText } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { supabase } from "@/integrations/supabase/client";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
@@ -651,6 +653,42 @@ function PaperRow({
                   <span className="text-xs font-bold">GS</span>
                 </a>
               </Button>
+              {(paper.paper_attachments?.length ?? 0) > 0 && (
+                <Popover modal={true}>
+                  <PopoverTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 relative" title="Attachments">
+                      <Paperclip className="h-4 w-4" />
+                      <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                        {paper.paper_attachments!.length}
+                      </span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-64 p-2" side="bottom" align="start" style={{ pointerEvents: 'auto' }}>
+                    <p className="text-xs font-medium text-muted-foreground mb-1.5">Attachments</p>
+                    <div className="max-h-[200px] overflow-y-auto overscroll-contain space-y-0.5">
+                      {paper.paper_attachments!.map((att) => {
+                        const url = supabase.storage.from("attachments").getPublicUrl(att.file_path).data.publicUrl;
+                        return (
+                          <a
+                            key={att.id}
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+                          >
+                            {att.file_type.startsWith("image/") ? (
+                              <img src={url} alt="" className="h-6 w-6 rounded object-cover flex-shrink-0" />
+                            ) : (
+                              <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                            )}
+                            <span className="truncate">{att.file_name}</span>
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
             </div>
           </TableCell>
         )}
