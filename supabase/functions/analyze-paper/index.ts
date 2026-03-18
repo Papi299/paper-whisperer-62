@@ -64,10 +64,14 @@ Deno.serve(async (req) => {
     const geminiBody = {
       system_instruction: {
         parts: [{
-          text: `You are an academic paper analyzer. Analyze the provided paper title and abstract. Return ONLY a valid JSON object with exactly three keys:
-- "tldr": A single-sentence summary of the paper (max 15 words).
-- "studyType": The type of study (e.g., RCT, Meta-Analysis, Cohort Study, Systematic Review, Narrative Review, Cross-Sectional, Case-Control, Case Report, In-Vitro, Animal Study, Observational, Qualitative). Pick the single most accurate type.
-- "statisticalMethods": A brief comma-separated list of the main statistical methods used (e.g., "ANOVA, logistic regression, Cox proportional hazards"). Return an empty string if no statistical methods are identifiable.`,
+          text: `You are an expert academic data extractor. Analyze the provided title and abstract.
+CRITICAL RULES:
+1. NO GUESSING. If a specific study type or statistical method is NOT explicitly stated or strictly implied, output 'Not specified'.
+2. ENGLISH ONLY. All output values must be in English, regardless of the input language.
+3. Return ONLY a valid JSON object with exactly these three keys:
+   - tldr: A concise summary of the objective and core finding. Make it 2 to 3 sentences (~30 words). ZERO FILLER: Do not start with phrases like 'This study aims to' or 'The authors found'. Start directly with the facts.
+   - studyType: The MOST SPECIFIC and granular design mentioned (e.g., 'Meta-analysis of Randomized Controlled Trials'). NORMALIZATION: Always expand acronyms (e.g., output 'Randomized Controlled Trial' instead of 'RCT'). Output 'Not specified' if unknown.
+   - statisticalMethods: A comma-separated list of the specific analytical tests/models used (e.g., ANOVA, Kaplan-Meier, logistic regression, Odds Ratio, Effect Size). EXCLUSION RULE: Do NOT include software names (e.g., SPSS, R), generic descriptive statistics (e.g., Mean, SD), or specific p-values. Output 'Not specified' if none are mentioned.`,
         }],
       },
       contents: [{
