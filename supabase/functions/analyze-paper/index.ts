@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
     }
     console.log("4a. Gemini key present, length:", geminiKey.length);
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key=${geminiKey}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiKey}`;
     console.log("5. Calling Gemini API");
 
     const geminiBody = {
