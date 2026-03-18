@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,9 +23,10 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { PaperWithTags, Project, Tag } from "@/types/database";
-import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags } from "lucide-react";
+import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags, Trash2, FileText, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useAttachments } from "@/hooks/useAttachments";
 
 interface EditPaperDialogProps {
   paper: PaperWithTags | null;
@@ -34,6 +35,7 @@ interface EditPaperDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (paper: Partial<PaperWithTags> & { tagIds: string[]; projectIds: string[] }) => Promise<void>;
+  userId?: string | null;
 }
 
 export function EditPaperDialog({
@@ -43,6 +45,7 @@ export function EditPaperDialog({
   open,
   onOpenChange,
   onSave,
+  userId,
 }: EditPaperDialogProps) {
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
@@ -61,6 +64,13 @@ export function EditPaperDialog({
   const [loading, setLoading] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const { attachments, uploading, uploadAttachment, deleteAttachment } = useAttachments(
+    paper?.id,
+    userId,
+  );
 
   useEffect(() => {
     if (paper) {
@@ -377,6 +387,86 @@ export function EditPaperDialog({
             </div>
           </div>
         </div>
+
+        {/* ── Visuals & Attachments (full width) ── */}
+        {userId && paper && (
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2 text-sm font-medium">
+              <Upload className="h-4 w-4" />
+              Visuals &amp; Attachments
+            </Label>
+
+            {/* Drop zone */}
+            <div
+              className={cn(
+                "flex flex-col items-center justify-center rounded-md border-2 border-dashed p-6 text-center text-sm text-muted-foreground cursor-pointer transition-colors",
+                dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
+                uploading && "pointer-events-none opacity-60",
+              )}
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const file = e.dataTransfer.files[0];
+                if (file) uploadAttachment(file);
+              }}
+            >
+              {uploading ? (
+                <><Loader2 className="mb-2 h-5 w-5 animate-spin" /> Uploading…</>
+              ) : (
+                <>
+                  <Upload className="mb-2 h-5 w-5" />
+                  <span>Drop a file here or <span className="text-primary underline">browse</span></span>
+                  <span className="mt-1 text-xs">Images &amp; PDFs · Max 20 MB</span>
+                </>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,application/pdf"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) uploadAttachment(file);
+                e.target.value = "";
+              }}
+            />
+
+            {/* Thumbnail grid */}
+            {attachments.length > 0 && (
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
+                {attachments.map((att) => (
+                  <div key={att.id} className="group relative rounded-md border overflow-hidden bg-muted">
+                    <a href={att.publicUrl} target="_blank" rel="noopener noreferrer" className="block">
+                      {att.file_type.startsWith("image/") ? (
+                        <img
+                          src={att.publicUrl}
+                          alt={att.file_name}
+                          className="h-20 w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-20 w-full items-center justify-center">
+                          <FileText className="h-8 w-8 text-muted-foreground" />
+                        </div>
+                      )}
+                    </a>
+                    <p className="truncate px-1 py-0.5 text-[10px] text-muted-foreground">{att.file_name}</p>
+                    <button
+                      onClick={() => deleteAttachment(att)}
+                      className="absolute right-1 top-1 hidden rounded bg-destructive p-0.5 text-destructive-foreground group-hover:flex"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>

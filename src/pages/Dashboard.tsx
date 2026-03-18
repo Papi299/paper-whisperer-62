@@ -410,6 +410,7 @@ function DashboardContent() {
         open={!!editingPaper}
         onOpenChange={(open) => !open && setEditingPaper(null)}
         onSave={handleSavePaper}
+        userId={user?.id}
       />
 
       <EditProjectDialog
