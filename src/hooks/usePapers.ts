@@ -505,6 +505,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     abstract: string;
     keywords: string;
     driveUrl: string;
+    pubmedUrl?: string;
   }, options?: { targetProjectId?: string; targetTagIds?: string[] }) => {
     if (!userId) return;
 
@@ -539,7 +540,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       mesh_terms: [],
       substances: [],
       study_type: null,
-      pubmed_url: manualPmid ? `https://pubmed.ncbi.nlm.nih.gov/${manualPmid}/` : null,
+      pubmed_url: paperData.pubmedUrl?.trim() || (manualPmid ? `https://pubmed.ncbi.nlm.nih.gov/${manualPmid}/` : null),
       journal_url: null,
       drive_url: paperData.driveUrl.trim() || null,
     };
