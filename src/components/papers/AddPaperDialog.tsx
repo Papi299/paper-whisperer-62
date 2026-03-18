@@ -315,7 +315,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assign on Import</p>
       <div className="flex flex-wrap gap-2">
         {projects.length > 0 && (
-          <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={false}>
+          <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={true}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
                 <FolderOpen className="h-3.5 w-3.5 mr-1" />
@@ -325,7 +325,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 <ChevronsUpDown className="h-3 w-3 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
+            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
               <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                 <CommandInput placeholder="Search projects..." />
                 <CommandList>
@@ -350,7 +350,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
         )}
 
         {tags.length > 0 && (
-          <Popover open={tagOpen} onOpenChange={setTagOpen} modal={false}>
+          <Popover open={tagOpen} onOpenChange={setTagOpen} modal={true}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
                 <Tags className="h-3.5 w-3.5 mr-1" />
@@ -358,7 +358,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 <ChevronsUpDown className="h-3 w-3 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
+            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
               <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                 <CommandInput placeholder="Search tags..." />
                 <CommandList>

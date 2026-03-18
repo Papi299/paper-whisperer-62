@@ -269,7 +269,7 @@ export function EditPaperDialog({
             {/* Projects — Searchable Combobox */}
             <div className="space-y-2 relative">
               <Label>Projects</Label>
-              <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={false}>
+              <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={true}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
                     <span className="flex items-center gap-1.5">
@@ -281,7 +281,7 @@ export function EditPaperDialog({
                     <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
                   <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                     <CommandInput placeholder="Search projects..." />
                     <CommandList>
@@ -324,7 +324,7 @@ export function EditPaperDialog({
             {/* Tags — Searchable Combobox */}
             <div className="space-y-2 relative">
               <Label>Tags</Label>
-              <Popover open={tagOpen} onOpenChange={setTagOpen} modal={false}>
+              <Popover open={tagOpen} onOpenChange={setTagOpen} modal={true}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
                     <span className="flex items-center gap-1.5">
@@ -336,7 +336,7 @@ export function EditPaperDialog({
                     <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
                   <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                     <CommandInput placeholder="Search tags..." />
                     <CommandList>
