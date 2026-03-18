@@ -275,7 +275,7 @@ export function EditPaperDialog({
                   <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4}>
+              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
                 <Command>
                   <CommandInput placeholder="Search projects..." />
                   <CommandList>
@@ -330,7 +330,7 @@ export function EditPaperDialog({
                   <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4}>
+              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
                 <Command>
                   <CommandInput placeholder="Search tags..." />
                   <CommandList>
