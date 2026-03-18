@@ -315,7 +315,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assign on Import</p>
       <div className="flex flex-wrap gap-2">
         {projects.length > 0 && (
-          <Popover open={projectOpen} onOpenChange={setProjectOpen}>
+          <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={false}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
                 <FolderOpen className="h-3.5 w-3.5 mr-1" />
@@ -326,7 +326,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
-              <Command>
+              <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                 <CommandInput placeholder="Search projects..." />
                 <CommandList>
                   <CommandEmpty>No projects found.</CommandEmpty>
@@ -350,7 +350,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
         )}
 
         {tags.length > 0 && (
-          <Popover open={tagOpen} onOpenChange={setTagOpen}>
+          <Popover open={tagOpen} onOpenChange={setTagOpen} modal={false}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
                 <Tags className="h-3.5 w-3.5 mr-1" />
@@ -359,7 +359,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
-              <Command>
+              <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                 <CommandInput placeholder="Search tags..." />
                 <CommandList>
                   <CommandEmpty>No tags found.</CommandEmpty>
@@ -413,7 +413,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
 
   return (
     <Dialog open={open} onOpenChange={isAnyRunning ? undefined : resetAndClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-4xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add Papers</DialogTitle>
           <DialogDescription>
@@ -720,127 +720,133 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
             </div>
           </TabsContent>
 
-          {/* ── Manual Tab ── */}
+          {/* ── Manual Tab — 2-Column Layout ── */}
           <TabsContent value="manual" className="space-y-4 mt-4">
-            <div className="grid gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="manual-title">Title *</Label>
-                <Input
-                  id="manual-title"
-                  placeholder="Paper title"
-                  value={manualData.title}
-                  onChange={(e) => updateManualField("title", e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Column 1: Metadata */}
+              <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="manual-authors">Authors (comma-separated)</Label>
+                  <Label htmlFor="manual-title">Title *</Label>
                   <Input
-                    id="manual-authors"
-                    placeholder="Smith J, Doe A"
-                    value={manualData.authors}
-                    onChange={(e) => updateManualField("authors", e.target.value)}
+                    id="manual-title"
+                    placeholder="Paper title"
+                    value={manualData.title}
+                    onChange={(e) => updateManualField("title", e.target.value)}
                     disabled={loading}
                   />
                 </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="manual-authors">Authors (comma-separated)</Label>
+                    <Input
+                      id="manual-authors"
+                      placeholder="Smith J, Doe A"
+                      value={manualData.authors}
+                      onChange={(e) => updateManualField("authors", e.target.value)}
+                      disabled={loading}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="manual-year">Year</Label>
+                    <Input
+                      id="manual-year"
+                      placeholder="2024"
+                      value={manualData.year}
+                      onChange={(e) => updateManualField("year", e.target.value)}
+                      disabled={loading}
+                    />
+                  </div>
+                </div>
+
                 <div className="space-y-2">
-                  <Label htmlFor="manual-year">Year</Label>
+                  <Label htmlFor="manual-journal">Journal</Label>
                   <Input
-                    id="manual-year"
-                    placeholder="2024"
-                    value={manualData.year}
-                    onChange={(e) => updateManualField("year", e.target.value)}
+                    id="manual-journal"
+                    placeholder="Journal of Example Studies"
+                    value={manualData.journal}
+                    onChange={(e) => updateManualField("journal", e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="manual-pmid">PMID</Label>
+                    <Input
+                      id="manual-pmid"
+                      placeholder="12345678"
+                      value={manualData.pmid}
+                      onChange={(e) => updateManualField("pmid", e.target.value)}
+                      disabled={loading}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="manual-doi">DOI</Label>
+                    <Input
+                      id="manual-doi"
+                      placeholder="10.1000/xyz123"
+                      value={manualData.doi}
+                      onChange={(e) => updateManualField("doi", e.target.value)}
+                      disabled={loading}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="manual-keywords">Keywords (comma-separated)</Label>
+                  <Input
+                    id="manual-keywords"
+                    placeholder="keyword1, keyword2, keyword3"
+                    value={manualData.keywords}
+                    onChange={(e) => updateManualField("keywords", e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="manual-drive" className="flex items-center gap-2">
+                    <LinkIcon className="h-4 w-4" />
+                    Google Drive Link (optional)
+                  </Label>
+                  <Input
+                    id="manual-drive"
+                    placeholder="https://drive.google.com/file/d/..."
+                    value={manualData.driveUrl}
+                    onChange={(e) => updateManualField("driveUrl", e.target.value)}
                     disabled={loading}
                   />
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="manual-journal">Journal</Label>
-                <Input
-                  id="manual-journal"
-                  placeholder="Journal of Example Studies"
-                  value={manualData.journal}
-                  onChange={(e) => updateManualField("journal", e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+              {/* Column 2: Categorization */}
+              <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="manual-pmid">PMID</Label>
-                  <Input
-                    id="manual-pmid"
-                    placeholder="12345678"
-                    value={manualData.pmid}
-                    onChange={(e) => updateManualField("pmid", e.target.value)}
+                  <Label htmlFor="manual-abstract">Abstract</Label>
+                  <Textarea
+                    id="manual-abstract"
+                    placeholder="Paper abstract..."
+                    value={manualData.abstract}
+                    onChange={(e) => updateManualField("abstract", e.target.value)}
+                    rows={5}
                     disabled={loading}
                   />
                 </div>
+
                 <div className="space-y-2">
-                  <Label htmlFor="manual-doi">DOI</Label>
+                  <Label htmlFor="manual-pubmedUrl">PubMed URL</Label>
                   <Input
-                    id="manual-doi"
-                    placeholder="10.1000/xyz123"
-                    value={manualData.doi}
-                    onChange={(e) => updateManualField("doi", e.target.value)}
+                    id="manual-pubmedUrl"
+                    placeholder="https://pubmed.ncbi.nlm.nih.gov/..."
+                    value={manualData.pubmedUrl}
+                    onChange={(e) => updateManualField("pubmedUrl", e.target.value)}
                     disabled={loading}
                   />
                 </div>
-              </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="manual-keywords">Keywords (comma-separated)</Label>
-                <Input
-                  id="manual-keywords"
-                  placeholder="keyword1, keyword2, keyword3"
-                  value={manualData.keywords}
-                  onChange={(e) => updateManualField("keywords", e.target.value)}
-                  disabled={loading}
-                />
+                {/* Assign to project/tags */}
+                {assignToSection}
               </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="manual-drive" className="flex items-center gap-2">
-                  <LinkIcon className="h-4 w-4" />
-                  Google Drive Link (optional)
-                </Label>
-                <Input
-                  id="manual-drive"
-                  placeholder="https://drive.google.com/file/d/..."
-                  value={manualData.driveUrl}
-                  onChange={(e) => updateManualField("driveUrl", e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="manual-pubmed-url">PubMed URL</Label>
-                <Input
-                  id="manual-pubmed-url"
-                  placeholder="https://pubmed.ncbi.nlm.nih.gov/..."
-                  value={manualData.pubmedUrl}
-                  onChange={(e) => updateManualField("pubmedUrl", e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="manual-abstract">Abstract</Label>
-                <Textarea
-                  id="manual-abstract"
-                  placeholder="Paper abstract..."
-                  value={manualData.abstract}
-                  onChange={(e) => updateManualField("abstract", e.target.value)}
-                  rows={3}
-                  disabled={loading}
-                />
-              </div>
-
-              {/* Assign to project/tags */}
-              {assignToSection}
             </div>
 
             <div className="flex justify-end gap-2">

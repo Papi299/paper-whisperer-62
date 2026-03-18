@@ -123,262 +123,269 @@ export function EditPaperDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Paper</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="title">Title</Label>
-            <Input
-              id="title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={loading}
-            />
-          </div>
 
-          <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* ── Column 1: Metadata ── */}
+          <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="authors">Authors (comma-separated)</Label>
+              <Label htmlFor="title">Title</Label>
               <Input
-                id="authors"
-                value={authors}
-                onChange={(e) => setAuthors(e.target.value)}
+                id="title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
                 disabled={loading}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="year">Year</Label>
-              <Input
-                id="year"
-                type="number"
-                value={year}
-                onChange={(e) => setYear(e.target.value)}
-                disabled={loading}
-              />
-            </div>
-          </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="journal">Journal</Label>
-            <Input
-              id="journal"
-              value={journal}
-              onChange={(e) => setJournal(e.target.value)}
-              disabled={loading}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="pmid">PMID</Label>
-              <Input
-                id="pmid"
-                value={pmid}
-                onChange={(e) => setPmid(e.target.value)}
-                disabled={loading}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="doi">DOI</Label>
-              <Input
-                id="doi"
-                value={doi}
-                onChange={(e) => setDoi(e.target.value)}
-                disabled={loading}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="abstract">Abstract</Label>
-            <Textarea
-              id="abstract"
-              value={abstract}
-              onChange={(e) => setAbstract(e.target.value)}
-              rows={3}
-              disabled={loading}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="studyType">Study Type</Label>
-              <Input
-                id="studyType"
-                value={studyType}
-                onChange={(e) => setStudyType(e.target.value)}
-                placeholder="e.g., RCT, Meta-analysis"
-                disabled={loading}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="statisticalMethods">Statistical Methods</Label>
-              <Input
-                id="statisticalMethods"
-                value={statisticalMethods}
-                onChange={(e) => setStatisticalMethods(e.target.value)}
-                placeholder="e.g., ANOVA, Regression"
-                disabled={loading}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="keywords">Keywords (comma-separated)</Label>
-            <Input
-              id="keywords"
-              value={keywords}
-              onChange={(e) => setKeywords(e.target.value)}
-              disabled={loading}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="driveUrl" className="flex items-center gap-2">
-              <LinkIcon className="h-4 w-4" />
-              Google Drive Link
-            </Label>
-            <Input
-              id="driveUrl"
-              value={driveUrl}
-              onChange={(e) => setDriveUrl(e.target.value)}
-              placeholder="https://drive.google.com/file/d/..."
-              disabled={loading}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="pubmedUrl">PubMed URL</Label>
-            <Input
-              id="pubmedUrl"
-              value={pubmedUrl}
-              onChange={(e) => setPubmedUrl(e.target.value)}
-              placeholder="https://pubmed.ncbi.nlm.nih.gov/..."
-              disabled={loading}
-            />
-          </div>
-
-          {/* Projects — Searchable Combobox */}
-          <div className="space-y-2">
-            <Label>Projects</Label>
-            <Popover open={projectOpen} onOpenChange={setProjectOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
-                  <span className="flex items-center gap-1.5">
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    {selectedProjectIds.length > 0
-                      ? `${selectedProjectIds.length} project${selectedProjectIds.length !== 1 ? "s" : ""} selected`
-                      : "Select projects..."}
-                  </span>
-                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
-                <Command>
-                  <CommandInput placeholder="Search projects..." />
-                  <CommandList>
-                    <CommandEmpty>No projects found.</CommandEmpty>
-                    <CommandGroup>
-                      {projects.map((project) => (
-                        <CommandItem
-                          key={project.id}
-                          value={project.name}
-                          onSelect={() => toggleProject(project.id)}
-                        >
-                          <Check className={cn("mr-2 h-4 w-4", selectedProjectIds.includes(project.id) ? "opacity-100" : "opacity-0")} />
-                          <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: project.color }} />
-                          {project.name}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-            {selectedProjectIds.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {selectedProjectIds.map((id) => {
-                  const project = projects.find((p) => p.id === id);
-                  return project ? (
-                    <Badge key={id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
-                      {project.name}
-                      <button onClick={() => toggleProject(id)} className="hover:bg-muted rounded p-0.5">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ) : null;
-                })}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="authors">Authors (comma-separated)</Label>
+                <Input
+                  id="authors"
+                  value={authors}
+                  onChange={(e) => setAuthors(e.target.value)}
+                  disabled={loading}
+                />
               </div>
-            )}
-          </div>
-
-          {/* Tags — Searchable Combobox */}
-          <div className="space-y-2">
-            <Label>Tags</Label>
-            <Popover open={tagOpen} onOpenChange={setTagOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
-                  <span className="flex items-center gap-1.5">
-                    <Tags className="h-3.5 w-3.5" />
-                    {selectedTagIds.length > 0
-                      ? `${selectedTagIds.length} tag${selectedTagIds.length !== 1 ? "s" : ""} selected`
-                      : "Select tags..."}
-                  </span>
-                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
-                <Command>
-                  <CommandInput placeholder="Search tags..." />
-                  <CommandList>
-                    <CommandEmpty>No tags found.</CommandEmpty>
-                    <CommandGroup>
-                      {tags.map((tag) => (
-                        <CommandItem
-                          key={tag.id}
-                          value={tag.name}
-                          onSelect={() => toggleTag(tag.id)}
-                        >
-                          <Check className={cn("mr-2 h-4 w-4", selectedTagIds.includes(tag.id) ? "opacity-100" : "opacity-0")} />
-                          <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: tag.color }} />
-                          {tag.name}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-            {selectedTagIds.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {selectedTagIds.map((id) => {
-                  const tag = tags.find((t) => t.id === id);
-                  return tag ? (
-                    <Badge key={id} variant="secondary" className="text-xs flex items-center gap-1 pr-1">
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }} />
-                      {tag.name}
-                      <button onClick={() => toggleTag(id)} className="hover:bg-muted rounded p-0.5">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ) : null;
-                })}
+              <div className="space-y-2">
+                <Label htmlFor="year">Year</Label>
+                <Input
+                  id="year"
+                  type="number"
+                  value={year}
+                  onChange={(e) => setYear(e.target.value)}
+                  disabled={loading}
+                />
               </div>
-            )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="journal">Journal</Label>
+              <Input
+                id="journal"
+                value={journal}
+                onChange={(e) => setJournal(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="pmid">PMID</Label>
+                <Input
+                  id="pmid"
+                  value={pmid}
+                  onChange={(e) => setPmid(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="doi">DOI</Label>
+                <Input
+                  id="doi"
+                  value={doi}
+                  onChange={(e) => setDoi(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="pubmedUrl">PubMed URL</Label>
+              <Input
+                id="pubmedUrl"
+                value={pubmedUrl}
+                onChange={(e) => setPubmedUrl(e.target.value)}
+                placeholder="https://pubmed.ncbi.nlm.nih.gov/..."
+                disabled={loading}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="driveUrl" className="flex items-center gap-2">
+                <LinkIcon className="h-4 w-4" />
+                Google Drive Link
+              </Label>
+              <Input
+                id="driveUrl"
+                value={driveUrl}
+                onChange={(e) => setDriveUrl(e.target.value)}
+                placeholder="https://drive.google.com/file/d/..."
+                disabled={loading}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="keywords">Keywords (comma-separated)</Label>
+              <Input
+                id="keywords"
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+                disabled={loading}
+              />
+            </div>
           </div>
 
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
-              Cancel
-            </Button>
-            <Button onClick={handleSave} disabled={loading}>
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save Changes
-            </Button>
+          {/* ── Column 2: Categorization ── */}
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="abstract">Abstract</Label>
+              <Textarea
+                id="abstract"
+                value={abstract}
+                onChange={(e) => setAbstract(e.target.value)}
+                rows={5}
+                disabled={loading}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="studyType">Study Type</Label>
+                <Input
+                  id="studyType"
+                  value={studyType}
+                  onChange={(e) => setStudyType(e.target.value)}
+                  placeholder="e.g., RCT, Meta-analysis"
+                  disabled={loading}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="statisticalMethods">Statistical Methods</Label>
+                <Input
+                  id="statisticalMethods"
+                  value={statisticalMethods}
+                  onChange={(e) => setStatisticalMethods(e.target.value)}
+                  placeholder="e.g., ANOVA, Regression"
+                  disabled={loading}
+                />
+              </div>
+            </div>
+
+            {/* Projects — Searchable Combobox */}
+            <div className="space-y-2 relative">
+              <Label>Projects</Label>
+              <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={false}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
+                    <span className="flex items-center gap-1.5">
+                      <FolderOpen className="h-3.5 w-3.5" />
+                      {selectedProjectIds.length > 0
+                        ? `${selectedProjectIds.length} project${selectedProjectIds.length !== 1 ? "s" : ""} selected`
+                        : "Select projects..."}
+                    </span>
+                    <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
+                  <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
+                    <CommandInput placeholder="Search projects..." />
+                    <CommandList>
+                      <CommandEmpty>No projects found.</CommandEmpty>
+                      <CommandGroup>
+                        {projects.map((project) => (
+                          <CommandItem
+                            key={project.id}
+                            value={project.name}
+                            onSelect={() => toggleProject(project.id)}
+                          >
+                            <Check className={cn("mr-2 h-4 w-4", selectedProjectIds.includes(project.id) ? "opacity-100" : "opacity-0")} />
+                            <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: project.color }} />
+                            {project.name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              {selectedProjectIds.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {selectedProjectIds.map((id) => {
+                    const project = projects.find((p) => p.id === id);
+                    return project ? (
+                      <Badge key={id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
+                        {project.name}
+                        <button onClick={() => toggleProject(id)} className="hover:bg-muted rounded p-0.5">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ) : null;
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Tags — Searchable Combobox */}
+            <div className="space-y-2 relative">
+              <Label>Tags</Label>
+              <Popover open={tagOpen} onOpenChange={setTagOpen} modal={false}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
+                    <span className="flex items-center gap-1.5">
+                      <Tags className="h-3.5 w-3.5" />
+                      {selectedTagIds.length > 0
+                        ? `${selectedTagIds.length} tag${selectedTagIds.length !== 1 ? "s" : ""} selected`
+                        : "Select tags..."}
+                    </span>
+                    <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false}>
+                  <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
+                    <CommandInput placeholder="Search tags..." />
+                    <CommandList>
+                      <CommandEmpty>No tags found.</CommandEmpty>
+                      <CommandGroup>
+                        {tags.map((tag) => (
+                          <CommandItem
+                            key={tag.id}
+                            value={tag.name}
+                            onSelect={() => toggleTag(tag.id)}
+                          >
+                            <Check className={cn("mr-2 h-4 w-4", selectedTagIds.includes(tag.id) ? "opacity-100" : "opacity-0")} />
+                            <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: tag.color }} />
+                            {tag.name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              {selectedTagIds.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {selectedTagIds.map((id) => {
+                    const tag = tags.find((t) => t.id === id);
+                    return tag ? (
+                      <Badge key={id} variant="secondary" className="text-xs flex items-center gap-1 pr-1">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }} />
+                        {tag.name}
+                        <button onClick={() => toggleTag(id)} className="hover:bg-muted rounded p-0.5">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ) : null;
+                  })}
+                </div>
+              )}
+            </div>
           </div>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={loading}>
+            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Save Changes
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
