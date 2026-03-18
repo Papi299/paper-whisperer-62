@@ -134,8 +134,10 @@ export function EditPaperDialog({
     if (!abstract.trim()) return;
     setAnalyzing(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const { data, error } = await supabase.functions.invoke("analyze-paper", {
         body: { title, abstract },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
       });
       if (error) throw error;
       if (data.studyType) setStudyType(data.studyType);
