@@ -1159,6 +1159,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     bulkSetProjects,
     bulkSetTags,
     reevaluateStudyTypes,
+    updatePapersCache,
     refetch: () => queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId!) }),
   };
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { PaperAttachment } from "@/types/database";
 
 const MAX_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"];
@@ -18,7 +19,14 @@ export interface Attachment {
   publicUrl: string;
 }
 
-export function useAttachments(paperId: string | null | undefined, userId: string | null | undefined) {
+/** Called after every upload/delete so the parent can sync the table cache. */
+export type OnAttachmentsChange = (paperId: string, attachments: PaperAttachment[]) => void;
+
+export function useAttachments(
+  paperId: string | null | undefined,
+  userId: string | null | undefined,
+  onAttachmentsChange?: OnAttachmentsChange,
+) {
   const { toast } = useToast();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [loading, setLoading] = useState(false);
@@ -54,66 +62,90 @@ export function useAttachments(paperId: string | null | undefined, userId: strin
     fetchAttachments();
   }, [fetchAttachments]);
 
-  const uploadAttachment = useCallback(async (file: File) => {
-    if (!paperId || !userId) return;
+  /** Convert current attachments to lightweight PaperAttachment[] and notify parent. */
+  const notifyParent = useCallback((current: Attachment[]) => {
+    if (!paperId || !onAttachmentsChange) return;
+    const lightweight: PaperAttachment[] = current.map((a) => ({
+      id: a.id,
+      file_name: a.file_name,
+      file_path: a.file_path,
+      file_type: a.file_type,
+    }));
+    onAttachmentsChange(paperId, lightweight);
+  }, [paperId, onAttachmentsChange]);
 
-    // Validate size
-    if (file.size > MAX_SIZE_BYTES) {
-      toast({ title: "File too large. Max size is 20MB.", variant: "destructive" });
-      return;
+  const uploadAttachments = useCallback(async (files: File[]) => {
+    if (!paperId || !userId || files.length === 0) return;
+
+    // Validate all files first
+    const validFiles: File[] = [];
+    for (const file of files) {
+      if (file.size > MAX_SIZE_BYTES) {
+        toast({ title: `"${file.name}" too large (max 20MB).`, variant: "destructive" });
+        continue;
+      }
+      const isAllowed = ALLOWED_TYPES.includes(file.type) || file.type.startsWith("image/");
+      if (!isAllowed) {
+        toast({ title: `"${file.name}" is not a valid type (images/PDFs only).`, variant: "destructive" });
+        continue;
+      }
+      validFiles.push(file);
     }
 
-    // Validate type
-    const isAllowed = ALLOWED_TYPES.includes(file.type) || file.type.startsWith("image/");
-    if (!isAllowed) {
-      toast({ title: "Invalid file type. Only images and PDFs are allowed.", variant: "destructive" });
-      return;
-    }
+    if (validFiles.length === 0) return;
 
     setUploading(true);
+    const uploaded: Attachment[] = [];
     try {
-      // Build a unique storage path
-      const ext = file.name.split(".").pop() ?? "bin";
-      const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const filePath = `${userId}/${paperId}/${uniqueName}`;
+      for (const file of validFiles) {
+        const ext = file.name.split(".").pop() ?? "bin";
+        const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        const filePath = `${userId}/${paperId}/${uniqueName}`;
 
-      // 1. Upload to storage
-      const { error: storageError } = await supabase.storage
-        .from(BUCKET)
-        .upload(filePath, file, { contentType: file.type, upsert: false });
+        const { error: storageError } = await supabase.storage
+          .from(BUCKET)
+          .upload(filePath, file, { contentType: file.type, upsert: false });
 
-      if (storageError) throw storageError;
+        if (storageError) {
+          toast({ title: `Failed to upload "${file.name}"`, description: storageError.message, variant: "destructive" });
+          continue;
+        }
 
-      // 2. Insert record into DB
-      const { data: inserted, error: dbError } = await supabase
-        .from("paper_attachments")
-        .insert({
-          paper_id: paperId,
-          user_id: userId,
-          file_path: filePath,
-          file_name: file.name,
-          file_type: file.type,
-          size_bytes: file.size,
-        })
-        .select()
-        .single();
+        const { data: inserted, error: dbError } = await supabase
+          .from("paper_attachments")
+          .insert({
+            paper_id: paperId,
+            user_id: userId,
+            file_path: filePath,
+            file_name: file.name,
+            file_type: file.type,
+            size_bytes: file.size,
+          })
+          .select()
+          .single();
 
-      if (dbError) {
-        // Roll back storage upload on DB failure
-        await supabase.storage.from(BUCKET).remove([filePath]);
-        throw dbError;
+        if (dbError) {
+          await supabase.storage.from(BUCKET).remove([filePath]);
+          toast({ title: `Failed to save "${file.name}"`, description: dbError.message, variant: "destructive" });
+          continue;
+        }
+
+        const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+        uploaded.push({ ...inserted, publicUrl: urlData.publicUrl });
       }
 
-      const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
-      setAttachments((prev) => [...prev, { ...inserted, publicUrl: urlData.publicUrl }]);
-      toast({ title: "Attachment uploaded" });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      toast({ title: "Upload failed", description: msg, variant: "destructive" });
+      if (uploaded.length > 0) {
+        setAttachments((prev) => {
+          const next = [...prev, ...uploaded];
+          notifyParent(next);
+          return next;
+        });
+        toast({ title: uploaded.length === 1 ? "Attachment uploaded" : `${uploaded.length} attachments uploaded` });
+      }
     } finally {
       setUploading(false);
     }
-  }, [paperId, userId, toast]);
+  }, [paperId, userId, toast, notifyParent]);
 
   const deleteAttachment = useCallback(async (attachment: Attachment) => {
     if (!userId) return;
@@ -133,13 +165,17 @@ export function useAttachments(paperId: string | null | undefined, userId: strin
 
       if (dbError) throw dbError;
 
-      setAttachments((prev) => prev.filter((a) => a.id !== attachment.id));
+      setAttachments((prev) => {
+        const next = prev.filter((a) => a.id !== attachment.id);
+        notifyParent(next);
+        return next;
+      });
       toast({ title: "Attachment deleted" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       toast({ title: "Delete failed", description: msg, variant: "destructive" });
     }
-  }, [userId, toast]);
+  }, [userId, toast, notifyParent]);
 
-  return { attachments, loading, uploading, uploadAttachment, deleteAttachment, refetch: fetchAttachments };
+  return { attachments, loading, uploading, uploadAttachments, deleteAttachment, refetch: fetchAttachments };
 }
