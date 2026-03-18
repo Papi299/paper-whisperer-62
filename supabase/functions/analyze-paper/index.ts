@@ -1,15 +1,5 @@
 /// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
-/**
- * Supabase Edge Function: analyze-paper
- *
- * Uses Google Gemini to extract study type, statistical methods, and a TLDR
- * from a paper's title and abstract.
- *
- * Accepts: POST { title: string, abstract: string }
- * Returns: { tldr: string, studyType: string, statisticalMethods: string }
- */
-
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -18,55 +8,58 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+
 Deno.serve(async (req) => {
-  // CORS preflight
+  // CORS preflight — MUST be first, before any auth logic
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    // ── 1. Auth validation ──
+    // ── Step 1: Auth ──
+    console.log("1. Checking Auth Header");
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Missing authorization header" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      throw new Error("Missing Authorization header");
     }
+    console.log("1a. Auth header present:", authHeader.substring(0, 20) + "...");
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    console.log("2. Calling Supabase getUser");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
     const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+    if (authError) {
+      console.log("2a. Auth error:", authError.message);
+      throw new Error("Auth failed: " + authError.message);
     }
+    if (!user) {
+      throw new Error("Auth failed: no user returned");
+    }
+    console.log("2b. User authenticated:", user.id);
 
-    // ── 2. Parse input ──
+    // ── Step 2: Parse input ──
+    console.log("3. Parsing request body");
     const { title, abstract } = await req.json();
     if (!abstract || typeof abstract !== "string") {
-      return new Response(
-        JSON.stringify({ error: "Missing or invalid 'abstract' field" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      throw new Error("Missing or invalid 'abstract' field");
     }
+    console.log("3a. Title:", (title || "").substring(0, 50), "| Abstract length:", abstract.length);
 
-    // ── 3. Call Gemini ──
+    // ── Step 3: Call Gemini ──
+    console.log("4. Checking Gemini API key");
     const geminiKey = Deno.env.get("GEMINI_API_KEY");
     if (!geminiKey) {
-      return new Response(
-        JSON.stringify({ error: "Gemini API key not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      throw new Error("GEMINI_API_KEY not configured in Supabase secrets");
     }
+    console.log("4a. Gemini key present, length:", geminiKey.length);
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key=${geminiKey}`;
+    console.log("5. Calling Gemini API");
 
     const geminiBody = {
       system_instruction: {
@@ -94,27 +87,26 @@ Deno.serve(async (req) => {
       body: JSON.stringify(geminiBody),
     });
 
+    console.log("5a. Gemini response status:", geminiRes.status);
+
     if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      console.error("Gemini API error:", errText);
-      return new Response(
-        JSON.stringify({ error: "Gemini API request failed", details: errText }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      const errorText = await geminiRes.text();
+      console.log("5b. Gemini error body:", errorText);
+      throw new Error("Gemini API Error (" + geminiRes.status + "): " + errorText);
     }
 
     const geminiData = await geminiRes.json();
+    console.log("6. Parsing Gemini response");
 
-    // Extract the text content from Gemini's response structure
     const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!rawText) {
-      return new Response(
-        JSON.stringify({ error: "Empty response from Gemini" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      console.log("6a. Empty Gemini response. Full data:", JSON.stringify(geminiData));
+      throw new Error("Empty response from Gemini");
     }
+    console.log("6b. Raw Gemini text:", rawText.substring(0, 200));
 
     const parsed = JSON.parse(rawText);
+    console.log("7. Success! Returning parsed result");
 
     return new Response(
       JSON.stringify({
@@ -122,13 +114,13 @@ Deno.serve(async (req) => {
         studyType: parsed.studyType || "",
         statisticalMethods: parsed.statisticalMethods || "",
       }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      { status: 200, headers: jsonHeaders },
     );
   } catch (err) {
-    console.error("analyze-paper error:", err);
+    console.error("analyze-paper CAUGHT ERROR:", err);
     return new Response(
-      JSON.stringify({ error: err.message || "Internal server error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      JSON.stringify({ error: err.message || "Unknown error" }),
+      { status: 400, headers: jsonHeaders },
     );
   }
 });
