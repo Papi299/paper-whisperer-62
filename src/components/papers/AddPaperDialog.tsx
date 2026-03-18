@@ -26,7 +26,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp, FolderOpen, Tags, Check, ChevronsUpDown, FileText } from "lucide-react";
+import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp, FolderOpen, Tags, Check, ChevronsUpDown, FileText, X } from "lucide-react";
 import { Project, Tag } from "@/types/database";
 import { RawPaperData } from "@/lib/normalizePaperData";
 import { parseFile, FileParseResult } from "@/lib/importParsers";
@@ -50,17 +50,17 @@ interface AddPaperDialogProps {
   onOpenChange: (open: boolean) => void;
   onSubmitManual?: (
     paperData: ManualPaperData,
-    options?: { targetProjectId?: string; targetTagIds?: string[] }
+    options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
   ) => Promise<void>;
   onBulkImport?: (
     identifiers: string[],
     onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
-    options?: { targetProjectId?: string; targetTagIds?: string[] }
+    options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
   ) => Promise<void>;
   onFileImport?: (
     papers: RawPaperData[],
     onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void,
-    options?: { targetProjectId?: string; targetTagIds?: string[] }
+    options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
   ) => Promise<void>;
   projects?: Project[];
   tags?: Tag[];
@@ -113,12 +113,16 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const [isFileDragging, setIsFileDragging] = useState(false);
 
   // Project/Tag assignment state (shared between all tabs)
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [projectOpen, setProjectOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  const toggleProject = (projectId: string) => {
+    setSelectedProjectIds((prev) =>
+      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId]
+    );
+  };
 
   const toggleTag = (tagId: string) => {
     setSelectedTagIds((prev) =>
@@ -127,8 +131,8 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   };
 
   const getImportOptions = () => {
-    const opts: { targetProjectId?: string; targetTagIds?: string[] } = {};
-    if (selectedProjectId) opts.targetProjectId = selectedProjectId;
+    const opts: { targetProjectIds?: string[]; targetTagIds?: string[] } = {};
+    if (selectedProjectIds.length > 0) opts.targetProjectIds = selectedProjectIds;
     if (selectedTagIds.length > 0) opts.targetTagIds = selectedTagIds;
     return Object.keys(opts).length > 0 ? opts : undefined;
   };
@@ -282,7 +286,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     setFileImportRunning(false);
     setFileImportComplete(false);
     setFileImportProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
-    setSelectedProjectId(null);
+    setSelectedProjectIds([]);
     setSelectedTagIds([]);
     setActiveTab("import");
     onOpenChange(false);
@@ -315,14 +319,9 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
                 <FolderOpen className="h-3.5 w-3.5 mr-1" />
-                {selectedProject ? (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: selectedProject.color }} />
-                    {selectedProject.name}
-                  </span>
-                ) : (
-                  "Project"
-                )}
+                {selectedProjectIds.length > 0
+                  ? `${selectedProjectIds.length} project${selectedProjectIds.length !== 1 ? "s" : ""}`
+                  : "Projects"}
                 <ChevronsUpDown className="h-3 w-3 opacity-50" />
               </Button>
             </PopoverTrigger>
@@ -332,18 +331,13 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 <CommandList>
                   <CommandEmpty>No projects found.</CommandEmpty>
                   <CommandGroup>
-                    {selectedProjectId && (
-                      <CommandItem onSelect={() => { setSelectedProjectId(null); setProjectOpen(false); }}>
-                        <span className="text-muted-foreground">Clear selection</span>
-                      </CommandItem>
-                    )}
                     {projects.map((p) => (
                       <CommandItem
                         key={p.id}
                         value={p.name}
-                        onSelect={() => { setSelectedProjectId(p.id); setProjectOpen(false); }}
+                        onSelect={() => toggleProject(p.id)}
                       >
-                        <Check className={cn("mr-2 h-4 w-4", selectedProjectId === p.id ? "opacity-100" : "opacity-0")} />
+                        <Check className={cn("mr-2 h-4 w-4", selectedProjectIds.includes(p.id) ? "opacity-100" : "opacity-0")} />
                         <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: p.color }} />
                         {p.name}
                       </CommandItem>
@@ -386,20 +380,29 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
       </div>
 
       {/* Show selected items as badges */}
-      {(selectedProject || selectedTagIds.length > 0) && (
+      {(selectedProjectIds.length > 0 || selectedTagIds.length > 0) && (
         <div className="flex flex-wrap gap-1">
-          {selectedProject && (
-            <Badge variant="outline" className="text-xs">
-              <span className="w-2 h-2 rounded-full mr-1" style={{ backgroundColor: selectedProject.color }} />
-              {selectedProject.name}
-            </Badge>
-          )}
+          {selectedProjectIds.map((id) => {
+            const project = projects.find((p) => p.id === id);
+            return project ? (
+              <Badge key={id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
+                {project.name}
+                <button onClick={() => toggleProject(id)} className="hover:bg-muted rounded p-0.5">
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ) : null;
+          })}
           {selectedTagIds.map((id) => {
             const tag = tags.find((t) => t.id === id);
             return tag ? (
-              <Badge key={id} variant="secondary" className="text-xs">
-                <span className="w-2 h-2 rounded-full mr-1" style={{ backgroundColor: tag.color }} />
+              <Badge key={id} variant="secondary" className="text-xs flex items-center gap-1 pr-1">
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }} />
                 {tag.name}
+                <button onClick={() => toggleTag(id)} className="hover:bg-muted rounded p-0.5">
+                  <X className="h-3 w-3" />
+                </button>
               </Badge>
             ) : null;
           })}

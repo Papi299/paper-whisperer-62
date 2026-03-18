@@ -233,6 +233,13 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const createProject = async (name: string) => {
     if (!userId) return;
 
+    // Case-insensitive find-or-create: if "CVD" exists and user types "cvd", select existing
+    const existing = projects.find((p) => p.name.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      toast({ title: "Project exists", description: `Using existing project "${existing.name}".` });
+      return;
+    }
+
     // Create cannot be optimistic (we need the server-generated ID)
     const { data: newProject, error } = await supabase
       .from("projects")
@@ -241,7 +248,11 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       .single();
 
     if (error) {
-      toast({ title: "Error creating project", description: error.message, variant: "destructive" });
+      if (error.code === "23505") {
+        toast({ title: "Project exists", description: "A project with this name already exists." });
+      } else {
+        toast({ title: "Error creating project", description: error.message, variant: "destructive" });
+      }
       return;
     }
 
@@ -317,6 +328,13 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const createTag = async (name: string) => {
     if (!userId) return;
 
+    // Case-insensitive find-or-create: if "CVD" exists and user types "cvd", select existing
+    const existing = tags.find((t) => t.name.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      toast({ title: "Tag exists", description: `Using existing tag "${existing.name}".` });
+      return;
+    }
+
     // Create cannot be optimistic (server generates ID, may reject duplicates)
     const { data: newTag, error } = await supabase
       .from("tags")
@@ -326,7 +344,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
 
     if (error) {
       if (error.code === "23505") {
-        toast({ title: "Tag exists", description: "A tag with this name already exists.", variant: "destructive" });
+        toast({ title: "Tag exists", description: "A tag with this name already exists." });
       } else {
         toast({ title: "Error creating tag", description: error.message, variant: "destructive" });
       }
@@ -506,7 +524,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     keywords: string;
     driveUrl: string;
     pubmedUrl?: string;
-  }, options?: { targetProjectId?: string; targetTagIds?: string[] }) => {
+  }, options?: { targetProjectIds?: string[]; targetTagIds?: string[] }) => {
     if (!userId) return;
 
     const authorsArray = paperData.authors.split(",").map((a) => a.trim()).filter((a) => a.length > 0);
@@ -567,10 +585,9 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     let assignedTags: Tag[] = [];
 
     // Assign project/tags if specified
-    if (options?.targetProjectId) {
-      await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: [options.targetProjectId] });
-      const proj = projects.find((p) => p.id === options.targetProjectId);
-      if (proj) assignedProjects = [proj];
+    if (options?.targetProjectIds && options.targetProjectIds.length > 0) {
+      await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: options.targetProjectIds });
+      assignedProjects = projects.filter((p) => options.targetProjectIds!.includes(p.id));
     }
     if (options?.targetTagIds && options.targetTagIds.length > 0) {
       await supabase.rpc("set_paper_tags", { p_paper_id: paperId, p_tag_ids: options.targetTagIds });
@@ -657,7 +674,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     async (
       identifiers: string[],
       onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
-      options?: { targetProjectId?: string; targetTagIds?: string[] }
+      options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
     ) => {
       if (!userId || identifiers.length === 0) return;
 
@@ -805,20 +822,20 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       // Phase 5: Assign project/tags to newly inserted papers
       const insertedPaperIds = newPapers.map((p) => p.id);
       if (insertedPaperIds.length > 0) {
-        const projectId = options?.targetProjectId;
+        const projectIds = options?.targetProjectIds;
         const tagIds = options?.targetTagIds;
 
-        if (projectId) {
+        if (projectIds && projectIds.length > 0) {
           await supabase.rpc("bulk_set_paper_projects", {
             p_paper_ids: insertedPaperIds,
-            p_project_ids: [projectId],
+            p_project_ids: projectIds,
           });
           // Update cache with project info
-          const proj = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
-            ?.pages.flatMap((p) => p.projects)
-            .find((p) => p.id === projectId);
-          if (proj) {
-            newPapers.forEach((p) => { p.projects = [proj]; });
+          const allProjects = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
+            ?.pages.flatMap((p) => p.projects) ?? [];
+          const matchedProjects = allProjects.filter((p) => projectIds.includes(p.id));
+          if (matchedProjects.length > 0) {
+            newPapers.forEach((p) => { p.projects = matchedProjects; });
           }
         }
 
@@ -856,7 +873,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     async (
       parsedPapers: RawPaperData[],
       onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void,
-      options?: { targetProjectId?: string; targetTagIds?: string[] }
+      options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
     ) => {
       if (!userId || parsedPapers.length === 0) return;
 
@@ -960,19 +977,19 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       // Phase 4: Assign project/tags to newly inserted papers
       const insertedPaperIds = newPapers.map((p) => p.id);
       if (insertedPaperIds.length > 0) {
-        const projectId = options?.targetProjectId;
+        const projectIds = options?.targetProjectIds;
         const tagIds = options?.targetTagIds;
 
-        if (projectId) {
+        if (projectIds && projectIds.length > 0) {
           await supabase.rpc("bulk_set_paper_projects", {
             p_paper_ids: insertedPaperIds,
-            p_project_ids: [projectId],
+            p_project_ids: projectIds,
           });
-          const proj = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
-            ?.pages.flatMap((p) => p.projects)
-            .find((p) => p.id === projectId);
-          if (proj) {
-            newPapers.forEach((p) => { p.projects = [proj]; });
+          const allProjects = queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId))
+            ?.pages.flatMap((p) => p.projects) ?? [];
+          const matchedProjects = allProjects.filter((p) => projectIds.includes(p.id));
+          if (matchedProjects.length > 0) {
+            newPapers.forEach((p) => { p.projects = matchedProjects; });
           }
         }
 
