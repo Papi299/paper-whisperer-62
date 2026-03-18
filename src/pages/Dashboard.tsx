@@ -21,7 +21,7 @@ import { SearchFilters } from "@/components/papers/SearchFilters";
 import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDropdown";
 import { DeduplicationDialog } from "@/components/papers/DeduplicationDialog";
 import { Button } from "@/components/ui/button";
-import { PaperWithTags, Project, Tag } from "@/types/database";
+import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
 import { Plus, Loader2, Layers } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
@@ -124,6 +124,7 @@ function DashboardContent() {
     bulkSetProjects,
     bulkSetTags,
     reevaluateStudyTypes,
+    updatePapersCache,
   } = usePapers(user?.id, normalizationConfig);
 
   // Study type re-evaluation on pool changes
@@ -249,6 +250,12 @@ function DashboardContent() {
     exportToBibTeX(filteredPapers);
     toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as BibTeX.` });
   };
+
+  const handleAttachmentsChange = useCallback((paperId: string, atts: PaperAttachment[]) => {
+    updatePapersCache((all) =>
+      all.map((p) => (p.id === paperId ? { ...p, paper_attachments: atts } : p))
+    );
+  }, [updatePapersCache]);
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
@@ -411,6 +418,7 @@ function DashboardContent() {
         onOpenChange={(open) => !open && setEditingPaper(null)}
         onSave={handleSavePaper}
         userId={user?.id}
+        onAttachmentsChange={handleAttachmentsChange}
       />
 
       <EditProjectDialog

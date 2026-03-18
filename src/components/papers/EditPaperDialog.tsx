@@ -26,7 +26,7 @@ import { PaperWithTags, Project, Tag } from "@/types/database";
 import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags, Trash2, FileText, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { useAttachments } from "@/hooks/useAttachments";
+import { useAttachments, OnAttachmentsChange } from "@/hooks/useAttachments";
 
 interface EditPaperDialogProps {
   paper: PaperWithTags | null;
@@ -36,6 +36,7 @@ interface EditPaperDialogProps {
   onOpenChange: (open: boolean) => void;
   onSave: (paper: Partial<PaperWithTags> & { tagIds: string[]; projectIds: string[] }) => Promise<void>;
   userId?: string | null;
+  onAttachmentsChange?: OnAttachmentsChange;
 }
 
 export function EditPaperDialog({
@@ -46,6 +47,7 @@ export function EditPaperDialog({
   onOpenChange,
   onSave,
   userId,
+  onAttachmentsChange,
 }: EditPaperDialogProps) {
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
@@ -67,9 +69,10 @@ export function EditPaperDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
-  const { attachments, uploading, uploadAttachment, deleteAttachment } = useAttachments(
+  const { attachments, uploading, uploadAttachments, deleteAttachment } = useAttachments(
     paper?.id,
     userId,
+    onAttachmentsChange,
   );
 
   useEffect(() => {
@@ -409,8 +412,8 @@ export function EditPaperDialog({
               onDrop={(e) => {
                 e.preventDefault();
                 setDragOver(false);
-                const file = e.dataTransfer.files[0];
-                if (file) uploadAttachment(file);
+                const files = Array.from(e.dataTransfer.files);
+                if (files.length > 0) uploadAttachments(files);
               }}
             >
               {uploading ? (
@@ -418,8 +421,8 @@ export function EditPaperDialog({
               ) : (
                 <>
                   <Upload className="mb-2 h-5 w-5" />
-                  <span>Drop a file here or <span className="text-primary underline">browse</span></span>
-                  <span className="mt-1 text-xs">Images &amp; PDFs · Max 20 MB</span>
+                  <span>Drop files here or <span className="text-primary underline">browse</span></span>
+                  <span className="mt-1 text-xs">Images &amp; PDFs · Max 20 MB each</span>
                 </>
               )}
             </div>
@@ -427,10 +430,11 @@ export function EditPaperDialog({
               ref={fileInputRef}
               type="file"
               accept="image/*,application/pdf"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) uploadAttachment(file);
+                const files = Array.from(e.target.files ?? []);
+                if (files.length > 0) uploadAttachments(files);
                 e.target.value = "";
               }}
             />
