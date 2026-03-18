@@ -324,7 +324,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 <ChevronsUpDown className="h-3 w-3 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-52 p-0" align="start">
+            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4}>
               <Command>
                 <CommandInput placeholder="Search projects..." />
                 <CommandList>
@@ -362,7 +362,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 <ChevronsUpDown className="h-3 w-3 opacity-50" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-52 p-0" align="start">
+            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4}>
               <Command>
                 <CommandInput placeholder="Search tags..." />
                 <CommandList>

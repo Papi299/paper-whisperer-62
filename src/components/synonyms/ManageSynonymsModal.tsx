@@ -115,7 +115,7 @@ export function ManageSynonymsModal({
 
           <div className="space-y-3">
             <Button
-              variant="outline"
+              variant="default"
               size="sm"
               className="w-full"
               onClick={() => setEditDialogOpen(true)}
