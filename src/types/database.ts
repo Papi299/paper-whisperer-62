@@ -62,9 +62,17 @@ export interface PaperTag {
   created_at: string;
 }
 
+export interface PaperAttachment {
+  id: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+}
+
 export interface PaperWithTags extends Paper {
   tags: Tag[];
   projects: Project[];
+  paper_attachments?: PaperAttachment[];
 }
 
 /**
