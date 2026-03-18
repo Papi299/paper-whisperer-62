@@ -10,15 +10,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { PaperWithTags, Project, Tag } from "@/types/database";
-import { Loader2, X, Link as LinkIcon } from "lucide-react";
+import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 interface EditPaperDialogProps {
   paper: PaperWithTags | null;
@@ -51,6 +58,8 @@ export function EditPaperDialog({
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [tagOpen, setTagOpen] = useState(false);
 
   useEffect(() => {
     if (paper) {
@@ -95,6 +104,12 @@ export function EditPaperDialog({
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleProject = (projectId: string) => {
+    setSelectedProjectIds((prev) =>
+      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId]
+    );
   };
 
   const toggleTag = (tagId: string) => {
@@ -231,57 +246,114 @@ export function EditPaperDialog({
             />
           </div>
 
+          {/* Projects — Searchable Combobox */}
           <div className="space-y-2">
             <Label>Projects</Label>
-            <div className="flex flex-wrap gap-2">
-              {projects.map((project) => (
-                <Badge
-                  key={project.id}
-                  variant={selectedProjectIds.includes(project.id) ? "default" : "outline"}
-                  className="cursor-pointer"
-                  onClick={() =>
-                    setSelectedProjectIds((prev) =>
-                      prev.includes(project.id)
-                        ? prev.filter((id) => id !== project.id)
-                        : [...prev, project.id]
-                    )
-                  }
-                  style={
-                    selectedProjectIds.includes(project.id)
-                      ? { backgroundColor: project.color }
-                      : { borderColor: project.color }
-                  }
-                >
-                  <div className="w-2 h-2 rounded-full mr-1" style={{ backgroundColor: project.color }} />
-                  {project.name}
-                  {selectedProjectIds.includes(project.id) && <X className="ml-1 h-3 w-3" />}
-                </Badge>
-              ))}
-            </div>
+            <Popover open={projectOpen} onOpenChange={setProjectOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
+                  <span className="flex items-center gap-1.5">
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    {selectedProjectIds.length > 0
+                      ? `${selectedProjectIds.length} project${selectedProjectIds.length !== 1 ? "s" : ""} selected`
+                      : "Select projects..."}
+                  </span>
+                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search projects..." />
+                  <CommandList>
+                    <CommandEmpty>No projects found.</CommandEmpty>
+                    <CommandGroup>
+                      {projects.map((project) => (
+                        <CommandItem
+                          key={project.id}
+                          value={project.name}
+                          onSelect={() => toggleProject(project.id)}
+                        >
+                          <Check className={cn("mr-2 h-4 w-4", selectedProjectIds.includes(project.id) ? "opacity-100" : "opacity-0")} />
+                          <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: project.color }} />
+                          {project.name}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            {selectedProjectIds.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {selectedProjectIds.map((id) => {
+                  const project = projects.find((p) => p.id === id);
+                  return project ? (
+                    <Badge key={id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
+                      {project.name}
+                      <button onClick={() => toggleProject(id)} className="hover:bg-muted rounded p-0.5">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ) : null;
+                })}
+              </div>
+            )}
           </div>
 
+          {/* Tags — Searchable Combobox */}
           <div className="space-y-2">
             <Label>Tags</Label>
-            <div className="flex flex-wrap gap-2">
-              {tags.map((tag) => (
-                <Badge
-                  key={tag.id}
-                  variant={selectedTagIds.includes(tag.id) ? "default" : "outline"}
-                  className="cursor-pointer"
-                  onClick={() => toggleTag(tag.id)}
-                  style={
-                    selectedTagIds.includes(tag.id)
-                      ? { backgroundColor: tag.color }
-                      : { borderColor: tag.color }
-                  }
-                >
-                  {tag.name}
-                  {selectedTagIds.includes(tag.id) && (
-                    <X className="ml-1 h-3 w-3" />
-                  )}
-                </Badge>
-              ))}
-            </div>
+            <Popover open={tagOpen} onOpenChange={setTagOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="w-full justify-between h-9" disabled={loading}>
+                  <span className="flex items-center gap-1.5">
+                    <Tags className="h-3.5 w-3.5" />
+                    {selectedTagIds.length > 0
+                      ? `${selectedTagIds.length} tag${selectedTagIds.length !== 1 ? "s" : ""} selected`
+                      : "Select tags..."}
+                  </span>
+                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search tags..." />
+                  <CommandList>
+                    <CommandEmpty>No tags found.</CommandEmpty>
+                    <CommandGroup>
+                      {tags.map((tag) => (
+                        <CommandItem
+                          key={tag.id}
+                          value={tag.name}
+                          onSelect={() => toggleTag(tag.id)}
+                        >
+                          <Check className={cn("mr-2 h-4 w-4", selectedTagIds.includes(tag.id) ? "opacity-100" : "opacity-0")} />
+                          <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: tag.color }} />
+                          {tag.name}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            {selectedTagIds.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {selectedTagIds.map((id) => {
+                  const tag = tags.find((t) => t.id === id);
+                  return tag ? (
+                    <Badge key={id} variant="secondary" className="text-xs flex items-center gap-1 pr-1">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }} />
+                      {tag.name}
+                      <button onClick={() => toggleTag(id)} className="hover:bg-muted rounded p-0.5">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ) : null;
+                })}
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end gap-2">

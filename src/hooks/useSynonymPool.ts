@@ -35,6 +35,16 @@ export function useSynonymPool(userId: string | undefined) {
   const addSynonymGroup = useCallback(
     async (canonicalTerm: string, synonyms: string[]) => {
       if (!userId) return;
+
+      // Client-side uniqueness check
+      const exists = synonymGroups.some(
+        (g) => g.canonical_term.toLowerCase() === canonicalTerm.toLowerCase()
+      );
+      if (exists) {
+        toast.error("A synonym group with this canonical term already exists");
+        return;
+      }
+
       try {
         const { error } = await supabase.from("synonym_pool").insert({
           user_id: userId,
@@ -42,8 +52,14 @@ export function useSynonymPool(userId: string | undefined) {
           synonyms: synonyms.map((s) => s.toLowerCase()),
         });
 
-        if (error) throw error;
-        // Invalidate to refetch — insert doesn't return the new row
+        if (error) {
+          // Handle DB unique constraint violation gracefully
+          if (error.code === "23505") {
+            toast.error("A synonym group with this canonical term already exists");
+            return;
+          }
+          throw error;
+        }
         await queryClient.invalidateQueries({ queryKey: queryKeys.synonymPool.all(userId) });
         toast.success(`Synonym group "${canonicalTerm}" added`);
       } catch (error) {
@@ -51,12 +67,22 @@ export function useSynonymPool(userId: string | undefined) {
         toast.error("Failed to add synonym group");
       }
     },
-    [userId, queryClient]
+    [userId, queryClient, synonymGroups]
   );
 
   const updateSynonymGroup = useCallback(
     async (id: string, canonicalTerm: string, synonyms: string[]) => {
       if (!userId) return;
+
+      // Client-side uniqueness check (exclude current group)
+      const exists = synonymGroups.some(
+        (g) => g.id !== id && g.canonical_term.toLowerCase() === canonicalTerm.toLowerCase()
+      );
+      if (exists) {
+        toast.error("A synonym group with this canonical term already exists");
+        return;
+      }
+
       try {
         const { error } = await supabase
           .from("synonym_pool")
@@ -67,9 +93,14 @@ export function useSynonymPool(userId: string | undefined) {
           .eq("id", id)
           .eq("user_id", userId);
 
-        if (error) throw error;
+        if (error) {
+          if (error.code === "23505") {
+            toast.error("A synonym group with this canonical term already exists");
+            return;
+          }
+          throw error;
+        }
 
-        // Optimistic update — we know the exact change
         queryClient.setQueryData(
           queryKeys.synonymPool.all(userId),
           (old: Synonym[] = []) =>
@@ -85,7 +116,7 @@ export function useSynonymPool(userId: string | undefined) {
         toast.error("Failed to update synonym group");
       }
     },
-    [userId, queryClient]
+    [userId, queryClient, synonymGroups]
   );
 
   const deleteSynonymGroup = useCallback(

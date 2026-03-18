@@ -118,6 +118,36 @@ describe("parseBibTeX", () => {
     expect(p.keywords).toEqual([]);
   });
 
+  it("extracts PMID from explicit pmid field and generates pubmed_url", () => {
+    const bib = `@article{key,
+  title = {PMID Test},
+  pmid = {99887766}
+}`;
+    const result = parseBibTeX(bib);
+    expect(result.papers[0].pmid).toBe("99887766");
+    expect(result.papers[0].pubmed_url).toBe("https://pubmed.ncbi.nlm.nih.gov/99887766/");
+  });
+
+  it("extracts PMID from url field containing PubMed link", () => {
+    const bib = `@article{key,
+  title = {URL PMID Test},
+  url = {https://pubmed.ncbi.nlm.nih.gov/12345678/}
+}`;
+    const result = parseBibTeX(bib);
+    expect(result.papers[0].pmid).toBe("12345678");
+    expect(result.papers[0].pubmed_url).toBe("https://pubmed.ncbi.nlm.nih.gov/12345678/");
+  });
+
+  it("extracts PMID from note field containing PubMed link", () => {
+    const bib = `@article{key,
+  title = {Note PMID Test},
+  note = {Available at https://pubmed.ncbi.nlm.nih.gov/55443322/}
+}`;
+    const result = parseBibTeX(bib);
+    expect(result.papers[0].pmid).toBe("55443322");
+    expect(result.papers[0].pubmed_url).toBe("https://pubmed.ncbi.nlm.nih.gov/55443322/");
+  });
+
   it("handles bare numeric values (e.g., year without braces)", () => {
     const bib = `@article{key,
   title = {Paper},

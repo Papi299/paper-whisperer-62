@@ -262,12 +262,26 @@ function bibtexEntryToRawPaper(entry: BibTeXEntry): RawPaperData | null {
   // DOI
   const doi = f.doi ? stripOuterBraces(f.doi).trim() : null;
 
-  // PMID (custom field)
-  const pmid = f.pmid ? stripOuterBraces(f.pmid).trim() : null;
-
-  // URL
+  // PMID — check explicit field, then extract from url/note fields
+  let pmid = f.pmid ? stripOuterBraces(f.pmid).trim() : null;
   const url = f.url ? stripOuterBraces(f.url).trim() : null;
-  const pubmed_url = url && url.includes("pubmed") ? url : (pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : null);
+
+  // Extract PMID from URL if not found via explicit field
+  if (!pmid && url) {
+    const urlPmidMatch = url.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/);
+    if (urlPmidMatch) pmid = urlPmidMatch[1];
+  }
+
+  // Extract PMID from note field if it contains a PubMed link
+  if (!pmid && noteVal) {
+    const notePmidMatch = noteVal.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/);
+    if (notePmidMatch) pmid = notePmidMatch[1];
+  }
+
+  // Generate pubmed_url from PMID, or use existing PubMed URL
+  const pubmed_url = pmid
+    ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`
+    : (url && url.includes("pubmed") ? url : null);
   const journal_url = url && !url.includes("pubmed") && !url.includes("doi.org") ? url : null;
 
   return {
