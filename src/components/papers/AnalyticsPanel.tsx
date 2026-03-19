@@ -186,16 +186,27 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
   }, [papers]);
 
   // Study type distribution (auto, no selection needed)
-  // Exclude papers with empty/generic study types ("Not specified", "Journal Article")
+  // Exclude: empty/generic types, PubMed funding tags, excluded/rejected papers
   const studyTypeStats = useMemo(() => {
-    const excluded = new Set(["not specified", "journal article"]);
+    const genericTypes = new Set(["not specified", "journal article"]);
+    const isNoise = (st: string) => {
+      const lower = st.toLowerCase();
+      return genericTypes.has(lower)
+        || lower.includes("research support")
+        || lower.includes("gov't");
+    };
     const counts: Record<string, number> = {};
     papers.forEach(p => {
+      // Skip excluded/rejected papers
+      if ((p as Record<string, unknown>).status === "excluded" || (p as Record<string, unknown>).status === "rejected") return;
       const st = p.study_type?.trim();
-      if (st && !excluded.has(st.toLowerCase())) counts[st] = (counts[st] || 0) + 1;
+      if (st && !isNoise(st)) counts[st] = (counts[st] || 0) + 1;
     });
     return Object.entries(counts)
-      .map(([name, count]) => ({ name, count }))
+      .map(([type, count]) => ({
+        name: type.length > 35 ? type.substring(0, 35) + "…" : type,
+        count,
+      }))
       .sort((a, b) => b.count - a.count);
   }, [papers]);
 
@@ -328,7 +339,7 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
                       <YAxis
                         type="category"
                         dataKey="name"
-                        width={200}
+                        width={320}
                         tick={{ fontSize: 11 }}
                         className="text-xs"
                       />
