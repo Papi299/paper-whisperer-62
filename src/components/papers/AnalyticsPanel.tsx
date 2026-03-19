@@ -28,6 +28,13 @@ import {
   Cell,
 } from "recharts";
 
+/** Decode HTML entities (e.g. &#xc1;ngel → Ángel) using a temporary textarea */
+function decodeHtml(html: string): string {
+  const txt = document.createElement("textarea");
+  txt.innerHTML = html;
+  return txt.value;
+}
+
 interface AnalyticsPanelProps {
   papers: PaperWithTags[];
 }
@@ -76,7 +83,7 @@ function MultiSelectPopover({
                 className="h-8 pl-7 text-sm"
               />
             </div>
-            <ScrollArea className="max-h-48">
+            <ScrollArea className="max-h-[300px] overflow-y-auto">
               <div className="space-y-0.5">
                 {filtered.length === 0 && (
                   <p className="text-xs text-muted-foreground py-2 px-2">No matches</p>
@@ -179,14 +186,27 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
   }, [papers]);
 
   // Study type distribution (auto, no selection needed)
+  // Exclude: empty/generic types, PubMed funding tags, excluded/rejected papers
   const studyTypeStats = useMemo(() => {
+    const genericTypes = new Set(["not specified", "journal article"]);
+    const isNoise = (st: string) => {
+      const lower = st.toLowerCase();
+      return genericTypes.has(lower)
+        || lower.includes("research support")
+        || lower.includes("gov't");
+    };
     const counts: Record<string, number> = {};
     papers.forEach(p => {
+      // Skip excluded/rejected papers
+      if ((p as Record<string, unknown>).status === "excluded" || (p as Record<string, unknown>).status === "rejected") return;
       const st = p.study_type?.trim();
-      if (st) counts[st] = (counts[st] || 0) + 1;
+      if (st && !isNoise(st)) counts[st] = (counts[st] || 0) + 1;
     });
     return Object.entries(counts)
-      .map(([name, count]) => ({ name, count }))
+      .map(([type, count]) => ({
+        name: type.length > 35 ? type.substring(0, 35) + "…" : type,
+        count,
+      }))
       .sort((a, b) => b.count - a.count);
   }, [papers]);
 
@@ -214,7 +234,7 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
   const availableAuthors = useMemo(() => {
     const set = new Set<string>();
     papers.forEach((p) => {
-      p.authors?.forEach((a) => set.add(a));
+      p.authors?.forEach((a) => set.add(decodeHtml(a)));
     });
     return Array.from(set).sort();
   }, [papers]);
@@ -319,7 +339,7 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
                       <YAxis
                         type="category"
                         dataKey="name"
-                        width={140}
+                        width={320}
                         tick={{ fontSize: 11 }}
                         className="text-xs"
                       />

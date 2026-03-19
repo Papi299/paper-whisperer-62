@@ -16,7 +16,7 @@ export function Header() {
       <div className="container flex h-14 items-center">
         <div className="flex items-center gap-2">
           <BookOpen className="h-6 w-6 text-primary" />
-          <span className="font-semibold text-lg">Paper Index</span>
+          <span className="font-semibold text-lg">Paper Whisperer</span>
         </div>
         <div className="flex flex-1 items-center justify-end gap-2">
           <DropdownMenu>
