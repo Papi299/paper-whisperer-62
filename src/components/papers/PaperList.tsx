@@ -23,12 +23,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2, Paperclip, FileText, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { supabase } from "@/integrations/supabase/client";
@@ -36,6 +30,13 @@ import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { escapeRegExp } from "@/lib/textUtils";
+
+/** Decode HTML entities (e.g. &#xf8; → ø) using a temporary textarea */
+function decodeHtml(html: string): string {
+  const txt = document.createElement("textarea");
+  txt.innerHTML = html;
+  return txt.value;
+}
 
 /** Renders abstract text with matched keywords highlighted. */
 function HighlightedAbstract({ text, keywords }: { text: string; keywords: string[] }) {
@@ -297,7 +298,7 @@ export function PaperList({
             {isVisible("links") && (
               <ResizableTableHeader columnId="links" label="Links" width={getWidth("links")} onResize={onColumnResize} />
             )}
-            <TableHead className="w-[105px]"></TableHead>
+            <TableHead className="w-[105px]">Actions</TableHead>
           </TableRow>
         </TableHeader>
         {/* Spacer for items before visible window */}
@@ -507,7 +508,7 @@ function PaperRow({
             style={{ width: getWidth("authors"), minWidth: getWidth("authors"), maxWidth: getWidth("authors") }}
           >
             <div className="truncate">
-              {paper.authors.slice(0, 3).join(", ")}
+              {paper.authors.slice(0, 3).map(a => decodeHtml(a)).join(", ")}
               {paper.authors.length > 3 && " et al."}
             </div>
           </TableCell>
@@ -602,48 +603,27 @@ function PaperRow({
         )}
         {isVisible("keywords") && (
           <TableCell style={{ width: getWidth("keywords"), minWidth: getWidth("keywords"), maxWidth: getWidth("keywords") }}>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex flex-wrap gap-1 cursor-default">
-                    {combinedKeywords.map(({ keyword, displayName, source }) => (
-                      <Badge
-                        key={`${source}-${keyword}`}
-                        variant="outline"
-                        className="text-xs group/badge hover:pr-1"
-                      >
-                        {displayName}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onExcludeKeyword(keyword);
-                          }}
-                          className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
-                          title={`Exclude "${keyword}"`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                </TooltipTrigger>
-                {combinedKeywords.length > 0 && (
-                  <TooltipContent side="bottom" className="max-w-md bg-popover" align="start">
-                    <div className="flex flex-wrap gap-1 p-1">
-                      {combinedKeywords.map(({ keyword, displayName, source }) => (
-                        <Badge
-                          key={`tooltip-${source}-${keyword}`}
-                          variant="outline"
-                          className="text-xs"
-                        >
-                          {displayName}
-                        </Badge>
-                      ))}
-                    </div>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </TooltipProvider>
+            <div className="flex flex-wrap gap-1">
+              {combinedKeywords.map(({ keyword, displayName, source }) => (
+                <Badge
+                  key={`${source}-${keyword}`}
+                  variant="outline"
+                  className="text-xs group/badge hover:pr-1"
+                >
+                  {displayName}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onExcludeKeyword(keyword);
+                    }}
+                    className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                    title={`Exclude "${keyword}"`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
           </TableCell>
         )}
         {isVisible("links") && (
