@@ -414,7 +414,7 @@ function DashboardContent() {
           onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
         />
         <main className="flex-1 p-6 overflow-auto flex flex-col">
-          <div className="mb-6 flex items-center justify-between sticky top-0 z-40 bg-background py-2">
+          <div className="mb-6 flex items-center justify-between sticky top-14 z-40 bg-background py-2">
             <div>
               <h1 className="text-2xl font-bold">Papers</h1>
               <p className="text-muted-foreground">
