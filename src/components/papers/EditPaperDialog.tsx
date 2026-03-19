@@ -130,6 +130,10 @@ export function EditPaperDialog({
     }
   };
 
+  /** A study type is "generic" if it's empty or a catch-all PubMed label. */
+  const isGenericStudyType = (type: string | null | undefined) =>
+    !type || type.trim() === "" || type.trim().toLowerCase() === "journal article";
+
   const handleAnalyze = async () => {
     if (!abstract.trim()) return;
     setAnalyzing(true);
@@ -140,10 +144,28 @@ export function EditPaperDialog({
         headers: { Authorization: `Bearer ${session?.access_token}` },
       });
       if (error) throw error;
-      if (data.studyType) setStudyType(data.studyType);
-      if (data.statisticalMethods) setStatisticalMethods(data.statisticalMethods);
+
+      // Smart Merge: preserve high-quality PubMed study type over AI guess
+      const existingStudyType = paper?.study_type ?? studyType;
+      const keptExisting = !isGenericStudyType(existingStudyType);
+
+      if (keptExisting) {
+        // Keep existing specific study type from PubMed — don't overwrite
+      } else if (data.studyType && data.studyType !== "Not specified") {
+        setStudyType(data.studyType);
+      }
+
+      if (data.statisticalMethods && data.statisticalMethods !== "Not specified") {
+        setStatisticalMethods(data.statisticalMethods);
+      }
       if (data.tldr) setTldr(data.tldr);
-      toast({ title: "AI analysis complete" });
+
+      toast({
+        title: "AI analysis complete",
+        description: keptExisting
+          ? `TLDR updated. Kept existing study type from PubMed.`
+          : undefined,
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Analysis failed";
       toast({ title: "AI analysis failed", description: msg, variant: "destructive" });
