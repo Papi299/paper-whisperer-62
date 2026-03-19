@@ -9,7 +9,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2, FolderOpen, Tags, X, Loader2, FolderMinus, TagsIcon } from "lucide-react";
+import { Trash2, FolderOpen, Tags, X, Loader2, FolderMinus, TagsIcon, Sparkles } from "lucide-react";
 import { Project, Tag } from "@/types/database";
 
 interface BulkActionsToolbarProps {
@@ -18,6 +18,9 @@ interface BulkActionsToolbarProps {
   onBulkDelete: () => Promise<void>;
   onBulkSetProjects: (projectIds: string[]) => Promise<void>;
   onBulkSetTags: (tagIds: string[]) => Promise<void>;
+  onBulkAnalyze?: () => Promise<void>;
+  bulkAnalyzing?: boolean;
+  bulkAnalyzeProgress?: { current: number; total: number };
   projects: Project[];
   tags: Tag[];
 }
@@ -28,6 +31,9 @@ export function BulkActionsToolbar({
   onBulkDelete,
   onBulkSetProjects,
   onBulkSetTags,
+  onBulkAnalyze,
+  bulkAnalyzing = false,
+  bulkAnalyzeProgress = { current: 0, total: 0 },
   projects,
   tags,
 }: BulkActionsToolbarProps) {
@@ -116,10 +122,31 @@ export function BulkActionsToolbar({
 
           <div className="h-5 w-px bg-border" />
 
+          {onBulkAnalyze && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || bulkAnalyzing}
+              onClick={onBulkAnalyze}
+            >
+              {bulkAnalyzing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                  Analyzing {bulkAnalyzeProgress.current} of {bulkAnalyzeProgress.total}...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4 mr-1" />
+                  AI Analyze ({selectedCount})
+                </>
+              )}
+            </Button>
+          )}
+
           <Button
             variant="destructive"
             size="sm"
-            disabled={loading}
+            disabled={loading || bulkAnalyzing}
             onClick={() => setDeleteConfirmOpen(true)}
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Trash2 className="h-4 w-4 mr-1" />}
@@ -129,7 +156,7 @@ export function BulkActionsToolbar({
           <Button
             variant="outline"
             size="sm"
-            disabled={loading}
+            disabled={loading || bulkAnalyzing}
             onClick={() => { setSelectedProjectIds([]); setProjectDialogOpen(true); }}
           >
             <FolderOpen className="h-4 w-4 mr-1" />
@@ -139,7 +166,7 @@ export function BulkActionsToolbar({
           <Button
             variant="outline"
             size="sm"
-            disabled={loading}
+            disabled={loading || bulkAnalyzing}
             onClick={() => setClearProjectsConfirmOpen(true)}
           >
             <FolderMinus className="h-4 w-4 mr-1" />
@@ -149,7 +176,7 @@ export function BulkActionsToolbar({
           <Button
             variant="outline"
             size="sm"
-            disabled={loading}
+            disabled={loading || bulkAnalyzing}
             onClick={() => { setSelectedTagIds([]); setTagDialogOpen(true); }}
           >
             <Tags className="h-4 w-4 mr-1" />
@@ -159,7 +186,7 @@ export function BulkActionsToolbar({
           <Button
             variant="outline"
             size="sm"
-            disabled={loading}
+            disabled={loading || bulkAnalyzing}
             onClick={() => setClearTagsConfirmOpen(true)}
           >
             <X className="h-4 w-4 mr-1" />
@@ -168,7 +195,7 @@ export function BulkActionsToolbar({
 
           <div className="h-5 w-px bg-border" />
 
-          <Button variant="ghost" size="sm" onClick={onClearSelection} disabled={loading}>
+          <Button variant="ghost" size="sm" onClick={onClearSelection} disabled={loading || bulkAnalyzing}>
             <X className="h-4 w-4 mr-1" />
             Clear Selection
           </Button>

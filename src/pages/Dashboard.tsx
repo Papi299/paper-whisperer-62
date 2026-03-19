@@ -237,6 +237,8 @@ function DashboardContent() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
   const [analyzingPaperId, setAnalyzingPaperId] = useState<string | null>(null);
+  const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
+  const [bulkAnalyzeProgress, setBulkAnalyzeProgress] = useState({ current: 0, total: 0 });
 
   const handleExportCSV = () => {
     exportToCSV(filteredPapers);
@@ -306,6 +308,62 @@ function DashboardContent() {
       setAnalyzingPaperId(null);
     }
   }, [updatePaper, toast]);
+
+  const handleBulkAnalyze = useCallback(async () => {
+    const selectedPapers = sortedPapers.filter(p => selectedPaperIds.has(p.id));
+    const papersToAnalyze = selectedPapers.filter(p => p.abstract); // skip papers without abstract
+    if (papersToAnalyze.length === 0) {
+      toast({ title: "No papers to analyze", description: "Selected papers have no abstracts.", variant: "destructive" });
+      return;
+    }
+
+    setBulkAnalyzing(true);
+    setBulkAnalyzeProgress({ current: 0, total: papersToAnalyze.length });
+    let successCount = 0;
+    let failCount = 0;
+
+    const { data: { session } } = await supabase.auth.getSession();
+
+    for (const paper of papersToAnalyze) {
+      setBulkAnalyzeProgress(prev => ({ ...prev, current: prev.current + 1 }));
+      try {
+        const { data, error } = await supabase.functions.invoke("analyze-paper", {
+          body: { title: paper.title, abstract: paper.abstract },
+          headers: { Authorization: `Bearer ${session?.access_token}` },
+        });
+        if (error) throw error;
+
+        const aiData = data as { tldr?: string; studyType?: string; statisticalMethods?: string };
+        const finalStudyType = isGenericStudyType(paper.study_type)
+          ? (aiData.studyType ?? paper.study_type)
+          : paper.study_type;
+
+        await updatePaper(paper.id, {
+          tldr: aiData.tldr || paper.tldr,
+          study_type: finalStudyType,
+          statistical_methods: aiData.statisticalMethods || paper.statistical_methods,
+        });
+        successCount++;
+      } catch (err: unknown) {
+        failCount++;
+        toast({
+          title: `Failed: ${paper.title?.slice(0, 50)}...`,
+          description: err instanceof Error ? err.message : "Unknown error",
+          variant: "destructive",
+        });
+      }
+
+      // 3-second cooldown to avoid Gemini rate limits
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+
+    setBulkAnalyzing(false);
+    setBulkAnalyzeProgress({ current: 0, total: 0 });
+    toast({
+      title: "Bulk analysis complete",
+      description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
+    });
+  }, [sortedPapers, selectedPaperIds, updatePaper, toast]);
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
@@ -446,6 +504,9 @@ function DashboardContent() {
             onBulkDelete={handleBulkDelete}
             onBulkSetProjects={handleBulkSetProjects}
             onBulkSetTags={handleBulkSetTags}
+            onBulkAnalyze={handleBulkAnalyze}
+            bulkAnalyzing={bulkAnalyzing}
+            bulkAnalyzeProgress={bulkAnalyzeProgress}
             projects={projects}
             tags={tags}
           />
