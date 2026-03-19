@@ -66,12 +66,18 @@ Deno.serve(async (req) => {
         parts: [{
           text: `You are an expert academic data extractor. Analyze the provided title and abstract.
 CRITICAL RULES:
-1. NO GUESSING. If a specific study type or statistical method is NOT explicitly stated or strictly implied, output 'Not specified'.
-2. ENGLISH ONLY. All output values must be in English, regardless of the input language.
+1. NO GUESSING. Only extract explicit information.
+2. ENGLISH ONLY.
 3. Return ONLY a valid JSON object with exactly these three keys:
-   - tldr: A concise summary of the objective and core finding. Make it 2 to 3 sentences (~30 words). ZERO FILLER: Do not start with phrases like 'This study aims to' or 'The authors found'. Start directly with the facts.
-   - studyType: The MOST SPECIFIC and granular design mentioned (e.g., 'Meta-analysis of Randomized Controlled Trials'). NORMALIZATION: Always expand acronyms (e.g., output 'Randomized Controlled Trial' instead of 'RCT'). Output 'Not specified' if unknown.
-   - statisticalMethods: A comma-separated list of the specific analytical tests/models used (e.g., ANOVA, Kaplan-Meier, logistic regression, Odds Ratio, Effect Size). EXCLUSION RULE: Do NOT include software names (e.g., SPSS, R), generic descriptive statistics (e.g., Mean, SD), or specific p-values. Output 'Not specified' if none are mentioned.`,
+   - tldr: A concise summary of the objective and core findings (~30 words). RESULTS RULE: You MUST include the specific numerical results or effect sizes if they exist in the abstract (e.g., '13.5 kg', 'reduced by 20%'). NOISE EXCLUSION RULE: You MUST STRICTLY EXCLUDE statistical noise such as 95% CI intervals, standard deviations, and exact p-values from this summary. Just state the core numerical finding.
+   - studyType: The specific study design. TITLE OVERRIDE RULE: If the study design is explicitly stated in the paper's TITLE, you MUST use that exact design. Expand acronyms. Output 'Not specified' if unknown.
+   - statisticalMethods: A comma-separated list of analytical tests AND methodological features. VOCABULARY MATCHING RULE: You MUST explicitly check for and include any of the following terms if they are mentioned or implied:
+     * Blinding: 'double-blind', 'single-blind', 'triple-blind', 'blinded', 'blinding', 'masked', 'masking'
+     * Crossover: 'crossover', 'cross-over', 'crossover study', 'crossover trial'
+     * Placebo: 'placebo', 'placebo-controlled'
+     * Additional: 'multicenter', 'open-label'
+     * Assessment/Guidelines: 'grade', 'prisma', 'cochrane', 'robins-i', 'amstar', 'moose', 'quadas', 'consort', 'strobe', 'prospero'
+     Also include standard tests (ANOVA, Odds Ratio, etc.). Output 'Not specified' if none are found.`,
         }],
       },
       contents: [{
