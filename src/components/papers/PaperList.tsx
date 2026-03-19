@@ -29,7 +29,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2, Paperclip, FileText } from "lucide-react";
+import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2, Paperclip, FileText, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { supabase } from "@/integrations/supabase/client";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
@@ -98,6 +98,8 @@ interface PaperListProps {
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
+  onAnalyzePaper?: (paper: PaperWithTags) => Promise<void>;
+  analyzingPaperId?: string | null;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -130,6 +132,8 @@ export function PaperList({
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
+  onAnalyzePaper,
+  analyzingPaperId,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -293,7 +297,7 @@ export function PaperList({
             {isVisible("links") && (
               <ResizableTableHeader columnId="links" label="Links" width={getWidth("links")} onResize={onColumnResize} />
             )}
-            <TableHead className="w-[70px]"></TableHead>
+            <TableHead className="w-[105px]"></TableHead>
           </TableRow>
         </TableHeader>
         {/* Spacer for items before visible window */}
@@ -331,6 +335,8 @@ export function PaperList({
               generateGoogleScholarUrl={generateGoogleScholarUrl}
               isSelected={selectedPaperIds.has(paper.id)}
               onToggleSelect={onToggleSelect}
+              onAnalyzePaper={onAnalyzePaper}
+              isAnalyzing={analyzingPaperId === paper.id}
             />
           );
         })}
@@ -414,6 +420,8 @@ interface PaperRowProps {
   measureElement: (el: HTMLElement | null) => void;
   isSelected: boolean;
   onToggleSelect: (paperId: string) => void;
+  onAnalyzePaper?: (paper: PaperWithTags) => Promise<void>;
+  isAnalyzing?: boolean;
 }
 
 function PaperRow({
@@ -436,6 +444,8 @@ function PaperRow({
   measureElement,
   isSelected,
   onToggleSelect,
+  onAnalyzePaper,
+  isAnalyzing,
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
@@ -552,9 +562,20 @@ function PaperRow({
             className="text-sm text-muted-foreground"
             style={{ width: getWidth("statisticalMethods"), minWidth: getWidth("statisticalMethods"), maxWidth: getWidth("statisticalMethods") }}
           >
-            <div className="truncate" title={paper.statistical_methods || undefined}>
-              {paper.statistical_methods || "-"}
-            </div>
+            {(() => {
+              const raw = (paper.statistical_methods || "").trim();
+              if (!raw || raw.toLowerCase() === "not specified") return <span>-</span>;
+              const methods = raw.split(",").map(m => m.trim()).filter(Boolean);
+              return (
+                <div className="flex flex-wrap gap-1">
+                  {methods.map((method, i) => (
+                    <Badge key={i} variant="secondary" className="text-xs whitespace-nowrap">
+                      {method}
+                    </Badge>
+                  ))}
+                </div>
+              );
+            })()}
           </TableCell>
         )}
         {isVisible("tags") && (
@@ -697,6 +718,22 @@ function PaperRow({
         )}
         <TableCell>
           <div className="flex items-center gap-0.5">
+            {onAnalyzePaper && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => onAnalyzePaper(paper)}
+                disabled={isAnalyzing || !paper.abstract}
+                title={paper.abstract ? "AI Analyze" : "No abstract to analyze"}
+              >
+                {isAnalyzing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+              </Button>
+            )}
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onEdit(paper)} title="Edit">
               <Pencil className="h-4 w-4" />
             </Button>
