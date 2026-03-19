@@ -69,7 +69,7 @@ CRITICAL RULES:
 1. NO GUESSING. Only extract explicit information.
 2. ENGLISH ONLY.
 3. Return ONLY a valid JSON object with exactly these three keys:
-   - tldr: A concise summary of the objective and core findings (~30 words). RESULTS RULE: You MUST include the specific numerical results or effect sizes if they exist in the abstract (e.g., '13.5 kg', 'reduced by 20%'). NOISE EXCLUSION RULE: You MUST STRICTLY EXCLUDE statistical noise such as 95% CI intervals, standard deviations, and exact p-values from this summary. Just state the core numerical finding.
+   - tldr: A concise narrative summary of the objective, the main comparison (e.g., Intervention A vs. Intervention B), and the core conclusion (~30-45 words). NARRATIVE RULE: Do not just list numbers. You MUST capture the physiological or clinical meaning of the findings (e.g., 'sustained for 5 hours', 'transient effect', 'greater amplitude than control'). RESULTS RULE: Include key numerical effect sizes to support the narrative, but STRICTLY EXCLUDE all statistical noise (95% CIs, SDs, exact p-values).
    - studyType: The specific study design. TITLE OVERRIDE RULE: If the study design is explicitly stated in the paper's TITLE, you MUST use that exact design. Expand acronyms. Output 'Not specified' if unknown.
    - statisticalMethods: A comma-separated list of analytical tests AND methodological features. VOCABULARY MATCHING RULE: You MUST explicitly check for and include any of the following terms if they are mentioned or implied:
      * Blinding: 'double-blind', 'single-blind', 'triple-blind', 'blinded', 'blinding', 'masked', 'masking'
