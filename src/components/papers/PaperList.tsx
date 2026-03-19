@@ -540,7 +540,7 @@ function PaperRow({
               
               return (
                 <div className="flex items-center gap-1">
-                  <Badge variant="outline" className="text-xs group/badge hover:pr-1 whitespace-normal break-words text-center leading-tight">
+                  <Badge variant="outline" className="text-xs group/badge whitespace-normal break-words text-center leading-tight">
                     <span>{studyTypeValue}</span>
                     <button
                       onClick={(e) => {
@@ -608,7 +608,7 @@ function PaperRow({
                 <Badge
                   key={`${source}-${keyword}`}
                   variant="outline"
-                  className="text-xs group/badge hover:pr-1"
+                  className="text-xs group/badge"
                 >
                   {displayName}
                   <button
