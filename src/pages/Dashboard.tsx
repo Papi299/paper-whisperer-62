@@ -22,8 +22,9 @@ import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDr
 import { DeduplicationDialog } from "@/components/papers/DeduplicationDialog";
 import { Button } from "@/components/ui/button";
 import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
-import { Plus, Loader2, Layers } from "lucide-react";
+import { Plus, Loader2, Layers, Sparkles } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
+import { supabase } from "@/integrations/supabase/client";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
@@ -235,6 +236,7 @@ function DashboardContent() {
   const [editingPaper, setEditingPaper] = useState<PaperWithTags | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
+  const [analyzingPaperId, setAnalyzingPaperId] = useState<string | null>(null);
 
   const handleExportCSV = () => {
     exportToCSV(filteredPapers);
@@ -256,6 +258,54 @@ function DashboardContent() {
       all.map((p) => (p.id === paperId ? { ...p, paper_attachments: atts } : p))
     );
   }, [updatePapersCache]);
+
+  /** Smart merge: preserve existing study_type if it's specific (not generic/empty). */
+  const isGenericStudyType = (type: string | null | undefined) =>
+    !type || type.trim() === "" || type.trim().toLowerCase() === "journal article";
+
+  const handleAnalyzePaper = useCallback(async (paper: PaperWithTags) => {
+    if (!paper.abstract) return;
+    setAnalyzingPaperId(paper.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data, error } = await supabase.functions.invoke("analyze-paper", {
+        body: { title: paper.title, abstract: paper.abstract },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      });
+      if (error) throw error;
+
+      const aiData = data as { tldr?: string; studyType?: string; statisticalMethods?: string };
+
+      // Smart merge: keep existing study_type if it's specific
+      const finalStudyType = isGenericStudyType(paper.study_type)
+        ? (aiData.studyType ?? paper.study_type)
+        : paper.study_type;
+
+      const updates: Record<string, unknown> = {
+        tldr: aiData.tldr || paper.tldr,
+        study_type: finalStudyType,
+        statistical_methods: aiData.statisticalMethods || paper.statistical_methods,
+      };
+
+      await updatePaper(paper.id, updates);
+
+      const keptStudyType = !isGenericStudyType(paper.study_type) && aiData.studyType && aiData.studyType !== paper.study_type;
+      toast({
+        title: "Analysis complete and saved",
+        description: keptStudyType
+          ? "TLDR updated. Kept existing study type from PubMed."
+          : "TLDR, study type, and statistical methods updated.",
+      });
+    } catch (err: unknown) {
+      toast({
+        title: "AI Analysis failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setAnalyzingPaperId(null);
+    }
+  }, [updatePaper, toast]);
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
@@ -386,6 +436,8 @@ function DashboardContent() {
             hasNextPage={hasNextPage}
             isFetchingNextPage={isFetchingNextPage}
             onLoadMore={fetchNextPage}
+            onAnalyzePaper={handleAnalyzePaper}
+            analyzingPaperId={analyzingPaperId}
           />
 
           <BulkActionsToolbar
