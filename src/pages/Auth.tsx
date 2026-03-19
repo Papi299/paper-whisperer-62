@@ -159,7 +159,7 @@ const Auth = () => {
               <BookOpen className="h-8 w-8 text-primary" />
             </div>
           </div>
-          <CardTitle className="text-2xl font-bold">Paper Index</CardTitle>
+          <CardTitle className="text-2xl font-bold">Paper Whisperer</CardTitle>
           <CardDescription>
             Manage your scientific paper collections
           </CardDescription>
