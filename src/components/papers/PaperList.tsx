@@ -298,7 +298,7 @@ export function PaperList({
             {isVisible("links") && (
               <ResizableTableHeader columnId="links" label="Links" width={getWidth("links")} onResize={onColumnResize} />
             )}
-            <TableHead className="w-[105px]">Actions</TableHead>
+            <TableHead className="w-[105px] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         {/* Spacer for items before visible window */}
@@ -450,7 +450,7 @@ function PaperRow({
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
-      <TableRow className={isSelected ? "bg-primary/5" : undefined}>
+      <TableRow className={isSelected ? "bg-primary/5" : "even:bg-muted/30"}>
         {/* Selection checkbox */}
         <TableCell className="px-1" style={{ width: getWidth("checkbox"), minWidth: getWidth("checkbox"), maxWidth: getWidth("checkbox") }}>
           <Checkbox
@@ -697,8 +697,8 @@ function PaperRow({
             </div>
           </TableCell>
         )}
-        <TableCell>
-          <div className="flex items-center gap-0.5">
+        <TableCell className="text-right align-middle">
+          <div className="flex items-center justify-end gap-0.5">
             {onAnalyzePaper && (
               <Button
                 variant="ghost"
