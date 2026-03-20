@@ -115,7 +115,21 @@ CRITICAL RULES:
     }
     console.log("6b. Raw Gemini text:", rawText.substring(0, 200));
 
-    const parsed = JSON.parse(rawText);
+    let cleanText = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+    const startIndex = cleanText.indexOf("{");
+    const endIndex = cleanText.lastIndexOf("}");
+    if (startIndex === -1 || endIndex === -1) {
+      console.log("6c. No JSON object found in:", rawText);
+      throw new Error("Gemini response did not contain valid JSON");
+    }
+    cleanText = cleanText.substring(startIndex, endIndex + 1);
+    let parsed;
+    try {
+      parsed = JSON.parse(cleanText);
+    } catch (parseErr) {
+      console.log("6c. JSON parse failed. Raw text:", rawText);
+      throw new Error("Failed to parse Gemini JSON: " + parseErr.message);
+    }
     console.log("7. Success! Returning parsed result");
 
     return new Response(
