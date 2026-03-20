@@ -449,7 +449,7 @@ function PaperRow({
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
-      <TableRow className={isSelected ? "bg-primary/5" : virtualIndex % 2 === 1 ? "bg-muted/30 hover:bg-primary/10" : "hover:bg-primary/10"}>
+      <TableRow className={isSelected ? "bg-sky-100/50" : virtualIndex % 2 === 1 ? "bg-muted/30 hover:bg-sky-50 dark:hover:bg-sky-900/20" : "hover:bg-sky-50 dark:hover:bg-sky-900/20"}>
         {/* Selection checkbox */}
         <TableCell className="px-1" style={{ width: getWidth("checkbox"), minWidth: getWidth("checkbox"), maxWidth: getWidth("checkbox") }}>
           <Checkbox
