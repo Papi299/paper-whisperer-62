@@ -449,13 +449,14 @@ function PaperRow({
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
-      <TableRow className={isSelected ? "bg-sky-100/50" : "group hover:bg-sky-400 hover:text-white transition-colors cursor-default"}>
+      <TableRow className={isSelected ? "bg-orange-100/50" : "group hover:bg-orange-600 hover:text-white transition-colors cursor-default"}>
         {/* Selection checkbox */}
         <TableCell className="px-1" style={{ width: getWidth("checkbox"), minWidth: getWidth("checkbox"), maxWidth: getWidth("checkbox") }}>
           <Checkbox
             checked={isSelected}
             onCheckedChange={() => onToggleSelect(paper.id)}
             aria-label={`Select ${paper.title}`}
+            className="group-hover:border-white"
           />
         </TableCell>
         {/* Expand/Collapse chevron */}
@@ -483,15 +484,15 @@ function PaperRow({
             <div className="space-y-1">
               <p className="font-medium whitespace-normal break-words leading-snug">{paper.title}</p>
               {paper.tldr && (
-                <p className="text-xs text-muted-foreground group-hover:text-sky-50 italic whitespace-normal break-words leading-snug">{paper.tldr}</p>
+                <p className="text-xs text-muted-foreground group-hover:text-orange-50 italic whitespace-normal break-words leading-snug">{paper.tldr}</p>
               )}
               {paper.projects.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {paper.projects.map((proj) => (
                     <Badge key={proj.id} variant="outline" className="text-xs group-hover:border-white group-hover:text-white">
                       <div
-                        className="w-2 h-2 rounded-full mr-1"
-                        style={{ backgroundColor: proj.color }}
+                        className="w-2 h-2 rounded-full mr-1 bg-[var(--proj-color)] group-hover:bg-white"
+                        style={{ "--proj-color": proj.color } as React.CSSProperties}
                       />
                       {proj.name}
                     </Badge>
@@ -503,7 +504,7 @@ function PaperRow({
         )}
         {isVisible("authors") && (
           <TableCell
-            className="text-sm text-muted-foreground group-hover:text-sky-50"
+            className="text-sm text-muted-foreground group-hover:text-orange-50"
             style={{ width: getWidth("authors"), minWidth: getWidth("authors"), maxWidth: getWidth("authors") }}
           >
             <div className="truncate">
@@ -519,7 +520,7 @@ function PaperRow({
         )}
         {isVisible("journal") && (
           <TableCell
-            className="text-sm text-muted-foreground group-hover:text-sky-50"
+            className="text-sm text-muted-foreground group-hover:text-orange-50"
             style={{ width: getWidth("journal"), minWidth: getWidth("journal"), maxWidth: getWidth("journal") }}
           >
             <div className="truncate">{paper.journal || "-"}</div>
@@ -559,7 +560,7 @@ function PaperRow({
         )}
         {isVisible("statisticalMethods") && (
           <TableCell
-            className="text-sm text-muted-foreground group-hover:text-sky-50"
+            className="text-sm text-muted-foreground group-hover:text-orange-50"
             style={{ width: getWidth("statisticalMethods"), minWidth: getWidth("statisticalMethods"), maxWidth: getWidth("statisticalMethods") }}
           >
             {(() => {
@@ -570,7 +571,7 @@ function PaperRow({
               return (
                 <div className="flex flex-wrap gap-1">
                   {methods.map((method, i) => (
-                    <Badge key={i} variant="secondary" className="text-xs whitespace-nowrap group-hover:bg-sky-400 group-hover:text-white">
+                    <Badge key={i} variant="secondary" className="text-xs whitespace-nowrap group-hover:bg-transparent group-hover:text-white group-hover:border-white">
                       {method}
                     </Badge>
                   ))}
@@ -586,14 +587,14 @@ function PaperRow({
                 <Badge
                   key={tag.id}
                   variant="secondary"
-                  className="text-xs group-hover:bg-sky-400 group-hover:text-white"
+                  className="text-xs group-hover:bg-transparent group-hover:text-white group-hover:border-white"
                   style={{ borderColor: tag.color }}
                 >
                   {tag.name}
                 </Badge>
               ))}
               {paper.tags.length > 3 && (
-                <Badge variant="secondary" className="text-xs group-hover:bg-sky-400 group-hover:text-white">
+                <Badge variant="secondary" className="text-xs group-hover:bg-transparent group-hover:text-white group-hover:border-white">
                   +{paper.tags.length - 3}
                 </Badge>
               )}
