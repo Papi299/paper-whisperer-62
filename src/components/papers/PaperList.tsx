@@ -449,7 +449,7 @@ function PaperRow({
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
-      <TableRow className={isSelected ? "bg-sky-100/50" : "group hover:bg-sky-500 hover:text-white transition-colors cursor-default"}>
+      <TableRow className={isSelected ? "bg-sky-100/50" : "group hover:bg-sky-400 hover:text-white transition-colors cursor-default"}>
         {/* Selection checkbox */}
         <TableCell className="px-1" style={{ width: getWidth("checkbox"), minWidth: getWidth("checkbox"), maxWidth: getWidth("checkbox") }}>
           <Checkbox
@@ -464,7 +464,7 @@ function PaperRow({
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7 group-hover:text-white"
+              className="h-7 w-7 group-hover:text-white group-hover:hover:bg-white/20"
               onClick={() => onToggleExpand(paper.id)}
               title={isExpanded ? "Collapse abstract" : "Expand abstract"}
             >
@@ -634,20 +634,20 @@ function PaperRow({
                 onSave={onUpdateDriveUrl}
               />
               {paper.pubmed_url && (
-                <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" asChild>
                   <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer" title="PubMed">
                     <ExternalLink className="h-4 w-4" />
                   </a>
                 </Button>
               )}
               {paper.journal_url && (
-                <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" asChild>
                   <a href={paper.journal_url} target="_blank" rel="noopener noreferrer" title="Journal">
                     <span className="text-xs font-bold">J</span>
                   </a>
                 </Button>
               )}
-              <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" asChild>
                 <a
                   href={generateGoogleScholarUrl(paper.title)}
                   target="_blank"
@@ -660,7 +660,7 @@ function PaperRow({
               {(paper.paper_attachments?.length ?? 0) > 0 && (
                 <Popover modal={true}>
                   <PopoverTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 relative group-hover:text-white" title="Attachments">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 relative group-hover:text-white group-hover:hover:bg-white/20" title="Attachments">
                       <Paperclip className="h-4 w-4" />
                       <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
                         {paper.paper_attachments!.length}
@@ -702,7 +702,7 @@ function PaperRow({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 group-hover:text-white"
+                className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20"
                 onClick={() => onAnalyzePaper(paper)}
                 disabled={isAnalyzing || !paper.abstract}
                 title={paper.abstract ? "AI Analyze" : "No abstract to analyze"}
@@ -714,13 +714,13 @@ function PaperRow({
                 )}
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" onClick={() => onEdit(paper)} title="Edit">
+            <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" onClick={() => onEdit(paper)} title="Edit">
               <Pencil className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-destructive group-hover:text-red-200 hover:!text-red-100 transition-colors"
+              className="h-8 w-8 text-destructive group-hover:text-red-200 hover:!text-red-100 group-hover:hover:bg-white/20 transition-colors"
               onClick={() => onRequestDelete(paper.id)}
               title="Delete"
             >

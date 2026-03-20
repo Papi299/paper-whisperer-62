@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Cloud, Plus, Check, X, Loader2 } from "lucide-react";
+import { Cloud, Check, X, Loader2 } from "lucide-react";
 
 interface QuickAddDriveLinkProps {
   paperId: string;
@@ -37,7 +37,7 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
 
   if (driveUrl) {
     return (
-      <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+      <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" asChild>
         <a href={driveUrl} target="_blank" rel="noopener noreferrer" title="Open cloud link">
           <Cloud className="h-4 w-4" />
         </a>
@@ -51,13 +51,10 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 opacity-40 hover:opacity-100 transition-opacity"
+          className="h-8 w-8 opacity-40 hover:opacity-100 group-hover:text-white group-hover:hover:bg-white/20 transition-opacity"
           title="Add cloud link"
         >
-          <div className="relative">
-            <Cloud className="h-4 w-4" />
-            <Plus className="h-2.5 w-2.5 absolute -bottom-0.5 -right-0.5 bg-background rounded-full" />
-          </div>
+          <Cloud className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-3" align="start" side="bottom">
