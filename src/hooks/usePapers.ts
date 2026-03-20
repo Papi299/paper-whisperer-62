@@ -656,15 +656,32 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     await cancelQueries();
     const snapshot = snapshotCache();
 
+    // 1. Query attachment paths BEFORE deletion (CASCADE will remove rows)
+    const { data: attachments } = await supabase
+      .from("paper_attachments")
+      .select("file_path")
+      .eq("paper_id", paperId);
+    const storagePaths = (attachments || []).map((a) => a.file_path);
+
     // Optimistic: remove paper and decrement count immediately
     updatePapersCache((old) => old.filter((p) => p.id !== paperId));
     adjustCount(-1);
 
+    // 2. Delete from DB
     const { error } = await supabase.from("papers").delete().eq("id", paperId);
     if (error) {
       rollbackCache(snapshot);
       toast({ title: "Error deleting paper", description: error.message, variant: "destructive" });
       return;
+    }
+
+    // 3. Best-effort storage cleanup (only after successful DB deletion)
+    if (storagePaths.length > 0) {
+      try {
+        await supabase.storage.from("attachments").remove(storagePaths);
+      } catch (e) {
+        console.warn("Storage cleanup failed (non-critical):", e);
+      }
     }
 
     toast({ title: "Paper deleted" });
@@ -1074,16 +1091,33 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     await cancelQueries();
     const snapshot = snapshotCache();
 
+    // 1. Query attachment paths BEFORE deletion (CASCADE will remove rows)
+    const { data: attachments } = await supabase
+      .from("paper_attachments")
+      .select("file_path")
+      .in("paper_id", paperIds);
+    const storagePaths = (attachments || []).map((a) => a.file_path);
+
     // Optimistic: remove papers and adjust count immediately
     const idSet = new Set(paperIds);
     updatePapersCache((old) => old.filter((p) => !idSet.has(p.id)));
     adjustCount(-paperIds.length);
 
+    // 2. Delete from DB
     const { error } = await supabase.from("papers").delete().in("id", paperIds);
     if (error) {
       rollbackCache(snapshot);
       toast({ title: "Error deleting papers", description: error.message, variant: "destructive" });
       return;
+    }
+
+    // 3. Best-effort storage cleanup (only after successful DB deletion)
+    if (storagePaths.length > 0) {
+      try {
+        await supabase.storage.from("attachments").remove(storagePaths);
+      } catch (e) {
+        console.warn("Bulk storage cleanup failed (non-critical):", e);
+      }
     }
 
     toast({ title: `Deleted ${paperIds.length} paper(s)` });
