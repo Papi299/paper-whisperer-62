@@ -410,8 +410,8 @@ function DashboardContent() {
         onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
         onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
       />
-      <main className="flex-1 overflow-auto flex flex-col relative">
-        <div className="sticky top-0 z-30 flex flex-col gap-4 bg-background border-b px-6 py-4 shadow-sm">
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        <div className="flex flex-col gap-4 bg-background border-b px-6 py-4 shadow-sm shrink-0 z-10">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold">Papers</h1>
@@ -461,12 +461,10 @@ function DashboardContent() {
             onProjectChange={setSelectedProjectId}
             onTagChange={setSelectedTagId}
           />
+          <AnalyticsPanel papers={filteredPapers} />
         </div>
 
-        <div className="p-6 flex flex-col gap-6">
-
-          <AnalyticsPanel papers={filteredPapers} />
-
+        <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
           <PaperList
             papers={sortedPapers}
             onEdit={setEditingPaper}

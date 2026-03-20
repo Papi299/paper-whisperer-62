@@ -251,8 +251,7 @@ export function PaperList({
   return (
     <div
       ref={scrollContainerRef}
-      className="rounded-md border overflow-auto flex-1 min-h-0"
-      style={{ maxHeight: "calc(100vh - 220px)" }}
+      className="rounded-md border overflow-auto flex-1 min-h-0 h-full"
     >
       <Table style={{ tableLayout: "fixed" }}>
         <TableHeader className="sticky top-0 z-20 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
