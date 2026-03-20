@@ -115,14 +115,10 @@ export function Sidebar({
       </div>
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4">
-          {/* All Papers */}
-          <Button
-            variant="ghost"
-            className="w-full justify-start"
-          >
-            <FolderOpen className="mr-2 h-4 w-4" />
-            All Papers
-          </Button>
+          {/* Taxonomy & Settings section header */}
+          <div className="px-0 py-2 mt-2">
+            <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Taxonomy & Settings</h2>
+          </div>
 
           {/* Projects - compact row with Manage button */}
           <div className="flex items-center justify-between py-1 px-2">

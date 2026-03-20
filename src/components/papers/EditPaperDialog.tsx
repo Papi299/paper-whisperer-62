@@ -273,13 +273,13 @@ export function EditPaperDialog({
             <div className="space-y-2">
               <Label htmlFor="driveUrl" className="flex items-center gap-2">
                 <LinkIcon className="h-4 w-4" />
-                Google Drive Link
+                Cloud Storage URL
               </Label>
               <Input
                 id="driveUrl"
                 value={driveUrl}
                 onChange={(e) => setDriveUrl(e.target.value)}
-                placeholder="https://drive.google.com/file/d/..."
+                placeholder="https://drive.google.com/..., https://dropbox.com/..."
                 disabled={loading}
               />
             </div>
