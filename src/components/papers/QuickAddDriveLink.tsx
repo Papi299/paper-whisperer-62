@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { FolderOpen, Plus, Check, X, Loader2 } from "lucide-react";
+import { Cloud, Plus, Check, X, Loader2 } from "lucide-react";
 
 interface QuickAddDriveLinkProps {
   paperId: string;
@@ -38,8 +38,8 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
   if (driveUrl) {
     return (
       <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-        <a href={driveUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Drive">
-          <FolderOpen className="h-4 w-4" />
+        <a href={driveUrl} target="_blank" rel="noopener noreferrer" title="Open cloud link">
+          <Cloud className="h-4 w-4" />
         </a>
       </Button>
     );
@@ -52,10 +52,10 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
           variant="ghost"
           size="icon"
           className="h-8 w-8 opacity-40 hover:opacity-100 transition-opacity"
-          title="Add Google Drive link"
+          title="Add cloud link"
         >
           <div className="relative">
-            <FolderOpen className="h-4 w-4" />
+            <Cloud className="h-4 w-4" />
             <Plus className="h-2.5 w-2.5 absolute -bottom-0.5 -right-0.5 bg-background rounded-full" />
           </div>
         </Button>
@@ -64,7 +64,7 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
         <div className="flex gap-2">
           <Input
             ref={inputRef}
-            placeholder="Paste Google Drive URL..."
+            placeholder="Paste cloud link..."
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
