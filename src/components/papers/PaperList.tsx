@@ -449,7 +449,7 @@ function PaperRow({
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
-      <TableRow className={isSelected ? "bg-sky-100/50" : "hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors"}>
+      <TableRow className={isSelected ? "bg-sky-100/50" : "group hover:bg-sky-500 hover:text-white transition-colors cursor-default"}>
         {/* Selection checkbox */}
         <TableCell className="px-1" style={{ width: getWidth("checkbox"), minWidth: getWidth("checkbox"), maxWidth: getWidth("checkbox") }}>
           <Checkbox
@@ -464,7 +464,7 @@ function PaperRow({
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7"
+              className="h-7 w-7 group-hover:text-white"
               onClick={() => onToggleExpand(paper.id)}
               title={isExpanded ? "Collapse abstract" : "Expand abstract"}
             >
@@ -483,12 +483,12 @@ function PaperRow({
             <div className="space-y-1">
               <p className="font-medium whitespace-normal break-words leading-snug">{paper.title}</p>
               {paper.tldr && (
-                <p className="text-xs text-muted-foreground italic whitespace-normal break-words leading-snug">{paper.tldr}</p>
+                <p className="text-xs text-muted-foreground group-hover:text-sky-50 italic whitespace-normal break-words leading-snug">{paper.tldr}</p>
               )}
               {paper.projects.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {paper.projects.map((proj) => (
-                    <Badge key={proj.id} variant="outline" className="text-xs">
+                    <Badge key={proj.id} variant="outline" className="text-xs group-hover:border-white group-hover:text-white">
                       <div
                         className="w-2 h-2 rounded-full mr-1"
                         style={{ backgroundColor: proj.color }}
@@ -503,7 +503,7 @@ function PaperRow({
         )}
         {isVisible("authors") && (
           <TableCell
-            className="text-sm text-muted-foreground"
+            className="text-sm text-muted-foreground group-hover:text-sky-50"
             style={{ width: getWidth("authors"), minWidth: getWidth("authors"), maxWidth: getWidth("authors") }}
           >
             <div className="truncate">
@@ -519,7 +519,7 @@ function PaperRow({
         )}
         {isVisible("journal") && (
           <TableCell
-            className="text-sm text-muted-foreground"
+            className="text-sm text-muted-foreground group-hover:text-sky-50"
             style={{ width: getWidth("journal"), minWidth: getWidth("journal"), maxWidth: getWidth("journal") }}
           >
             <div className="truncate">{paper.journal || "-"}</div>
@@ -539,7 +539,7 @@ function PaperRow({
               
               return (
                 <div className="flex items-center gap-1">
-                  <Badge variant="outline" className="text-xs group/badge whitespace-normal break-words text-center leading-tight">
+                  <Badge variant="outline" className="text-xs group/badge whitespace-normal break-words text-center leading-tight group-hover:border-white group-hover:text-white">
                     <span>{studyTypeValue}</span>
                     <button
                       onClick={(e) => {
@@ -559,7 +559,7 @@ function PaperRow({
         )}
         {isVisible("statisticalMethods") && (
           <TableCell
-            className="text-sm text-muted-foreground"
+            className="text-sm text-muted-foreground group-hover:text-sky-50"
             style={{ width: getWidth("statisticalMethods"), minWidth: getWidth("statisticalMethods"), maxWidth: getWidth("statisticalMethods") }}
           >
             {(() => {
@@ -570,7 +570,7 @@ function PaperRow({
               return (
                 <div className="flex flex-wrap gap-1">
                   {methods.map((method, i) => (
-                    <Badge key={i} variant="secondary" className="text-xs whitespace-nowrap">
+                    <Badge key={i} variant="secondary" className="text-xs whitespace-nowrap group-hover:bg-sky-400 group-hover:text-white">
                       {method}
                     </Badge>
                   ))}
@@ -586,14 +586,14 @@ function PaperRow({
                 <Badge
                   key={tag.id}
                   variant="secondary"
-                  className="text-xs"
+                  className="text-xs group-hover:bg-sky-400 group-hover:text-white"
                   style={{ borderColor: tag.color }}
                 >
                   {tag.name}
                 </Badge>
               ))}
               {paper.tags.length > 3 && (
-                <Badge variant="secondary" className="text-xs">
+                <Badge variant="secondary" className="text-xs group-hover:bg-sky-400 group-hover:text-white">
                   +{paper.tags.length - 3}
                 </Badge>
               )}
@@ -607,7 +607,7 @@ function PaperRow({
                 <Badge
                   key={`${source}-${keyword}`}
                   variant="outline"
-                  className="text-xs group/badge"
+                  className="text-xs group/badge group-hover:border-white group-hover:text-white"
                 >
                   {displayName}
                   <button
@@ -634,20 +634,20 @@ function PaperRow({
                 onSave={onUpdateDriveUrl}
               />
               {paper.pubmed_url && (
-                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" asChild>
                   <a href={paper.pubmed_url} target="_blank" rel="noopener noreferrer" title="PubMed">
                     <ExternalLink className="h-4 w-4" />
                   </a>
                 </Button>
               )}
               {paper.journal_url && (
-                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" asChild>
                   <a href={paper.journal_url} target="_blank" rel="noopener noreferrer" title="Journal">
                     <span className="text-xs font-bold">J</span>
                   </a>
                 </Button>
               )}
-              <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" asChild>
                 <a
                   href={generateGoogleScholarUrl(paper.title)}
                   target="_blank"
@@ -660,7 +660,7 @@ function PaperRow({
               {(paper.paper_attachments?.length ?? 0) > 0 && (
                 <Popover modal={true}>
                   <PopoverTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 relative" title="Attachments">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 relative group-hover:text-white" title="Attachments">
                       <Paperclip className="h-4 w-4" />
                       <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
                         {paper.paper_attachments!.length}
@@ -702,7 +702,7 @@ function PaperRow({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8"
+                className="h-8 w-8 group-hover:text-white"
                 onClick={() => onAnalyzePaper(paper)}
                 disabled={isAnalyzing || !paper.abstract}
                 title={paper.abstract ? "AI Analyze" : "No abstract to analyze"}
@@ -714,13 +714,13 @@ function PaperRow({
                 )}
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onEdit(paper)} title="Edit">
+            <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white" onClick={() => onEdit(paper)} title="Edit">
               <Pencil className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-destructive hover:text-destructive/80 transition-colors"
+              className="h-8 w-8 text-destructive group-hover:text-red-200 hover:!text-red-100 transition-colors"
               onClick={() => onRequestDelete(paper.id)}
               title="Delete"
             >
