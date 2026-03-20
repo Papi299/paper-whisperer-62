@@ -109,7 +109,7 @@ export function Sidebar({
 
   return (
     <aside className="w-64 border-r bg-muted/30 flex flex-col">
-      <div className="flex items-center gap-2 px-4 py-4 border-b">
+      <div className="flex items-center gap-2 px-4 py-4">
         <BookOpen className="h-6 w-6 text-primary" />
         <span className="font-bold text-lg">Paper Whisperer</span>
       </div>

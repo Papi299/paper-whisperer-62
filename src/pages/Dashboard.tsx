@@ -411,32 +411,31 @@ function DashboardContent() {
         onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
       />
       <main className="flex-1 overflow-auto flex flex-col relative">
-        <div className="sticky top-0 z-30 flex items-center justify-between bg-background border-b px-6 py-4 shadow-sm">
-          <div>
-            <h1 className="text-2xl font-bold">Papers</h1>
-            <p className="text-muted-foreground">
-              {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
-              {totalCount > papers.length && ` (${papers.length} of ${totalCount} loaded)`}
-            </p>
+        <div className="sticky top-0 z-30 flex flex-col gap-4 bg-background border-b px-6 py-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold">Papers</h1>
+              <p className="text-muted-foreground">
+                {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
+                {totalCount > papers.length && ` (${papers.length} of ${totalCount} loaded)`}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <ColumnVisibilityDropdown
+                availableColumns={availableColumns}
+                visibleColumns={visibleColumns}
+                onToggleColumn={toggleColumn}
+              />
+              <Button variant="outline" onClick={() => setDedupOpen(true)}>
+                <Layers className="mr-2 h-4 w-4" />
+                Find Duplicates
+              </Button>
+              <Button onClick={() => setAddPaperOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Papers
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <ColumnVisibilityDropdown
-              availableColumns={availableColumns}
-              visibleColumns={visibleColumns}
-              onToggleColumn={toggleColumn}
-            />
-            <Button variant="outline" onClick={() => setDedupOpen(true)}>
-              <Layers className="mr-2 h-4 w-4" />
-              Find Duplicates
-            </Button>
-            <Button onClick={() => setAddPaperOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Papers
-            </Button>
-          </div>
-        </div>
-
-        <div className="p-6 flex flex-col gap-6">
           <SearchFilters
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
@@ -462,6 +461,9 @@ function DashboardContent() {
             onProjectChange={setSelectedProjectId}
             onTagChange={setSelectedTagId}
           />
+        </div>
+
+        <div className="p-6 flex flex-col gap-6">
 
           <AnalyticsPanel papers={filteredPapers} />
 
