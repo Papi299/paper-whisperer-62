@@ -9,7 +9,6 @@ import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
 import { useFilteredAndSortedPapers } from "@/hooks/useFilteredAndSortedPapers";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
-import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
 import { BulkActionsToolbar } from "@/components/papers/BulkActionsToolbar";
@@ -395,77 +394,74 @@ function DashboardContent() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <Header />
-      <div className="flex flex-1">
-        <Sidebar
-          projects={projects}
-          tags={tags}
-          onCreateProject={createProject}
-          onCreateTag={createTag}
-          onEditProject={(p) => setEditingProject(p)}
-          onDeleteProject={deleteProject}
-          onEditTag={(t) => setEditingTag(t)}
-          onDeleteTag={deleteTag}
-          availableKeywords={allKeywords}
-          availableStudyTypes={allStudyTypes}
-          onDeletePoolStudyType={handleDeletePoolStudyType}
-          onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
-          onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
-        />
-        <main className="flex-1 p-6 overflow-auto flex flex-col">
-          <div className="mb-6 flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">Papers</h1>
-              <p className="text-muted-foreground">
-                {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
-                {totalCount > papers.length && ` (${papers.length} of ${totalCount} loaded)`}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <ColumnVisibilityDropdown
-                availableColumns={availableColumns}
-                visibleColumns={visibleColumns}
-                onToggleColumn={toggleColumn}
-              />
-              <Button variant="outline" onClick={() => setDedupOpen(true)}>
-                <Layers className="mr-2 h-4 w-4" />
-                Find Duplicates
-              </Button>
-              <Button onClick={() => setAddPaperOpen(true)}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Papers
-              </Button>
-            </div>
+    <div className="flex h-screen w-full bg-background overflow-hidden">
+      <Sidebar
+        projects={projects}
+        tags={tags}
+        onCreateProject={createProject}
+        onCreateTag={createTag}
+        onEditProject={(p) => setEditingProject(p)}
+        onDeleteProject={deleteProject}
+        onEditTag={(t) => setEditingTag(t)}
+        onDeleteTag={deleteTag}
+        availableKeywords={allKeywords}
+        availableStudyTypes={allStudyTypes}
+        onDeletePoolStudyType={handleDeletePoolStudyType}
+        onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
+        onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
+      />
+      <main className="flex-1 overflow-auto flex flex-col relative">
+        <div className="sticky top-0 z-30 flex items-center justify-between bg-background border-b px-6 py-4 shadow-sm">
+          <div>
+            <h1 className="text-2xl font-bold">Papers</h1>
+            <p className="text-muted-foreground">
+              {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
+              {totalCount > papers.length && ` (${papers.length} of ${totalCount} loaded)`}
+            </p>
           </div>
-
-          <div className="mb-6">
-            <SearchFilters
-              searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
-              yearFrom={yearFrom}
-              yearTo={yearTo}
-              onYearFromChange={setYearFrom}
-              onYearToChange={setYearTo}
-              studyType={studyType}
-              onStudyTypeChange={setStudyType}
-              studyTypeFilterOptions={studyTypeFilterOptions}
-              selectedKeywords={selectedKeywords}
-              availableKeywords={filteredKeywords}
-              onKeywordToggle={handleKeywordToggle}
-              onClearFilters={clearFilters}
-              onExportCSV={handleExportCSV}
-              onExportRIS={handleExportRIS}
-              onExportBibTeX={handleExportBibTeX}
-              hasActiveFilters={hasActiveFilters}
-              projects={projects}
-              tags={tags}
-              selectedProjectId={selectedProjectId}
-              selectedTagId={selectedTagId}
-              onProjectChange={setSelectedProjectId}
-              onTagChange={setSelectedTagId}
+          <div className="flex items-center gap-2">
+            <ColumnVisibilityDropdown
+              availableColumns={availableColumns}
+              visibleColumns={visibleColumns}
+              onToggleColumn={toggleColumn}
             />
+            <Button variant="outline" onClick={() => setDedupOpen(true)}>
+              <Layers className="mr-2 h-4 w-4" />
+              Find Duplicates
+            </Button>
+            <Button onClick={() => setAddPaperOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Papers
+            </Button>
           </div>
+        </div>
+
+        <div className="p-6 flex flex-col gap-6">
+          <SearchFilters
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            yearFrom={yearFrom}
+            yearTo={yearTo}
+            onYearFromChange={setYearFrom}
+            onYearToChange={setYearTo}
+            studyType={studyType}
+            onStudyTypeChange={setStudyType}
+            studyTypeFilterOptions={studyTypeFilterOptions}
+            selectedKeywords={selectedKeywords}
+            availableKeywords={filteredKeywords}
+            onKeywordToggle={handleKeywordToggle}
+            onClearFilters={clearFilters}
+            onExportCSV={handleExportCSV}
+            onExportRIS={handleExportRIS}
+            onExportBibTeX={handleExportBibTeX}
+            hasActiveFilters={hasActiveFilters}
+            projects={projects}
+            tags={tags}
+            selectedProjectId={selectedProjectId}
+            selectedTagId={selectedTagId}
+            onProjectChange={setSelectedProjectId}
+            onTagChange={setSelectedTagId}
+          />
 
           <AnalyticsPanel papers={filteredPapers} />
 
@@ -510,8 +506,8 @@ function DashboardContent() {
             projects={projects}
             tags={tags}
           />
-        </main>
-      </div>
+        </div>
+      </main>
 
       <AddPaperDialog
         open={addPaperOpen}

@@ -11,7 +11,17 @@ import {
   Settings,
   Sparkles,
   FileText,
+  BookOpen,
+  LogOut,
+  User,
 } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ManageSynonymsModal } from "@/components/synonyms/ManageSynonymsModal";
 import { ManageExclusionsModal } from "@/components/exclusions/ManageExclusionsModal";
 import { ManageKeywordPoolModal } from "@/components/keywords/ManageKeywordPoolModal";
@@ -58,6 +68,8 @@ export function Sidebar({
   onDeleteAllPoolStudyTypes,
   onStudyTypePoolModalClose,
 }: SidebarProps) {
+  const { user, signOut } = useAuth();
+
   // Pool data from context (eliminates 24+ props)
   const {
     poolKeywords,
@@ -97,6 +109,10 @@ export function Sidebar({
 
   return (
     <aside className="w-64 border-r bg-muted/30 flex flex-col">
+      <div className="flex items-center gap-2 px-4 py-4 border-b">
+        <BookOpen className="h-6 w-6 text-primary" />
+        <span className="font-bold text-lg">Paper Whisperer</span>
+      </div>
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4">
           {/* All Papers */}
@@ -245,6 +261,23 @@ export function Sidebar({
           </div>
         </div>
       </ScrollArea>
+
+      <div className="mt-auto border-t px-4 py-3">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="w-full justify-start gap-2 text-sm">
+              <User className="h-4 w-4" />
+              <span className="truncate">{user?.email}</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={signOut}>
+              <LogOut className="mr-2 h-4 w-4" />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
       {/* Modals rendered outside scroll area to avoid clipping */}
       <ManageProjectsModal

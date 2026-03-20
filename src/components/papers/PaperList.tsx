@@ -298,7 +298,7 @@ export function PaperList({
             {isVisible("links") && (
               <ResizableTableHeader columnId="links" label="Links" width={getWidth("links")} onResize={onColumnResize} />
             )}
-            <TableHead className="w-[105px]">Actions</TableHead>
+            <TableHead className="w-[80px]">Actions</TableHead>
           </TableRow>
         </TableHeader>
         {/* Spacer for items before visible window */}
@@ -450,7 +450,7 @@ function PaperRow({
 }: PaperRowProps) {
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
-      <TableRow className={isSelected ? "bg-primary/5" : undefined}>
+      <TableRow className={isSelected ? "bg-primary/5" : virtualIndex % 2 === 1 ? "bg-muted/30" : undefined}>
         {/* Selection checkbox */}
         <TableCell className="px-1" style={{ width: getWidth("checkbox"), minWidth: getWidth("checkbox"), maxWidth: getWidth("checkbox") }}>
           <Checkbox
@@ -540,7 +540,7 @@ function PaperRow({
               
               return (
                 <div className="flex items-center gap-1">
-                  <Badge variant="outline" className="text-xs group/badge hover:pr-1 whitespace-normal break-words text-center leading-tight">
+                  <Badge variant="outline" className="text-xs group/badge whitespace-normal break-words text-center leading-tight">
                     <span>{studyTypeValue}</span>
                     <button
                       onClick={(e) => {
@@ -608,7 +608,7 @@ function PaperRow({
                 <Badge
                   key={`${source}-${keyword}`}
                   variant="outline"
-                  className="text-xs group/badge hover:pr-1"
+                  className="text-xs group/badge"
                 >
                   {displayName}
                   <button
