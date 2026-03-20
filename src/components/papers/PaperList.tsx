@@ -489,7 +489,7 @@ function PaperRow({
               {paper.projects.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {paper.projects.map((proj) => (
-                    <Badge key={proj.id} variant="outline" className="text-xs group-hover:border-white group-hover:text-white">
+                    <Badge key={proj.id} variant="outline" className="text-xs group-hover:!border-white group-hover:!text-white">
                       <div
                         className="w-2 h-2 rounded-full mr-1 bg-[var(--proj-color)] group-hover:bg-white"
                         style={{ "--proj-color": proj.color } as React.CSSProperties}
@@ -540,7 +540,7 @@ function PaperRow({
               
               return (
                 <div className="flex items-center gap-1">
-                  <Badge variant="outline" className="text-xs group/badge whitespace-normal break-words text-center leading-tight group-hover:border-white group-hover:text-white">
+                  <Badge variant="outline" className="text-xs group/badge whitespace-normal break-words text-center leading-tight group-hover:!border-white group-hover:!text-white">
                     <span>{studyTypeValue}</span>
                     <button
                       onClick={(e) => {
@@ -571,7 +571,7 @@ function PaperRow({
               return (
                 <div className="flex flex-wrap gap-1">
                   {methods.map((method, i) => (
-                    <Badge key={i} variant="secondary" className="text-xs whitespace-nowrap group-hover:bg-transparent group-hover:text-white group-hover:border-white">
+                    <Badge key={i} variant="secondary" className="text-xs whitespace-nowrap group-hover:!bg-transparent group-hover:!text-white group-hover:!border-white">
                       {method}
                     </Badge>
                   ))}
@@ -587,14 +587,14 @@ function PaperRow({
                 <Badge
                   key={tag.id}
                   variant="secondary"
-                  className="text-xs group-hover:bg-transparent group-hover:text-white group-hover:border-white"
+                  className="text-xs group-hover:!bg-transparent group-hover:!text-white group-hover:!border-white"
                   style={{ borderColor: tag.color }}
                 >
                   {tag.name}
                 </Badge>
               ))}
               {paper.tags.length > 3 && (
-                <Badge variant="secondary" className="text-xs group-hover:bg-transparent group-hover:text-white group-hover:border-white">
+                <Badge variant="secondary" className="text-xs group-hover:!bg-transparent group-hover:!text-white group-hover:!border-white">
                   +{paper.tags.length - 3}
                 </Badge>
               )}
@@ -608,7 +608,7 @@ function PaperRow({
                 <Badge
                   key={`${source}-${keyword}`}
                   variant="outline"
-                  className="text-xs group/badge group-hover:border-white group-hover:text-white"
+                  className="text-xs group/badge group-hover:!border-white group-hover:!text-white"
                 >
                   {displayName}
                   <button
