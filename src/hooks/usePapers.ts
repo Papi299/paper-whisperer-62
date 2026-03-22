@@ -771,30 +771,57 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         drive_url: normalized.drive_url ?? null,
       }));
 
-      const { data: rpcResult, error: rpcError } = await supabase.rpc(
-        "safe_bulk_insert_papers",
-        {
-          p_user_id: userId,
-          p_papers: insertPayload as unknown as Json,
-        }
-      );
+      // Sequential batching to avoid connection limits
+      const CHUNK_SIZE = 50;
+      let allRpcResults: BulkInsertResult[] = [];
+      let lastError: string | null = null;
 
-      if (rpcError) {
-        // Fallback: mark all as failed
+      for (let i = 0; i < insertPayload.length; i += CHUNK_SIZE) {
+        const chunk = insertPayload.slice(i, i + CHUNK_SIZE);
+        try {
+          const { data: chunkResult, error: rpcError } = await supabase.rpc(
+            "safe_bulk_insert_papers",
+            {
+              p_user_id: userId,
+              p_papers: chunk as unknown as Json,
+            }
+          );
+
+          if (rpcError) {
+            console.error("Bulk import chunk error at offset", i, rpcError.message);
+            lastError = rpcError.message;
+            break;
+          }
+
+          const parsed = (typeof chunkResult === "string" ? JSON.parse(chunkResult) : chunkResult) as BulkInsertResult[];
+          const adjusted = parsed.map(r => ({ ...r, index: r.index + i }));
+          allRpcResults = [...allRpcResults, ...adjusted];
+
+          if (i + CHUNK_SIZE < insertPayload.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        } catch (err) {
+          console.error("Bulk import chunk exception at offset", i, err);
+          lastError = err instanceof Error ? err.message : "Network error";
+          break;
+        }
+      }
+
+      if (allRpcResults.length === 0) {
         for (const { identifier } of successfulResults) {
           failedIds.push(identifier);
         }
         onProgress?.(total, total, addedIds, skippedIds, failedIds);
         toast({
           title: "Bulk import failed",
-          description: rpcError.message,
+          description: lastError || "Unknown error",
           variant: "destructive",
         });
         return;
       }
 
       // Phase 4: Process RPC results
-      const results = (typeof rpcResult === "string" ? JSON.parse(rpcResult) : rpcResult) as BulkInsertResult[];
+      const results = allRpcResults;
       const newPapers: PaperWithTags[] = [];
 
       for (const row of results) {
@@ -932,26 +959,54 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
         drive_url: normalized.drive_url ?? null,
       }));
 
-      const { data: rpcResult, error: rpcError } = await supabase.rpc(
-        "safe_bulk_insert_papers",
-        {
-          p_user_id: userId,
-          p_papers: insertPayload as unknown as Json,
-        }
-      );
+      // Sequential batching to avoid connection limits
+      const CHUNK_SIZE = 50;
+      let allRpcResults: BulkInsertResult[] = [];
+      let lastError: string | null = null;
 
-      if (rpcError) {
+      for (let i = 0; i < insertPayload.length; i += CHUNK_SIZE) {
+        const chunk = insertPayload.slice(i, i + CHUNK_SIZE);
+        try {
+          const { data: chunkResult, error: rpcError } = await supabase.rpc(
+            "safe_bulk_insert_papers",
+            {
+              p_user_id: userId,
+              p_papers: chunk as unknown as Json,
+            }
+          );
+
+          if (rpcError) {
+            console.error("File import chunk error at offset", i, rpcError.message);
+            lastError = rpcError.message;
+            break;
+          }
+
+          const parsed = (typeof chunkResult === "string" ? JSON.parse(chunkResult) : chunkResult) as BulkInsertResult[];
+          const adjusted = parsed.map(r => ({ ...r, index: r.index + i }));
+          allRpcResults = [...allRpcResults, ...adjusted];
+
+          if (i + CHUNK_SIZE < insertPayload.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        } catch (err) {
+          console.error("File import chunk exception at offset", i, err);
+          lastError = err instanceof Error ? err.message : "Network error";
+          break;
+        }
+      }
+
+      if (allRpcResults.length === 0) {
         onProgress?.(total, total, 0, 0, total);
         toast({
           title: "File import failed",
-          description: rpcError.message,
+          description: lastError || "Unknown error",
           variant: "destructive",
         });
         return;
       }
 
       // Phase 3: Process RPC results
-      const results = (typeof rpcResult === "string" ? JSON.parse(rpcResult) : rpcResult) as BulkInsertResult[];
+      const results = allRpcResults;
       const newPapers: PaperWithTags[] = [];
 
       for (const row of results) {
