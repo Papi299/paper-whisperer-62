@@ -1,0 +1,661 @@
+import { useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
+import { useToast } from "@/hooks/use-toast";
+import { Paper, PaperWithTags, Project, Tag, BulkInsertResult } from "@/types/database";
+import { queryKeys } from "@/lib/queryKeys";
+import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
+import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
+import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
+import { getErrorMessage } from "@/lib/errorUtils";
+import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
+import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
+
+export function useBulkMutations(
+  userId: string | undefined,
+  papers: PaperWithTags[],
+  projects: Project[],
+  tags: Tag[],
+  normalizationConfig: NormalizationConfig | undefined,
+) {
+  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount } = usePaperCacheHelpers(userId);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { normalize } = useNormalizationWorker();
+
+  const addPapers = useCallback(
+    async (identifiers: string[], driveUrl?: string) => {
+      if (!userId) return;
+
+      try {
+        const fetchedPapers = await fetchPaperMetadata(identifiers);
+        const successfulPapers: PaperWithTags[] = [];
+
+        // Collect non-duplicate, successfully-fetched raw papers for batch normalization
+        const rawPapersForNormalization: { raw: RawPaperData; result: typeof fetchedPapers[number] }[] = [];
+
+        for (const result of fetchedPapers) {
+          if (result.error) {
+            toast({ title: "Could not fetch paper", description: `${result.identifier}: ${result.error}`, variant: "destructive" });
+            continue;
+          }
+
+          const isDuplicate = papers.some((existing) => {
+            if (result.pmid && existing.pmid && result.pmid === existing.pmid) return true;
+            if (result.doi && existing.doi && result.doi.toLowerCase() === existing.doi.toLowerCase()) return true;
+            if (result.title && existing.title && result.title.replace(/\.\s*$/, "").trim().toLowerCase() === existing.title.toLowerCase()) return true;
+            return false;
+          });
+
+          if (isDuplicate) {
+            toast({ title: "Duplicate paper", description: `"${result.title}" already exists in the index.`, variant: "destructive" });
+            continue;
+          }
+
+          if (result.source === "crossref") {
+            toast({ title: "Paper fetched via Crossref", description: `"${result.title}" — PubMed unavailable. Some metadata (MeSH terms, keywords) may be limited.` });
+          }
+
+          const combinedKeywords = [...(result.keywords || []), ...(result.mesh_terms || []), ...(result.substances || [])];
+
+          rawPapersForNormalization.push({
+            result,
+            raw: {
+              title: result.title,
+              authors: result.authors || [],
+              year: result.year,
+              journal: result.journal,
+              pmid: result.pmid,
+              doi: result.doi,
+              abstract: result.abstract,
+              keywords: combinedKeywords,
+              mesh_terms: result.mesh_terms || [],
+              substances: result.substances || [],
+              study_type: result.study_type || null,
+              pubmed_url: result.pubmed_url,
+              journal_url: result.journal_url,
+              drive_url: driveUrl || null,
+            },
+          });
+        }
+
+        // Batch normalize via Web Worker (falls back to main thread for small batches)
+        const normalizedPapers = normalizationConfig
+          ? await normalize(rawPapersForNormalization.map((r) => r.raw), normalizationConfig)
+          : rawPapersForNormalization.map((r) => r.raw);
+
+        // Insert each normalized paper
+        for (let i = 0; i < normalizedPapers.length; i++) {
+          const normalized = normalizedPapers[i];
+          const { result } = rawPapersForNormalization[i];
+
+          const paperData = {
+            user_id: userId,
+            ...normalized,
+            raw_study_type: result.study_type || null,
+            mesh_terms: normalized.mesh_terms || [],
+            substances: normalized.substances || [],
+          };
+
+          const { data: insertedPaper, error: insertError } = await supabase
+            .from("papers")
+            .insert(paperData)
+            .select()
+            .single();
+
+          if (insertError) {
+            if (insertError.code === "23505") {
+              toast({ title: "Duplicate paper", description: `"${result.title}" already exists (duplicate PMID or DOI).`, variant: "destructive" });
+            } else {
+              toast({ title: "Error saving paper", description: insertError.message, variant: "destructive" });
+            }
+            continue;
+          }
+
+          successfulPapers.push({ ...(insertedPaper as Paper), tags: [], projects: [] });
+        }
+
+        if (successfulPapers.length > 0) {
+          updatePapersCache((old) => [...successfulPapers, ...old]);
+          queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+          toast({ title: "Papers added", description: `Successfully added ${successfulPapers.length} paper(s).` });
+        }
+      } catch (error: unknown) {
+        toast({ title: "Error fetching papers", description: getErrorMessage(error), variant: "destructive" });
+      }
+    },
+    [userId, papers, normalizationConfig, normalize, updatePapersCache, queryClient, toast],
+  );
+
+  const bulkImportPapers = useCallback(
+    async (
+      identifiers: string[],
+      onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
+      options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
+    ) => {
+      if (!userId || identifiers.length === 0) return;
+
+      const addedIds: string[] = [];
+      const skippedIds: string[] = [];
+      const failedIds: string[] = [];
+      const total = identifiers.length;
+
+      // Phase 1: Batch fetch all metadata via edge function
+      // (fetchPaperMetadata already batches by EDGE_BATCH_SIZE=10 internally)
+      onProgress?.(0, total, addedIds, skippedIds, failedIds);
+      const allMetadata = await fetchPaperMetadata(identifiers);
+
+      // Separate successful fetches from failures
+      const successfulResults: { identifier: string; meta: typeof allMetadata[0] }[] = [];
+      for (const meta of allMetadata) {
+        if (meta.error || !meta.title) {
+          failedIds.push(meta.identifier);
+        } else {
+          successfulResults.push({ identifier: meta.identifier, meta });
+        }
+      }
+
+      // Report after fetch phase
+      onProgress?.(Math.ceil(total * 0.6), total, addedIds, skippedIds, failedIds);
+
+      if (successfulResults.length === 0) {
+        onProgress?.(total, total, addedIds, skippedIds, failedIds);
+        toast({
+          title: "Bulk import complete",
+          description: `0 added, 0 skipped (duplicates), ${failedIds.length} failed.`,
+        });
+        return;
+      }
+
+      // Phase 2: Batch normalize all successful results
+      const rawPapers: RawPaperData[] = successfulResults.map(({ meta }) => ({
+        title: meta.title!,
+        authors: meta.authors || [],
+        year: meta.year ?? null,
+        journal: meta.journal ?? null,
+        pmid: meta.pmid ?? null,
+        doi: meta.doi ?? null,
+        abstract: meta.abstract ?? null,
+        keywords: meta.keywords || [],
+        mesh_terms: meta.mesh_terms || [],
+        substances: meta.substances || [],
+        study_type: meta.study_type || null,
+        pubmed_url: meta.pubmed_url ?? null,
+        journal_url: meta.journal_url ?? null,
+        drive_url: null,
+      }));
+
+      const normalizedPapers = normalizationConfig
+        ? await normalize(rawPapers, normalizationConfig)
+        : rawPapers;
+
+      // Phase 3: Build payload and call safe_bulk_insert_papers RPC
+      const insertPayload = normalizedPapers.map((normalized, i) => ({
+        title: normalized.title,
+        authors: normalized.authors || [],
+        year: normalized.year ?? null,
+        journal: normalized.journal ?? null,
+        pmid: normalized.pmid ?? null,
+        doi: normalized.doi ?? null,
+        abstract: normalized.abstract ?? null,
+        study_type: normalized.study_type ?? null,
+        raw_study_type: successfulResults[i].meta.study_type || null,
+        statistical_methods: null,
+        keywords: normalized.keywords || [],
+        mesh_terms: normalized.mesh_terms || [],
+        substances: normalized.substances || [],
+        pubmed_url: normalized.pubmed_url ?? null,
+        journal_url: normalized.journal_url ?? null,
+        drive_url: normalized.drive_url ?? null,
+      }));
+
+      // Sequential batching to avoid connection limits
+      const CHUNK_SIZE = 50;
+      let allRpcResults: BulkInsertResult[] = [];
+      let lastError: string | null = null;
+
+      for (let i = 0; i < insertPayload.length; i += CHUNK_SIZE) {
+        const chunk = insertPayload.slice(i, i + CHUNK_SIZE);
+        try {
+          const { data: chunkResult, error: rpcError } = await supabase.rpc(
+            "safe_bulk_insert_papers",
+            {
+              p_user_id: userId,
+              p_papers: chunk as unknown as Json,
+            }
+          );
+
+          if (rpcError) {
+            console.error("Bulk import chunk error at offset", i, rpcError.message);
+            lastError = rpcError.message;
+            break;
+          }
+
+          const parsed = (typeof chunkResult === "string" ? JSON.parse(chunkResult) : chunkResult) as BulkInsertResult[];
+          const adjusted = parsed.map(r => ({ ...r, index: r.index + i }));
+          allRpcResults = [...allRpcResults, ...adjusted];
+
+          if (i + CHUNK_SIZE < insertPayload.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        } catch (err) {
+          console.error("Bulk import chunk exception at offset", i, err);
+          lastError = err instanceof Error ? err.message : "Network error";
+          break;
+        }
+      }
+
+      if (allRpcResults.length === 0) {
+        for (const { identifier } of successfulResults) {
+          failedIds.push(identifier);
+        }
+        onProgress?.(total, total, addedIds, skippedIds, failedIds);
+        toast({
+          title: "Bulk import failed",
+          description: lastError || "Unknown error",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Phase 4: Process RPC results
+      const results = allRpcResults;
+      const newPapers: PaperWithTags[] = [];
+
+      for (const row of results) {
+        const { identifier } = successfulResults[row.index];
+        if (row.status === "inserted" && row.id) {
+          addedIds.push(identifier);
+          // Build a PaperWithTags from the normalized data + returned id
+          const norm = normalizedPapers[row.index];
+          newPapers.push({
+            id: row.id,
+            user_id: userId,
+            title: norm.title,
+            authors: norm.authors,
+            year: norm.year,
+            journal: norm.journal,
+            pmid: norm.pmid,
+            doi: norm.doi,
+            abstract: norm.abstract,
+            study_type: norm.study_type,
+            raw_study_type: successfulResults[row.index].meta.study_type || null,
+            statistical_methods: null,
+            keywords: norm.keywords,
+            mesh_terms: norm.mesh_terms || [],
+            substances: norm.substances || [],
+            pubmed_url: norm.pubmed_url,
+            journal_url: norm.journal_url,
+            drive_url: norm.drive_url,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            tags: [],
+            projects: [],
+          });
+        } else if (row.status === "duplicate") {
+          skippedIds.push(identifier);
+        } else {
+          failedIds.push(identifier);
+        }
+      }
+
+      onProgress?.(total, total, addedIds, skippedIds, failedIds);
+
+      // Phase 5: Assign project/tags to newly inserted papers
+      const insertedPaperIds = newPapers.map((p) => p.id);
+      if (insertedPaperIds.length > 0) {
+        const projectIds = options?.targetProjectIds;
+        const tagIds = options?.targetTagIds;
+
+        if (projectIds && projectIds.length > 0) {
+          await supabase.rpc("bulk_set_paper_projects", {
+            p_paper_ids: insertedPaperIds,
+            p_project_ids: projectIds,
+          });
+          const matchedProjects = projects.filter((p) => projectIds.includes(p.id));
+          if (matchedProjects.length > 0) {
+            newPapers.forEach((p) => { p.projects = matchedProjects; });
+          }
+        }
+
+        if (tagIds && tagIds.length > 0) {
+          await supabase.rpc("bulk_set_paper_tags", {
+            p_paper_ids: insertedPaperIds,
+            p_tag_ids: tagIds,
+          });
+          const matchedTags = tags.filter((t) => tagIds.includes(t.id));
+          if (matchedTags.length > 0) {
+            newPapers.forEach((p) => { p.tags = matchedTags; });
+          }
+        }
+
+        updatePapersCache((old) => [...newPapers, ...old]);
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+      }
+
+      toast({
+        title: "Bulk import complete",
+        description: `${addedIds.length} added, ${skippedIds.length} skipped (duplicates), ${failedIds.length} failed.`,
+      });
+    },
+    [userId, projects, tags, normalizationConfig, normalize, toast, updatePapersCache, queryClient],
+  );
+
+  /**
+   * Import pre-parsed papers (from .bib, .ris, .csv file parsers).
+   * Skips the metadata fetch phase — goes directly to normalize → RPC → cache.
+   */
+  const bulkImportFromParsedData = useCallback(
+    async (
+      parsedPapers: RawPaperData[],
+      onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void,
+      options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
+    ) => {
+      if (!userId || parsedPapers.length === 0) return;
+
+      const total = parsedPapers.length;
+      let addedCount = 0;
+      let skippedCount = 0;
+      let failedCount = 0;
+
+      onProgress?.(0, total, 0, 0, 0);
+
+      // Phase 1: Normalize via Web Worker
+      const normalizedPapers = normalizationConfig
+        ? await normalize(parsedPapers, normalizationConfig)
+        : parsedPapers.map((p) => ({
+            ...p,
+            mesh_terms: p.mesh_terms || [],
+            substances: p.substances || [],
+          }));
+
+      onProgress?.(Math.ceil(total * 0.3), total, 0, 0, 0);
+
+      // Phase 2: Build payload and call safe_bulk_insert_papers RPC
+      const insertPayload = normalizedPapers.map((normalized, i) => ({
+        title: normalized.title,
+        authors: normalized.authors || [],
+        year: normalized.year ?? null,
+        journal: normalized.journal ?? null,
+        pmid: normalized.pmid ?? null,
+        doi: normalized.doi ?? null,
+        abstract: normalized.abstract ?? null,
+        study_type: normalized.study_type ?? null,
+        raw_study_type: parsedPapers[i].study_type || null,
+        statistical_methods: null,
+        keywords: normalized.keywords || [],
+        mesh_terms: normalized.mesh_terms || [],
+        substances: normalized.substances || [],
+        pubmed_url: normalized.pubmed_url ?? null,
+        journal_url: normalized.journal_url ?? null,
+        drive_url: normalized.drive_url ?? null,
+      }));
+
+      // Sequential batching to avoid connection limits
+      const CHUNK_SIZE = 50;
+      let allRpcResults: BulkInsertResult[] = [];
+      let lastError: string | null = null;
+
+      for (let i = 0; i < insertPayload.length; i += CHUNK_SIZE) {
+        const chunk = insertPayload.slice(i, i + CHUNK_SIZE);
+        try {
+          const { data: chunkResult, error: rpcError } = await supabase.rpc(
+            "safe_bulk_insert_papers",
+            {
+              p_user_id: userId,
+              p_papers: chunk as unknown as Json,
+            }
+          );
+
+          if (rpcError) {
+            console.error("File import chunk error at offset", i, rpcError.message);
+            lastError = rpcError.message;
+            break;
+          }
+
+          const parsed = (typeof chunkResult === "string" ? JSON.parse(chunkResult) : chunkResult) as BulkInsertResult[];
+          const adjusted = parsed.map(r => ({ ...r, index: r.index + i }));
+          allRpcResults = [...allRpcResults, ...adjusted];
+
+          if (i + CHUNK_SIZE < insertPayload.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        } catch (err) {
+          console.error("File import chunk exception at offset", i, err);
+          lastError = err instanceof Error ? err.message : "Network error";
+          break;
+        }
+      }
+
+      if (allRpcResults.length === 0) {
+        onProgress?.(total, total, 0, 0, total);
+        toast({
+          title: "File import failed",
+          description: lastError || "Unknown error",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Phase 3: Process RPC results
+      const results = allRpcResults;
+      const newPapers: PaperWithTags[] = [];
+
+      for (const row of results) {
+        if (row.status === "inserted" && row.id) {
+          addedCount++;
+          const norm = normalizedPapers[row.index];
+          newPapers.push({
+            id: row.id,
+            user_id: userId,
+            title: norm.title,
+            authors: norm.authors,
+            year: norm.year,
+            journal: norm.journal,
+            pmid: norm.pmid,
+            doi: norm.doi,
+            abstract: norm.abstract,
+            study_type: norm.study_type,
+            raw_study_type: parsedPapers[row.index].study_type || null,
+            statistical_methods: null,
+            keywords: norm.keywords,
+            mesh_terms: norm.mesh_terms || [],
+            substances: norm.substances || [],
+            pubmed_url: norm.pubmed_url,
+            journal_url: norm.journal_url,
+            drive_url: norm.drive_url,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            tags: [],
+            projects: [],
+          });
+        } else if (row.status === "duplicate") {
+          skippedCount++;
+        } else {
+          failedCount++;
+        }
+      }
+
+      onProgress?.(total, total, addedCount, skippedCount, failedCount);
+
+      // Phase 4: Assign project/tags to newly inserted papers
+      const insertedPaperIds = newPapers.map((p) => p.id);
+      if (insertedPaperIds.length > 0) {
+        const projectIds = options?.targetProjectIds;
+        const tagIds = options?.targetTagIds;
+
+        if (projectIds && projectIds.length > 0) {
+          await supabase.rpc("bulk_set_paper_projects", {
+            p_paper_ids: insertedPaperIds,
+            p_project_ids: projectIds,
+          });
+          const matchedProjects = projects.filter((p) => projectIds.includes(p.id));
+          if (matchedProjects.length > 0) {
+            newPapers.forEach((p) => { p.projects = matchedProjects; });
+          }
+        }
+
+        if (tagIds && tagIds.length > 0) {
+          await supabase.rpc("bulk_set_paper_tags", {
+            p_paper_ids: insertedPaperIds,
+            p_tag_ids: tagIds,
+          });
+          const matchedTags = tags.filter((t) => tagIds.includes(t.id));
+          if (matchedTags.length > 0) {
+            newPapers.forEach((p) => { p.tags = matchedTags; });
+          }
+        }
+
+        updatePapersCache((old) => [...newPapers, ...old]);
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+      }
+
+      toast({
+        title: "File import complete",
+        description: `${addedCount} added, ${skippedCount} skipped (duplicates), ${failedCount} failed.`,
+      });
+    },
+    [userId, projects, tags, normalizationConfig, normalize, toast, updatePapersCache, queryClient],
+  );
+
+  const bulkDeletePapers = useCallback(
+    async (paperIds: string[]) => {
+      if (!userId || paperIds.length === 0) return;
+
+      await cancelQueries();
+      const snapshot = snapshotCache();
+
+      // 1. Query attachment paths BEFORE deletion (CASCADE will remove rows)
+      const { data: attachments } = await supabase
+        .from("paper_attachments")
+        .select("file_path")
+        .in("paper_id", paperIds);
+      const storagePaths = (attachments || []).map((a) => a.file_path);
+
+      // Optimistic: remove papers and adjust count immediately
+      const idSet = new Set(paperIds);
+      updatePapersCache((old) => old.filter((p) => !idSet.has(p.id)));
+      adjustCount(-paperIds.length);
+
+      // 2. Delete from DB
+      const { error } = await supabase.from("papers").delete().in("id", paperIds);
+      if (error) {
+        rollbackCache(snapshot);
+        toast({ title: "Error deleting papers", description: error.message, variant: "destructive" });
+        return;
+      }
+
+      // 3. Best-effort storage cleanup (only after successful DB deletion)
+      if (storagePaths.length > 0) {
+        try {
+          await supabase.storage.from("attachments").remove(storagePaths);
+        } catch (e) {
+          console.warn("Bulk storage cleanup failed (non-critical):", e);
+        }
+      }
+
+      toast({ title: `Deleted ${paperIds.length} paper(s)` });
+    },
+    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, rollbackCache, toast],
+  );
+
+  const bulkSetProjects = useCallback(
+    async (paperIds: string[], projectIds: string[]) => {
+      if (!userId || paperIds.length === 0) return;
+
+      await cancelQueries();
+      const snapshot = snapshotCache();
+
+      // Optimistic: assign projects immediately
+      const newProjects = projects.filter((p) => projectIds.includes(p.id));
+      updatePapersCache((allPapers) =>
+        allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, projects: newProjects } : p)),
+      );
+
+      const { error } = await supabase.rpc("bulk_set_paper_projects", { p_paper_ids: paperIds, p_project_ids: projectIds });
+      if (error) {
+        rollbackCache(snapshot);
+        toast({ title: "Error setting projects", description: getErrorMessage(error), variant: "destructive" });
+        return;
+      }
+
+      toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
+    },
+    [userId, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, toast],
+  );
+
+  const bulkSetTags = useCallback(
+    async (paperIds: string[], tagIds: string[]) => {
+      if (!userId || paperIds.length === 0) return;
+
+      await cancelQueries();
+      const snapshot = snapshotCache();
+
+      // Optimistic: assign tags immediately
+      const newTags = tags.filter((t) => tagIds.includes(t.id));
+      updatePapersCache((allPapers) =>
+        allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, tags: newTags } : p)),
+      );
+
+      const { error } = await supabase.rpc("bulk_set_paper_tags", { p_paper_ids: paperIds, p_tag_ids: tagIds });
+      if (error) {
+        rollbackCache(snapshot);
+        toast({ title: "Error setting tags", description: getErrorMessage(error), variant: "destructive" });
+        return;
+      }
+
+      toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
+    },
+    [userId, tags, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, toast],
+  );
+
+  /**
+   * Re-evaluate study types for all papers against the given pool.
+   * Updates cache immediately and persists changes to DB.
+   */
+  const reevaluateStudyTypes = useCallback(
+    async (pool: StudyTypePoolEntry[]) => {
+      if (!userId || papers.length === 0) return;
+
+      // Compute updates first — early return if nothing changed
+      const updates: { id: string; newType: string }[] = [];
+
+      for (const paper of papers) {
+        const rawFallback = paper.raw_study_type ?? paper.study_type;
+        const newType = evaluateStudyType(paper.title, paper.abstract, rawFallback, pool);
+        const current = (paper.study_type || "").trim();
+        const evaluated = (newType || "").trim();
+        if (current !== evaluated) {
+          updates.push({ id: paper.id, newType: evaluated });
+        }
+      }
+
+      if (updates.length === 0) return;
+
+      // Snapshot + optimistic update + RPC
+      await cancelQueries();
+      const snapshot = snapshotCache();
+
+      updatePapersCache((allPapers) =>
+        allPapers.map((p) => {
+          const upd = updates.find((u) => u.id === p.id);
+          return upd ? { ...p, study_type: upd.newType || null } : p;
+        }),
+      );
+
+      try {
+        const payload = updates.map(({ id, newType }) => ({ id, study_type: newType || null }));
+        const { error } = await supabase.rpc("bulk_update_study_types", { updates: payload });
+        if (error) throw error;
+        toast({ title: "Study types updated", description: `Re-classified ${updates.length} paper(s) based on updated pool.` });
+      } catch (err: unknown) {
+        rollbackCache(snapshot);
+        toast({ title: "Error saving study type updates", description: getErrorMessage(err), variant: "destructive" });
+      }
+    },
+    [userId, papers, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, toast],
+  );
+
+  return { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes };
+}

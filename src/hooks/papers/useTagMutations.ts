@@ -1,9 +1,7 @@
 import { useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tag } from "@/types/database";
-import { queryKeys } from "@/lib/queryKeys";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
 export function useTagMutations(userId: string | undefined, tags: Tag[]) {
@@ -13,10 +11,8 @@ export function useTagMutations(userId: string | undefined, tags: Tag[]) {
     cancelQueries,
     updatePapersCache,
     updateMetaCache,
-    adjustCount,
   } = usePaperCacheHelpers(userId);
   const { toast } = useToast();
-  const queryClient = useQueryClient();
 
   const createTag = useCallback(
     async (name: string) => {

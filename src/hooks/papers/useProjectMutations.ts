@@ -1,9 +1,7 @@
 import { useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Project } from "@/types/database";
-import { queryKeys } from "@/lib/queryKeys";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
 export function useProjectMutations(userId: string | undefined, projects: Project[]) {
@@ -13,10 +11,8 @@ export function useProjectMutations(userId: string | undefined, projects: Projec
     cancelQueries,
     updatePapersCache,
     updateMetaCache,
-    adjustCount,
   } = usePaperCacheHelpers(userId);
   const { toast } = useToast();
-  const queryClient = useQueryClient();
 
   const createProject = useCallback(
     async (name: string) => {
