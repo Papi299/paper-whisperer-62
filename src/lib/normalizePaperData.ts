@@ -163,13 +163,16 @@ export function normalizePaperData(
   raw: RawPaperData,
   config: NormalizationConfig
 ): NormalizedPaperData {
-  // Decode HTML entities
+  // Decode HTML entities in all human-readable text fields
   const decodedTitleRaw = decodeHTMLEntities(raw.title) || raw.title;
   const decodedTitle = decodedTitleRaw.replace(/\.\s*$/, '').trim();
   const decodedAbstract = decodeHTMLEntities(raw.abstract) || null;
-
-  // Decode HTML entities in keywords
   const decodedKeywords = raw.keywords.map(kw => decodeHTMLEntities(kw) || kw);
+  const decodedAuthors = raw.authors.map(a => decodeHTMLEntities(a) || a);
+  const decodedJournal = raw.journal ? (decodeHTMLEntities(raw.journal) || raw.journal) : null;
+  const decodedMeshTerms = (raw.mesh_terms || []).map(m => decodeHTMLEntities(m) || m);
+  const decodedSubstances = (raw.substances || []).map(s => decodeHTMLEntities(s) || s);
+  const decodedStudyType = raw.study_type ? (decodeHTMLEntities(raw.study_type) || raw.study_type) : null;
 
   // Step 1: Normalize keywords through synonym lookup
   let normalizedKeywords = normalizeKeywords(decodedKeywords, config.synonymLookup);
@@ -194,21 +197,21 @@ export function normalizePaperData(
   const winnerStudyType = evaluateStudyType(
     decodedTitle,
     decodedAbstract,
-    raw.study_type,
+    decodedStudyType,
     config.poolStudyTypes
   );
 
   return {
     title: decodedTitle,
-    authors: raw.authors,
+    authors: decodedAuthors,
     year: raw.year,
-    journal: raw.journal,
+    journal: decodedJournal,
     pmid: raw.pmid,
     doi: raw.doi,
     abstract: decodedAbstract,
     keywords: mergedKeywords,
-    mesh_terms: raw.mesh_terms || [],
-    substances: raw.substances || [],
+    mesh_terms: decodedMeshTerms,
+    substances: decodedSubstances,
     study_type: winnerStudyType || null,
     pubmed_url: raw.pubmed_url,
     journal_url: raw.journal_url,

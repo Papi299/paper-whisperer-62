@@ -158,4 +158,53 @@ describe("normalizePaperData", () => {
     );
     expect(result.title).toBe("Effect of & Treatment");
   });
+
+  it("decodes HTML entities in abstract (reported bug)", () => {
+    const result = normalizePaperData(
+      makeRaw({ abstract: "BMI 32.3&#x2009;&#xb1;&#x2009;5.4 kg/m2" }),
+      makeConfig()
+    );
+    expect(result.abstract).toBe("BMI 32.3\u2009±\u20095.4 kg/m2");
+  });
+
+  it("decodes HTML entities in authors", () => {
+    const result = normalizePaperData(
+      makeRaw({ authors: ["Smith&#x2009;J", "Doe &amp; Partners"] }),
+      makeConfig()
+    );
+    expect(result.authors).toEqual(["Smith\u2009J", "Doe & Partners"]);
+  });
+
+  it("decodes HTML entities in journal", () => {
+    const result = normalizePaperData(
+      makeRaw({ journal: "Journal&#x2013;Name" }),
+      makeConfig()
+    );
+    expect(result.journal).toBe("Journal–Name");
+  });
+
+  it("decodes HTML entities in mesh_terms", () => {
+    const result = normalizePaperData(
+      makeRaw({ mesh_terms: ["term&#xb1;value"] }),
+      makeConfig()
+    );
+    expect(result.mesh_terms).toEqual(["term±value"]);
+  });
+
+  it("decodes HTML entities in substances", () => {
+    const result = normalizePaperData(
+      makeRaw({ substances: ["compound&#x2009;A"] }),
+      makeConfig()
+    );
+    expect(result.substances).toEqual(["compound\u2009A"]);
+  });
+
+  it("leaves already-decoded Unicode unchanged", () => {
+    const result = normalizePaperData(
+      makeRaw({ abstract: "Value ± 5.4 kg/m2", authors: ["José García"] }),
+      makeConfig()
+    );
+    expect(result.abstract).toBe("Value ± 5.4 kg/m2");
+    expect(result.authors).toEqual(["José García"]);
+  });
 });
