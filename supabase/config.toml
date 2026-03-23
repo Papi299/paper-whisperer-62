@@ -6,3 +6,9 @@ project_id = "nvpnuxrvaicsugvmixlq"
 # papers table when inserting results.
 [functions.fetch-paper-metadata]
 verify_jwt = false
+
+# analyze-paper verifies auth inside the function body (getUser()).
+# Disable gateway JWT verification so stale/refreshing tokens don't
+# cause 401 before the function code executes.
+[functions.analyze-paper]
+verify_jwt = false

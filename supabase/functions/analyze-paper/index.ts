@@ -21,7 +21,11 @@ Deno.serve(async (req) => {
     console.log("1. Checking Auth Header");
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      throw new Error("Missing Authorization header");
+      console.log("1a. Missing Authorization header");
+      return new Response(
+        JSON.stringify({ error: "Missing Authorization header" }),
+        { status: 401, headers: jsonHeaders },
+      );
     }
     console.log("1a. Auth header present:", authHeader.substring(0, 20) + "...");
 
@@ -35,10 +39,17 @@ Deno.serve(async (req) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError) {
       console.log("2a. Auth error:", authError.message);
-      throw new Error("Auth failed: " + authError.message);
+      return new Response(
+        JSON.stringify({ error: "Auth failed: " + authError.message }),
+        { status: 401, headers: jsonHeaders },
+      );
     }
     if (!user) {
-      throw new Error("Auth failed: no user returned");
+      console.log("2a. No user returned from getUser");
+      return new Response(
+        JSON.stringify({ error: "Auth failed: no user returned" }),
+        { status: 401, headers: jsonHeaders },
+      );
     }
     console.log("2b. User authenticated:", user.id);
 
@@ -46,7 +57,11 @@ Deno.serve(async (req) => {
     console.log("3. Parsing request body");
     const { title, abstract } = await req.json();
     if (!abstract || typeof abstract !== "string") {
-      throw new Error("Missing or invalid 'abstract' field");
+      console.log("3a. Invalid input: missing or non-string abstract");
+      return new Response(
+        JSON.stringify({ error: "Missing or invalid 'abstract' field" }),
+        { status: 400, headers: jsonHeaders },
+      );
     }
     console.log("3a. Title:", (title || "").substring(0, 50), "| Abstract length:", abstract.length);
 
@@ -144,7 +159,7 @@ CRITICAL RULES:
     console.error("analyze-paper CAUGHT ERROR:", err);
     return new Response(
       JSON.stringify({ error: err.message || "Unknown error" }),
-      { status: 400, headers: jsonHeaders },
+      { status: 500, headers: jsonHeaders },
     );
   }
 });
