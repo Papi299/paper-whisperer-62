@@ -268,10 +268,8 @@ function DashboardContent() {
     if (!paper.abstract) return;
     setAnalyzingPaperId(paper.id);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       const { data, error } = await supabase.functions.invoke("analyze-paper", {
         body: { title: paper.title, abstract: paper.abstract },
-        headers: { Authorization: `Bearer ${session?.access_token}` },
       });
       if (error) throw error;
 
@@ -321,14 +319,11 @@ function DashboardContent() {
     let successCount = 0;
     let failCount = 0;
 
-    const { data: { session } } = await supabase.auth.getSession();
-
     for (const paper of papersToAnalyze) {
       setBulkAnalyzeProgress(prev => ({ ...prev, current: prev.current + 1 }));
       try {
         const { data, error } = await supabase.functions.invoke("analyze-paper", {
           body: { title: paper.title, abstract: paper.abstract },
-          headers: { Authorization: `Bearer ${session?.access_token}` },
         });
         if (error) throw error;
 
