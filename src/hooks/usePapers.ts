@@ -16,10 +16,10 @@ const PAGE_SIZE = 100;
 export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
   const queryClient = useQueryClient();
 
-  // ── Infinite query: papers (paginated) + projects + tags ──
+  // ── Infinite query: papers only (paginated) ──
   const {
     data,
-    isLoading: loading,
+    isLoading: papersLoading,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -30,23 +30,12 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
 
-      // Projects and tags: always fetch all (they're small)
-      const [projectsResult, tagsResult] = await Promise.all([
-        supabase.from("projects").select("*").eq("user_id", userId!).order("name"),
-        supabase.from("tags").select("*").eq("user_id", userId!).order("name"),
-      ]);
-      if (projectsResult.error) throw projectsResult.error;
-      if (tagsResult.error) throw tagsResult.error;
-
-      const fetchedProjects = (projectsResult.data as Project[]) || [];
-      const fetchedTags = (tagsResult.data as Tag[]) || [];
-
       // Papers: paginated
       const { data: papersData, error: papersError } = await supabase
         .from("papers")
         .select("*, paper_attachments(id, file_name, file_path, file_type)")
         .eq("user_id", userId!)
-        .order("created_at", { ascending: false })
+        .order("insert_order", { ascending: false })
         .range(from, to);
       if (papersError) throw papersError;
 
@@ -68,25 +57,28 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       const paperTagsData = paperTagsResult.data;
       const paperProjectsData = paperProjectsResult.data;
 
-      // Assemble PaperWithTags
-      const assembledPapers: PaperWithTags[] = rawPapers.map((paper) => {
-        const paperTagIds = (paperTagsData || [])
+      // Build raw papers with junction IDs
+      const papers = rawPapers.map((paper) => {
+        const tagIds = (paperTagsData || [])
           .filter((pt: { paper_id: string; tag_id: string }) => pt.paper_id === paper.id)
           .map((pt: { tag_id: string }) => pt.tag_id);
-        const paperTags = fetchedTags.filter((t) => paperTagIds.includes(t.id));
 
-        const paperProjectIds = (paperProjectsData || [])
+        const projectIds = (paperProjectsData || [])
           .filter((pp: { paper_id: string; project_id: string }) => pp.paper_id === paper.id)
           .map((pp: { project_id: string }) => pp.project_id);
-        const paperProjects = fetchedProjects.filter((p) => paperProjectIds.includes(p.id));
 
-        return { ...paper, tags: paperTags, projects: paperProjects };
+        return {
+          ...paper,
+          tagIds,
+          projectIds,
+          paper_attachments: (paper as Record<string, unknown>).paper_attachments as
+            | { id: string; file_name: string; file_path: string; file_type: string }[]
+            | undefined,
+        };
       });
 
       return {
-        papers: assembledPapers,
-        projects: fetchedProjects,
-        tags: fetchedTags,
+        papers,
         hasMore: rawPapers.length === PAGE_SIZE,
       };
     },
@@ -94,6 +86,36 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     getNextPageParam: (lastPage, _allPages, lastPageParam) => {
       if (!lastPage.hasMore) return undefined;
       return (lastPageParam as number) + 1;
+    },
+    enabled: !!userId,
+  });
+
+  // ── Projects (single query, not per-page) ──
+  const { data: projectsData, isLoading: projectsLoading } = useQuery({
+    queryKey: queryKeys.projects.all(userId!),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("projects")
+        .select("*")
+        .eq("user_id", userId!)
+        .order("name");
+      if (error) throw error;
+      return (data as Project[]) || [];
+    },
+    enabled: !!userId,
+  });
+
+  // ── Tags (single query, not per-page) ──
+  const { data: tagsData, isLoading: tagsLoading } = useQuery({
+    queryKey: queryKeys.tags.all(userId!),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("tags")
+        .select("*")
+        .eq("user_id", userId!)
+        .order("name");
+      if (error) throw error;
+      return (data as Tag[]) || [];
     },
     enabled: !!userId,
   });
@@ -119,17 +141,27 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     }
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
+  const loading = papersLoading || projectsLoading || tagsLoading;
   const allLoaded = !hasNextPage && !isFetchingNextPage && !loading;
 
-  // Flatten pages into single arrays
-  const papers = useMemo(
-    () => data?.pages.flatMap((p) => p.papers) ?? [],
-    [data],
-  );
-  const rawProjects = data?.pages?.[0]?.projects;
-  const rawTags = data?.pages?.[0]?.tags;
-  const projects = useMemo(() => rawProjects ?? [], [rawProjects]);
-  const tags = useMemo(() => rawTags ?? [], [rawTags]);
+  // Stable references
+  const projects = useMemo(() => projectsData ?? [], [projectsData]);
+  const tags = useMemo(() => tagsData ?? [], [tagsData]);
+
+  // Hydrate raw papers + junction IDs → PaperWithTags
+  const papers = useMemo(() => {
+    const rawPapers = data?.pages.flatMap((p) => p.papers) ?? [];
+    if (rawPapers.length === 0) return [];
+
+    const tagsMap = new Map(tags.map((t) => [t.id, t]));
+    const projectsMap = new Map(projects.map((p) => [p.id, p]));
+
+    return rawPapers.map((raw): PaperWithTags => ({
+      ...raw,
+      tags: raw.tagIds.map((id) => tagsMap.get(id)).filter((t): t is Tag => !!t),
+      projects: raw.projectIds.map((id) => projectsMap.get(id)).filter((p): p is Project => !!p),
+    }));
+  }, [data, tags, projects]);
 
   // ── Cache helpers (only updatePapersCache needed directly in facade) ──
   const { updatePapersCache } = usePaperCacheHelpers(userId);

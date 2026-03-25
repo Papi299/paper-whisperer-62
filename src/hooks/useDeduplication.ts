@@ -1,17 +1,10 @@
 import { useState, useCallback } from "react";
 import { useQueryClient, InfiniteData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { DuplicateGroup, DuplicatePaperInfo, PaperWithTags, Project, Tag } from "@/types/database";
+import { DuplicateGroup, DuplicatePaperInfo } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
 import { queryKeys } from "@/lib/queryKeys";
-
-/** Shape of each page in the infinite papers query. */
-interface PapersPage {
-  papers: PaperWithTags[];
-  projects: Project[];
-  tags: Tag[];
-  hasMore: boolean;
-}
+import { PapersPage } from "./papers/types";
 
 /**
  * Merges duplicate groups that share overlapping paper IDs.

@@ -117,7 +117,7 @@ export function useBulkMutations(
         }
 
         if (successfulPapers.length > 0) {
-          updatePapersCache((old) => [...successfulPapers, ...old]);
+          updatePapersCache((old) => [...successfulPapers.slice().reverse(), ...old]);
           queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
           toast({ title: "Papers added", description: `Successfully added ${successfulPapers.length} paper(s).` });
         }
@@ -288,6 +288,7 @@ export function useBulkMutations(
             pubmed_url: norm.pubmed_url,
             journal_url: norm.journal_url,
             drive_url: norm.drive_url,
+            insert_order: Date.now() + row.index,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             tags: [],
@@ -330,7 +331,7 @@ export function useBulkMutations(
           }
         }
 
-        updatePapersCache((old) => [...newPapers, ...old]);
+        updatePapersCache((old) => [...newPapers.slice().reverse(), ...old]);
         queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
       }
 
@@ -465,6 +466,7 @@ export function useBulkMutations(
             pubmed_url: norm.pubmed_url,
             journal_url: norm.journal_url,
             drive_url: norm.drive_url,
+            insert_order: Date.now() + row.index,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             tags: [],
@@ -507,7 +509,7 @@ export function useBulkMutations(
           }
         }
 
-        updatePapersCache((old) => [...newPapers, ...old]);
+        updatePapersCache((old) => [...newPapers.slice().reverse(), ...old]);
         queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
       }
 
