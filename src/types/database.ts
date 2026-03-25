@@ -52,6 +52,7 @@ export interface Paper {
   journal_url: string | null;
   drive_url: string | null;
   tldr: string | null;
+  insert_order: number;
   created_at: string;
   updated_at: string;
 }
