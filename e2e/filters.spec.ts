@@ -30,7 +30,7 @@ test.describe("Search & Filters", () => {
     const searchInput = page.getByPlaceholder(/search/i);
     await searchInput.fill("some query");
 
-    const clearButton = page.getByRole("button", { name: /clear/i });
+    const clearButton = page.getByRole("button", { name: "Clear", exact: true });
     if (await clearButton.isVisible()) {
       await clearButton.click();
       await expect(searchInput).toHaveValue("");
