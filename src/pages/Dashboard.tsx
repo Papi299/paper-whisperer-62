@@ -106,6 +106,7 @@ function DashboardContent() {
     loading,
     allKeywords,
     totalCount,
+    allLoaded,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -411,8 +412,9 @@ function DashboardContent() {
             <div>
               <h1 className="text-2xl font-bold">Papers</h1>
               <p className="text-muted-foreground">
-                {filteredPapers.length} paper{filteredPapers.length !== 1 ? "s" : ""}
-                {totalCount > papers.length && ` (${papers.length} of ${totalCount} loaded)`}
+                {!allLoaded
+                  ? `Loading\u2026 ${papers.length} of ${totalCount} papers`
+                  : `${filteredPapers.length} paper${filteredPapers.length !== 1 ? "s" : ""}`}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -455,8 +457,9 @@ function DashboardContent() {
             selectedTagId={selectedTagId}
             onProjectChange={setSelectedProjectId}
             onTagChange={setSelectedTagId}
+            allLoaded={allLoaded}
           />
-          <AnalyticsPanel papers={filteredPapers} />
+          <AnalyticsPanel papers={filteredPapers} allLoaded={allLoaded} />
         </div>
 
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
@@ -482,9 +485,6 @@ function DashboardContent() {
             sortKey={sortKey}
             sortDirection={sortDirection}
             onSort={handleSort}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
             onAnalyzePaper={handleAnalyzePaper}
             analyzingPaperId={analyzingPaperId}
           />

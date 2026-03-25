@@ -37,6 +37,7 @@ function decodeHtml(html: string): string {
 
 interface AnalyticsPanelProps {
   papers: PaperWithTags[];
+  allLoaded?: boolean;
 }
 
 function MultiSelectPopover({
@@ -161,7 +162,7 @@ function PercentTooltip({ active, payload, total }: {
   );
 }
 
-export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
+export function AnalyticsPanel({ papers, allLoaded = true }: AnalyticsPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
@@ -293,7 +294,12 @@ export function AnalyticsPanel({ papers }: AnalyticsPanelProps) {
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <Card className="mb-4">
+        <Card className="mb-4 relative">
+          {!allLoaded && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/70 rounded-lg">
+              <p className="text-sm text-muted-foreground animate-pulse">Loading all papers…</p>
+            </div>
+          )}
           <CardContent className="pt-4 pb-4 space-y-4">
             {/* Summary stats row */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
