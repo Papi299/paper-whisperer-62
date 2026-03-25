@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
@@ -112,6 +112,15 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     enabled: !!userId,
   });
 
+  // ── Auto-fetch all pages for whole-library correctness ──
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  const allLoaded = !hasNextPage && !isFetchingNextPage && !loading;
+
   // Flatten pages into single arrays
   const papers = useMemo(
     () => data?.pages.flatMap((p) => p.papers) ?? [],
@@ -149,6 +158,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     projects,
     tags,
     loading,
+    allLoaded,
     allKeywords,
     totalCount: totalCount ?? papers.length,
     fetchNextPage,

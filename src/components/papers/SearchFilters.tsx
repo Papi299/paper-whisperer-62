@@ -41,6 +41,7 @@ interface SearchFiltersProps {
   selectedTagId: string | null;
   onProjectChange: (projectId: string | null) => void;
   onTagChange: (tagId: string | null) => void;
+  allLoaded?: boolean;
 }
 
 export function SearchFilters({
@@ -67,6 +68,7 @@ export function SearchFilters({
   selectedTagId,
   onProjectChange,
   onTagChange,
+  allLoaded = true,
 }: SearchFiltersProps) {
 
   return (
@@ -182,7 +184,7 @@ export function SearchFilters({
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" disabled={!allLoaded} title={!allLoaded ? "Loading papers…" : undefined}>
                 <Download className="mr-1 h-4 w-4" />
                 Export
               </Button>

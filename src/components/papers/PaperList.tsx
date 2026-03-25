@@ -96,9 +96,6 @@ interface PaperListProps {
   sortKey?: ColumnId | null;
   sortDirection?: SortDirection | null;
   onSort?: (columnId: ColumnId) => void;
-  hasNextPage?: boolean;
-  isFetchingNextPage?: boolean;
-  onLoadMore?: () => void;
   onAnalyzePaper?: (paper: PaperWithTags) => Promise<void>;
   analyzingPaperId?: string | null;
 }
@@ -130,9 +127,6 @@ export function PaperList({
   sortKey,
   sortDirection,
   onSort,
-  hasNextPage,
-  isFetchingNextPage,
-  onLoadMore,
   onAnalyzePaper,
   analyzingPaperId,
 }: PaperListProps) {
@@ -377,24 +371,6 @@ export function PaperList({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {hasNextPage && (
-        <div className="flex justify-center py-4">
-          <Button
-            variant="outline"
-            onClick={onLoadMore}
-            disabled={isFetchingNextPage}
-          >
-            {isFetchingNextPage ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Loading...
-              </>
-            ) : (
-              "Load More Papers"
-            )}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
