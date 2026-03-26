@@ -97,7 +97,7 @@ export function useAttachments(
         toast({ title: `"${file.name}" too large (max 20MB).`, variant: "destructive" });
         continue;
       }
-      const isAllowed = ALLOWED_TYPES.includes(file.type) || file.type.startsWith("image/");
+      const isAllowed = ALLOWED_TYPES.includes(file.type);
       if (!isAllowed) {
         toast({ title: `"${file.name}" is not a valid type (images/PDFs only).`, variant: "destructive" });
         continue;
