@@ -4,6 +4,7 @@
  * Supabase Edge Function: fetch-paper-metadata
  *
  * Server-side PubMed/Crossref paper metadata fetcher.
+ * Requires a valid Supabase JWT (Authorization: Bearer <token>).
  * Includes rate limiting (350ms between requests), retry with exponential
  * backoff, and 15s request timeouts.
  *
@@ -11,11 +12,15 @@
  * Returns: { results: PaperMetadata[] }
  */
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 
 // ── Types ──
 
@@ -487,20 +492,49 @@ async function fetchPaperMetadata(
 // ── Main Handler ──
 
 Deno.serve(async (req) => {
+  // CORS preflight — MUST be first, before any auth logic
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
+    // ── Step 1: Auth ──
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: "Missing Authorization header" }),
+        { status: 401, headers: jsonHeaders },
+      );
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError) {
+      return new Response(
+        JSON.stringify({ error: "Auth failed: " + authError.message }),
+        { status: 401, headers: jsonHeaders },
+      );
+    }
+    if (!user) {
+      return new Response(
+        JSON.stringify({ error: "Auth failed: no user returned" }),
+        { status: 401, headers: jsonHeaders },
+      );
+    }
+    console.log(`Authenticated user: ${user.id}`);
+
+    // ── Step 2: Parse & validate input ──
     const { identifiers, api_key } = await req.json();
 
     if (!Array.isArray(identifiers) || identifiers.length === 0) {
       return new Response(
         JSON.stringify({ error: "identifiers array is required" }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        { status: 400, headers: jsonHeaders },
       );
     }
 
@@ -509,17 +543,15 @@ Deno.serve(async (req) => {
         JSON.stringify({
           error: `Maximum ${MAX_IDENTIFIERS} identifiers per request`,
         }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        { status: 400, headers: jsonHeaders },
       );
     }
 
+    // ── Step 3: Fetch metadata ──
     const results = await fetchPaperMetadata(identifiers, api_key || undefined);
 
     return new Response(JSON.stringify({ results }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: jsonHeaders,
     });
   } catch (error: unknown) {
     console.error("Error:", error);
@@ -527,7 +559,7 @@ Deno.serve(async (req) => {
       error instanceof Error ? error.message : "Internal server error";
     return new Response(JSON.stringify({ error: errorMessage }), {
       status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: jsonHeaders,
     });
   }
 });

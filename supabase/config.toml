@@ -1,9 +1,8 @@
-project_id = "nvpnuxrvaicsugvmixlq"
+project_id = "lioxtgiputfniqbktcsz"
 
-# The fetch-paper-metadata function only calls external APIs (PubMed/Crossref)
-# and has no auth logic. Disable gateway JWT verification so stale tokens
-# don't block the call. User-level access is still enforced by RLS on the
-# papers table when inserting results.
+# fetch-paper-metadata verifies auth inside the function body (getUser()).
+# Disable gateway JWT verification so CORS preflight and stale/refreshing
+# tokens are handled gracefully by the in-code auth logic.
 [functions.fetch-paper-metadata]
 verify_jwt = false
 
