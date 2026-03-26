@@ -53,15 +53,17 @@ test.describe("Pools & Sidebar", () => {
   });
 
   test("should show create tag dialog", async ({ page }) => {
-    const addTagBtn = page
-      .locator('[aria-label*="tag" i]')
-      .or(page.getByRole("button", { name: /new tag|add tag/i }));
+    // Use the same sidebar gear-button pattern as the manage tags helper
+    const gearBtn = page
+      .getByText("Tags")
+      .first()
+      .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
+      .locator("button");
 
-    if (await addTagBtn.first().isVisible()) {
-      await addTagBtn.first().click();
-      await expect(
-        page.getByRole("dialog").or(page.getByPlaceholder(/tag name/i)),
-      ).toBeVisible();
+    if (await gearBtn.isVisible()) {
+      await gearBtn.click();
+      await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+      await page.keyboard.press("Escape");
     }
   });
 
