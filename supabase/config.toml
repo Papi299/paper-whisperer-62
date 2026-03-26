@@ -1,4 +1,4 @@
-project_id = "nvpnuxrvaicsugvmixlq"
+project_id = "lioxtgiputfniqbktcsz"
 
 # fetch-paper-metadata verifies auth inside the function body (getUser()).
 # Disable gateway JWT verification so CORS preflight and stale/refreshing
