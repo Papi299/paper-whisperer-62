@@ -193,15 +193,17 @@ export async function deleteProject(page: Page, name: string) {
   await gearBtn.click();
   await expect(page.getByRole("dialog")).toBeVisible();
 
-  // Find the project row and click its delete button
+  // Find the project row and click its delete button (skip if already gone)
   const projectRow = page.getByRole("dialog").locator("div").filter({ hasText: name });
-  const deleteBtn = projectRow.locator('button:has(svg)').last();
-  await deleteBtn.click();
+  if (await projectRow.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
+    const deleteBtn = projectRow.locator('button:has(svg)').last();
+    await deleteBtn.click();
 
-  // Confirm if needed
-  const confirmBtn = page.getByRole("button", { name: /^delete$/i });
-  if (await confirmBtn.isVisible({ timeout: 1_000 }).catch(() => false)) {
-    await confirmBtn.click();
+    // Confirm if needed
+    const confirmBtn = page.getByRole("button", { name: /^delete$/i });
+    if (await confirmBtn.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await confirmBtn.click();
+    }
   }
 
   // Close dialog
@@ -220,15 +222,17 @@ export async function deleteTag(page: Page, name: string) {
   await gearBtn.click();
   await expect(page.getByRole("dialog")).toBeVisible();
 
-  // Find the tag row and click its delete button
+  // Find the tag row and click its delete button (skip if already gone)
   const tagRow = page.getByRole("dialog").locator("div").filter({ hasText: name });
-  const deleteBtn = tagRow.locator('button:has(svg)').last();
-  await deleteBtn.click();
+  if (await tagRow.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
+    const deleteBtn = tagRow.locator('button:has(svg)').last();
+    await deleteBtn.click();
 
-  // Confirm if needed
-  const confirmBtn = page.getByRole("button", { name: /^delete$/i });
-  if (await confirmBtn.isVisible({ timeout: 1_000 }).catch(() => false)) {
-    await confirmBtn.click();
+    // Confirm if needed
+    const confirmBtn = page.getByRole("button", { name: /^delete$/i });
+    if (await confirmBtn.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await confirmBtn.click();
+    }
   }
 
   // Close dialog
