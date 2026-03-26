@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useMemo, ReactNode } from "react";
+import { useRef, useCallback, useState, useEffect, useMemo, ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
@@ -72,6 +72,69 @@ function HighlightedAbstract({ text, keywords }: { text: string; keywords: strin
   }
 
   return <>{parts}</>;
+}
+
+const SIGNED_URL_EXPIRY = 3600; // 1 hour
+
+/** Popover body that lazily generates signed URLs for a paper's attachments. */
+function AttachmentPopoverBody({ attachments }: { attachments: { id: string; file_name: string; file_path: string; file_type: string }[] }) {
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const paths = attachments.map((a) => a.file_path);
+    supabase.storage
+      .from("attachments")
+      .createSignedUrls(paths, SIGNED_URL_EXPIRY)
+      .then(({ data }) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        data?.forEach((entry, i) => {
+          if (entry.signedUrl) map[attachments[i].id] = entry.signedUrl;
+        });
+        setUrls(map);
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [attachments]);
+
+  return (
+    <>
+      <p className="text-xs font-medium text-muted-foreground mb-1.5">Attachments</p>
+      <div className="max-h-[200px] overflow-y-auto overscroll-contain space-y-0.5">
+        {attachments.map((att) => {
+          const url = urls[att.id];
+          const inner = (
+            <span className="flex items-center gap-2">
+              {att.file_type.startsWith("image/") && url ? (
+                <img src={url} alt="" className="h-6 w-6 rounded object-cover flex-shrink-0" />
+              ) : (
+                <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              )}
+              <span className="truncate">{att.file_name}</span>
+            </span>
+          );
+          return url ? (
+            <a
+              key={att.id}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+            >
+              {inner}
+            </a>
+          ) : (
+            <span key={att.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground">
+              {inner}
+              {loading && <Loader2 className="h-3 w-3 animate-spin ml-auto" />}
+            </span>
+          );
+        })}
+      </div>
+    </>
+  );
 }
 
 interface PaperListProps {
@@ -645,28 +708,7 @@ function PaperRow({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-64 p-2" side="bottom" align="start" style={{ pointerEvents: 'auto' }}>
-                    <p className="text-xs font-medium text-muted-foreground mb-1.5">Attachments</p>
-                    <div className="max-h-[200px] overflow-y-auto overscroll-contain space-y-0.5">
-                      {paper.paper_attachments!.map((att) => {
-                        const url = supabase.storage.from("attachments").getPublicUrl(att.file_path).data.publicUrl;
-                        return (
-                          <a
-                            key={att.id}
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                          >
-                            {att.file_type.startsWith("image/") ? (
-                              <img src={url} alt="" className="h-6 w-6 rounded object-cover flex-shrink-0" />
-                            ) : (
-                              <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-                            )}
-                            <span className="truncate">{att.file_name}</span>
-                          </a>
-                        );
-                      })}
-                    </div>
+                    <AttachmentPopoverBody attachments={paper.paper_attachments!} />
                   </PopoverContent>
                 </Popover>
               )}

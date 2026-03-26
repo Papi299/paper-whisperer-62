@@ -4,8 +4,9 @@ import { useToast } from "@/hooks/use-toast";
 import { PaperAttachment } from "@/types/database";
 
 const MAX_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
-const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"];
+const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp"];
 const BUCKET = "attachments";
+const SIGNED_URL_EXPIRY = 3600; // 1 hour
 
 export interface Attachment {
   id: string;
@@ -44,10 +45,22 @@ export function useAttachments(
 
       if (error) throw error;
 
-      const withUrls: Attachment[] = (data ?? []).map((row) => {
-        const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(row.file_path);
-        return { ...row, publicUrl: urlData.publicUrl };
-      });
+      const rows = data ?? [];
+      let signedUrls: (string | null)[] = rows.map(() => null);
+      if (rows.length > 0) {
+        const paths = rows.map((row) => row.file_path);
+        const { data: signedData } = await supabase.storage
+          .from(BUCKET)
+          .createSignedUrls(paths, SIGNED_URL_EXPIRY);
+        if (signedData) {
+          signedUrls = signedData.map((entry) => entry.signedUrl);
+        }
+      }
+
+      const withUrls: Attachment[] = rows.map((row, i) => ({
+        ...row,
+        publicUrl: signedUrls[i] ?? "",
+      }));
 
       setAttachments(withUrls);
     } catch (err: unknown) {
@@ -130,8 +143,10 @@ export function useAttachments(
           continue;
         }
 
-        const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
-        uploaded.push({ ...inserted, publicUrl: urlData.publicUrl });
+        const { data: signedData } = await supabase.storage
+          .from(BUCKET)
+          .createSignedUrl(filePath, SIGNED_URL_EXPIRY);
+        uploaded.push({ ...inserted, publicUrl: signedData?.signedUrl ?? "" });
       }
 
       if (uploaded.length > 0) {
