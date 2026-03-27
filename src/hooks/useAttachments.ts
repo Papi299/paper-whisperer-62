@@ -61,7 +61,6 @@ export function useAttachments(
         ...row,
         publicUrl: signedUrls[i] ?? "",
       }));
-
       setAttachments(withUrls);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";

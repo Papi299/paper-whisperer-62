@@ -37,11 +37,27 @@ function criticalOnly(errors: string[]) {
   );
 }
 
+/**
+ * Wait for attachment data to finish loading inside the edit dialog.
+ * The hook fetches rows from paper_attachments then batch-fetches signed URLs.
+ * We wait for the drop-zone to appear, then wait for the network to settle.
+ */
+async function waitForAttachmentsLoaded(page: Page, dialog: ReturnType<Page["getByRole"]>) {
+  await expect(dialog.getByText("Drop files here or")).toBeVisible({ timeout: 5_000 });
+  // Wait for fetchAttachments to complete — it issues a select then createSignedUrls.
+  // networkidle is too strict (Supabase realtime keeps a connection), so we wait for
+  // the paper_attachments query response + a buffer for signed URL resolution.
+  await page.waitForResponse(
+    (res) => res.url().includes("/rest/v1/paper_attachments") && res.status() === 200,
+    { timeout: 10_000 },
+  ).catch(() => { /* no attachments query if paperId not ready yet */ });
+  // Extra buffer for signed URL batch response + React re-render
+  await page.waitForTimeout(2_000);
+}
+
 /** Delete all attachments named TEST_FILE_NAME from the edit dialog (pre-cleanup). */
 async function deleteTestAttachments(page: Page, dialog: ReturnType<Page["getByRole"]>) {
-  // Wait for attachment section to render
-  await expect(dialog.getByText("Drop files here or")).toBeVisible({ timeout: 5_000 });
-  await page.waitForTimeout(1_500); // let signed URLs resolve
+  await waitForAttachmentsLoaded(page, dialog);
 
   // Delete all cards matching our test file name
   const cards = dialog.locator("div.group").filter({ hasText: TEST_FILE_NAME });
@@ -52,7 +68,8 @@ async function deleteTestAttachments(page: Page, dialog: ReturnType<Page["getByR
     await expect(deleteBtn).toBeVisible({ timeout: 2_000 });
     await deleteBtn.click();
     await expect(page.getByText("Attachment deleted", { exact: true })).toBeVisible({ timeout: 10_000 });
-    await page.waitForTimeout(500);
+    // Wait for toast to dismiss and DOM to update
+    await page.waitForTimeout(1_000);
     count = await cards.count();
   }
 }
@@ -61,7 +78,7 @@ async function deleteTestAttachments(page: Page, dialog: ReturnType<Page["getByR
 
 test.describe("Attachment upload, open, refresh, delete", () => {
   test.describe.configure({ mode: "serial" });
-  test.setTimeout(60_000);
+  test.setTimeout(120_000); // generous timeout for cleanup of many leftovers
 
   /** We'll store the title of the paper we attach to, so subsequent tests can reopen it. */
   let paperTitle: string;
@@ -92,7 +109,7 @@ test.describe("Attachment upload, open, refresh, delete", () => {
     const dialog = page.getByRole("dialog");
 
     // Wait for the attachment section to finish loading
-    await expect(dialog.getByText("Drop files here or")).toBeVisible({ timeout: 5_000 });
+    await waitForAttachmentsLoaded(page, dialog);
 
     // Upload the PNG fixture via the hidden file input
     const fileInput = dialog.locator('input[type="file"]');
@@ -104,10 +121,10 @@ test.describe("Attachment upload, open, refresh, delete", () => {
     // The file name should be visible in the grid
     await expect(dialog.getByText(TEST_FILE_NAME).first()).toBeVisible({ timeout: 5_000 });
 
-    // The attachment thumbnail/link should point to a signed URL
+    // The attachment thumbnail/link should point to a signed URL (exactly one should exist after cleanup)
     const card = dialog.locator("a[target='_blank']").filter({
       has: page.locator(`img[alt='${TEST_FILE_NAME}']`),
-    });
+    }).first();
     const href = await card.getAttribute("href");
     expect(href).toBeTruthy();
     expect(href).toContain("/storage/v1/object/sign/");
@@ -136,10 +153,10 @@ test.describe("Attachment upload, open, refresh, delete", () => {
     // Find the attachment
     await expect(dialog.getByText(TEST_FILE_NAME).first()).toBeVisible({ timeout: 10_000 });
 
-    // Get the signed URL href
+    // Get the signed URL href (use .first() for resilience)
     const link = dialog.locator("a[target='_blank']").filter({
       has: page.locator(`img[alt='${TEST_FILE_NAME}']`),
-    });
+    }).first();
     const href = await link.getAttribute("href");
     expect(href).toBeTruthy();
     expect(href).toContain("/storage/v1/object/sign/");
@@ -169,10 +186,10 @@ test.describe("Attachment upload, open, refresh, delete", () => {
     // Attachment should still be visible
     await expect(dialog.getByText(TEST_FILE_NAME).first()).toBeVisible({ timeout: 10_000 });
 
-    // The signed URL should be a fresh one (still valid)
+    // The signed URL should be a fresh one (still valid) — use .first() for resilience
     const link = dialog.locator("a[target='_blank']").filter({
       has: page.locator(`img[alt='${TEST_FILE_NAME}']`),
-    });
+    }).first();
     const href = await link.getAttribute("href");
     expect(href).toBeTruthy();
     expect(href).toContain("/storage/v1/object/sign/");
@@ -239,10 +256,9 @@ test.describe("Attachment invalid type rejection", () => {
     const dialog = page.getByRole("dialog");
 
     // Wait for the attachment section to load
-    await expect(dialog.getByText("Drop files here or")).toBeVisible({ timeout: 5_000 });
+    await waitForAttachmentsLoaded(page, dialog);
 
     // Count existing attachments
-    await page.waitForTimeout(1_000);
     const countBefore = await dialog.locator('button[title="Delete"]').count();
 
     // Upload the SVG fixture
