@@ -9,6 +9,7 @@ import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
+import { processChunkedInsert } from "@/lib/chunkedInsert";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
@@ -212,39 +213,14 @@ export function useBulkMutations(
 
       // Sequential batching to avoid connection limits
       const CHUNK_SIZE = 50;
-      let allRpcResults: BulkInsertResult[] = [];
-      let lastError: string | null = null;
-
-      for (let i = 0; i < insertPayload.length; i += CHUNK_SIZE) {
-        const chunk = insertPayload.slice(i, i + CHUNK_SIZE);
-        try {
-          const { data: chunkResult, error: rpcError } = await supabase.rpc(
-            "safe_bulk_insert_papers",
-            {
-              p_user_id: userId,
-              p_papers: chunk as unknown as Json,
-            }
-          );
-
-          if (rpcError) {
-            console.error("Bulk import chunk error at offset", i, rpcError.message);
-            lastError = rpcError.message;
-            break;
-          }
-
-          const parsed = (typeof chunkResult === "string" ? JSON.parse(chunkResult) : chunkResult) as BulkInsertResult[];
-          const adjusted = parsed.map(r => ({ ...r, index: r.index + i }));
-          allRpcResults = [...allRpcResults, ...adjusted];
-
-          if (i + CHUNK_SIZE < insertPayload.length) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-        } catch (err) {
-          console.error("Bulk import chunk exception at offset", i, err);
-          lastError = err instanceof Error ? err.message : "Network error";
-          break;
-        }
-      }
+      const { results: allRpcResults, lastError } = await processChunkedInsert(
+        insertPayload,
+        (chunk) => supabase.rpc("safe_bulk_insert_papers", {
+          p_user_id: userId,
+          p_papers: chunk as unknown as Json,
+        }),
+        { chunkSize: CHUNK_SIZE },
+      );
 
       if (allRpcResults.length === 0) {
         for (const { identifier } of successfulResults) {
@@ -395,39 +371,14 @@ export function useBulkMutations(
 
       // Sequential batching to avoid connection limits
       const CHUNK_SIZE = 50;
-      let allRpcResults: BulkInsertResult[] = [];
-      let lastError: string | null = null;
-
-      for (let i = 0; i < insertPayload.length; i += CHUNK_SIZE) {
-        const chunk = insertPayload.slice(i, i + CHUNK_SIZE);
-        try {
-          const { data: chunkResult, error: rpcError } = await supabase.rpc(
-            "safe_bulk_insert_papers",
-            {
-              p_user_id: userId,
-              p_papers: chunk as unknown as Json,
-            }
-          );
-
-          if (rpcError) {
-            console.error("File import chunk error at offset", i, rpcError.message);
-            lastError = rpcError.message;
-            break;
-          }
-
-          const parsed = (typeof chunkResult === "string" ? JSON.parse(chunkResult) : chunkResult) as BulkInsertResult[];
-          const adjusted = parsed.map(r => ({ ...r, index: r.index + i }));
-          allRpcResults = [...allRpcResults, ...adjusted];
-
-          if (i + CHUNK_SIZE < insertPayload.length) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-        } catch (err) {
-          console.error("File import chunk exception at offset", i, err);
-          lastError = err instanceof Error ? err.message : "Network error";
-          break;
-        }
-      }
+      const { results: allRpcResults, lastError } = await processChunkedInsert(
+        insertPayload,
+        (chunk) => supabase.rpc("safe_bulk_insert_papers", {
+          p_user_id: userId,
+          p_papers: chunk as unknown as Json,
+        }),
+        { chunkSize: CHUNK_SIZE },
+      );
 
       if (allRpcResults.length === 0) {
         onProgress?.(total, total, 0, 0, total);
