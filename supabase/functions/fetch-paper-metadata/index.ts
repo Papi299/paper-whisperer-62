@@ -547,17 +547,38 @@ Deno.serve(async (req) => {
       );
     }
 
+    // ── Step 2b: Per-item sanitization ──
+    const sanitized: string[] = [];
+    const rejected: PaperMetadata[] = [];
+    for (const raw of identifiers) {
+      if (typeof raw !== "string") {
+        rejected.push({ identifier: String(raw), error: "Identifier must be a string" });
+        continue;
+      }
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) {
+        rejected.push({ identifier: raw, error: "Empty identifier" });
+        continue;
+      }
+      if (trimmed.length > 500) {
+        rejected.push({ identifier: trimmed.slice(0, 50) + "…", error: "Identifier too long (max 500 characters)" });
+        continue;
+      }
+      sanitized.push(trimmed);
+    }
+
     // ── Step 3: Fetch metadata ──
-    const results = await fetchPaperMetadata(identifiers, api_key || undefined);
+    const fetched = sanitized.length > 0
+      ? await fetchPaperMetadata(sanitized, api_key || undefined)
+      : [];
+    const results = [...rejected, ...fetched];
 
     return new Response(JSON.stringify({ results }), {
       headers: jsonHeaders,
     });
   } catch (error: unknown) {
     console.error("Error:", error);
-    const errorMessage =
-      error instanceof Error ? error.message : "Internal server error";
-    return new Response(JSON.stringify({ error: errorMessage }), {
+    return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,
       headers: jsonHeaders,
     });
