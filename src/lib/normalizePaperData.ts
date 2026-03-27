@@ -207,7 +207,9 @@ export function normalizePaperData(
     year: raw.year,
     journal: decodedJournal,
     pmid: raw.pmid,
-    doi: raw.doi,
+    doi: raw.doi
+      ? raw.doi.replace(/^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:)/i, "").trim().toLowerCase()
+      : null,
     abstract: decodedAbstract,
     keywords: mergedKeywords,
     mesh_terms: decodedMeshTerms,

@@ -207,4 +207,51 @@ describe("normalizePaperData", () => {
     expect(result.abstract).toBe("Value ± 5.4 kg/m2");
     expect(result.authors).toEqual(["José García"]);
   });
+
+  // ── DOI normalization ──────────────────────────────────────────────────────
+
+  it("lowercases DOI", () => {
+    const result = normalizePaperData(makeRaw({ doi: "10.1234/ABC.Def" }), makeConfig());
+    expect(result.doi).toBe("10.1234/abc.def");
+  });
+
+  it("strips doi: prefix and lowercases", () => {
+    const result = normalizePaperData(makeRaw({ doi: "doi:10.1234/FOO" }), makeConfig());
+    expect(result.doi).toBe("10.1234/foo");
+  });
+
+  it("strips DOI: prefix (case-insensitive)", () => {
+    const result = normalizePaperData(makeRaw({ doi: "DOI:10.5678/Bar" }), makeConfig());
+    expect(result.doi).toBe("10.5678/bar");
+  });
+
+  it("strips https://doi.org/ prefix and lowercases", () => {
+    const result = normalizePaperData(makeRaw({ doi: "https://doi.org/10.1234/TEST" }), makeConfig());
+    expect(result.doi).toBe("10.1234/test");
+  });
+
+  it("strips https://dx.doi.org/ prefix and lowercases", () => {
+    const result = normalizePaperData(makeRaw({ doi: "https://dx.doi.org/10.9999/XYZ" }), makeConfig());
+    expect(result.doi).toBe("10.9999/xyz");
+  });
+
+  it("strips http://doi.org/ prefix", () => {
+    const result = normalizePaperData(makeRaw({ doi: "http://doi.org/10.1234/http-test" }), makeConfig());
+    expect(result.doi).toBe("10.1234/http-test");
+  });
+
+  it("trims whitespace from DOI", () => {
+    const result = normalizePaperData(makeRaw({ doi: "  10.1234/SPACED  " }), makeConfig());
+    expect(result.doi).toBe("10.1234/spaced");
+  });
+
+  it("returns null for null DOI", () => {
+    const result = normalizePaperData(makeRaw({ doi: null }), makeConfig());
+    expect(result.doi).toBeNull();
+  });
+
+  it("preserves already-clean lowercase DOI", () => {
+    const result = normalizePaperData(makeRaw({ doi: "10.1234/already-clean" }), makeConfig());
+    expect(result.doi).toBe("10.1234/already-clean");
+  });
 });

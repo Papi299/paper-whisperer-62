@@ -158,7 +158,7 @@ CRITICAL RULES:
   } catch (err) {
     console.error("analyze-paper CAUGHT ERROR:", err);
     return new Response(
-      JSON.stringify({ error: err.message || "Unknown error" }),
+      JSON.stringify({ error: "Analysis failed. Please try again later." }),
       { status: 500, headers: jsonHeaders },
     );
   }

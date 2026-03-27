@@ -72,7 +72,7 @@ function parseBulkIdentifiers(text: string): string[] {
     .split(/[\n,]+/)
     .flatMap((line) => line.trim().split(/\s+/))
     .map((id) => id.trim())
-    .filter((id) => id.length > 0);
+    .filter((id) => id.length > 0); // only reject empty-after-trim; no heuristic rejection
 }
 
 const emptyManualData: ManualPaperData = {

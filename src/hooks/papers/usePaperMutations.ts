@@ -38,9 +38,17 @@ export function usePaperMutations(
       const authorsArray = paperData.authors.split(",").map((a) => a.trim()).filter((a) => a.length > 0);
       const keywordsArray = paperData.keywords.split(",").map((k) => k.trim()).filter((k) => k.length > 0);
       const yearNum = paperData.year ? parseInt(paperData.year) : null;
+      if (yearNum !== null && (isNaN(yearNum) || yearNum < 1800 || yearNum > new Date().getFullYear() + 1)) {
+        toast({ title: "Invalid year", description: `Year must be between 1800 and ${new Date().getFullYear() + 1}.`, variant: "destructive" });
+        return;
+      }
 
       const manualTitle = paperData.title.trim();
       const manualPmid = paperData.pmid.trim();
+      if (manualPmid && !/^\d+$/.test(manualPmid)) {
+        toast({ title: "Invalid PMID", description: "PMID must be a number (e.g., 12345678).", variant: "destructive" });
+        return;
+      }
       const manualDoi = paperData.doi.trim();
       const isDuplicate = papers.some((existing) => {
         if (manualPmid && existing.pmid && manualPmid === existing.pmid) return true;
