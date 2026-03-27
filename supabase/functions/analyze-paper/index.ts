@@ -10,6 +10,69 @@ const corsHeaders = {
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 
+/**
+ * Fetch with bounded retry and exponential backoff.
+ * Retries on 429, 5xx, network errors, and timeouts.
+ * Does NOT retry on 4xx (except 429) — those are permanent failures.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  maxRetries = 2,
+  baseDelayMs = 2000,
+): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (res.ok) return res;
+
+      // Non-retriable client errors (except 429)
+      if (res.status !== 429 && res.status < 500) {
+        return res;
+      }
+
+      // Retriable: 429 or 5xx
+      if (attempt < maxRetries) {
+        let delay = baseDelayMs * Math.pow(2, attempt);
+
+        // Respect Retry-After header on 429
+        if (res.status === 429) {
+          const retryAfter = res.headers.get("Retry-After");
+          if (retryAfter) {
+            const retryMs = Number(retryAfter) * 1000;
+            if (!isNaN(retryMs) && retryMs > 0) {
+              delay = Math.min(Math.max(retryMs, delay), 10_000);
+            }
+          }
+        }
+
+        console.log(`fetchWithRetry: attempt ${attempt + 1}/${maxRetries + 1} got ${res.status}, retrying in ${delay}ms`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+
+      // Exhausted retries
+      return res;
+    } catch (err) {
+      // Network error or timeout
+      if (attempt < maxRetries) {
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        console.log(`fetchWithRetry: attempt ${attempt + 1}/${maxRetries + 1} threw ${err.message}, retrying in ${delay}ms`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // Unreachable
+  throw new Error("fetchWithRetry: exhausted retries");
+}
+
 Deno.serve(async (req) => {
   // CORS preflight — MUST be first, before any auth logic
   if (req.method === "OPTIONS") {
@@ -106,7 +169,7 @@ CRITICAL RULES:
       },
     };
 
-    const geminiRes = await fetch(geminiUrl, {
+    const geminiRes = await fetchWithRetry(geminiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(geminiBody),
