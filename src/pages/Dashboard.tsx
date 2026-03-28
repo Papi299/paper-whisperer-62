@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { exportToCSV, exportToRIS, exportToBibTeX } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
@@ -9,6 +8,7 @@ import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
 import { useFilterState } from "@/hooks/useFilterState";
 import { useFilteredPapers } from "@/hooks/useFilteredPapers";
+import { useExportPapers } from "@/hooks/useExportPapers";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -134,6 +134,8 @@ function DashboardContent() {
     projects,
     tags,
     loading,
+    tagsLoading,
+    projectsLoading,
     allKeywords,
     totalCount,
     allLoaded,
@@ -167,6 +169,23 @@ function DashboardContent() {
     debouncedSearchQuery,
     useServerSearch,
     serverSearchIds,
+  });
+
+  // ── Step 4: Dedicated export fetch (bypasses paginated display query) ──
+  const { exportPapers, isExporting, isExportReady } = useExportPapers({
+    userId: user?.id,
+    serverFilterParams,
+    tags,
+    projects,
+    tagsLoading,
+    projectsLoading,
+    clientFilterParams: {
+      debouncedSearchQuery,
+      useServerSearch,
+      selectedKeywords,
+      synonymLookup,
+      findMatchingKeywords,
+    },
   });
 
   // Study type re-evaluation on pool changes
@@ -249,20 +268,9 @@ function DashboardContent() {
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
   const [bulkAnalyzeProgress, setBulkAnalyzeProgress] = useState({ current: 0, total: 0 });
 
-  const handleExportCSV = () => {
-    exportToCSV(filteredPapers);
-    toast({ title: "Export started", description: `Downloading ${filteredPapers.length} papers as CSV.` });
-  };
-
-  const handleExportRIS = () => {
-    exportToRIS(filteredPapers);
-    toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as RIS.` });
-  };
-
-  const handleExportBibTeX = () => {
-    exportToBibTeX(filteredPapers);
-    toast({ title: "Export started", description: `Downloading ${filteredPapers.length} citations as BibTeX.` });
-  };
+  const handleExportCSV = () => exportPapers("csv");
+  const handleExportRIS = () => exportPapers("ris");
+  const handleExportBibTeX = () => exportPapers("bibtex");
 
   const handleAttachmentsChange = useCallback((paperId: string, atts: PaperAttachment[]) => {
     updatePapersCache((all) =>
@@ -467,6 +475,8 @@ function DashboardContent() {
             onProjectChange={setSelectedProjectId}
             onTagChange={setSelectedTagId}
             allLoaded={allLoaded}
+            isExportReady={isExportReady}
+            isExporting={isExporting}
           />
           <AnalyticsPanel papers={filteredPapers} allLoaded={allLoaded} />
         </div>
