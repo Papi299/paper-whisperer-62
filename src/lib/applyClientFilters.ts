@@ -1,4 +1,4 @@
-import type { PaperWithTags } from "@/types/database";
+import type { Paper } from "@/types/database";
 
 /** Minimum query length for server-side FTS. Below this, client-side substring match is used. */
 const SERVER_SEARCH_MIN_LENGTH = 3;
@@ -23,13 +23,17 @@ export interface ClientFilterParams {
  * This is a pure function — no React hooks. Shared between:
  * - useFilteredPapers (display, wrapped in useMemo)
  * - useExportPapers (export, called after fetch)
+ * - useAnalyticsData (analytics, called after fetch)
+ *
+ * Generic over T extends Paper — works with PaperWithTags (display/export)
+ * and plain Paper (analytics, no junction hydration needed).
  *
  * Does NOT sort — input order is preserved by Array.filter().
  */
-export function applyClientFilters(
-  papers: PaperWithTags[],
+export function applyClientFilters<T extends Paper>(
+  papers: T[],
   params: ClientFilterParams,
-): PaperWithTags[] {
+): T[] {
   const { debouncedSearchQuery, useServerSearch, selectedKeywords, synonymLookup, findMatchingKeywords } = params;
 
   return papers.filter((paper) => {

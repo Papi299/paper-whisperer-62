@@ -16,6 +16,9 @@ export const queryKeys = {
     /** Parameterized key for the infinite papers query (includes filter/sort state). */
     list: (userId: string, params: ServerFilterParams) =>
       ["papers", userId, "list", params] as const,
+    /** Parameterized key for the analytics fetch-all query (includes filter/sort state). */
+    analytics: (userId: string, params: ServerFilterParams) =>
+      ["papers", userId, "analytics", params] as const,
     count: (userId: string) => ["papers", userId, "count"] as const,
   },
   projects: {

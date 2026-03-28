@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { PaperWithTags } from "@/types/database";
+import { Paper } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -36,8 +36,10 @@ function decodeHtml(html: string): string {
 }
 
 interface AnalyticsPanelProps {
-  papers: PaperWithTags[];
-  allLoaded?: boolean;
+  papers: Paper[];
+  isLoading: boolean;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
 function MultiSelectPopover({
@@ -162,8 +164,7 @@ function PercentTooltip({ active, payload, total }: {
   );
 }
 
-export function AnalyticsPanel({ papers, allLoaded = true }: AnalyticsPanelProps) {
-  const [isOpen, setIsOpen] = useState(false);
+export function AnalyticsPanel({ papers, isLoading, isOpen, onOpenChange }: AnalyticsPanelProps) {
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
 
@@ -198,8 +199,6 @@ export function AnalyticsPanel({ papers, allLoaded = true }: AnalyticsPanelProps
     };
     const counts: Record<string, number> = {};
     papers.forEach(p => {
-      // Skip excluded/rejected papers
-      if ((p as Record<string, unknown>).status === "excluded" || (p as Record<string, unknown>).status === "rejected") return;
       const st = p.study_type?.trim();
       if (st && !isNoise(st)) counts[st] = (counts[st] || 0) + 1;
     });
@@ -281,7 +280,7 @@ export function AnalyticsPanel({ papers, allLoaded = true }: AnalyticsPanelProps
     Math.max(150, Math.min(dataLength * 28 + 40, 400));
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+    <Collapsible open={isOpen} onOpenChange={onOpenChange}>
       <CollapsibleTrigger asChild>
         <Button variant="outline" size="sm" className="mb-4 gap-2">
           <BarChart3 className="h-4 w-4" />
@@ -295,9 +294,9 @@ export function AnalyticsPanel({ papers, allLoaded = true }: AnalyticsPanelProps
       </CollapsibleTrigger>
       <CollapsibleContent>
         <Card className="mb-4 relative">
-          {!allLoaded && (
+          {isLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/70 rounded-lg">
-              <p className="text-sm text-muted-foreground animate-pulse">Loading all papers…</p>
+              <p className="text-sm text-muted-foreground animate-pulse">Loading analytics data…</p>
             </div>
           )}
           <CardContent className="pt-4 pb-4 space-y-4">
