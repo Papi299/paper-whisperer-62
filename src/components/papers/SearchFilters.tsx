@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, X, Download, FileText, FileSpreadsheet, BookOpen } from "lucide-react";
+import { Search, X, Download, FileText, FileSpreadsheet, BookOpen, Loader2 } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
 import { Project, Tag } from "@/types/database";
 
@@ -42,6 +42,8 @@ interface SearchFiltersProps {
   onProjectChange: (projectId: string | null) => void;
   onTagChange: (tagId: string | null) => void;
   allLoaded?: boolean;
+  isExportReady?: boolean;
+  isExporting?: boolean;
 }
 
 export function SearchFilters({
@@ -69,7 +71,14 @@ export function SearchFilters({
   onProjectChange,
   onTagChange,
   allLoaded = true,
+  isExportReady,
+  isExporting = false,
 }: SearchFiltersProps) {
+
+  // Export gating: prefer explicit isExportReady if provided, otherwise fall back to allLoaded
+  const exportDisabled = isExportReady !== undefined
+    ? !isExportReady || isExporting
+    : !allLoaded;
 
   return (
     <div className="space-y-4">
@@ -184,9 +193,9 @@ export function SearchFilters({
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" disabled={!allLoaded} title={!allLoaded ? "Loading papers…" : undefined}>
-                <Download className="mr-1 h-4 w-4" />
-                Export
+              <Button variant="outline" size="sm" disabled={exportDisabled} title={exportDisabled ? (isExporting ? "Exporting…" : "Loading…") : undefined}>
+                {isExporting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
+                {isExporting ? "Exporting…" : "Export"}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-popover">

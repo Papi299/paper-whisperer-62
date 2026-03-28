@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { queryKeys } from "@/lib/queryKeys";
+import { buildPapersQuery } from "@/lib/buildPapersQuery";
 import { PapersPage, ServerFilterParams, areServerFiltersReady } from "./papers/types";
 import { usePaperCacheHelpers } from "./papers/usePaperCacheHelpers";
 import { useProjectMutations } from "./papers/useProjectMutations";
@@ -35,40 +36,19 @@ export function usePapers(
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
 
-      const { filterPaperIds, yearFrom, yearTo, studyTypes, sortColumn, sortAscending } =
-        serverFilterParams;
+      const { filterPaperIds } = serverFilterParams;
 
       // Short-circuit: filter resolved with no matches
       if (filterPaperIds !== null && filterPaperIds !== undefined && filterPaperIds.length === 0) {
         return { papers: [], hasMore: false };
       }
 
-      // Build query with server-side predicates
-      let query = supabase
-        .from("papers")
-        .select("*, paper_attachments(id, file_name, file_path, file_type)")
-        .eq("user_id", userId!);
-
-      // ID-based filtering (pre-resolved from junction queries + search)
-      if (filterPaperIds !== null && filterPaperIds !== undefined) {
-        query = query.in("id", filterPaperIds);
-      }
-
-      // Year range
-      if (yearFrom !== null) query = query.gte("year", yearFrom);
-      if (yearTo !== null) query = query.lte("year", yearTo);
-
-      // Study type
-      if (studyTypes !== null && studyTypes.length > 0) {
-        query = query.in("study_type", studyTypes);
-      }
-
-      // Sort: server-side is the single source of truth
-      if (sortColumn !== null && sortAscending !== null) {
-        query = query.order(sortColumn, { ascending: sortAscending });
-      } else {
-        query = query.order("insert_order", { ascending: false });
-      }
+      // Build query with shared predicate builder (display needs attachments)
+      const query = buildPapersQuery(
+        userId!,
+        serverFilterParams,
+        "*, paper_attachments(id, file_name, file_path, file_type)",
+      );
 
       const { data: papersData, error: papersError } = await query.range(from, to);
       if (papersError) throw papersError;
@@ -225,6 +205,8 @@ export function usePapers(
     projects,
     tags,
     loading,
+    tagsLoading,
+    projectsLoading,
     allLoaded,
     allKeywords,
     totalCount: totalCount ?? papers.length,
