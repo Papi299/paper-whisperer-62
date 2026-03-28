@@ -1,8 +1,9 @@
 import { useState, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { ServerFilterParams, areServerFiltersReady } from "./papers/types";
 import { buildPapersQuery } from "@/lib/buildPapersQuery";
+import { fetchAllPages } from "@/lib/fetchAllPages";
+import { fetchInChunks } from "@/lib/fetchInChunks";
 import { applyClientFilters, ClientFilterParams } from "@/lib/applyClientFilters";
 import { exportToCSV, exportToRIS, exportToBibTeX } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
@@ -59,13 +60,10 @@ export function useExportPapers({
       setIsExporting(true);
 
       try {
-        // 1. Fetch all matching papers (no pagination)
-        const query = buildPapersQuery(userId, serverFilterParams, EXPORT_SELECT);
-        const { data: papersData, error: papersError } = await query;
-
-        if (papersError) throw papersError;
-
-        const rawPapers = (papersData as Paper[]) || [];
+        // 1. Fetch all matching papers via paginated helper (fixes >1000-row truncation)
+        const rawPapers = await fetchAllPages<Paper>(
+          () => buildPapersQuery(userId, serverFilterParams, EXPORT_SELECT),
+        );
 
         if (rawPapers.length === 0) {
           toast({ title: "No papers to export", description: "No papers match current filters." });
@@ -74,32 +72,33 @@ export function useExportPapers({
 
         const paperIds = rawPapers.map((p) => p.id);
 
-        // 2. Fetch junction tables for hydration
-        const [paperTagsResult, paperProjectsResult] = await Promise.all([
-          supabase.from("paper_tags").select("paper_id, tag_id").in("paper_id", paperIds),
-          supabase.from("paper_projects").select("paper_id, project_id").in("paper_id", paperIds),
+        // 2. Fetch junction tables for hydration (chunked to handle large ID arrays)
+        const [paperTagRows, paperProjectRows] = await Promise.all([
+          fetchInChunks<{ paper_id: string; tag_id: string }>(
+            "paper_tags", "paper_id, tag_id", "paper_id", paperIds,
+          ),
+          fetchInChunks<{ paper_id: string; project_id: string }>(
+            "paper_projects", "paper_id, project_id", "paper_id", paperIds,
+          ),
         ]);
-
-        if (paperTagsResult.error) throw paperTagsResult.error;
-        if (paperProjectsResult.error) throw paperProjectsResult.error;
 
         // 3. Hydrate into PaperWithTags
         const tagsMap = new Map(tags.map((t) => [t.id, t]));
         const projectsMap = new Map(projects.map((p) => [p.id, p]));
 
         const hydratedPapers: PaperWithTags[] = rawPapers.map((paper) => {
-          const paperTagIds = (paperTagsResult.data || [])
-            .filter((pt: { paper_id: string; tag_id: string }) => pt.paper_id === paper.id)
-            .map((pt: { tag_id: string }) => pt.tag_id);
+          const paperTagIds = paperTagRows
+            .filter((pt) => pt.paper_id === paper.id)
+            .map((pt) => pt.tag_id);
 
-          const paperProjectIds = (paperProjectsResult.data || [])
-            .filter((pp: { paper_id: string; project_id: string }) => pp.paper_id === paper.id)
-            .map((pp: { project_id: string }) => pp.project_id);
+          const paperProjectIds = paperProjectRows
+            .filter((pp) => pp.paper_id === paper.id)
+            .map((pp) => pp.project_id);
 
           return {
             ...paper,
-            tags: paperTagIds.map((id: string) => tagsMap.get(id)).filter((t): t is Tag => !!t),
-            projects: paperProjectIds.map((id: string) => projectsMap.get(id)).filter((p): p is Project => !!p),
+            tags: paperTagIds.map((id) => tagsMap.get(id)).filter((t): t is Tag => !!t),
+            projects: paperProjectIds.map((id) => projectsMap.get(id)).filter((p): p is Project => !!p),
           };
         });
 

@@ -9,6 +9,7 @@ import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
 import { useFilterState } from "@/hooks/useFilterState";
 import { useFilteredPapers } from "@/hooks/useFilteredPapers";
 import { useExportPapers } from "@/hooks/useExportPapers";
+import { useAnalyticsData } from "@/hooks/useAnalyticsData";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -186,6 +187,21 @@ function DashboardContent() {
       synonymLookup,
       findMatchingKeywords,
     },
+  });
+
+  // ── Step 5: Dedicated analytics fetch (bypasses paginated display query) ──
+  const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
+  const { papers: analyticsPapers, isLoading: isAnalyticsLoading } = useAnalyticsData({
+    userId: user?.id,
+    serverFilterParams,
+    clientFilterParams: {
+      debouncedSearchQuery,
+      useServerSearch,
+      selectedKeywords,
+      synonymLookup,
+      findMatchingKeywords,
+    },
+    enabled: isAnalyticsOpen,
   });
 
   // Study type re-evaluation on pool changes
@@ -478,7 +494,12 @@ function DashboardContent() {
             isExportReady={isExportReady}
             isExporting={isExporting}
           />
-          <AnalyticsPanel papers={filteredPapers} allLoaded={allLoaded} />
+          <AnalyticsPanel
+            papers={analyticsPapers}
+            isLoading={isAnalyticsLoading}
+            isOpen={isAnalyticsOpen}
+            onOpenChange={setIsAnalyticsOpen}
+          />
         </div>
 
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
