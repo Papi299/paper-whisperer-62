@@ -1,27 +1,37 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useQueryClient, InfiniteData } from "@tanstack/react-query";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { queryKeys } from "@/lib/queryKeys";
-import { PapersPage, RawPaperWithJunctions, CacheSnapshot } from "./types";
+import { PapersPage, RawPaperWithJunctions, CacheSnapshot, ServerFilterParams } from "./types";
 
-export function usePaperCacheHelpers(userId: string | undefined) {
+export function usePaperCacheHelpers(
+  userId: string | undefined,
+  serverFilterParams: ServerFilterParams,
+) {
   const queryClient = useQueryClient();
 
+  /** Exact key for the currently active papers list query. */
+  const activeListKey = useMemo(
+    () => (userId ? queryKeys.papers.list(userId, serverFilterParams) : null),
+    [userId, serverFilterParams],
+  );
+
   const snapshotCache = useCallback((): CacheSnapshot => {
-    if (!userId) return { papers: undefined, count: undefined, projects: undefined, tags: undefined };
+    if (!userId || !activeListKey)
+      return { papers: undefined, count: undefined, projects: undefined, tags: undefined };
     return {
-      papers: queryClient.getQueryData<InfiniteData<PapersPage>>(queryKeys.papers.all(userId)),
+      papers: queryClient.getQueryData<InfiniteData<PapersPage>>(activeListKey),
       count: queryClient.getQueryData<number>(queryKeys.papers.count(userId)),
       projects: queryClient.getQueryData<Project[]>(queryKeys.projects.all(userId)),
       tags: queryClient.getQueryData<Tag[]>(queryKeys.tags.all(userId)),
     };
-  }, [userId, queryClient]);
+  }, [userId, activeListKey, queryClient]);
 
   const rollbackCache = useCallback(
     (snapshot: CacheSnapshot) => {
-      if (!userId) return;
+      if (!userId || !activeListKey) return;
       if (snapshot.papers !== undefined) {
-        queryClient.setQueryData(queryKeys.papers.all(userId), snapshot.papers);
+        queryClient.setQueryData(activeListKey, snapshot.papers);
       }
       if (snapshot.count !== undefined) {
         queryClient.setQueryData(queryKeys.papers.count(userId), snapshot.count);
@@ -33,21 +43,22 @@ export function usePaperCacheHelpers(userId: string | undefined) {
         queryClient.setQueryData(queryKeys.tags.all(userId), snapshot.tags);
       }
     },
-    [userId, queryClient],
+    [userId, activeListKey, queryClient],
   );
 
   const cancelQueries = useCallback(async () => {
-    if (!userId) return;
-    await queryClient.cancelQueries({ queryKey: queryKeys.papers.all(userId) });
-  }, [userId, queryClient]);
+    if (!activeListKey) return;
+    await queryClient.cancelQueries({ queryKey: activeListKey });
+  }, [activeListKey, queryClient]);
 
   /**
-   * Update the papers cache. Accepts an updater that works with hydrated PaperWithTags[].
-   * Internally hydrates raw cache → PaperWithTags, runs updater, strips back.
+   * Update the papers cache on the exact active list key.
+   * Accepts an updater that works with hydrated PaperWithTags[].
+   * Internally hydrates raw cache -> PaperWithTags, runs updater, strips back.
    */
   const updatePapersCache = useCallback(
     (updater: (papers: PaperWithTags[]) => PaperWithTags[]) => {
-      if (!userId) return;
+      if (!userId || !activeListKey) return;
 
       const projects = queryClient.getQueryData<Project[]>(queryKeys.projects.all(userId)) ?? [];
       const tags = queryClient.getQueryData<Tag[]>(queryKeys.tags.all(userId)) ?? [];
@@ -55,11 +66,11 @@ export function usePaperCacheHelpers(userId: string | undefined) {
       const projectsMap = new Map(projects.map((p) => [p.id, p]));
 
       queryClient.setQueryData(
-        queryKeys.papers.all(userId),
+        activeListKey,
         (old: InfiniteData<PapersPage> | undefined) => {
           if (!old) return old;
 
-          // Hydrate raw → PaperWithTags
+          // Hydrate raw -> PaperWithTags
           const allRaw = old.pages.flatMap((p) => p.papers);
           const hydrated: PaperWithTags[] = allRaw.map((raw) => ({
             ...raw,
@@ -91,12 +102,11 @@ export function usePaperCacheHelpers(userId: string | undefined) {
         },
       );
     },
-    [userId, queryClient],
+    [userId, activeListKey, queryClient],
   );
 
   /**
-   * Update projects and tags caches. Same signature as before —
-   * now reads/writes separate caches instead of PapersPage entries.
+   * Update projects and tags caches.
    */
   const updateMetaCache = useCallback(
     (updater: (projects: Project[], tags: Tag[]) => { projects: Project[]; tags: Tag[] }) => {
@@ -121,6 +131,45 @@ export function usePaperCacheHelpers(userId: string | undefined) {
     [userId, queryClient],
   );
 
+  /**
+   * Remove stale non-active list caches to prevent cross-filter contamination.
+   * Called after successful server mutations (not on rollback).
+   */
+  const removeStaleListCaches = useCallback(() => {
+    if (!userId || !activeListKey) return;
+    const activeKeyStr = JSON.stringify(activeListKey);
+    queryClient.removeQueries({
+      queryKey: queryKeys.papers.all(userId),
+      predicate: (query) => {
+        const key = query.queryKey;
+        return (
+          key.length > 2 &&
+          key[2] === "list" &&
+          JSON.stringify(key) !== activeKeyStr
+        );
+      },
+    });
+  }, [userId, activeListKey, queryClient]);
+
+  /**
+   * Invalidate all papers queries (active + stale) and junction pre-query caches.
+   * Used after add/import mutations where new papers may not match active filter.
+   */
+  const invalidateAndRefetch = useCallback(() => {
+    if (!userId) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+    queryClient.invalidateQueries({ queryKey: ["junction"] });
+  }, [userId, queryClient]);
+
+  /**
+   * Invalidate junction pre-query caches only.
+   * Used after mutations that change junction membership (bulk set projects/tags).
+   */
+  const invalidateJunctionCaches = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["junction"] });
+  }, [queryClient]);
+
   return {
     snapshotCache,
     rollbackCache,
@@ -128,5 +177,8 @@ export function usePaperCacheHelpers(userId: string | undefined) {
     updatePapersCache,
     updateMetaCache,
     adjustCount,
+    removeStaleListCaches,
+    invalidateAndRefetch,
+    invalidateJunctionCaches,
   };
 }

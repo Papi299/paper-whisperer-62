@@ -2,14 +2,14 @@ import { useState, useCallback } from "react";
 import type { PaperWithTags } from "@/types/database";
 
 interface UseBulkSelectionArgs {
-  sortedPapers: PaperWithTags[];
+  papers: PaperWithTags[];
   bulkDeletePapers: (ids: string[]) => Promise<void>;
   bulkSetProjects: (paperIds: string[], projectIds: string[]) => Promise<void>;
   bulkSetTags: (paperIds: string[], tagIds: string[]) => Promise<void>;
 }
 
 export function useBulkSelection({
-  sortedPapers,
+  papers,
   bulkDeletePapers,
   bulkSetProjects,
   bulkSetTags,
@@ -27,12 +27,12 @@ export function useBulkSelection({
 
   const handleToggleSelectAll = useCallback(() => {
     setSelectedPaperIds((prev) => {
-      const allFilteredIds = sortedPapers.map((p) => p.id);
+      const allFilteredIds = papers.map((p) => p.id);
       const allSelected = allFilteredIds.every((id) => prev.has(id));
       if (allSelected) return new Set<string>();
       return new Set(allFilteredIds);
     });
-  }, [sortedPapers]);
+  }, [papers]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedPaperIds(new Set());

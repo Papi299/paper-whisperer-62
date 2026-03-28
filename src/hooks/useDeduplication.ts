@@ -1,10 +1,9 @@
 import { useState, useCallback } from "react";
-import { useQueryClient, InfiniteData } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { DuplicateGroup, DuplicatePaperInfo } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
 import { queryKeys } from "@/lib/queryKeys";
-import { PapersPage } from "./papers/types";
 
 /**
  * Merges duplicate groups that share overlapping paper IDs.
@@ -143,42 +142,12 @@ export function useDeduplication(userId: string | undefined) {
   }, [userId, toast]);
 
   // ── Merge ──
+  // Simplified: no optimistic updates for dedup (cross-library operation).
+  // The dedup dialog shows a "merging..." spinner, so a brief refetch is acceptable.
 
   const mergeDuplicateGroup = useCallback(
     async (keepId: string, discardIds: string[]) => {
       if (!userId || discardIds.length === 0) return false;
-
-      // Snapshot for rollback
-      const papersSnapshot = queryClient.getQueryData<InfiniteData<PapersPage>>(
-        queryKeys.papers.all(userId),
-      );
-      const countSnapshot = queryClient.getQueryData<number>(
-        queryKeys.papers.count(userId),
-      );
-
-      // Optimistic: remove discards from cache and adjust count
-      await queryClient.cancelQueries({ queryKey: queryKeys.papers.all(userId) });
-      const discardSet = new Set(discardIds);
-
-      queryClient.setQueryData(
-        queryKeys.papers.all(userId),
-        (old: InfiniteData<PapersPage> | undefined) => {
-          if (!old) return old;
-          const allPapers = old.pages.flatMap((p) => p.papers);
-          const updated = allPapers.filter((p) => !discardSet.has(p.id));
-          return {
-            ...old,
-            pages: old.pages.map((page, i) =>
-              i === 0 ? { ...page, papers: updated } : { ...page, papers: [] },
-            ),
-          };
-        },
-      );
-
-      queryClient.setQueryData(
-        queryKeys.papers.count(userId),
-        (old: number | undefined) => Math.max(0, (old ?? 0) - discardIds.length),
-      );
 
       // Server call
       const { error } = await supabase.rpc("merge_exact_duplicates", {
@@ -187,13 +156,6 @@ export function useDeduplication(userId: string | undefined) {
       });
 
       if (error) {
-        // Rollback
-        if (papersSnapshot !== undefined) {
-          queryClient.setQueryData(queryKeys.papers.all(userId), papersSnapshot);
-        }
-        if (countSnapshot !== undefined) {
-          queryClient.setQueryData(queryKeys.papers.count(userId), countSnapshot);
-        }
         toast({
           title: "Error merging duplicates",
           description: error.message,
@@ -202,8 +164,10 @@ export function useDeduplication(userId: string | undefined) {
         return false;
       }
 
-      // Invalidate to refresh the kept paper with its coalesced fields
+      // Invalidate all papers caches to refetch with correct data
       queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+      queryClient.invalidateQueries({ queryKey: ["junction"] });
 
       return true;
     },

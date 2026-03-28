@@ -10,6 +10,7 @@ import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
 import { processChunkedInsert } from "@/lib/chunkedInsert";
+import { ServerFilterParams } from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
@@ -19,8 +20,9 @@ export function useBulkMutations(
   projects: Project[],
   tags: Tag[],
   normalizationConfig: NormalizationConfig | undefined,
+  serverFilterParams: ServerFilterParams,
 ) {
-  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount } = usePaperCacheHelpers(userId);
+  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, removeStaleListCaches, invalidateAndRefetch, invalidateJunctionCaches } = usePaperCacheHelpers(userId, serverFilterParams);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { normalize } = useNormalizationWorker();
@@ -118,15 +120,16 @@ export function useBulkMutations(
         }
 
         if (successfulPapers.length > 0) {
-          updatePapersCache((old) => [...successfulPapers.slice().reverse(), ...old]);
-          queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+          // No optimistic insert — new papers may not match active filter.
+          // Invalidate to refetch with current filters.
+          invalidateAndRefetch();
           toast({ title: "Papers added", description: `Successfully added ${successfulPapers.length} paper(s).` });
         }
       } catch (error: unknown) {
         toast({ title: "Error fetching papers", description: getErrorMessage(error), variant: "destructive" });
       }
     },
-    [userId, papers, normalizationConfig, normalize, updatePapersCache, queryClient, toast],
+    [userId, papers, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
   );
 
   const bulkImportPapers = useCallback(
@@ -143,7 +146,6 @@ export function useBulkMutations(
       const total = identifiers.length;
 
       // Phase 1: Batch fetch all metadata via edge function
-      // (fetchPaperMetadata already batches by EDGE_BATCH_SIZE=10 internally)
       onProgress?.(0, total, addedIds, skippedIds, failedIds);
       const allMetadata = await fetchPaperMetadata(identifiers);
 
@@ -237,39 +239,13 @@ export function useBulkMutations(
 
       // Phase 4: Process RPC results
       const results = allRpcResults;
-      const newPapers: PaperWithTags[] = [];
+      const insertedPaperIds: string[] = [];
 
       for (const row of results) {
         const { identifier } = successfulResults[row.index];
         if (row.status === "inserted" && row.id) {
           addedIds.push(identifier);
-          // Build a PaperWithTags from the normalized data + returned id
-          const norm = normalizedPapers[row.index];
-          newPapers.push({
-            id: row.id,
-            user_id: userId,
-            title: norm.title,
-            authors: norm.authors,
-            year: norm.year,
-            journal: norm.journal,
-            pmid: norm.pmid,
-            doi: norm.doi,
-            abstract: norm.abstract,
-            study_type: norm.study_type,
-            raw_study_type: successfulResults[row.index].meta.study_type || null,
-            statistical_methods: null,
-            keywords: norm.keywords,
-            mesh_terms: norm.mesh_terms || [],
-            substances: norm.substances || [],
-            pubmed_url: norm.pubmed_url,
-            journal_url: norm.journal_url,
-            drive_url: norm.drive_url,
-            insert_order: Date.now() + row.index,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            tags: [],
-            projects: [],
-          });
+          insertedPaperIds.push(row.id);
         } else if (row.status === "duplicate") {
           skippedIds.push(identifier);
         } else {
@@ -280,7 +256,6 @@ export function useBulkMutations(
       onProgress?.(total, total, addedIds, skippedIds, failedIds);
 
       // Phase 5: Assign project/tags to newly inserted papers
-      const insertedPaperIds = newPapers.map((p) => p.id);
       if (insertedPaperIds.length > 0) {
         const projectIds = options?.targetProjectIds;
         const tagIds = options?.targetTagIds;
@@ -290,10 +265,6 @@ export function useBulkMutations(
             p_paper_ids: insertedPaperIds,
             p_project_ids: projectIds,
           });
-          const matchedProjects = projects.filter((p) => projectIds.includes(p.id));
-          if (matchedProjects.length > 0) {
-            newPapers.forEach((p) => { p.projects = matchedProjects; });
-          }
         }
 
         if (tagIds && tagIds.length > 0) {
@@ -301,14 +272,10 @@ export function useBulkMutations(
             p_paper_ids: insertedPaperIds,
             p_tag_ids: tagIds,
           });
-          const matchedTags = tags.filter((t) => tagIds.includes(t.id));
-          if (matchedTags.length > 0) {
-            newPapers.forEach((p) => { p.tags = matchedTags; });
-          }
         }
 
-        updatePapersCache((old) => [...newPapers.slice().reverse(), ...old]);
-        queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+        // No optimistic insert — invalidate to refetch with current filters
+        invalidateAndRefetch();
       }
 
       toast({
@@ -316,12 +283,12 @@ export function useBulkMutations(
         description: `${addedIds.length} added, ${skippedIds.length} skipped (duplicates), ${failedIds.length} failed.`,
       });
     },
-    [userId, projects, tags, normalizationConfig, normalize, toast, updatePapersCache, queryClient],
+    [userId, projects, tags, normalizationConfig, normalize, toast, invalidateAndRefetch, queryClient],
   );
 
   /**
    * Import pre-parsed papers (from .bib, .ris, .csv file parsers).
-   * Skips the metadata fetch phase — goes directly to normalize → RPC → cache.
+   * Skips the metadata fetch phase — goes directly to normalize -> RPC -> cache.
    */
   const bulkImportFromParsedData = useCallback(
     async (
@@ -392,37 +359,12 @@ export function useBulkMutations(
 
       // Phase 3: Process RPC results
       const results = allRpcResults;
-      const newPapers: PaperWithTags[] = [];
+      const insertedPaperIds: string[] = [];
 
       for (const row of results) {
         if (row.status === "inserted" && row.id) {
           addedCount++;
-          const norm = normalizedPapers[row.index];
-          newPapers.push({
-            id: row.id,
-            user_id: userId,
-            title: norm.title,
-            authors: norm.authors,
-            year: norm.year,
-            journal: norm.journal,
-            pmid: norm.pmid,
-            doi: norm.doi,
-            abstract: norm.abstract,
-            study_type: norm.study_type,
-            raw_study_type: parsedPapers[row.index].study_type || null,
-            statistical_methods: null,
-            keywords: norm.keywords,
-            mesh_terms: norm.mesh_terms || [],
-            substances: norm.substances || [],
-            pubmed_url: norm.pubmed_url,
-            journal_url: norm.journal_url,
-            drive_url: norm.drive_url,
-            insert_order: Date.now() + row.index,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            tags: [],
-            projects: [],
-          });
+          insertedPaperIds.push(row.id);
         } else if (row.status === "duplicate") {
           skippedCount++;
         } else {
@@ -433,7 +375,6 @@ export function useBulkMutations(
       onProgress?.(total, total, addedCount, skippedCount, failedCount);
 
       // Phase 4: Assign project/tags to newly inserted papers
-      const insertedPaperIds = newPapers.map((p) => p.id);
       if (insertedPaperIds.length > 0) {
         const projectIds = options?.targetProjectIds;
         const tagIds = options?.targetTagIds;
@@ -443,10 +384,6 @@ export function useBulkMutations(
             p_paper_ids: insertedPaperIds,
             p_project_ids: projectIds,
           });
-          const matchedProjects = projects.filter((p) => projectIds.includes(p.id));
-          if (matchedProjects.length > 0) {
-            newPapers.forEach((p) => { p.projects = matchedProjects; });
-          }
         }
 
         if (tagIds && tagIds.length > 0) {
@@ -454,14 +391,10 @@ export function useBulkMutations(
             p_paper_ids: insertedPaperIds,
             p_tag_ids: tagIds,
           });
-          const matchedTags = tags.filter((t) => tagIds.includes(t.id));
-          if (matchedTags.length > 0) {
-            newPapers.forEach((p) => { p.tags = matchedTags; });
-          }
         }
 
-        updatePapersCache((old) => [...newPapers.slice().reverse(), ...old]);
-        queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+        // No optimistic insert — invalidate to refetch with current filters
+        invalidateAndRefetch();
       }
 
       toast({
@@ -469,7 +402,7 @@ export function useBulkMutations(
         description: `${addedCount} added, ${skippedCount} skipped (duplicates), ${failedCount} failed.`,
       });
     },
-    [userId, projects, tags, normalizationConfig, normalize, toast, updatePapersCache, queryClient],
+    [userId, projects, tags, normalizationConfig, normalize, toast, invalidateAndRefetch, queryClient],
   );
 
   const bulkDeletePapers = useCallback(
@@ -486,7 +419,7 @@ export function useBulkMutations(
         .in("paper_id", paperIds);
       const storagePaths = (attachments || []).map((a) => a.file_path);
 
-      // Optimistic: remove papers and adjust count immediately
+      // Optimistic: remove papers and adjust count immediately (always safe)
       const idSet = new Set(paperIds);
       updatePapersCache((old) => old.filter((p) => !idSet.has(p.id)));
       adjustCount(-paperIds.length);
@@ -508,9 +441,10 @@ export function useBulkMutations(
         }
       }
 
+      removeStaleListCaches();
       toast({ title: `Deleted ${paperIds.length} paper(s)` });
     },
-    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, rollbackCache, toast],
+    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, rollbackCache, removeStaleListCaches, toast],
   );
 
   const bulkSetProjects = useCallback(
@@ -520,7 +454,7 @@ export function useBulkMutations(
       await cancelQueries();
       const snapshot = snapshotCache();
 
-      // Optimistic: assign projects immediately
+      // Optimistic: assign projects immediately (papers are visible in list)
       const newProjects = projects.filter((p) => projectIds.includes(p.id));
       updatePapersCache((allPapers) =>
         allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, projects: newProjects } : p)),
@@ -533,9 +467,14 @@ export function useBulkMutations(
         return;
       }
 
+      // Post-confirm: invalidate junction caches + papers list (membership changed)
+      removeStaleListCaches();
+      invalidateJunctionCaches();
+      queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
+
       toast({ title: `Updated projects for ${paperIds.length} paper(s)` });
     },
-    [userId, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, toast],
+    [userId, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, invalidateJunctionCaches, queryClient, toast],
   );
 
   const bulkSetTags = useCallback(
@@ -545,7 +484,7 @@ export function useBulkMutations(
       await cancelQueries();
       const snapshot = snapshotCache();
 
-      // Optimistic: assign tags immediately
+      // Optimistic: assign tags immediately (papers are visible in list)
       const newTags = tags.filter((t) => tagIds.includes(t.id));
       updatePapersCache((allPapers) =>
         allPapers.map((p) => (paperIds.includes(p.id) ? { ...p, tags: newTags } : p)),
@@ -558,9 +497,14 @@ export function useBulkMutations(
         return;
       }
 
+      // Post-confirm: invalidate junction caches + papers list (membership changed)
+      removeStaleListCaches();
+      invalidateJunctionCaches();
+      queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
+
       toast({ title: `Updated tags for ${paperIds.length} paper(s)` });
     },
-    [userId, tags, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, toast],
+    [userId, tags, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, invalidateJunctionCaches, queryClient, toast],
   );
 
   /**
@@ -601,13 +545,18 @@ export function useBulkMutations(
         const payload = updates.map(({ id, newType }) => ({ id, study_type: newType || null }));
         const { error } = await supabase.rpc("bulk_update_study_types", { updates: payload });
         if (error) throw error;
+
+        // Post-confirm: invalidate papers list (study_type may affect filter membership)
+        removeStaleListCaches();
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
+
         toast({ title: "Study types updated", description: `Re-classified ${updates.length} paper(s) based on updated pool.` });
       } catch (err: unknown) {
         rollbackCache(snapshot);
         toast({ title: "Error saving study type updates", description: getErrorMessage(err), variant: "destructive" });
       }
     },
-    [userId, papers, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, toast],
+    [userId, papers, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, queryClient, toast],
   );
 
   return { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes };
