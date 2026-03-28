@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { queryKeys } from "@/lib/queryKeys";
-import { PapersPage } from "./papers/types";
+import { PapersPage, ServerFilterParams, areServerFiltersReady } from "./papers/types";
 import { usePaperCacheHelpers } from "./papers/usePaperCacheHelpers";
 import { useProjectMutations } from "./papers/useProjectMutations";
 import { useTagMutations } from "./papers/useTagMutations";
@@ -13,10 +13,15 @@ import { useBulkMutations } from "./papers/useBulkMutations";
 
 const PAGE_SIZE = 100;
 
-export function usePapers(userId: string | undefined, normalizationConfig?: NormalizationConfig) {
+export function usePapers(
+  userId: string | undefined,
+  serverFilterParams: ServerFilterParams,
+  normalizationConfig?: NormalizationConfig,
+) {
   const queryClient = useQueryClient();
+  const filtersReady = areServerFiltersReady(serverFilterParams);
 
-  // ── Infinite query: papers only (paginated) ──
+  // ── Infinite query: papers with server-side filtering + sorting ──
   const {
     data,
     isLoading: papersLoading,
@@ -24,19 +29,48 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery<PapersPage, Error>({
-    queryKey: queryKeys.papers.all(userId!),
+    queryKey: queryKeys.papers.list(userId!, serverFilterParams),
     queryFn: async ({ pageParam }): Promise<PapersPage> => {
       const page = pageParam as number;
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
 
-      // Papers: paginated
-      const { data: papersData, error: papersError } = await supabase
+      const { filterPaperIds, yearFrom, yearTo, studyTypes, sortColumn, sortAscending } =
+        serverFilterParams;
+
+      // Short-circuit: filter resolved with no matches
+      if (filterPaperIds !== null && filterPaperIds !== undefined && filterPaperIds.length === 0) {
+        return { papers: [], hasMore: false };
+      }
+
+      // Build query with server-side predicates
+      let query = supabase
         .from("papers")
         .select("*, paper_attachments(id, file_name, file_path, file_type)")
-        .eq("user_id", userId!)
-        .order("insert_order", { ascending: false })
-        .range(from, to);
+        .eq("user_id", userId!);
+
+      // ID-based filtering (pre-resolved from junction queries + search)
+      if (filterPaperIds !== null && filterPaperIds !== undefined) {
+        query = query.in("id", filterPaperIds);
+      }
+
+      // Year range
+      if (yearFrom !== null) query = query.gte("year", yearFrom);
+      if (yearTo !== null) query = query.lte("year", yearTo);
+
+      // Study type
+      if (studyTypes !== null && studyTypes.length > 0) {
+        query = query.in("study_type", studyTypes);
+      }
+
+      // Sort: server-side is the single source of truth
+      if (sortColumn !== null && sortAscending !== null) {
+        query = query.order(sortColumn, { ascending: sortAscending });
+      } else {
+        query = query.order("insert_order", { ascending: false });
+      }
+
+      const { data: papersData, error: papersError } = await query.range(from, to);
       if (papersError) throw papersError;
 
       const rawPapers = (papersData as Paper[]) || [];
@@ -87,7 +121,8 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
       if (!lastPage.hasMore) return undefined;
       return (lastPageParam as number) + 1;
     },
-    enabled: !!userId,
+    // Gated: don't run when ID-based filters are still loading
+    enabled: !!userId && filtersReady,
   });
 
   // ── Projects (single query, not per-page) ──
@@ -120,7 +155,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     enabled: !!userId,
   });
 
-  // ── Total paper count (separate lightweight query) ──
+  // ── Total paper count (separate lightweight query — stays unfiltered) ──
   const { data: totalCount } = useQuery({
     queryKey: queryKeys.papers.count(userId!),
     queryFn: async () => {
@@ -148,7 +183,7 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
   const projects = useMemo(() => projectsData ?? [], [projectsData]);
   const tags = useMemo(() => tagsData ?? [], [tagsData]);
 
-  // Hydrate raw papers + junction IDs → PaperWithTags
+  // Hydrate raw papers + junction IDs -> PaperWithTags
   const papers = useMemo(() => {
     const rawPapers = data?.pages.flatMap((p) => p.papers) ?? [];
     if (rawPapers.length === 0) return [];
@@ -163,18 +198,18 @@ export function usePapers(userId: string | undefined, normalizationConfig?: Norm
     }));
   }, [data, tags, projects]);
 
-  // ── Cache helpers (only updatePapersCache needed directly in facade) ──
-  const { updatePapersCache } = usePaperCacheHelpers(userId);
+  // ── Cache helpers ──
+  const { updatePapersCache, invalidateAndRefetch } = usePaperCacheHelpers(userId, serverFilterParams);
 
-  // ── Taxonomy mutations (Phase 1) ──
+  // ── Taxonomy mutations ──
   const { createProject, updateProject, deleteProject } = useProjectMutations(userId, projects);
   const { createTag, updateTag, deleteTag } = useTagMutations(userId, tags);
 
-  // ── Paper mutations (Phase 2) ──
-  const { addPaperManually, updatePaper, deletePaper } = usePaperMutations(userId, papers, projects, tags, normalizationConfig);
+  // ── Paper mutations ──
+  const { addPaperManually, updatePaper, deletePaper } = usePaperMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams);
 
-  // ── Bulk mutations (Phase 2) ──
-  const { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes } = useBulkMutations(userId, papers, projects, tags, normalizationConfig);
+  // ── Bulk mutations ──
+  const { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes } = useBulkMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams);
 
   // Extract all unique keywords from papers
   const allKeywords = useMemo(() => {

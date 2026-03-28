@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { queryKeys } from "@/lib/queryKeys";
 import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
+import { ServerFilterParams } from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
@@ -14,8 +15,9 @@ export function usePaperMutations(
   projects: Project[],
   tags: Tag[],
   normalizationConfig: NormalizationConfig | undefined,
+  serverFilterParams: ServerFilterParams,
 ) {
-  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount } = usePaperCacheHelpers(userId);
+  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, removeStaleListCaches, invalidateAndRefetch } = usePaperCacheHelpers(userId, serverFilterParams);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { normalize } = useNormalizationWorker();
@@ -97,24 +99,21 @@ export function usePaperMutations(
       }
 
       const paperId = (insertedPaper as Paper).id;
-      let assignedProjects: Project[] = [];
-      let assignedTags: Tag[] = [];
 
       // Assign project/tags if specified
       if (options?.targetProjectIds && options.targetProjectIds.length > 0) {
         await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: options.targetProjectIds });
-        assignedProjects = projects.filter((p) => options.targetProjectIds!.includes(p.id));
       }
       if (options?.targetTagIds && options.targetTagIds.length > 0) {
         await supabase.rpc("set_paper_tags", { p_paper_id: paperId, p_tag_ids: options.targetTagIds });
-        assignedTags = tags.filter((t) => options.targetTagIds!.includes(t.id));
       }
 
-      updatePapersCache((old) => [{ ...(insertedPaper as Paper), tags: assignedTags, projects: assignedProjects }, ...old]);
-      queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
+      // No optimistic insert — new paper may not match active server filter.
+      // Invalidate to refetch with current filters.
+      invalidateAndRefetch();
       toast({ title: "Paper added manually" });
     },
-    [userId, papers, projects, tags, normalizationConfig, normalize, updatePapersCache, queryClient, toast],
+    [userId, papers, projects, tags, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
   );
 
   const updatePaper = useCallback(
@@ -128,7 +127,7 @@ export function usePaperMutations(
       await cancelQueries();
       const snapshot = snapshotCache();
 
-      // Optimistic: apply all changes immediately
+      // Optimistic: apply field changes immediately (paper is already in the visible list)
       updatePapersCache((allPapers) =>
         allPapers.map((p) => {
           if (p.id !== paperId) return p;
@@ -166,9 +165,19 @@ export function usePaperMutations(
         }
       }
 
+      // Post-confirm: invalidate to fix any filter membership changes
+      // (e.g., year/study_type edit may take paper out of active filter)
+      removeStaleListCaches();
+      if (tagIds !== undefined || projectIds !== undefined) {
+        // Junction membership changed — invalidate junction caches
+        queryClient.invalidateQueries({ queryKey: ["junction"] });
+      }
+      // Invalidate the active papers list so it refetches with correct membership
+      queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
+
       toast({ title: "Paper updated" });
     },
-    [userId, tags, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, toast],
+    [userId, tags, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, queryClient, toast],
   );
 
   const deletePaper = useCallback(
@@ -185,7 +194,7 @@ export function usePaperMutations(
         .eq("paper_id", paperId);
       const storagePaths = (attachments || []).map((a) => a.file_path);
 
-      // Optimistic: remove paper and decrement count immediately
+      // Optimistic: remove paper and decrement count immediately (always safe)
       updatePapersCache((old) => old.filter((p) => p.id !== paperId));
       adjustCount(-1);
 
@@ -206,9 +215,10 @@ export function usePaperMutations(
         }
       }
 
+      removeStaleListCaches();
       toast({ title: "Paper deleted" });
     },
-    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, rollbackCache, toast],
+    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, rollbackCache, removeStaleListCaches, toast],
   );
 
   return { addPaperManually, updatePaper, deletePaper };

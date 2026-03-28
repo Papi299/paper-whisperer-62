@@ -7,7 +7,8 @@ import { usePapers } from "@/hooks/usePapers";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
-import { useFilteredAndSortedPapers } from "@/hooks/useFilteredAndSortedPapers";
+import { useFilterState } from "@/hooks/useFilterState";
+import { useFilteredPapers } from "@/hooks/useFilteredPapers";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -98,7 +99,36 @@ function DashboardContent() {
     })),
   }), [synonymLookup, poolStudyTypes, poolKeywords, synonymGroups]);
 
-  // Core paper data
+  // ── Step 1: Filter state (no papers dependency) ──
+  const {
+    serverFilterParams,
+    searchQuery,
+    setSearchQuery,
+    yearFrom,
+    setYearFrom,
+    yearTo,
+    setYearTo,
+    studyType,
+    setStudyType,
+    selectedKeywords,
+    selectedProjectId,
+    setSelectedProjectId,
+    selectedTagId,
+    setSelectedTagId,
+    studyTypeFilterOptions,
+    sortKey,
+    sortDirection,
+    handleSort,
+    debouncedSearchQuery,
+    useServerSearch,
+    serverSearchIds,
+    isSearching,
+    handleKeywordToggle,
+    clearFilters,
+    hasActiveFilters,
+  } = useFilterState({ poolStudyTypes, userId: user?.id });
+
+  // ── Step 2: Papers (receives server params — already sorted by server) ──
   const {
     papers,
     projects,
@@ -126,7 +156,18 @@ function DashboardContent() {
     bulkSetTags,
     reevaluateStudyTypes,
     updatePapersCache,
-  } = usePapers(user?.id, normalizationConfig);
+  } = usePapers(user?.id, serverFilterParams, normalizationConfig);
+
+  // ── Step 3: Client-side post-filter (keyword + short search ONLY — no sort) ──
+  const filteredPapers = useFilteredPapers({
+    papers,
+    selectedKeywords,
+    synonymLookup,
+    findMatchingKeywords,
+    debouncedSearchQuery,
+    useServerSearch,
+    serverSearchIds,
+  });
 
   // Study type re-evaluation on pool changes
   const {
@@ -182,39 +223,7 @@ function DashboardContent() {
     return Array.from(studyTypeSet).sort();
   }, [papers]);
 
-  // Filtering & sorting
-  const {
-    searchQuery,
-    setSearchQuery,
-    yearFrom,
-    setYearFrom,
-    yearTo,
-    setYearTo,
-    studyType,
-    setStudyType,
-    selectedKeywords,
-    selectedProjectId,
-    setSelectedProjectId,
-    selectedTagId,
-    setSelectedTagId,
-    studyTypeFilterOptions,
-    sortKey,
-    sortDirection,
-    handleSort,
-    filteredPapers,
-    sortedPapers,
-    handleKeywordToggle,
-    clearFilters,
-    hasActiveFilters,
-  } = useFilteredAndSortedPapers({
-    papers,
-    poolStudyTypes,
-    synonymLookup,
-    findMatchingKeywords,
-    userId: user?.id,
-  });
-
-  // Bulk selection
+  // Bulk selection (now uses filteredPapers — server-sorted + client-filtered)
   const {
     selectedPaperIds,
     handleToggleSelect,
@@ -224,7 +233,7 @@ function DashboardContent() {
     handleBulkSetProjects,
     handleBulkSetTags,
   } = useBulkSelection({
-    sortedPapers,
+    papers: filteredPapers,
     bulkDeletePapers,
     bulkSetProjects,
     bulkSetTags,
@@ -308,7 +317,7 @@ function DashboardContent() {
   }, [updatePaper, toast]);
 
   const handleBulkAnalyze = useCallback(async () => {
-    const selectedPapers = sortedPapers.filter(p => selectedPaperIds.has(p.id));
+    const selectedPapers = filteredPapers.filter(p => selectedPaperIds.has(p.id));
     const papersToAnalyze = selectedPapers.filter(p => p.abstract); // skip papers without abstract
     if (papersToAnalyze.length === 0) {
       toast({ title: "No papers to analyze", description: "Selected papers have no abstracts.", variant: "destructive" });
@@ -358,7 +367,7 @@ function DashboardContent() {
       title: "Bulk analysis complete",
       description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
     });
-  }, [sortedPapers, selectedPaperIds, updatePaper, toast]);
+  }, [filteredPapers, selectedPaperIds, updatePaper, toast]);
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
@@ -464,7 +473,7 @@ function DashboardContent() {
 
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
           <PaperList
-            papers={sortedPapers}
+            papers={filteredPapers}
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
