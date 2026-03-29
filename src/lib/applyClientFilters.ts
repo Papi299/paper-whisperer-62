@@ -6,7 +6,7 @@ const SERVER_SEARCH_MIN_LENGTH = 3;
 export interface ClientFilterParams {
   /** Debounced search query string. */
   debouncedSearchQuery: string;
-  /** Whether server-side search is active (query >= 3 chars). */
+  /** Whether server-side search is active (true for all non-empty queries). */
   useServerSearch: boolean;
   /** Active keyword filter selections. */
   selectedKeywords: string[];
