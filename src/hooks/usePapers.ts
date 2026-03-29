@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
@@ -22,6 +22,17 @@ export function usePapers(
   const queryClient = useQueryClient();
   const filtersReady = areServerFiltersReady(serverFilterParams);
 
+  // Hold the last resolved filter params. The query key, queryFn, and enabled
+  // all use this ref so that during filter transitions (filterPaperIds=undefined)
+  // the query stays on the old key with old data rather than disabling/resetting.
+  // When new filters resolve, the ref updates → key changes → placeholderData
+  // bridges the gap with old results while the new query fetches.
+  const resolvedParamsRef = useRef(serverFilterParams);
+  if (filtersReady) {
+    resolvedParamsRef.current = serverFilterParams;
+  }
+  const activeParams = resolvedParamsRef.current;
+
   // ── Infinite query: papers with server-side filtering + sorting ──
   const {
     data,
@@ -30,13 +41,13 @@ export function usePapers(
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery<PapersPage, Error>({
-    queryKey: queryKeys.papers.list(userId!, serverFilterParams),
+    queryKey: queryKeys.papers.list(userId!, activeParams),
     queryFn: async ({ pageParam }): Promise<PapersPage> => {
       const page = pageParam as number;
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
 
-      const { filterPaperIds } = serverFilterParams;
+      const { filterPaperIds } = activeParams;
 
       // Short-circuit: filter resolved with no matches
       if (filterPaperIds !== null && filterPaperIds !== undefined && filterPaperIds.length === 0) {
@@ -46,7 +57,7 @@ export function usePapers(
       // Build query with shared predicate builder (display needs attachments)
       const query = buildPapersQuery(
         userId!,
-        serverFilterParams,
+        activeParams,
         "*, paper_attachments(id, file_name, file_path, file_type)",
       );
 
@@ -101,8 +112,11 @@ export function usePapers(
       if (!lastPage.hasMore) return undefined;
       return (lastPageParam as number) + 1;
     },
-    // Gated: don't run when ID-based filters are still loading
-    enabled: !!userId && filtersReady,
+    // Always enabled once userId exists — resolved params keep the query stable
+    // during filter transitions rather than disabling/re-enabling.
+    enabled: !!userId && areServerFiltersReady(activeParams),
+    // Keep previous results visible while new filter/search query fetches
+    placeholderData: (prev) => prev,
   });
 
   // ── Projects (single query, not per-page) ──
