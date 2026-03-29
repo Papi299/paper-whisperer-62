@@ -13,7 +13,7 @@ interface UseFilteredPapersArgs {
   findMatchingKeywords: (abstract: string | null) => string[];
   /** Debounced search query string. */
   debouncedSearchQuery: string;
-  /** Whether server-side search is active (query >= 3 chars). */
+  /** Whether server-side search is active (true for all non-empty queries). */
   useServerSearch: boolean;
   /** Server search result IDs (for gating, not filtering — filtering is done server-side). */
   serverSearchIds: Set<string> | undefined;

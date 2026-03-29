@@ -15,6 +15,7 @@ CREATE OR REPLACE FUNCTION search_papers_short(
 )
 RETURNS TABLE(paper_id UUID)
 LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public
 AS $$
   SELECT p.id AS paper_id
   FROM papers p
