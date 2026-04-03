@@ -94,7 +94,7 @@ function extractSynonymKeywords(
 
 // ── Deduplicate keywords (case-insensitive) ──
 
-function deduplicateKeywords(keywords: string[]): string[] {
+export function deduplicateKeywords(keywords: string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const kw of keywords) {
@@ -156,6 +156,37 @@ export interface NormalizedPaperData {
 }
 
 /**
+ * Compute the fully enriched keyword set from raw keywords + text + config.
+ * Used by both import-time normalization and keyword reevaluation.
+ *
+ * Steps:
+ * 1. Normalize raw keywords through synonym lookup
+ * 2. Filter out pool keywords that are negated in the abstract
+ * 3. Extract synonym-group canonical terms from title+abstract
+ * 4. Extract pool keywords from title+abstract (negation-aware)
+ * 5. Merge + deduplicate
+ */
+export function computeEnrichedKeywords(
+  rawKeywords: string[],
+  title: string,
+  abstract: string | null,
+  config: NormalizationConfig,
+): string[] {
+  // Step 1: Normalize raw keywords through synonym lookup
+  const normalized = normalizeKeywords(rawKeywords, config.synonymLookup);
+  // Step 2: Remove pool keywords that are negated in the abstract
+  const filtered = filterKeywordsByAbstractContext(normalized, abstract, config.poolKeywords);
+  // Step 3: Synonym-group extraction from title+abstract
+  const synonymExtracted = extractSynonymKeywords(title, abstract, config.synonymGroups);
+  // Step 4: Pool-keyword extraction from title+abstract (negation-aware)
+  const text = [title, abstract || ""].join(" ");
+  const poolExtracted = extractContextualKeywords(text, config.poolKeywords);
+  const poolNormalized = poolExtracted.map(kw => config.synonymLookup[kw.toLowerCase()] || kw);
+  // Merge + deduplicate
+  return deduplicateKeywords([...filtered, ...synonymExtracted, ...poolNormalized]);
+}
+
+/**
  * Central normalization pipeline. Both API and manual entry paths
  * MUST call this before writing to the database.
  */
@@ -174,26 +205,10 @@ export function normalizePaperData(
   const decodedSubstances = (raw.substances || []).map(s => decodeHTMLEntities(s) || s);
   const decodedStudyType = raw.study_type ? (decodeHTMLEntities(raw.study_type) || raw.study_type) : null;
 
-  // Step 1: Normalize keywords through synonym lookup
-  let normalizedKeywords = normalizeKeywords(decodedKeywords, config.synonymLookup);
+  // Compute enriched keywords from raw keywords + title + abstract + config
+  const enrichedKeywords = computeEnrichedKeywords(decodedKeywords, decodedTitle, decodedAbstract, config);
 
-  // Step 2: Filter out keywords that are negated in the abstract
-  normalizedKeywords = filterKeywordsByAbstractContext(
-    normalizedKeywords,
-    decodedAbstract,
-    config.poolKeywords
-  );
-
-  // Step 2.5: Synonym-based keyword extraction from title + abstract
-  const synonymExtracted = extractSynonymKeywords(
-    decodedTitle,
-    decodedAbstract,
-    config.synonymGroups
-  );
-  // Merge synonym-extracted canonical terms, deduplicating
-  const mergedKeywords = deduplicateKeywords([...normalizedKeywords, ...synonymExtracted]);
-
-  // Step 3: Winner Takes All study type (hierarchy_rank ASC, then length DESC)
+  // Winner Takes All study type (hierarchy_rank ASC, then length DESC)
   const winnerStudyType = evaluateStudyType(
     decodedTitle,
     decodedAbstract,
@@ -211,7 +226,7 @@ export function normalizePaperData(
       ? raw.doi.replace(/^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:)/i, "").trim().toLowerCase()
       : null,
     abstract: decodedAbstract,
-    keywords: mergedKeywords,
+    keywords: enrichedKeywords,
     mesh_terms: decodedMeshTerms,
     substances: decodedSubstances,
     study_type: winnerStudyType || null,

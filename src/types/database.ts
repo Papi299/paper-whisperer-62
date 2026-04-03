@@ -46,6 +46,7 @@ export interface Paper {
   raw_study_type: string | null;
   statistical_methods: string | null;
   keywords: string[];
+  raw_keywords: string[];
   mesh_terms: string[];
   substances: string[];
   pubmed_url: string | null;

@@ -6,6 +6,7 @@ import { usePapers } from "@/hooks/usePapers";
 import { useColumnVisibility } from "@/hooks/useColumnVisibility";
 import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
+import { useKeywordReevaluation } from "@/hooks/useKeywordReevaluation";
 import { useFilterState } from "@/hooks/useFilterState";
 import { useFilteredPapers } from "@/hooks/useFilteredPapers";
 import { useExportPapers } from "@/hooks/useExportPapers";
@@ -158,6 +159,7 @@ function DashboardContent() {
     bulkSetProjects,
     bulkSetTags,
     reevaluateStudyTypes,
+    reevaluateKeywords,
     updatePapersCache,
   } = usePapers(user?.id, serverFilterParams, normalizationConfig);
 
@@ -214,6 +216,15 @@ function DashboardContent() {
     reevaluateStudyTypes,
     deleteStudyType: deletePoolStudyType,
     deleteAllStudyTypes: deleteAllPoolStudyTypes,
+  });
+
+  // Keyword re-evaluation on keyword/synonym pool changes (dirty-flag gated)
+  const {
+    markDirty: markKeywordPoolDirty,
+    handlePoolModalClose: handleKeywordPoolModalClose,
+  } = useKeywordReevaluation({
+    normalizationConfig,
+    reevaluateKeywords,
   });
 
   // Column visibility & widths
@@ -438,6 +449,8 @@ function DashboardContent() {
         onDeletePoolStudyType={handleDeletePoolStudyType}
         onDeleteAllPoolStudyTypes={handleDeleteAllPoolStudyTypes}
         onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
+        onKeywordPoolChange={markKeywordPoolDirty}
+        onKeywordPoolModalClose={handleKeywordPoolModalClose}
       />
       <main className="flex-1 flex flex-col overflow-hidden relative">
         <div className="flex flex-col gap-4 bg-background border-b px-6 py-4 shadow-sm shrink-0 z-10">

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizePaperData, NormalizationConfig, RawPaperData } from "../normalizePaperData";
+import { normalizePaperData, NormalizationConfig, RawPaperData, computeEnrichedKeywords } from "../normalizePaperData";
 
 function makeRaw(overrides: Partial<RawPaperData> = {}): RawPaperData {
   return {
@@ -253,5 +253,114 @@ describe("normalizePaperData", () => {
   it("preserves already-clean lowercase DOI", () => {
     const result = normalizePaperData(makeRaw({ doi: "10.1234/already-clean" }), makeConfig());
     expect(result.doi).toBe("10.1234/already-clean");
+  });
+});
+
+describe("computeEnrichedKeywords", () => {
+  it("returns raw keywords unchanged when config is empty", () => {
+    const result = computeEnrichedKeywords(
+      ["diabetes", "hypertension"],
+      "Some title",
+      "Some abstract",
+      makeConfig(),
+    );
+    expect(result).toEqual(["diabetes", "hypertension"]);
+  });
+
+  it("normalizes raw keywords through synonym lookup", () => {
+    const config = makeConfig({
+      synonymLookup: { "bp": "Hypertension", "blood pressure": "Hypertension" },
+    });
+    const result = computeEnrichedKeywords(["bp", "diabetes"], "Title", null, config);
+    expect(result).toContain("Hypertension");
+    expect(result).toContain("diabetes");
+    expect(result).not.toContain("bp");
+  });
+
+  it("deduplicates after synonym normalization", () => {
+    const config = makeConfig({
+      synonymLookup: { "bp": "Hypertension", "high blood pressure": "Hypertension" },
+    });
+    const result = computeEnrichedKeywords(["bp", "high blood pressure"], "Title", null, config);
+    const count = result.filter(k => k.toLowerCase() === "hypertension").length;
+    expect(count).toBe(1);
+  });
+
+  it("extracts pool keywords from title+abstract", () => {
+    const config = makeConfig({ poolKeywords: ["diabetes", "obesity"] });
+    const result = computeEnrichedKeywords(
+      [],
+      "Study on diabetes outcomes",
+      "Patients with obesity were enrolled.",
+      config,
+    );
+    expect(result).toContain("diabetes");
+    expect(result).toContain("obesity");
+  });
+
+  it("does not extract negated pool keywords", () => {
+    const config = makeConfig({ poolKeywords: ["diabetes"] });
+    const result = computeEnrichedKeywords(
+      [],
+      "Study title",
+      "Patients without diabetes were excluded.",
+      config,
+    );
+    expect(result).not.toContain("diabetes");
+  });
+
+  it("extracts synonym-group canonical terms from text", () => {
+    const config = makeConfig({
+      synonymGroups: [
+        { canonical_term: "Type 2 Diabetes", synonyms: ["T2DM", "type 2 diabetes mellitus"] },
+      ],
+    });
+    const result = computeEnrichedKeywords([], "T2DM outcomes", null, config);
+    expect(result).toContain("Type 2 Diabetes");
+  });
+
+  it("merges raw, pool, and synonym keywords without duplicates", () => {
+    const config = makeConfig({
+      poolKeywords: ["obesity"],
+      synonymGroups: [
+        { canonical_term: "Diabetes", synonyms: ["diabetes", "DM"] },
+      ],
+    });
+    const result = computeEnrichedKeywords(
+      ["obesity"],
+      "Study on diabetes",
+      "Patients with obesity were enrolled.",
+      config,
+    );
+    expect(result).toContain("obesity");
+    expect(result).toContain("Diabetes");
+    const obesityCount = result.filter(k => k.toLowerCase() === "obesity").length;
+    expect(obesityCount).toBe(1);
+  });
+
+  it("filters raw pool keywords negated in abstract", () => {
+    const config = makeConfig({ poolKeywords: ["diabetes", "hypertension"] });
+    const result = computeEnrichedKeywords(
+      ["diabetes", "hypertension"],
+      "Study title",
+      "Patients without diabetes were excluded from this trial. The study focused on managing hypertension in elderly adults.",
+      config,
+    );
+    expect(result).not.toContain("diabetes");
+    expect(result).toContain("hypertension");
+  });
+
+  it("normalizes pool-extracted keywords through synonym lookup", () => {
+    const config = makeConfig({
+      poolKeywords: ["bp"],
+      synonymLookup: { "bp": "Hypertension" },
+    });
+    const result = computeEnrichedKeywords(
+      [],
+      "Study on bp management",
+      null,
+      config,
+    );
+    expect(result).toContain("Hypertension");
   });
 });
