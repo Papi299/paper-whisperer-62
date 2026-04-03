@@ -8,7 +8,6 @@ import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
 import { useKeywordReevaluation } from "@/hooks/useKeywordReevaluation";
 import { useFilterState } from "@/hooks/useFilterState";
-import { useFilteredPapers } from "@/hooks/useFilteredPapers";
 import { useExportPapers } from "@/hooks/useExportPapers";
 import { useAnalyticsData } from "@/hooks/useAnalyticsData";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
@@ -121,10 +120,6 @@ function DashboardContent() {
     sortKey,
     sortDirection,
     handleSort,
-    debouncedSearchQuery,
-    useServerSearch,
-    serverSearchIds,
-    isSearching,
     handleKeywordToggle,
     clearFilters,
     hasActiveFilters,
@@ -163,18 +158,7 @@ function DashboardContent() {
     updatePapersCache,
   } = usePapers(user?.id, serverFilterParams, normalizationConfig);
 
-  // ── Step 3: Client-side post-filter (keyword + short search ONLY — no sort) ──
-  const filteredPapers = useFilteredPapers({
-    papers,
-    selectedKeywords,
-    synonymLookup,
-    findMatchingKeywords,
-    debouncedSearchQuery,
-    useServerSearch,
-    serverSearchIds,
-  });
-
-  // ── Step 4: Dedicated export fetch (bypasses paginated display query) ──
+  // ── Step 3: Dedicated export fetch (bypasses paginated display query) ──
   const { exportPapers, isExporting, isExportReady } = useExportPapers({
     userId: user?.id,
     serverFilterParams,
@@ -182,27 +166,13 @@ function DashboardContent() {
     projects,
     tagsLoading,
     projectsLoading,
-    clientFilterParams: {
-      debouncedSearchQuery,
-      useServerSearch,
-      selectedKeywords,
-      synonymLookup,
-      findMatchingKeywords,
-    },
   });
 
-  // ── Step 5: Dedicated analytics fetch (bypasses paginated display query) ──
+  // ── Step 4: Dedicated analytics fetch (bypasses paginated display query) ──
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const { papers: analyticsPapers, isLoading: isAnalyticsLoading } = useAnalyticsData({
     userId: user?.id,
     serverFilterParams,
-    clientFilterParams: {
-      debouncedSearchQuery,
-      useServerSearch,
-      selectedKeywords,
-      synonymLookup,
-      findMatchingKeywords,
-    },
     enabled: isAnalyticsOpen,
   });
 
@@ -269,7 +239,7 @@ function DashboardContent() {
     return Array.from(studyTypeSet).sort();
   }, [papers]);
 
-  // Bulk selection (now uses filteredPapers — server-sorted + client-filtered)
+  // Bulk selection (server-sorted + server-filtered)
   const {
     selectedPaperIds,
     handleToggleSelect,
@@ -279,7 +249,7 @@ function DashboardContent() {
     handleBulkSetProjects,
     handleBulkSetTags,
   } = useBulkSelection({
-    papers: filteredPapers,
+    papers: papers,
     bulkDeletePapers,
     bulkSetProjects,
     bulkSetTags,
@@ -352,7 +322,7 @@ function DashboardContent() {
   }, [updatePaper, toast]);
 
   const handleBulkAnalyze = useCallback(async () => {
-    const selectedPapers = filteredPapers.filter(p => selectedPaperIds.has(p.id));
+    const selectedPapers = papers.filter(p => selectedPaperIds.has(p.id));
     const papersToAnalyze = selectedPapers.filter(p => p.abstract); // skip papers without abstract
     if (papersToAnalyze.length === 0) {
       toast({ title: "No papers to analyze", description: "Selected papers have no abstracts.", variant: "destructive" });
@@ -402,7 +372,7 @@ function DashboardContent() {
       title: "Bulk analysis complete",
       description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
     });
-  }, [filteredPapers, selectedPaperIds, updatePaper, toast]);
+  }, [papers, selectedPaperIds, updatePaper, toast]);
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
@@ -460,7 +430,7 @@ function DashboardContent() {
               <p className="text-muted-foreground">
                 {!allLoaded
                   ? `Loading\u2026 ${papers.length} of ${totalCount} papers`
-                  : `${filteredPapers.length} paper${filteredPapers.length !== 1 ? "s" : ""}`}
+                  : `${papers.length} paper${papers.length !== 1 ? "s" : ""}`}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -517,7 +487,7 @@ function DashboardContent() {
 
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
           <PaperList
-            papers={filteredPapers}
+            papers={papers}
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}

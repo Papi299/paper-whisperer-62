@@ -44,12 +44,10 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   const debouncedSearchQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
 
   // Search is always server-side: FTS for ≥3 chars, ILIKE for 1-2 chars.
-  // useServerSearch=true tells applyClientFilters to skip client-side substring matching.
   const useFtsSearch =
     !!userId && debouncedSearchQuery.length >= SERVER_SEARCH_MIN_LENGTH;
   const useShortSearch =
     !!userId && debouncedSearchQuery.length > 0 && debouncedSearchQuery.length < SERVER_SEARCH_MIN_LENGTH;
-  const useServerSearch = useFtsSearch || useShortSearch;
 
   // ── Server-side full-text search via search_papers RPC ──
   const { data: serverSearchIds, isFetching: isSearching } = useQuery<
@@ -118,21 +116,39 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     staleTime: 30_000,
   });
 
+  // ── Server-side keyword filter via RPC ──
+  const { data: keywordPaperIds } = useQuery<string[]>({
+    queryKey: ["filter_keywords", userId, selectedKeywords],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("filter_papers_by_keywords", {
+        p_user_id: userId!,
+        p_keywords: selectedKeywords,
+      });
+      if (error) throw error;
+      return (data as { paper_id: string }[]).map((r) => r.paper_id);
+    },
+    enabled: !!userId && selectedKeywords.length > 0,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
   // ── ID intersection (4-state model) ──
   const filterPaperIds = useMemo((): string[] | null | undefined => {
     const needsProject = !!selectedProjectId;
     const needsTag = !!selectedTagId;
     const needsFtsSearch = useFtsSearch;
     const needsShortSearch = useShortSearch;
+    const needsKeywords = selectedKeywords.length > 0;
 
     // No ID-based filter active → null (no filtering)
-    if (!needsProject && !needsTag && !needsFtsSearch && !needsShortSearch) return null;
+    if (!needsProject && !needsTag && !needsFtsSearch && !needsShortSearch && !needsKeywords) return null;
 
     // Any required ID set still loading → undefined (block papers query)
     if (needsProject && projectPaperIds === undefined) return undefined;
     if (needsTag && tagPaperIds === undefined) return undefined;
     if (needsFtsSearch && serverSearchIds === undefined) return undefined;
     if (needsShortSearch && shortSearchIds === undefined) return undefined;
+    if (needsKeywords && keywordPaperIds === undefined) return undefined;
 
     // All required sets resolved — intersect them
     const idSets: string[][] = [];
@@ -140,6 +156,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     if (needsTag) idSets.push(tagPaperIds!);
     if (needsFtsSearch) idSets.push(Array.from(serverSearchIds!));
     if (needsShortSearch) idSets.push(Array.from(shortSearchIds!));
+    if (needsKeywords) idSets.push(keywordPaperIds!);
 
     if (idSets.length === 0) return null; // shouldn't happen, safe fallback
 
@@ -158,6 +175,8 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     serverSearchIds,
     useShortSearch,
     shortSearchIds,
+    selectedKeywords,
+    keywordPaperIds,
   ]);
 
   // ── Resolve study type subtypes from group name ──
@@ -256,12 +275,6 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     sortKey,
     sortDirection,
     handleSort,
-
-    // Search state (for client-side post-filtering)
-    debouncedSearchQuery,
-    useServerSearch,
-    serverSearchIds,
-    isSearching,
 
     // Actions
     handleKeywordToggle,

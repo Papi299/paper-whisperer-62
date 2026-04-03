@@ -408,6 +408,15 @@ export type Database = {
         }
         Returns: undefined
       }
+      filter_papers_by_keywords: {
+        Args: {
+          p_user_id: string
+          p_keywords: string[]
+        }
+        Returns: {
+          paper_id: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never

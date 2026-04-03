@@ -4,7 +4,6 @@ import { ServerFilterParams, areServerFiltersReady } from "./papers/types";
 import { buildPapersQuery } from "@/lib/buildPapersQuery";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { fetchInChunks } from "@/lib/fetchInChunks";
-import { applyClientFilters, ClientFilterParams } from "@/lib/applyClientFilters";
 import { exportToCSV, exportToRIS, exportToBibTeX } from "@/lib/exportUtils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -19,7 +18,6 @@ interface UseExportPapersArgs {
   projects: Project[];
   tagsLoading: boolean;
   projectsLoading: boolean;
-  clientFilterParams: ClientFilterParams;
 }
 
 export function useExportPapers({
@@ -29,7 +27,6 @@ export function useExportPapers({
   projects,
   tagsLoading,
   projectsLoading,
-  clientFilterParams,
 }: UseExportPapersArgs) {
   const { toast } = useToast();
   const [isExporting, setIsExporting] = useState(false);
@@ -102,30 +99,27 @@ export function useExportPapers({
           };
         });
 
-        // 4. Apply client-only filters (keywords, short-search)
-        const filteredPapers = applyClientFilters(hydratedPapers, clientFilterParams);
-
-        if (filteredPapers.length === 0) {
+        if (hydratedPapers.length === 0) {
           toast({ title: "No papers to export", description: "No papers match current filters." });
           return;
         }
 
-        // 5. Format and download
+        // 4. Format and download
         switch (format) {
           case "csv":
-            exportToCSV(filteredPapers);
+            exportToCSV(hydratedPapers);
             break;
           case "ris":
-            exportToRIS(filteredPapers);
+            exportToRIS(hydratedPapers);
             break;
           case "bibtex":
-            exportToBibTeX(filteredPapers);
+            exportToBibTeX(hydratedPapers);
             break;
         }
 
         toast({
           title: "Export started",
-          description: `Downloading ${filteredPapers.length} paper${filteredPapers.length !== 1 ? "s" : ""} as ${format.toUpperCase()}.`,
+          description: `Downloading ${hydratedPapers.length} paper${hydratedPapers.length !== 1 ? "s" : ""} as ${format.toUpperCase()}.`,
         });
       } catch (error) {
         toast({
@@ -137,7 +131,7 @@ export function useExportPapers({
         setIsExporting(false);
       }
     },
-    [userId, serverFilterParams, tags, projects, clientFilterParams, toast],
+    [userId, serverFilterParams, tags, projects, toast],
   );
 
   return { exportPapers, isExporting, isExportReady };
