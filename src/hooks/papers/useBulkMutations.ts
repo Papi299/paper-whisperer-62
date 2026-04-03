@@ -5,7 +5,8 @@ import type { Json } from "@/integrations/supabase/types";
 import { useToast } from "@/hooks/use-toast";
 import { Paper, PaperWithTags, Project, Tag, BulkInsertResult } from "@/types/database";
 import { queryKeys } from "@/lib/queryKeys";
-import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
+import { NormalizationConfig, RawPaperData, computeEnrichedKeywords } from "@/lib/normalizePaperData";
+import { fetchAllPages } from "@/lib/fetchAllPages";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
@@ -97,6 +98,7 @@ export function useBulkMutations(
             user_id: userId,
             ...normalized,
             raw_study_type: result.study_type || null,
+            raw_keywords: rawPapersForNormalization[i].raw.keywords || [],
             mesh_terms: normalized.mesh_terms || [],
             substances: normalized.substances || [],
           };
@@ -204,6 +206,7 @@ export function useBulkMutations(
         abstract: normalized.abstract ?? null,
         study_type: normalized.study_type ?? null,
         raw_study_type: successfulResults[i].meta.study_type || null,
+        raw_keywords: successfulResults[i].meta.keywords || [],
         statistical_methods: null,
         keywords: normalized.keywords || [],
         mesh_terms: normalized.mesh_terms || [],
@@ -327,6 +330,7 @@ export function useBulkMutations(
         abstract: normalized.abstract ?? null,
         study_type: normalized.study_type ?? null,
         raw_study_type: parsedPapers[i].study_type || null,
+        raw_keywords: parsedPapers[i].keywords || [],
         statistical_methods: null,
         keywords: normalized.keywords || [],
         mesh_terms: normalized.mesh_terms || [],
@@ -559,5 +563,66 @@ export function useBulkMutations(
     [userId, papers, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, queryClient, toast],
   );
 
-  return { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes };
+  /**
+   * Re-evaluate keywords for ALL user papers against the current normalization config.
+   * Fetches full library via fetchAllPages (pagination-safe), recomputes enriched keywords
+   * from raw_keywords + title + abstract, and batch-updates only changed papers.
+   */
+  const reevaluateKeywords = useCallback(
+    async (config: NormalizationConfig) => {
+      if (!userId) return;
+
+      // 1. Fetch ALL papers (safe pagination via fetchAllPages)
+      let allPapers: { id: string; raw_keywords: string[]; title: string; abstract: string | null; keywords: string[] }[];
+      try {
+        allPapers = await fetchAllPages(() =>
+          supabase
+            .from("papers")
+            .select("id, raw_keywords, title, abstract, keywords")
+            .eq("user_id", userId)
+        );
+      } catch (err) {
+        toast({ title: "Error loading papers for keyword update", description: getErrorMessage(err), variant: "destructive" });
+        return;
+      }
+
+      if (allPapers.length === 0) return;
+
+      // 2. Compute enriched keywords, collect changes
+      const updates: { id: string; keywords: string[] }[] = [];
+      for (const paper of allPapers) {
+        const newKeywords = computeEnrichedKeywords(
+          paper.raw_keywords || [], paper.title, paper.abstract, config
+        );
+        const oldSet = new Set((paper.keywords || []).map(k => k.toLowerCase()));
+        const newSet = new Set(newKeywords.map(k => k.toLowerCase()));
+        if (oldSet.size !== newSet.size || ![...newSet].every(k => oldSet.has(k))) {
+          updates.push({ id: paper.id, keywords: newKeywords });
+        }
+      }
+      if (updates.length === 0) return;
+
+      // 3. Batch update via RPC (chunked for safety)
+      try {
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
+          const chunk = updates.slice(i, i + CHUNK_SIZE);
+          const { error } = await supabase.rpc("bulk_update_keywords", {
+            updates: chunk.map(({ id, keywords }) => ({ id, keywords })),
+          });
+          if (error) throw error;
+        }
+
+        // 4. Invalidate cache
+        removeStaleListCaches();
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
+        toast({ title: "Keywords updated", description: `Updated keywords for ${updates.length} paper(s).` });
+      } catch (err) {
+        toast({ title: "Error saving keyword updates", description: getErrorMessage(err), variant: "destructive" });
+      }
+    },
+    [userId, removeStaleListCaches, queryClient, toast],
+  );
+
+  return { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords };
 }

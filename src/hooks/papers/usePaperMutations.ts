@@ -85,7 +85,7 @@ export function usePaperMutations(
         ? await normalize([rawPaper], normalizationConfig)
         : [rawPaper];
 
-      const insertData = { user_id: userId, ...normalized, raw_study_type: null };
+      const insertData = { user_id: userId, ...normalized, raw_study_type: null, raw_keywords: rawPaper.keywords || [] };
 
       const { data: insertedPaper, error } = await supabase.from("papers").insert(insertData).select().single();
 

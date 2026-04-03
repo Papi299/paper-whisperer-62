@@ -51,6 +51,9 @@ interface SidebarProps {
   onDeletePoolStudyType: (id: string) => void;
   onDeleteAllPoolStudyTypes: () => void;
   onStudyTypePoolModalClose?: () => void;
+  // Keyword/synonym pool change callbacks for dirty-flag reevaluation
+  onKeywordPoolChange?: () => void;
+  onKeywordPoolModalClose?: () => void;
 }
 
 export function Sidebar({
@@ -67,6 +70,8 @@ export function Sidebar({
   onDeletePoolStudyType,
   onDeleteAllPoolStudyTypes,
   onStudyTypePoolModalClose,
+  onKeywordPoolChange,
+  onKeywordPoolModalClose,
 }: SidebarProps) {
   const { user, signOut } = useAuth();
 
@@ -294,11 +299,14 @@ export function Sidebar({
       />
       <ManageSynonymsModal
         open={synonymsModalOpen}
-        onOpenChange={setSynonymsModalOpen}
+        onOpenChange={(open) => {
+          setSynonymsModalOpen(open);
+          if (!open) onKeywordPoolModalClose?.();
+        }}
         synonymGroups={synonymGroups}
-        onAdd={addSynonymGroup}
-        onUpdate={updateSynonymGroup}
-        onDelete={deleteSynonymGroup}
+        onAdd={async (...args) => { await addSynonymGroup(...args); onKeywordPoolChange?.(); }}
+        onUpdate={async (...args) => { await updateSynonymGroup(...args); onKeywordPoolChange?.(); }}
+        onDelete={async (id) => { await deleteSynonymGroup(id); onKeywordPoolChange?.(); }}
       />
       <ManageExclusionsModal
         open={exclusionsModalOpen}
@@ -314,13 +322,16 @@ export function Sidebar({
       />
       <ManageKeywordPoolModal
         open={keywordPoolModalOpen}
-        onOpenChange={setKeywordPoolModalOpen}
+        onOpenChange={(open) => {
+          setKeywordPoolModalOpen(open);
+          if (!open) onKeywordPoolModalClose?.();
+        }}
         poolKeywords={poolKeywords}
         availableKeywords={availableKeywords}
-        onAddKeyword={addKeyword}
-        onAddMultipleKeywords={addMultipleKeywords}
-        onDeleteKeyword={deleteKeyword}
-        onDeleteAllKeywords={deleteAllKeywords}
+        onAddKeyword={async (kw) => { const r = await addKeyword(kw); onKeywordPoolChange?.(); return r; }}
+        onAddMultipleKeywords={async (kws) => { const r = await addMultipleKeywords(kws); onKeywordPoolChange?.(); return r; }}
+        onDeleteKeyword={(id) => { deleteKeyword(id); onKeywordPoolChange?.(); }}
+        onDeleteAllKeywords={() => { deleteAllKeywords(); onKeywordPoolChange?.(); }}
       />
       <ManageStudyTypePoolModal
         open={studyTypePoolModalOpen}

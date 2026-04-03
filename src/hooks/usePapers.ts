@@ -203,7 +203,7 @@ export function usePapers(
   const { addPaperManually, updatePaper, deletePaper } = usePaperMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams);
 
   // ── Bulk mutations ──
-  const { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes } = useBulkMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams);
+  const { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords } = useBulkMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams);
 
   // Extract all unique keywords from papers
   const allKeywords = useMemo(() => {
@@ -243,6 +243,7 @@ export function usePapers(
     bulkSetProjects,
     bulkSetTags,
     reevaluateStudyTypes,
+    reevaluateKeywords,
     updatePapersCache,
     refetch: () => queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId!) }),
   };
