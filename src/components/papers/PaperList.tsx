@@ -156,6 +156,8 @@ interface PaperListProps {
   selectedPaperIds: Set<string>;
   onToggleSelect: (paperId: string) => void;
   onToggleSelectAll: () => void;
+  /** Whether the full filtered ID set is loaded (disables select-all checkbox until ready). */
+  isSelectAllReady?: boolean;
   sortKey?: ColumnId | null;
   sortDirection?: SortDirection | null;
   onSort?: (columnId: ColumnId) => void;
@@ -193,6 +195,7 @@ export function PaperList({
   selectedPaperIds,
   onToggleSelect,
   onToggleSelectAll,
+  isSelectAllReady = true,
   sortKey,
   sortDirection,
   onSort,
@@ -341,6 +344,7 @@ export function PaperList({
             <ResizableTableHeader columnId="checkbox" label="" width={getWidth("checkbox")} onResize={onColumnResize} className="px-1">
               <Checkbox
                 checked={allSelected}
+                disabled={!isSelectAllReady}
                 ref={(el: HTMLButtonElement | null) => {
                   if (el) {
                     const input = el.querySelector("input");

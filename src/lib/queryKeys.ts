@@ -29,6 +29,12 @@ export const queryKeys = {
     /** Distinct keyword options from all filtered papers (server-side aggregation). */
     keywordOptions: (userId: string, params: ServerFilterParams) =>
       ["papers", userId, "keywordOptions", params] as const,
+    /** All distinct keywords across ALL user papers (unfiltered — for Sidebar import). */
+    allKeywords: (userId: string) =>
+      ["papers", userId, "allKeywords"] as const,
+    /** All distinct study types across ALL user papers (unfiltered — for Sidebar import). */
+    allStudyTypes: (userId: string) =>
+      ["papers", userId, "allStudyTypes"] as const,
   },
   projects: {
     all: (userId: string) => ["projects", userId] as const,
