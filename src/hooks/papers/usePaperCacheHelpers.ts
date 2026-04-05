@@ -132,6 +132,22 @@ export function usePaperCacheHelpers(
   );
 
   /**
+   * Adjust the filtered count by a delta (e.g., -1 on delete).
+   * Only updates if a cached filtered count exists for the active params.
+   */
+  const adjustFilteredCount = useCallback(
+    (delta: number) => {
+      if (!userId) return;
+      const key = queryKeys.papers.filteredCount(userId, serverFilterParams);
+      queryClient.setQueryData(
+        key,
+        (old: number | undefined) => old !== undefined ? Math.max(0, old + delta) : undefined,
+      );
+    },
+    [userId, serverFilterParams, queryClient],
+  );
+
+  /**
    * Remove stale non-active list caches to prevent cross-filter contamination.
    * Called after successful server mutations (not on rollback).
    */
@@ -177,6 +193,7 @@ export function usePaperCacheHelpers(
     updatePapersCache,
     updateMetaCache,
     adjustCount,
+    adjustFilteredCount,
     removeStaleListCaches,
     invalidateAndRefetch,
     invalidateJunctionCaches,

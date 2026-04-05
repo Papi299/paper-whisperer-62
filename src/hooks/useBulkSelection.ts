@@ -3,6 +3,8 @@ import type { PaperWithTags } from "@/types/database";
 
 interface UseBulkSelectionArgs {
   papers: PaperWithTags[];
+  /** All filtered paper IDs from the server (for full-set select-all). */
+  allFilteredIds?: string[];
   bulkDeletePapers: (ids: string[]) => Promise<void>;
   bulkSetProjects: (paperIds: string[], projectIds: string[]) => Promise<void>;
   bulkSetTags: (paperIds: string[], tagIds: string[]) => Promise<void>;
@@ -10,6 +12,7 @@ interface UseBulkSelectionArgs {
 
 export function useBulkSelection({
   papers,
+  allFilteredIds,
   bulkDeletePapers,
   bulkSetProjects,
   bulkSetTags,
@@ -27,12 +30,13 @@ export function useBulkSelection({
 
   const handleToggleSelectAll = useCallback(() => {
     setSelectedPaperIds((prev) => {
-      const allFilteredIds = papers.map((p) => p.id);
-      const allSelected = allFilteredIds.every((id) => prev.has(id));
+      // Prefer full filtered set from server; fall back to loaded papers
+      const ids = allFilteredIds ?? papers.map((p) => p.id);
+      const allSelected = ids.every((id) => prev.has(id));
       if (allSelected) return new Set<string>();
-      return new Set(allFilteredIds);
+      return new Set(ids);
     });
-  }, [papers]);
+  }, [allFilteredIds, papers]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedPaperIds(new Set());

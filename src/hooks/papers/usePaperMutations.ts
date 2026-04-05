@@ -17,7 +17,7 @@ export function usePaperMutations(
   normalizationConfig: NormalizationConfig | undefined,
   serverFilterParams: ServerFilterParams,
 ) {
-  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, removeStaleListCaches, invalidateAndRefetch } = usePaperCacheHelpers(userId, serverFilterParams);
+  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, adjustFilteredCount, removeStaleListCaches, invalidateAndRefetch } = usePaperCacheHelpers(userId, serverFilterParams);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { normalize } = useNormalizationWorker();
@@ -194,9 +194,10 @@ export function usePaperMutations(
         .eq("paper_id", paperId);
       const storagePaths = (attachments || []).map((a) => a.file_path);
 
-      // Optimistic: remove paper and decrement count immediately (always safe)
+      // Optimistic: remove paper and decrement counts immediately (always safe)
       updatePapersCache((old) => old.filter((p) => p.id !== paperId));
       adjustCount(-1);
+      adjustFilteredCount(-1);
 
       // 2. Delete from DB
       const { error } = await supabase.from("papers").delete().eq("id", paperId);
@@ -218,7 +219,7 @@ export function usePaperMutations(
       removeStaleListCaches();
       toast({ title: "Paper deleted" });
     },
-    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, rollbackCache, removeStaleListCaches, toast],
+    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, adjustFilteredCount, rollbackCache, removeStaleListCaches, toast],
   );
 
   return { addPaperManually, updatePaper, deletePaper };

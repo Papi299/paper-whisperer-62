@@ -417,6 +417,18 @@ export type Database = {
           paper_id: string
         }[]
       }
+      get_keyword_options: {
+        Args: {
+          p_user_id: string
+          p_paper_ids?: string[] | null
+          p_year_from?: number | null
+          p_year_to?: number | null
+          p_study_types?: string[] | null
+        }
+        Returns: {
+          keyword: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
