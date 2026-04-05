@@ -41,7 +41,6 @@ interface SearchFiltersProps {
   selectedTagId: string | null;
   onProjectChange: (projectId: string | null) => void;
   onTagChange: (tagId: string | null) => void;
-  allLoaded?: boolean;
   isExportReady?: boolean;
   isExporting?: boolean;
 }
@@ -70,15 +69,12 @@ export function SearchFilters({
   selectedTagId,
   onProjectChange,
   onTagChange,
-  allLoaded = true,
   isExportReady,
   isExporting = false,
 }: SearchFiltersProps) {
 
-  // Export gating: prefer explicit isExportReady if provided, otherwise fall back to allLoaded
-  const exportDisabled = isExportReady !== undefined
-    ? !isExportReady || isExporting
-    : !allLoaded;
+  // Export gating: based on isExportReady (from useExportPapers)
+  const exportDisabled = !isExportReady || isExporting;
 
   return (
     <div className="space-y-4">

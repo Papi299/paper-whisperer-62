@@ -161,6 +161,12 @@ interface PaperListProps {
   onSort?: (columnId: ColumnId) => void;
   onAnalyzePaper?: (paper: PaperWithTags) => Promise<void>;
   analyzingPaperId?: string | null;
+  /** Whether more pages are available for lazy loading. */
+  hasNextPage?: boolean;
+  /** Whether the next page is currently being fetched. */
+  isFetchingNextPage?: boolean;
+  /** Callback to load the next page (triggered by scroll sentinel). */
+  onLoadMore?: () => void;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -192,10 +198,29 @@ export function PaperList({
   onSort,
   onAnalyzePaper,
   analyzingPaperId,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // IntersectionObserver sentinel for lazy loading
+  useEffect(() => {
+    if (!onLoadMore || !hasNextPage || isFetchingNextPage) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) onLoadMore();
+      },
+      { root: scrollContainerRef.current, rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onLoadMore, hasNextPage, isFetchingNextPage]);
 
   const toggleRow = useCallback((paperId: string) => {
     setExpandedRows(prev => {
@@ -410,6 +435,13 @@ export function PaperList({
           </tbody>
         )}
       </Table>
+      {/* Sentinel for infinite scroll — triggers onLoadMore when visible */}
+      {hasNextPage && <div ref={sentinelRef} className="h-1" />}
+      {isFetchingNextPage && (
+        <div className="flex justify-center py-4">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      )}
       <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

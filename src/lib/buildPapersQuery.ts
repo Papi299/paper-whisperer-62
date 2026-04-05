@@ -2,6 +2,34 @@ import { supabase } from "@/integrations/supabase/client";
 import type { ServerFilterParams } from "@/hooks/papers/types";
 
 /**
+ * Apply shared filter predicates to a PostgREST query builder.
+ * Used by both the display query and the count query.
+ */
+function applyFilterPredicates<T extends ReturnType<typeof supabase.from>>(
+  query: T,
+  serverFilterParams: ServerFilterParams,
+): T {
+  const { filterPaperIds, yearFrom, yearTo, studyTypes } =
+    serverFilterParams;
+
+  // ID-based filtering (pre-resolved from junction queries + search)
+  if (filterPaperIds !== null && filterPaperIds !== undefined) {
+    query = query.in("id", filterPaperIds) as T;
+  }
+
+  // Year range
+  if (yearFrom !== null) query = query.gte("year", yearFrom) as T;
+  if (yearTo !== null) query = query.lte("year", yearTo) as T;
+
+  // Study type
+  if (studyTypes !== null && studyTypes.length > 0) {
+    query = query.in("study_type", studyTypes) as T;
+  }
+
+  return query;
+}
+
+/**
  * Build a PostgREST query for papers with server-side filter predicates.
  * Shared between the display query (usePapers) and export query (useExportPapers).
  *
@@ -15,24 +43,10 @@ export function buildPapersQuery(
   serverFilterParams: ServerFilterParams,
   select: string,
 ) {
-  const { filterPaperIds, yearFrom, yearTo, studyTypes, sortColumn, sortAscending } =
-    serverFilterParams;
+  const { sortColumn, sortAscending } = serverFilterParams;
 
   let query = supabase.from("papers").select(select).eq("user_id", userId);
-
-  // ID-based filtering (pre-resolved from junction queries + search)
-  if (filterPaperIds !== null && filterPaperIds !== undefined) {
-    query = query.in("id", filterPaperIds);
-  }
-
-  // Year range
-  if (yearFrom !== null) query = query.gte("year", yearFrom);
-  if (yearTo !== null) query = query.lte("year", yearTo);
-
-  // Study type
-  if (studyTypes !== null && studyTypes.length > 0) {
-    query = query.in("study_type", studyTypes);
-  }
+  query = applyFilterPredicates(query, serverFilterParams);
 
   // Sort: server-side is the single source of truth
   if (sortColumn !== null && sortAscending !== null) {
@@ -40,6 +54,24 @@ export function buildPapersQuery(
   } else {
     query = query.order("insert_order", { ascending: false });
   }
+
+  return query;
+}
+
+/**
+ * Build a lightweight HEAD query that returns only the count of matching papers.
+ * Uses the same filter predicates as buildPapersQuery but no select columns or sort.
+ */
+export function buildPapersCountQuery(
+  userId: string,
+  serverFilterParams: ServerFilterParams,
+) {
+  let query = supabase
+    .from("papers")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId);
+
+  query = applyFilterPredicates(query, serverFilterParams);
 
   return query;
 }

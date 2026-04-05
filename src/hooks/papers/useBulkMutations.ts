@@ -23,7 +23,7 @@ export function useBulkMutations(
   normalizationConfig: NormalizationConfig | undefined,
   serverFilterParams: ServerFilterParams,
 ) {
-  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, removeStaleListCaches, invalidateAndRefetch, invalidateJunctionCaches } = usePaperCacheHelpers(userId, serverFilterParams);
+  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, adjustFilteredCount, removeStaleListCaches, invalidateAndRefetch, invalidateJunctionCaches } = usePaperCacheHelpers(userId, serverFilterParams);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { normalize } = useNormalizationWorker();
@@ -423,10 +423,11 @@ export function useBulkMutations(
         .in("paper_id", paperIds);
       const storagePaths = (attachments || []).map((a) => a.file_path);
 
-      // Optimistic: remove papers and adjust count immediately (always safe)
+      // Optimistic: remove papers and adjust counts immediately (always safe)
       const idSet = new Set(paperIds);
       updatePapersCache((old) => old.filter((p) => !idSet.has(p.id)));
       adjustCount(-paperIds.length);
+      adjustFilteredCount(-paperIds.length);
 
       // 2. Delete from DB
       const { error } = await supabase.from("papers").delete().in("id", paperIds);
@@ -448,7 +449,7 @@ export function useBulkMutations(
       removeStaleListCaches();
       toast({ title: `Deleted ${paperIds.length} paper(s)` });
     },
-    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, rollbackCache, removeStaleListCaches, toast],
+    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, adjustFilteredCount, rollbackCache, removeStaleListCaches, toast],
   );
 
   const bulkSetProjects = useCallback(

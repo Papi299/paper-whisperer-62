@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { queryKeys } from "@/lib/queryKeys";
-import { buildPapersQuery } from "@/lib/buildPapersQuery";
+import { buildPapersQuery, buildPapersCountQuery } from "@/lib/buildPapersQuery";
+import { fetchAllPages } from "@/lib/fetchAllPages";
 import { PapersPage, ServerFilterParams, areServerFiltersReady } from "./papers/types";
 import { usePaperCacheHelpers } from "./papers/usePaperCacheHelpers";
 import { useProjectMutations } from "./papers/useProjectMutations";
@@ -163,29 +164,92 @@ export function usePapers(
     enabled: !!userId,
   });
 
-  // ── Auto-fetch all pages for whole-library correctness ──
-  useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  // ── Filtered count (lightweight HEAD query with same filters) ──
+  const { data: filteredCount } = useQuery({
+    queryKey: queryKeys.papers.filteredCount(userId!, activeParams),
+    queryFn: async () => {
+      const { filterPaperIds } = activeParams;
+      // Short-circuit: filter resolved with no matches
+      if (filterPaperIds !== null && filterPaperIds !== undefined && filterPaperIds.length === 0) {
+        return 0;
+      }
+      const { count, error } = await buildPapersCountQuery(userId!, activeParams);
+      if (error) throw error;
+      return count ?? 0;
+    },
+    enabled: !!userId && areServerFiltersReady(activeParams),
+    placeholderData: (prev) => prev,
+  });
+
+  // ── All filtered paper IDs (for select-all semantics — IDs only, lightweight) ──
+  const { data: allFilteredIds } = useQuery<string[]>({
+    queryKey: queryKeys.papers.filteredIds(userId!, activeParams),
+    queryFn: async () => {
+      const { filterPaperIds } = activeParams;
+      // Short-circuit: filter resolved with no matches
+      if (filterPaperIds !== null && filterPaperIds !== undefined && filterPaperIds.length === 0) {
+        return [];
+      }
+      const papers = await fetchAllPages<{ id: string }>(
+        () => buildPapersQuery(userId!, activeParams, "id"),
+      );
+      return papers.map((p) => p.id);
+    },
+    enabled: !!userId && areServerFiltersReady(activeParams),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+  // ── Server-side keyword options (distinct terms from all filtered papers) ──
+  const { data: serverKeywordOptions } = useQuery<string[]>({
+    queryKey: queryKeys.papers.keywordOptions(userId!, activeParams),
+    queryFn: async () => {
+      const { filterPaperIds, yearFrom, yearTo, studyTypes } = activeParams;
+      // Short-circuit: filter resolved with no matches
+      if (filterPaperIds !== null && filterPaperIds !== undefined && filterPaperIds.length === 0) {
+        return [];
+      }
+      const { data, error } = await supabase.rpc("get_keyword_options", {
+        p_user_id: userId!,
+        p_paper_ids: filterPaperIds ?? null,
+        p_year_from: yearFrom ?? null,
+        p_year_to: yearTo ?? null,
+        p_study_types: studyTypes ?? null,
+      });
+      if (error) throw error;
+      return (data as { keyword: string }[]).map((r) => r.keyword);
+    },
+    enabled: !!userId && areServerFiltersReady(activeParams),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+  // NOTE: auto-fetch-all useEffect removed — pages now load lazily via
+  // IntersectionObserver sentinel in PaperList.
 
   const loading = papersLoading || projectsLoading || tagsLoading;
-  const allLoaded = !hasNextPage && !isFetchingNextPage && !loading;
 
   // Stable references
   const projects = useMemo(() => projectsData ?? [], [projectsData]);
   const tags = useMemo(() => tagsData ?? [], [tagsData]);
 
-  // Hydrate raw papers + junction IDs -> PaperWithTags
+  // Hydrate raw papers + junction IDs -> PaperWithTags (with safety dedup by ID)
   const papers = useMemo(() => {
     const rawPapers = data?.pages.flatMap((p) => p.papers) ?? [];
     if (rawPapers.length === 0) return [];
 
+    // Safety dedup: first occurrence wins (preserves optimistic state from page 0)
+    const seen = new Set<string>();
+    const unique = rawPapers.filter((p) => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+
     const tagsMap = new Map(tags.map((t) => [t.id, t]));
     const projectsMap = new Map(projects.map((p) => [p.id, p]));
 
-    return rawPapers.map((raw): PaperWithTags => ({
+    return unique.map((raw): PaperWithTags => ({
       ...raw,
       tags: raw.tagIds.map((id) => tagsMap.get(id)).filter((t): t is Tag => !!t),
       projects: raw.projectIds.map((id) => projectsMap.get(id)).filter((p): p is Project => !!p),
@@ -205,7 +269,7 @@ export function usePapers(
   // ── Bulk mutations ──
   const { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords } = useBulkMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams);
 
-  // Extract all unique keywords from papers
+  // Extract all unique keywords from loaded papers (used by Sidebar)
   const allKeywords = useMemo(() => {
     const keywordSet = new Set<string>();
     papers.forEach((paper) => {
@@ -221,9 +285,11 @@ export function usePapers(
     loading,
     tagsLoading,
     projectsLoading,
-    allLoaded,
     allKeywords,
     totalCount: totalCount ?? papers.length,
+    filteredCount: filteredCount ?? papers.length,
+    allFilteredIds,
+    serverKeywordOptions,
     fetchNextPage,
     hasNextPage: hasNextPage ?? false,
     isFetchingNextPage,

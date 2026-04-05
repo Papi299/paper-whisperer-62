@@ -135,7 +135,9 @@ function DashboardContent() {
     projectsLoading,
     allKeywords,
     totalCount,
-    allLoaded,
+    filteredCount,
+    allFilteredIds,
+    serverKeywordOptions,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -201,14 +203,10 @@ function DashboardContent() {
   const { visibleColumns, toggleColumn, availableColumns } = useColumnVisibility();
   const { columnWidths, setColumnWidth } = useColumnWidths();
 
-  // Filter available keywords: derive from papers, apply synonym mapping, exclude, deduplicate
+  // Filter available keywords: server-side keyword options + pool keywords, apply synonym mapping, exclude, deduplicate
   const filteredKeywords = useMemo(() => {
     const allTerms = [
-      ...papers.flatMap(paper => [
-        ...(paper.keywords || []),
-        ...((paper.substances as string[]) || []),
-        ...((paper.mesh_terms as string[]) || []),
-      ]),
+      ...(serverKeywordOptions ?? []),
       ...poolKeywords.map(pk => pk.keyword),
     ];
 
@@ -222,7 +220,7 @@ function DashboardContent() {
     return Array.from(new Set(mappedTerms))
       .filter(kw => !excludedSet.has(kw.toLowerCase()))
       .sort();
-  }, [papers, excludedKeywords, synonymLookup, poolKeywords]);
+  }, [serverKeywordOptions, excludedKeywords, synonymLookup, poolKeywords]);
 
   // Extract unique study types from papers for import functionality
   const allStudyTypes = useMemo(() => {
@@ -250,6 +248,7 @@ function DashboardContent() {
     handleBulkSetTags,
   } = useBulkSelection({
     papers: papers,
+    allFilteredIds,
     bulkDeletePapers,
     bulkSetProjects,
     bulkSetTags,
@@ -428,9 +427,9 @@ function DashboardContent() {
             <div>
               <h1 className="text-2xl font-bold">Papers</h1>
               <p className="text-muted-foreground">
-                {!allLoaded
-                  ? `Loading\u2026 ${papers.length} of ${totalCount} papers`
-                  : `${papers.length} paper${papers.length !== 1 ? "s" : ""}`}
+                {hasActiveFilters
+                  ? `${filteredCount} of ${totalCount} papers`
+                  : `${totalCount} paper${totalCount !== 1 ? "s" : ""}`}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -473,7 +472,6 @@ function DashboardContent() {
             selectedTagId={selectedTagId}
             onProjectChange={setSelectedProjectId}
             onTagChange={setSelectedTagId}
-            allLoaded={allLoaded}
             isExportReady={isExportReady}
             isExporting={isExporting}
           />
@@ -510,6 +508,9 @@ function DashboardContent() {
             onSort={handleSort}
             onAnalyzePaper={handleAnalyzePaper}
             analyzingPaperId={analyzingPaperId}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            onLoadMore={fetchNextPage}
           />
 
           <BulkActionsToolbar

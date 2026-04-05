@@ -20,6 +20,15 @@ export const queryKeys = {
     analytics: (userId: string, params: ServerFilterParams) =>
       ["papers", userId, "analytics", params] as const,
     count: (userId: string) => ["papers", userId, "count"] as const,
+    /** Filtered count for the current server filter params (lightweight HEAD query). */
+    filteredCount: (userId: string, params: ServerFilterParams) =>
+      ["papers", userId, "filteredCount", params] as const,
+    /** All paper IDs matching the current server filter params (for select-all). */
+    filteredIds: (userId: string, params: ServerFilterParams) =>
+      ["papers", userId, "filteredIds", params] as const,
+    /** Distinct keyword options from all filtered papers (server-side aggregation). */
+    keywordOptions: (userId: string, params: ServerFilterParams) =>
+      ["papers", userId, "keywordOptions", params] as const,
   },
   projects: {
     all: (userId: string) => ["projects", userId] as const,
