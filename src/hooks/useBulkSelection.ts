@@ -19,6 +19,9 @@ export function useBulkSelection({
 }: UseBulkSelectionArgs) {
   const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
 
+  /** True once the full filtered ID set has loaded from the server. */
+  const isSelectAllReady = allFilteredIds !== undefined;
+
   const handleToggleSelect = useCallback((paperId: string) => {
     setSelectedPaperIds((prev) => {
       const next = new Set(prev);
@@ -29,14 +32,16 @@ export function useBulkSelection({
   }, []);
 
   const handleToggleSelectAll = useCallback(() => {
+    // No-op if the full filtered ID set hasn't loaded yet.
+    // The select-all checkbox is disabled in the UI until isSelectAllReady is true.
+    if (!allFilteredIds) return;
+
     setSelectedPaperIds((prev) => {
-      // Prefer full filtered set from server; fall back to loaded papers
-      const ids = allFilteredIds ?? papers.map((p) => p.id);
-      const allSelected = ids.every((id) => prev.has(id));
+      const allSelected = allFilteredIds.every((id) => prev.has(id));
       if (allSelected) return new Set<string>();
-      return new Set(ids);
+      return new Set(allFilteredIds);
     });
-  }, [allFilteredIds, papers]);
+  }, [allFilteredIds]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedPaperIds(new Set());
@@ -65,6 +70,7 @@ export function useBulkSelection({
 
   return {
     selectedPaperIds,
+    isSelectAllReady,
     handleToggleSelect,
     handleToggleSelectAll,
     handleClearSelection,

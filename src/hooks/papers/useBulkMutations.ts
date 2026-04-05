@@ -568,6 +568,17 @@ export function useBulkMutations(
    * Re-evaluate keywords for ALL user papers against the current normalization config.
    * Fetches full library via fetchAllPages (pagination-safe), recomputes enriched keywords
    * from raw_keywords + title + abstract, and batch-updates only changed papers.
+   *
+   * NOTE on raw_keywords provenance (migration 20260330010000):
+   * Papers imported BEFORE 2026-03-30 had their raw_keywords backfilled as a copy of
+   * the already-enriched `keywords` column (the original pre-enrichment values no longer
+   * exist anywhere in the system). For these papers, reevaluation starts from the enriched
+   * set rather than the true raw import values. Because enrichment is additive (adds terms
+   * from title/abstract/pool, never removes), this produces a correct superset — the result
+   * may include slightly more terms than a true-raw reevaluation would, but no terms are
+   * lost. The original raw values are fundamentally unrecoverable: they were overwritten
+   * in-place by the enrichment pipeline before the raw_keywords column existed. Papers
+   * imported AFTER the migration have exact raw_keywords captured at import time.
    */
   const reevaluateKeywords = useCallback(
     async (config: NormalizationConfig) => {

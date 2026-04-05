@@ -134,6 +134,7 @@ function DashboardContent() {
     tagsLoading,
     projectsLoading,
     allKeywords,
+    allStudyTypes,
     totalCount,
     filteredCount,
     allFilteredIds,
@@ -222,24 +223,10 @@ function DashboardContent() {
       .sort();
   }, [serverKeywordOptions, excludedKeywords, synonymLookup, poolKeywords]);
 
-  // Extract unique study types from papers for import functionality
-  const allStudyTypes = useMemo(() => {
-    const studyTypeSet = new Set<string>();
-    papers.forEach((paper) => {
-      if (paper.study_type) {
-        paper.study_type
-          .split(/[,;]+/)
-          .map((t) => t.trim())
-          .filter(Boolean)
-          .forEach((t) => studyTypeSet.add(t));
-      }
-    });
-    return Array.from(studyTypeSet).sort();
-  }, [papers]);
-
   // Bulk selection (server-sorted + server-filtered)
   const {
     selectedPaperIds,
+    isSelectAllReady,
     handleToggleSelect,
     handleToggleSelectAll,
     handleClearSelection,
@@ -503,6 +490,7 @@ function DashboardContent() {
             selectedPaperIds={selectedPaperIds}
             onToggleSelect={handleToggleSelect}
             onToggleSelectAll={handleToggleSelectAll}
+            isSelectAllReady={isSelectAllReady}
             sortKey={sortKey}
             sortDirection={sortDirection}
             onSort={handleSort}

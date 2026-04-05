@@ -269,14 +269,51 @@ export function usePapers(
   // ── Bulk mutations ──
   const { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords } = useBulkMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams);
 
-  // Extract all unique keywords from loaded papers (used by Sidebar)
-  const allKeywords = useMemo(() => {
-    const keywordSet = new Set<string>();
-    papers.forEach((paper) => {
-      paper.keywords.forEach((kw) => keywordSet.add(kw));
-    });
-    return Array.from(keywordSet).sort();
-  }, [papers]);
+  // ── All keywords across ALL papers (unfiltered — for Sidebar import suggestions) ──
+  // Replaces the old loaded-papers-only memo to preserve eager-load-era completeness.
+  const { data: allKeywords } = useQuery<string[]>({
+    queryKey: queryKeys.papers.allKeywords(userId!),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("papers")
+        .select("keywords")
+        .eq("user_id", userId!);
+      if (error) throw error;
+      const set = new Set<string>();
+      (data || []).forEach((row: { keywords: string[] | null }) => {
+        (row.keywords || []).forEach((kw: string) => set.add(kw));
+      });
+      return Array.from(set).sort();
+    },
+    enabled: !!userId,
+    staleTime: 60_000,
+  });
+
+  // ── All study types across ALL papers (unfiltered — for Sidebar import suggestions) ──
+  // Replaces the old loaded-papers-only memo to preserve eager-load-era completeness.
+  const { data: allStudyTypes } = useQuery<string[]>({
+    queryKey: queryKeys.papers.allStudyTypes(userId!),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("papers")
+        .select("study_type")
+        .eq("user_id", userId!);
+      if (error) throw error;
+      const set = new Set<string>();
+      (data || []).forEach((row: { study_type: string | null }) => {
+        if (row.study_type) {
+          row.study_type
+            .split(/[,;]+/)
+            .map((t: string) => t.trim())
+            .filter(Boolean)
+            .forEach((t: string) => set.add(t));
+        }
+      });
+      return Array.from(set).sort();
+    },
+    enabled: !!userId,
+    staleTime: 60_000,
+  });
 
   return {
     papers,
@@ -285,7 +322,8 @@ export function usePapers(
     loading,
     tagsLoading,
     projectsLoading,
-    allKeywords,
+    allKeywords: allKeywords ?? [],
+    allStudyTypes: allStudyTypes ?? [],
     totalCount: totalCount ?? papers.length,
     filteredCount: filteredCount ?? papers.length,
     allFilteredIds,
