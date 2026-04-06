@@ -2,18 +2,19 @@ import { useCallback, useMemo } from "react";
 import { useQueryClient, InfiniteData } from "@tanstack/react-query";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { queryKeys } from "@/lib/queryKeys";
-import { PapersPage, RawPaperWithJunctions, CacheSnapshot, ServerFilterParams } from "./types";
+import { PapersPage, RawPaperWithJunctions, CacheSnapshot, ServerFilterParams, ServerSortParams } from "./types";
 
 export function usePaperCacheHelpers(
   userId: string | undefined,
   serverFilterParams: ServerFilterParams,
+  serverSortParams: ServerSortParams,
 ) {
   const queryClient = useQueryClient();
 
   /** Exact key for the currently active papers list query. */
   const activeListKey = useMemo(
-    () => (userId ? queryKeys.papers.list(userId, serverFilterParams) : null),
-    [userId, serverFilterParams],
+    () => (userId ? queryKeys.papers.list(userId, serverFilterParams, serverSortParams) : null),
+    [userId, serverFilterParams, serverSortParams],
   );
 
   const snapshotCache = useCallback((): CacheSnapshot => {

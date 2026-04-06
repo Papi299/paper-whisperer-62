@@ -103,6 +103,7 @@ function DashboardContent() {
   // ── Step 1: Filter state (no papers dependency) ──
   const {
     serverFilterParams,
+    serverSortParams,
     searchQuery,
     setSearchQuery,
     yearFrom,
@@ -159,12 +160,13 @@ function DashboardContent() {
     reevaluateStudyTypes,
     reevaluateKeywords,
     updatePapersCache,
-  } = usePapers(user?.id, serverFilterParams, normalizationConfig);
+  } = usePapers(user?.id, serverFilterParams, serverSortParams, normalizationConfig);
 
   // ── Step 3: Dedicated export fetch (bypasses paginated display query) ──
   const { exportPapers, isExporting, isExportReady } = useExportPapers({
     userId: user?.id,
     serverFilterParams,
+    serverSortParams,
     tags,
     projects,
     tagsLoading,
@@ -176,6 +178,7 @@ function DashboardContent() {
   const { papers: analyticsPapers, isLoading: isAnalyticsLoading } = useAnalyticsData({
     userId: user?.id,
     serverFilterParams,
+    serverSortParams,
     enabled: isAnalyticsOpen,
   });
 

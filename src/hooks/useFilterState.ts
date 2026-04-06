@@ -4,8 +4,9 @@ import { supabase } from "@/integrations/supabase/client";
 import type { ColumnId } from "@/hooks/useColumnVisibility";
 import type { SortDirection } from "@/components/papers/ResizableTableHeader";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
-import type { ServerFilterParams } from "@/hooks/papers/types";
+import type { ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { timedQueryFn } from "@/lib/queryTiming";
 
 /** Minimum query length to trigger server-side full-text search. */
 const SERVER_SEARCH_MIN_LENGTH = 3;
@@ -54,7 +55,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     Set<string>
   >({
     queryKey: ["search_papers", userId, debouncedSearchQuery],
-    queryFn: async () => {
+    queryFn: timedQueryFn("search_papers (FTS)", async () => {
       const { data, error } = await supabase.rpc("search_papers", {
         p_user_id: userId!,
         p_query: debouncedSearchQuery,
@@ -63,7 +64,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
       return new Set(
         (data as { paper_id: string; rank: number }[]).map((r) => r.paper_id),
       );
-    },
+    }),
     enabled: useFtsSearch,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -72,7 +73,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   // ── Server-side short search via ILIKE (1-2 char queries) ──
   const { data: shortSearchIds } = useQuery<Set<string>>({
     queryKey: ["search_papers_short", userId, debouncedSearchQuery],
-    queryFn: async () => {
+    queryFn: timedQueryFn("search_papers_short (ILIKE)", async () => {
       const { data, error } = await supabase.rpc("search_papers_short", {
         p_user_id: userId!,
         p_query: debouncedSearchQuery,
@@ -81,7 +82,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
       return new Set(
         (data as { paper_id: string }[]).map((r) => r.paper_id),
       );
-    },
+    }),
     enabled: useShortSearch,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -90,28 +91,28 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   // ── Junction pre-queries (project/tag ID resolution) ──
   const { data: projectPaperIds } = useQuery<string[]>({
     queryKey: ["junction", "paper_projects", selectedProjectId],
-    queryFn: async () => {
+    queryFn: timedQueryFn("junction.paper_projects", async () => {
       const { data, error } = await supabase
         .from("paper_projects")
         .select("paper_id")
         .eq("project_id", selectedProjectId!);
       if (error) throw error;
       return data.map((r) => r.paper_id);
-    },
+    }),
     enabled: !!selectedProjectId,
     staleTime: 30_000,
   });
 
   const { data: tagPaperIds } = useQuery<string[]>({
     queryKey: ["junction", "paper_tags", selectedTagId],
-    queryFn: async () => {
+    queryFn: timedQueryFn("junction.paper_tags", async () => {
       const { data, error } = await supabase
         .from("paper_tags")
         .select("paper_id")
         .eq("tag_id", selectedTagId!);
       if (error) throw error;
       return data.map((r) => r.paper_id);
-    },
+    }),
     enabled: !!selectedTagId,
     staleTime: 30_000,
   });
@@ -119,14 +120,14 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   // ── Server-side keyword filter via RPC ──
   const { data: keywordPaperIds } = useQuery<string[]>({
     queryKey: ["filter_keywords", userId, selectedKeywords],
-    queryFn: async () => {
+    queryFn: timedQueryFn("filter_papers_by_keywords (RPC)", async () => {
       const { data, error } = await supabase.rpc("filter_papers_by_keywords", {
         p_user_id: userId!,
         p_keywords: selectedKeywords,
       });
       if (error) throw error;
       return (data as { paper_id: string }[]).map((r) => r.paper_id);
-    },
+    }),
     enabled: !!userId && selectedKeywords.length > 0,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -187,15 +188,18 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
       .map((st) => st.study_type);
   }, [studyType, poolStudyTypes]);
 
-  // ── Build serverFilterParams ──
+  // ── Build server params (split into filter + sort) ──
   const serverFilterParams = useMemo((): ServerFilterParams => ({
     filterPaperIds,
     yearFrom: yearFrom ? parseInt(yearFrom) : null,
     yearTo: yearTo ? parseInt(yearTo) : null,
     studyTypes: resolvedStudyTypes,
+  }), [filterPaperIds, yearFrom, yearTo, resolvedStudyTypes]);
+
+  const serverSortParams = useMemo((): ServerSortParams => ({
     sortColumn: sortKey ? (SORT_COLUMN_MAP[sortKey] ?? null) : null,
     sortAscending: sortDirection === "asc" ? true : sortDirection === "desc" ? false : null,
-  }), [filterPaperIds, yearFrom, yearTo, resolvedStudyTypes, sortKey, sortDirection]);
+  }), [sortKey, sortDirection]);
 
   // ── Sort handler ──
   const handleSort = useCallback(
@@ -252,8 +256,9 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   }, []);
 
   return {
-    // Server filter params for usePapers
+    // Server params for usePapers (split: filter-only + sort-only)
     serverFilterParams,
+    serverSortParams,
 
     // Filter state + setters
     searchQuery,

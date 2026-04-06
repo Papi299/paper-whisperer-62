@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Paper } from "@/types/database";
-import { ServerFilterParams, areServerFiltersReady } from "./papers/types";
+import { ServerFilterParams, ServerSortParams, areServerFiltersReady } from "./papers/types";
 import { buildPapersQuery } from "@/lib/buildPapersQuery";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { queryKeys } from "@/lib/queryKeys";
+import { timedQueryFn } from "@/lib/queryTiming";
 
 /** Minimal select — only fields needed for analytics aggregations. */
 const ANALYTICS_SELECT =
@@ -12,6 +13,7 @@ const ANALYTICS_SELECT =
 interface UseAnalyticsDataArgs {
   userId: string | undefined;
   serverFilterParams: ServerFilterParams;
+  serverSortParams: ServerSortParams;
   /** Set to true when the analytics panel is open — gates the fetch. */
   enabled: boolean;
 }
@@ -28,13 +30,14 @@ interface UseAnalyticsDataArgs {
 export function useAnalyticsData({
   userId,
   serverFilterParams,
+  serverSortParams,
   enabled,
 }: UseAnalyticsDataArgs) {
   const filtersReady = areServerFiltersReady(serverFilterParams);
 
   const { data: rawPapers, isLoading } = useQuery<Paper[]>({
-    queryKey: queryKeys.papers.analytics(userId!, serverFilterParams),
-    queryFn: async () => {
+    queryKey: queryKeys.papers.analytics(userId!, serverFilterParams, serverSortParams),
+    queryFn: timedQueryFn("analytics.fetchAllPages", async () => {
       const { filterPaperIds } = serverFilterParams;
 
       // Short-circuit: filter resolved with no matches
@@ -43,9 +46,9 @@ export function useAnalyticsData({
       }
 
       return fetchAllPages<Paper>(
-        () => buildPapersQuery(userId!, serverFilterParams, ANALYTICS_SELECT),
+        () => buildPapersQuery(userId!, serverFilterParams, serverSortParams, ANALYTICS_SELECT),
       );
-    },
+    }),
     enabled: !!userId && filtersReady && enabled,
   });
 

@@ -5,7 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { queryKeys } from "@/lib/queryKeys";
 import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
-import { ServerFilterParams } from "./types";
+import { ServerFilterParams, ServerSortParams } from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
@@ -16,8 +16,9 @@ export function usePaperMutations(
   tags: Tag[],
   normalizationConfig: NormalizationConfig | undefined,
   serverFilterParams: ServerFilterParams,
+  serverSortParams: ServerSortParams,
 ) {
-  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, adjustFilteredCount, removeStaleListCaches, invalidateAndRefetch } = usePaperCacheHelpers(userId, serverFilterParams);
+  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, adjustFilteredCount, removeStaleListCaches, invalidateAndRefetch } = usePaperCacheHelpers(userId, serverFilterParams, serverSortParams);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { normalize } = useNormalizationWorker();

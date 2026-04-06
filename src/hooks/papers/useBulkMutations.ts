@@ -11,7 +11,7 @@ import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
 import { processChunkedInsert } from "@/lib/chunkedInsert";
-import { ServerFilterParams } from "./types";
+import { ServerFilterParams, ServerSortParams } from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
@@ -22,8 +22,9 @@ export function useBulkMutations(
   tags: Tag[],
   normalizationConfig: NormalizationConfig | undefined,
   serverFilterParams: ServerFilterParams,
+  serverSortParams: ServerSortParams,
 ) {
-  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, adjustFilteredCount, removeStaleListCaches, invalidateAndRefetch, invalidateJunctionCaches } = usePaperCacheHelpers(userId, serverFilterParams);
+  const { snapshotCache, rollbackCache, cancelQueries, updatePapersCache, adjustCount, adjustFilteredCount, removeStaleListCaches, invalidateAndRefetch, invalidateJunctionCaches } = usePaperCacheHelpers(userId, serverFilterParams, serverSortParams);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { normalize } = useNormalizationWorker();

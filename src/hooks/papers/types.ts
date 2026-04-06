@@ -22,8 +22,9 @@ export type CacheSnapshot = {
 };
 
 /**
- * Server-side filter parameters passed from useFilterState → usePapers.
- * These control the PostgREST query predicates and sort order.
+ * Server-side filter parameters (filter predicates only — no sort).
+ * Used in query keys for count, filtered IDs, keyword options, etc.
+ * Changing sort order does NOT invalidate these caches.
  */
 export interface ServerFilterParams {
   /**
@@ -38,6 +39,14 @@ export interface ServerFilterParams {
   yearTo: number | null;
   /** Resolved study type subtypes (not group name). */
   studyTypes: string[] | null;
+}
+
+/**
+ * Server-side sort parameters. Separated from filter params so that
+ * changing sort order does not invalidate filter-derived caches
+ * (count, filtered IDs, keyword options).
+ */
+export interface ServerSortParams {
   /** PostgREST column name for sorting. */
   sortColumn: string | null;
   sortAscending: boolean | null;

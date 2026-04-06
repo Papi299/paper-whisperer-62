@@ -1,10 +1,11 @@
 import { useState, useCallback } from "react";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
-import { ServerFilterParams, areServerFiltersReady } from "./papers/types";
+import { ServerFilterParams, ServerSortParams, areServerFiltersReady } from "./papers/types";
 import { buildPapersQuery } from "@/lib/buildPapersQuery";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { fetchInChunks } from "@/lib/fetchInChunks";
 import { exportToCSV, exportToRIS, exportToBibTeX } from "@/lib/exportUtils";
+import { timedQueryFn } from "@/lib/queryTiming";
 import { useToast } from "@/hooks/use-toast";
 
 /** Select only the fields needed for export — no attachments. */
@@ -14,6 +15,7 @@ const EXPORT_SELECT =
 interface UseExportPapersArgs {
   userId: string | undefined;
   serverFilterParams: ServerFilterParams;
+  serverSortParams: ServerSortParams;
   tags: Tag[];
   projects: Project[];
   tagsLoading: boolean;
@@ -23,6 +25,7 @@ interface UseExportPapersArgs {
 export function useExportPapers({
   userId,
   serverFilterParams,
+  serverSortParams,
   tags,
   projects,
   tagsLoading,
@@ -58,9 +61,11 @@ export function useExportPapers({
 
       try {
         // 1. Fetch all matching papers via paginated helper (fixes >1000-row truncation)
-        const rawPapers = await fetchAllPages<Paper>(
-          () => buildPapersQuery(userId, serverFilterParams, EXPORT_SELECT),
-        );
+        const rawPapers = await timedQueryFn("export.fetchAllPages", () =>
+          fetchAllPages<Paper>(
+            () => buildPapersQuery(userId, serverFilterParams, serverSortParams, EXPORT_SELECT),
+          ),
+        )();
 
         if (rawPapers.length === 0) {
           toast({ title: "No papers to export", description: "No papers match current filters." });
@@ -131,7 +136,7 @@ export function useExportPapers({
         setIsExporting(false);
       }
     },
-    [userId, serverFilterParams, tags, projects, toast],
+    [userId, serverFilterParams, serverSortParams, tags, projects, toast],
   );
 
   return { exportPapers, isExporting, isExportReady };
