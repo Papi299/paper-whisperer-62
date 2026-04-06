@@ -61,12 +61,13 @@ export function usePapers(
         return { papers: [], hasMore: false };
       }
 
-      // Build query with shared predicate builder (display needs attachments)
+      // Build query with shared predicate builder (display needs attachments).
+      // Explicit column list excludes search_vector (tsvector, ~4KB/row, unused by client).
       const query = buildPapersQuery(
         userId!,
         activeFilterParams,
         activeSortParams,
-        "*, paper_attachments(id, file_name, file_path, file_type)",
+        "id, user_id, title, authors, year, journal, pmid, doi, abstract, study_type, raw_study_type, statistical_methods, keywords, raw_keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url, tldr, insert_order, created_at, updated_at, urls, paper_attachments(id, file_name, file_path, file_type)",
       );
 
       const { data: papersData, error: papersError } = await query.range(from, to);
