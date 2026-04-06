@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import type { ServerFilterParams } from "@/hooks/papers/types";
+import type { ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
 
 /**
  * Apply shared filter predicates to a PostgREST query builder.
@@ -7,10 +7,9 @@ import type { ServerFilterParams } from "@/hooks/papers/types";
  */
 function applyFilterPredicates<T extends ReturnType<typeof supabase.from>>(
   query: T,
-  serverFilterParams: ServerFilterParams,
+  filterParams: ServerFilterParams,
 ): T {
-  const { filterPaperIds, yearFrom, yearTo, studyTypes } =
-    serverFilterParams;
+  const { filterPaperIds, yearFrom, yearTo, studyTypes } = filterParams;
 
   // ID-based filtering (pre-resolved from junction queries + search)
   if (filterPaperIds !== null && filterPaperIds !== undefined) {
@@ -30,7 +29,7 @@ function applyFilterPredicates<T extends ReturnType<typeof supabase.from>>(
 }
 
 /**
- * Build a PostgREST query for papers with server-side filter predicates.
+ * Build a PostgREST query for papers with server-side filter predicates + sort.
  * Shared between the display query (usePapers) and export query (useExportPapers).
  *
  * Caller is responsible for:
@@ -40,13 +39,14 @@ function applyFilterPredicates<T extends ReturnType<typeof supabase.from>>(
  */
 export function buildPapersQuery(
   userId: string,
-  serverFilterParams: ServerFilterParams,
+  filterParams: ServerFilterParams,
+  sortParams: ServerSortParams,
   select: string,
 ) {
-  const { sortColumn, sortAscending } = serverFilterParams;
+  const { sortColumn, sortAscending } = sortParams;
 
   let query = supabase.from("papers").select(select).eq("user_id", userId);
-  query = applyFilterPredicates(query, serverFilterParams);
+  query = applyFilterPredicates(query, filterParams);
 
   // Sort: server-side is the single source of truth
   if (sortColumn !== null && sortAscending !== null) {
@@ -64,14 +64,14 @@ export function buildPapersQuery(
  */
 export function buildPapersCountQuery(
   userId: string,
-  serverFilterParams: ServerFilterParams,
+  filterParams: ServerFilterParams,
 ) {
   let query = supabase
     .from("papers")
     .select("*", { count: "exact", head: true })
     .eq("user_id", userId);
 
-  query = applyFilterPredicates(query, serverFilterParams);
+  query = applyFilterPredicates(query, filterParams);
 
   return query;
 }
