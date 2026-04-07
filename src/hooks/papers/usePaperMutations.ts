@@ -166,6 +166,11 @@ export function usePaperMutations(
         }
       }
 
+      // If abstract was updated, invalidate its on-demand cache entry
+      if ('abstract' in paperUpdates) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.papers.abstract(paperId) });
+      }
+
       // Post-confirm: invalidate to fix any filter membership changes
       // (e.g., year/study_type edit may take paper out of active filter)
       removeStaleListCaches();

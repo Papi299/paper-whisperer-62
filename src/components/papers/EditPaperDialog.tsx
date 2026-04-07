@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { useAbstract } from "@/hooks/useAbstract";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -75,6 +76,9 @@ export function EditPaperDialog({
 
   const { toast } = useToast();
 
+  // Fetch abstract on demand — only when dialog is open
+  const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(open && paper ? paper.id : null);
+
   const { attachments, uploading, uploadAttachments, deleteAttachment } = useAttachments(
     paper?.id,
     userId,
@@ -89,6 +93,8 @@ export function EditPaperDialog({
       setJournal(paper.journal || "");
       setPmid(paper.pmid || "");
       setDoi(paper.doi || "");
+      // abstract is loaded on demand via useAbstract; use paper.abstract as fallback
+      // if it's already available (e.g. from a previous fetch cached on the paper object)
       setAbstract(paper.abstract || "");
       setStudyType(paper.study_type || "");
       setStatisticalMethods(paper.statistical_methods || "");
@@ -100,6 +106,13 @@ export function EditPaperDialog({
       setSelectedTagIds(paper.tags.map((t) => t.id));
     }
   }, [paper]);
+
+  // When the on-demand abstract arrives, populate the form field
+  useEffect(() => {
+    if (fetchedAbstract !== undefined && fetchedAbstract !== null && paper) {
+      setAbstract(fetchedAbstract);
+    }
+  }, [fetchedAbstract, paper]);
 
   const handleSave = async () => {
     if (!paper) return;
@@ -320,7 +333,8 @@ export function EditPaperDialog({
                 value={abstract}
                 onChange={(e) => setAbstract(e.target.value)}
                 rows={5}
-                disabled={loading}
+                disabled={loading || abstractLoading}
+                placeholder={abstractLoading ? "Loading abstract…" : ""}
               />
             </div>
 

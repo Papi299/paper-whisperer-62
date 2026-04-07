@@ -30,6 +30,7 @@ import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { escapeRegExp } from "@/lib/textUtils";
+import { useAbstract } from "@/hooks/useAbstract";
 
 /** Decode HTML entities (e.g. &#xf8; → ø) using a temporary textarea */
 function decodeHtml(html: string): string {
@@ -144,6 +145,8 @@ interface PaperListProps {
   findMatchingKeywords: (abstract: string | null) => string[];
   findMatchingStudyTypes?: undefined;
   poolStudyTypes?: undefined;
+  /** Pool keywords for highlighting in expanded abstract view. */
+  poolKeywordStrings?: string[];
   visibleColumns: ColumnId[];
   columnWidths: { [key: string]: number };
   onColumnResize: (columnId: ColumnId, width: number) => void;
@@ -183,6 +186,7 @@ export function PaperList({
   findMatchingKeywords,
   findMatchingStudyTypes,
   poolStudyTypes,
+  poolKeywordStrings,
   visibleColumns,
   columnWidths,
   onColumnResize,
@@ -397,8 +401,9 @@ export function PaperList({
         {virtualItems.map((virtualRow) => {
           const paper = papers[virtualRow.index];
           const isExpanded = expandedRows.has(paper.id);
-          const matchedPoolKeywords = findMatchingKeywords(paper.abstract);
-          const combinedKeywords = getCombinedKeywords(paper, matchedPoolKeywords);
+          // Pool keywords are already persisted into paper.keywords via enrichment.
+          // Pass [] for matchedPoolKeywords in collapsed view (no runtime abstract scan).
+          const combinedKeywords = getCombinedKeywords(paper, []);
           return (
             <PaperRow
               key={paper.id}
@@ -407,7 +412,7 @@ export function PaperList({
               measureElement={rowVirtualizer.measureElement}
               isExpanded={isExpanded}
               onToggleExpand={toggleRow}
-              matchedPoolKeywords={matchedPoolKeywords}
+              poolKeywordStrings={poolKeywordStrings ?? []}
               combinedKeywords={combinedKeywords}
               isVisible={isVisible}
               getWidth={getWidth}
@@ -479,7 +484,8 @@ interface PaperRowProps {
   paper: PaperWithTags;
   isExpanded: boolean;
   onToggleExpand: (id: string) => void;
-  matchedPoolKeywords: string[];
+  /** Pool keyword strings for highlighting in expanded abstract. */
+  poolKeywordStrings: string[];
   combinedKeywords: { keyword: string; displayName: string; source: 'pool' | 'pubmed' | 'mesh' | 'substance' }[];
   isVisible: (col: ColumnId) => boolean;
   getWidth: (col: ColumnId) => number;
@@ -503,7 +509,7 @@ function PaperRow({
   paper,
   isExpanded,
   onToggleExpand,
-  matchedPoolKeywords,
+  poolKeywordStrings,
   combinedKeywords,
   isVisible,
   getWidth,
@@ -522,6 +528,9 @@ function PaperRow({
   onAnalyzePaper,
   isAnalyzing,
 }: PaperRowProps) {
+  // On-demand abstract: only fetch when the row is expanded
+  const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(isExpanded ? paper.id : null);
+
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
       <TableRow className={isSelected ? "bg-orange-100/50" : "group hover:bg-orange-600 hover:text-white transition-colors cursor-default"}>
@@ -536,7 +545,7 @@ function PaperRow({
         </TableCell>
         {/* Expand/Collapse chevron */}
         <TableCell className="w-[36px] px-1">
-          {paper.abstract ? (
+          {paper.has_abstract ? (
             <Button
               variant="ghost"
               size="icon"
@@ -759,8 +768,8 @@ function PaperRow({
                 size="icon"
                 className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20"
                 onClick={() => onAnalyzePaper(paper)}
-                disabled={isAnalyzing || !paper.abstract}
-                title={paper.abstract ? "AI Analyze" : "No abstract to analyze"}
+                disabled={isAnalyzing || !paper.has_abstract}
+                title={paper.has_abstract ? "AI Analyze" : "No abstract to analyze"}
               >
                 {isAnalyzing ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -784,15 +793,23 @@ function PaperRow({
           </div>
         </TableCell>
       </TableRow>
-      {/* Expanded abstract row */}
-      {isExpanded && paper.abstract && (
+      {/* Expanded abstract row — abstract loaded on demand */}
+      {isExpanded && (
         <tr>
           <td colSpan={visibleColumnCount}>
             <div className="px-6 py-4 bg-muted/50 border-t border-border">
               <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">Abstract</p>
-              <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-                <HighlightedAbstract text={paper.abstract} keywords={matchedPoolKeywords} />
-              </p>
+              {abstractLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading abstract…
+                </div>
+              ) : fetchedAbstract ? (
+                <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+                  <HighlightedAbstract text={fetchedAbstract} keywords={poolKeywordStrings} />
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">No abstract available.</p>
+              )}
             </div>
           </td>
         </tr>

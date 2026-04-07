@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
@@ -26,6 +27,7 @@ import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
 import { Plus, Loader2, Layers, Sparkles } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAbstract, fetchAbstractsBatch } from "@/hooks/useAbstract";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
@@ -67,6 +69,7 @@ export function Dashboard() {
 function DashboardContent() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   // Pool data from context
   const {
@@ -269,11 +272,18 @@ function DashboardContent() {
     !type || type.trim() === "" || type.trim().toLowerCase() === "journal article";
 
   const handleAnalyzePaper = useCallback(async (paper: PaperWithTags) => {
-    if (!paper.abstract) return;
+    if (!paper.has_abstract) return;
     setAnalyzingPaperId(paper.id);
     try {
+      // Fetch abstract on demand (uses cache if already loaded)
+      const abstract = await fetchAbstract(paper.id, queryClient);
+      if (!abstract) {
+        toast({ title: "No abstract", description: "Paper has no abstract to analyze.", variant: "destructive" });
+        return;
+      }
+
       const { data, error } = await supabase.functions.invoke("analyze-paper", {
-        body: { title: paper.title, abstract: paper.abstract },
+        body: { title: paper.title, abstract },
       });
       if (error) throw error;
 
@@ -308,11 +318,11 @@ function DashboardContent() {
     } finally {
       setAnalyzingPaperId(null);
     }
-  }, [updatePaper, toast]);
+  }, [updatePaper, queryClient, toast]);
 
   const handleBulkAnalyze = useCallback(async () => {
     const selectedPapers = papers.filter(p => selectedPaperIds.has(p.id));
-    const papersToAnalyze = selectedPapers.filter(p => p.abstract); // skip papers without abstract
+    const papersToAnalyze = selectedPapers.filter(p => p.has_abstract); // skip papers without abstract
     if (papersToAnalyze.length === 0) {
       toast({ title: "No papers to analyze", description: "Selected papers have no abstracts.", variant: "destructive" });
       return;
@@ -323,11 +333,22 @@ function DashboardContent() {
     let successCount = 0;
     let failCount = 0;
 
+    // Batch-fetch all abstracts in one query (avoids N+1)
+    const abstractMap = await fetchAbstractsBatch(
+      papersToAnalyze.map(p => p.id),
+      queryClient,
+    );
+
     for (const paper of papersToAnalyze) {
       setBulkAnalyzeProgress(prev => ({ ...prev, current: prev.current + 1 }));
+      const abstract = abstractMap.get(paper.id);
+      if (!abstract) {
+        failCount++;
+        continue;
+      }
       try {
         const { data, error } = await supabase.functions.invoke("analyze-paper", {
-          body: { title: paper.title, abstract: paper.abstract },
+          body: { title: paper.title, abstract },
         });
         if (error) throw error;
 
@@ -497,6 +518,7 @@ function DashboardContent() {
             sortKey={sortKey}
             sortDirection={sortDirection}
             onSort={handleSort}
+            poolKeywordStrings={poolKeywords.map(pk => pk.keyword)}
             onAnalyzePaper={handleAnalyzePaper}
             analyzingPaperId={analyzingPaperId}
             hasNextPage={hasNextPage}

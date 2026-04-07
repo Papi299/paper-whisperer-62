@@ -521,10 +521,17 @@ export function useBulkMutations(
     async (pool: StudyTypePoolEntry[]) => {
       if (!userId || papers.length === 0) return;
 
+      // Fetch own data including abstract — the list cache no longer carries abstract
+      const { data: freshPapers, error: fetchError } = await supabase
+        .from("papers")
+        .select("id, title, abstract, study_type, raw_study_type")
+        .eq("user_id", userId);
+      if (fetchError) throw fetchError;
+
       // Compute updates first — early return if nothing changed
       const updates: { id: string; newType: string }[] = [];
 
-      for (const paper of papers) {
+      for (const paper of (freshPapers || [])) {
         const rawFallback = paper.raw_study_type ?? paper.study_type;
         const newType = evaluateStudyType(paper.title, paper.abstract, rawFallback, pool);
         const current = (paper.study_type || "").trim();
