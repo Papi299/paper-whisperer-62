@@ -62,12 +62,14 @@ export function usePapers(
       }
 
       // Build query with shared predicate builder (display needs attachments).
-      // Explicit column list excludes search_vector (tsvector, ~4KB/row, unused by client).
+      // Explicit column list excludes search_vector (~4KB/row) and abstract (~3KB/row).
+      // abstract is loaded on demand via useAbstract when expanding, editing, or analyzing.
+      // has_abstract (stored generated boolean) lets the UI toggle expand/analyze buttons.
       const query = buildPapersQuery(
         userId!,
         activeFilterParams,
         activeSortParams,
-        "id, user_id, title, authors, year, journal, pmid, doi, abstract, study_type, raw_study_type, statistical_methods, keywords, raw_keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url, tldr, insert_order, created_at, updated_at, urls, paper_attachments(id, file_name, file_path, file_type)",
+        "id, user_id, title, authors, year, journal, pmid, doi, has_abstract, study_type, raw_study_type, statistical_methods, keywords, raw_keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url, tldr, insert_order, created_at, updated_at, urls, paper_attachments(id, file_name, file_path, file_type)",
       );
 
       const { data: papersData, error: papersError } = await query.range(from, to);

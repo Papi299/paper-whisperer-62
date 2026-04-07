@@ -135,6 +135,7 @@ export type Database = {
           created_at: string
           doi: string | null
           drive_url: string | null
+          has_abstract: boolean
           id: string
           journal: string | null
           journal_url: string | null

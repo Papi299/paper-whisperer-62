@@ -39,6 +39,9 @@ export const queryKeys = {
     /** All distinct study types across ALL user papers (unfiltered — for Sidebar import). */
     allStudyTypes: (userId: string) =>
       ["papers", userId, "allStudyTypes"] as const,
+    /** Single paper abstract — fetched on demand (expand, edit, analyze). */
+    abstract: (paperId: string) =>
+      ["papers", "abstract", paperId] as const,
   },
   projects: {
     all: (userId: string) => ["projects", userId] as const,

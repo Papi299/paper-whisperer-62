@@ -41,7 +41,12 @@ export interface Paper {
   journal: string | null;
   pmid: string | null;
   doi: string | null;
-  abstract: string | null;
+  /** Full abstract text. Excluded from the base list query for payload optimization;
+   *  fetched on demand when expanding a row, editing, or analyzing. */
+  abstract?: string | null;
+  /** Lightweight boolean derived from `abstract IS NOT NULL` (stored generated column).
+   *  Included in the base list query so the UI knows whether expand/analyze are available. */
+  has_abstract?: boolean;
   study_type: string | null;
   raw_study_type: string | null;
   statistical_methods: string | null;
