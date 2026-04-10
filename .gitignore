@@ -33,3 +33,6 @@ dist-ssr
 e2e/.auth/user.json
 test-results/
 playwright-report/
+
+# Supabase CLI cache
+supabase/.temp/
