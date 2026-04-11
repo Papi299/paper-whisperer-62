@@ -27,6 +27,10 @@ Both edge functions (`analyze-paper` and `fetch-paper-metadata`) had a logging h
 
 PubMed API key storage moved from browser `localStorage` to the server-side `profiles` table. The edge function (`fetch-paper-metadata`) now reads the key directly from the DB after authenticating, so the client never sends the key in request bodies. Settings dialog updated for async operations with loading states. See [migration-history.md](migration-history.md) for details.
 
+## Manual-add dialog UX fix (post-API key migration)
+
+Fixed a bug where the Add Paper dialog would close even when manual paper creation failed (validation errors, duplicate detection, DB errors). The dialog now stays open with the user's data preserved on failure, so they can correct issues and retry. `addPaperManually` returns `boolean` (true = success, false = failure); the dialog only calls `resetAndClose()` on success.
+
 **Remaining follow-up work:**
 - Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
 - Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)

@@ -51,7 +51,7 @@ interface AddPaperDialogProps {
   onSubmitManual?: (
     paperData: ManualPaperData,
     options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   onBulkImport?: (
     identifiers: string[],
     onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
@@ -232,8 +232,10 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
 
     setLoading(true);
     try {
-      await onSubmitManual(manualData, getImportOptions());
-      resetAndClose();
+      const success = await onSubmitManual(manualData, getImportOptions());
+      if (success) {
+        resetAndClose();
+      }
     } finally {
       setLoading(false);
     }

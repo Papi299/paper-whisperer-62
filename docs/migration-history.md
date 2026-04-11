@@ -115,6 +115,18 @@ Chronological record of the read-path performance track (March–April 2026).
 **Behavior change:** The API key is no longer stored in or read from `localStorage`. Existing keys in `localStorage` are orphaned (harmless). Users must re-enter their API key in the Settings dialog after this migration. The Settings dialog now shows a loading spinner while fetching the key from the server.
 **Verification:** Build passes, all 147 unit tests pass. Edge function deployed. Migration applied to remote DB.
 
+## Manual-add dialog UX fix
+
+**Date:** April 2026
+**What:** Fixed bug where Add Paper dialog closed on manual-add failure, losing user input.
+**Root cause:** `addPaperManually` returned `void` (never threw); `handleManualSubmit` unconditionally called `resetAndClose()`.
+**Fix:** `addPaperManually` now returns `Promise<boolean>` — `false` on all failure paths (no userId, invalid year, invalid PMID, duplicate, DB error), `true` on success. Dialog's `handleManualSubmit` only calls `resetAndClose()` when result is `true`.
+**Files changed:**
+- `src/hooks/papers/usePaperMutations.ts` — `addPaperManually` returns `boolean`
+- `src/components/papers/AddPaperDialog.tsx` — `onSubmitManual` prop type updated, conditional close
+- `src/hooks/papers/__tests__/usePaperMutations.test.ts` — 7 tests covering all return-value paths
+**No migration needed.** No DB changes.
+
 ## Evidence gathering (no PR — investigation only)
 
 **Date:** April 2026
