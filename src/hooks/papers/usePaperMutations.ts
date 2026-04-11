@@ -35,22 +35,22 @@ export function usePaperMutations(
       keywords: string;
       driveUrl: string;
       pubmedUrl?: string;
-    }, options?: { targetProjectIds?: string[]; targetTagIds?: string[] }) => {
-      if (!userId) return;
+    }, options?: { targetProjectIds?: string[]; targetTagIds?: string[] }): Promise<boolean> => {
+      if (!userId) return false;
 
       const authorsArray = paperData.authors.split(",").map((a) => a.trim()).filter((a) => a.length > 0);
       const keywordsArray = paperData.keywords.split(",").map((k) => k.trim()).filter((k) => k.length > 0);
       const yearNum = paperData.year ? parseInt(paperData.year) : null;
       if (yearNum !== null && (isNaN(yearNum) || yearNum < 1800 || yearNum > new Date().getFullYear() + 1)) {
         toast({ title: "Invalid year", description: `Year must be between 1800 and ${new Date().getFullYear() + 1}.`, variant: "destructive" });
-        return;
+        return false;
       }
 
       const manualTitle = paperData.title.trim();
       const manualPmid = paperData.pmid.trim();
       if (manualPmid && !/^\d+$/.test(manualPmid)) {
         toast({ title: "Invalid PMID", description: "PMID must be a number (e.g., 12345678).", variant: "destructive" });
-        return;
+        return false;
       }
       const manualDoi = paperData.doi.trim();
       const isDuplicate = papers.some((existing) => {
@@ -62,7 +62,7 @@ export function usePaperMutations(
 
       if (isDuplicate) {
         toast({ title: "Duplicate paper", description: `"${manualTitle}" already exists in the index.`, variant: "destructive" });
-        return;
+        return false;
       }
 
       const rawPaper: RawPaperData = {
@@ -96,7 +96,7 @@ export function usePaperMutations(
         } else {
           toast({ title: "Error adding paper", description: error.message, variant: "destructive" });
         }
-        return;
+        return false;
       }
 
       const paperId = (insertedPaper as Paper).id;
@@ -113,6 +113,7 @@ export function usePaperMutations(
       // Invalidate to refetch with current filters.
       invalidateAndRefetch();
       toast({ title: "Paper added manually" });
+      return true;
     },
     [userId, papers, projects, tags, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
   );
