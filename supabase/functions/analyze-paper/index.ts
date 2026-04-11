@@ -61,7 +61,7 @@ async function fetchWithRetry(
       // Network error or timeout
       if (attempt < maxRetries) {
         const delay = baseDelayMs * Math.pow(2, attempt);
-        console.log(`fetchWithRetry: attempt ${attempt + 1}/${maxRetries + 1} threw ${err.message}, retrying in ${delay}ms`);
+        console.log(`fetchWithRetry: attempt ${attempt + 1}/${maxRetries + 1} network error, retrying in ${delay}ms`);
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -90,7 +90,7 @@ Deno.serve(async (req) => {
         { status: 401, headers: jsonHeaders },
       );
     }
-    console.log("1a. Auth header present:", authHeader.substring(0, 20) + "...");
+    console.log("1a. Auth header present");
 
     console.log("2. Calling Supabase getUser");
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
@@ -101,7 +101,7 @@ Deno.serve(async (req) => {
 
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError) {
-      console.log("2a. Auth error:", authError.message);
+      console.log("2a. Auth failed");
       return new Response(
         JSON.stringify({ error: "Auth failed: " + authError.message }),
         { status: 401, headers: jsonHeaders },
@@ -114,7 +114,7 @@ Deno.serve(async (req) => {
         { status: 401, headers: jsonHeaders },
       );
     }
-    console.log("2b. User authenticated:", user.id);
+    console.log("2b. User authenticated");
 
     // ── Step 2: Parse input ──
     console.log("3. Parsing request body");
@@ -126,7 +126,7 @@ Deno.serve(async (req) => {
         { status: 400, headers: jsonHeaders },
       );
     }
-    console.log("3a. Title:", (title || "").substring(0, 50), "| Abstract length:", abstract.length);
+    console.log("3a. Input received, abstract length:", abstract.length);
 
     // ── Step 3: Call Gemini ──
     console.log("4. Checking Gemini API key");
@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
     if (!geminiKey) {
       throw new Error("GEMINI_API_KEY not configured in Supabase secrets");
     }
-    console.log("4a. Gemini key present, length:", geminiKey.length);
+    console.log("4a. Gemini key present");
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiKey}`;
     console.log("5. Calling Gemini API");
@@ -178,9 +178,8 @@ CRITICAL RULES:
     console.log("5a. Gemini response status:", geminiRes.status);
 
     if (!geminiRes.ok) {
-      const errorText = await geminiRes.text();
-      console.log("5b. Gemini error body:", errorText);
-      throw new Error("Gemini API Error (" + geminiRes.status + "): " + errorText);
+      console.log("5b. Gemini error, status:", geminiRes.status);
+      throw new Error("Gemini API Error (" + geminiRes.status + ")");
     }
 
     const geminiData = await geminiRes.json();
@@ -188,16 +187,16 @@ CRITICAL RULES:
 
     const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!rawText) {
-      console.log("6a. Empty Gemini response. Full data:", JSON.stringify(geminiData));
+      console.log("6a. Empty Gemini response (no candidates/text)");
       throw new Error("Empty response from Gemini");
     }
-    console.log("6b. Raw Gemini text:", rawText.substring(0, 200));
+    console.log("6b. Gemini response received, length:", rawText.length);
 
     let cleanText = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
     const startIndex = cleanText.indexOf("{");
     const endIndex = cleanText.lastIndexOf("}");
     if (startIndex === -1 || endIndex === -1) {
-      console.log("6c. No JSON object found in:", rawText);
+      console.log("6c. No JSON object found in Gemini response");
       throw new Error("Gemini response did not contain valid JSON");
     }
     cleanText = cleanText.substring(startIndex, endIndex + 1);
@@ -205,7 +204,7 @@ CRITICAL RULES:
     try {
       parsed = JSON.parse(cleanText);
     } catch (parseErr) {
-      console.log("6c. JSON parse failed. Raw text:", rawText);
+      console.log("6c. JSON parse failed");
       throw new Error("Failed to parse Gemini JSON: " + parseErr.message);
     }
     console.log("7. Success! Returning parsed result");
@@ -219,7 +218,7 @@ CRITICAL RULES:
       { status: 200, headers: jsonHeaders },
     );
   } catch (err) {
-    console.error("analyze-paper CAUGHT ERROR:", err);
+    console.error("analyze-paper error:", err instanceof Error ? err.message : "Unknown error");
     return new Response(
       JSON.stringify({ error: "Analysis failed. Please try again later." }),
       { status: 500, headers: jsonHeaders },

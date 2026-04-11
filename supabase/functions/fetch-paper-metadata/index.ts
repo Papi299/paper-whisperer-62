@@ -110,8 +110,7 @@ async function fetchWithRetry(
       if (attempt < maxRetries) {
         const delay = baseDelayMs * Math.pow(2, attempt);
         console.warn(
-          `Network error on attempt ${attempt + 1}, retrying in ${delay}ms...`,
-          error
+          `Network error on attempt ${attempt + 1}, retrying in ${delay}ms...`
         );
         await sleep(delay);
       }
@@ -228,7 +227,7 @@ async function fetchFromPubMed(
       source: "pubmed",
     };
   } catch (error) {
-    console.error("PubMed fetch error:", error);
+    console.error("PubMed fetch error:", error instanceof Error ? error.message : "Unknown error");
     return null;
   }
 }
@@ -348,7 +347,7 @@ async function fetchFromCrossrefByDoi(
     const data = await response.json();
     return mapCrossrefToSchema(data.message, doi);
   } catch (error) {
-    console.error("Crossref DOI fetch error:", error);
+    console.error("Crossref DOI fetch error:", error instanceof Error ? error.message : "Unknown error");
     return null;
   }
 }
@@ -369,7 +368,7 @@ async function searchCrossrefByTitle(
     if (!items || items.length === 0) return null;
     return mapCrossrefToSchema(items[0], title);
   } catch (error) {
-    console.error("Crossref title search error:", error);
+    console.error("Crossref title search error:", error instanceof Error ? error.message : "Unknown error");
     return null;
   }
 }
@@ -396,9 +395,7 @@ async function fetchByDoi(doi: string, apiKey?: string): Promise<PaperMetadata |
   }
 
   // Fallback to Crossref
-  console.log(
-    `PubMed unavailable for DOI ${cleanedDoi}, falling back to Crossref`
-  );
+  console.log("PubMed unavailable for DOI, falling back to Crossref");
   const crossrefResult = await fetchFromCrossrefByDoi(cleanedDoi);
   if (!crossrefResult) return null;
 
@@ -432,9 +429,7 @@ async function fetchByTitle(title: string, apiKey?: string): Promise<PaperMetada
     if (pubmedResult) return pubmedResult;
   }
 
-  console.log(
-    `PubMed unavailable for title "${title}", falling back to Crossref`
-  );
+  console.log("PubMed unavailable for title, falling back to Crossref");
   return await searchCrossrefByTitle(title);
 }
 
@@ -459,7 +454,7 @@ async function fetchPaperMetadata(
     }
 
     console.log(
-      `Processing identifier ${i + 1}/${identifiers.length}: ${identifier} (type: ${type})`
+      `Processing identifier ${i + 1}/${identifiers.length} (type: ${type})`
     );
 
     switch (type) {
@@ -526,7 +521,7 @@ Deno.serve(async (req) => {
         { status: 401, headers: jsonHeaders },
       );
     }
-    console.log(`Authenticated user: ${user.id}`);
+    console.log("User authenticated");
 
     // ── Step 2: Parse & validate input ──
     const { identifiers, api_key } = await req.json();
@@ -577,7 +572,7 @@ Deno.serve(async (req) => {
       headers: jsonHeaders,
     });
   } catch (error: unknown) {
-    console.error("Error:", error);
+    console.error("fetch-paper-metadata error:", error instanceof Error ? error.message : "Unknown error");
     return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,
       headers: jsonHeaders,
