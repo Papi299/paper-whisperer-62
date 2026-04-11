@@ -68,6 +68,34 @@ Chronological record of the read-path performance track (March–April 2026).
 **Why:** Abstracts are ~500 bytes each. At 400 papers, they add ~200KB to the list payload but are only needed when a user expands a row or runs analysis. On-demand loading eliminated this from the initial load.
 **Migration:** `20260406020000_add_has_abstract_column.sql`
 
+## Edge function logging hardening (no PR — security hardening only)
+
+**Date:** April 2026
+**What:** Redacted or removed all sensitive data from `console.log`/`console.warn`/`console.error` statements in both Supabase edge functions (`analyze-paper/index.ts` and `fetch-paper-metadata/index.ts`).
+**Why:** Audit found that logs were leaking auth token fragments, user IDs, paper titles/identifiers, raw Gemini API responses containing paper analysis content, and full error objects with stack traces. All of this was visible in Supabase dashboard logs.
+**Files changed:**
+- `supabase/functions/analyze-paper/index.ts` — 14 log statements redacted/cleaned
+- `supabase/functions/fetch-paper-metadata/index.ts` — 8 log statements redacted/cleaned
+**What was removed/redacted:**
+- Auth header substring (was logging first 20 chars of JWT)
+- User IDs (was logging `user.id`)
+- Paper titles, identifiers, and abstract content
+- Gemini API key length
+- Raw Gemini response text (on success and error paths)
+- Full Gemini error response bodies
+- Full error objects (replaced with `err.message` extraction)
+- DOI values in fallback log messages
+**What was preserved:**
+- All flow step markers (numbered 1–7 in analyze-paper)
+- Retry attempt counts and HTTP status codes
+- Generic auth success/failure indicators
+- Abstract length (non-identifying metadata)
+- Gemini response text length (non-identifying)
+- Identifier type and progress counter (e.g., "3/10 (type: doi)")
+**Behavior change:** None. Auth flow, retry logic, request/response payloads, error responses to clients, and all business logic are unchanged. Only log verbosity was reduced. One minor detail: in `analyze-paper`, the Gemini error-path previously consumed the response body via `await geminiRes.text()` and appended it to the thrown Error message; now neither happens. The client-facing response is unchanged (hardcoded `"Analysis failed. Please try again later."`).
+**Verification:** Build passes, all 147 unit tests pass. No existing Playwright tests exercise the edge functions directly (existing E2E tests cover only dialog UI mechanics). Verification that sensitive data no longer appears in logs was done by code inspection only — runtime log output was not directly inspected (would require deploying functions or running `supabase functions serve`).
+**No migration file:** This change does not affect the database.
+
 ## Evidence gathering (no PR — investigation only)
 
 **Date:** April 2026

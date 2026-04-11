@@ -19,6 +19,15 @@ The entire **read-path performance track** is done:
 9. **Short search bug fix** (#64) — correct jsonb handling in RPC
 10. **Abstract on-demand loading** (#65) — `has_abstract` boolean column, lazy abstract fetch
 
+## Edge function logging hardening (post-PR #65)
+
+Both edge functions (`analyze-paper` and `fetch-paper-metadata`) had a logging hardening pass. All sensitive data (auth tokens, user IDs, paper titles/content, raw API responses, full error objects) was removed from logs. Only operational markers (flow steps, retry counts, HTTP status codes, generic success/failure) remain. No behavior changes. See [migration-history.md](migration-history.md) for details.
+
+**Remaining follow-up work outside this task:**
+- PubMed API key is stored in plaintext `localStorage` — should be migrated to server-side storage (profiles table)
+- Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
+- Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)
+
 ## What is stable — do not reopen casually
 
 - The read-path architecture (server-side filter/sort/paginate/lazy-load)
