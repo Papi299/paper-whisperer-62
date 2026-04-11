@@ -8,7 +8,6 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import type { PaperMetadata } from "@/types/database";
-import { getPubmedApiKey } from "@/hooks/useSettings";
 
 /** Maximum identifiers per single edge function invocation. */
 const EDGE_BATCH_SIZE = 10;
@@ -50,13 +49,8 @@ async function invokeBatch(
   batch: string[],
   accessToken: string
 ): Promise<{ data: unknown; error: Error | null }> {
-  const apiKey = getPubmedApiKey();
-  const body = apiKey
-    ? { identifiers: batch, api_key: apiKey }
-    : { identifiers: batch };
-
   const first = await supabase.functions.invoke("fetch-paper-metadata", {
-    body,
+    body: { identifiers: batch },
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 
@@ -82,7 +76,7 @@ async function invokeBatch(
 
       // Retry with the explicitly fresh token
       return supabase.functions.invoke("fetch-paper-metadata", {
-        body,
+        body: { identifiers: batch },
         headers: {
           Authorization: `Bearer ${refreshData.session.access_token}`,
         },

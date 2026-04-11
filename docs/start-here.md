@@ -23,8 +23,11 @@ The entire **read-path performance track** is done:
 
 Both edge functions (`analyze-paper` and `fetch-paper-metadata`) had a logging hardening pass. All sensitive data (auth tokens, user IDs, paper titles/content, raw API responses, full error objects) was removed from logs. Only operational markers (flow steps, retry counts, HTTP status codes, generic success/failure) remain. No behavior changes. See [migration-history.md](migration-history.md) for details.
 
-**Remaining follow-up work outside this task:**
-- PubMed API key is stored in plaintext `localStorage` — should be migrated to server-side storage (profiles table)
+## PubMed API key migration (post-logging hardening)
+
+PubMed API key storage moved from browser `localStorage` to the server-side `profiles` table. The edge function (`fetch-paper-metadata`) now reads the key directly from the DB after authenticating, so the client never sends the key in request bodies. Settings dialog updated for async operations with loading states. See [migration-history.md](migration-history.md) for details.
+
+**Remaining follow-up work:**
 - Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
 - Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)
 
