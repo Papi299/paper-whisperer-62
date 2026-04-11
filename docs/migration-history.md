@@ -96,6 +96,25 @@ Chronological record of the read-path performance track (March–April 2026).
 **Verification:** Build passes, all 147 unit tests pass. No existing Playwright tests exercise the edge functions directly (existing E2E tests cover only dialog UI mechanics). Verification that sensitive data no longer appears in logs was done by code inspection only — runtime log output was not directly inspected (would require deploying functions or running `supabase functions serve`).
 **No migration file:** This change does not affect the database.
 
+## PubMed API key migration to server-side storage
+
+**Date:** April 2026
+**What:** Moved PubMed API key storage from browser `localStorage` to the `profiles` table in Supabase. The edge function now reads the key server-side after authenticating the request, eliminating client-side key handling entirely.
+**Why:** Storing API keys in `localStorage` is a security concern — the key was visible in browser dev tools, persisted across sessions without auth, and was sent in the request body to the edge function. Server-side storage keeps the key within the authenticated backend.
+**Migration:** `20260411010000_add_pubmed_api_key_to_profiles.sql`
+- Adds `pubmed_api_key TEXT DEFAULT NULL` column to `profiles`
+- Also recreates the `profiles` table idempotently (it was missing from the remote DB despite its creation migration being marked as applied)
+- Recreates RLS policies, triggers, and the `handle_new_user` function
+**Files changed:**
+- `supabase/migrations/20260411010000_add_pubmed_api_key_to_profiles.sql` — new migration
+- `supabase/functions/fetch-paper-metadata/index.ts` — reads API key from `profiles` table after auth instead of from request body
+- `src/integrations/supabase/types.ts` — added `pubmed_api_key` to profiles type
+- `src/hooks/useSettings.ts` — complete rewrite: localStorage → Supabase `profiles` table via PostgREST
+- `src/components/settings/SettingsDialog.tsx` — updated for async save/remove with loading states
+- `src/lib/fetchPaperMetadataEdge.ts` — removed API key from request body; edge function reads it server-side
+**Behavior change:** The API key is no longer stored in or read from `localStorage`. Existing keys in `localStorage` are orphaned (harmless). Users must re-enter their API key in the Settings dialog after this migration. The Settings dialog now shows a loading spinner while fetching the key from the server.
+**Verification:** Build passes, all 147 unit tests pass. Edge function deployed. Migration applied to remote DB.
+
 ## Evidence gathering (no PR — investigation only)
 
 **Date:** April 2026

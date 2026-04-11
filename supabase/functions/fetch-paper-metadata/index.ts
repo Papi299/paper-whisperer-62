@@ -10,6 +10,9 @@
  *
  * Accepts: POST { identifiers: string[] }   (max 50 per request)
  * Returns: { results: PaperMetadata[] }
+ *
+ * The user's PubMed API key (if configured) is read from the profiles
+ * table server-side. It is NOT passed in the request body.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -523,8 +526,16 @@ Deno.serve(async (req) => {
     }
     console.log("User authenticated");
 
+    // ── Step 1b: Fetch user's PubMed API key from profiles ──
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("pubmed_api_key")
+      .eq("user_id", user.id)
+      .single();
+    const apiKey: string | undefined = profile?.pubmed_api_key || undefined;
+
     // ── Step 2: Parse & validate input ──
-    const { identifiers, api_key } = await req.json();
+    const { identifiers } = await req.json();
 
     if (!Array.isArray(identifiers) || identifiers.length === 0) {
       return new Response(
@@ -564,7 +575,7 @@ Deno.serve(async (req) => {
 
     // ── Step 3: Fetch metadata ──
     const fetched = sanitized.length > 0
-      ? await fetchPaperMetadata(sanitized, api_key || undefined)
+      ? await fetchPaperMetadata(sanitized, apiKey)
       : [];
     const results = [...rejected, ...fetched];
 

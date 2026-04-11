@@ -1,58 +1,77 @@
 import { useState, useEffect, useCallback } from "react";
-
-const SETTINGS_STORAGE_KEY = "paper-index-settings";
-
-interface Settings {
-  pubmedApiKey: string | null;
-}
-
-const DEFAULT_SETTINGS: Settings = {
-  pubmedApiKey: null,
-};
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 
 /**
- * Plain (non-React) accessor for the PubMed API key.
- * Used by fetchPaperMetadataEdge.ts which runs outside React components.
- */
-export function getPubmedApiKey(): string | null {
-  try {
-    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!stored) return null;
-    const parsed = JSON.parse(stored) as Settings;
-    return parsed.pubmedApiKey || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * React hook for managing application settings persisted in localStorage.
- * Follows the same pattern as useColumnWidths / useColumnVisibility.
+ * React hook for managing the PubMed API key stored server-side in the
+ * profiles table. Replaces the old localStorage-based approach.
  */
 export function useSettings() {
-  const [settings, setSettings] = useState<Settings>(() => {
-    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (stored) {
-      try {
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
-      } catch {
-        return DEFAULT_SETTINGS;
-      }
-    }
-    return DEFAULT_SETTINGS;
-  });
+  const { user } = useAuth();
+  const [pubmedApiKey, setPubmedApiKeyState] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
+  // Fetch key from server on mount / user change
   useEffect(() => {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  }, [settings]);
+    if (!user) {
+      setPubmedApiKeyState(null);
+      setLoading(false);
+      return;
+    }
 
-  const setPubmedApiKey = useCallback((key: string) => {
-    setSettings((prev) => ({ ...prev, pubmedApiKey: key }));
-  }, []);
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("pubmed_api_key")
+        .eq("user_id", user.id)
+        .single();
 
-  const clearPubmedApiKey = useCallback(() => {
-    setSettings((prev) => ({ ...prev, pubmedApiKey: null }));
-  }, []);
+      if (!cancelled) {
+        if (!error && data) {
+          setPubmedApiKeyState(data.pubmed_api_key ?? null);
+        }
+        setLoading(false);
+      }
+    })();
 
-  return { settings, setPubmedApiKey, clearPubmedApiKey };
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const setPubmedApiKey = useCallback(async (key: string) => {
+    if (!user) return;
+    const trimmed = key.trim();
+    if (!trimmed) return;
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ pubmed_api_key: trimmed })
+      .eq("user_id", user.id);
+
+    if (!error) {
+      setPubmedApiKeyState(trimmed);
+    }
+    return error ?? undefined;
+  }, [user]);
+
+  const clearPubmedApiKey = useCallback(async () => {
+    if (!user) return;
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ pubmed_api_key: null })
+      .eq("user_id", user.id);
+
+    if (!error) {
+      setPubmedApiKeyState(null);
+    }
+    return error ?? undefined;
+  }, [user]);
+
+  return {
+    settings: { pubmedApiKey },
+    loading,
+    setPubmedApiKey,
+    clearPubmedApiKey,
+  };
 }
