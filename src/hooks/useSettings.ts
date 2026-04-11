@@ -43,10 +43,14 @@ export function useSettings() {
     const trimmed = key.trim();
     if (!trimmed) return;
 
+    // Use upsert so that a profile row is created if one doesn't exist yet
+    // (existing users who signed up before the profiles table was created).
     const { error } = await supabase
       .from("profiles")
-      .update({ pubmed_api_key: trimmed })
-      .eq("user_id", user.id);
+      .upsert(
+        { user_id: user.id, email: user.email, pubmed_api_key: trimmed },
+        { onConflict: "user_id" }
+      );
 
     if (!error) {
       setPubmedApiKeyState(trimmed);
