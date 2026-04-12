@@ -39,7 +39,18 @@ Project/tag assignment RPCs after bulk import (identifier-based and file-based) 
 
 Fixed a database-layer bug where global `UNIQUE` constraints on `keyword_pool`, `study_type_pool`, `keyword_exclusion_pool`, and `study_type_exclusion_pool` prevented different users from adding the same keyword or study type to their own independent pools. Replaced with per-user unique indexes on `(user_id, lower(column))`. No frontend changes needed. See [migration-history.md](migration-history.md) for details.
 
+## Schema drift audit fix — projects/tags uniqueness + RLS tightening (post-pool fix)
+
+Comprehensive remote-DB audit found two more critical drift issues:
+1. **Global UNIQUE on `projects.name` and `tags.name`** — same bug class as pools. Different users couldn't create projects/tags with the same name. Fixed with per-user indexes.
+2. **"Allow all access" RLS policies on 9 tables** — projects, tags, keyword_pool, keyword_exclusion_pool, study_type_pool, study_type_exclusion_pool, synonym_pool, paper_projects, paper_tags all had wide-open RLS. Any authenticated user could read/write any other user's data. Fixed by dropping permissive policies and recreating correct per-user policies. SECURITY DEFINER RPCs are unaffected.
+
+See [migration-history.md](migration-history.md) for details.
+
 **Remaining follow-up work:**
+- Nullable `user_id` columns on 8 tables — should be SET NOT NULL after verifying no NULL rows
+- Missing `ON DELETE CASCADE` on FKs to auth.users on 8 tables
+- Missing UPDATE RLS policy on `paper_attachments`
 - Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
 - Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)
 
