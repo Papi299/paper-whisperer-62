@@ -186,9 +186,40 @@ These tables had dashboard-created "Allow all access" policies (qual=true, with_
 - All 9 tables have `relrowsecurity=true` and `relforcerowsecurity=true`
 
 **Remaining follow-up (not in this task):**
-- Nullable `user_id` columns on 8 tables (medium priority)
-- Missing `ON DELETE CASCADE` on FKs to auth.users (low priority)
 - Missing UPDATE RLS policy on `paper_attachments` (low priority)
+
+**Audited and confirmed correct:** `user_id` nullability — all tables already have `NOT NULL` at the DB level.
+
+## Fix pool tables FK — add ON DELETE CASCADE
+
+**Date:** April 2026
+**What:** The 5 pool tables (`keyword_pool`, `keyword_exclusion_pool`, `study_type_pool`, `study_type_exclusion_pool`, `synonym_pool`) had FK constraints to `auth.users(id)` with `NO ACTION` delete rule (auto-created by Supabase dashboard). Replaced with `ON DELETE CASCADE`.
+**Migration:** `20260412040000_add_pool_tables_fk_cascade.sql`
+**Verification:** All 5 pool tables confirmed CASCADE via information_schema query. 0 orphan rows.
+
+## Fix papers/projects/tags FK — add ON DELETE CASCADE
+
+**Date:** April 2026
+**What:** `papers`, `projects`, `tags` had FK constraints to `auth.users(id)` with `NO ACTION` despite original migrations defining `ON DELETE CASCADE`. Same dashboard-drift root cause as the pool tables.
+
+**Pre-migration audit:**
+- 0 orphan rows across all 3 tables (689 papers, 34 projects, 82 tags)
+- 2 distinct user_ids, all mapping to existing auth.users
+
+**Migration:** `20260412060000_fix_papers_projects_tags_fk_cascade.sql`
+- Drops existing NO ACTION constraints, recreates with ON DELETE CASCADE
+- Also cleans up leftover `tmp_verify_fk()` audit function
+
+**Post-migration verification:**
+- All 10 user_id FK constraints across the entire schema now show CASCADE
+- paper_attachments and profiles were already correct — not touched
+- All data intact, TypeScript passes, 180 tests pass
+- App-level: dashboard loads, projects/tags management works
+
+**Files changed:** One migration file only. No frontend code changes.
+
+**FK cascade status — complete:**
+All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`. No further FK work needed.
 
 ## Evidence gathering (no PR — investigation only)
 

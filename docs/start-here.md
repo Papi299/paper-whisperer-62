@@ -47,12 +47,24 @@ Comprehensive remote-DB audit found two more critical drift issues:
 
 See [migration-history.md](migration-history.md) for details.
 
+## FK cascade fixes (post-schema-drift fix)
+
+Restored `ON DELETE CASCADE` on all user-scoped table FK constraints to `auth.users(id)`. The Supabase dashboard had overwritten these with `NO ACTION`.
+
+- **Pool tables** (keyword_pool, keyword_exclusion_pool, study_type_pool, study_type_exclusion_pool, synonym_pool): Fixed in migration `20260412040000`.
+- **papers, projects, tags**: Fixed in migration `20260412060000`.
+- **paper_attachments, profiles**: Already had correct CASCADE — not touched.
+
+See [migration-history.md](migration-history.md) for details.
+
 **Remaining follow-up work:**
-- Nullable `user_id` columns on 8 tables — should be SET NOT NULL after verifying no NULL rows
-- Missing `ON DELETE CASCADE` on FKs to auth.users on 8 tables
 - Missing UPDATE RLS policy on `paper_attachments`
 - Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
 - Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)
+
+**Audited and confirmed correct (no action needed):**
+- `user_id` nullability — all user-scoped tables already have `user_id NOT NULL` at the DB level
+- FK `ON DELETE CASCADE` — all user-scoped tables now have correct CASCADE behavior
 
 ## What is stable — do not reopen casually
 
