@@ -127,6 +127,17 @@ Chronological record of the read-path performance track (March–April 2026).
 - `src/hooks/papers/__tests__/usePaperMutations.test.ts` — 7 tests covering all return-value paths
 **No migration needed.** No DB changes.
 
+## Bulk import assignment-failure visibility
+
+**Date:** April 2026
+**What:** Made project/tag assignment failures after bulk import visible to the user.
+**Root cause:** Both `bulkImportPapers` and `bulkImportFromParsedData` called `bulk_set_paper_projects` and `bulk_set_paper_tags` RPCs without checking the error return. If assignment failed, papers were imported successfully but ended up without the requested project/tag assignments — with no user-visible feedback.
+**Fix:** Both functions now capture the `error` return from assignment RPCs. On failure, a warning toast is shown with `variant: "destructive"` that says which assignment(s) failed, while preserving the accurate paper import counts. Successfully inserted papers are never rolled back.
+**Files changed:**
+- `src/hooks/papers/useBulkMutations.ts` — error handling for `bulk_set_paper_projects` / `bulk_set_paper_tags` in both `bulkImportPapers` and `bulkImportFromParsedData`
+- `src/hooks/papers/__tests__/useBulkMutations-assignment.test.ts` — 8 tests covering assignment success, project-only failure, tag-only failure, both-failure, and cache invalidation behavior
+**No migration needed.** No DB changes. No rollback of inserted papers.
+
 ## Evidence gathering (no PR — investigation only)
 
 **Date:** April 2026
