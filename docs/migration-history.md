@@ -193,9 +193,26 @@ These tables had dashboard-created "Allow all access" policies (qual=true, with_
 ## Fix pool tables FK — add ON DELETE CASCADE
 
 **Date:** April 2026
-**What:** The 5 pool tables (`keyword_pool`, `keyword_exclusion_pool`, `study_type_pool`, `study_type_exclusion_pool`, `synonym_pool`) had FK constraints to `auth.users(id)` with `NO ACTION` delete rule (auto-created by Supabase dashboard). Replaced with `ON DELETE CASCADE`.
+**What:** The 5 pool tables (`keyword_pool`, `keyword_exclusion_pool`, `study_type_pool`, `study_type_exclusion_pool`, `synonym_pool`) had FK constraints to `auth.users(id)` with `NO ACTION` delete rule. Replaced with `ON DELETE CASCADE` so that deleting a user automatically cleans up their pool entries.
+
+**Root cause:** Original migrations created these tables without any FK on `user_id`. The Supabase dashboard later auto-created FK constraints, but with `NO ACTION` instead of the intended `CASCADE`.
+
+**Pre-migration audit:**
+- All user_ids in pool tables map to existing auth.users (0 orphan rows)
+- 3 auth.users exist; 2 distinct user_ids appear across pool tables
+- Existing FKs confirmed via `information_schema` query — all 5 had `NO ACTION`
+
 **Migration:** `20260412040000_add_pool_tables_fk_cascade.sql`
-**Verification:** All 5 pool tables confirmed CASCADE via information_schema query. 0 orphan rows.
+- Drops existing `*_user_id_fkey` constraints on all 5 pool tables
+- Recreates with `REFERENCES auth.users(id) ON DELETE CASCADE`
+
+**Post-migration verification:**
+- All 5 pool tables now show `CASCADE` delete rule
+- `paper_attachments` was already correct (`CASCADE`)
+- All data intact (row counts unchanged)
+- TypeScript check passes, all 180 tests pass
+
+**Files changed:** One migration file only. No frontend code changes.
 
 ## Fix papers/projects/tags FK — add ON DELETE CASCADE
 
