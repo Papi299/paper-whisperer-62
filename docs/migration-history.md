@@ -186,9 +186,36 @@ These tables had dashboard-created "Allow all access" policies (qual=true, with_
 - All 9 tables have `relrowsecurity=true` and `relforcerowsecurity=true`
 
 **Remaining follow-up (not in this task):**
-- Nullable `user_id` columns on 8 tables (medium priority)
-- Missing `ON DELETE CASCADE` on FKs to auth.users (low priority)
 - Missing UPDATE RLS policy on `paper_attachments` (low priority)
+- `papers`, `projects`, `tags` have `NO ACTION` FK to auth.users instead of `CASCADE` (low priority — same drift class)
+
+**Audited and confirmed correct:** `user_id` nullability — all tables already have `NOT NULL` at the DB level.
+
+## Fix pool tables FK — add ON DELETE CASCADE
+
+**Date:** April 2026
+**What:** The 5 pool tables (`keyword_pool`, `keyword_exclusion_pool`, `study_type_pool`, `study_type_exclusion_pool`, `synonym_pool`) had FK constraints to `auth.users(id)` with `NO ACTION` delete rule. Replaced with `ON DELETE CASCADE` so that deleting a user automatically cleans up their pool entries.
+
+**Root cause:** Original migrations created these tables without any FK on `user_id`. The Supabase dashboard later auto-created FK constraints, but with `NO ACTION` instead of the intended `CASCADE`.
+
+**Pre-migration audit:**
+- All user_ids in pool tables map to existing auth.users (0 orphan rows)
+- 3 auth.users exist; 2 distinct user_ids appear across pool tables
+- Existing FKs confirmed via `information_schema` query — all 5 had `NO ACTION`
+
+**Migration:** `20260412040000_add_pool_tables_fk_cascade.sql`
+- Drops existing `*_user_id_fkey` constraints on all 5 pool tables
+- Recreates with `REFERENCES auth.users(id) ON DELETE CASCADE`
+
+**Post-migration verification:**
+- All 5 pool tables now show `CASCADE` delete rule
+- `paper_attachments` was already correct (`CASCADE`)
+- `papers`, `projects`, `tags` still have `NO ACTION` (out of scope)
+- All data intact (row counts unchanged)
+- TypeScript check passes, all 180 tests pass
+
+**Files changed:** One migration file only. No frontend code changes.
+**What was NOT changed:** papers/projects/tags FK rules, no RLS changes, no frontend changes.
 
 ## Evidence gathering (no PR — investigation only)
 
