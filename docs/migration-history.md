@@ -138,6 +138,26 @@ Chronological record of the read-path performance track (March–April 2026).
 - `src/hooks/papers/__tests__/useBulkMutations-assignment.test.ts` — 8 tests covering assignment success, project-only failure, tag-only failure, both-failure, and cache invalidation behavior
 **No migration needed.** No DB changes. No rollback of inserted papers.
 
+## Fix cross-user uniqueness bug in pool/exclusion tables
+
+**Date:** April 2026
+**What:** Fixed a bug where two different users could not add the same keyword or study type to their own independent pools.
+**Root cause:** All four pool tables had global `UNIQUE` constraints (`*_term_key`) that enforced uniqueness on `keyword` or `study_type` across ALL users, not per-user. These constraints were likely created by the Supabase dashboard and overrode the per-user `UNIQUE(user_id, keyword)` constraints defined in the original migrations.
+**Affected tables:**
+- `keyword_pool` — had `UNIQUE(keyword)` via `keyword_pool_term_key`
+- `keyword_exclusion_pool` — had `UNIQUE(keyword)` via `keyword_exclusion_pool_term_key`
+- `study_type_pool` — had `UNIQUE(study_type)` via `study_type_pool_term_key`
+- `study_type_exclusion_pool` — had `UNIQUE(study_type)` via `study_type_exclusion_pool_term_key`
+**Fix:** Dropped all four global `*_term_key` constraints and created per-user unique indexes using `lower()` for case-insensitive dedup:
+- `idx_keyword_pool_user_keyword` on `(user_id, lower(keyword))`
+- `idx_keyword_exclusion_pool_user_keyword` on `(user_id, lower(keyword))`
+- `idx_study_type_pool_user_study_type` on `(user_id, lower(study_type))`
+- `idx_study_type_exclusion_pool_user_study_type` on `(user_id, lower(study_type))`
+**Migration:** `20260412010000_fix_pool_global_unique_constraints.sql`
+**Files changed:** Migration only. No frontend code changes needed — hooks already query per-user and handle `23505` errors correctly.
+**Verification:** Migration applied to remote DB. Constraints verified via direct SQL query — all global `*_term_key` constraints removed, all per-user indexes created.
+**Precedent:** Same bug class as the earlier `papers_pmid_key` / `papers_doi_key` fix (migration `20260327000000`).
+
 ## Evidence gathering (no PR — investigation only)
 
 **Date:** April 2026

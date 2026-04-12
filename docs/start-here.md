@@ -35,6 +35,10 @@ Fixed a bug where the Add Paper dialog would close even when manual paper creati
 
 Project/tag assignment RPCs after bulk import (identifier-based and file-based) previously failed silently. Now, if `bulk_set_paper_projects` or `bulk_set_paper_tags` returns an error, the user sees a warning toast explaining which assignment(s) failed. Papers are never rolled back — the user knows papers were imported but may need manual project/tag assignment. See [migration-history.md](migration-history.md) for details.
 
+## Cross-user uniqueness fix for pool/exclusion tables (post-assignment fix)
+
+Fixed a database-layer bug where global `UNIQUE` constraints on `keyword_pool`, `study_type_pool`, `keyword_exclusion_pool`, and `study_type_exclusion_pool` prevented different users from adding the same keyword or study type to their own independent pools. Replaced with per-user unique indexes on `(user_id, lower(column))`. No frontend changes needed. See [migration-history.md](migration-history.md) for details.
+
 **Remaining follow-up work:**
 - Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
 - Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)
