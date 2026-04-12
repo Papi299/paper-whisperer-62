@@ -158,6 +158,38 @@ Chronological record of the read-path performance track (March–April 2026).
 **Verification:** Migration applied to remote DB. Constraints verified via direct SQL query — all global `*_term_key` constraints removed, all per-user indexes created.
 **Precedent:** Same bug class as the earlier `papers_pmid_key` / `papers_doi_key` fix (migration `20260327000000`).
 
+## Fix global uniqueness on projects/tags + restore RLS on 9 tables
+
+**Date:** April 2026
+**What:** Two critical schema-drift fixes found during a comprehensive remote-DB audit.
+
+**Fix A — Global uniqueness on `projects.name` and `tags.name`:**
+Same bug class as the pool/exclusion and papers fixes. Global `UNIQUE(name)` constraints (`projects_name_key`, `tags_name_key`) prevented different users from creating projects or tags with the same name.
+- Dropped `projects_name_key` and `tags_name_key`
+- Created `idx_projects_user_name` on `(user_id, lower(name))` and `idx_tags_user_name` on `(user_id, lower(name))`
+**Migration:** `20260412020000_fix_projects_tags_global_unique.sql`
+
+**Fix B — Overly permissive RLS ("Allow all access") on 9 tables:**
+These tables had dashboard-created "Allow all access" policies (qual=true, with_check=true) that let any authenticated user read/write any other user's data: `projects`, `tags`, `keyword_pool`, `keyword_exclusion_pool`, `study_type_pool`, `study_type_exclusion_pool`, `synonym_pool`, `paper_projects`, `paper_tags`.
+- Dropped "Allow all access" policy on each table
+- Recreated correct per-user policies from canonical migration definitions
+- Enabled + forced RLS on all 9 tables
+- `SECURITY DEFINER` RPCs (set_paper_tags, bulk_set_paper_projects, safe_bulk_insert_papers, etc.) are unaffected — they bypass RLS by design
+**Migration:** `20260412030000_fix_rls_all_tables.sql`
+
+**Files changed:** Two migration files only. No frontend code changes.
+**Verification:** Both migrations applied to remote DB. Post-migration SQL queries confirmed:
+- No global unique constraints on projects/tags
+- Per-user unique indexes exist
+- No "Allow all access" policies remain on any table
+- All 9 tables have correct named per-user policies (31 total)
+- All 9 tables have `relrowsecurity=true` and `relforcerowsecurity=true`
+
+**Remaining follow-up (not in this task):**
+- Nullable `user_id` columns on 8 tables (medium priority)
+- Missing `ON DELETE CASCADE` on FKs to auth.users (low priority)
+- Missing UPDATE RLS policy on `paper_attachments` (low priority)
+
 ## Evidence gathering (no PR — investigation only)
 
 **Date:** April 2026
