@@ -47,12 +47,19 @@ Comprehensive remote-DB audit found two more critical drift issues:
 
 See [migration-history.md](migration-history.md) for details.
 
+## Pool tables FK cascade fix (post-schema-drift fix)
+
+Added `ON DELETE CASCADE` to FK constraints on 5 pool tables (`keyword_pool`, `keyword_exclusion_pool`, `study_type_pool`, `study_type_exclusion_pool`, `synonym_pool`). These had dashboard-created FKs with `NO ACTION`. Now deleting a user automatically cleans up their pool entries. See [migration-history.md](migration-history.md) for details.
+
 **Remaining follow-up work:**
-- Nullable `user_id` columns on 8 tables — should be SET NOT NULL after verifying no NULL rows
-- Missing `ON DELETE CASCADE` on FKs to auth.users on 8 tables
+- `papers`, `projects`, `tags` FK to auth.users still use `NO ACTION` instead of `CASCADE` (same drift class)
 - Missing UPDATE RLS policy on `paper_attachments`
 - Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
 - Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)
+
+**Audited and confirmed correct (no action needed):**
+- `user_id` nullability — all user-scoped tables already have `user_id NOT NULL` at the DB level (verified via types.ts and migration SQL)
+- Pool table FK constraints — all 5 now have `ON DELETE CASCADE`
 
 ## What is stable — do not reopen casually
 
