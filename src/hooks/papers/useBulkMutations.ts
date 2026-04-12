@@ -260,32 +260,50 @@ export function useBulkMutations(
       onProgress?.(total, total, addedIds, skippedIds, failedIds);
 
       // Phase 5: Assign project/tags to newly inserted papers
+      const assignmentWarnings: string[] = [];
+
       if (insertedPaperIds.length > 0) {
         const projectIds = options?.targetProjectIds;
         const tagIds = options?.targetTagIds;
 
         if (projectIds && projectIds.length > 0) {
-          await supabase.rpc("bulk_set_paper_projects", {
+          const { error: projError } = await supabase.rpc("bulk_set_paper_projects", {
             p_paper_ids: insertedPaperIds,
             p_project_ids: projectIds,
           });
+          if (projError) {
+            assignmentWarnings.push("project assignment failed");
+          }
         }
 
         if (tagIds && tagIds.length > 0) {
-          await supabase.rpc("bulk_set_paper_tags", {
+          const { error: tagError } = await supabase.rpc("bulk_set_paper_tags", {
             p_paper_ids: insertedPaperIds,
             p_tag_ids: tagIds,
           });
+          if (tagError) {
+            assignmentWarnings.push("tag assignment failed");
+          }
         }
 
         // No optimistic insert — invalidate to refetch with current filters
         invalidateAndRefetch();
       }
 
-      toast({
-        title: "Bulk import complete",
-        description: `${addedIds.length} added, ${skippedIds.length} skipped (duplicates), ${failedIds.length} failed.`,
-      });
+      const summary = `${addedIds.length} added, ${skippedIds.length} skipped (duplicates), ${failedIds.length} failed.`;
+
+      if (assignmentWarnings.length > 0) {
+        toast({
+          title: "Bulk import complete with warnings",
+          description: `${summary} Note: ${assignmentWarnings.join(" and ")} — papers were imported but may need manual project/tag assignment.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Bulk import complete",
+          description: summary,
+        });
+      }
     },
     [userId, projects, tags, normalizationConfig, normalize, toast, invalidateAndRefetch, queryClient],
   );
@@ -380,32 +398,50 @@ export function useBulkMutations(
       onProgress?.(total, total, addedCount, skippedCount, failedCount);
 
       // Phase 4: Assign project/tags to newly inserted papers
+      const assignmentWarnings: string[] = [];
+
       if (insertedPaperIds.length > 0) {
         const projectIds = options?.targetProjectIds;
         const tagIds = options?.targetTagIds;
 
         if (projectIds && projectIds.length > 0) {
-          await supabase.rpc("bulk_set_paper_projects", {
+          const { error: projError } = await supabase.rpc("bulk_set_paper_projects", {
             p_paper_ids: insertedPaperIds,
             p_project_ids: projectIds,
           });
+          if (projError) {
+            assignmentWarnings.push("project assignment failed");
+          }
         }
 
         if (tagIds && tagIds.length > 0) {
-          await supabase.rpc("bulk_set_paper_tags", {
+          const { error: tagError } = await supabase.rpc("bulk_set_paper_tags", {
             p_paper_ids: insertedPaperIds,
             p_tag_ids: tagIds,
           });
+          if (tagError) {
+            assignmentWarnings.push("tag assignment failed");
+          }
         }
 
         // No optimistic insert — invalidate to refetch with current filters
         invalidateAndRefetch();
       }
 
-      toast({
-        title: "File import complete",
-        description: `${addedCount} added, ${skippedCount} skipped (duplicates), ${failedCount} failed.`,
-      });
+      const summary = `${addedCount} added, ${skippedCount} skipped (duplicates), ${failedCount} failed.`;
+
+      if (assignmentWarnings.length > 0) {
+        toast({
+          title: "File import complete with warnings",
+          description: `${summary} Note: ${assignmentWarnings.join(" and ")} — papers were imported but may need manual project/tag assignment.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "File import complete",
+          description: summary,
+        });
+      }
     },
     [userId, projects, tags, normalizationConfig, normalize, toast, invalidateAndRefetch, queryClient],
   );
