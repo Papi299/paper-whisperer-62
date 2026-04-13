@@ -61,13 +61,26 @@ See [migration-history.md](migration-history.md) for details.
 
 Added a static warning to the Import IDs tab in the Add Papers dialog: "Title-based import may match the wrong paper. PMID/DOI import is more reliable." This is the chosen handling for the title-import reliability concern — no mandatory preview/confirmation flow. See "Standing product decisions" below.
 
-## Worker error-handling fix (post-title-import warning)
+## Post-hardening correctness and hygiene fixes (PRs #78–#82)
 
-Fixed a bug in `useNormalizationWorker.ts` where the Web Worker `onerror` handler resolved pending promises with an empty array instead of rejecting. A worker crash during batch normalization (>10 papers) would silently produce papers with missing normalized fields. Now the worker rejects on error, and both bulk import flows (`bulkImportPapers`, `bulkImportFromParsedData`) catch the rejection and surface a clear error toast.
+After the security/integrity hardening wave, a focused round of correctness and code-hygiene fixes was completed:
 
-## Gemini API key transport hardening (post-worker fix)
+1. **Worker error-handling fix** (#78) — Fixed a bug in `useNormalizationWorker.ts` where the Web Worker `onerror` handler resolved pending promises with `[]` instead of rejecting. A worker crash during batch normalization (>10 papers) would silently produce papers with missing normalized fields. Now the worker rejects on error, and both bulk import flows (`bulkImportPapers`, `bulkImportFromParsedData`) catch the rejection and surface a clear error toast. 5 unit tests added.
 
-Moved the Gemini API key in `analyze-paper` edge function from URL query parameter (`?key=`) to HTTP header (`x-goog-api-key`). The key no longer appears in URL strings, reducing exposure in server logs. No behavior change — same endpoint, same request shape, same response handling.
+2. **Ghost `urls` field removal** (#79) — Removed `urls` from the papers list SELECT string in `usePapers.ts` and matching docs. The field was not in any type definition, not in any migration, and not read or written by any code. Dead query baggage.
+
+3. **Client-side `decodeHtml` deduplication** (#80) — Replaced the local browser-only `decodeHtml` helper in `AnalyticsPanel.tsx` (using `document.createElement("textarea")`) with the shared `decodeHTMLEntities` utility from `src/lib/decodeHTMLEntities.ts`.
+
+4. **Gemini API key transport hardening** (#81) — Moved the Gemini API key in `analyze-paper` edge function from URL query parameter (`?key=`) to HTTP header (`x-goog-api-key`). The key no longer appears in URL strings, reducing exposure in server logs. Same endpoint, same request shape, same response handling.
+
+5. **analyze-paper log sanitization** (#82) — Removed `abstract.length` and `rawText.length` from `analyze-paper` log output. These were the last two content-adjacent metadata values appearing in logs.
+
+**Post-deploy verification (analyze-paper):**
+PRs #81 and #82 were deployed to Supabase and verified:
+- Gemini analysis still succeeds (status 200, valid JSON response)
+- Deployed source confirmed via `supabase functions download` — both fixes present
+- Logs now contain only safe high-level stage markers and HTTP status codes
+- No bearer tokens, user IDs, paper titles, abstract content, raw Gemini text, or content-length metadata appears in logs
 
 **Audited and confirmed correct (no action needed):**
 - `user_id` nullability — all user-scoped tables already have `user_id NOT NULL` at the DB level
@@ -90,6 +103,13 @@ These decisions have been explicitly made by the user. Do not suggest revisiting
 - Do NOT propose mandatory per-paper preview/confirmation for title-based imports.
 - Do NOT propose a review/approval workflow before title-imported papers are saved.
 - The user has explicitly rejected these approaches.
+
+### CORS policy for edge functions
+- Both edge functions (`analyze-paper`, `fetch-paper-metadata`) use `Access-Control-Allow-Origin: "*"`. This is **intentional and correct** for the current auth model.
+- Auth is **Bearer-token/header-based** (Supabase JWT via `Authorization` header), NOT cookie-based. Browsers never auto-attach `localStorage` tokens cross-origin, so CORS provides no meaningful protection here.
+- Tightening CORS would add complexity (Vercel preview URL regex, origin reflection logic) for zero practical security gain.
+- Do NOT propose CORS restriction for the current auth architecture.
+- Revisit only if the auth model changes to cookie-based sessions.
 
 ## What is stable — do not reopen casually
 
@@ -116,7 +136,7 @@ These were thoroughly measured and verified. Changing them requires new evidence
 
 ## Current recommendation
 
-The app is performant and secure at current scale. The security/integrity hardening wave (PRs #67–#76) is complete. Network RTT to Supabase Mumbai (~200ms from Israel) dominates wall time, not DB execution. Focus new work on **features**, not performance or schema cleanup, unless the paper count grows past ~2,000 or users report slowness.
+The app is performant and secure at current scale. The security/integrity hardening wave (PRs #67–#76) and the follow-up correctness/hygiene fixes (PRs #78–#82) are complete. Network RTT to Supabase Mumbai (~200ms from Israel) dominates wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
 
 ## Key files
 

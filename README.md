@@ -14,6 +14,7 @@ The app is **stable and hardened**. Two major work phases are complete:
 
 1. **Read-path performance track** (PRs #56–#65) — server-side filtering, sorting, pagination, lazy loading, abstract on-demand fetch. Handles ~400+ papers with sub-second dashboard loads.
 2. **Security & schema integrity hardening** (PRs #67–#76) — edge function logging redaction, PubMed API key server-side migration, RLS restoration on all user-scoped tables, per-user uniqueness constraints, FK cascade fixes, and import UX improvements.
+3. **Correctness & hygiene fixes** (PRs #78–#82) — normalization worker error-handling fix, ghost query field removal, client-side code deduplication, Gemini API key transport hardening, and further log sanitization.
 
 Deeper DB optimization is evidence-deferred until the library grows past ~2,000–5,000 papers. See [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) for the exact re-evaluation criteria.
 
@@ -40,6 +41,7 @@ Requires Node.js 18+. Supabase project config is in `supabase/config.toml`.
 ## Testing
 
 ```sh
+npx vitest run               # Unit tests (185 tests)
 npx playwright test          # E2E tests
 npx playwright test --ui     # Interactive test runner
 ```
