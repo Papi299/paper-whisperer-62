@@ -479,6 +479,9 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                   {bulkIds.length} identifier{bulkIds.length !== 1 ? "s" : ""} detected
                 </p>
               )}
+              <p className="text-xs text-muted-foreground">
+                Title-based import may match the wrong paper. PMID/DOI import is more reliable.
+              </p>
             </div>
 
             {/* Assign to project/tags */}
