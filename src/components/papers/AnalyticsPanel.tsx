@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { decodeHTMLEntities } from "@/lib/decodeHTMLEntities";
 import { Paper } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,13 +28,6 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-
-/** Decode HTML entities (e.g. &#xc1;ngel → Ángel) using a temporary textarea */
-function decodeHtml(html: string): string {
-  const txt = document.createElement("textarea");
-  txt.innerHTML = html;
-  return txt.value;
-}
 
 interface AnalyticsPanelProps {
   papers: Paper[];
@@ -234,7 +228,7 @@ export function AnalyticsPanel({ papers, isLoading, isOpen, onOpenChange }: Anal
   const availableAuthors = useMemo(() => {
     const set = new Set<string>();
     papers.forEach((p) => {
-      p.authors?.forEach((a) => set.add(decodeHtml(a)));
+      p.authors?.forEach((a) => set.add(decodeHTMLEntities(a) ?? a));
     });
     return Array.from(set).sort();
   }, [papers]);
