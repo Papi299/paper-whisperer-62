@@ -61,6 +61,10 @@ See [migration-history.md](migration-history.md) for details.
 
 Added a static warning to the Import IDs tab in the Add Papers dialog: "Title-based import may match the wrong paper. PMID/DOI import is more reliable." This is the chosen handling for the title-import reliability concern — no mandatory preview/confirmation flow. See "Standing product decisions" below.
 
+## Worker error-handling fix (post-title-import warning)
+
+Fixed a bug in `useNormalizationWorker.ts` where the Web Worker `onerror` handler resolved pending promises with an empty array instead of rejecting. A worker crash during batch normalization (>10 papers) would silently produce papers with missing normalized fields. Now the worker rejects on error, and both bulk import flows (`bulkImportPapers`, `bulkImportFromParsedData`) catch the rejection and surface a clear error toast.
+
 **Audited and confirmed correct (no action needed):**
 - `user_id` nullability — all user-scoped tables already have `user_id NOT NULL` at the DB level
 - FK `ON DELETE CASCADE` — all user-scoped tables now have correct CASCADE behavior

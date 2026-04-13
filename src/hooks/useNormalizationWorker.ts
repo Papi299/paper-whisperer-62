@@ -14,7 +14,7 @@ const WORKER_THRESHOLD = 10;
 export function useNormalizationWorker() {
   const workerRef = useRef<Worker | null>(null);
   const nextIdRef = useRef(0);
-  const pendingRef = useRef<Map<number, (results: NormalizedPaperData[]) => void>>(
+  const pendingRef = useRef<Map<number, { resolve: (results: NormalizedPaperData[]) => void; reject: (error: Error) => void }>>(
     new Map(),
   );
 
@@ -28,18 +28,18 @@ export function useNormalizationWorker() {
 
       workerRef.current.onmessage = (event: MessageEvent<NormalizationResponse>) => {
         const { id, results } = event.data;
-        const resolve = pendingRef.current.get(id);
-        if (resolve) {
+        const pending = pendingRef.current.get(id);
+        if (pending) {
           pendingRef.current.delete(id);
-          resolve(results);
+          pending.resolve(results);
         }
       };
 
       workerRef.current.onerror = (err) => {
         console.error("[NormalizationWorker] error:", err);
-        // Reject all pending
-        for (const [id, resolve] of pendingRef.current) {
-          resolve([]); // resolve empty so callers can fall back
+        // Reject all pending promises and clear the map
+        for (const [id, { reject }] of pendingRef.current) {
+          reject(new Error("Normalization worker error: " + (err.message || "unknown error")));
           pendingRef.current.delete(id);
         }
       };
@@ -73,8 +73,8 @@ export function useNormalizationWorker() {
       const worker = getWorker();
       const id = nextIdRef.current++;
 
-      return new Promise<NormalizedPaperData[]>((resolve) => {
-        pendingRef.current.set(id, resolve);
+      return new Promise<NormalizedPaperData[]>((resolve, reject) => {
+        pendingRef.current.set(id, { resolve, reject });
         const message: NormalizationRequest = { id, papers, config };
         worker.postMessage(message);
       });
