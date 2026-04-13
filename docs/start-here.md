@@ -65,6 +65,10 @@ Added a static warning to the Import IDs tab in the Add Papers dialog: "Title-ba
 
 Fixed a bug in `useNormalizationWorker.ts` where the Web Worker `onerror` handler resolved pending promises with an empty array instead of rejecting. A worker crash during batch normalization (>10 papers) would silently produce papers with missing normalized fields. Now the worker rejects on error, and both bulk import flows (`bulkImportPapers`, `bulkImportFromParsedData`) catch the rejection and surface a clear error toast.
 
+## Gemini API key transport hardening (post-worker fix)
+
+Moved the Gemini API key in `analyze-paper` edge function from URL query parameter (`?key=`) to HTTP header (`x-goog-api-key`). The key no longer appears in URL strings, reducing exposure in server logs. No behavior change — same endpoint, same request shape, same response handling.
+
 **Audited and confirmed correct (no action needed):**
 - `user_id` nullability — all user-scoped tables already have `user_id NOT NULL` at the DB level
 - FK `ON DELETE CASCADE` — all user-scoped tables now have correct CASCADE behavior
