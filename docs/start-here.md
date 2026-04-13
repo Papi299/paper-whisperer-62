@@ -57,14 +57,31 @@ Restored `ON DELETE CASCADE` on all user-scoped table FK constraints to `auth.us
 
 See [migration-history.md](migration-history.md) for details.
 
-**Remaining follow-up work:**
-- Missing UPDATE RLS policy on `paper_attachments`
-- Title-based import auto-selects first PubMed/Crossref match without user confirmation — needs a preview/review step
-- Title-only duplicate detection is not covered by the dedup scan RPC (`get_duplicate_papers` only groups by PMID/DOI)
+## Title-import warning (post-FK fix)
+
+Added a static warning to the Import IDs tab in the Add Papers dialog: "Title-based import may match the wrong paper. PMID/DOI import is more reliable." This is the chosen handling for the title-import reliability concern — no mandatory preview/confirmation flow. See "Standing product decisions" below.
 
 **Audited and confirmed correct (no action needed):**
 - `user_id` nullability — all user-scoped tables already have `user_id NOT NULL` at the DB level
 - FK `ON DELETE CASCADE` — all user-scoped tables now have correct CASCADE behavior
+- `paper_attachments` UPDATE RLS policy — no UPDATE code path exists in the app; the missing policy has zero real-world impact
+
+## Standing product decisions — do not re-propose
+
+These decisions have been explicitly made by the user. Do not suggest revisiting them unless the user explicitly asks.
+
+### Duplicate detection policy
+- Duplicate detection is **PMID/DOI only**. This is intentional.
+- Do NOT propose fuzzy or title-based duplicate detection.
+- Do NOT propose extending `get_duplicate_papers` to match by title.
+- The user has explicitly rejected this direction.
+
+### Title-based import handling
+- Title-based import auto-selects the first PubMed/Crossref match. This is known and accepted.
+- The chosen mitigation is a **static warning in the Add Papers dialog**: "Title-based import may match the wrong paper. PMID/DOI import is more reliable." (PR #76)
+- Do NOT propose mandatory per-paper preview/confirmation for title-based imports.
+- Do NOT propose a review/approval workflow before title-imported papers are saved.
+- The user has explicitly rejected these approaches.
 
 ## What is stable — do not reopen casually
 
@@ -73,6 +90,7 @@ See [migration-history.md](migration-history.md) for details.
 - The abstract on-demand loading pattern
 - The sort/filter cache key split
 - The select-all-filtered-IDs mechanism
+- The security/schema integrity layer (RLS, per-user uniqueness, FK cascades)
 
 These were thoroughly measured and verified. Changing them requires new evidence.
 
@@ -90,7 +108,7 @@ These were thoroughly measured and verified. Changing them requires new evidence
 
 ## Current recommendation
 
-The app is performant at current scale. Network RTT to Supabase Mumbai (~200ms from Israel) dominates wall time, not DB execution. Focus new work on **features**, not performance, unless the paper count grows past ~2,000 or users report slowness.
+The app is performant and secure at current scale. The security/integrity hardening wave (PRs #67–#76) is complete. Network RTT to Supabase Mumbai (~200ms from Israel) dominates wall time, not DB execution. Focus new work on **features**, not performance or schema cleanup, unless the paper count grows past ~2,000 or users report slowness.
 
 ## Key files
 

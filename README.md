@@ -10,7 +10,12 @@ Academic paper library manager with server-side filtering, sorting, pagination, 
 
 ## Current status (April 2026)
 
-The read-path performance track (PRs #56–#65) is **complete**. The app handles ~400 papers with sub-second dashboard loads. Deeper DB optimization is evidence-deferred until the library grows past ~2,000–5,000 papers. See [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) for the exact re-evaluation criteria.
+The app is **stable and hardened**. Two major work phases are complete:
+
+1. **Read-path performance track** (PRs #56–#65) — server-side filtering, sorting, pagination, lazy loading, abstract on-demand fetch. Handles ~400+ papers with sub-second dashboard loads.
+2. **Security & schema integrity hardening** (PRs #67–#76) — edge function logging redaction, PubMed API key server-side migration, RLS restoration on all user-scoped tables, per-user uniqueness constraints, FK cascade fixes, and import UX improvements.
+
+Deeper DB optimization is evidence-deferred until the library grows past ~2,000–5,000 papers. See [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) for the exact re-evaluation criteria.
 
 ## Documentation
 

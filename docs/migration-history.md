@@ -185,10 +185,9 @@ These tables had dashboard-created "Allow all access" policies (qual=true, with_
 - All 9 tables have correct named per-user policies (31 total)
 - All 9 tables have `relrowsecurity=true` and `relforcerowsecurity=true`
 
-**Remaining follow-up (not in this task):**
-- Missing UPDATE RLS policy on `paper_attachments` (low priority)
-
-**Audited and confirmed correct:** `user_id` nullability — all tables already have `NOT NULL` at the DB level.
+**Audited and confirmed correct:**
+- `user_id` nullability — all tables already have `NOT NULL` at the DB level
+- `paper_attachments` UPDATE RLS policy — no UPDATE code path exists in the app; non-issue
 
 ## Fix pool tables FK — add ON DELETE CASCADE
 
