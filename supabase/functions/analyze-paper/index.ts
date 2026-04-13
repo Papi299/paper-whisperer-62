@@ -136,7 +136,7 @@ Deno.serve(async (req) => {
     }
     console.log("4a. Gemini key present");
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiKey}`;
+    const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
     console.log("5. Calling Gemini API");
 
     const geminiBody = {
@@ -171,7 +171,7 @@ CRITICAL RULES:
 
     const geminiRes = await fetchWithRetry(geminiUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
       body: JSON.stringify(geminiBody),
     });
 
