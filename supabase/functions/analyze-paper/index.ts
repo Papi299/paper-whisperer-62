@@ -126,7 +126,7 @@ Deno.serve(async (req) => {
         { status: 400, headers: jsonHeaders },
       );
     }
-    console.log("3a. Input received, abstract length:", abstract.length);
+    console.log("3a. Input received");
 
     // ── Step 3: Call Gemini ──
     console.log("4. Checking Gemini API key");
@@ -190,7 +190,7 @@ CRITICAL RULES:
       console.log("6a. Empty Gemini response (no candidates/text)");
       throw new Error("Empty response from Gemini");
     }
-    console.log("6b. Gemini response received, length:", rawText.length);
+    console.log("6b. Gemini response received");
 
     let cleanText = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
     const startIndex = cleanText.indexOf("{");
