@@ -8,7 +8,7 @@ The dashboard loads a paginated, server-filtered, server-sorted list of papers. 
 
 **Hook:** `usePapers()` → `useInfiniteQuery` with PAGE_SIZE=100.
 
-**SELECT columns:** `id, user_id, title, authors, year, journal, pmid, doi, has_abstract, study_type, raw_study_type, statistical_methods, keywords, raw_keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url, tldr, insert_order, created_at, updated_at, urls, paper_attachments(...)`.
+**SELECT columns:** `id, user_id, title, authors, year, journal, pmid, doi, has_abstract, study_type, raw_study_type, statistical_methods, keywords, raw_keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url, tldr, insert_order, created_at, updated_at, paper_attachments(...)`.
 
 **Excluded:** `abstract` (loaded on demand), `search_vector` (never sent to client).
 
