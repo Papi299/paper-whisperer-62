@@ -192,9 +192,24 @@ export function useBulkMutations(
         drive_url: null,
       }));
 
-      const normalizedPapers = normalizationConfig
-        ? await normalize(rawPapers, normalizationConfig)
-        : rawPapers;
+      let normalizedPapers: typeof rawPapers;
+      try {
+        normalizedPapers = normalizationConfig
+          ? await normalize(rawPapers, normalizationConfig)
+          : rawPapers;
+      } catch (normError: unknown) {
+        // Mark only the successfully-fetched identifiers as failed (fetch-phase failures are already in failedIds)
+        for (const { identifier } of successfulResults) {
+          failedIds.push(identifier);
+        }
+        onProgress?.(total, total, addedIds, skippedIds, failedIds);
+        toast({
+          title: "Normalization failed",
+          description: getErrorMessage(normError),
+          variant: "destructive",
+        });
+        return;
+      }
 
       // Phase 3: Build payload and call safe_bulk_insert_papers RPC
       const insertPayload = normalizedPapers.map((normalized, i) => ({
@@ -328,13 +343,24 @@ export function useBulkMutations(
       onProgress?.(0, total, 0, 0, 0);
 
       // Phase 1: Normalize via Web Worker
-      const normalizedPapers = normalizationConfig
-        ? await normalize(parsedPapers, normalizationConfig)
-        : parsedPapers.map((p) => ({
-            ...p,
-            mesh_terms: p.mesh_terms || [],
-            substances: p.substances || [],
-          }));
+      let normalizedPapers: typeof parsedPapers;
+      try {
+        normalizedPapers = normalizationConfig
+          ? await normalize(parsedPapers, normalizationConfig)
+          : parsedPapers.map((p) => ({
+              ...p,
+              mesh_terms: p.mesh_terms || [],
+              substances: p.substances || [],
+            }));
+      } catch (normError: unknown) {
+        onProgress?.(total, total, 0, 0, total);
+        toast({
+          title: "Normalization failed",
+          description: getErrorMessage(normError),
+          variant: "destructive",
+        });
+        return;
+      }
 
       onProgress?.(Math.ceil(total * 0.3), total, 0, 0, 0);
 
