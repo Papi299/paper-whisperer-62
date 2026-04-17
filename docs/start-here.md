@@ -87,6 +87,10 @@ PRs #81 and #82 were deployed to Supabase and verified:
 - FK `ON DELETE CASCADE` — all user-scoped tables now have correct CASCADE behavior
 - `paper_attachments` UPDATE RLS policy — no UPDATE code path exists in the app; the missing policy has zero real-world impact
 
+## Paper notes MVP (post-hardening features)
+
+Added a `notes text` column on `papers` (nullable, no default) and a free-text "Notes" `<Textarea>` in the Edit Paper dialog, placed between TL;DR and Study Type. Notes load with the existing list query and persist via the existing `updatePaper` mutation — no new RPCs, indexes, or RLS changes. Out of scope for the MVP: markdown, search/filter, export, AI processing, version history, sharing, bulk edit, and any non-dialog surface.
+
 ## Standing product decisions — do not re-propose
 
 These decisions have been explicitly made by the user. Do not suggest revisiting them unless the user explicitly asks.
