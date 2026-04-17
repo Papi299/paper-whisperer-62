@@ -23,7 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2, Paperclip, FileText, Sparkles } from "lucide-react";
+import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2, Paperclip, FileText, Sparkles, StickyNote } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { supabase } from "@/integrations/supabase/client";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
@@ -777,6 +777,28 @@ function PaperRow({
                   <Sparkles className="h-4 w-4" />
                 )}
               </Button>
+            )}
+            {paper.notes?.trim() && (
+              <Popover modal={true}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20"
+                    title="View notes"
+                  >
+                    <StickyNote className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-3" side="bottom" align="start" style={{ pointerEvents: 'auto' }}>
+                  <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">Notes</p>
+                  <div className="max-h-48 overflow-y-auto">
+                    <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap break-words">
+                      {paper.notes}
+                    </p>
+                  </div>
+                </PopoverContent>
+              </Popover>
             )}
             <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" onClick={() => onEdit(paper)} title="Edit">
               <Pencil className="h-4 w-4" />
