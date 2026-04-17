@@ -16,6 +16,7 @@ import {
 import { Search, X, Download, FileText, FileSpreadsheet, BookOpen, Loader2 } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
 import { Project, Tag } from "@/types/database";
+import type { NotesPresence } from "@/hooks/papers/types";
 
 interface SearchFiltersProps {
   searchQuery: string;
@@ -27,6 +28,8 @@ interface SearchFiltersProps {
   studyType: string;
   onStudyTypeChange: (type: string) => void;
   studyTypeFilterOptions: string[];
+  notesPresence: NotesPresence;
+  onNotesPresenceChange: (v: NotesPresence) => void;
   selectedKeywords: string[];
   availableKeywords: string[];
   onKeywordToggle: (keyword: string) => void;
@@ -55,6 +58,8 @@ export function SearchFilters({
   studyType,
   onStudyTypeChange,
   studyTypeFilterOptions,
+  notesPresence,
+  onNotesPresenceChange,
   selectedKeywords,
   availableKeywords,
   onKeywordToggle,
@@ -121,6 +126,18 @@ export function SearchFilters({
                 {type}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+
+        {/* Notes presence */}
+        <Select value={notesPresence} onValueChange={(v) => onNotesPresenceChange(v as NotesPresence)}>
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="Notes" />
+          </SelectTrigger>
+          <SelectContent className="bg-popover">
+            <SelectItem value="all">All Papers</SelectItem>
+            <SelectItem value="has">Has notes</SelectItem>
+            <SelectItem value="none">No notes</SelectItem>
           </SelectContent>
         </Select>
 

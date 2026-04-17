@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { ColumnId } from "@/hooks/useColumnVisibility";
 import type { SortDirection } from "@/components/papers/ResizableTableHeader";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
-import type { ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
+import type { NotesPresence, ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { timedQueryFn } from "@/lib/queryTiming";
 
@@ -35,6 +35,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
   const [studyType, setStudyType] = useState("all");
+  const [notesPresence, setNotesPresence] = useState<NotesPresence>("all");
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
 
   // ── Sort state ──
@@ -194,7 +195,8 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     yearFrom: yearFrom ? parseInt(yearFrom) : null,
     yearTo: yearTo ? parseInt(yearTo) : null,
     studyTypes: resolvedStudyTypes,
-  }), [filterPaperIds, yearFrom, yearTo, resolvedStudyTypes]);
+    notesPresence,
+  }), [filterPaperIds, yearFrom, yearTo, resolvedStudyTypes, notesPresence]);
 
   const serverSortParams = useMemo((): ServerSortParams => ({
     sortColumn: sortKey ? (SORT_COLUMN_MAP[sortKey] ?? null) : null,
@@ -241,6 +243,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     yearFrom !== "" ||
     yearTo !== "" ||
     studyType !== "all" ||
+    notesPresence !== "all" ||
     selectedKeywords.length > 0 ||
     selectedProjectId !== null ||
     selectedTagId !== null;
@@ -250,6 +253,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     setYearFrom("");
     setYearTo("");
     setStudyType("all");
+    setNotesPresence("all");
     setSelectedKeywords([]);
     setSelectedProjectId(null);
     setSelectedTagId(null);
@@ -269,6 +273,8 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     setYearTo,
     studyType,
     setStudyType,
+    notesPresence,
+    setNotesPresence,
     selectedKeywords,
     selectedProjectId,
     setSelectedProjectId,

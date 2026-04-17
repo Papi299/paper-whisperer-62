@@ -115,6 +115,8 @@ function DashboardContent() {
     setYearTo,
     studyType,
     setStudyType,
+    notesPresence,
+    setNotesPresence,
     selectedKeywords,
     selectedProjectId,
     setSelectedProjectId,
@@ -469,6 +471,8 @@ function DashboardContent() {
             studyType={studyType}
             onStudyTypeChange={setStudyType}
             studyTypeFilterOptions={studyTypeFilterOptions}
+            notesPresence={notesPresence}
+            onNotesPresenceChange={setNotesPresence}
             selectedKeywords={selectedKeywords}
             availableKeywords={filteredKeywords}
             onKeywordToggle={handleKeywordToggle}
