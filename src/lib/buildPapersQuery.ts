@@ -9,7 +9,7 @@ function applyFilterPredicates<T extends ReturnType<typeof supabase.from>>(
   query: T,
   filterParams: ServerFilterParams,
 ): T {
-  const { filterPaperIds, yearFrom, yearTo, studyTypes } = filterParams;
+  const { filterPaperIds, yearFrom, yearTo, studyTypes, notesPresence } = filterParams;
 
   // ID-based filtering (pre-resolved from junction queries + search)
   if (filterPaperIds !== null && filterPaperIds !== undefined) {
@@ -23,6 +23,15 @@ function applyFilterPredicates<T extends ReturnType<typeof supabase.from>>(
   // Study type
   if (studyTypes !== null && studyTypes.length > 0) {
     query = query.in("study_type", studyTypes) as T;
+  }
+
+  // Notes presence (tri-state). Semantics mirror `paper.notes?.trim()`
+  // used by the list indicator — NULL and whitespace-only both count as "no notes".
+  // Uses Postgres POSIX regex via PostgREST `match` operator.
+  if (notesPresence === "has") {
+    query = query.not("notes", "is", null).filter("notes", "match", "[^[:space:]]") as T;
+  } else if (notesPresence === "none") {
+    query = query.or("notes.is.null,notes.match.^[[:space:]]*$") as T;
   }
 
   return query;

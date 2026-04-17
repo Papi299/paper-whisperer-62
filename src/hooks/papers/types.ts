@@ -22,6 +22,15 @@ export type CacheSnapshot = {
 };
 
 /**
+ * Tri-state filter for notes presence.
+ * - "all"  — no filter (default)
+ * - "has"  — notes IS NOT NULL AND contains at least one non-whitespace character
+ * - "none" — notes IS NULL OR contains only whitespace
+ * Semantics match the list row sticky-note indicator (`paper.notes?.trim()`).
+ */
+export type NotesPresence = "all" | "has" | "none";
+
+/**
  * Server-side filter parameters (filter predicates only — no sort).
  * Used in query keys for count, filtered IDs, keyword options, etc.
  * Changing sort order does NOT invalidate these caches.
@@ -39,6 +48,8 @@ export interface ServerFilterParams {
   yearTo: number | null;
   /** Resolved study type subtypes (not group name). */
   studyTypes: string[] | null;
+  /** Notes presence tri-state. "all" = no predicate applied. */
+  notesPresence: NotesPresence;
 }
 
 /**
