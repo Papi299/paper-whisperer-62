@@ -65,6 +65,7 @@ export function EditPaperDialog({
   const [driveUrl, setDriveUrl] = useState("");
   const [pubmedUrl, setPubmedUrl] = useState("");
   const [tldr, setTldr] = useState("");
+  const [notes, setNotes] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
@@ -102,6 +103,7 @@ export function EditPaperDialog({
       setDriveUrl(paper.drive_url || "");
       setPubmedUrl(paper.pubmed_url || "");
       setTldr(paper.tldr || "");
+      setNotes(paper.notes || "");
       setSelectedProjectIds(paper.projects.map((p) => p.id));
       setSelectedTagIds(paper.tags.map((t) => t.id));
     }
@@ -134,6 +136,7 @@ export function EditPaperDialog({
         drive_url: driveUrl || null,
         pubmed_url: pubmedUrl || null,
         tldr: tldr || null,
+        notes: notes || null,
         tagIds: selectedTagIds,
         projectIds: selectedProjectIds,
       });
@@ -345,6 +348,18 @@ export function EditPaperDialog({
                 value={tldr}
                 onChange={(e) => setTldr(e.target.value)}
                 placeholder="AI-generated summary..."
+                disabled={loading}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="notes">Notes</Label>
+              <Textarea
+                id="notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={4}
+                placeholder="Personal notes, observations, follow-up questions…"
                 disabled={loading}
               />
             </div>
