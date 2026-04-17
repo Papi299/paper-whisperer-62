@@ -91,6 +91,11 @@ PRs #81 and #82 were deployed to Supabase and verified:
 
 Added a `notes text` column on `papers` (nullable, no default) and a free-text "Notes" `<Textarea>` in the Edit Paper dialog, placed between TL;DR and Study Type. Notes load with the existing list query and persist via the existing `updatePaper` mutation — no new RPCs, indexes, or RLS changes. Out of scope for the MVP: markdown, search/filter, export, AI processing, version history, sharing, bulk edit, and any non-dialog surface.
 
+Follow-ups on the notes feature (all on top of the original column):
+- Notes preview in list — sticky-note icon in the action cell opens a popover of the notes text, shown only for papers with non-whitespace notes.
+- Has Notes filter — tri-state `all | has | none` dropdown in the filter bar, implemented as a PostgREST predicate in `buildPapersQuery.ts` using POSIX regex (`[^[:space:]]` / `^[[:space:]]*$`) so NULL and whitespace-only notes both count as "no notes" (matches the list-indicator semantics).
+- Notes included in text search — migration `20260417020000_add_notes_to_search.sql` regenerates `papers.search_vector` with `notes` at weight D and adds `OR p.notes ILIKE …` to `search_papers_short`. Zero frontend code changes; the existing search bar covers notes automatically. Ranking hierarchy: A = title, B = abstract, C = journal + authors, D = notes.
+
 ## Standing product decisions — do not re-propose
 
 These decisions have been explicitly made by the user. Do not suggest revisiting them unless the user explicitly asks.
