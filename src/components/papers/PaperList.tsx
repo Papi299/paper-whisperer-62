@@ -436,6 +436,7 @@ export function PaperList({
               onToggleSelect={onToggleSelect}
               onAnalyzePaper={onAnalyzePaper}
               isAnalyzing={analyzingPaperId === paper.id}
+              searchQuery={searchQuery}
             />
           );
         })}
@@ -511,6 +512,8 @@ interface PaperRowProps {
   onToggleSelect: (paperId: string) => void;
   onAnalyzePaper?: (paper: PaperWithTags) => Promise<void>;
   isAnalyzing?: boolean;
+  /** Active (debounced) search query — drives the "Matched in:" sub-line. Empty string suppresses it. */
+  searchQuery: string;
 }
 
 function PaperRow({
@@ -535,6 +538,7 @@ function PaperRow({
   onToggleSelect,
   onAnalyzePaper,
   isAnalyzing,
+  searchQuery,
 }: PaperRowProps) {
   // On-demand abstract: only fetch when the row is expanded
   const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(isExpanded ? paper.id : null);
