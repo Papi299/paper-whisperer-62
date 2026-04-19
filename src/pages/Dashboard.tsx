@@ -109,6 +109,7 @@ function DashboardContent() {
     serverSortParams,
     searchQuery,
     setSearchQuery,
+    debouncedSearchQuery,
     yearFrom,
     setYearFrom,
     yearTo,
@@ -528,6 +529,7 @@ function DashboardContent() {
             hasNextPage={hasNextPage}
             isFetchingNextPage={isFetchingNextPage}
             onLoadMore={fetchNextPage}
+            searchQuery={debouncedSearchQuery}
           />
 
           <BulkActionsToolbar

@@ -267,6 +267,13 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     // Filter state + setters
     searchQuery,
     setSearchQuery,
+    /**
+     * The debounced search query — the value the server is actually filtering on.
+     * Exposed so UI surfaces (e.g. per-row "Matched in:" badges in PaperList) can
+     * stay in lock-step with the rendered result set instead of flickering during
+     * the 300ms debounce window.
+     */
+    debouncedSearchQuery,
     yearFrom,
     setYearFrom,
     yearTo,

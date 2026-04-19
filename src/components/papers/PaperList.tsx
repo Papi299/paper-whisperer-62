@@ -31,6 +31,7 @@ import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { escapeRegExp } from "@/lib/textUtils";
 import { useAbstract } from "@/hooks/useAbstract";
+import { getMatchedFields } from "@/lib/searchMatchFields";
 
 /** Decode HTML entities (e.g. &#xf8; → ø) using a temporary textarea */
 function decodeHtml(html: string): string {
@@ -172,6 +173,12 @@ interface PaperListProps {
   isFetchingNextPage?: boolean;
   /** Callback to load the next page (triggered by scroll sentinel). */
   onLoadMore?: () => void;
+  /**
+   * The debounced search query the server is filtering on. Used to render the
+   * per-row "Matched in: …" sub-line in the title cell. Pass the empty string
+   * (or omit) to suppress the sub-line entirely.
+   */
+  searchQuery?: string;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -208,6 +215,7 @@ export function PaperList({
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
+  searchQuery = "",
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -583,6 +591,26 @@ function PaperRow({
                   ))}
                 </div>
               )}
+              {searchQuery.trim().length > 0 && (() => {
+                const matchedFields = getMatchedFields(searchQuery, paper);
+                if (matchedFields.length === 0) return null;
+                return (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-xs text-muted-foreground group-hover:text-orange-50">
+                      Matched in:
+                    </span>
+                    {matchedFields.map((field) => (
+                      <Badge
+                        key={field}
+                        variant="outline"
+                        className="text-xs font-normal group-hover:!border-white group-hover:!text-white"
+                      >
+                        {field}
+                      </Badge>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </TableCell>
         )}
