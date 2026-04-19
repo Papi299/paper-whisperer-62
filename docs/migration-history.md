@@ -242,3 +242,22 @@ All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`.
 **Date:** April 2026
 **What:** Ran EXPLAIN ANALYZE on all key queries via temporary PL/pgSQL wrapper. Generated synthetic data at 500/2K/5K/10K paper tiers. Measured DB execution times at each scale.
 **Finding:** At current scale (389 papers), all queries execute in <40ms. Network RTT (~200ms) dominates. Keyword RPCs scale O(n×k) and reach ~225–275ms at 10K papers. Phase C optimization deferred — see [decisions-and-triggers.md](decisions-and-triggers.md).
+
+## Notes + search wave (PRs #84–#88)
+
+**Date:** April 2026
+**What:** Two related capability waves shipped back-to-back.
+
+**Notes feature (PRs #84–#87):**
+- PR #84 — Added `notes text` column on `papers` (nullable, no default) and a Notes `<Textarea>` in the Edit Paper dialog. Loaded with the existing list query, persisted via the existing `updatePaper` mutation. No new RPCs, indexes, or RLS.
+- PR #85 — Sticky-note icon in the list action cell opens a popover preview of the notes text. Shown only for papers with non-whitespace notes. No extra fetch.
+- PR #86 — Tri-state "Has Notes" filter (`all | has | none`) in the filter bar. Implemented as a PostgREST predicate in `buildPapersQuery.ts` using POSIX regex (`[^[:space:]]` / `^[[:space:]]*$`) so NULL and whitespace-only notes both count as "no notes" — matches the list-indicator semantics.
+- PR #87 — Migration `20260417020000_add_notes_to_search.sql` regenerates `papers.search_vector` to include `notes` at weight D, and adds `OR p.notes ILIKE …` to `search_papers_short`. Ranking hierarchy: A = title, B = abstract, C = journal + authors, D = notes. Migration applied to live Supabase.
+
+**Search behavior (PR #88):**
+- Migration `20260417030000_prefix_search.sql` replaces the body of the `search_papers` RPC. Old behavior used `websearch_to_tsquery`, which tokenizes and stems user input into complete lexemes — so `guideli` (lexeme `guideli`) did not match the stored lexeme `guidelin` from "guideline" until the full word was typed. New behavior splits the input on whitespace, strips only the ten tsquery operator/control characters (`& | ! ( ) : * < > ' " \`), appends `:*` to each non-empty token, `&`-joins them, and feeds the result to `to_tsquery('english', …)`. Unicode letters are preserved (Postgres regex character classes match per codepoint), so non-English content (Latin diacritics, Cyrillic, Hebrew, Arabic, CJK) continues to be searchable. Empty / all-blacklisted / whitespace-only input is guarded — `to_tsquery('')` is never called.
+- Unchanged: `search_vector` column, `idx_papers_search_vector` GIN index, `search_papers_short` ILIKE path, length-1-2 routing, frontend code, query keys, types, debounce.
+- Deliberately removed: `websearch_to_tsquery` sugar (quoted phrase, explicit `OR`, `-` exclusion). None were surfaced in the UI.
+- Migration applied to live Supabase. Manual verification confirmed partial-input matching (e.g., `Ast` → `Asth` → `Asthma` all return the "Asthma" paper) and monotonic narrowing across multi-syllable terms.
+
+**Files changed (cumulative):** `papers.notes` column add; `papers.search_vector` regenerated twice (notes inclusion, then unchanged across PR #88 since only the RPC body changed); two new RPC bodies (`search_papers`, `search_papers_short`); one new column-presence predicate in `buildPapersQuery.ts`; new UI surfaces for editing/viewing/filtering notes. No existing migration was modified — all changes are additive.

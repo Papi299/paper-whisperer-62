@@ -10,11 +10,13 @@ Academic paper library manager with server-side filtering, sorting, pagination, 
 
 ## Current status (April 2026)
 
-The app is **stable and hardened**. Two major work phases are complete:
+The app is **stable, hardened, and feature-complete at current scale**. Five major work phases are complete:
 
 1. **Read-path performance track** (PRs #56–#65) — server-side filtering, sorting, pagination, lazy loading, abstract on-demand fetch. Handles ~400+ papers with sub-second dashboard loads.
 2. **Security & schema integrity hardening** (PRs #67–#76) — edge function logging redaction, PubMed API key server-side migration, RLS restoration on all user-scoped tables, per-user uniqueness constraints, FK cascade fixes, and import UX improvements.
 3. **Correctness & hygiene fixes** (PRs #78–#82) — normalization worker error-handling fix, ghost query field removal, client-side code deduplication, Gemini API key transport hardening, and further log sanitization.
+4. **Paper notes feature wave** (PRs #84–#87) — `notes` column on `papers` with an Edit-dialog textarea, a list-cell sticky-note indicator with popover preview, a tri-state "Has Notes" filter, and inclusion of notes in full-text search (weight D) and the short-query ILIKE path.
+5. **Search-behavior upgrade** (PR #88) — `search_papers` rewritten as prefix-aware FTS so partial inputs match while typing (`guideli` finds "guideline"). Uses a Unicode-preserving blacklist of tsquery operator characters; the existing `search_vector`, GIN index, and short-search RPC are unchanged. Migration applied on Supabase and manually verified.
 
 Deeper DB optimization is evidence-deferred until the library grows past ~2,000–5,000 papers. See [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) for the exact re-evaluation criteria.
 
