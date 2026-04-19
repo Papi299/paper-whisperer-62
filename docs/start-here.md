@@ -87,18 +87,26 @@ PRs #81 and #82 were deployed to Supabase and verified:
 - FK `ON DELETE CASCADE` — all user-scoped tables now have correct CASCADE behavior
 - `paper_attachments` UPDATE RLS policy — no UPDATE code path exists in the app; the missing policy has zero real-world impact
 
-## Paper notes MVP (post-hardening features)
+## Paper notes — full feature wave (PRs #84–#87)
 
-Added a `notes text` column on `papers` (nullable, no default) and a free-text "Notes" `<Textarea>` in the Edit Paper dialog, placed between TL;DR and Study Type. Notes load with the existing list query and persist via the existing `updatePaper` mutation — no new RPCs, indexes, or RLS changes. Out of scope for the MVP: markdown, search/filter, export, AI processing, version history, sharing, bulk edit, and any non-dialog surface.
+The notes feature was built and shipped as a four-step capability. All four steps are merged and live in production:
 
-Follow-ups on the notes feature (all on top of the original column):
-- Notes preview in list — sticky-note icon in the action cell opens a popover of the notes text, shown only for papers with non-whitespace notes.
-- Has Notes filter — tri-state `all | has | none` dropdown in the filter bar, implemented as a PostgREST predicate in `buildPapersQuery.ts` using POSIX regex (`[^[:space:]]` / `^[[:space:]]*$`) so NULL and whitespace-only notes both count as "no notes" (matches the list-indicator semantics).
-- Notes included in text search — migration `20260417020000_add_notes_to_search.sql` regenerates `papers.search_vector` with `notes` at weight D and adds `OR p.notes ILIKE …` to `search_papers_short`. Zero frontend code changes; the existing search bar covers notes automatically. Ranking hierarchy: A = title, B = abstract, C = journal + authors, D = notes.
+1. **Notes column + edit surface (PR #84).** A `notes text` column on `papers` (nullable, no default) and a free-text "Notes" `<Textarea>` in the Edit Paper dialog, placed between TL;DR and Study Type. Notes load with the existing list query and persist via the existing `updatePaper` mutation — no new RPCs, indexes, or RLS changes.
+2. **List indicator + popover preview (PR #85).** A sticky-note icon appears in the action cell only for papers with non-whitespace notes. Clicking it opens a popover with the notes text. No extra fetch — uses the notes already loaded with the list.
+3. **"Has Notes" filter (PR #86).** Tri-state `all | has | none` dropdown in the filter bar, implemented as a PostgREST predicate in `buildPapersQuery.ts` using POSIX regex (`[^[:space:]]` / `^[[:space:]]*$`) so NULL and whitespace-only notes both count as "no notes" — matches the list-indicator semantics exactly.
+4. **Notes included in text search (PR #87).** Migration `20260417020000_add_notes_to_search.sql` regenerates `papers.search_vector` with `notes` at weight D and adds `OR p.notes ILIKE …` to `search_papers_short`. Zero frontend code changes; the existing search bar covers notes automatically. Ranking hierarchy: A = title, B = abstract, C = journal + authors, D = notes.
 
-## Prefix-aware FTS (post-notes-in-search)
+The migrations for both PR #86 (the regex predicate is client-side) and PR #87 (the `search_vector` rebuild + short-search RPC) have been applied to live Supabase and behavior verified end-to-end (edit → save → indicator → popover → filter → search-by-notes).
 
-Migration `20260417030000_prefix_search.sql` replaces the body of the `search_papers` RPC so partial inputs match while typing. The RPC no longer calls `websearch_to_tsquery` — instead it splits the user's input on whitespace, strips only the ten tsquery operator/control characters (`& | ! ( ) : * < > ' " \`), appends `:*` to each non-empty token, `&`-joins, and feeds the result to `to_tsquery('english', …)`. `guideli` now matches `guideline` (lexeme `guidelin` starts with `guideli`), and result counts narrow monotonically as the user types. Unicode letters (Latin diacritics, Cyrillic, Hebrew, Arabic, CJK, etc.) are preserved — Postgres regex character classes match per codepoint, so the blacklist never accidentally strips multibyte characters. The existing `search_vector` column, `idx_papers_search_vector` GIN index, `search_papers_short` ILIKE path, and length-1-2 routing are all unchanged. Deliberate loss: `websearch_to_tsquery` sugar (quoted phrase / explicit OR / `-` exclusion) — not surfaced anywhere in the UI.
+Out of scope for the notes feature and not planned: markdown rendering, export inclusion, AI processing of notes, version history, sharing, bulk edit, and any non-dialog editing surface.
+
+## Search behavior — prefix-aware FTS (PR #88, applied + verified)
+
+Migration `20260417030000_prefix_search.sql` replaces the body of the `search_papers` RPC so partial inputs match while typing. The RPC no longer calls `websearch_to_tsquery` — instead it splits the user's input on whitespace, strips only the ten tsquery operator/control characters (`& | ! ( ) : * < > ' " \`), appends `:*` to each non-empty token, `&`-joins, and feeds the result to `to_tsquery('english', …)`. `guideli` now matches `guideline` (lexeme `guidelin` starts with `guideli`), and result counts narrow monotonically as the user types. Unicode letters (Latin diacritics, Cyrillic, Hebrew, Arabic, CJK, etc.) are preserved — Postgres regex character classes match per codepoint, so the blacklist never accidentally strips multibyte characters. The existing `search_vector` column, `idx_papers_search_vector` GIN index, `search_papers_short` ILIKE path, and length-1-2 routing are all unchanged.
+
+**Status:** The migration has been applied to live Supabase, and manual verification has been completed. Partial inputs ("Ast" → "Asth" → "Asthma") now match the corresponding paper at every step, monotonic narrowing is observed across multi-syllable terms, and the short-query (1–2 char) ILIKE path is unaffected.
+
+**Deliberately removed (not a regression to chase):** `websearch_to_tsquery` sugar — quoted phrases, explicit `OR`, and `-` exclusion. None of these were surfaced in the UI or documented as in use. If they are ever wanted back, that is a future discrete change.
 
 ## Standing product decisions — do not re-propose
 
@@ -149,7 +157,7 @@ These were thoroughly measured and verified. Changing them requires new evidence
 
 ## Current recommendation
 
-The app is performant and secure at current scale. The security/integrity hardening wave (PRs #67–#76) and the follow-up correctness/hygiene fixes (PRs #78–#82) are complete. Network RTT to Supabase Mumbai (~200ms from Israel) dominates wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
+The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), and the search-behavior upgrade (PR #88) are all complete and live. PR #88's migration is applied on Supabase and manually verified. Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
 
 ## Key files
 
