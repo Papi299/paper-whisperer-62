@@ -106,7 +106,19 @@ Migration `20260417030000_prefix_search.sql` replaces the body of the `search_pa
 
 **Status:** The migration has been applied to live Supabase, and manual verification has been completed. Partial inputs ("Ast" → "Asth" → "Asthma") now match the corresponding paper at every step, monotonic narrowing is observed across multi-syllable terms, and the short-query (1–2 char) ILIKE path is unaffected.
 
-**Deliberately removed (not a regression to chase):** `websearch_to_tsquery` sugar — quoted phrases, explicit `OR`, and `-` exclusion. None of these were surfaced in the UI or documented as in use. If they are ever wanted back, that is a future discrete change.
+**Dropped from the FTS path (PR #88):** `websearch_to_tsquery` sugar — explicit `OR`, and `-` exclusion. Quoted phrases were also dropped from this path, but were subsequently re-introduced via a separate ILIKE-based implementation in PR #92 (see next section). Explicit `OR` and `-` exclusion remain unsupported and are not planned.
+
+## Search wave — keywords, server-side attribution, quoted phrases (PRs #91–#93, applied + verified)
+
+Three back-to-back PRs extended search end-to-end. All are merged and live.
+
+1. **Keywords in search + server-side match attribution (PR #91).** Migration `20260420010000_keywords_in_search_with_attribution.sql` rebuilds `papers.search_vector` to include `keywords::text` at weight C (alongside `authors::text` and `journal`; title stays A, abstract B, notes D) and recreates `idx_papers_search_vector` on the rebuilt column. Both search RPCs (`search_papers` FTS, `search_papers_short` ILIKE) were recreated to return six per-field attribution booleans — `matched_title`, `matched_abstract`, `matched_authors`, `matched_journal`, `matched_notes`, `matched_keywords` — computed server-side against each field's own `to_tsvector`/ILIKE test. Client side, `useFilterState.ts` now threads a `Map<paper_id, MatchFlags>` through to `PaperList`, which renders a read-only "Matched in: …" sub-line of outline `<Badge>`s on each matching row in fixed field order (Title → Abstract → Authors → Journal → Notes → Keywords). Attribution is authoritative — the client does not re-tokenize the query. The sub-line hides entirely when search is empty or only non-search filters are active.
+
+2. **Quoted phrase search (PR #92).** Wrapping a query in double quotes (`"muscle protein synthesis"`) now performs a literal phrase match against title, abstract, authors (jsonb), journal, notes, and keywords (jsonb) — no stemming, no tokenization, Unicode-safe, punctuation-preserving (`"COX-2"` works). Implementation reuses `search_papers_short`'s per-field ILIKE + `EXISTS (SELECT 1 FROM jsonb_array_elements_text(...) WHERE elem ILIKE …)` structure with the phrase wrapped in `%…%`, so zero new SQL was needed and the same six `matched_*` columns flow through. `useFilterState.ts` detects the `"…"` wrapper and routes to a third mode (phrase) that takes priority over the FTS (≥3 chars) and short-query (1–2 chars) modes via mutually-exclusive `!usePhraseSearch` guards — unquoted behavior is bit-identical to PR #88/#91. A single quote character, an unterminated quote, or `""` all fall back to the regular FTS/short path.
+
+3. **Placeholder-based discoverability (PR #93).** The search input placeholder reads `Search titles, authors, notes, keywords... Use "..." for exact phrase`. Net diff vs main is a single-line placeholder change in `SearchFilters.tsx`; no helper line, tooltip, popover, or docs link surface was added. This was the user's chosen direction after an initial helper-line prototype was rejected as scope creep.
+
+**Status:** Migration `20260420010000_keywords_in_search_with_attribution.sql` has been applied to live Supabase and verified end-to-end. Manual verification covered keyword-only matches, phrase-only matches on multi-word phrases present as contiguous substrings, attribution chips rendering in fixed order on the row, and clean behavior when search is cleared.
 
 ## Standing product decisions — do not re-propose
 
@@ -157,17 +169,22 @@ These were thoroughly measured and verified. Changing them requires new evidence
 
 ## Current recommendation
 
-The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), and the search-behavior upgrade (PR #88) are all complete and live. PR #88's migration is applied on Supabase and manually verified. Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
+The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), the prefix-aware FTS upgrade (PR #88), and the search wave (keywords in search + server-side attribution + quoted phrase search + placeholder discoverability, PRs #91–#93) are all complete and live. Migrations `20260417030000_prefix_search.sql` and `20260420010000_keywords_in_search_with_attribution.sql` are applied on Supabase and manually verified. Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
 
 ## Key files
 
 | File | Role |
 |---|---|
 | `src/hooks/usePapers.ts` | Core papers infinite query + server filter/sort |
+| `src/hooks/useFilterState.ts` | Filter/search state + three-mode search routing (phrase / FTS / short) + `searchMatchFlags` map |
 | `src/hooks/useAbstract.ts` | On-demand abstract fetch + batch fetch |
 | `src/hooks/papers/useBulkSelection.ts` | Select-all via `allFilteredIds` |
+| `src/hooks/papers/types.ts` | `MatchFlags`, `NotesPresence`, server filter/sort param types |
 | `src/lib/buildPapersQuery.ts` | PostgREST query builder with filter predicates |
 | `src/lib/queryKeys.ts` | React Query key structure |
 | `src/pages/Dashboard.tsx` | Main page — orchestrates all hooks |
-| `src/components/papers/PaperList.tsx` | Virtualized table with lazy abstract expand |
+| `src/components/papers/PaperList.tsx` | Virtualized table with lazy abstract expand + "Matched in: …" sub-line |
+| `src/components/papers/SearchFilters.tsx` | Search input (with quoted-phrase placeholder hint) and filter controls |
+| `supabase/migrations/20260417030000_prefix_search.sql` | Prefix-aware FTS (PR #88) |
+| `supabase/migrations/20260420010000_keywords_in_search_with_attribution.sql` | Keywords in search_vector + 6 `matched_*` attribution flags (PR #91) |
 | `supabase/migrations/` | All DB schema + RPC definitions |
