@@ -45,11 +45,39 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   // ── Debounced search ──
   const debouncedSearchQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
 
-  // Search is always server-side: FTS for ≥3 chars, ILIKE for 1-2 chars.
+  /**
+   * Exact-phrase mode: a query wrapped in double quotes (e.g.
+   * `"muscle protein synthesis"`) is treated as a literal contiguous phrase
+   * and matched via case-insensitive ILIKE substring across all six
+   * searchable fields. Returns the inner phrase (quotes stripped, trimmed)
+   * when the query is in phrase mode, otherwise null.
+   *
+   * Why ILIKE rather than `phraseto_tsquery`/`<->`: ILIKE is literal — what
+   * the user types is what gets matched, with no English-stemmer surprises
+   * (a user typing `"muscles"` will not match `muscle`), no Unicode
+   * fragility, and no tokenizer edge cases on punctuation like `"COX-2"`.
+   * The cost — a sequential scan instead of GIN — is sub-millisecond at
+   * the current paper-count scale and bounded by the user's library size.
+   */
+  const phraseQuery: string | null = useMemo(() => {
+    const trimmed = debouncedSearchQuery.trim();
+    if (trimmed.length < 2) return null;
+    if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) return null;
+    const inner = trimmed.slice(1, -1).trim();
+    return inner.length > 0 ? inner : null;
+  }, [debouncedSearchQuery]);
+
+  // Three mutually-exclusive search routes:
+  //   • Phrase  — quoted query → ILIKE substring of the inner phrase
+  //   • FTS    — unquoted query ≥3 chars → prefix-aware tsquery
+  //   • Short  — unquoted query 1-2 chars → ILIKE substring
+  // Phrase takes priority and suppresses the other two so the existing
+  // unquoted behavior is preserved exactly when the query is not quoted.
+  const usePhraseSearch = !!userId && phraseQuery !== null;
   const useFtsSearch =
-    !!userId && debouncedSearchQuery.length >= SERVER_SEARCH_MIN_LENGTH;
+    !!userId && !usePhraseSearch && debouncedSearchQuery.length >= SERVER_SEARCH_MIN_LENGTH;
   const useShortSearch =
-    !!userId && debouncedSearchQuery.length > 0 && debouncedSearchQuery.length < SERVER_SEARCH_MIN_LENGTH;
+    !!userId && !usePhraseSearch && debouncedSearchQuery.length > 0 && debouncedSearchQuery.length < SERVER_SEARCH_MIN_LENGTH;
 
   // ── Server-side full-text search via search_papers RPC ──
   // Returns a Map<paper_id, MatchFlags> so the UI can render authoritative
@@ -116,17 +144,60 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     placeholderData: (prev) => prev,
   });
 
+  // ── Server-side phrase search via search_papers_short RPC ──
+  // Reuses the existing ILIKE-substring RPC with the inner (unquoted) phrase
+  // as the query. The RPC tests `field ILIKE '%<phrase>%'` per scalar field
+  // and `EXISTS (... element ILIKE '%<phrase>%')` over the jsonb arrays
+  // `authors` / `keywords` — exactly the contiguous-phrase semantics the
+  // product spec asks for. Same Map<paper_id, MatchFlags> shape as the
+  // other two paths, so the UI and intersection logic need no special-casing.
+  const { data: phraseSearchMatches } = useQuery<Map<string, MatchFlags>>({
+    queryKey: ["search_papers_phrase", userId, phraseQuery],
+    queryFn: timedQueryFn("search_papers_short (phrase)", async () => {
+      const { data, error } = await supabase.rpc("search_papers_short", {
+        p_user_id: userId!,
+        p_query: phraseQuery!,
+      });
+      if (error) throw error;
+      const rows = data as Array<{ paper_id: string } & MatchFlags>;
+      return new Map(
+        rows.map((r) => [
+          r.paper_id,
+          {
+            matched_title: r.matched_title,
+            matched_abstract: r.matched_abstract,
+            matched_authors: r.matched_authors,
+            matched_journal: r.matched_journal,
+            matched_notes: r.matched_notes,
+            matched_keywords: r.matched_keywords,
+          },
+        ]),
+      );
+    }),
+    enabled: usePhraseSearch,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
   /**
    * Combined per-row match flags for the active search path. Whichever path
-   * (FTS or short) is enabled supplies the Map; null when no search is
-   * active or the query has not yet resolved. The UI consumes this directly
-   * and looks up `paper.id`.
+   * (phrase / FTS / short) is enabled supplies the Map; null when no search
+   * is active or the query has not yet resolved. The UI consumes this
+   * directly and looks up `paper.id`.
    */
   const searchMatchFlags: Map<string, MatchFlags> | null = useMemo(() => {
+    if (usePhraseSearch) return phraseSearchMatches ?? null;
     if (useFtsSearch) return serverSearchMatches ?? null;
     if (useShortSearch) return shortSearchMatches ?? null;
     return null;
-  }, [useFtsSearch, useShortSearch, serverSearchMatches, shortSearchMatches]);
+  }, [
+    usePhraseSearch,
+    phraseSearchMatches,
+    useFtsSearch,
+    serverSearchMatches,
+    useShortSearch,
+    shortSearchMatches,
+  ]);
 
   // ── Junction pre-queries (project/tag ID resolution) ──
   const { data: projectPaperIds } = useQuery<string[]>({
@@ -177,16 +248,18 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   const filterPaperIds = useMemo((): string[] | null | undefined => {
     const needsProject = !!selectedProjectId;
     const needsTag = !!selectedTagId;
+    const needsPhraseSearch = usePhraseSearch;
     const needsFtsSearch = useFtsSearch;
     const needsShortSearch = useShortSearch;
     const needsKeywords = selectedKeywords.length > 0;
 
     // No ID-based filter active → null (no filtering)
-    if (!needsProject && !needsTag && !needsFtsSearch && !needsShortSearch && !needsKeywords) return null;
+    if (!needsProject && !needsTag && !needsPhraseSearch && !needsFtsSearch && !needsShortSearch && !needsKeywords) return null;
 
     // Any required ID set still loading → undefined (block papers query)
     if (needsProject && projectPaperIds === undefined) return undefined;
     if (needsTag && tagPaperIds === undefined) return undefined;
+    if (needsPhraseSearch && phraseSearchMatches === undefined) return undefined;
     if (needsFtsSearch && serverSearchMatches === undefined) return undefined;
     if (needsShortSearch && shortSearchMatches === undefined) return undefined;
     if (needsKeywords && keywordPaperIds === undefined) return undefined;
@@ -195,6 +268,7 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     const idSets: string[][] = [];
     if (needsProject) idSets.push(projectPaperIds!);
     if (needsTag) idSets.push(tagPaperIds!);
+    if (needsPhraseSearch) idSets.push(Array.from(phraseSearchMatches!.keys()));
     if (needsFtsSearch) idSets.push(Array.from(serverSearchMatches!.keys()));
     if (needsShortSearch) idSets.push(Array.from(shortSearchMatches!.keys()));
     if (needsKeywords) idSets.push(keywordPaperIds!);
@@ -212,6 +286,8 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     projectPaperIds,
     selectedTagId,
     tagPaperIds,
+    usePhraseSearch,
+    phraseSearchMatches,
     useFtsSearch,
     serverSearchMatches,
     useShortSearch,
