@@ -88,7 +88,7 @@ export function SearchFilters({
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search titles, authors, journals..."
+            placeholder={'Search titles, authors, notes, keywords... Use "..." for exact phrase'}
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="pl-9"
