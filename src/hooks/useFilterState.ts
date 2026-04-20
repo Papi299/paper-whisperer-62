@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { ColumnId } from "@/hooks/useColumnVisibility";
 import type { SortDirection } from "@/components/papers/ResizableTableHeader";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
-import type { NotesPresence, ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
+import type { MatchFlags, NotesPresence, ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { timedQueryFn } from "@/lib/queryTiming";
 
@@ -52,8 +52,12 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     !!userId && debouncedSearchQuery.length > 0 && debouncedSearchQuery.length < SERVER_SEARCH_MIN_LENGTH;
 
   // ── Server-side full-text search via search_papers RPC ──
-  const { data: serverSearchIds, isFetching: isSearching } = useQuery<
-    Set<string>
+  // Returns a Map<paper_id, MatchFlags> so the UI can render authoritative
+  // per-field "Matched in:" badges without re-deriving anything client-side.
+  // The Set of matching IDs (used for filter intersection below) is derived
+  // from `.keys()` — same data, two views.
+  const { data: serverSearchMatches, isFetching: isSearching } = useQuery<
+    Map<string, MatchFlags>
   >({
     queryKey: ["search_papers", userId, debouncedSearchQuery],
     queryFn: timedQueryFn("search_papers (FTS)", async () => {
@@ -62,8 +66,19 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
         p_query: debouncedSearchQuery,
       });
       if (error) throw error;
-      return new Set(
-        (data as { paper_id: string; rank: number }[]).map((r) => r.paper_id),
+      const rows = data as Array<{ paper_id: string; rank: number } & MatchFlags>;
+      return new Map(
+        rows.map((r) => [
+          r.paper_id,
+          {
+            matched_title: r.matched_title,
+            matched_abstract: r.matched_abstract,
+            matched_authors: r.matched_authors,
+            matched_journal: r.matched_journal,
+            matched_notes: r.matched_notes,
+            matched_keywords: r.matched_keywords,
+          },
+        ]),
       );
     }),
     enabled: useFtsSearch,
@@ -72,7 +87,8 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   });
 
   // ── Server-side short search via ILIKE (1-2 char queries) ──
-  const { data: shortSearchIds } = useQuery<Set<string>>({
+  // Same Map<paper_id, MatchFlags> shape — RPC also returns per-field flags.
+  const { data: shortSearchMatches } = useQuery<Map<string, MatchFlags>>({
     queryKey: ["search_papers_short", userId, debouncedSearchQuery],
     queryFn: timedQueryFn("search_papers_short (ILIKE)", async () => {
       const { data, error } = await supabase.rpc("search_papers_short", {
@@ -80,14 +96,37 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
         p_query: debouncedSearchQuery,
       });
       if (error) throw error;
-      return new Set(
-        (data as { paper_id: string }[]).map((r) => r.paper_id),
+      const rows = data as Array<{ paper_id: string } & MatchFlags>;
+      return new Map(
+        rows.map((r) => [
+          r.paper_id,
+          {
+            matched_title: r.matched_title,
+            matched_abstract: r.matched_abstract,
+            matched_authors: r.matched_authors,
+            matched_journal: r.matched_journal,
+            matched_notes: r.matched_notes,
+            matched_keywords: r.matched_keywords,
+          },
+        ]),
       );
     }),
     enabled: useShortSearch,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
+
+  /**
+   * Combined per-row match flags for the active search path. Whichever path
+   * (FTS or short) is enabled supplies the Map; null when no search is
+   * active or the query has not yet resolved. The UI consumes this directly
+   * and looks up `paper.id`.
+   */
+  const searchMatchFlags: Map<string, MatchFlags> | null = useMemo(() => {
+    if (useFtsSearch) return serverSearchMatches ?? null;
+    if (useShortSearch) return shortSearchMatches ?? null;
+    return null;
+  }, [useFtsSearch, useShortSearch, serverSearchMatches, shortSearchMatches]);
 
   // ── Junction pre-queries (project/tag ID resolution) ──
   const { data: projectPaperIds } = useQuery<string[]>({
@@ -148,16 +187,16 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     // Any required ID set still loading → undefined (block papers query)
     if (needsProject && projectPaperIds === undefined) return undefined;
     if (needsTag && tagPaperIds === undefined) return undefined;
-    if (needsFtsSearch && serverSearchIds === undefined) return undefined;
-    if (needsShortSearch && shortSearchIds === undefined) return undefined;
+    if (needsFtsSearch && serverSearchMatches === undefined) return undefined;
+    if (needsShortSearch && shortSearchMatches === undefined) return undefined;
     if (needsKeywords && keywordPaperIds === undefined) return undefined;
 
     // All required sets resolved — intersect them
     const idSets: string[][] = [];
     if (needsProject) idSets.push(projectPaperIds!);
     if (needsTag) idSets.push(tagPaperIds!);
-    if (needsFtsSearch) idSets.push(Array.from(serverSearchIds!));
-    if (needsShortSearch) idSets.push(Array.from(shortSearchIds!));
+    if (needsFtsSearch) idSets.push(Array.from(serverSearchMatches!.keys()));
+    if (needsShortSearch) idSets.push(Array.from(shortSearchMatches!.keys()));
     if (needsKeywords) idSets.push(keywordPaperIds!);
 
     if (idSets.length === 0) return null; // shouldn't happen, safe fallback
@@ -174,9 +213,9 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     selectedTagId,
     tagPaperIds,
     useFtsSearch,
-    serverSearchIds,
+    serverSearchMatches,
     useShortSearch,
-    shortSearchIds,
+    shortSearchMatches,
     selectedKeywords,
     keywordPaperIds,
   ]);
@@ -291,5 +330,13 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     handleKeywordToggle,
     clearFilters,
     hasActiveFilters,
+
+    /**
+     * Authoritative per-paper match attribution from the active search RPC,
+     * keyed by paper_id. Null when no search query is active or the result
+     * has not yet resolved. Consumed by `PaperList` to render the
+     * "Matched in:" sub-line in each row.
+     */
+    searchMatchFlags,
   };
 }

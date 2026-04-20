@@ -67,3 +67,25 @@ export interface ServerSortParams {
 export function areServerFiltersReady(params: ServerFilterParams): boolean {
   return params.filterPaperIds !== undefined;
 }
+
+/**
+ * Per-field match flags returned by `search_papers` and `search_papers_short`.
+ * Each flag is true iff the corresponding paper field matched the active
+ * search query under the path-appropriate rule (FTS prefix or ILIKE substring).
+ *
+ * Authoritative — derived server-side, not inferred on the client. The UI
+ * renders the "Matched in: …" sub-line in the paper row directly from these
+ * flags, in fixed UI order (Title → Abstract → Authors → Journal → Notes →
+ * Keywords).
+ *
+ * Snake_case mirrors the SQL return columns to keep the row → state mapping
+ * trivial.
+ */
+export interface MatchFlags {
+  matched_title: boolean;
+  matched_abstract: boolean;
+  matched_authors: boolean;
+  matched_journal: boolean;
+  matched_notes: boolean;
+  matched_keywords: boolean;
+}
