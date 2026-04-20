@@ -85,14 +85,19 @@ export function SearchFilters({
     <div className="space-y-4">
       <div className="flex flex-wrap gap-4 items-center">
         {/* Search */}
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search titles, authors, journals..."
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="pl-9"
-          />
+        <div className="flex-1 min-w-[200px]">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search titles, authors, journals..."
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground mt-1 pl-1">
+            Tip: Use "..." for exact phrase search
+          </p>
         </div>
 
         {/* Year range */}
