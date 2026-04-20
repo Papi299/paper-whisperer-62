@@ -129,6 +129,7 @@ function DashboardContent() {
     handleKeywordToggle,
     clearFilters,
     hasActiveFilters,
+    searchMatchFlags,
   } = useFilterState({ poolStudyTypes, userId: user?.id });
 
   // ── Step 2: Papers (receives server params — already sorted by server) ──
@@ -528,6 +529,7 @@ function DashboardContent() {
             hasNextPage={hasNextPage}
             isFetchingNextPage={isFetchingNextPage}
             onLoadMore={fetchNextPage}
+            searchMatchFlags={searchMatchFlags}
           />
 
           <BulkActionsToolbar

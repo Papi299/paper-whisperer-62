@@ -31,6 +31,21 @@ import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { escapeRegExp } from "@/lib/textUtils";
 import { useAbstract } from "@/hooks/useAbstract";
+import type { MatchFlags } from "@/hooks/papers/types";
+
+/**
+ * Fixed UI order for the "Matched in:" badge row, paired with the boolean
+ * field on `MatchFlags`. Mirrors the FTS weight order (A→D) plus keywords
+ * appended at the end so they read after the existing fields.
+ */
+const MATCH_FIELD_ORDER: Array<{ key: keyof MatchFlags; label: string }> = [
+  { key: "matched_title", label: "Title" },
+  { key: "matched_abstract", label: "Abstract" },
+  { key: "matched_authors", label: "Authors" },
+  { key: "matched_journal", label: "Journal" },
+  { key: "matched_notes", label: "Notes" },
+  { key: "matched_keywords", label: "Keywords" },
+];
 
 /** Decode HTML entities (e.g. &#xf8; → ø) using a temporary textarea */
 function decodeHtml(html: string): string {
@@ -172,6 +187,13 @@ interface PaperListProps {
   isFetchingNextPage?: boolean;
   /** Callback to load the next page (triggered by scroll sentinel). */
   onLoadMore?: () => void;
+  /**
+   * Authoritative per-paper match attribution from the active search RPC,
+   * keyed by paper_id. Null when no search query is active or results have
+   * not yet resolved. When non-null, each row renders a "Matched in:" sub-
+   * line in its title cell from the flags for its own id.
+   */
+  searchMatchFlags?: Map<string, MatchFlags> | null;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -208,6 +230,7 @@ export function PaperList({
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
+  searchMatchFlags,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -428,6 +451,7 @@ export function PaperList({
               onToggleSelect={onToggleSelect}
               onAnalyzePaper={onAnalyzePaper}
               isAnalyzing={analyzingPaperId === paper.id}
+              searchMatchFlags={searchMatchFlags}
             />
           );
         })}
@@ -503,6 +527,12 @@ interface PaperRowProps {
   onToggleSelect: (paperId: string) => void;
   onAnalyzePaper?: (paper: PaperWithTags) => Promise<void>;
   isAnalyzing?: boolean;
+  /**
+   * Authoritative per-paper match attribution from the active search RPC,
+   * keyed by paper_id. When non-null and this row's id is present, the title
+   * cell renders a "Matched in:" sub-line listing the matching fields.
+   */
+  searchMatchFlags?: Map<string, MatchFlags> | null;
 }
 
 function PaperRow({
@@ -527,6 +557,7 @@ function PaperRow({
   onToggleSelect,
   onAnalyzePaper,
   isAnalyzing,
+  searchMatchFlags,
 }: PaperRowProps) {
   // On-demand abstract: only fetch when the row is expanded
   const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(isExpanded ? paper.id : null);
@@ -583,6 +614,26 @@ function PaperRow({
                   ))}
                 </div>
               )}
+              {searchMatchFlags && (() => {
+                const flags = searchMatchFlags.get(paper.id);
+                if (!flags) return null;
+                const matched = MATCH_FIELD_ORDER.filter((f) => flags[f.key]);
+                if (matched.length === 0) return null;
+                return (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-xs text-muted-foreground group-hover:text-orange-50">Matched in:</span>
+                    {matched.map((f) => (
+                      <Badge
+                        key={f.key}
+                        variant="outline"
+                        className="text-xs font-normal group-hover:!border-white group-hover:!text-white"
+                      >
+                        {f.label}
+                      </Badge>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </TableCell>
         )}
