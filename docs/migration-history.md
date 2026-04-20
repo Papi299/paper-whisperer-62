@@ -261,3 +261,39 @@ All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`.
 - Migration applied to live Supabase. Manual verification confirmed partial-input matching (e.g., `Ast` → `Asth` → `Asthma` all return the "Asthma" paper) and monotonic narrowing across multi-syllable terms.
 
 **Files changed (cumulative):** `papers.notes` column add; `papers.search_vector` regenerated twice (notes inclusion, then unchanged across PR #88 since only the RPC body changed); two new RPC bodies (`search_papers`, `search_papers_short`); one new column-presence predicate in `buildPapersQuery.ts`; new UI surfaces for editing/viewing/filtering notes. No existing migration was modified — all changes are additive.
+
+## Search wave — keywords in search + server-side attribution + quoted phrases (PRs #91–#93)
+
+**Date:** April 2026
+**What:** Three back-to-back PRs extending search end-to-end. All merged and live.
+
+**Keywords in search_vector + per-field attribution (PR #91):**
+- Migration `20260420010000_keywords_in_search_with_attribution.sql` drops + rebuilds `papers.search_vector` so `keywords::text` is included at weight C, alongside `authors::text` and `journal`. Title stays A, abstract B, notes D.
+- Recreates `idx_papers_search_vector` GIN index on the rebuilt column.
+- `DROP FUNCTION IF EXISTS search_papers(...)` then recreates it with return columns `(paper_id UUID, rank REAL, matched_title BOOLEAN, matched_abstract BOOLEAN, matched_authors BOOLEAN, matched_journal BOOLEAN, matched_notes BOOLEAN, matched_keywords BOOLEAN)`. Per-field flags computed by testing each field's own `to_tsvector('english', coalesce(field, ''))` against the same prefix-aware tsquery used in the WHERE clause. Sanitization rule unchanged from `20260417030000_prefix_search.sql` (whitespace split + tsquery-operator blacklist + `:*` per token + `&`-join, Unicode preserved).
+- `DROP FUNCTION IF EXISTS search_papers_short(...)` then recreates it with the same eight-column return shape. Flags computed via direct ILIKE for scalar fields and `EXISTS (SELECT 1 FROM jsonb_array_elements_text(...) WHERE elem ILIKE …)` for `authors` and `keywords`.
+- `GRANT EXECUTE ... TO authenticated` on both.
+- Client: `src/hooks/papers/types.ts` gains a `MatchFlags` interface mirroring the SQL return columns 1:1 (snake_case). `src/hooks/useFilterState.ts` replaces `serverSearchIds: Set<string>` and `shortSearchIds: Set<string>` with `Map<string, MatchFlags>` and exports a memoized `searchMatchFlags`. `src/components/papers/PaperList.tsx` adds a `MATCH_FIELD_ORDER` constant (Title, Abstract, Authors, Journal, Notes, Keywords) and renders a read-only "Matched in: …" sub-line of outline `<Badge>`s on each matching row after the project-chips line. The sub-line is hidden when search is empty or only non-search filters are active. `src/pages/Dashboard.tsx` threads `searchMatchFlags` from the hook into `<PaperList />`.
+
+**Quoted phrase search (PR #92):**
+- No migration. `src/hooks/useFilterState.ts` detects a `"…"` wrapper on the debounced query and, when present with a non-empty inner string of ≥1 character, routes to a new phrase-search mode that reuses the existing `search_papers_short` RPC with the inner string wrapped in `%…%` for per-field ILIKE + `EXISTS` over jsonb arrays. Phrase mode takes priority over FTS (≥3 chars) and short-query (1–2 chars) modes via mutually-exclusive `!usePhraseSearch` guards; unquoted behavior is bit-identical to PR #91.
+- Literal match — no stemming, no tokenization, Unicode-safe, punctuation-preserving (e.g. `"COX-2"`, `"研究"`).
+- A single quote character, an unterminated quote, or `""` all fall back to the regular FTS/short path.
+- The same six `matched_*` columns flow through, so the "Matched in: …" sub-line works identically for phrase queries.
+
+**Placeholder-based discoverability hint (PR #93):**
+- No migration. Single-line change in `src/components/papers/SearchFilters.tsx`: placeholder updated to `Search titles, authors, notes, keywords... Use "..." for exact phrase` (JSX expression form because the literal contains double quotes).
+- An initial helper-line prototype was implemented in a first commit and then reverted in a follow-up commit on the same branch per user direction — the final net diff vs main is the one-line placeholder change only.
+
+**Files changed (cumulative across PRs #91–#93):**
+- New migration: `supabase/migrations/20260420010000_keywords_in_search_with_attribution.sql`
+- `src/hooks/papers/types.ts` (new `MatchFlags` interface)
+- `src/hooks/useFilterState.ts` (three-mode routing, `searchMatchFlags` map export)
+- `src/components/papers/PaperList.tsx` (`MATCH_FIELD_ORDER`, "Matched in: …" sub-line)
+- `src/pages/Dashboard.tsx` (thread `searchMatchFlags` prop)
+- `src/components/papers/SearchFilters.tsx` (placeholder text)
+
+**Verification:**
+- Migration `20260420010000_keywords_in_search_with_attribution.sql` applied to live Supabase via SQL Editor. Post-deploy SQL confirmed both RPCs return the six `matched_*` boolean columns in correct order.
+- Manual end-to-end check: keyword-only matches surface `Matched in: Keywords`; multi-field matches render chips in fixed order; phrase queries on multi-word substrings (`"muscle protein synthesis"`) return literal matches with no stemmer surprise; clearing the search box removes all sub-lines; non-search filters alone render no sub-line.
+- `npx tsc --noEmit`, `npx vitest run`, `npm run build` all clean after each PR.
