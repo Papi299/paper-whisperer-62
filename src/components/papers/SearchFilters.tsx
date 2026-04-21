@@ -15,8 +15,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Search, X, Download, FileText, FileSpreadsheet, BookOpen, Loader2 } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
+import { FilterPresetsMenu } from "./FilterPresetsMenu";
 import { Project, Tag } from "@/types/database";
 import type { NotesPresence } from "@/hooks/papers/types";
+import type { FilterPreset, PresetPayload } from "@/hooks/useFilterPresets";
 
 interface SearchFiltersProps {
   searchQuery: string;
@@ -46,6 +48,14 @@ interface SearchFiltersProps {
   onTagChange: (tagId: string | null) => void;
   isExportReady?: boolean;
   isExporting?: boolean;
+  // Filter presets (Saved Searches)
+  presets: FilterPreset[];
+  presetsLoading: boolean;
+  presetsSaving: boolean;
+  getCurrentPresetPayload: () => PresetPayload;
+  onSavePreset: (name: string, payload: PresetPayload) => Promise<boolean>;
+  onLoadPreset: (preset: FilterPreset) => void;
+  onDeletePreset: (preset: Pick<FilterPreset, "id" | "name">) => Promise<void>;
 }
 
 export function SearchFilters({
@@ -76,6 +86,13 @@ export function SearchFilters({
   onTagChange,
   isExportReady,
   isExporting = false,
+  presets,
+  presetsLoading,
+  presetsSaving,
+  getCurrentPresetPayload,
+  onSavePreset,
+  onLoadPreset,
+  onDeletePreset,
 }: SearchFiltersProps) {
 
   // Export gating: based on isExportReady (from useExportPapers)
@@ -198,6 +215,15 @@ export function SearchFilters({
 
         {/* Actions */}
         <div className="flex gap-2">
+          <FilterPresetsMenu
+            presets={presets}
+            isLoading={presetsLoading}
+            isSaving={presetsSaving}
+            getCurrentPayload={getCurrentPresetPayload}
+            onSave={onSavePreset}
+            onLoad={onLoadPreset}
+            onDelete={onDeletePreset}
+          />
           {hasActiveFilters && (
             <Button variant="outline" size="sm" onClick={onClearFilters}>
               <X className="mr-1 h-4 w-4" />
