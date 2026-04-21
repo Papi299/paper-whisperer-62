@@ -120,6 +120,46 @@ Three back-to-back PRs extended search end-to-end. All are merged and live.
 
 **Status:** Migration `20260420010000_keywords_in_search_with_attribution.sql` has been applied to live Supabase and verified end-to-end. Manual verification covered keyword-only matches, phrase-only matches on multi-word phrases present as contiguous substrings, attribution chips rendering in fixed order on the row, and clean behavior when search is cleared.
 
+## Current search behavior — at a glance
+
+This is the authoritative summary of how the main search box behaves today. Treat it as the source of truth — do not re-derive it from the prose above.
+
+**Search modes (mutually exclusive, selected by query shape):**
+
+| Query shape | Mode | Backend |
+|---|---|---|
+| Empty | No search filtering | — |
+| Unquoted, 1–2 characters | Short ILIKE search | `search_papers_short` RPC |
+| Unquoted, 3+ characters | Prefix-aware FTS | `search_papers` RPC |
+| Quoted (`"..."`) with non-empty inner string | Exact phrase (literal ILIKE, no stemming) | `search_papers_short` RPC with wrapped `%phrase%` |
+
+An unterminated quote, a lone `"`, or `""` all fall back to the regular unquoted path for the inner length.
+
+**Searchable fields (all six are covered by every non-empty mode):**
+
+- title
+- abstract
+- authors
+- journal
+- notes
+- keywords
+
+**"Matched in:" sub-line:**
+
+- **Server-driven**, not client-inferred. The per-row chips come from six boolean columns (`matched_title`, `matched_abstract`, `matched_authors`, `matched_journal`, `matched_notes`, `matched_keywords`) returned by the search RPCs. The client does not re-tokenize the query.
+- Chip order is fixed: **Title → Abstract → Authors → Journal → Notes → Keywords**.
+- Hidden when search is empty or only non-search filters are active.
+
+**Discoverability:**
+
+- The `"..."` phrase syntax is taught via the search input **placeholder**, not a helper line, tooltip, or docs link. The placeholder reads `Search titles, authors, notes, keywords... Use "..." for exact phrase`. Do not re-propose a separate helper line.
+
+**Unsupported (not planned):** explicit `OR`, `-` exclusion, and any other `websearch_to_tsquery` sugar beyond quoted phrases.
+
+## Docs normalization for the search wave (PR #94)
+
+The handoff documentation was normalized to reflect PRs #91–#93 in PR #94 (merged). That work updated `docs/start-here.md`, `README.md`, and `docs/migration-history.md` — no code, schema, or behavior change. Future docs passes should only correct anything that remains stale; do not re-audit the same ground.
+
 ## Standing product decisions — do not re-propose
 
 These decisions have been explicitly made by the user. Do not suggest revisiting them unless the user explicitly asks.
@@ -169,7 +209,7 @@ These were thoroughly measured and verified. Changing them requires new evidence
 
 ## Current recommendation
 
-The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), the prefix-aware FTS upgrade (PR #88), and the search wave (keywords in search + server-side attribution + quoted phrase search + placeholder discoverability, PRs #91–#93) are all complete and live. Migrations `20260417030000_prefix_search.sql` and `20260420010000_keywords_in_search_with_attribution.sql` are applied on Supabase and manually verified. Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
+The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), the prefix-aware FTS upgrade (PR #88), the search wave (keywords in search + server-side attribution + quoted phrase search + placeholder discoverability, PRs #91–#93), and the docs normalization for that wave (PR #94) are all complete and live. Migrations `20260417030000_prefix_search.sql` and `20260420010000_keywords_in_search_with_attribution.sql` are applied on Supabase and manually verified. Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
 
 ## Key files
 
