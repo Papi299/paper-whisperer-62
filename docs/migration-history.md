@@ -297,3 +297,13 @@ All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`.
 - Migration `20260420010000_keywords_in_search_with_attribution.sql` applied to live Supabase via SQL Editor. Post-deploy SQL confirmed both RPCs return the six `matched_*` boolean columns in correct order.
 - Manual end-to-end check: keyword-only matches surface `Matched in: Keywords`; multi-field matches render chips in fixed order; phrase queries on multi-word substrings (`"muscle protein synthesis"`) return literal matches with no stemmer surprise; clearing the search box removes all sub-lines; non-search filters alone render no sub-line.
 - `npx tsc --noEmit`, `npx vitest run`, `npm run build` all clean after each PR.
+
+## Docs normalization for the search wave (PR #94)
+
+**Date:** April 2026
+**What:** Docs-only normalization so future planning sessions accurately reflect the completed search wave (PRs #91–#93). No code, schema, or behavior change.
+**Files changed:**
+- `docs/start-here.md` — corrected the stale "quoted phrases deliberately removed" claim (true for PR #88, superseded by PR #92), added a section covering PRs #91–#93, extended the "Key files" table with `useFilterState.ts`, `papers/types.ts`, `SearchFilters.tsx`, and the two search-related migrations, updated "Current recommendation" through PR #93.
+- `README.md` — added phase 6 to "Current status (April 2026)".
+- `docs/migration-history.md` — appended the "Search wave — keywords in search + server-side attribution + quoted phrases (PRs #91–#93)" section above.
+**No migration.** No DB change.

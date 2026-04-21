@@ -17,7 +17,18 @@ The app is **stable, hardened, and feature-complete at current scale**. Six majo
 3. **Correctness & hygiene fixes** (PRs #78–#82) — normalization worker error-handling fix, ghost query field removal, client-side code deduplication, Gemini API key transport hardening, and further log sanitization.
 4. **Paper notes feature wave** (PRs #84–#87) — `notes` column on `papers` with an Edit-dialog textarea, a list-cell sticky-note indicator with popover preview, a tri-state "Has Notes" filter, and inclusion of notes in full-text search (weight D) and the short-query ILIKE path.
 5. **Prefix-aware FTS** (PR #88) — `search_papers` rewritten as prefix-aware FTS so partial inputs match while typing (`guideli` finds "guideline"). Uses a Unicode-preserving blacklist of tsquery operator characters; the existing `search_vector`, GIN index, and short-search RPC are unchanged. Migration applied on Supabase and manually verified.
-6. **Search wave — keywords + attribution + phrase search** (PRs #91–#93) — `keywords` added to `search_vector` at weight C; both search RPCs return six per-field `matched_*` booleans that drive a read-only "Matched in: …" sub-line on each matching row in fixed field order (PR #91). Double-quoted queries (`"muscle protein synthesis"`) route to a literal phrase-match ILIKE path with no stemming, Unicode-safe, punctuation-preserving; unquoted behavior is bit-identical (PR #92). Search input placeholder reads `Search titles, authors, notes, keywords... Use "..." for exact phrase` for discoverability (PR #93). Migration `20260420010000_keywords_in_search_with_attribution.sql` applied on Supabase and verified end-to-end.
+6. **Search wave — keywords + attribution + phrase search** (PRs #91–#93, docs normalized in PR #94) — `keywords` added to `search_vector` at weight C; both search RPCs return six per-field `matched_*` booleans that drive a read-only "Matched in: …" sub-line on each matching row in fixed field order (PR #91). Double-quoted queries (`"muscle protein synthesis"`) route to a literal phrase-match ILIKE path with no stemming, Unicode-safe, punctuation-preserving; unquoted behavior is bit-identical (PR #92). Search input placeholder reads `Search titles, authors, notes, keywords... Use "..." for exact phrase` for discoverability (PR #93). Migration `20260420010000_keywords_in_search_with_attribution.sql` applied on Supabase and verified end-to-end.
+
+### Current search behavior
+
+The main search box operates in one of four mutually-exclusive modes, selected by the shape of the query:
+
+- **Empty** → no search filtering.
+- **Unquoted, 1–2 characters** → short ILIKE search (`search_papers_short` RPC).
+- **Unquoted, 3+ characters** → prefix-aware FTS (`search_papers` RPC).
+- **Quoted** (`"..."` with non-empty inner string) → literal phrase match (no stemming, Unicode-safe, punctuation-preserving).
+
+Every non-empty mode searches six fields: **title, abstract, authors, journal, notes, keywords**. Each matching row renders a **server-driven** "Matched in: …" sub-line showing which of those six fields matched (fixed order, no client-side re-tokenization). The `"..."` phrase syntax is taught via the search-input placeholder.
 
 Deeper DB optimization is evidence-deferred until the library grows past ~2,000–5,000 papers. See [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) for the exact re-evaluation criteria.
 
