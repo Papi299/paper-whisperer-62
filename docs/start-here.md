@@ -160,6 +160,53 @@ An unterminated quote, a lone `"`, or `""` all fall back to the regular unquoted
 
 The handoff documentation was normalized to reflect PRs #91–#93 in PR #94 (merged). That work updated `docs/start-here.md`, `README.md`, and `docs/migration-history.md` — no code, schema, or behavior change. Future docs passes should only correct anything that remains stale; do not re-audit the same ground.
 
+## Saved Searches / Filter Presets — MVP (PR #96, applied + verified)
+
+Users can now snapshot the current filter/search configuration under a name, list saved presets, load one with a click, and delete it. **Treat this section as the authoritative description of the presets capability — do not re-derive scope from the prose around it.**
+
+**Persistence model.** Presets are **server-side, per user**. They are NOT in `localStorage`. The backing table is `public.filter_presets` (one JSONB `payload` column plus `id`/`user_id`/`name`/timestamps), with full RLS (`auth.uid() = user_id` for SELECT/INSERT/UPDATE/DELETE), `FORCE ROW LEVEL SECURITY`, a case-insensitive unique index `idx_filter_presets_user_name` on `(user_id, lower(name))`, and the standard `update_updated_at_column()` trigger. Migration: `supabase/migrations/20260421010000_add_filter_presets.sql`.
+
+**Migration deployment status.** The migration has been applied to live Supabase. Post-deploy SQL spot-checks confirmed: 6 columns all `NOT NULL` with correct types (`uuid`, `text`, `jsonb`, `timestamptz`); both `relrowsecurity` and `relforcerowsecurity` are `true`; four policies exist (one each for SELECT/INSERT/UPDATE/DELETE); the case-insensitive unique index on `(user_id, lower(name))` is present alongside the user-id lookup index. Cross-user RLS isolation (sign in as a second user and verify zero rows are visible in `filter_presets`) was on the manual checklist but has not been empirically performed in-session — the structural confirmation makes correct behavior very likely, but treat that one item as not-yet-empirically-verified.
+
+**MVP actions.** The Presets dropdown in the filters row supports exactly four user-visible actions:
+
+- **Save** the current filter state under a user-supplied name (Dialog with a single Input; trim non-empty; ≤ 80 chars; duplicate name surfaces a toast and does NOT overwrite).
+- **List** saved presets alphabetically (case-insensitive) inside the dropdown; empty state reads "No saved searches yet".
+- **Load** a preset by clicking its row.
+- **Delete** a preset via a trailing trash icon → AlertDialog confirmation.
+
+**Saved payload — exactly these 8 fields plus a `version: 1` sentinel.** The Zod schema in `src/hooks/useFilterPresets.ts` is the source of truth. Do not assume any other field is in the payload.
+
+| Field | Type | Notes |
+|---|---|---|
+| `searchQuery` | `string` | Saved **raw, verbatim** — surrounding double-quotes are preserved so quoted phrase searches like `"muscle protein synthesis"` round-trip exactly and re-trigger the phrase-search route on load |
+| `yearFrom` | `string` | Raw text-input value; may be `""` |
+| `yearTo` | `string` | Raw text-input value; may be `""` |
+| `studyType` | `string` | `"all"` for the no-filter case |
+| `notesPresence` | `"all" \| "has" \| "none"` | |
+| `selectedKeywords` | `string[]` | Order preserved |
+| `selectedProjectId` | `string \| null` | UUID or null |
+| `selectedTagId` | `string \| null` | UUID or null |
+
+**Load semantics — full replacement, not merge.** Loading a preset deterministically overwrites all 8 fields via direct setter calls. There is no partial merge, no "keep current keywords and add saved ones", and no diff. The preset name uniquely determines the resulting filter state.
+
+**Sort state is NOT saved.** Sort order is a view concern, not filter intent. Loading a preset leaves the active sort key/direction untouched. Do not propose adding sort to the payload.
+
+**Stale-ID guard.** If a saved `selectedProjectId` or `selectedTagId` no longer exists in the user's current `projects`/`tags` lists (e.g. they deleted the project after saving the preset), the field is silently set to `null` on load and a gentle toast surfaces ("The project/tag saved in this preset no longer exists — skipped"). The preset still loads — the missing reference is dropped, not an error.
+
+**Invalid-payload guard.** `parsePresetPayload` runs `safeParse` on every row read from the DB. Rows that fail validation (future schema version, missing fields, corrupted write) are dropped from the menu with a `console.warn` so the rest of the menu keeps rendering.
+
+**Explicit MVP exclusions — do not re-propose as if they exist.** The MVP deliberately omits all of the following. Each was discussed and excluded for scope reasons; do not assume any of them are present.
+
+- Rename a preset (delete + re-save is the equivalent path).
+- Overwrite-on-duplicate-name (duplicate save shows a toast and is rejected).
+- Sharing / public presets / collaboration.
+- Import / export of presets.
+- A dedicated preset management page or sidebar surface.
+- Sort-state persistence in the payload.
+- Auto-run / scheduled presets / saved-search alerts / smart folders / search-within-the-preset-list / drag-reorder / preset folders or tags.
+- Any change to the existing search routing, `Matched in:` attribution, or `onClearFilters` behavior.
+
 ## Standing product decisions — do not re-propose
 
 These decisions have been explicitly made by the user. Do not suggest revisiting them unless the user explicitly asks.
@@ -209,7 +256,7 @@ These were thoroughly measured and verified. Changing them requires new evidence
 
 ## Current recommendation
 
-The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), the prefix-aware FTS upgrade (PR #88), the search wave (keywords in search + server-side attribution + quoted phrase search + placeholder discoverability, PRs #91–#93), and the docs normalization for that wave (PR #94) are all complete and live. Migrations `20260417030000_prefix_search.sql` and `20260420010000_keywords_in_search_with_attribution.sql` are applied on Supabase and manually verified. Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
+The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), the prefix-aware FTS upgrade (PR #88), the search wave (keywords in search + server-side attribution + quoted phrase search + placeholder discoverability, PRs #91–#93), the docs normalization for that wave (PR #94), and the Saved Searches / Filter Presets MVP (PR #96) are all complete and live. Migrations `20260417030000_prefix_search.sql`, `20260420010000_keywords_in_search_with_attribution.sql`, and `20260421010000_add_filter_presets.sql` are applied on Supabase and verified (the presets migration via post-deploy SQL spot-checks; cross-user RLS isolation for `filter_presets` was on the manual checklist but has not been empirically performed in-session — structural confirmation makes it very likely correct). Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
 
 ## Key files
 
@@ -224,7 +271,10 @@ The app is performant, secure, and feature-complete at current scale. The securi
 | `src/lib/queryKeys.ts` | React Query key structure |
 | `src/pages/Dashboard.tsx` | Main page — orchestrates all hooks |
 | `src/components/papers/PaperList.tsx` | Virtualized table with lazy abstract expand + "Matched in: …" sub-line |
-| `src/components/papers/SearchFilters.tsx` | Search input (with quoted-phrase placeholder hint) and filter controls |
+| `src/components/papers/SearchFilters.tsx` | Search input (with quoted-phrase placeholder hint), filter controls, mounts the Presets dropdown |
+| `src/hooks/useFilterPresets.ts` | Saved Searches: Zod payload schema, list query + create/delete mutations, pure `applyPreset` with stale project/tag-ID guard (PR #96) |
+| `src/components/papers/FilterPresetsMenu.tsx` | Presets DropdownMenu — Save Dialog, list, Delete AlertDialog (PR #96) |
 | `supabase/migrations/20260417030000_prefix_search.sql` | Prefix-aware FTS (PR #88) |
 | `supabase/migrations/20260420010000_keywords_in_search_with_attribution.sql` | Keywords in search_vector + 6 `matched_*` attribution flags (PR #91) |
+| `supabase/migrations/20260421010000_add_filter_presets.sql` | `filter_presets` table + RLS + per-user case-insensitive unique name + `updated_at` trigger (PR #96) |
 | `supabase/migrations/` | All DB schema + RPC definitions |
