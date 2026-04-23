@@ -55,6 +55,12 @@ interface SearchFiltersProps {
   presetsUpdating: boolean;
   /** The preset most recently loaded or just-created. `null` when nothing is loaded. */
   loadedPreset: FilterPreset | null;
+  /**
+   * `true` when a preset is loaded AND the current filter state differs from
+   * that preset's stored payload. Drives the Presets trigger dot and the
+   * enabled state of the `Update "<name>"` menu item.
+   */
+  isLoadedPresetDirty: boolean;
   getCurrentPresetPayload: () => PresetPayload;
   onSavePreset: (name: string, payload: PresetPayload) => Promise<boolean>;
   onLoadPreset: (preset: FilterPreset) => void;
@@ -96,6 +102,7 @@ export function SearchFilters({
   presetsSaving,
   presetsUpdating,
   loadedPreset,
+  isLoadedPresetDirty,
   getCurrentPresetPayload,
   onSavePreset,
   onLoadPreset,
@@ -229,6 +236,7 @@ export function SearchFilters({
             isSaving={presetsSaving}
             isUpdating={presetsUpdating}
             loadedPreset={loadedPreset}
+            isLoadedPresetDirty={isLoadedPresetDirty}
             getCurrentPayload={getCurrentPresetPayload}
             onSave={onSavePreset}
             onLoad={onLoadPreset}

@@ -144,6 +144,42 @@ export function buildPresetPayload(fields: Omit<PresetPayload, "version">): Pres
   return { version: PRESET_PAYLOAD_VERSION, ...fields };
 }
 
+/**
+ * Deep-ish equality for two `PresetPayload` objects. Used to derive the
+ * "currently loaded preset has unsaved changes" signal — when this returns
+ * `false`, the UI surfaces a dot on the Presets trigger and enables the
+ * `Update "<name>"` action.
+ *
+ * All scalar/nullable fields compare with strict `===`. `selectedKeywords`
+ * compares **order-insensitively** (same length + same set of members),
+ * because the keyword filter is semantically "match any of these" — toggling
+ * a keyword off and back on should not read as dirty. `applyPreset` still
+ * restores keyword order on load; only this comparator is order-insensitive.
+ *
+ * A `version` mismatch (future schema bump) reads as not-equal, which
+ * correctly surfaces a dirty signal so the user can re-save under the
+ * current schema.
+ */
+export function arePresetPayloadsEqual(a: PresetPayload, b: PresetPayload): boolean {
+  if (a.version !== b.version) return false;
+  if (a.searchQuery !== b.searchQuery) return false;
+  if (a.yearFrom !== b.yearFrom) return false;
+  if (a.yearTo !== b.yearTo) return false;
+  if (a.studyType !== b.studyType) return false;
+  if (a.notesPresence !== b.notesPresence) return false;
+  if (a.selectedProjectId !== b.selectedProjectId) return false;
+  if (a.selectedTagId !== b.selectedTagId) return false;
+  if (a.selectedKeywords.length !== b.selectedKeywords.length) return false;
+  // Order-insensitive set equality. Lengths match, so a one-way membership
+  // check is sufficient (if every element of `a` is in `b`, and they're the
+  // same length, the sets are equal).
+  const bSet = new Set(b.selectedKeywords);
+  for (const kw of a.selectedKeywords) {
+    if (!bSet.has(kw)) return false;
+  }
+  return true;
+}
+
 interface UseFilterPresetsArgs {
   userId: string | undefined;
 }
