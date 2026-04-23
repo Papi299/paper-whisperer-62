@@ -10,7 +10,7 @@ Academic paper library manager with server-side filtering, sorting, pagination, 
 
 ## Current status (April 2026)
 
-The app is **stable, hardened, and feature-complete at current scale**. Six major work phases are complete:
+The app is **stable, hardened, and feature-complete at current scale**. Seven major work phases are complete:
 
 1. **Read-path performance track** (PRs #56–#65) — server-side filtering, sorting, pagination, lazy loading, abstract on-demand fetch. Handles ~400+ papers with sub-second dashboard loads.
 2. **Security & schema integrity hardening** (PRs #67–#76) — edge function logging redaction, PubMed API key server-side migration, RLS restoration on all user-scoped tables, per-user uniqueness constraints, FK cascade fixes, and import UX improvements.
@@ -18,6 +18,7 @@ The app is **stable, hardened, and feature-complete at current scale**. Six majo
 4. **Paper notes feature wave** (PRs #84–#87) — `notes` column on `papers` with an Edit-dialog textarea, a list-cell sticky-note indicator with popover preview, a tri-state "Has Notes" filter, and inclusion of notes in full-text search (weight D) and the short-query ILIKE path.
 5. **Prefix-aware FTS** (PR #88) — `search_papers` rewritten as prefix-aware FTS so partial inputs match while typing (`guideli` finds "guideline"). Uses a Unicode-preserving blacklist of tsquery operator characters; the existing `search_vector`, GIN index, and short-search RPC are unchanged. Migration applied on Supabase and manually verified.
 6. **Search wave — keywords + attribution + phrase search** (PRs #91–#93, docs normalized in PR #94) — `keywords` added to `search_vector` at weight C; both search RPCs return six per-field `matched_*` booleans that drive a read-only "Matched in: …" sub-line on each matching row in fixed field order (PR #91). Double-quoted queries (`"muscle protein synthesis"`) route to a literal phrase-match ILIKE path with no stemming, Unicode-safe, punctuation-preserving; unquoted behavior is bit-identical (PR #92). Search input placeholder reads `Search titles, authors, notes, keywords... Use "..." for exact phrase` for discoverability (PR #93). Migration `20260420010000_keywords_in_search_with_attribution.sql` applied on Supabase and verified end-to-end.
+7. **Saved Searches / Filter Presets — MVP** (PR #96) — Users can save the current filter/search configuration under a name, list saved presets alphabetically, load one (full replacement of all 8 saved fields, with stale project/tag IDs nulled and a toast), and delete with a confirmation. Persistence is **server-side per user** in a new `filter_presets` table with full RLS, `FORCE ROW LEVEL SECURITY`, a case-insensitive unique name per user, an `updated_at` trigger, and a Zod-validated JSONB `payload` with a `version: 1` sentinel. Raw search query strings are saved verbatim, so quoted phrase searches round-trip exactly. Sort state is intentionally **not** in the payload (view concern). Migration `20260421010000_add_filter_presets.sql` is applied to live Supabase and structurally verified via post-deploy SQL spot-checks (cross-user RLS isolation has not been empirically performed end-to-end in-session). MVP deliberately excludes rename, overwrite-on-duplicate, sharing, import/export, a dedicated management page, and sort persistence.
 
 ### Current search behavior
 
@@ -55,7 +56,7 @@ Requires Node.js 18+. Supabase project config is in `supabase/config.toml`.
 ## Testing
 
 ```sh
-npx vitest run               # Unit tests (185 tests)
+npx vitest run               # Unit tests (203 tests)
 npx playwright test          # E2E tests
 npx playwright test --ui     # Interactive test runner
 ```

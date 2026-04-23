@@ -307,3 +307,41 @@ All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`.
 - `README.md` — added phase 6 to "Current status (April 2026)".
 - `docs/migration-history.md` — appended the "Search wave — keywords in search + server-side attribution + quoted phrases (PRs #91–#93)" section above.
 **No migration.** No DB change.
+
+## Saved Searches / Filter Presets — MVP (PR #96)
+
+**Date:** April 2026
+**What:** First user-facing capability beyond the search wave. Users can snapshot the current filter/search configuration under a name, list saved presets alphabetically, load one (full replacement of saved state), and delete with a confirmation.
+
+**Migration (applied to live Supabase):** `supabase/migrations/20260421010000_add_filter_presets.sql`
+- New table `public.filter_presets` (`id uuid pk`, `user_id uuid → auth.users(id) on delete cascade`, `name text`, `payload jsonb`, `created_at timestamptz`, `updated_at timestamptz`, all `NOT NULL`).
+- Case-insensitive unique index `idx_filter_presets_user_name` on `(user_id, lower(name))` enforces per-user name uniqueness; duplicate INSERTs surface Postgres error `23505`, which the client renders as a "Name already taken" toast.
+- Lookup index `idx_filter_presets_user_id` on `(user_id)`.
+- `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY` on the table.
+- Four RLS policies, one per CRUD verb, all `USING (auth.uid() = user_id)` / `WITH CHECK (auth.uid() = user_id)`.
+- `update_updated_at_column()` trigger reused for `BEFORE UPDATE`.
+
+**Why JSONB instead of individual columns:** the payload is round-tripped as a whole; nothing queries its internal keys. JSONB means adding/removing a filter field later is a zero-schema-change operation. Type safety is recovered client-side via a Zod `safeParse` at the read boundary; rows that fail validation are dropped from the menu with a `console.warn` so one corrupt row never breaks the dropdown.
+
+**Saved payload (Zod schema in `useFilterPresets.ts`):** `version: 1` sentinel + 8 user-state fields — `searchQuery: string` (saved **raw, verbatim** including surrounding quotes so phrase searches like `"muscle protein synthesis"` round-trip exactly), `yearFrom: string`, `yearTo: string`, `studyType: string`, `notesPresence: "all" | "has" | "none"`, `selectedKeywords: string[]`, `selectedProjectId: string | null`, `selectedTagId: string | null`. Sort state is intentionally **not** in the payload — it is a view concern. No other field is in the schema.
+
+**Load semantics — full replacement.** `applyPreset` invokes each of the 8 setters exactly once with the saved value. There is no merge, no diff, no partial overlay. The preset name uniquely determines the resulting filter state. Stale-ID guard: if the saved `selectedProjectId` or `selectedTagId` no longer exists in the user's current `projects`/`tags` lists, the field is set to `null` and a gentle toast surfaces ("The project/tag saved in this preset no longer exists — skipped"). The preset still loads.
+
+**Files changed (new + modified):**
+- `supabase/migrations/20260421010000_add_filter_presets.sql` — new table + RLS + indexes + trigger.
+- `src/integrations/supabase/types.ts` — `Row`/`Insert`/`Update` rows for `filter_presets`.
+- `src/lib/queryKeys.ts` — `filterPresets.all(userId)` key.
+- `src/hooks/useFilterPresets.ts` — new hook: `useQuery` list (alphabetical, case-insensitive, `staleTime: 60_000`), create + delete `useMutation`s with 23505-aware error toast, pure `applyPreset` and `parsePresetPayload`/`validatePresetName`/`buildPresetPayload` helpers.
+- `src/hooks/useFilterState.ts` — exposed `setSelectedKeywords` (the existing return surface only had `handleKeywordToggle`; preset restore needs the direct array setter).
+- `src/components/papers/FilterPresetsMenu.tsx` — new component: shadcn `DropdownMenu` (Save row + Saved-searches list with delete trash), Save `Dialog` (autofocused `Input`, `maxLength=80`, Enter submits), Delete `AlertDialog` confirmation. Empty state reads "No saved searches yet".
+- `src/components/papers/SearchFilters.tsx` — mounts `<FilterPresetsMenu />` in the actions row before the Clear button; threads 7 new props.
+- `src/pages/Dashboard.tsx` — wires `useFilterPresets({ userId })`, `getCurrentPresetPayload` (calls `buildPresetPayload`), and `handleLoadPreset` (calls `applyPreset` and toasts on `droppedProjectId`/`droppedTagId`).
+- `src/hooks/__tests__/useFilterPresets.test.ts` — 18 unit tests covering `applyPreset` (default / fully-populated / stale-project / stale-tag / both-stale), `parsePresetPayload` (valid + multiple invalid shapes including future-version and bad enum), `validatePresetName` (empty / whitespace / overlength / at-limit), `buildPresetPayload` (version sentinel attach).
+
+**Verification:**
+- `npx tsc --noEmit`, `npx vitest run` (203/203 pass), `npm run build`, `npm run lint` — all clean (no new lint issues vs main).
+- Migration applied to live Supabase via SQL Editor.
+- Post-deploy SQL spot-checks confirmed: 6 columns all `NOT NULL` with correct types; both `relrowsecurity` and `relforcerowsecurity` are `true`; four RLS policies (one each for SELECT/INSERT/UPDATE/DELETE); the case-insensitive unique index on `(user_id, lower(name))` is present alongside the user-id lookup index.
+- **Honest gap:** cross-user RLS isolation (sign in as a second user, confirm zero rows visible in `filter_presets`) was on the manual checklist but has not been empirically performed in this session. Structural confirmation of forced RLS + four correct policies makes correct behavior very likely; treat the empirical end-to-end check as still owed.
+
+**Explicit MVP exclusions (do not re-propose as if they exist):** rename a preset, overwrite-on-duplicate-name, sharing / public presets / collaboration, import/export of presets, dedicated preset management page or sidebar surface, sort-state persistence in the payload, auto-run / scheduled presets / saved-search alerts / smart folders / search-within-the-preset-list / drag-reorder / preset folders or tags, any change to existing search routing, `Matched in:` attribution, or `onClearFilters` behavior.
