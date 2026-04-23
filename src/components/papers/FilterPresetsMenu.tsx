@@ -184,7 +184,7 @@ export function FilterPresetsMenu({
           )}
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-            Saved searches
+            Saved searches{presets.length > 0 ? ` · ${presets.length}` : ""}
           </DropdownMenuLabel>
           {isLoading ? (
             <div className="px-2 py-2 text-xs text-muted-foreground">Loading…</div>
