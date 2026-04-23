@@ -391,6 +391,13 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     notesPresence,
     setNotesPresence,
     selectedKeywords,
+    /**
+     * Direct setter for the selected-keywords array. The common add/remove
+     * path goes through `handleKeywordToggle`; the setter is exposed for
+     * callers that need to replace the whole array at once (e.g.
+     * `useFilterPresets.applyPreset` when restoring a saved filter preset).
+     */
+    setSelectedKeywords,
     selectedProjectId,
     setSelectedProjectId,
     selectedTagId,

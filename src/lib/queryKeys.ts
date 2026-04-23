@@ -61,4 +61,7 @@ export const queryKeys = {
   exclusions: {
     all: (userId: string) => ["exclusions", userId] as const,
   },
+  filterPresets: {
+    all: (userId: string) => ["filterPresets", userId] as const,
+  },
 } as const;

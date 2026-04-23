@@ -9,6 +9,13 @@ import { useColumnWidths } from "@/hooks/useColumnWidths";
 import { useStudyTypeReevaluation } from "@/hooks/useStudyTypeReevaluation";
 import { useKeywordReevaluation } from "@/hooks/useKeywordReevaluation";
 import { useFilterState } from "@/hooks/useFilterState";
+import {
+  useFilterPresets,
+  applyPreset,
+  buildPresetPayload,
+  type FilterPreset,
+  type PresetPayload,
+} from "@/hooks/useFilterPresets";
 import { useExportPapers } from "@/hooks/useExportPapers";
 import { useAnalyticsData } from "@/hooks/useAnalyticsData";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
@@ -118,6 +125,7 @@ function DashboardContent() {
     notesPresence,
     setNotesPresence,
     selectedKeywords,
+    setSelectedKeywords,
     selectedProjectId,
     setSelectedProjectId,
     selectedTagId,
@@ -178,6 +186,91 @@ function DashboardContent() {
     tagsLoading,
     projectsLoading,
   });
+
+  // ── Saved Searches / Filter Presets (list + create + delete) ──
+  const {
+    presets,
+    isLoading: presetsLoading,
+    isSaving: presetsSaving,
+    savePreset,
+    deletePreset,
+  } = useFilterPresets({ userId: user?.id });
+
+  /** Build the payload to persist from the current filter state. */
+  const getCurrentPresetPayload = useCallback((): PresetPayload => {
+    return buildPresetPayload({
+      searchQuery,
+      yearFrom,
+      yearTo,
+      studyType,
+      notesPresence,
+      selectedKeywords,
+      selectedProjectId,
+      selectedTagId,
+    });
+  }, [
+    searchQuery,
+    yearFrom,
+    yearTo,
+    studyType,
+    notesPresence,
+    selectedKeywords,
+    selectedProjectId,
+    selectedTagId,
+  ]);
+
+  /**
+   * Full-replacement preset load. Runs the stale-ID guard in `applyPreset`
+   * and surfaces a toast if the saved project or tag no longer exists.
+   * Sort state is intentionally left untouched — it is a view concern.
+   */
+  const handleLoadPreset = useCallback(
+    (preset: FilterPreset) => {
+      const result = applyPreset(
+        preset.payload,
+        {
+          setSearchQuery,
+          setYearFrom,
+          setYearTo,
+          setStudyType,
+          setNotesPresence,
+          setSelectedKeywords,
+          setSelectedProjectId,
+          setSelectedTagId,
+        },
+        projects,
+        tags,
+      );
+
+      if (result.droppedProjectId || result.droppedTagId) {
+        const parts: string[] = [];
+        if (result.droppedProjectId) parts.push("project");
+        if (result.droppedTagId) parts.push("tag");
+        toast({
+          title: "Preset loaded with missing references",
+          description: `The ${parts.join(" and ")} saved in "${preset.name}" no longer exists — skipped.`,
+        });
+      } else {
+        toast({
+          title: "Preset loaded",
+          description: `"${preset.name}" is now active.`,
+        });
+      }
+    },
+    [
+      projects,
+      tags,
+      setSearchQuery,
+      setYearFrom,
+      setYearTo,
+      setStudyType,
+      setNotesPresence,
+      setSelectedKeywords,
+      setSelectedProjectId,
+      setSelectedTagId,
+      toast,
+    ],
+  );
 
   // ── Step 4: Dedicated analytics fetch (bypasses paginated display query) ──
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
@@ -490,6 +583,13 @@ function DashboardContent() {
             onTagChange={setSelectedTagId}
             isExportReady={isExportReady}
             isExporting={isExporting}
+            presets={presets}
+            presetsLoading={presetsLoading}
+            presetsSaving={presetsSaving}
+            getCurrentPresetPayload={getCurrentPresetPayload}
+            onSavePreset={savePreset}
+            onLoadPreset={handleLoadPreset}
+            onDeletePreset={deletePreset}
           />
           <AnalyticsPanel
             papers={analyticsPapers}
