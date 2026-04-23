@@ -342,6 +342,45 @@ All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`.
 - `npx tsc --noEmit`, `npx vitest run` (203/203 pass), `npm run build`, `npm run lint` — all clean (no new lint issues vs main).
 - Migration applied to live Supabase via SQL Editor.
 - Post-deploy SQL spot-checks confirmed: 6 columns all `NOT NULL` with correct types; both `relrowsecurity` and `relforcerowsecurity` are `true`; four RLS policies (one each for SELECT/INSERT/UPDATE/DELETE); the case-insensitive unique index on `(user_id, lower(name))` is present alongside the user-id lookup index.
-- **Honest gap:** cross-user RLS isolation (sign in as a second user, confirm zero rows visible in `filter_presets`) was on the manual checklist but has not been empirically performed in this session. Structural confirmation of forced RLS + four correct policies makes correct behavior very likely; treat the empirical end-to-end check as still owed.
+- **Cross-user RLS isolation — empirically verified (post-merge).** The earlier handoff noted this check as owed. It has since been performed: the user signed in as two separate accounts (one real, one test) and confirmed each account cannot see the other's rows in `filter_presets`. Treat the empirical end-to-end check as **done**; do not re-flag it as open.
 
-**Explicit MVP exclusions (do not re-propose as if they exist):** rename a preset, overwrite-on-duplicate-name, sharing / public presets / collaboration, import/export of presets, dedicated preset management page or sidebar surface, sort-state persistence in the payload, auto-run / scheduled presets / saved-search alerts / smart folders / search-within-the-preset-list / drag-reorder / preset folders or tags, any change to existing search routing, `Matched in:` attribution, or `onClearFilters` behavior.
+**Explicit MVP exclusions (do not re-propose as if they exist):** rename a preset, overwrite-on-duplicate-name, sharing / public presets / collaboration, import/export of presets, dedicated preset management page or sidebar surface, sort-state persistence in the payload, version history / audit trail for preset edits, auto-run / scheduled presets / saved-search alerts / smart folders / search-within-the-preset-list / drag-reorder / preset folders or tags, any change to existing search routing, `Matched in:` attribution, or `onClearFilters` behavior.
+
+## Saved Searches / Filter Presets — update-existing-loaded-preset (PR #98)
+
+**Date:** April 2026
+**What:** First follow-up on the presets MVP. Adds a fifth user-visible action to the Presets dropdown — *Update "<name>"* — so a user can load a preset, tweak the current filters/search, and overwrite that same preset's stored payload **without** deleting and re-saving. No schema change, no search-behavior change, no payload-shape change.
+
+**UX.** After a successful Load — or after a successful Save — the target preset becomes the **currently loaded preset**. When a preset is loaded, the Presets dropdown shows an extra item directly under *Save current search…*: `Update "<loaded preset name>"`. Clicking it opens an AlertDialog with the copy *"<name> will be overwritten with the current filters and search. The preset name stays the same. This cannot be undone."* On confirm, the preset's `payload` is overwritten with the current dashboard state. The preset name is preserved. The item is hidden when no preset is loaded. The loaded-preset pointer is cleared on Clear Filters and on Deleting the loaded preset — so the *Update* action cannot target a stale row.
+
+**Targeting rule — id, not name.** The UPDATE mutation targets the preset by `id`, never by name lookup. This means a rename or duplicate-name scenario (neither exists in the MVP, but reserved for future) cannot silently overwrite the wrong row. The existing case-insensitive unique index on `(user_id, lower(name))` is unaffected because the mutation deliberately does not touch the `name` column. The existing `update_updated_at_column()` trigger refreshes `updated_at` as normal.
+
+**No schema / migration change.** The `filter_presets` table, RLS policies, unique index, `updated_at` trigger, and the Zod payload schema (`version: 1` + 8 fields) are all unchanged. Nothing in this PR required SQL work.
+
+**Files changed:**
+- `src/hooks/useFilterPresets.ts` — added `updatePresetMutation` (id-targeted `UPDATE { payload }`), added `updatePreset` callback, extended the hook's return with `isUpdating` and `updatePreset`. Changed `savePreset` to resolve to the created `FilterPreset | null` (was `boolean`) so the caller can set the just-created row as "currently loaded" without a re-fetch round-trip.
+- `src/pages/Dashboard.tsx` — added `loadedPresetId: string | null` state + `loadedPreset` memo. Wired `handleSavePreset`, `handleLoadPreset`, `handleDeletePreset`, `handleClearFilters`, and new `handleUpdateLoadedPreset` — set / clear the loaded-preset pointer at the correct points so *Update* can never target a stale or already-deleted row.
+- `src/components/papers/FilterPresetsMenu.tsx` — new `loadedPreset` / `isUpdating` / `onUpdateLoaded` props; conditional `Update "<name>"` DropdownMenuItem; AlertDialog confirmation that keeps itself open on mutation failure so the user can retry.
+- `src/components/papers/SearchFilters.tsx` — threaded the three new props through.
+
+**Verification:**
+- `npx tsc --noEmit`, `npx vitest run`, `npm run build`, `npm run lint` — all clean.
+- Manual flow confirmed live: load a preset → tweak filters → reopen dropdown → *Update "<name>"* appears as the second item → confirm → preset row reflects the new payload; label of the action correctly updates when a different preset is loaded; Clear Filters and deleting the loaded preset both hide the *Update* item.
+
+**Explicit non-goals (do not re-propose as if they exist):** rename a preset, rename via the update flow, a per-row edit pencil icon, any form-based payload editor, version history of past payloads, bulk-update across presets. The MVP-exclusions list from PR #96 remains in force — PR #98 adds exactly one new action and does not reopen any earlier exclusion.
+
+## Saved Searches / Filter Presets — dropdown count label (PR #99)
+
+**Date:** April 2026
+**What:** One-line UI polish on top of the presets capability. The *Saved searches* label inside the Presets dropdown now appends the total preset count, rendered as `Saved searches · N`. Users see the total at a glance and know to scroll when the visible rows are fewer than the total (the list is clipped at `max-h-[320px]`).
+
+**Why a count label and not a visible scrollbar.** A first attempt added an always-visible thin scrollbar via `::-webkit-scrollbar` + `scrollbar-width: thin`. On macOS Chromium (Chrome, Safari, and Electron builds) the OS-level overlay-scrollbar mode overrode those styles even with `-webkit-appearance: none` — `offsetWidth − clientWidth` stayed at `0` in live verification. The count label is OS-agnostic, adds zero visual chrome, and is strictly more informative than a scrollbar (it communicates the total as well as "there is more").
+
+**No schema / behavior change.** Single literal edit in the JSX template of `FilterPresetsMenu.tsx`. No new state, no new props, no changes to hooks, payload schema, RPCs, or search behavior.
+
+**Files changed:**
+- `src/components/papers/FilterPresetsMenu.tsx` — the `DropdownMenuLabel` text now reads `` `Saved searches${presets.length > 0 ? ` · ${presets.length}` : ""}` `` so the count is omitted when there are zero presets (empty-state copy still renders below).
+
+**Verification:** `npx tsc --noEmit` clean; verified live in the preview — label rendered `Saved searches · 11` for an account with 11 saved presets.
+
+**Explicit non-goals (do not re-propose):** a distinct "N of total" indicator when the list is partially scrolled, a custom-styled scrollbar (see "Why a count label" above), a chevron / fade / scroll-hint element, or any other overflow affordance. The count label is the chosen indicator for the current scale.
