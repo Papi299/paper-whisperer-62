@@ -47,6 +47,14 @@ interface FilterPresetsMenuProps {
    * user can re-save the current filters into the same row.
    */
   loadedPreset: FilterPreset | null;
+  /**
+   * `true` when a preset is loaded AND the current filter state differs
+   * from that preset's stored payload. When `true` we render a small dot
+   * on the Presets trigger and enable `Update "<name>"`. When `false` (or
+   * when no preset is loaded at all) the Update item stays visible but
+   * disabled — the dot's absence is the primary at-a-glance signal.
+   */
+  isLoadedPresetDirty: boolean;
   /** Build the payload to persist from the current filter state. */
   getCurrentPayload: () => PresetPayload;
   /** Save a new preset under the given name. Returns true on success. */
@@ -81,6 +89,7 @@ export function FilterPresetsMenu({
   isSaving,
   isUpdating,
   loadedPreset,
+  isLoadedPresetDirty,
   getCurrentPayload,
   onSave,
   onLoad,
@@ -162,9 +171,22 @@ export function FilterPresetsMenu({
     <>
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            className="relative"
+            aria-label={
+              loadedPreset && isLoadedPresetDirty ? "Presets — unsaved changes" : "Presets"
+            }
+          >
             <Bookmark className="mr-1 h-4 w-4" />
             Presets
+            {loadedPreset && isLoadedPresetDirty && (
+              <span
+                aria-hidden="true"
+                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background"
+              />
+            )}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="bg-popover w-72">
@@ -175,7 +197,11 @@ export function FilterPresetsMenu({
           {loadedPreset && (
             <DropdownMenuItem
               onClick={openUpdateDialog}
-              disabled={isUpdating}
+              // Disabled when nothing has changed since the preset was loaded,
+              // or while a prior Update mutation is in flight. No tooltip —
+              // the dot on the trigger + shadcn's muted disabled styling
+              // are the combined signal.
+              disabled={!isLoadedPresetDirty || isUpdating}
               className="cursor-pointer"
             >
               <Save className="mr-2 h-4 w-4" />

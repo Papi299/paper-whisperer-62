@@ -12,6 +12,7 @@ import { useFilterState } from "@/hooks/useFilterState";
 import {
   useFilterPresets,
   applyPreset,
+  arePresetPayloadsEqual,
   buildPresetPayload,
   type FilterPreset,
   type PresetPayload,
@@ -236,6 +237,22 @@ function DashboardContent() {
     selectedProjectId,
     selectedTagId,
   ]);
+
+  /**
+   * Derived "unsaved changes relative to the loaded preset" signal. `true`
+   * when a preset is loaded AND the current filter state differs from that
+   * preset's stored payload (order-insensitive for `selectedKeywords`, exact
+   * for everything else). Purely derived — no new state, no effects.
+   *
+   * When no preset is loaded, this is `false` by definition (there is
+   * nothing to be dirty relative to). The Presets dropdown uses this to
+   * render a dot on its trigger and to disable `Update "<name>"` when clean.
+   */
+  const isLoadedPresetDirty = useMemo(
+    () =>
+      loadedPreset ? !arePresetPayloadsEqual(loadedPreset.payload, getCurrentPresetPayload()) : false,
+    [loadedPreset, getCurrentPresetPayload],
+  );
 
   /**
    * Full-replacement preset load. Runs the stale-ID guard in `applyPreset`
@@ -661,6 +678,7 @@ function DashboardContent() {
             presetsSaving={presetsSaving}
             presetsUpdating={presetsUpdating}
             loadedPreset={loadedPreset}
+            isLoadedPresetDirty={isLoadedPresetDirty}
             getCurrentPresetPayload={getCurrentPresetPayload}
             onSavePreset={handleSavePreset}
             onLoadPreset={handleLoadPreset}

@@ -10,6 +10,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 import {
   applyPreset,
+  arePresetPayloadsEqual,
   buildPresetPayload,
   parsePresetPayload,
   validatePresetName,
@@ -247,5 +248,95 @@ describe("applyPreset", () => {
     const result = applyPreset(defaultPayload(), setters, [], []);
     expect(result.droppedProjectId).toBe(false);
     expect(result.droppedTagId).toBe(false);
+  });
+});
+
+// ── arePresetPayloadsEqual ──────────────────────────────────────────────
+
+/** A fully-populated payload used as the base for field-by-field diffs. */
+function populatedPayload(): PresetPayload {
+  return {
+    version: PRESET_PAYLOAD_VERSION,
+    searchQuery: '"muscle protein synthesis"',
+    yearFrom: "2020",
+    yearTo: "2024",
+    studyType: "RCT",
+    notesPresence: "has",
+    selectedKeywords: ["sleep", "asthma", "HIIT"],
+    selectedProjectId: "11111111-1111-1111-1111-111111111111",
+    selectedTagId: "22222222-2222-2222-2222-222222222222",
+  };
+}
+
+describe("arePresetPayloadsEqual", () => {
+  it("returns true for two identical default payloads", () => {
+    expect(arePresetPayloadsEqual(defaultPayload(), defaultPayload())).toBe(true);
+  });
+
+  it("returns true for two identical fully-populated payloads", () => {
+    expect(arePresetPayloadsEqual(populatedPayload(), populatedPayload())).toBe(true);
+  });
+
+  it.each<[keyof PresetPayload, Partial<PresetPayload>]>([
+    ["searchQuery", { searchQuery: "different" }],
+    ["yearFrom", { yearFrom: "2019" }],
+    ["yearTo", { yearTo: "2025" }],
+    ["studyType", { studyType: "meta-analysis" }],
+    ["notesPresence", { notesPresence: "none" }],
+    ["selectedProjectId", { selectedProjectId: "33333333-3333-3333-3333-333333333333" }],
+    ["selectedTagId", { selectedTagId: null }],
+  ])("returns false when %s differs", (_field, patch) => {
+    const a = populatedPayload();
+    const b = { ...populatedPayload(), ...patch };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  it("returns true when selectedKeywords are the same set in a different order", () => {
+    const a = populatedPayload(); // ["sleep", "asthma", "HIIT"]
+    const b = { ...populatedPayload(), selectedKeywords: ["HIIT", "sleep", "asthma"] };
+    expect(arePresetPayloadsEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when selectedKeywords differ by one element", () => {
+    const a = populatedPayload();
+    const b = { ...populatedPayload(), selectedKeywords: ["sleep", "asthma", "keto"] };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when selectedKeywords lengths differ", () => {
+    const a = populatedPayload();
+    const b = { ...populatedPayload(), selectedKeywords: ["sleep", "asthma"] };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  it("returns true for empty selectedKeywords on both sides", () => {
+    expect(arePresetPayloadsEqual(defaultPayload(), defaultPayload())).toBe(true);
+  });
+
+  it("distinguishes null from empty string on selectedProjectId", () => {
+    // The payload Zod schema currently only produces UUID | null, but the
+    // comparator must not silently treat "" as null — a future schema
+    // accident should still read as dirty, not clean.
+    const a = { ...populatedPayload(), selectedProjectId: null };
+    const b = { ...populatedPayload(), selectedProjectId: "" as unknown as string };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  it("returns false for a version mismatch (defensive / future-proof)", () => {
+    const a = populatedPayload();
+    const b = { ...populatedPayload(), version: 99 as unknown as typeof PRESET_PAYLOAD_VERSION };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  it("treats whitespace differences in searchQuery as dirty", () => {
+    const a = { ...populatedPayload(), searchQuery: "sleep" };
+    const b = { ...populatedPayload(), searchQuery: "sleep " };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  it("treats case differences in searchQuery as dirty", () => {
+    const a = { ...populatedPayload(), searchQuery: "Asthma" };
+    const b = { ...populatedPayload(), searchQuery: "asthma" };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
   });
 });
