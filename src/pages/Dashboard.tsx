@@ -187,14 +187,32 @@ function DashboardContent() {
     projectsLoading,
   });
 
-  // ── Saved Searches / Filter Presets (list + create + delete) ──
+  // ── Saved Searches / Filter Presets (list + create + delete + update) ──
   const {
     presets,
     isLoading: presetsLoading,
     isSaving: presetsSaving,
+    isUpdating: presetsUpdating,
     savePreset,
     deletePreset,
+    updatePreset,
   } = useFilterPresets({ userId: user?.id });
+
+  /**
+   * Tracks which preset (if any) is currently "loaded" — i.e. which preset
+   * the user most recently restored or just created. Powers the Update action
+   * in the Presets menu so it always targets a specific preset by id (never
+   * by name lookup, which could collide). Cleared when the user clears
+   * filters or deletes the loaded preset.
+   *
+   * Intentionally NOT cleared when the user edits filters after loading —
+   * the whole point of Update is to re-save those edits into the same row.
+   */
+  const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null);
+  const loadedPreset = useMemo(
+    () => (loadedPresetId ? presets.find((p) => p.id === loadedPresetId) ?? null : null),
+    [loadedPresetId, presets],
+  );
 
   /** Build the payload to persist from the current filter state. */
   const getCurrentPresetPayload = useCallback((): PresetPayload => {
@@ -223,6 +241,8 @@ function DashboardContent() {
    * Full-replacement preset load. Runs the stale-ID guard in `applyPreset`
    * and surfaces a toast if the saved project or tag no longer exists.
    * Sort state is intentionally left untouched — it is a view concern.
+   * Marks this preset as the currently-loaded one so the Update action knows
+   * which row to overwrite when the user re-saves after tweaking filters.
    */
   const handleLoadPreset = useCallback(
     (preset: FilterPreset) => {
@@ -241,6 +261,8 @@ function DashboardContent() {
         projects,
         tags,
       );
+
+      setLoadedPresetId(preset.id);
 
       if (result.droppedProjectId || result.droppedTagId) {
         const parts: string[] = [];
@@ -271,6 +293,57 @@ function DashboardContent() {
       toast,
     ],
   );
+
+  /**
+   * Wrap `savePreset` so the newly-created preset becomes the currently-loaded
+   * one. This makes the create → tweak → update flow work without an extra
+   * Load click. Returns the same boolean shape the dialog already expects.
+   */
+  const handleSavePreset = useCallback(
+    async (name: string, payload: PresetPayload): Promise<boolean> => {
+      const created = await savePreset(name, payload);
+      if (!created) return false;
+      setLoadedPresetId(created.id);
+      return true;
+    },
+    [savePreset],
+  );
+
+  /**
+   * Wrap `deletePreset` so deleting the currently-loaded preset clears the
+   * loaded-id state — otherwise the Update action would point at a row that
+   * no longer exists.
+   */
+  const handleDeletePreset = useCallback(
+    async (preset: Pick<FilterPreset, "id" | "name">): Promise<void> => {
+      await deletePreset(preset);
+      setLoadedPresetId((current) => (current === preset.id ? null : current));
+    },
+    [deletePreset],
+  );
+
+  /**
+   * Update the currently-loaded preset's payload with the current dashboard
+   * state. No-op if nothing is loaded (the menu item is also hidden in that
+   * case, so this is a defensive guard).
+   */
+  const handleUpdateLoadedPreset = useCallback(async (): Promise<boolean> => {
+    if (!loadedPreset) return false;
+    return await updatePreset(
+      { id: loadedPreset.id, name: loadedPreset.name },
+      getCurrentPresetPayload(),
+    );
+  }, [loadedPreset, updatePreset, getCurrentPresetPayload]);
+
+  /**
+   * Wrap `clearFilters` so clearing the dashboard also clears the
+   * "currently loaded" pointer — once the filters are zeroed out, no preset
+   * is meaningfully "loaded" anymore.
+   */
+  const handleClearFilters = useCallback(() => {
+    clearFilters();
+    setLoadedPresetId(null);
+  }, [clearFilters]);
 
   // ── Step 4: Dedicated analytics fetch (bypasses paginated display query) ──
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
@@ -570,7 +643,7 @@ function DashboardContent() {
             selectedKeywords={selectedKeywords}
             availableKeywords={filteredKeywords}
             onKeywordToggle={handleKeywordToggle}
-            onClearFilters={clearFilters}
+            onClearFilters={handleClearFilters}
             onExportCSV={handleExportCSV}
             onExportRIS={handleExportRIS}
             onExportBibTeX={handleExportBibTeX}
@@ -586,10 +659,13 @@ function DashboardContent() {
             presets={presets}
             presetsLoading={presetsLoading}
             presetsSaving={presetsSaving}
+            presetsUpdating={presetsUpdating}
+            loadedPreset={loadedPreset}
             getCurrentPresetPayload={getCurrentPresetPayload}
-            onSavePreset={savePreset}
+            onSavePreset={handleSavePreset}
             onLoadPreset={handleLoadPreset}
-            onDeletePreset={deletePreset}
+            onDeletePreset={handleDeletePreset}
+            onUpdateLoadedPreset={handleUpdateLoadedPreset}
           />
           <AnalyticsPanel
             papers={analyticsPapers}

@@ -52,10 +52,15 @@ interface SearchFiltersProps {
   presets: FilterPreset[];
   presetsLoading: boolean;
   presetsSaving: boolean;
+  presetsUpdating: boolean;
+  /** The preset most recently loaded or just-created. `null` when nothing is loaded. */
+  loadedPreset: FilterPreset | null;
   getCurrentPresetPayload: () => PresetPayload;
   onSavePreset: (name: string, payload: PresetPayload) => Promise<boolean>;
   onLoadPreset: (preset: FilterPreset) => void;
   onDeletePreset: (preset: Pick<FilterPreset, "id" | "name">) => Promise<void>;
+  /** Overwrite the currently-loaded preset's payload with the current dashboard state. */
+  onUpdateLoadedPreset: () => Promise<boolean>;
 }
 
 export function SearchFilters({
@@ -89,10 +94,13 @@ export function SearchFilters({
   presets,
   presetsLoading,
   presetsSaving,
+  presetsUpdating,
+  loadedPreset,
   getCurrentPresetPayload,
   onSavePreset,
   onLoadPreset,
   onDeletePreset,
+  onUpdateLoadedPreset,
 }: SearchFiltersProps) {
 
   // Export gating: based on isExportReady (from useExportPapers)
@@ -219,10 +227,13 @@ export function SearchFilters({
             presets={presets}
             isLoading={presetsLoading}
             isSaving={presetsSaving}
+            isUpdating={presetsUpdating}
+            loadedPreset={loadedPreset}
             getCurrentPayload={getCurrentPresetPayload}
             onSave={onSavePreset}
             onLoad={onLoadPreset}
             onDelete={onDeletePreset}
+            onUpdateLoaded={onUpdateLoadedPreset}
           />
           {hasActiveFilters && (
             <Button variant="outline" size="sm" onClick={onClearFilters}>
