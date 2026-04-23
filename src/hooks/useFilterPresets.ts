@@ -247,16 +247,64 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
     },
   });
 
-  /** Promise-returning save that resolves to true on success, false on error (duplicate etc). */
+  /**
+   * Overwrite an existing preset's `payload` with the current dashboard state.
+   * Targets the preset by `id` (never by name) so a rename or duplicate-name
+   * scenario can never silently overwrite the wrong row. The DB `updated_at`
+   * trigger refreshes the timestamp; the unique-index on (user_id, lower(name))
+   * is unaffected because we deliberately do not touch the name here.
+   */
+  const updatePresetMutation = useMutation({
+    mutationFn: async ({ id, payload }: { id: string; name: string; payload: PresetPayload }) => {
+      const { error } = await supabase
+        .from("filter_presets")
+        .update({ payload })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: (_data, variables) => {
+      invalidate();
+      toast({
+        title: "Preset updated",
+        description: `"${variables.name}" now reflects the current filters.`,
+      });
+    },
+    onError: (error: unknown) => {
+      const pgError = error as { message?: string };
+      toast({
+        title: "Could not update preset",
+        description: pgError?.message ?? "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  /**
+   * Create a new preset. Resolves to the created `FilterPreset` (with its
+   * server-assigned id) on success or `null` on error. Returning the row lets
+   * the caller mark the new preset as "currently loaded" so the user can
+   * immediately tweak filters and click Update without an extra Load step.
+   */
   const savePreset = useCallback(
-    async (name: string, payload: PresetPayload): Promise<boolean> => {
+    async (name: string, payload: PresetPayload): Promise<FilterPreset | null> => {
       try {
-        await createPresetMutation.mutateAsync({ name, payload });
+        const created = await createPresetMutation.mutateAsync({ name, payload });
         toast({ title: "Preset saved", description: `"${name}" is now in your saved searches.` });
-        return true;
+        // The insert SELECT returns the same shape as a list row; reuse the
+        // schema parser so the in-memory preset matches what the list query
+        // would produce (and so a future schema bump is caught here too).
+        const parsedPayload = parsePresetPayload(created.payload);
+        if (!parsedPayload) return null;
+        return {
+          id: created.id,
+          name: created.name,
+          payload: parsedPayload,
+          created_at: created.created_at,
+          updated_at: created.updated_at,
+        };
       } catch {
         // Error already surfaced by the mutation's onError handler.
-        return false;
+        return null;
       }
     },
     [createPresetMutation, toast],
@@ -269,15 +317,43 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
     [deletePresetMutation],
   );
 
+  /**
+   * Update an already-loaded preset's payload. Pass the full preset (or at
+   * least `id` + `name`) so the success toast can name the preset and so the
+   * mutation cannot accidentally target a different row by name lookup.
+   */
+  const updatePreset = useCallback(
+    async (preset: Pick<FilterPreset, "id" | "name">, payload: PresetPayload): Promise<boolean> => {
+      try {
+        await updatePresetMutation.mutateAsync({ id: preset.id, name: preset.name, payload });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [updatePresetMutation],
+  );
+
   return useMemo(
     () => ({
       presets,
       isLoading,
       isSaving: createPresetMutation.isPending,
       isDeleting: deletePresetMutation.isPending,
+      isUpdating: updatePresetMutation.isPending,
       savePreset,
       deletePreset,
+      updatePreset,
     }),
-    [presets, isLoading, createPresetMutation.isPending, deletePresetMutation.isPending, savePreset, deletePreset],
+    [
+      presets,
+      isLoading,
+      createPresetMutation.isPending,
+      deletePresetMutation.isPending,
+      updatePresetMutation.isPending,
+      savePreset,
+      deletePreset,
+      updatePreset,
+    ],
   );
 }

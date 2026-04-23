@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Bookmark, Plus, Trash2 } from "lucide-react";
+import { Bookmark, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -40,6 +40,13 @@ interface FilterPresetsMenuProps {
   presets: FilterPreset[];
   isLoading: boolean;
   isSaving: boolean;
+  isUpdating: boolean;
+  /**
+   * The preset currently "loaded" (most recently restored or just-created).
+   * When non-null, an `Update "<name>"` action appears in the menu so the
+   * user can re-save the current filters into the same row.
+   */
+  loadedPreset: FilterPreset | null;
   /** Build the payload to persist from the current filter state. */
   getCurrentPayload: () => PresetPayload;
   /** Save a new preset under the given name. Returns true on success. */
@@ -48,6 +55,12 @@ interface FilterPresetsMenuProps {
   onLoad: (preset: FilterPreset) => void;
   /** Delete a preset by id + name (name is used only for the confirmation copy). */
   onDelete: (preset: Pick<FilterPreset, "id" | "name">) => Promise<void>;
+  /**
+   * Overwrite the currently-loaded preset's payload with the current dashboard
+   * state. The parent owns "which preset is loaded" — this component only
+   * surfaces the action and the confirmation.
+   */
+  onUpdateLoaded: () => Promise<boolean>;
 }
 
 /**
@@ -66,16 +79,26 @@ export function FilterPresetsMenu({
   presets,
   isLoading,
   isSaving,
+  isUpdating,
+  loadedPreset,
   getCurrentPayload,
   onSave,
   onLoad,
   onDelete,
+  onUpdateLoaded,
 }: FilterPresetsMenuProps) {
   const { toast } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [presetToDelete, setPresetToDelete] = useState<FilterPreset | null>(null);
+  /**
+   * When non-null, the Update confirmation AlertDialog is open targeting this
+   * preset. We snapshot the loaded preset on dialog-open (rather than reading
+   * `loadedPreset` directly inside the dialog) so the confirmation copy stays
+   * stable even if the parent's loaded-preset state changes mid-flight.
+   */
+  const [presetToUpdate, setPresetToUpdate] = useState<FilterPreset | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Autofocus the name input when the Save dialog opens.
@@ -121,6 +144,20 @@ export function FilterPresetsMenu({
     setPresetToDelete(null);
   }, [presetToDelete, onDelete]);
 
+  const openUpdateDialog = useCallback(() => {
+    if (!loadedPreset) return;
+    setPresetToUpdate(loadedPreset);
+    setMenuOpen(false);
+  }, [loadedPreset]);
+
+  const handleUpdateConfirm = useCallback(async () => {
+    if (!presetToUpdate) return;
+    const ok = await onUpdateLoaded();
+    if (ok) setPresetToUpdate(null);
+    // On failure, the mutation's onError toast surfaces and we leave the
+    // dialog open so the user can retry or cancel.
+  }, [presetToUpdate, onUpdateLoaded]);
+
   return (
     <>
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -135,6 +172,16 @@ export function FilterPresetsMenu({
             <Plus className="mr-2 h-4 w-4" />
             Save current search…
           </DropdownMenuItem>
+          {loadedPreset && (
+            <DropdownMenuItem
+              onClick={openUpdateDialog}
+              disabled={isUpdating}
+              className="cursor-pointer"
+            >
+              <Save className="mr-2 h-4 w-4" />
+              <span className="truncate">Update “{loadedPreset.name}”</span>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
             Saved searches
@@ -239,6 +286,37 @@ export function FilterPresetsMenu({
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Update confirmation — overwrites the loaded preset's saved payload */}
+      <AlertDialog
+        open={!!presetToUpdate}
+        onOpenChange={(open) => !open && !isUpdating && setPresetToUpdate(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Update saved search?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {presetToUpdate
+                ? `"${presetToUpdate.name}" will be overwritten with the current filters and search. The preset name stays the same. This cannot be undone.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isUpdating}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                // Prevent Radix's auto-close so we can keep the dialog open
+                // on failure (the parent's mutation toast surfaces the error).
+                e.preventDefault();
+                void handleUpdateConfirm();
+              }}
+              disabled={isUpdating}
+            >
+              {isUpdating ? "Updating…" : "Update"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
