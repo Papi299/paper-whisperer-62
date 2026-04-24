@@ -432,7 +432,12 @@ export function EditPaperDialog({
                       <Badge key={id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
                         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
                         {project.name}
-                        <button onClick={() => toggleProject(id)} className="hover:bg-muted rounded p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => toggleProject(id)}
+                          aria-label={`Remove project "${project.name}"`}
+                          className="hover:bg-muted rounded p-0.5"
+                        >
                           <X className="h-3 w-3" />
                         </button>
                       </Badge>
@@ -487,7 +492,12 @@ export function EditPaperDialog({
                       <Badge key={id} variant="secondary" className="text-xs flex items-center gap-1 pr-1">
                         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }} />
                         {tag.name}
-                        <button onClick={() => toggleTag(id)} className="hover:bg-muted rounded p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => toggleTag(id)}
+                          aria-label={`Remove tag "${tag.name}"`}
+                          className="hover:bg-muted rounded p-0.5"
+                        >
                           <X className="h-3 w-3" />
                         </button>
                       </Badge>
