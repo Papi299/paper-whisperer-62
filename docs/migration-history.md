@@ -383,4 +383,60 @@ All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`.
 
 **Verification:** `npx tsc --noEmit` clean; verified live in the preview — label rendered `Saved searches · 11` for an account with 11 saved presets.
 
+## Saved Searches / Filter Presets — loaded-preset dirty-state indicator (PR #101)
+
+**Date:** April 2026
+**What:** Adds a visual unsaved-changes signal for the currently loaded preset. When a preset is loaded and the current dashboard filter/search state diverges from its stored `payload`, the Presets trigger button shows a small accent dot (top-right, `bg-primary` with a `ring-2 ring-background`) and the trigger's `aria-label` flips from `Presets` to `Presets — unsaved changes`. Inside the dropdown, the existing `Update "<name>"` item is **enabled when dirty** and **disabled when clean** (shadcn's standard muted + `cursor-not-allowed` styling). When no preset is loaded, neither the dot nor the Update item is shown — unchanged from prior behavior.
+
+**Derivation — pure, no schema, no migration.** A new exported helper `arePresetPayloadsEqual(a, b)` in `src/hooks/useFilterPresets.ts` compares the 8 payload fields. Scalars (`version`, `searchQuery`, `yearFrom`, `yearTo`, `studyType`, `notesPresence`, `selectedProjectId`, `selectedTagId`) compare with strict `===`; `selectedKeywords` is compared **order-insensitively** as a set (same length + same members) so toggling a keyword off and back on does not register as dirty. `applyPreset` still restores keyword order on load — only the dirty comparator is order-insensitive. A `version` mismatch reads as dirty (defensive / future-proof). In `Dashboard.tsx`, `isLoadedPresetDirty` is a `useMemo` over `loadedPreset` and the existing `getCurrentPresetPayload` callback. No new state, no effects, no DB column, no mutation changes.
+
+**No tooltip / `title` on the disabled Update item.** Disabled Radix `DropdownMenuItem`s are not a reliable hover/focus target across browsers — the `title` attribute may not appear consistently. The signal is the **trigger dot's presence/absence** before the menu opens, reinforced by the muted/disabled item once the menu is open. This decision is final; do not re-propose adding a tooltip.
+
+**Rename interaction (forward reference).** Rename (added in PR #102, below) only touches `name`, never `payload`. Because the dirty comparator looks at payload fields only, **rename is never affected by — and never affects — the dirty-state signal**.
+
+**Files changed:**
+- `src/hooks/useFilterPresets.ts` — added exported pure helper `arePresetPayloadsEqual`. No change to hook return surface, no new mutations, no schema or Zod changes.
+- `src/pages/Dashboard.tsx` — imported `arePresetPayloadsEqual`, added `isLoadedPresetDirty` `useMemo` colocated with the existing `loadedPreset` memo, threaded `isLoadedPresetDirty` into `<SearchFilters />`.
+- `src/components/papers/SearchFilters.tsx` — one new prop `isLoadedPresetDirty: boolean`, passed straight through to `<FilterPresetsMenu />`.
+- `src/components/papers/FilterPresetsMenu.tsx` — accepts `isLoadedPresetDirty`. Adds the trigger-button dot conditionally on `loadedPreset && isLoadedPresetDirty`. Trigger gains `relative` class + state-aware `aria-label`. Update item's `disabled` becomes `!isLoadedPresetDirty || isUpdating`; no `title` is set.
+- `src/hooks/__tests__/useFilterPresets.test.ts` — 12 unit tests for `arePresetPayloadsEqual` covering identical payloads, each of the 8 fields differing in isolation (`it.each`), order-insensitive keyword equality, length-mismatch keywords, `null` vs `""` distinction on `selectedProjectId`, version mismatch, and whitespace/case differences in `searchQuery`.
+
+**No schema, RLS, payload, or migration change.** Purely derived UI state.
+
+**Verification:**
+- `npx tsc --noEmit`, `npx vitest run` (220/220 pass — 208 prior + 12 new), `npm run build`, `npm run lint` — all clean (no new lint issues vs main).
+- Manual flow confirmed live: load a preset → no dot, Update disabled → tweak any tracked field → dot appears, Update enables → revert the tweak → dot clears, Update disables → toggle a keyword off and back on → state stays clean → click Update → dot clears after the mutation resolves.
+
+**Explicit non-goals (do not re-propose):** an explanatory tooltip on the disabled Update item, a per-row `• modified` suffix, a persistent banner / toast about unsaved changes, state-aware copy on the Update item (`Save changes` / `No changes`), a full diff view of current vs saved payload, autosave, "Revert to saved" action, navigate-away confirm dialog.
+
+## Saved Searches / Filter Presets — rename action (PR #102)
+
+**Date:** April 2026
+**What:** Users can now rename an existing preset without deleting and re-saving. Each preset row in the Presets dropdown gains a per-row pencil icon between the name button and the existing trash button. Clicking the pencil closes the menu and opens a small dedicated Rename dialog with the current name prefilled and selected. Submitting writes the new name to the targeted row by `id`; payload, `created_at`, and `id` are untouched.
+
+**Targeting rule — id, not name.** The UPDATE mutation does `update({ name }).eq("id", id)` — it can never accidentally rename a different row by name lookup. The existing case-insensitive unique index `idx_filter_presets_user_name` on `(user_id, lower(name))` enforces uniqueness; conflicts surface as Postgres `23505` and the client renders the existing `Name already taken` toast (same idiom as the create flow). The existing `update_filter_presets_updated_at` trigger refreshes `updated_at` as normal.
+
+**Validation — reused verbatim.** `validatePresetName` is the source of truth: trim → reject if empty → reject if > `PRESET_NAME_MAX_LENGTH` (80). The Rename dialog's `<Input>` carries `maxLength={PRESET_NAME_MAX_LENGTH}` to mirror the Save dialog.
+
+**No-op rename — guarded.** A new pure helper `prepareRename(preset, newName)` in `useFilterPresets.ts` returns one of three outcomes: `invalid` (validation failed), `noop` (trimmed new name byte-identical to current name), or `ok` (real rename). The hook's `renamePreset` callback maps these to side effects — for `noop`, **no Supabase call, no list query invalidation, no `updated_at` bump, no success toast** — the dialog just closes. The Save button in the Rename dialog is disabled when (a) validation would fail, (b) the trimmed draft equals the current name, or (c) a rename mutation is in flight; the form's `onSubmit` is gated on the same memoized condition so Enter doesn't bypass it. Both the dialog's submit handler and the hook's `renamePreset` re-check defensively in case the disable is bypassed (e.g. by a browser extension).
+
+**Case-only rename is allowed.** `"My Preset"` → `"my preset"` (or `"My preset"`) is treated as a real rename — the strings differ after trim, so the mutation runs. Postgres permits the UPDATE because a row never conflicts with itself even when the unique-index expression `lower(name)` collapses to the same key. This preserves the user's ability to fix capitalization.
+
+**Loaded-preset interaction.** If the renamed preset is currently loaded, `loadedPresetId` is unchanged. After the list refetch, the derived `loadedPreset` memo re-resolves the same id to the updated row; `loadedPreset.name` becomes the new name; the `Update "<name>"` label updates automatically. Because rename only touches `name` (never `payload`), the **dirty-state dot from PR #101 is unaffected** — `arePresetPayloadsEqual` compares payload fields only.
+
+**No schema / migration / RLS change.** `filter_presets.name` is already plain `TEXT NOT NULL` with the per-user case-insensitive unique index; the existing UPDATE RLS policy already covers writes. Nothing in this PR required SQL work.
+
+**Files changed:**
+- `src/hooks/useFilterPresets.ts` — added pure helper `prepareRename`, added `renamePresetMutation` (id-targeted `UPDATE { name }` with the canonical 23505 → "Name already taken" branch), added `renamePreset` callback that handles validation toast / no-op short-circuit / mutation invocation. Hook return surface gains `renamePreset` and `isRenaming`.
+- `src/pages/Dashboard.tsx` — destructured `renamePreset` and `isRenaming` from `useFilterPresets({...})`; threaded them into `<SearchFilters />` as `onRenamePreset` and `presetsRenaming`. No changes to `loadedPresetId` or any preset handler.
+- `src/components/papers/SearchFilters.tsx` — added two passthrough props (`onRenamePreset`, `presetsRenaming`) and threaded them into `<FilterPresetsMenu />`.
+- `src/components/papers/FilterPresetsMenu.tsx` — per-row Pencil button between the name and trash buttons; new `Rename saved search` Dialog mirroring the Save dialog's structure with autofocus + select-all on the prefilled input; `presetToRename` / `renameDraft` state; memoized `renameSubmitEnabled` (validation + no-op guard + `!isRenaming`); defensive submit handler that re-checks both conditions before delegating to `onRename`.
+- `src/hooks/__tests__/useFilterPresets.test.ts` — 8 new unit tests for `prepareRename` covering: real rename with trimming, no-op (exact-equal and trim-equal), case-only difference (real rename, both `"my preset"` and `"My preset"` cases), invalid (empty, whitespace, over-length), and exact-max-length pass-through.
+
+**Verification:**
+- `npx tsc --noEmit`, `npx vitest run` (228/228 pass — 220 prior + 8 new), `npm run build`, `npm run lint` — all clean (no new lint issues vs main).
+- Manual flow confirmed live: per-row pencil renames a non-loaded preset (toast + new name in list); per-row pencil renames the loaded preset (label of `Update "<name>"` updates automatically, dirty state unaffected); duplicate name surfaces "Name already taken"; whitespace-only name is locally rejected; no-op rename (unchanged trimmed name) closes the dialog with **no network request and no toast** (verified via DevTools Network tab); case-only rename runs as a real rename.
+
+**Explicit non-goals (do not re-propose as if they exist):** autosave or inline / click-on-name rename, bulk rename or rename-via-search-and-replace, version history of past names, "recently renamed" indicator, rename-only docs in this same PR (docs follow-up is its own normalization PR), any change to `payload` / `arePresetPayloadsEqual` / the dirty-dot logic from PR #101, any change to the Save / Update / Delete flows or copy.
+
 **Explicit non-goals (do not re-propose):** a distinct "N of total" indicator when the list is partially scrolled, a custom-styled scrollbar (see "Why a count label" above), a chevron / fade / scroll-hint element, or any other overflow affordance. The count label is the chosen indicator for the current scale.
