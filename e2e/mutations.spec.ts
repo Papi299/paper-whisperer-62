@@ -222,18 +222,25 @@ test.describe("Mutation persistence regression", () => {
     await firstRow.getByRole("button", { name: /edit/i }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
-    // Try to unassign the project by clicking its X badge
-    const projBadge = page.getByRole("dialog").locator("span, div").filter({ hasText: TEST_PROJECT });
-    const projX = projBadge.locator("button, [role='button']").first();
-    if (await projX.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      await projX.click();
+    // Try to unassign the project by clicking its per-badge remove button.
+    // The remove button has an explicit aria-label (`Remove project "<name>"`),
+    // which is both an a11y improvement and the robust Playwright selector —
+    // scoping by text-in-an-ancestor-div matches the entire dialog body and
+    // can resolve to a disabled shadcn Button (e.g. the Popover trigger).
+    const dialog = page.getByRole("dialog");
+    const projRemove = dialog.getByRole("button", {
+      name: `Remove project "${TEST_PROJECT}"`,
+    });
+    if (await projRemove.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await projRemove.click();
     }
 
-    // Try to unassign the tag
-    const tagBadge = page.getByRole("dialog").locator("span, div").filter({ hasText: TEST_TAG });
-    const tagX = tagBadge.locator("button, [role='button']").first();
-    if (await tagX.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      await tagX.click();
+    // Same pattern for the tag badge's remove button.
+    const tagRemove = dialog.getByRole("button", {
+      name: `Remove tag "${TEST_TAG}"`,
+    });
+    if (await tagRemove.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await tagRemove.click();
     }
 
     // Dismiss any toast notifications that might block the Save button

@@ -49,6 +49,44 @@ async function closePresetsMenu(page: Page) {
   await page.keyboard.press("Escape");
 }
 
+/**
+ * Best-effort dismissal of stale UI overlays at the start of a test.
+ *
+ * A fresh `page.goto("/")` gives each Playwright test a clean DOM in theory,
+ * but when the full suite runs a rapid sequence of saves/deletes, a toast
+ * from the previous test's final mutation can still be animating out when
+ * the next test's `beforeEach` fires its first click. The floating toast
+ * can overlay the Presets trigger button and make the click flaky. We
+ * hammer Escape a couple of times (also closes any menu/dialog that might
+ * have survived a navigation) and then wait for role=dialog, role=menu,
+ * and role=alertdialog to all be absent.
+ */
+async function dismissStaleOverlays(page: Page) {
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.press("Escape");
+  }
+  await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 3_000 });
+  await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 3_000 });
+  await expect(page.getByRole("menu")).toHaveCount(0, { timeout: 3_000 });
+}
+
+/**
+ * Wait for a success toast with the given exact title to fully leave the DOM.
+ *
+ * shadcn toasts default to ~5s auto-dismiss; their fade-out overlays the
+ * top-right region of the screen and can intercept subsequent clicks on
+ * the Presets trigger during rapid-fire mutation sequences. Waiting for
+ * the detached state is the most reliable way to avoid those races.
+ *
+ * Tolerates an already-detached toast (e.g. if the auto-dismiss raced us).
+ */
+async function waitForToastDetached(page: Page, title: string) {
+  const toast = page.getByText(title, { exact: true });
+  await toast
+    .waitFor({ state: "detached", timeout: 15_000 })
+    .catch(() => {});
+}
+
 /** The Presets trigger button. Used to read its aria-label for dirty-state. */
 function presetsTrigger(page: Page) {
   return page.getByRole("button", { name: /^presets/i });
@@ -91,6 +129,11 @@ async function saveCurrentSearchAs(page: Page, name: string) {
     timeout: 10_000,
   });
   await expect(dialog).toBeHidden({ timeout: 5_000 });
+  // Wait for the success toast to fully leave the DOM before returning. The
+  // floating toast can otherwise overlay the next UI target (most notably
+  // the Presets trigger in the count-label test, which does two saves back
+  // to back before reopening the menu).
+  await waitForToastDetached(page, "Preset saved");
 }
 
 /** Load a preset by clicking its name button inside the open menu. */
@@ -116,6 +159,7 @@ async function deletePresetByName(page: Page, name: string) {
   await expect(page.getByText("Preset deleted", { exact: true })).toBeVisible({
     timeout: 10_000,
   });
+  await waitForToastDetached(page, "Preset deleted");
 }
 
 /** Cleanup: open the menu and delete any preset whose name starts with the
@@ -143,8 +187,11 @@ async function deleteAllE2EPresets(page: Page) {
     await expect(page.getByText("Preset deleted", { exact: true })).toBeVisible({
       timeout: 10_000,
     });
-    // Let the toast fade / query re-fetch before the next iteration.
-    await page.waitForTimeout(300);
+    // Wait for the toast to fully leave the DOM before the next iteration —
+    // the floating toast otherwise overlays the Presets trigger and can make
+    // the next `openPresetsMenu` click miss. This replaces the previous
+    // fixed 300ms wait, which was both slower and less reliable.
+    await waitForToastDetached(page, "Preset deleted");
   }
   throw new Error("deleteAllE2EPresets: exceeded iteration cap — aborting");
 }
@@ -155,6 +202,12 @@ test.describe("Filter Presets (Saved Searches)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/", { waitUntil: "networkidle" });
     await waitForDashboard(page);
+    // Dismiss any stray overlays that might have survived a navigation from
+    // a crashed prior test (dialogs, alertdialogs, menus, lingering toasts).
+    // A fresh goto normally clears these, but the full-suite run has
+    // occasionally left one behind and the resulting overlay intercepts the
+    // first click we make in the test.
+    await dismissStaleOverlays(page);
     await clearAllFilters(page);
     await deleteAllE2EPresets(page);
   });
@@ -239,6 +292,7 @@ test.describe("Filter Presets (Saved Searches)", () => {
     await expect(page.getByText("Preset updated", { exact: true })).toBeVisible({
       timeout: 10_000,
     });
+    await waitForToastDetached(page, "Preset updated");
 
     // Back to clean: dot gone, Update disabled again.
     await expect(presetsTrigger(page)).toHaveAttribute("aria-label", "Presets");
@@ -283,6 +337,7 @@ test.describe("Filter Presets (Saved Searches)", () => {
     await expect(page.getByText("Preset renamed", { exact: true })).toBeVisible({
       timeout: 10_000,
     });
+    await waitForToastDetached(page, "Preset renamed");
 
     // Rename does not affect payload → loaded preset is still clean.
     await expect(presetsTrigger(page)).toHaveAttribute("aria-label", "Presets");
