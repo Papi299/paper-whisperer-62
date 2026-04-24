@@ -13,6 +13,7 @@ import {
   arePresetPayloadsEqual,
   buildPresetPayload,
   parsePresetPayload,
+  prepareRename,
   validatePresetName,
   PRESET_NAME_MAX_LENGTH,
   PRESET_PAYLOAD_VERSION,
@@ -338,5 +339,58 @@ describe("arePresetPayloadsEqual", () => {
     const a = { ...populatedPayload(), searchQuery: "Asthma" };
     const b = { ...populatedPayload(), searchQuery: "asthma" };
     expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+});
+
+// ── prepareRename ───────────────────────────────────────────────────────
+
+describe("prepareRename", () => {
+  const preset = { name: "My Preset" };
+
+  it("returns ok with the trimmed new name when it differs", () => {
+    expect(prepareRename(preset, "  Other name  ")).toEqual({
+      kind: "ok",
+      trimmedName: "Other name",
+    });
+  });
+
+  it("returns noop when the trimmed new name equals the current name", () => {
+    expect(prepareRename(preset, "My Preset")).toEqual({ kind: "noop" });
+  });
+
+  it("returns noop when only surrounding whitespace differs (equal after trim)", () => {
+    expect(prepareRename(preset, "   My Preset   ")).toEqual({ kind: "noop" });
+  });
+
+  it("treats a case-only difference as a real rename, not a no-op", () => {
+    expect(prepareRename(preset, "my preset")).toEqual({
+      kind: "ok",
+      trimmedName: "my preset",
+    });
+    expect(prepareRename(preset, "My preset")).toEqual({
+      kind: "ok",
+      trimmedName: "My preset",
+    });
+  });
+
+  it("returns invalid for an empty new name", () => {
+    const res = prepareRename(preset, "");
+    expect(res.kind).toBe("invalid");
+  });
+
+  it("returns invalid for a whitespace-only new name", () => {
+    const res = prepareRename(preset, "   \t  ");
+    expect(res.kind).toBe("invalid");
+  });
+
+  it("returns invalid for a new name over the max length", () => {
+    const tooLong = "x".repeat(PRESET_NAME_MAX_LENGTH + 1);
+    const res = prepareRename(preset, tooLong);
+    expect(res.kind).toBe("invalid");
+  });
+
+  it("returns ok for a new name exactly at the max length", () => {
+    const atMax = "x".repeat(PRESET_NAME_MAX_LENGTH);
+    expect(prepareRename(preset, atMax)).toEqual({ kind: "ok", trimmedName: atMax });
   });
 });

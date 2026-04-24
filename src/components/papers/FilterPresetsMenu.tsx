@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { Bookmark, Plus, Save, Trash2 } from "lucide-react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { Bookmark, Pencil, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -41,6 +41,8 @@ interface FilterPresetsMenuProps {
   isLoading: boolean;
   isSaving: boolean;
   isUpdating: boolean;
+  /** `true` while a rename mutation is in flight — disables the Save button and Cancel/close in the Rename dialog. */
+  isRenaming: boolean;
   /**
    * The preset currently "loaded" (most recently restored or just-created).
    * When non-null, an `Update "<name>"` action appears in the menu so the
@@ -69,6 +71,12 @@ interface FilterPresetsMenuProps {
    * surfaces the action and the confirmation.
    */
   onUpdateLoaded: () => Promise<boolean>;
+  /**
+   * Rename an existing preset by id. Returns `true` for both real renames and
+   * no-ops (so the dialog closes uniformly), `false` for validation/mutation
+   * failure (dialog stays open for retry).
+   */
+  onRename: (preset: Pick<FilterPreset, "id" | "name">, newName: string) => Promise<boolean>;
 }
 
 /**
@@ -88,6 +96,7 @@ export function FilterPresetsMenu({
   isLoading,
   isSaving,
   isUpdating,
+  isRenaming,
   loadedPreset,
   isLoadedPresetDirty,
   getCurrentPayload,
@@ -95,6 +104,7 @@ export function FilterPresetsMenu({
   onLoad,
   onDelete,
   onUpdateLoaded,
+  onRename,
 }: FilterPresetsMenuProps) {
   const { toast } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -108,7 +118,15 @@ export function FilterPresetsMenu({
    * stable even if the parent's loaded-preset state changes mid-flight.
    */
   const [presetToUpdate, setPresetToUpdate] = useState<FilterPreset | null>(null);
+  /**
+   * When non-null, the Rename Dialog is open targeting this preset. Snapshot
+   * (not a live ref to `presets`) so the dialog copy and the no-op comparison
+   * stay stable even if the list is refetched mid-flight.
+   */
+  const [presetToRename, setPresetToRename] = useState<FilterPreset | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   // Autofocus the name input when the Save dialog opens.
   useEffect(() => {
@@ -118,6 +136,17 @@ export function FilterPresetsMenu({
       return () => clearTimeout(t);
     }
   }, [saveOpen]);
+
+  // Autofocus the rename input + select-all when the Rename dialog opens.
+  useEffect(() => {
+    if (presetToRename) {
+      const t = setTimeout(() => {
+        renameInputRef.current?.focus();
+        renameInputRef.current?.select();
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, [presetToRename]);
 
   const openSaveDialog = useCallback(() => {
     setNameDraft("");
@@ -166,6 +195,58 @@ export function FilterPresetsMenu({
     // On failure, the mutation's onError toast surfaces and we leave the
     // dialog open so the user can retry or cancel.
   }, [presetToUpdate, onUpdateLoaded]);
+
+  const openRenameDialog = useCallback((preset: FilterPreset) => {
+    setPresetToRename(preset);
+    setRenameDraft(preset.name);
+    setMenuOpen(false);
+  }, []);
+
+  /**
+   * Submit-time enable check: validation passes, trimmed draft differs from
+   * the current preset name (no-op guard), and no rename mutation is in flight.
+   * Both the Save button's `disabled` prop and the form's `onSubmit` use this
+   * memoized boolean so keyboard (Enter) and click submission stay in sync.
+   */
+  const renameSubmitEnabled = useMemo(() => {
+    if (!presetToRename) return false;
+    if (isRenaming) return false;
+    const trimmed = renameDraft.trim();
+    if (trimmed.length === 0) return false;
+    if (trimmed.length > PRESET_NAME_MAX_LENGTH) return false;
+    if (trimmed === presetToRename.name) return false;
+    return true;
+  }, [presetToRename, isRenaming, renameDraft]);
+
+  const handleRenameSubmit = useCallback(async () => {
+    if (!presetToRename) return;
+    // Defensive re-check: even if a submission reaches us with the gating
+    // condition false (browser/extension that ignores `disabled`), bail out
+    // without calling the network. The hook layer also short-circuits no-ops.
+    const trimmed = renameDraft.trim();
+    if (trimmed.length === 0 || trimmed.length > PRESET_NAME_MAX_LENGTH) {
+      // Let the hook's `validatePresetName` toast fire so the user sees why.
+      const ok = await onRename(presetToRename, renameDraft);
+      if (ok) {
+        setPresetToRename(null);
+        setRenameDraft("");
+      }
+      return;
+    }
+    if (trimmed === presetToRename.name) {
+      // No-op: close cleanly without a mutation, without a toast.
+      setPresetToRename(null);
+      setRenameDraft("");
+      return;
+    }
+    const ok = await onRename(presetToRename, renameDraft);
+    if (ok) {
+      setPresetToRename(null);
+      setRenameDraft("");
+    }
+    // On failure, the hook surfaces the error toast and we leave the dialog
+    // open so the user can correct and retry.
+  }, [presetToRename, renameDraft, onRename]);
 
   return (
     <>
@@ -231,6 +312,18 @@ export function FilterPresetsMenu({
                   >
                     {preset.name}
                   </button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openRenameDialog(preset);
+                    }}
+                    aria-label={`Rename preset "${preset.name}"`}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -347,6 +440,58 @@ export function FilterPresetsMenu({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rename dialog — changes only the preset's name, never its payload */}
+      <Dialog
+        open={!!presetToRename}
+        onOpenChange={(open) => {
+          if (!open && !isRenaming) {
+            setPresetToRename(null);
+            setRenameDraft("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Rename saved search</DialogTitle>
+            <DialogDescription>
+              Give this saved search a new name. Filters and search query are not changed.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              // Mirror the button's gating so Enter doesn't bypass it.
+              if (!renameSubmitEnabled) return;
+              void handleRenameSubmit();
+            }}
+          >
+            <Input
+              ref={renameInputRef}
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              maxLength={PRESET_NAME_MAX_LENGTH}
+              disabled={isRenaming}
+            />
+            <DialogFooter className="mt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setPresetToRename(null);
+                  setRenameDraft("");
+                }}
+                disabled={isRenaming}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!renameSubmitEnabled}>
+                {isRenaming ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

@@ -139,6 +139,35 @@ export function validatePresetName(name: string): { ok: true; name: string } | {
   return { ok: true, name: trimmed };
 }
 
+/**
+ * Decide what should happen when the user submits a Rename. Pure function,
+ * isolated for unit testing — the hook just maps the result to side effects.
+ *
+ *   • `invalid` — fails `validatePresetName` (empty after trim, or too long).
+ *     Hook surfaces a destructive toast and skips the network.
+ *   • `noop`    — trimmed new name is byte-identical to the current preset
+ *     name. Hook returns success without calling the mutation, without
+ *     invalidating the list query, and without firing a toast — closing the
+ *     dialog as if a normal success happened, while skipping the empty UPDATE.
+ *   • `ok`      — trimmed new name differs from the current name. Hook calls
+ *     the rename mutation with `{ id, name: trimmedName }`.
+ *
+ * Case-only differences are NOT a no-op (`"Foo"` vs `"foo"` are distinct
+ * strings) — the user retains the ability to fix capitalization.
+ */
+export function prepareRename(
+  preset: Pick<FilterPreset, "name">,
+  newName: string,
+):
+  | { kind: "invalid"; error: string }
+  | { kind: "noop" }
+  | { kind: "ok"; trimmedName: string } {
+  const validation = validatePresetName(newName);
+  if (!validation.ok) return { kind: "invalid", error: validation.error };
+  if (validation.name === preset.name) return { kind: "noop" };
+  return { kind: "ok", trimmedName: validation.name };
+}
+
 /** Build the payload we persist from the current filter-state fields. */
 export function buildPresetPayload(fields: Omit<PresetPayload, "version">): PresetPayload {
   return { version: PRESET_PAYLOAD_VERSION, ...fields };
@@ -316,6 +345,45 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
   });
 
   /**
+   * Rename an existing preset. Targets by `id`, never by old name text — so
+   * a duplicate-name scenario can never silently rename the wrong row. Only
+   * the `name` column is touched; `payload`, `created_at`, and `id` are
+   * preserved. The DB `updated_at` trigger refreshes the timestamp.
+   *
+   * The 23505 → "Name already taken" branch mirrors the create flow exactly
+   * (same per-user case-insensitive unique index governs both).
+   */
+  const renamePresetMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const { error } = await supabase.from("filter_presets").update({ name }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: (_data, variables) => {
+      invalidate();
+      toast({
+        title: "Preset renamed",
+        description: `"${variables.name}" is now the preset name.`,
+      });
+    },
+    onError: (error: unknown, variables) => {
+      const pgError = error as { code?: string; message?: string };
+      if (pgError?.code === "23505") {
+        toast({
+          title: "Name already taken",
+          description: `A preset named "${variables.name}" already exists.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "Could not rename preset",
+        description: pgError?.message ?? "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  /**
    * Create a new preset. Resolves to the created `FilterPreset` (with its
    * server-assigned id) on success or `null` on error. Returning the row lets
    * the caller mark the new preset as "currently loaded" so the user can
@@ -370,6 +438,35 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
     [updatePresetMutation],
   );
 
+  /**
+   * Rename an existing preset by id. Validates the new name and short-circuits
+   * a no-op (trimmed-equal to current name) without hitting the network — see
+   * `prepareRename` for the decision logic. Returns `true` for both real
+   * renames and no-ops (so the caller can close the dialog uniformly), and
+   * `false` for validation failure or mutation rejection.
+   */
+  const renamePreset = useCallback(
+    async (preset: Pick<FilterPreset, "id" | "name">, newName: string): Promise<boolean> => {
+      const decision = prepareRename(preset, newName);
+      if (decision.kind === "invalid") {
+        toast({ title: "Invalid name", description: decision.error, variant: "destructive" });
+        return false;
+      }
+      if (decision.kind === "noop") {
+        // Nothing to send, nothing to invalidate, nothing to toast — the
+        // dialog still closes via the `true` return.
+        return true;
+      }
+      try {
+        await renamePresetMutation.mutateAsync({ id: preset.id, name: decision.trimmedName });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [renamePresetMutation, toast],
+  );
+
   return useMemo(
     () => ({
       presets,
@@ -377,9 +474,11 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
       isSaving: createPresetMutation.isPending,
       isDeleting: deletePresetMutation.isPending,
       isUpdating: updatePresetMutation.isPending,
+      isRenaming: renamePresetMutation.isPending,
       savePreset,
       deletePreset,
       updatePreset,
+      renamePreset,
     }),
     [
       presets,
@@ -387,9 +486,11 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
       createPresetMutation.isPending,
       deletePresetMutation.isPending,
       updatePresetMutation.isPending,
+      renamePresetMutation.isPending,
       savePreset,
       deletePreset,
       updatePreset,
+      renamePreset,
     ],
   );
 }

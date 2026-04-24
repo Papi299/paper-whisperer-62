@@ -53,6 +53,8 @@ interface SearchFiltersProps {
   presetsLoading: boolean;
   presetsSaving: boolean;
   presetsUpdating: boolean;
+  /** `true` while a rename mutation is in flight. Drives the Save button's pending/disabled state in the Rename dialog. */
+  presetsRenaming: boolean;
   /** The preset most recently loaded or just-created. `null` when nothing is loaded. */
   loadedPreset: FilterPreset | null;
   /**
@@ -67,6 +69,8 @@ interface SearchFiltersProps {
   onDeletePreset: (preset: Pick<FilterPreset, "id" | "name">) => Promise<void>;
   /** Overwrite the currently-loaded preset's payload with the current dashboard state. */
   onUpdateLoadedPreset: () => Promise<boolean>;
+  /** Rename an existing preset by id. Returns `true` for real rename or no-op (so the dialog closes), `false` for validation/mutation failure. */
+  onRenamePreset: (preset: Pick<FilterPreset, "id" | "name">, newName: string) => Promise<boolean>;
 }
 
 export function SearchFilters({
@@ -101,6 +105,7 @@ export function SearchFilters({
   presetsLoading,
   presetsSaving,
   presetsUpdating,
+  presetsRenaming,
   loadedPreset,
   isLoadedPresetDirty,
   getCurrentPresetPayload,
@@ -108,6 +113,7 @@ export function SearchFilters({
   onLoadPreset,
   onDeletePreset,
   onUpdateLoadedPreset,
+  onRenamePreset,
 }: SearchFiltersProps) {
 
   // Export gating: based on isExportReady (from useExportPapers)
@@ -235,6 +241,7 @@ export function SearchFilters({
             isLoading={presetsLoading}
             isSaving={presetsSaving}
             isUpdating={presetsUpdating}
+            isRenaming={presetsRenaming}
             loadedPreset={loadedPreset}
             isLoadedPresetDirty={isLoadedPresetDirty}
             getCurrentPayload={getCurrentPresetPayload}
@@ -242,6 +249,7 @@ export function SearchFilters({
             onLoad={onLoadPreset}
             onDelete={onDeletePreset}
             onUpdateLoaded={onUpdateLoadedPreset}
+            onRename={onRenamePreset}
           />
           {hasActiveFilters && (
             <Button variant="outline" size="sm" onClick={onClearFilters}>

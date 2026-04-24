@@ -188,15 +188,17 @@ function DashboardContent() {
     projectsLoading,
   });
 
-  // ── Saved Searches / Filter Presets (list + create + delete + update) ──
+  // ── Saved Searches / Filter Presets (list + create + delete + update + rename) ──
   const {
     presets,
     isLoading: presetsLoading,
     isSaving: presetsSaving,
     isUpdating: presetsUpdating,
+    isRenaming: presetsRenaming,
     savePreset,
     deletePreset,
     updatePreset,
+    renamePreset,
   } = useFilterPresets({ userId: user?.id });
 
   /**
@@ -677,6 +679,7 @@ function DashboardContent() {
             presetsLoading={presetsLoading}
             presetsSaving={presetsSaving}
             presetsUpdating={presetsUpdating}
+            presetsRenaming={presetsRenaming}
             loadedPreset={loadedPreset}
             isLoadedPresetDirty={isLoadedPresetDirty}
             getCurrentPresetPayload={getCurrentPresetPayload}
@@ -684,6 +687,7 @@ function DashboardContent() {
             onLoadPreset={handleLoadPreset}
             onDeletePreset={handleDeletePreset}
             onUpdateLoadedPreset={handleUpdateLoadedPreset}
+            onRenamePreset={renamePreset}
           />
           <AnalyticsPanel
             papers={analyticsPapers}
