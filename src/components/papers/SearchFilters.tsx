@@ -18,6 +18,7 @@ import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
 import { FilterPresetsMenu, type FilterPresetsMenuProps } from "./FilterPresetsMenu";
 import { Project, Tag } from "@/types/database";
 import type { NotesPresence } from "@/hooks/papers/types";
+import type { ExportFormat } from "@/hooks/useExportPapers";
 
 interface SearchFiltersProps {
   searchQuery: string;
@@ -35,9 +36,7 @@ interface SearchFiltersProps {
   availableKeywords: string[];
   onKeywordToggle: (keyword: string) => void;
   onClearFilters: () => void;
-  onExportCSV: () => void;
-  onExportRIS: () => void;
-  onExportBibTeX: () => void;
+  onExport: (format: ExportFormat) => void;
   hasActiveFilters: boolean;
   projects: Project[];
   tags: Tag[];
@@ -71,9 +70,7 @@ export function SearchFilters({
   availableKeywords,
   onKeywordToggle,
   onClearFilters,
-  onExportCSV,
-  onExportRIS,
-  onExportBibTeX,
+  onExport,
   hasActiveFilters,
   projects,
   tags,
@@ -221,15 +218,15 @@ export function SearchFilters({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-popover">
-              <DropdownMenuItem onClick={onExportCSV}>
+              <DropdownMenuItem onClick={() => onExport("csv")}>
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 Export as CSV
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={onExportRIS}>
+              <DropdownMenuItem onClick={() => onExport("ris")}>
                 <FileText className="mr-2 h-4 w-4" />
                 Export as RIS
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={onExportBibTeX}>
+              <DropdownMenuItem onClick={() => onExport("bibtex")}>
                 <BookOpen className="mr-2 h-4 w-4" />
                 Export as BibTeX
               </DropdownMenuItem>

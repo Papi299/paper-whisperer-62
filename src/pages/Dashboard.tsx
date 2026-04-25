@@ -446,9 +446,6 @@ function DashboardContent() {
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
   const [bulkAnalyzeProgress, setBulkAnalyzeProgress] = useState({ current: 0, total: 0 });
 
-  const handleExportCSV = () => exportPapers("csv");
-  const handleExportRIS = () => exportPapers("ris");
-  const handleExportBibTeX = () => exportPapers("bibtex");
 
   const handleAttachmentsChange = useCallback((paperId: string, atts: PaperAttachment[]) => {
     updatePapersCache((all) =>
@@ -687,9 +684,7 @@ function DashboardContent() {
             availableKeywords={filteredKeywords}
             onKeywordToggle={handleKeywordToggle}
             onClearFilters={handleClearFilters}
-            onExportCSV={handleExportCSV}
-            onExportRIS={handleExportRIS}
-            onExportBibTeX={handleExportBibTeX}
+            onExport={exportPapers}
             hasActiveFilters={hasActiveFilters}
             projects={projects}
             tags={tags}

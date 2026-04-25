@@ -12,6 +12,13 @@ import { useToast } from "@/hooks/use-toast";
 const EXPORT_SELECT =
   "id, title, authors, year, journal, pmid, doi, abstract, study_type, keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url";
 
+/**
+ * Supported export formats. Single source of truth — imported by
+ * `Dashboard.tsx` and `SearchFilters.tsx` so the export `<DropdownMenu>`
+ * call sites and the `exportPapers` callback share the same union.
+ */
+export type ExportFormat = "csv" | "ris" | "bibtex";
+
 interface UseExportPapersArgs {
   userId: string | undefined;
   serverFilterParams: ServerFilterParams;
@@ -45,7 +52,7 @@ export function useExportPapers({
     !projectsLoading;
 
   const exportPapers = useCallback(
-    async (format: "csv" | "ris" | "bibtex") => {
+    async (format: ExportFormat) => {
       // Safety guard: don't export if prerequisites aren't met
       if (!userId || !areServerFiltersReady(serverFilterParams)) return;
 
