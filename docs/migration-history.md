@@ -440,3 +440,86 @@ All user-scoped tables now have correct `ON DELETE CASCADE` to `auth.users(id)`.
 **Explicit non-goals (do not re-propose as if they exist):** autosave or inline / click-on-name rename, bulk rename or rename-via-search-and-replace, version history of past names, "recently renamed" indicator, rename-only docs in this same PR (docs follow-up is its own normalization PR), any change to `payload` / `arePresetPayloadsEqual` / the dirty-dot logic from PR #101, any change to the Save / Update / Delete flows or copy.
 
 **Explicit non-goals (do not re-propose):** a distinct "N of total" indicator when the list is partially scrolled, a custom-styled scrollbar (see "Why a count label" above), a chevron / fade / scroll-hint element, or any other overflow affordance. The count label is the chosen indicator for the current scale.
+
+## Saved Searches / Filter Presets — E2E coverage (PR #104)
+
+**Date:** April 2026
+**What:** Added the first focused Playwright spec for the Saved Searches / Filter Presets workflow at `e2e/filter-presets.spec.ts`. The spec exercises the entire user flow through the real UI: save preset, reload page, load preset back, quoted phrase query (`"…"`) round-trip via `searchQuery`, dirty-state dot + `Update "<name>"` enabled-when-dirty / disabled-when-clean semantics, update-overwrites-payload, rename via the per-row pencil (no-op guard verified, case-only rename verified, dirty state unaffected), delete via the trash + `AlertDialog` confirmation, count label `Saved searches · N`, and the empty-state `No saved searches yet` reading. Test isolation uses an `E2E-` name prefix so a `beforeEach` cleanup hook reliably removes leftovers from prior failed runs without touching the user's real presets.
+
+**Cross-user RLS isolation deliberately not covered.** The existing E2E auth harness (`e2e/global-setup.ts`) signs in a single `storageState` account; adding a second account would require multi-user auth plumbing that exceeded the scope of a testing-only PR. The empirical two-account RLS verification documented for PR #96 (Saved Searches MVP) already covers cross-user isolation for `filter_presets`.
+
+**Files changed:**
+- `e2e/filter-presets.spec.ts` (new)
+
+**Verification:**
+- `npx playwright test e2e/filter-presets.spec.ts` and full `npx playwright test` both passed locally on the PR branch.
+- No application code, schema, RPC, RLS, or UI behavior changed.
+
+## Playwright flake stabilization (PR #105)
+
+**Date:** April 2026
+**What:** Stabilized the two Playwright flakes observed after PR #104. Testing-side hardening plus one narrow accessibility-only product change.
+
+**Flake 1 — `e2e/mutations.spec.ts:215` (cleanup step).** The cleanup-side selector `dialog.locator("span, div").filter({ hasText: TEST_TAG })` matched every ancestor that contained the tag-name text and could resolve to a disabled shadcn `Button` (the Popover trigger) instead of the actual icon-only X/remove button. The icon-only `<button>` had no accessible name, so a role-based selector was not yet usable.
+- **Fix (product, a11y-only):** added `aria-label="Remove project \"<name>\""` and `aria-label="Remove tag \"<name>\""` plus explicit `type="button"` to both icon-only remove buttons in `src/components/papers/EditPaperDialog.tsx`. This is a genuine WCAG improvement for icon-only buttons.
+- **Fix (test):** rewrote the cleanup selectors in `e2e/mutations.spec.ts` to use `dialog.getByRole("button", { name: 'Remove project "<name>"' })` (and the tag equivalent), which resolves unambiguously to the X button.
+
+**Flake 2 — `e2e/filter-presets.spec.ts` count-label test (full-suite race).** Under full-suite load, a `Preset saved` / `Preset deleted` / `Preset updated` / `Preset renamed` shadcn toast from the previous mutation could still be animating out (~5s auto-dismiss) when the next click on the Presets trigger fired, intercepting the click and producing inconsistent menu state.
+- **Fix (test only):** added `waitForToastDetached(page, title)` (waits for `getByText(title, { exact: true })` to reach `state: "detached"` with a 15s tolerance) and called it at every mutation boundary in the spec's helpers (save, delete, update, rename). Also added `dismissStaleOverlays(page)` called in `beforeEach` — hammers Escape twice and asserts no `dialog` / `alertdialog` / `menu` remains.
+
+**Files changed:**
+- `src/components/papers/EditPaperDialog.tsx` — `aria-label` + `type="button"` on the two icon-only remove buttons (a11y-only, no behavior change).
+- `e2e/mutations.spec.ts` — role/name selectors for the project/tag X buttons.
+- `e2e/filter-presets.spec.ts` — `waitForToastDetached` at mutation boundaries; `dismissStaleOverlays` in `beforeEach`.
+
+**Verification:**
+- Focused specs passed.
+- Two consecutive full Playwright suite runs at **60/60** each.
+- No schema/migration changed; no docs changed in this PR.
+
+## Notes — E2E coverage (PR #106)
+
+**Date:** April 2026
+**What:** Added focused Playwright coverage for the Paper Notes workflow at `e2e/notes.spec.ts`, locking in the user-visible behavior shipped in PRs #84–#87 and the search-attribution work from PRs #91–#93. The spec covers five cases:
+
+1. **Add note** via the Edit dialog → row `StickyNote` indicator appears → popover preview shows the note text verbatim (newline + Unicode round-tripped).
+2. **Edit existing note** — the Edit dialog's `<Textarea>` round-trips the saved value, and a replacement persists across reopen.
+3. **Clear note** — emptying the textarea and saving removes the row indicator (matches the `paper.notes?.trim()` product predicate).
+4. **`Has notes` / `No notes` filter** correctly partitions a paper with a note; reset to `All Papers` restores the full list.
+5. **Search + `Matched in: Notes` attribution** — typing a unique alphanumeric marker that was planted in `notes` returns the paper, and the row's attribution sub-line shows a `Notes` badge.
+
+**Strategy.** UI-driven only (no direct DB writes). The spec picks two papers from the first ~30 visible rows that currently have no notes indicator and uses them for the run. Each test is self-contained: it seeds the notes state it needs, asserts, and restores the paper to "no notes" before finishing. An `afterAll` hook performs a second defensive clear if a test aborts mid-way. Unique `E2E-NOTES-<timestamp>` tokens make search assertions immune to collisions with the user's real notes content. The search-attribution test uses a deliberately FTS-friendly alphanumeric marker (e.g. `zzqnote<base36-timestamp>`) — a short pure-numeric segment was tried first and silently dropped by the FTS tokenizer, so that path is now ruled out.
+
+**Files changed:**
+- `e2e/notes.spec.ts` (new)
+
+**Verification:**
+- `npx playwright test e2e/notes.spec.ts` passed.
+- Full suite: `npx playwright test` → **65/65** pass.
+- `npx vitest run` → **228/228** pass.
+- `npx tsc --noEmit`, `npm run build`, `npm run lint` — all clean (no new lint issues vs main).
+- No application code, schema, RPC, RLS, or UI behavior changed.
+
+## `raw_keywords` nullable type alignment (PR #107)
+
+**Date:** April 2026
+**What:** Closed a small type drift between hand-written and generated Supabase types. The generated types in `src/integrations/supabase/types.ts` declare `papers.raw_keywords` as `string[] | null`, but the hand-written `Paper` interface in `src/types/database.ts` had it as a non-nullable `string[]`. A local inline shape in `useBulkMutations.reevaluateKeywords` (the row type returned by `fetchAllPages`) had the same drift. Both were widened to `string[] | null` so TypeScript reflects what the database can actually return.
+
+**Audit (do not re-audit).** Every `raw_keywords` usage in `src/` was reviewed:
+- 4 insert payloads (`usePaperMutations.ts:89`, `useBulkMutations.ts:102`, `useBulkMutations.ts:225`, `useBulkMutations.ts:378`) — all already produce a non-null array via `|| []`. No change.
+- 1 column-list reference (`usePapers.ts:72`) — string in a SELECT, no value access. No change.
+- 1 property-access read (`useBulkMutations.ts:677`) — already null-safe via `paper.raw_keywords || []`. No change.
+
+No new null guards were required. No behavior change. No new tests were added — the only code-level change is a TypeScript type widening; the single read site was already null-safe.
+
+**Files changed:**
+- `src/types/database.ts` — `raw_keywords: string[]` → `string[] | null`.
+- `src/hooks/papers/useBulkMutations.ts` — local inline row type for `reevaluateKeywords` updated to match.
+
+**Verification:**
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 228/228 pass.
+- `npm run build` — clean.
+- `npm run lint` — no new issues vs main.
+
+**Explicit non-goals.** No schema or migration changed. No regenerated Supabase types. No search/import/UI behavior change. No docs change in that PR (this entry is the docs follow-up).
