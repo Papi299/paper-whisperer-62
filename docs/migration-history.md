@@ -523,3 +523,23 @@ No new null guards were required. No behavior change. No new tests were added �
 - `npm run lint` — no new issues vs main.
 
 **Explicit non-goals.** No schema or migration changed. No regenerated Supabase types. No search/import/UI behavior change. No docs change in that PR (this entry is the docs follow-up).
+
+## `Matched in:` search-attribution — E2E coverage (PR #109)
+
+**Date:** April 2026
+**What:** Added a focused Playwright spec at `e2e/search-attribution.spec.ts` that locks in the server-driven `Matched in:` UI shipped in PRs #91–#93. The spec covers all six supported attribution sources — **Title, Abstract, Authors, Journal, Notes, Keywords** — with one test per source. Each test asserts that searching a token planted in only that field surfaces the seeded paper's row with the correct `Matched in: <Field>` badge, scoped to the parent of the `Matched in:` `<span>`.
+
+**Strategy.** UI-driven seeding through the existing Edit Paper dialog (no service-role helpers exist in this repo, and the dialog already exposes all six searchable fields). `beforeAll` opens the first paper, captures every searchable field's current value (waiting for the `useAbstract` hook to finish so the abstract read is the real DB value), and **appends** a per-field unique alphanumeric token (`e2eattr<field><base36-timestamp>`) to all six fields in a single Save. Each token appears in exactly one field, so a search for any one token exercises that field's `matched_*` flag in isolation. `afterAll` restores the captured originals through the same dialog → no persistent test pollution.
+
+**Row scope.** Every test locates the seeded row by the **title token**, because the title cell is the only cell guaranteed to render seeded text in the collapsed virtual table — abstract is fetched on demand for expanded rows, notes live in a popover, and keywords live in a separately-toggled column. This was a real bug in the first iteration of the spec (filtering rows by the abstract token returned no rows even when the search match was correct) and is now the documented row-scope rule.
+
+**Files changed:**
+- `e2e/search-attribution.spec.ts` (new)
+
+**Verification:**
+- `npx playwright test e2e/search-attribution.spec.ts` — 7/7 pass (6 new + setup).
+- Full suite: `npx playwright test` → **71/71** pass.
+- `npx vitest run` → 228/228 pass.
+- `npx tsc --noEmit`, `npm run build`, `npm run lint` — all clean (no new lint issues vs main).
+
+**Explicit non-goals.** Testing-only. No application behavior, search behavior, RPC, SQL, schema, or migration changed. No docs change in that PR (this entry is the docs follow-up). `Matched in:` remains server-driven — the client still does not re-tokenize the query.
