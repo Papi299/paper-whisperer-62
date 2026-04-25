@@ -571,7 +571,7 @@ function DashboardContent() {
       title: "Bulk analysis complete",
       description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
     });
-  }, [papers, selectedPaperIds, updatePaper, toast]);
+  }, [papers, selectedPaperIds, updatePaper, queryClient, toast]);
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
