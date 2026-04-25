@@ -36,6 +36,78 @@ import {
   validatePresetName,
 } from "@/hooks/useFilterPresets";
 
+/**
+ * Shared form body for the Save Preset and Rename Preset dialogs.
+ *
+ * Both dialogs ask the user to enter (or edit) a preset name and then
+ * Cancel / Save. Their `<Dialog>`, `<DialogContent>`, and `<DialogHeader>`
+ * stay in the parent so the existing dialog titles, descriptions, and
+ * `onOpenChange` semantics — which differ per dialog and are also what
+ * the E2E spec filters on — are physically untouched. This component
+ * renders only the inner `<form>` + `<Input>` + `<DialogFooter>` (Cancel
+ * and Save buttons).
+ *
+ * The `<form>` `onSubmit` defensively gates on `submitDisabled` before
+ * calling the parent's `onSubmit`, mirroring the Rename dialog's existing
+ * Enter-key guard from PR #102. For Save, this is a strict tightening —
+ * see the PR body for the full rationale (it is observably equivalent in
+ * normal use because the Save button is already disabled in the same
+ * condition and the parent's submit handler re-validates anyway).
+ */
+interface PresetNameFormProps {
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  isLoading: boolean;
+  submitDisabled: boolean;
+  onSubmit: () => void;
+  onCancel: () => void;
+}
+
+function PresetNameForm({
+  inputRef,
+  value,
+  onChange,
+  placeholder,
+  isLoading,
+  submitDisabled,
+  onSubmit,
+  onCancel,
+}: PresetNameFormProps) {
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (submitDisabled) return;
+        onSubmit();
+      }}
+    >
+      <Input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        maxLength={PRESET_NAME_MAX_LENGTH}
+        disabled={isLoading}
+      />
+      <DialogFooter className="mt-4">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onCancel}
+          disabled={isLoading}
+        >
+          Cancel
+        </Button>
+        <Button type="submit" disabled={submitDisabled}>
+          {isLoading ? "Saving…" : "Save"}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
 interface FilterPresetsMenuProps {
   presets: FilterPreset[];
   isLoading: boolean;
@@ -353,34 +425,16 @@ export function FilterPresetsMenu({
               Give this search and filter combination a name you can recognise later.
             </DialogDescription>
           </DialogHeader>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void handleSaveSubmit();
-            }}
-          >
-            <Input
-              ref={inputRef}
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              placeholder="e.g. Recent reviews on sleep"
-              maxLength={PRESET_NAME_MAX_LENGTH}
-              disabled={isSaving}
-            />
-            <DialogFooter className="mt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setSaveOpen(false)}
-                disabled={isSaving}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isSaving || nameDraft.trim().length === 0}>
-                {isSaving ? "Saving…" : "Save"}
-              </Button>
-            </DialogFooter>
-          </form>
+          <PresetNameForm
+            inputRef={inputRef}
+            value={nameDraft}
+            onChange={setNameDraft}
+            placeholder="e.g. Recent reviews on sleep"
+            isLoading={isSaving}
+            submitDisabled={isSaving || nameDraft.trim().length === 0}
+            onSubmit={() => void handleSaveSubmit()}
+            onCancel={() => setSaveOpen(false)}
+          />
         </DialogContent>
       </Dialog>
 
@@ -458,38 +512,18 @@ export function FilterPresetsMenu({
               Give this saved search a new name. Filters and search query are not changed.
             </DialogDescription>
           </DialogHeader>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              // Mirror the button's gating so Enter doesn't bypass it.
-              if (!renameSubmitEnabled) return;
-              void handleRenameSubmit();
+          <PresetNameForm
+            inputRef={renameInputRef}
+            value={renameDraft}
+            onChange={setRenameDraft}
+            isLoading={isRenaming}
+            submitDisabled={!renameSubmitEnabled}
+            onSubmit={() => void handleRenameSubmit()}
+            onCancel={() => {
+              setPresetToRename(null);
+              setRenameDraft("");
             }}
-          >
-            <Input
-              ref={renameInputRef}
-              value={renameDraft}
-              onChange={(e) => setRenameDraft(e.target.value)}
-              maxLength={PRESET_NAME_MAX_LENGTH}
-              disabled={isRenaming}
-            />
-            <DialogFooter className="mt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setPresetToRename(null);
-                  setRenameDraft("");
-                }}
-                disabled={isRenaming}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!renameSubmitEnabled}>
-                {isRenaming ? "Saving…" : "Save"}
-              </Button>
-            </DialogFooter>
-          </form>
+          />
         </DialogContent>
       </Dialog>
     </>
