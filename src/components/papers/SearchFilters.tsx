@@ -15,10 +15,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Search, X, Download, FileText, FileSpreadsheet, BookOpen, Loader2 } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
-import { FilterPresetsMenu } from "./FilterPresetsMenu";
+import { FilterPresetsMenu, type FilterPresetsMenuProps } from "./FilterPresetsMenu";
 import { Project, Tag } from "@/types/database";
 import type { NotesPresence } from "@/hooks/papers/types";
-import type { FilterPreset, PresetPayload } from "@/hooks/useFilterPresets";
 
 interface SearchFiltersProps {
   searchQuery: string;
@@ -48,29 +47,12 @@ interface SearchFiltersProps {
   onTagChange: (tagId: string | null) => void;
   isExportReady?: boolean;
   isExporting?: boolean;
-  // Filter presets (Saved Searches)
-  presets: FilterPreset[];
-  presetsLoading: boolean;
-  presetsSaving: boolean;
-  presetsUpdating: boolean;
-  /** `true` while a rename mutation is in flight. Drives the Save button's pending/disabled state in the Rename dialog. */
-  presetsRenaming: boolean;
-  /** The preset most recently loaded or just-created. `null` when nothing is loaded. */
-  loadedPreset: FilterPreset | null;
   /**
-   * `true` when a preset is loaded AND the current filter state differs from
-   * that preset's stored payload. Drives the Presets trigger dot and the
-   * enabled state of the `Update "<name>"` menu item.
+   * Saved Searches / Filter Presets bundle. Pure pass-through into
+   * `<FilterPresetsMenu />` — see `FilterPresetsMenuProps` for the
+   * authoritative per-field documentation.
    */
-  isLoadedPresetDirty: boolean;
-  getCurrentPresetPayload: () => PresetPayload;
-  onSavePreset: (name: string, payload: PresetPayload) => Promise<boolean>;
-  onLoadPreset: (preset: FilterPreset) => void;
-  onDeletePreset: (preset: Pick<FilterPreset, "id" | "name">) => Promise<void>;
-  /** Overwrite the currently-loaded preset's payload with the current dashboard state. */
-  onUpdateLoadedPreset: () => Promise<boolean>;
-  /** Rename an existing preset by id. Returns `true` for real rename or no-op (so the dialog closes), `false` for validation/mutation failure. */
-  onRenamePreset: (preset: Pick<FilterPreset, "id" | "name">, newName: string) => Promise<boolean>;
+  filterPresets: FilterPresetsMenuProps;
 }
 
 export function SearchFilters({
@@ -101,19 +83,7 @@ export function SearchFilters({
   onTagChange,
   isExportReady,
   isExporting = false,
-  presets,
-  presetsLoading,
-  presetsSaving,
-  presetsUpdating,
-  presetsRenaming,
-  loadedPreset,
-  isLoadedPresetDirty,
-  getCurrentPresetPayload,
-  onSavePreset,
-  onLoadPreset,
-  onDeletePreset,
-  onUpdateLoadedPreset,
-  onRenamePreset,
+  filterPresets,
 }: SearchFiltersProps) {
 
   // Export gating: based on isExportReady (from useExportPapers)
@@ -236,21 +206,7 @@ export function SearchFilters({
 
         {/* Actions */}
         <div className="flex gap-2">
-          <FilterPresetsMenu
-            presets={presets}
-            isLoading={presetsLoading}
-            isSaving={presetsSaving}
-            isUpdating={presetsUpdating}
-            isRenaming={presetsRenaming}
-            loadedPreset={loadedPreset}
-            isLoadedPresetDirty={isLoadedPresetDirty}
-            getCurrentPayload={getCurrentPresetPayload}
-            onSave={onSavePreset}
-            onLoad={onLoadPreset}
-            onDelete={onDeletePreset}
-            onUpdateLoaded={onUpdateLoadedPreset}
-            onRename={onRenamePreset}
-          />
+          <FilterPresetsMenu {...filterPresets} />
           {hasActiveFilters && (
             <Button variant="outline" size="sm" onClick={onClearFilters}>
               <X className="mr-1 h-4 w-4" />
