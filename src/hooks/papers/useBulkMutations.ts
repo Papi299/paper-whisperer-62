@@ -655,7 +655,7 @@ export function useBulkMutations(
       if (!userId) return;
 
       // 1. Fetch ALL papers (safe pagination via fetchAllPages)
-      let allPapers: { id: string; raw_keywords: string[]; title: string; abstract: string | null; keywords: string[] }[];
+      let allPapers: { id: string; raw_keywords: string[] | null; title: string; abstract: string | null; keywords: string[] }[];
       try {
         allPapers = await fetchAllPages(() =>
           supabase
