@@ -108,7 +108,7 @@ function PresetNameForm({
   );
 }
 
-interface FilterPresetsMenuProps {
+export interface FilterPresetsMenuProps {
   presets: FilterPreset[];
   isLoading: boolean;
   isSaving: boolean;

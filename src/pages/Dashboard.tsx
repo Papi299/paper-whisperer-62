@@ -28,6 +28,7 @@ import { EditPaperDialog } from "@/components/papers/EditPaperDialog";
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
 import { EditTagDialog } from "@/components/tags/EditTagDialog";
 import { SearchFilters } from "@/components/papers/SearchFilters";
+import type { FilterPresetsMenuProps } from "@/components/papers/FilterPresetsMenu";
 import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDropdown";
 import { DeduplicationDialog } from "@/components/papers/DeduplicationDialog";
 import { Button } from "@/components/ui/button";
@@ -601,6 +602,29 @@ function DashboardContent() {
     );
   }
 
+  // Saved Searches / Filter Presets bundle — passed as a single prop to
+  // <SearchFilters /> which spreads it into <FilterPresetsMenu />. Typed
+  // against `FilterPresetsMenuProps` so TS enforces field-for-field
+  // alignment with the menu's contract. The five rename mappings
+  // (e.g. `isLoading: presetsLoading`, `getCurrentPayload:
+  // getCurrentPresetPayload`) live here in one place rather than being
+  // duplicated across SearchFilters' prop interface and JSX.
+  const filterPresets: FilterPresetsMenuProps = {
+    presets,
+    isLoading: presetsLoading,
+    isSaving: presetsSaving,
+    isUpdating: presetsUpdating,
+    isRenaming: presetsRenaming,
+    loadedPreset,
+    isLoadedPresetDirty,
+    getCurrentPayload: getCurrentPresetPayload,
+    onSave: handleSavePreset,
+    onLoad: handleLoadPreset,
+    onDelete: handleDeletePreset,
+    onUpdateLoaded: handleUpdateLoadedPreset,
+    onRename: renamePreset,
+  };
+
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
       <Sidebar
@@ -675,19 +699,7 @@ function DashboardContent() {
             onTagChange={setSelectedTagId}
             isExportReady={isExportReady}
             isExporting={isExporting}
-            presets={presets}
-            presetsLoading={presetsLoading}
-            presetsSaving={presetsSaving}
-            presetsUpdating={presetsUpdating}
-            presetsRenaming={presetsRenaming}
-            loadedPreset={loadedPreset}
-            isLoadedPresetDirty={isLoadedPresetDirty}
-            getCurrentPresetPayload={getCurrentPresetPayload}
-            onSavePreset={handleSavePreset}
-            onLoadPreset={handleLoadPreset}
-            onDeletePreset={handleDeletePreset}
-            onUpdateLoadedPreset={handleUpdateLoadedPreset}
-            onRenamePreset={renamePreset}
+            filterPresets={filterPresets}
           />
           <AnalyticsPanel
             papers={analyticsPapers}
