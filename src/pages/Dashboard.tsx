@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
 import { Plus, Loader2, Layers, Sparkles } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
+import { buildAnalysisUpdates } from "@/lib/studyTypeUtils";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchAbstract, fetchAbstractsBatch } from "@/hooks/useAbstract";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
@@ -453,10 +454,6 @@ function DashboardContent() {
     );
   }, [updatePapersCache]);
 
-  /** Smart merge: preserve existing study_type if it's specific (not generic/empty). */
-  const isGenericStudyType = (type: string | null | undefined) =>
-    !type || type.trim() === "" || type.trim().toLowerCase() === "journal article";
-
   const handleAnalyzePaper = useCallback(async (paper: PaperWithTags) => {
     if (!paper.has_abstract) return;
     setAnalyzingPaperId(paper.id);
@@ -475,20 +472,12 @@ function DashboardContent() {
 
       const aiData = data as { tldr?: string; studyType?: string; statisticalMethods?: string };
 
-      // Smart merge: keep existing study_type if it's specific
-      const finalStudyType = isGenericStudyType(paper.study_type)
-        ? (aiData.studyType ?? paper.study_type)
-        : paper.study_type;
-
-      const updates: Record<string, unknown> = {
-        tldr: aiData.tldr || paper.tldr,
-        study_type: finalStudyType,
-        statistical_methods: aiData.statisticalMethods || paper.statistical_methods,
-      };
+      // Smart merge: keep existing study_type if it's specific.
+      // See `src/lib/studyTypeUtils.ts` for the merge rule + tests.
+      const { updates, keptStudyType } = buildAnalysisUpdates(paper, aiData);
 
       await updatePaper(paper.id, updates);
 
-      const keptStudyType = !isGenericStudyType(paper.study_type) && aiData.studyType && aiData.studyType !== paper.study_type;
       toast({
         title: "Analysis complete and saved",
         description: keptStudyType
@@ -539,15 +528,9 @@ function DashboardContent() {
         if (error) throw error;
 
         const aiData = data as { tldr?: string; studyType?: string; statisticalMethods?: string };
-        const finalStudyType = isGenericStudyType(paper.study_type)
-          ? (aiData.studyType ?? paper.study_type)
-          : paper.study_type;
-
-        await updatePaper(paper.id, {
-          tldr: aiData.tldr || paper.tldr,
-          study_type: finalStudyType,
-          statistical_methods: aiData.statisticalMethods || paper.statistical_methods,
-        });
+        // Same smart-merge as the single-paper path above.
+        const { updates } = buildAnalysisUpdates(paper, aiData);
+        await updatePaper(paper.id, updates);
         successCount++;
       } catch (err: unknown) {
         failCount++;
