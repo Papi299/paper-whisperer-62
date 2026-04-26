@@ -24,6 +24,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { PaperWithTags, Project, Tag } from "@/types/database";
+import { isGenericStudyType } from "@/lib/studyTypeUtils";
 import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags, Trash2, FileText, Upload, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -145,10 +146,6 @@ export function EditPaperDialog({
       setLoading(false);
     }
   };
-
-  /** A study type is "generic" if it's empty or a catch-all PubMed label. */
-  const isGenericStudyType = (type: string | null | undefined) =>
-    !type || type.trim() === "" || type.trim().toLowerCase() === "journal article";
 
   const handleAnalyze = async () => {
     if (!abstract.trim()) return;
