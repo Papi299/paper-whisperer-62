@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { usePapers } from "@/hooks/usePapers";
@@ -35,9 +34,7 @@ import { Button } from "@/components/ui/button";
 import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
 import { Plus, Loader2, Layers, Sparkles } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
-import { buildAnalysisUpdates } from "@/lib/studyTypeUtils";
-import { supabase } from "@/integrations/supabase/client";
-import { fetchAbstract, fetchAbstractsBatch } from "@/hooks/useAbstract";
+import { usePaperAnalysisActions } from "@/hooks/usePaperAnalysisActions";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
@@ -79,7 +76,6 @@ export function Dashboard() {
 function DashboardContent() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
 
   // Pool data from context
   const {
@@ -443,115 +439,28 @@ function DashboardContent() {
   const [editingPaper, setEditingPaper] = useState<PaperWithTags | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
-  const [analyzingPaperId, setAnalyzingPaperId] = useState<string | null>(null);
-  const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
-  const [bulkAnalyzeProgress, setBulkAnalyzeProgress] = useState({ current: 0, total: 0 });
-
+  // AI-analysis orchestration extracted into a dedicated hook in PR #119.
+  // The hook owns state (`analyzingPaperId`, `bulkAnalyzing`,
+  // `bulkAnalyzeProgress`) and both async handlers (`handleAnalyzePaper`,
+  // `handleBulkAnalyze`); pure merge / payload logic lives in
+  // `src/lib/studyTypeUtils.ts` (PR #117).
+  const {
+    analyzingPaperId,
+    bulkAnalyzing,
+    bulkAnalyzeProgress,
+    handleAnalyzePaper,
+    handleBulkAnalyze,
+  } = usePaperAnalysisActions({
+    papers,
+    selectedPaperIds,
+    updatePaper,
+  });
 
   const handleAttachmentsChange = useCallback((paperId: string, atts: PaperAttachment[]) => {
     updatePapersCache((all) =>
       all.map((p) => (p.id === paperId ? { ...p, paper_attachments: atts } : p))
     );
   }, [updatePapersCache]);
-
-  const handleAnalyzePaper = useCallback(async (paper: PaperWithTags) => {
-    if (!paper.has_abstract) return;
-    setAnalyzingPaperId(paper.id);
-    try {
-      // Fetch abstract on demand (uses cache if already loaded)
-      const abstract = await fetchAbstract(paper.id, queryClient);
-      if (!abstract) {
-        toast({ title: "No abstract", description: "Paper has no abstract to analyze.", variant: "destructive" });
-        return;
-      }
-
-      const { data, error } = await supabase.functions.invoke("analyze-paper", {
-        body: { title: paper.title, abstract },
-      });
-      if (error) throw error;
-
-      const aiData = data as { tldr?: string; studyType?: string; statisticalMethods?: string };
-
-      // Smart merge: keep existing study_type if it's specific.
-      // See `src/lib/studyTypeUtils.ts` for the merge rule + tests.
-      const { updates, keptStudyType } = buildAnalysisUpdates(paper, aiData);
-
-      await updatePaper(paper.id, updates);
-
-      toast({
-        title: "Analysis complete and saved",
-        description: keptStudyType
-          ? "TLDR updated. Kept existing study type from PubMed."
-          : "TLDR, study type, and statistical methods updated.",
-      });
-    } catch (err: unknown) {
-      toast({
-        title: "AI Analysis failed",
-        description: err instanceof Error ? err.message : "Unknown error",
-        variant: "destructive",
-      });
-    } finally {
-      setAnalyzingPaperId(null);
-    }
-  }, [updatePaper, queryClient, toast]);
-
-  const handleBulkAnalyze = useCallback(async () => {
-    const selectedPapers = papers.filter(p => selectedPaperIds.has(p.id));
-    const papersToAnalyze = selectedPapers.filter(p => p.has_abstract); // skip papers without abstract
-    if (papersToAnalyze.length === 0) {
-      toast({ title: "No papers to analyze", description: "Selected papers have no abstracts.", variant: "destructive" });
-      return;
-    }
-
-    setBulkAnalyzing(true);
-    setBulkAnalyzeProgress({ current: 0, total: papersToAnalyze.length });
-    let successCount = 0;
-    let failCount = 0;
-
-    // Batch-fetch all abstracts in one query (avoids N+1)
-    const abstractMap = await fetchAbstractsBatch(
-      papersToAnalyze.map(p => p.id),
-      queryClient,
-    );
-
-    for (const paper of papersToAnalyze) {
-      setBulkAnalyzeProgress(prev => ({ ...prev, current: prev.current + 1 }));
-      const abstract = abstractMap.get(paper.id);
-      if (!abstract) {
-        failCount++;
-        continue;
-      }
-      try {
-        const { data, error } = await supabase.functions.invoke("analyze-paper", {
-          body: { title: paper.title, abstract },
-        });
-        if (error) throw error;
-
-        const aiData = data as { tldr?: string; studyType?: string; statisticalMethods?: string };
-        // Same smart-merge as the single-paper path above.
-        const { updates } = buildAnalysisUpdates(paper, aiData);
-        await updatePaper(paper.id, updates);
-        successCount++;
-      } catch (err: unknown) {
-        failCount++;
-        toast({
-          title: `Failed: ${paper.title?.slice(0, 50)}...`,
-          description: err instanceof Error ? err.message : "Unknown error",
-          variant: "destructive",
-        });
-      }
-
-      // 3-second cooldown to avoid Gemini rate limits
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-
-    setBulkAnalyzing(false);
-    setBulkAnalyzeProgress({ current: 0, total: 0 });
-    toast({
-      title: "Bulk analysis complete",
-      description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
-    });
-  }, [papers, selectedPaperIds, updatePaper, queryClient, toast]);
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
