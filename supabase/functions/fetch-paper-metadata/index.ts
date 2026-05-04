@@ -50,6 +50,14 @@ interface PaperMetadata {
 
 const RATE_LIMIT_DELAY_MS = 350; // ~2.8 req/sec, safely under PubMed's 3/sec limit
 const MAX_IDENTIFIERS = 50;
+/**
+ * Hard cap on PubMed EFetch XML response size. Above this we skip parsing
+ * and return a per-identifier "Could not find paper metadata" error rather
+ * than risk the Edge Function CPU budget on a multi-MB XML (e.g. consortium
+ * papers with thousands of authors). 2 MB comfortably accommodates normal
+ * papers (typical XML is 5–50 KB).
+ */
+const MAX_PUBMED_XML_BYTES = 2 * 1024 * 1024;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -154,20 +162,52 @@ async function fetchFromPubMed(
   try {
     const apiParam = apiKey ? `&api_key=${apiKey}` : "";
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&retmode=xml${apiParam}`;
-    const response = await fetchWithRetry(url);
+
+    // Reduced retry budget (1 retry instead of the default 3) to bound the
+    // wall-clock cost inside the Edge Function's CPU budget. PubMed-only —
+    // Crossref keeps the default elsewhere.
+    const tFetchStart = performance.now();
+    const response = await fetchWithRetry(url, {}, 1);
     if (!response.ok) return null;
 
     const xml = await response.text();
+    const tFetchMs = performance.now() - tFetchStart;
+
+    // Hard size guard: oversized XML (e.g. consortium papers with thousands
+    // of authors) gets a per-identifier failure rather than burning the
+    // Edge Function CPU budget on a multi-MB parse.
+    if (xml.length > MAX_PUBMED_XML_BYTES) {
+      console.warn(
+        `pubmed-parse pmid=${pmid} bytes=${xml.length} skipped=oversize`
+      );
+      return null;
+    }
+
+    const tParseStart = performance.now();
+
     const title = xml
       .match(/<ArticleTitle[^>]*>([\s\S]*?)<\/ArticleTitle>/)?.[1]
       ?.replace(/<[^>]+>/g, "");
 
-    const authorMatches = xml.matchAll(
-      /<Author[^>]*>[\s\S]*?<LastName>([^<]+)<\/LastName>[\s\S]*?<ForeName>([^<]+)<\/ForeName>[\s\S]*?<\/Author>/g
-    );
+    // Two-pass author extraction: first slice each <Author>...</Author>
+    // block (bounded by the FIRST </Author>, never spans siblings), then
+    // per-block extract LastName + ForeName independently. This eliminates
+    // the lazy [\s\S]*? cross-boundary backtracking the previous single-
+    // regex form suffered on Authors lacking <ForeName> (e.g. consortium
+    // <CollectiveName>, initials-only). Behavior preserved: only emit an
+    // author when both <LastName> and <ForeName> exist; format is unchanged.
+    const tAuthorsStart = performance.now();
+    const authorBlocks = xml.matchAll(/<Author[^>]*>([\s\S]*?)<\/Author>/g);
     const authors: string[] = [];
-    for (const match of authorMatches)
-      authors.push(`${match[2]} ${match[1]}`);
+    for (const block of authorBlocks) {
+      const body = block[1];
+      const lastName = body.match(/<LastName>([^<]+)<\/LastName>/)?.[1];
+      const foreName = body.match(/<ForeName>([^<]+)<\/ForeName>/)?.[1];
+      if (lastName && foreName) {
+        authors.push(`${foreName} ${lastName}`);
+      }
+    }
+    const tAuthorsMs = performance.now() - tAuthorsStart;
 
     const year = xml.match(
       /<PubDate>[\s\S]*?<Year>(\d{4})<\/Year>/
@@ -177,12 +217,14 @@ async function fetchFromPubMed(
       /<ArticleId IdType="doi">([^<]+)<\/ArticleId>/
     )?.[1];
 
+    const tAbstractStart = performance.now();
     const abstractMatch = xml.match(
       /<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/g
     );
     const abstract = abstractMatch
       ? abstractMatch.map((a) => a.replace(/<[^>]+>/g, "")).join(" ")
       : null;
+    const tAbstractMs = performance.now() - tAbstractStart;
 
     const keywordMatches = xml.matchAll(
       /<Keyword[^>]*>([^<]+)<\/Keyword>/g
@@ -191,23 +233,38 @@ async function fetchFromPubMed(
     for (const match of keywordMatches)
       keywords.push(decodeHTMLEntities(match[1]));
 
+    const tMeshStart = performance.now();
     const meshMatches = xml.matchAll(
       /<DescriptorName[^>]*>([^<]+)<\/DescriptorName>/g
     );
     const meshTerms: string[] = [];
     for (const match of meshMatches) meshTerms.push(match[1]);
+    const tMeshMs = performance.now() - tMeshStart;
 
+    const tSubsStart = performance.now();
     const substanceMatches = xml.matchAll(
       /<NameOfSubstance[^>]*>([^<]+)<\/NameOfSubstance>/g
     );
     const substances: string[] = [];
     for (const match of substanceMatches) substances.push(match[1]);
+    const tSubsMs = performance.now() - tSubsStart;
 
     const pubTypeMatches = xml.matchAll(
       /<PublicationType[^>]*>([^<]+)<\/PublicationType>/g
     );
     const publicationTypes: string[] = [];
     for (const match of pubTypeMatches) publicationTypes.push(match[1]);
+
+    const tParseMs = performance.now() - tParseStart;
+    // One structured log per PMID — keys are sizes / timings only, no
+    // titles / abstracts / author names / API keys / user data.
+    console.log(
+      `pubmed-parse pmid=${pmid} bytes=${xml.length} ` +
+        `fetch_ms=${Math.round(tFetchMs)} parse_ms=${Math.round(tParseMs)} ` +
+        `t_authors=${Math.round(tAuthorsMs)} ` +
+        `t_abstract=${Math.round(tAbstractMs)} ` +
+        `t_mesh=${Math.round(tMeshMs)} t_subs=${Math.round(tSubsMs)}`
+    );
 
     if (!title) return null;
 
@@ -239,7 +296,8 @@ async function searchPubMedByDoi(doi: string, apiKey?: string): Promise<string |
   try {
     const apiParam = apiKey ? `&api_key=${apiKey}` : "";
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(doi)}[doi]&retmode=json${apiParam}`;
-    const response = await fetchWithRetry(url);
+    // Reduced retry budget (1) for PubMed paths inside the Edge Function.
+    const response = await fetchWithRetry(url, {}, 1);
     if (!response.ok) return null;
     const data = await response.json();
     return data.esearchresult?.idlist?.[0] || null;
@@ -252,7 +310,8 @@ async function searchPubMedByTitle(title: string, apiKey?: string): Promise<stri
   try {
     const apiParam = apiKey ? `&api_key=${apiKey}` : "";
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(title)}&retmode=json&retmax=1${apiParam}`;
-    const response = await fetchWithRetry(url);
+    // Reduced retry budget (1) for PubMed paths inside the Edge Function.
+    const response = await fetchWithRetry(url, {}, 1);
     if (!response.ok) return null;
     const data = await response.json();
     return data.esearchresult?.idlist?.[0] || null;
