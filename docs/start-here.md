@@ -264,7 +264,7 @@ A focused maintainability / refactor / lint-cleanup wave landed four PRs back-to
 
 ## AI-analysis pre-refactor safety net (PR #117)
 
-PR #117 created the **first deterministic safety net** for the AI-analysis block in `Dashboard.tsx`. It is a pure-helper extraction + Vitest unit-test PR — **no behavior change, no UI change, no hook extraction yet**. The safety net is the prerequisite for the eventual `usePaperAnalysisActions` hook extraction; that hook does not exist yet and should not be assumed.
+PR #117 created the **first deterministic safety net** for the AI-analysis block in `Dashboard.tsx`. It is a pure-helper extraction + Vitest unit-test PR — **no behavior change, no UI change**. The safety net was the prerequisite that enabled the subsequent `usePaperAnalysisActions` hook extraction in PR #119 (see next section).
 
 **Three pure helpers + one type are now in `src/lib/studyTypeUtils.ts`** (new file):
 
@@ -295,17 +295,144 @@ This asymmetry is intentional and is the current state of the codebase. Do not u
 
 **Test counts after this PR:** Vitest **250/250** (228 prior + 22 new). Playwright unchanged at 71/71. PR #117 ran `npx playwright test e2e/filter-presets.spec.ts` (6/6) as a focused smoke confirmation that Dashboard still mounts; **full Playwright was not run** because pure helper extraction has no plausible E2E regression surface.
 
-**Explicit non-goals (do not re-propose as missing):**
+**Explicit non-goals at the time of PR #117 (some have since been delivered — see PR #119 below):**
 
-- **No `usePaperAnalysisActions` hook extraction yet** — sequenced as the next AI-analysis PR after this safety net lands. The pure helpers are the prerequisite.
-- **No tests for `handleAnalyzePaper` / `handleBulkAnalyze` themselves** (the async, toast, mutation, cooldown layers). Those become the next PR's scope.
-- **No `vi.useFakeTimers()` introduction**, **no `vi.mock("@/integrations/supabase/client")` introduction**, **no `renderHook` for any AI handler**, **no QueryClient test wrapper**, **no Supabase / fake-timer / renderHook AI test infrastructure of any kind** exists in the repo today.
+- **`usePaperAnalysisActions` hook extraction** — was deferred at the time of PR #117; **subsequently delivered in PR #119**.
+- **Tests for `handleAnalyzePaper` / `handleBulkAnalyze`** (the async, toast, mutation, cooldown layers) — also **delivered in PR #119**.
+- **`vi.mock("@/integrations/supabase/client")`**, injected `sleep` for the 3-second cooldown, `renderHook` for an AI handler — **all introduced for the first time in PR #119**.
 - **No real Gemini / Edge Function E2E**. AI analysis is intentionally not E2E-covered (Gemini-dependent, non-deterministic, rate-limited). Do not re-propose Playwright for the Sparkles button or the bulk-analyze toolbar.
 - No changes to the `analyze-paper` Edge Function, `useAbstract.ts`, `<PaperList>` / `<BulkActionsToolbar>` JSX or props, toast text, button labels, or any UI surface.
-- **No filtering of `"Not specified"` in `buildAnalysisUpdates`** (would be a behavior change — out of scope here).
+- **No filtering of `"Not specified"` in `buildAnalysisUpdates`** (would be a behavior change — still out of scope; the Dashboard ↔ EditPaperDialog asymmetry is intentional).
 - **No merge of `studyTypeUtils.ts` into `evaluateStudyType.ts`** (the two files own different domains: study-type-vs-pool evaluation vs. AI-merge helpers).
 
-The future AI-analysis refactor's natural shape is now **plan-only `usePaperAnalysisActions` extraction with mocked async dependencies** (`supabase.functions.invoke`, `fetchAbstract` / `fetchAbstractsBatch`, `updatePaper`, `toast`, fake timers for the 3-second cooldown, `queryClient`). The pure helpers in this PR are imported as-is by that future hook; the hook's own tests then need only cover orchestration (state transitions, toast routing, mutation invocation, cooldown), not the merge itself.
+## AI-analysis hook extraction (PR #119)
+
+PR #119 extracted the **async AI-analysis orchestration** from `Dashboard.tsx` into a dedicated hook `src/hooks/usePaperAnalysisActions.ts`, paired with **7 focused mocked-async Vitest tests** in `src/hooks/__tests__/usePaperAnalysisActions.test.ts`. This was the natural follow-on to PR #117's pure-helper safety net.
+
+**What moved out of `Dashboard.tsx`** (and is now owned by the hook):
+
+- State: `analyzingPaperId`, `bulkAnalyzing`, `bulkAnalyzeProgress`.
+- Callbacks: `handleAnalyzePaper`, `handleBulkAnalyze`.
+
+`Dashboard.tsx` now calls:
+
+```ts
+const {
+  analyzingPaperId,
+  bulkAnalyzing,
+  bulkAnalyzeProgress,
+  handleAnalyzePaper,
+  handleBulkAnalyze,
+} = usePaperAnalysisActions({
+  papers,
+  selectedPaperIds,
+  updatePaper,
+});
+```
+
+The same 5 returned values are passed unchanged into the same props on `<PaperList>` and `<BulkActionsToolbar>`. **No JSX / UI / props changed in those components.**
+
+**Behavior preservation — verbatim.** PR #119 is structural-extraction-only:
+
+- Toast titles/descriptions, state transitions, `try / catch / finally` boundaries, bulk processing order, `selectedPaperIds`-derived selection, `buildAnalysisUpdates` (PR #117), `"Not specified"` Dashboard-vs-EditPaperDialog asymmetry, missing-abstract behavior, progress reset behavior, and `<PaperList>` / `<BulkActionsToolbar>` props — all unchanged.
+- The hardcoded `await new Promise(resolve => setTimeout(resolve, 3000))` cooldown is now `await sleep(3000)`, where `sleep` defaults to a real `setTimeout`-backed wait in production and tests inject a no-op (`vi.fn().mockResolvedValue(undefined)`). Production behavior is bit-equivalent to the prior code.
+
+**Bulk cooldown truth table (intentionally preserved):**
+
+| Bulk paper outcome | Cooldown? |
+|---|---:|
+| Successful analysis + update | yes |
+| Caught per-paper invoke / update failure | yes |
+| Missing abstract from `abstractMap` | **no** |
+
+The `if (!abstract) { failCount++; continue; }` `continue` jumps to the next iteration **before** the `await sleep(3000)` line, so missing-abstract papers do NOT trigger the cooldown. Do not "simplify" this into a `finally` that would sleep after missing-abstract skips — that would be a behavior change.
+
+**New test infrastructure introduced in PR #119** (first time in the repo):
+
+- `vi.mock("@/integrations/supabase/client", () => ({ supabase: { functions: { invoke: mockInvoke } } }))` for `supabase.functions.invoke("analyze-paper", …)`.
+- Injected `sleep` (passed as a hook arg) instead of `vi.useFakeTimers()` — tests pass `sleep: vi.fn().mockResolvedValue(undefined)` and assert call count + `3000` arg.
+- `vi.mock("@/hooks/useAbstract")` for `fetchAbstract` / `fetchAbstractsBatch`.
+- Standard `vi.mock("@/hooks/use-toast")` and `vi.mock("@tanstack/react-query")` overriding only `useQueryClient` (matches `usePaperMutations.test.ts` precedent).
+- **No `renderHook` QueryClient wrapper** — bare `renderHook()` with module-level `useQueryClient` mock.
+
+**The 7 tests.** Single-paper: (1) skips papers without abstracts; (2) analyzes one paper successfully and saves updates; (3) shows `"No abstract"` toast when `fetchAbstract` returns null; (4) handles invoke error and clears `analyzingPaperId`. Bulk: (5) exits early when selected papers have no abstracts; (6) analyzes 2 papers successfully and reports `2 succeeded, 0 failed`; (7) **mixed scenario** — paper1 success + paper2 missing abstract + paper3 caught invoke failure → `updatePaper` called once (paper1), per-paper failure toast for paper3, `sleep` called **exactly 2 times** (not 3 — missing abstract skip bypasses cooldown), final toast `"1 succeeded, 2 failed out of 3 papers."`. Test 7 is the locked-in regression check for the missing-abstract-skip-cooldown rule.
+
+**Test counts after this PR:** Vitest **257/257** (250 prior + 7 new). Playwright unchanged at 71/71. PR #119 ran `npx playwright test e2e/filter-presets.spec.ts` (6/6) as a focused smoke confirmation that Dashboard still mounts; **full Playwright was not run**.
+
+**Dashboard cleanup follow-up (commit `d368fb9` on the same PR):** removed the now-unused `useQueryClient` import + `const queryClient = useQueryClient()` from `Dashboard.tsx` (the value is owned inside the hook now).
+
+**Explicit non-goals of PR #119 (still open boundaries to respect):**
+
+- No real Gemini / Supabase Edge Function calls in tests (mocks only).
+- No real Gemini / AI Playwright E2E — same boundary as PR #117.
+- No changes to `studyTypeUtils.ts`, `useAbstract.ts`, `analyze-paper` Edge Function, `fetch-paper-metadata` Edge Function, `<PaperList>`, `<BulkActionsToolbar>`, UI / copy / layout, schema / migration / RPC / RLS, search / filter / presets / export behavior.
+
+## PubMed import / Edge Function reliability (PRs #120–#121)
+
+A two-PR import-reliability hotfix wave for the `fetch-paper-metadata` Supabase Edge Function. Both PRs touched only `supabase/functions/fetch-paper-metadata/index.ts`. **No client changes**, **no PR #119 connection**, **no schema / migration / RPC / RLS / UI / docs** in either PR (this section is the docs follow-up).
+
+### PR #120 — PubMed XML CPU hardening (`546 WORKER_LIMIT` for PMID `41912805`)
+
+Importing PMID **`41912805`** (a 2025+ assignment, paper authored as the consortium "GBD 2023 IHD & Dietary Risk Factors Collaborators") was killing the Edge Function with browser status `546` and Supabase logs reading:
+
+```
+User authenticated
+Processing identifier 1/1 (type: pmid)
+CPU Time exceeded
+shutdown
+```
+
+The failure was **inside the Edge Function** — after auth + identifier-type detection succeeded — and was **NOT related to PR #119** (which only touched the AI-analysis hook + Dashboard; the import codepath via `fetchPaperMetadata` → `fetch-paper-metadata` Edge Function was not in PR #119's diff).
+
+**Four small Edge-Function-only changes in PR #120:**
+
+1. **Bounded PubMed author parsing.** Replaced the previous single cross-boundary author regex (which used three lazy `[\s\S]*?` quantifiers and could backtrack across `<Author>` boundaries when an author lacked `<ForeName>`) with a **bounded two-pass extraction**: first match each `<Author>...</Author>` block (the FIRST `</Author>` always closes — never spans siblings), then extract `<LastName>` and `<ForeName>` independently inside that block only. Personal-author behavior preserved: emit only when both fields exist; format `${foreName} ${lastName}`.
+2. **Reduced PubMed retry budget from 3 → 1.** PubMed call sites (`fetchFromPubMed`, `searchPubMedByDoi`, `searchPubMedByTitle`) now pass `fetchWithRetry(url, {}, 1)`. Crossref retry behavior is **unchanged** (different code path, not implicated).
+3. **Added `MAX_PUBMED_XML_BYTES = 2 * 1024 * 1024`.** Hard size guard immediately after `await response.text()`. Oversized XML logs `pubmed-parse pmid=… bytes=… skipped=oversize` and returns `null`, which surfaces as the existing per-identifier `"Could not find paper metadata"` error rather than killing the function.
+4. **Added a concise structured `pubmed-parse` log line per successful PMID.** Format: `pubmed-parse pmid=… bytes=… fetch_ms=… parse_ms=… t_authors=… t_abstract=… t_mesh=… t_subs=…`. Sizes / timings only — no titles, abstracts, author names, API keys, or user data (per the logging-redaction policy from PRs #81 / #82).
+
+**Behavior preservation:** auth, CORS, request shape (`{ identifiers: string[] }`), response shape (`{ results: PaperMetadata[] }`), per-identifier error envelope, PubMed-first / Crossref-fallback semantics, server-side-only PubMed API key, `MAX_IDENTIFIERS` validation, per-item sanitization, and the client-side wrapper in `src/lib/fetchPaperMetadataEdge.ts` — all unchanged.
+
+### PR #121 — PubMed `<CollectiveName>` author support
+
+After PR #120 was deployed, PMID `41912805` imported successfully but had an **empty `authors` array**. PubMed represents that paper's sole author as a `<CollectiveName>` element rather than a personal `<LastName>` + `<ForeName>` pair, and the bounded extractor from PR #120 only emitted personal authors.
+
+PR #121 added `<CollectiveName>` support inside the existing per-`<Author>`-block loop:
+
+```ts
+const collectiveName = body
+  .match(/<CollectiveName[^>]*>([\s\S]*?)<\/CollectiveName>/)?.[1]
+  ?.replace(/<[^>]+>/g, "")
+  .trim();
+if (collectiveName) {
+  authors.push(decodeHTMLEntities(collectiveName));
+  continue;
+}
+// then the existing <LastName> + <ForeName> personal-author branch
+```
+
+The `decodeHTMLEntities` call decodes `&amp;` → `&` so the imported author reads `"GBD 2023 IHD & Dietary Risk Factors Collaborators"`. Personal-author papers are unaffected.
+
+### Edge Function deploy is separate from frontend / Vercel deploy
+
+PRs #120 and #121 changed Supabase Edge Function code. **These changes do NOT take effect from a GitHub merge or a Vercel frontend deploy alone.** They require an explicit Supabase Edge Function deploy:
+
+```bash
+supabase functions deploy fetch-paper-metadata --project-ref lioxtgiputfniqbktcsz
+```
+
+Future maintainers: any change under `supabase/functions/<name>/` requires this explicit deploy, separate from the regular frontend deploy pipeline. Same pattern as PRs #81 / #82 (which also touched only `supabase/functions/...`).
+
+### Manual regression / smoke case — PMID `41912805`
+
+PMID **`41912805`** is now the established manual smoke case for the `fetch-paper-metadata` Edge Function. Expected post-deploy behavior:
+
+- Paper imports successfully.
+- `authors` contains `["GBD 2023 IHD & Dietary Risk Factors Collaborators"]`.
+- No `CPU Time exceeded`, no `546` status.
+- The structured `pubmed-parse pmid=41912805 bytes=… fetch_ms=… parse_ms=… t_authors=… t_abstract=… t_mesh=… t_subs=…` log line appears once.
+
+Future PubMed-import work that touches the parser should re-test this case. (Smoke a known-good simple PMID alongside, to confirm personal-author behavior is unchanged.)
 
 ## Standing product decisions — do not re-propose
 
@@ -356,7 +483,7 @@ These were thoroughly measured and verified. Changing them requires new evidence
 
 ## Current recommendation
 
-The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), the prefix-aware FTS upgrade (PR #88), the search wave (keywords in search + server-side attribution + quoted phrase search + placeholder discoverability, PRs #91–#93), the docs normalization for that wave (PR #94), the Saved Searches / Filter Presets capability — MVP plus the follow-up wave that added update-loaded (PR #98), the dropdown count label (PR #99), the loaded-preset dirty-state indicator (PR #101), and per-preset rename (PR #102) — the E2E + type-hardening wave (presets E2E in PR #104, Playwright flake stabilization in PR #105, Notes E2E in PR #106, `raw_keywords` nullable type alignment in PR #107), the search-attribution E2E spec for all six `Matched in:` sources (PR #109), the maintainability wave (`PresetNameForm` extraction in PR #111, `filterPresets` prop grouping in PR #112, `Dashboard.tsx` exhaustive-deps fix in PR #113, export callback collapse + `ExportFormat` type-promotion in PR #115), and the AI-analysis pre-refactor safety net (pure-helper extraction + 22 Vitest unit tests in PR #117) are all complete and live. Migrations `20260417030000_prefix_search.sql`, `20260420010000_keywords_in_search_with_attribution.sql`, and `20260421010000_add_filter_presets.sql` are applied on Supabase and verified — the presets migration via post-deploy SQL spot-checks **and empirical cross-user RLS isolation** (two separate accounts, each sees only their own rows in `filter_presets`). The Playwright suite is currently green at **71/71** locally and the Vitest suite at **250/250** (228 prior + 22 new from PR #117). Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
+The app is performant, secure, and feature-complete at current scale. The security/integrity hardening wave (PRs #67–#76), the follow-up correctness/hygiene fixes (PRs #78–#82), the notes feature wave (PRs #84–#87), the prefix-aware FTS upgrade (PR #88), the search wave (keywords in search + server-side attribution + quoted phrase search + placeholder discoverability, PRs #91–#93), the docs normalization for that wave (PR #94), the Saved Searches / Filter Presets capability — MVP plus the follow-up wave that added update-loaded (PR #98), the dropdown count label (PR #99), the loaded-preset dirty-state indicator (PR #101), and per-preset rename (PR #102) — the E2E + type-hardening wave (presets E2E in PR #104, Playwright flake stabilization in PR #105, Notes E2E in PR #106, `raw_keywords` nullable type alignment in PR #107), the search-attribution E2E spec for all six `Matched in:` sources (PR #109), the maintainability wave (`PresetNameForm` extraction in PR #111, `filterPresets` prop grouping in PR #112, `Dashboard.tsx` exhaustive-deps fix in PR #113, export callback collapse + `ExportFormat` type-promotion in PR #115), the AI-analysis pre-refactor safety net (pure-helper extraction + 22 Vitest unit tests in PR #117), the AI-analysis hook extraction (`usePaperAnalysisActions` + 7 mocked-async tests in PR #119), and the PubMed import / Edge Function reliability hotfix wave (CPU hardening for large PubMed XML in PR #120, `<CollectiveName>` author support in PR #121) are all complete and live. Migrations `20260417030000_prefix_search.sql`, `20260420010000_keywords_in_search_with_attribution.sql`, and `20260421010000_add_filter_presets.sql` are applied on Supabase and verified — the presets migration via post-deploy SQL spot-checks **and empirical cross-user RLS isolation** (two separate accounts, each sees only their own rows in `filter_presets`). The `fetch-paper-metadata` Edge Function is deployed with PRs #120 + #121 (Edge Function deploys are separate from frontend/Vercel deploys — see the PRs #120–#121 section above). The Playwright suite is currently green at **71/71** locally and the Vitest suite at **257/257** (250 prior + 7 new from PR #119). Network RTT to Supabase Mumbai (~200ms from Israel) continues to dominate wall time, not DB execution. Focus new work on **features**, not performance, schema cleanup, or further hardening, unless the paper count grows past ~2,000 or users report slowness.
 
 **Already-completed items — do NOT re-propose as open:**
 - Saved Searches / Filter Presets E2E coverage (`e2e/filter-presets.spec.ts`, PR #104)
@@ -371,8 +498,12 @@ The app is performant, secure, and feature-complete at current scale. The securi
 - `ExportFormat` type-promotion in `src/hooks/useExportPapers.ts` (PR #115) — `export type ExportFormat = "csv" | "ris" | "bibtex"` is the single source-of-truth union; `SearchFilters.tsx` and `Dashboard.tsx` import it from the hook (**no duplicate union declared in either consumer**)
 - AI-analysis pure-helper extraction (PR #117) — `isGenericStudyType`, `resolveStudyTypeAfterAnalysis`, and `buildAnalysisUpdates` (returning `{ updates: AnalysisUpdates, keptStudyType: boolean }`) all live in `src/lib/studyTypeUtils.ts`. Dashboard's inline duplicate of `isGenericStudyType` was deleted; EditPaperDialog's inline duplicate was deleted via strict import-swap (no other line of `handleAnalyze` was touched, so EditPaperDialog still filters `"Not specified"` while Dashboard still does not). `buildAnalysisUpdates`'s `updates` is typed narrowly as `Pick<Paper, "tldr" | "study_type" | "statistical_methods">`; `keptStudyType` is a strict boolean derived from the exact `Dashboard.tsx:491` predicate.
 - AI-analysis pure-helper Vitest coverage (PR #117) — 22 unit tests in `src/lib/__tests__/studyTypeUtils.test.ts` cover the predicate (case-insensitive, whitespace, null/undefined), the smart-merge ternary (kept-when-specific, adopted-when-generic, `??` fallback semantics), the `||` fallback for `tldr` / `statistical_methods`, the `"Not specified"` pass-through (Dashboard's current behavior, intentionally documented), and the full `keptStudyType` short-circuit truth table.
+- AI-analysis hook extraction `usePaperAnalysisActions` (PR #119) — `src/hooks/usePaperAnalysisActions.ts` now owns `analyzingPaperId`, `bulkAnalyzing`, `bulkAnalyzeProgress`, `handleAnalyzePaper`, `handleBulkAnalyze`. `Dashboard.tsx` consumes the 5 returned values and threads them unchanged into `<PaperList>` and `<BulkActionsToolbar>` props (no JSX/UI/props change). Hardcoded 3s cooldown replaced with injected `await sleep(3000)` (production default is bit-equivalent; tests inject a no-op). **Cooldown truth table preserved verbatim:** success → cooldown; caught failure → cooldown; missing-abstract `continue` → NO cooldown.
+- AI-analysis hook Vitest coverage (PR #119) — 7 mocked-async tests in `src/hooks/__tests__/usePaperAnalysisActions.test.ts` (4 single-paper + 3 bulk, including the locked-in 3-paper mixed scenario asserting `sleep` is called exactly **2 times**, not 3). Established the first repo-wide `vi.mock("@/integrations/supabase/client")` pattern for `supabase.functions.invoke`, plus injected `sleep` instead of `vi.useFakeTimers()`. **No real Gemini / Edge Function calls in tests; no Playwright AI E2E.**
+- `fetch-paper-metadata` Edge Function CPU hardening (PR #120) — bounded PubMed `<Author>...</Author>` parsing (no cross-author backtracking), PubMed retry budget reduced to 1 retry on `fetchFromPubMed` / `searchPubMedByDoi` / `searchPubMedByTitle` (Crossref unchanged), `MAX_PUBMED_XML_BYTES = 2 * 1024 * 1024` size guard, and a concise `pubmed-parse pmid=… bytes=… fetch_ms=… parse_ms=… t_authors=… t_abstract=… t_mesh=… t_subs=…` structured timing log per successful PMID. Resolved the `546 WORKER_LIMIT` / `CPU Time exceeded` failure on PMID `41912805`. **Edge Function only — no client / PR #119 / Dashboard / `analyze-paper` / schema / RLS changes.**
+- PubMed `<CollectiveName>` author support (PR #121) — inside the bounded `<Author>` block loop, before personal-author extraction, `<CollectiveName>` is now extracted with HTML-entity decoding (`&amp;` → `&`). Consortium / collaborator papers like PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors Collaborators") now produce a non-empty `authors` array. Personal-author papers unchanged.
 
-**Remaining grounded next-candidates** (none urgent — only pursue if the user explicitly asks): broader `Dashboard.tsx` responsibility-split planning (it remains the orchestration hub for many flows); other small prop-grouping refactors only if a similar pass-through pattern is found in another component; **plan-only `usePaperAnalysisActions` extraction with mocked async dependencies** (the natural follow-on to PR #117 — the pure helpers are now tested, so the hook's own tests can focus on async orchestration: `supabase.functions.invoke`, `fetchAbstract` / `fetchAbstractsBatch`, `updatePaper`, `toast`, fake timers for the 3-second cooldown, and `queryClient`. **No real Gemini / Playwright AI E2E** — that path is and remains rejected); analytics-section extraction planning (only if the analytics surface grows). These are candidates, not commitments — do not invent a roadmap beyond this list.
+**Remaining grounded next-candidates** (none urgent — only pursue if the user explicitly asks): broader `Dashboard.tsx` responsibility-split planning (it remains the orchestration hub for several non-AI flows); other small prop-grouping refactors only if a similar pass-through pattern is found in another component; analytics-section extraction planning (only if the analytics surface grows); a small ops note for the Edge Function deploy process (Supabase function deploys are separate from frontend/Vercel deploys); local working-tree cleanup for unrelated `jsdom` / `package-lock.json` leftovers in maintainer environments (cosmetic, not blocking); further metadata-parser hardening only if new evidence appears (PMID `41912805` is the established smoke case). **No real Gemini / Playwright AI E2E — that path is and remains rejected.** These are candidates, not commitments — do not invent a roadmap beyond this list.
 
 ## Key files
 
@@ -385,13 +516,15 @@ The app is performant, secure, and feature-complete at current scale. The securi
 | `src/hooks/papers/types.ts` | `MatchFlags`, `NotesPresence`, server filter/sort param types |
 | `src/lib/buildPapersQuery.ts` | PostgREST query builder with filter predicates |
 | `src/lib/queryKeys.ts` | React Query key structure |
-| `src/pages/Dashboard.tsx` | Main page — orchestrates all hooks. AI-analysis flows (`handleAnalyzePaper`, `handleBulkAnalyze`) call `buildAnalysisUpdates` from `@/lib/studyTypeUtils` for the smart-merge / payload (PR #117) — the merge logic is no longer inline. The async orchestration (state, toasts, `supabase.functions.invoke("analyze-paper", …)`, 3-second cooldown) is still inline pending the future `usePaperAnalysisActions` hook extraction. |
+| `src/pages/Dashboard.tsx` | Main page — orchestrates all hooks. AI-analysis state and async orchestration are NOT inline; they live in `src/hooks/usePaperAnalysisActions.ts` (PR #119). Dashboard consumes `{ analyzingPaperId, bulkAnalyzing, bulkAnalyzeProgress, handleAnalyzePaper, handleBulkAnalyze }` from the hook and threads them unchanged into `<PaperList>` and `<BulkActionsToolbar>` props. |
+| `src/hooks/usePaperAnalysisActions.ts` | AI-analysis async orchestration hook (PR #119): owns `analyzingPaperId`, `bulkAnalyzing`, `bulkAnalyzeProgress`, `handleAnalyzePaper`, `handleBulkAnalyze`. Single-paper flow: `fetchAbstract` → `supabase.functions.invoke("analyze-paper", …)` → `buildAnalysisUpdates` → `updatePaper`. Bulk flow: `fetchAbstractsBatch` → per-paper `try/catch` invoke + update loop with `await sleep(3000)` cooldown after success / caught failure (NOT after missing-abstract skips). `sleep` is injectable for tests; defaults to `setTimeout`-backed wait. Tested by 7 mocked-async cases in `src/hooks/__tests__/usePaperAnalysisActions.test.ts`. |
 | `src/lib/studyTypeUtils.ts` | AI-analysis pure helpers + types: `isGenericStudyType` (case-insensitive `"journal article"` predicate, also imported by `EditPaperDialog`), `resolveStudyTypeAfterAnalysis` (smart-merge ternary), `buildAnalysisUpdates` (returns `{ updates, keptStudyType }`), and `type AnalysisUpdates = Pick<Paper, "tldr" \| "study_type" \| "statistical_methods">`. Lifted verbatim from previously-inline `Dashboard.tsx` code. **Does not filter `"Not specified"`** — that is `EditPaperDialog`'s rule and the asymmetry is intentional. (PR #117) |
 | `src/components/papers/PaperList.tsx` | Virtualized table with lazy abstract expand + "Matched in: …" sub-line |
 | `src/components/papers/SearchFilters.tsx` | Search input (with quoted-phrase placeholder hint), filter controls, mounts the Presets dropdown. Receives Saved Searches state as one grouped `filterPresets: FilterPresetsMenuProps` prop and spreads it into `<FilterPresetsMenu {...filterPresets} />` (PR #112). Export menu now uses one typed `onExport: (format: ExportFormat) => void` callback (PR #115) instead of three named callbacks; `ExportFormat` is imported from `@/hooks/useExportPapers` |
 | `src/hooks/useExportPapers.ts` | Export hook for CSV / RIS / BibTeX. Owns `exportPapers(format)`, `isExporting`, `isExportReady`. Exports `ExportFormat = "csv" \| "ris" \| "bibtex"` as the single source-of-truth union — imported by `Dashboard.tsx` and `SearchFilters.tsx` (PR #115) |
 | `src/hooks/useFilterPresets.ts` | Saved Searches: Zod payload schema, list query + create / update-payload / rename / delete mutations, pure helpers — `applyPreset` (with stale project/tag-ID guard), `arePresetPayloadsEqual` (order-insensitive on `selectedKeywords`, drives the dirty-state dot), and `prepareRename` (returns `invalid` / `noop` / `ok`, drives the no-op short-circuit) (PRs #96, #98, #101, #102) |
 | `src/components/papers/FilterPresetsMenu.tsx` | Presets DropdownMenu — Save Dialog, list with `Saved searches · N` count label, dirty-state dot on the trigger button + state-aware `aria-label`, `Update "<name>"` AlertDialog (visible when a preset is loaded; disabled when clean, enabled when dirty; no tooltip/title on the disabled state), per-row Pencil → Rename Dialog (with no-op-aware Save button + defensive submit guard), Delete AlertDialog. Internal `PresetNameForm` component (PR #111) renders the shared `<form>` + `<Input>` + Cancel/Save footer for both the Save and Rename dialogs. Exports `FilterPresetsMenuProps` so `Dashboard.tsx` can build the grouped `filterPresets` bundle (PR #112). (PRs #96, #98, #99, #101, #102, #111, #112) |
+| `supabase/functions/fetch-paper-metadata/index.ts` | Supabase Edge Function for PubMed/Crossref metadata fetch. Hardened in PR #120 (bounded `<Author>...</Author>` parsing, 1-retry PubMed budget, `MAX_PUBMED_XML_BYTES = 2 * 1024 * 1024` size guard, concise `pubmed-parse` structured timing log) and extended in PR #121 (PubMed `<CollectiveName>` author support). PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors Collaborators") is the established manual smoke case. **Edge Function deploy is separate from frontend/Vercel deploy:** `supabase functions deploy fetch-paper-metadata --project-ref lioxtgiputfniqbktcsz`. |
 | `supabase/migrations/20260417030000_prefix_search.sql` | Prefix-aware FTS (PR #88) |
 | `supabase/migrations/20260420010000_keywords_in_search_with_attribution.sql` | Keywords in search_vector + 6 `matched_*` attribution flags (PR #91) |
 | `supabase/migrations/20260421010000_add_filter_presets.sql` | `filter_presets` table + RLS + per-user case-insensitive unique name + `updated_at` trigger (PR #96) |
