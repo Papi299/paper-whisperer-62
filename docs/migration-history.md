@@ -688,3 +688,103 @@ The unit tests document this asymmetry as **"current behavior, not a contract"**
 - **No filtering of `"Not specified"` in `buildAnalysisUpdates`** (would be a behavior change — out of scope here).
 - **No merge of `studyTypeUtils.ts` into `evaluateStudyType.ts`** (the two files own different domains: study-type-vs-pool evaluation vs. AI-merge helpers).
 - No docs change in that PR (this entry is the docs follow-up).
+
+## AI-analysis hook extraction — `usePaperAnalysisActions` + 7 mocked-async tests (PR #119)
+
+**Date:** April 2026
+**What:** Extracted the async AI-analysis orchestration from `Dashboard.tsx` into a dedicated hook `src/hooks/usePaperAnalysisActions.ts`, paired with 7 focused mocked-async Vitest tests in `src/hooks/__tests__/usePaperAnalysisActions.test.ts`. Structural refactor only — **no behavior change, no UI change, no schema change**. PR #117's pure-helper safety net was the prerequisite (the hook imports `buildAnalysisUpdates` from `@/lib/studyTypeUtils` as-is).
+
+**What moved out of `Dashboard.tsx`:** state (`analyzingPaperId`, `bulkAnalyzing`, `bulkAnalyzeProgress`) and callbacks (`handleAnalyzePaper`, `handleBulkAnalyze`). `Dashboard.tsx` now calls `usePaperAnalysisActions({ papers, selectedPaperIds, updatePaper })` and threads the 5 returned values unchanged into `<PaperList>` and `<BulkActionsToolbar>` props. **No JSX / UI / props changed in those components.**
+
+**Behavior preservation — verbatim:**
+- Toast titles / descriptions, `try / catch / finally` boundaries, bulk processing order, `selectedPaperIds`-derived selection, `buildAnalysisUpdates` (PR #117), `"Not specified"` Dashboard-vs-EditPaperDialog asymmetry, missing-abstract behavior, progress reset behavior — all unchanged.
+- The hardcoded `await new Promise(resolve => setTimeout(resolve, 3000))` cooldown is now `await sleep(3000)`, where `sleep` defaults to a real `setTimeout`-backed wait in production. Tests inject a no-op `sleep`. Production behavior is bit-equivalent.
+
+**Bulk cooldown truth table (intentionally preserved):** ✅ success → cooldown; ✅ caught per-paper failure → cooldown; ❌ missing abstract → NO cooldown (the `if (!abstract) { failCount++; continue; }` `continue` jumps to the next iteration before the `await sleep(3000)` line).
+
+**New test infrastructure introduced (first time in the repo):**
+- `vi.mock("@/integrations/supabase/client", () => ({ supabase: { functions: { invoke: mockInvoke } } }))` — first repo-wide mock for `supabase.functions.invoke`.
+- Injected `sleep` instead of `vi.useFakeTimers()` — tests pass `sleep: vi.fn().mockResolvedValue(undefined)` and assert call count + `3000` arg.
+- `vi.mock("@/hooks/useAbstract")` for `fetchAbstract` / `fetchAbstractsBatch`.
+- Standard `vi.mock("@/hooks/use-toast")` and `vi.mock("@tanstack/react-query")` overriding only `useQueryClient` (matches `usePaperMutations.test.ts` precedent).
+- **No `renderHook` QueryClient wrapper** — bare `renderHook()` with module-level `useQueryClient` mock.
+
+**The 7 tests.** Single-paper (4): skips papers without abstracts; analyzes one paper successfully; shows `"No abstract"` toast when fetch returns null; handles invoke error and clears `analyzingPaperId`. Bulk (3): exits early when selected papers have no abstracts; analyzes 2 papers successfully and reports `2 succeeded, 0 failed`; **mixed scenario** — paper1 success + paper2 missing abstract + paper3 caught invoke failure → `updatePaper` called once (paper1), per-paper failure toast for paper3, `sleep` called **exactly 2 times** (not 3), final toast `"1 succeeded, 2 failed out of 3 papers."`. The mixed scenario is the locked-in regression check for the missing-abstract-skip-cooldown rule.
+
+**Files changed:**
+- `src/hooks/usePaperAnalysisActions.ts` (new).
+- `src/hooks/__tests__/usePaperAnalysisActions.test.ts` (new — 7 tests).
+- `src/pages/Dashboard.tsx` — deleted 3 useState + both useCallback bodies + replaced with one hook call. Also dropped now-unused imports (`supabase`, `fetchAbstract`, `fetchAbstractsBatch`, `buildAnalysisUpdates`).
+- `src/pages/Dashboard.tsx` follow-up commit `d368fb9` (same PR): removed unused `useQueryClient` import + `const queryClient = useQueryClient()` (the value is now owned inside the hook).
+
+**Verification:**
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — **257/257** pass (250 prior + 7 new).
+- `npm run lint` — no new issues vs main.
+- `npm run build` — clean.
+- `npx playwright test e2e/filter-presets.spec.ts` — 6/6 pass (focused dashboard-mount smoke).
+- **Full Playwright suite NOT run** — same justification as PR #117 (AI flow is intentionally not E2E-covered; hook extraction has no plausible E2E regression surface).
+
+**Explicit non-goals.** No real Gemini / Supabase Edge Function calls in tests. No real Gemini / AI Playwright E2E. No changes to `studyTypeUtils.ts`, `useAbstract.ts`, the `analyze-paper` Edge Function, the `fetch-paper-metadata` Edge Function, `<PaperList>`, `<BulkActionsToolbar>`, UI / copy / layout, schema / migration / RPC / RLS, or search / filter / presets / export behavior. No docs change in that PR (this entry is the docs follow-up).
+
+## `fetch-paper-metadata` Edge Function — CPU hardening for large PubMed XML (PR #120)
+
+**Date:** April 2026
+**What:** Importing PMID `41912805` (a 2025+ assignment, paper authored as the consortium "GBD 2023 IHD & Dietary Risk Factors Collaborators") was killing the `fetch-paper-metadata` Edge Function with browser status `546` and Supabase logs:
+
+```
+User authenticated
+Processing identifier 1/1 (type: pmid)
+CPU Time exceeded
+shutdown
+```
+
+The failure was **inside the Edge Function** — after auth and identifier-type detection succeeded — and was **NOT related to PR #119** (the import codepath does not pass through the AI-analysis hook). PR #120 made four small Edge-Function-only changes in `supabase/functions/fetch-paper-metadata/index.ts`:
+
+1. **Bounded PubMed author parsing.** Replaced the previous single regex (three lazy `[\s\S]*?` quantifiers, capable of backtracking across `<Author>` boundaries when an author lacked `<ForeName>`) with a bounded two-pass extraction: first match each `<Author>...</Author>` block (FIRST `</Author>` always closes — never spans siblings), then per-block extract `<LastName>` and `<ForeName>` independently. Personal-author behavior preserved: emit only when both fields exist; format `${foreName} ${lastName}`.
+2. **Reduced PubMed retry budget from 3 → 1.** PubMed call sites (`fetchFromPubMed`, `searchPubMedByDoi`, `searchPubMedByTitle`) now pass `fetchWithRetry(url, {}, 1)`. Crossref retry behavior is **unchanged** (different code path, not implicated).
+3. **Added `MAX_PUBMED_XML_BYTES = 2 * 1024 * 1024`.** Hard size guard immediately after `await response.text()`. Oversized XML logs `pubmed-parse pmid=… bytes=… skipped=oversize` and returns `null`, surfacing as the existing per-identifier `"Could not find paper metadata"` error rather than killing the function.
+4. **Added a concise structured log line per successful PMID:** `pubmed-parse pmid=… bytes=… fetch_ms=… parse_ms=… t_authors=… t_abstract=… t_mesh=… t_subs=…`. Sizes / timings only — no titles, abstracts, author names, API keys, or user data (per the logging-redaction policy from PRs #81 / #82).
+
+**Files changed:** `supabase/functions/fetch-paper-metadata/index.ts` only (+67 / −8).
+
+**Behavior preservation:** auth requirement, CORS behavior, request shape (`{ identifiers: string[] }`), response shape (`{ results: PaperMetadata[] }`), per-identifier error envelope, PubMed-first / Crossref-fallback semantics, server-side-only PubMed API key, `MAX_IDENTIFIERS` validation, per-item sanitization, and the client-side wrapper in `src/lib/fetchPaperMetadataEdge.ts` — all unchanged.
+
+**Verification:** `npx tsc --noEmit` clean, `npx vitest run` 257/257, `npm run lint` no new issues, `npm run build` clean. **Manual post-deploy reproduction with PMID `41912805` is the gate** (the Deno Edge Function is not in the Vitest harness; same pattern as PRs #81 / #82). After Supabase Edge Function deploy, the function no longer killed CPU on `41912805`.
+
+**Edge Function deploy is separate from frontend / Vercel deploy.** Required after merge:
+
+```bash
+supabase functions deploy fetch-paper-metadata --project-ref lioxtgiputfniqbktcsz
+```
+
+**Explicit non-goals.** No client changes (`fetchPaperMetadataEdge.ts` untouched). No PR #119 / `usePaperAnalysisActions` / Dashboard / `analyze-paper` / schema / migration / RLS / RPC / UI changes. The browser-console 406s observed in the same incident are incidental (PostgREST `.single()` returning 0 rows — likely the `profiles.pubmed_api_key` lookup) and are not part of this hotfix.
+
+## PubMed `<CollectiveName>` author support (PR #121)
+
+**Date:** April 2026
+**What:** After PR #120 was deployed, PMID `41912805` imported successfully — but with an empty `authors` array. PubMed represents that paper's sole author as a `<CollectiveName>` element rather than a personal `<LastName>` + `<ForeName>` pair, and the bounded extractor from PR #120 only emitted personal authors. PR #121 added `<CollectiveName>` support inside the existing per-`<Author>`-block loop, before the personal-author extraction:
+
+```ts
+const collectiveName = body
+  .match(/<CollectiveName[^>]*>([\s\S]*?)<\/CollectiveName>/)?.[1]
+  ?.replace(/<[^>]+>/g, "")
+  .trim();
+if (collectiveName) {
+  authors.push(decodeHTMLEntities(collectiveName));
+  continue;
+}
+// then the existing <LastName> + <ForeName> personal-author branch runs unchanged
+```
+
+The `decodeHTMLEntities` call decodes `&amp;` → `&` so the imported author reads `"GBD 2023 IHD & Dietary Risk Factors Collaborators"`. Personal-author papers are unaffected.
+
+**Files changed:** `supabase/functions/fetch-paper-metadata/index.ts` only (+21 / −5).
+
+**Behavior preservation:** all PR #120 invariants intact (bounded `<Author>...</Author>` parsing, no cross-author backtracking, `MAX_PUBMED_XML_BYTES`, PubMed retry budget = 1, concise `pubmed-parse` timing log including `t_authors`). Request / response shape, auth, CORS, PubMed-first / Crossref-fallback semantics, per-identifier failure behavior, client wrapper — all unchanged.
+
+**Verification:** `npx tsc --noEmit` clean, `npx vitest run` 257/257, `npm run lint` no new issues, `npm run build` clean. Manual post-deploy reproduction: import PMID `41912805` → expect `authors: ["GBD 2023 IHD & Dietary Risk Factors Collaborators"]`, no `546`, `pubmed-parse pmid=41912805 …` log line still appears.
+
+**Edge Function deploy required:** `supabase functions deploy fetch-paper-metadata --project-ref lioxtgiputfniqbktcsz`.
+
+**Explicit non-goals.** No client changes. No PR #119 / Dashboard / `analyze-paper` / schema / migration / RLS / RPC / UI changes. No tests added (Deno Edge Function is not in the Vitest harness).
