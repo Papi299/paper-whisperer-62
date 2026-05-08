@@ -191,16 +191,32 @@ async function fetchFromPubMed(
 
     // Two-pass author extraction: first slice each <Author>...</Author>
     // block (bounded by the FIRST </Author>, never spans siblings), then
-    // per-block extract LastName + ForeName independently. This eliminates
-    // the lazy [\s\S]*? cross-boundary backtracking the previous single-
-    // regex form suffered on Authors lacking <ForeName> (e.g. consortium
-    // <CollectiveName>, initials-only). Behavior preserved: only emit an
-    // author when both <LastName> and <ForeName> exist; format is unchanged.
+    // per-block extract CollectiveName (consortia / collaborator groups)
+    // OR LastName + ForeName (personal authors). This eliminates the lazy
+    // [\s\S]*? cross-boundary backtracking the previous single-regex form
+    // suffered on Authors lacking <ForeName>. Behavior preserved for
+    // personal authors: only emit when both <LastName> and <ForeName>
+    // exist; format `${foreName} ${lastName}`. Behavior added: emit
+    // <CollectiveName> entries (e.g. PubMed consortium / collaborator
+    // groups like "GBD 2023 IHD & Dietary Risk Factors Collaborators")
+    // — previously skipped, leaving such papers with empty author lists.
     const tAuthorsStart = performance.now();
     const authorBlocks = xml.matchAll(/<Author[^>]*>([\s\S]*?)<\/Author>/g);
     const authors: string[] = [];
     for (const block of authorBlocks) {
       const body = block[1];
+
+      // Collective / consortium author takes precedence over LastName/ForeName.
+      // Strip any nested tags defensively, decode HTML entities, then trim.
+      const collectiveName = body
+        .match(/<CollectiveName[^>]*>([\s\S]*?)<\/CollectiveName>/)?.[1]
+        ?.replace(/<[^>]+>/g, "")
+        .trim();
+      if (collectiveName) {
+        authors.push(decodeHTMLEntities(collectiveName));
+        continue;
+      }
+
       const lastName = body.match(/<LastName>([^<]+)<\/LastName>/)?.[1];
       const foreName = body.match(/<ForeName>([^<]+)<\/ForeName>/)?.[1];
       if (lastName && foreName) {
