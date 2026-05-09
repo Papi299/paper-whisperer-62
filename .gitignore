@@ -29,6 +29,9 @@ dist-ssr
 *.sln
 *.sw?
 
+# Claude Code worktree artifacts (created by the Claude harness, not part of the project)
+.claude/worktrees/
+
 # Playwright
 e2e/.auth/user.json
 test-results/
