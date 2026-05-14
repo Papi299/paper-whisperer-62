@@ -434,6 +434,38 @@ PMID **`41912805`** is now the established manual smoke case for the `fetch-pape
 
 Future PubMed-import work that touches the parser should re-test this case. (Smoke a known-good simple PMID alongside, to confirm personal-author behavior is unchanged.)
 
+## Commercialization planning has started (docs-only PR)
+
+Commercialization planning for Paper Whisperer has begun. **Nothing in this area is implemented yet** — no billing, no entitlements, no quotas, no paywall, no mobile packaging. The current PR is **documentation-only** and captures the intended direction so future implementation PRs can work from an agreed model.
+
+Direction (planning, owner-confirmed):
+
+- **Single-user MVP.** One subscription = one individual user. No teams, no shared libraries, no collaboration.
+- **Plan structure.** **Core** plan (organize papers, search, filter, tags/projects, notes, presets, attachments, export) and **AI** plan (everything in Core plus a defined monthly AI analysis quota).
+- **Cadence.** Monthly subscription primary; annual at a discount also offered. **7-day free trial** on first subscribe.
+- **AI is premium.** Never unlimited; bounded by an explicit monthly quota in the AI plan.
+- **Storage is bounded.** Each plan carries a per-user storage cap.
+- **Architecture rule:** internal entitlements are decoupled from billing-provider state. Stripe / Apple IAP / Google Play / RevenueCat / future providers all feed the same internal model.
+- **Architecture rule:** commercial state is **not** stored primarily in `profiles`. `profiles` continues to hold profile/settings (display name, PubMed API key, etc.). Commercial state lives in dedicated `user_entitlements` / `subscriptions` / `usage_counters` tables introduced in a later PR.
+
+The four new planning docs are the source of truth for this direction:
+
+- [commercial-architecture.md](commercial-architecture.md) — entitlement / billing-neutral architecture, table shapes, enforcement points, non-goals.
+- [quotas-and-pricing.md](quotas-and-pricing.md) — provisional plan structure, quota ranges, and open pricing questions.
+- [store-launch-checklist.md](store-launch-checklist.md) — App Store / Play Store readiness checklist; **policies must be re-verified before launch**.
+- [documentation-policy.md](documentation-policy.md) — **active rule**: every meaningful change must update docs, and every Claude Code report must include a "Documentation updates" section.
+
+**The next implementation step is undecided and must not start without explicit owner approval.** Reasonable next candidates after these docs are reviewed include:
+
+1. A schema PR adding `user_entitlements`, `subscriptions`, `usage_counters` (and optionally `subscription_events`) with all-zero / `'free'` defaults, RLS locked down, no behavior change.
+2. A read-only client hook (`useEntitlements`) consuming the new tables.
+3. AI usage tracking + server-side quota enforcement inside `analyze-paper`.
+4. Storage usage tracking + trigger-based enforcement on `paper_attachments`.
+5. UI paywall / upgrade placeholders + `/privacy`, `/terms`, `/support` static pages.
+6. A chosen billing-provider integration.
+
+None of these are committed. They are options to discuss after [commercial-architecture.md](commercial-architecture.md) is owner-approved.
+
 ## Standing product decisions — do not re-propose
 
 These decisions have been explicitly made by the user. Do not suggest revisiting them unless the user explicitly asks.

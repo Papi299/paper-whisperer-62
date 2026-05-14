@@ -35,6 +35,19 @@ Every non-empty mode searches six fields: **title, abstract, authors, journal, n
 
 Deeper DB optimization is evidence-deferred until the library grows past ~2,000–5,000 papers. See [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) for the exact re-evaluation criteria.
 
+## Commercialization (planning only)
+
+Planning has started for a future commercial release of Paper Whisperer (single-user, Core + AI plans, monthly + annual, 7-day trial). **Nothing in this area is implemented in the current codebase** — there is no billing, no entitlements, no quotas, no paywall, and no mobile packaging. The planning docs below capture the intended architecture and open questions so future PRs can implement against an agreed model.
+
+| Doc | Purpose |
+|---|---|
+| [docs/commercial-architecture.md](docs/commercial-architecture.md) | Entitlement / billing-neutral architecture (planning) |
+| [docs/quotas-and-pricing.md](docs/quotas-and-pricing.md) | Provisional plan structure, quotas, and open pricing questions (planning) |
+| [docs/store-launch-checklist.md](docs/store-launch-checklist.md) | App Store / Play Store readiness checklist (planning; policies must be re-verified before launch) |
+| [docs/documentation-policy.md](docs/documentation-policy.md) | Active documentation update rule for every meaningful change |
+
+Do not interpret these planning docs as evidence that any commercial functionality, store listing, or billing integration ships today. Final prices, quotas, and the chosen billing provider are owner-pending.
+
 ## Documentation
 
 | Doc | Purpose |
@@ -43,6 +56,12 @@ Deeper DB optimization is evidence-deferred until the library grows past ~2,000�
 | [docs/architecture-read-path.md](docs/architecture-read-path.md) | Current read-path architecture |
 | [docs/migration-history.md](docs/migration-history.md) | What changed, when, and why |
 | [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) | Architectural decisions and re-evaluation triggers |
+| [docs/commercial-architecture.md](docs/commercial-architecture.md) | Commercial / entitlement architecture (planning) |
+| [docs/quotas-and-pricing.md](docs/quotas-and-pricing.md) | Provisional plans, quotas, open pricing questions (planning) |
+| [docs/store-launch-checklist.md](docs/store-launch-checklist.md) | App Store / Play Store launch checklist (planning) |
+| [docs/documentation-policy.md](docs/documentation-policy.md) | Documentation update rule for all changes |
+
+Per [docs/documentation-policy.md](docs/documentation-policy.md), every meaningful change must update documentation in the same PR, and every Claude Code report must end with a "Documentation updates" section.
 
 ## Local development
 
