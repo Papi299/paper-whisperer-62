@@ -2,13 +2,32 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 // ── Supabase mock (hoisted) ───────────────────────────────────────────
-const { mockInsert, mockSelect, mockSingle, mockFrom, mockRpc } = vi.hoisted(() => {
+//
+// `mockFrom` returns a builder that exposes both `insert(...)` (used by
+// `addPaperManually`) and `update(...)` (used by `updatePaper`). The
+// `update(...).eq(...)` chain resolves to `mockUpdateResolve`, defaulting to
+// success — individual tests override `mockUpdateResolve.mockResolvedValueOnce`
+// to simulate failure. `mockRpc` is used for both `set_paper_tags` and
+// `set_paper_projects`; tests override its per-call return as needed.
+const {
+  mockInsert,
+  mockSelect,
+  mockSingle,
+  mockFrom,
+  mockRpc,
+  mockUpdate,
+  mockUpdateEq,
+  mockUpdateResolve,
+} = vi.hoisted(() => {
   const mockSingle = vi.fn();
   const mockSelect = vi.fn(() => ({ single: mockSingle }));
   const mockInsert = vi.fn(() => ({ select: mockSelect }));
   const mockRpc = vi.fn();
-  const mockFrom = vi.fn(() => ({ insert: mockInsert }));
-  return { mockInsert, mockSelect, mockSingle, mockFrom, mockRpc };
+  const mockUpdateResolve = vi.fn();
+  const mockUpdateEq = vi.fn(() => mockUpdateResolve());
+  const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
+  const mockFrom = vi.fn(() => ({ insert: mockInsert, update: mockUpdate }));
+  return { mockInsert, mockSelect, mockSingle, mockFrom, mockRpc, mockUpdate, mockUpdateEq, mockUpdateResolve };
 });
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -28,11 +47,17 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 // ── usePaperCacheHelpers mock ─────────────────────────────────────────
+//
+// `mockRollbackCache` is exposed at module scope so the `updatePaper`
+// failure tests can assert that the optimistic snapshot is rolled back on
+// each handled error path (paper-row update / set_paper_tags /
+// set_paper_projects).
 const mockInvalidateAndRefetch = vi.fn();
+const mockRollbackCache = vi.fn();
 vi.mock("../usePaperCacheHelpers", () => ({
   usePaperCacheHelpers: () => ({
     snapshotCache: vi.fn(() => ({})),
-    rollbackCache: vi.fn(),
+    rollbackCache: mockRollbackCache,
     cancelQueries: vi.fn(),
     updatePapersCache: vi.fn(),
     adjustCount: vi.fn(),
@@ -202,5 +227,154 @@ describe("usePaperMutations – addPaperManually return value", () => {
     expect(returnValue).toBe(true);
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
     expect(mockInvalidateAndRefetch).toHaveBeenCalled();
+  });
+});
+
+// ── updatePaper return-value contract ─────────────────────────────────
+//
+// These tests lock in the contract that drives the Edit Paper dialog's
+// "stay open on failure" UX. `EditPaperDialog.handleSave` reads this
+// boolean and only calls `onOpenChange(false)` when it is `true`, so the
+// dialog closes after a real success and preserves the edited form values
+// on every handled failure path. Tests intentionally do not assert on the
+// success toast title or cache-helper invocations except where they are
+// the contractual signal (rollback on each failure).
+
+describe("usePaperMutations – updatePaper return value", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: paper-row UPDATE succeeds. Individual tests override.
+    mockUpdateResolve.mockResolvedValue({ error: null });
+    // Default: every RPC succeeds. Individual tests override.
+    mockRpc.mockResolvedValue({ error: null });
+  });
+
+  it("returns false when userId is undefined", async () => {
+    const { result } = renderHook(() =>
+      usePaperMutations(undefined, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.updatePaper("paper-1", { title: "x" });
+    });
+
+    expect(returnValue).toBe(false);
+    // No DB writes should have happened.
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("returns true on successful field-only update", async () => {
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.updatePaper("paper-1", { title: "Edited" });
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockUpdate).toHaveBeenCalledWith({ title: "Edited" });
+    expect(mockRollbackCache).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper updated" }));
+  });
+
+  it("returns false and rolls back when the papers row UPDATE fails", async () => {
+    mockUpdateResolve.mockResolvedValueOnce({ error: { message: "DB update failed" } });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.updatePaper("paper-1", { title: "Edited" });
+    });
+
+    expect(returnValue).toBe(false);
+    expect(mockRollbackCache).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error updating paper" }));
+    // No subsequent RPCs should have fired after the row UPDATE failed.
+    expect(mockRpc).not.toHaveBeenCalled();
+    // The success toast must NOT fire.
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper updated" }));
+  });
+
+  it("returns false and rolls back when set_paper_tags fails", async () => {
+    // First RPC call (`set_paper_tags`) fails; second (`set_paper_projects`) would have succeeded but must not be reached.
+    mockRpc.mockResolvedValueOnce({ error: { message: "tag RPC failed" } });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.updatePaper("paper-1", {
+        title: "Edited",
+        tagIds: ["t1"],
+        projectIds: ["p1"],
+      });
+    });
+
+    expect(returnValue).toBe(false);
+    expect(mockRollbackCache).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error updating tags" }));
+    // set_paper_projects must not have been called after the tag failure.
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledWith("set_paper_tags", expect.any(Object));
+    // Success toast must NOT fire.
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper updated" }));
+  });
+
+  it("returns false and rolls back when set_paper_projects fails", async () => {
+    // First RPC (`set_paper_tags`) succeeds; second (`set_paper_projects`) fails.
+    mockRpc
+      .mockResolvedValueOnce({ error: null })
+      .mockResolvedValueOnce({ error: { message: "project RPC failed" } });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.updatePaper("paper-1", {
+        title: "Edited",
+        tagIds: ["t1"],
+        projectIds: ["p1"],
+      });
+    });
+
+    expect(returnValue).toBe(false);
+    expect(mockRollbackCache).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error updating projects" }));
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+    // Success toast must NOT fire.
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper updated" }));
+  });
+
+  it("returns true when no field changes but tag+project assignments succeed", async () => {
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.updatePaper("paper-1", {
+        tagIds: ["t1"],
+        projectIds: ["p1"],
+      });
+    });
+
+    expect(returnValue).toBe(true);
+    // No papers row UPDATE should have happened (empty paperUpdates).
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith("set_paper_tags", expect.any(Object));
+    expect(mockRpc).toHaveBeenCalledWith("set_paper_projects", expect.any(Object));
+    expect(mockRollbackCache).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper updated" }));
   });
 });

@@ -118,12 +118,29 @@ export function usePaperMutations(
     [userId, papers, projects, tags, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
   );
 
+  /**
+   * Update an existing paper's fields, tags, and/or project assignments.
+   *
+   * Returns `true` only after every requested write — the `papers` row update
+   * (when there are field changes), the `set_paper_tags` RPC (when `tagIds`
+   * is provided), and the `set_paper_projects` RPC (when `projectIds` is
+   * provided) — has succeeded. Returns `false` if `userId` is missing or any
+   * of those writes fails. Existing rollback + destructive-toast behavior on
+   * each handled failure path is preserved verbatim; only the return type
+   * changed.
+   *
+   * Callers that need to keep an Edit dialog open on failure (notably
+   * `EditPaperDialog` via the Dashboard `handleSavePaper` wrapper) should
+   * branch on this boolean — close only when it is `true`. Callers that do
+   * not care about success/failure (e.g. AI analysis flows) may ignore the
+   * returned value; their error surface is unchanged.
+   */
   const updatePaper = useCallback(
     async (
       paperId: string,
       updates: Partial<Paper> & { tagIds?: string[]; projectIds?: string[] },
-    ) => {
-      if (!userId) return;
+    ): Promise<boolean> => {
+      if (!userId) return false;
       const { tagIds, projectIds, ...paperUpdates } = updates;
 
       await cancelQueries();
@@ -145,7 +162,7 @@ export function usePaperMutations(
         if (error) {
           rollbackCache(snapshot);
           toast({ title: "Error updating paper", description: error.message, variant: "destructive" });
-          return;
+          return false;
         }
       }
 
@@ -154,7 +171,7 @@ export function usePaperMutations(
         if (tagError) {
           rollbackCache(snapshot);
           toast({ title: "Error updating tags", description: tagError.message, variant: "destructive" });
-          return;
+          return false;
         }
       }
 
@@ -163,7 +180,7 @@ export function usePaperMutations(
         if (projError) {
           rollbackCache(snapshot);
           toast({ title: "Error updating projects", description: projError.message, variant: "destructive" });
-          return;
+          return false;
         }
       }
 
@@ -183,6 +200,7 @@ export function usePaperMutations(
       queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
 
       toast({ title: "Paper updated" });
+      return true;
     },
     [userId, tags, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, queryClient, toast],
   );

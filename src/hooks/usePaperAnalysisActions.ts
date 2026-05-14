@@ -38,11 +38,18 @@ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
 export interface UsePaperAnalysisActionsArgs {
   papers: PaperWithTags[];
   selectedPaperIds: Set<string>;
-  /** From `usePapers().updatePaper`. */
+  /**
+   * From `usePapers().updatePaper`. Returns `true` on full success, `false`
+   * on any handled failure path (the mutation already shows a destructive
+   * toast and rolls back optimistic state). This hook does not branch on
+   * the boolean — its only consumer that cares is `EditPaperDialog`, which
+   * keeps its dialog open on `false`. The type is kept aligned so the real
+   * mutation drops in without a cast.
+   */
   updatePaper: (
     paperId: string,
     updates: Partial<Paper> & { tagIds?: string[]; projectIds?: string[] },
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /**
    * Optional cooldown function — defaults to a real 3-second sleep via
    * `setTimeout`. Tests inject `vi.fn().mockResolvedValue(undefined)`.

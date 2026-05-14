@@ -38,7 +38,15 @@ interface EditPaperDialogProps {
   tags: Tag[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (paper: Partial<PaperWithTags> & { tagIds: string[]; projectIds: string[] }) => Promise<void>;
+  /**
+   * Persist the edits. Must resolve to `true` only when every requested write
+   * has succeeded — the dialog closes on `true` and stays open with the
+   * user's edited form values preserved on `false`. The downstream
+   * `usePaperMutations.updatePaper` already owns rollback + destructive-toast
+   * surfacing for each failure path, so this dialog only needs to read the
+   * boolean and decide whether to close.
+   */
+  onSave: (paper: Partial<PaperWithTags> & { tagIds: string[]; projectIds: string[] }) => Promise<boolean>;
   userId?: string | null;
   onAttachmentsChange?: OnAttachmentsChange;
 }
@@ -122,7 +130,13 @@ export function EditPaperDialog({
 
     setLoading(true);
     try {
-      await onSave({
+      // Close the dialog only after the update actually succeeds. On any
+      // failure path (papers row update, set_paper_tags, set_paper_projects,
+      // or missing userId), `onSave` resolves to `false` — the dialog stays
+      // open and every edited form field is preserved so the user can
+      // correct the issue and retry. The destructive toast is already
+      // surfaced by `usePaperMutations.updatePaper`.
+      const success = await onSave({
         id: paper.id,
         title,
         authors: authors.split(",").map((a) => a.trim()).filter(Boolean),
@@ -141,7 +155,9 @@ export function EditPaperDialog({
         tagIds: selectedTagIds,
         projectIds: selectedProjectIds,
       });
-      onOpenChange(false);
+      if (success) {
+        onOpenChange(false);
+      }
     } finally {
       setLoading(false);
     }

@@ -788,3 +788,25 @@ The `decodeHTMLEntities` call decodes `&amp;` → `&` so the imported author rea
 **Edge Function deploy required:** `supabase functions deploy fetch-paper-metadata --project-ref lioxtgiputfniqbktcsz`.
 
 **Explicit non-goals.** No client changes. No PR #119 / Dashboard / `analyze-paper` / schema / migration / RLS / RPC / UI changes. No tests added (Deno Edge Function is not in the Vitest harness).
+
+## Edit Paper dialog stays open on save failure
+
+**Date:** May 2026
+**What:** Fixed a bug where the Edit Paper dialog closed even when the underlying update failed — losing the user's edited form values and giving the impression the save had succeeded. The dialog now stays open and preserves every edited field on any handled failure path, and closes only after the update actually succeeds. Symmetric with the prior "Manual-add dialog UX fix" pattern.
+**Root cause:** `usePaperMutations.updatePaper(...)` resolved to `void`. On any handled failure (papers row UPDATE, `set_paper_tags` RPC, or `set_paper_projects` RPC) it rolled back the optimistic cache snapshot, fired a destructive toast, and returned silently. `EditPaperDialog.handleSave()` did `await onSave(...); onOpenChange(false);` with no way to distinguish success from failure, so the dialog always closed.
+**Fix:**
+- `usePaperMutations.updatePaper` now returns `Promise<boolean>`: `false` for missing `userId` and each handled failure path (UPDATE / tag RPC / project RPC), `true` after every requested write has succeeded. **Rollback behavior, destructive-toast behavior, optimistic-update behavior, abstract cache invalidation on `'abstract' in paperUpdates`, and junction cache invalidation on `tagIds`/`projectIds` change are all preserved verbatim.**
+- `EditPaperDialogProps.onSave` is now `Promise<boolean>`. `handleSave()` reads the boolean and only calls `onOpenChange(false)` when it is `true`; on `false` the dialog stays open with every edited form field intact, and the user can correct the issue and retry.
+- `Dashboard.handleSavePaper` now forwards the boolean from `updatePaper`. Returns `false` defensively when `editingPaper` is `null` (a state the menu UX should never reach).
+- `usePaperAnalysisActions.UsePaperAnalysisActionsArgs.updatePaper` type widened from `Promise<void>` to `Promise<boolean>` so the real mutation drops in without a cast. The hook itself **does not** branch on the returned boolean — its error surface is unchanged (the mutation's own destructive toast still fires on failure during AI flows). This satisfies the rule that callers that do not need the boolean may ignore it.
+**Files changed:**
+- `src/hooks/papers/usePaperMutations.ts` — `updatePaper` returns `boolean`; new JSDoc explains the contract.
+- `src/components/papers/EditPaperDialog.tsx` — `onSave` prop type widened; `handleSave` gates `onOpenChange(false)` on success.
+- `src/pages/Dashboard.tsx` — `handleSavePaper` returns `Promise<boolean>` and forwards `updatePaper`'s result.
+- `src/hooks/usePaperAnalysisActions.ts` — args-type alignment, no runtime / behavior change.
+- `src/hooks/papers/__tests__/usePaperMutations.test.ts` — **6 new tests** covering: `userId` undefined → `false`, field-only update success → `true`, papers row UPDATE failure → `false` + rollback + destructive toast + no subsequent RPCs + no success toast, `set_paper_tags` failure → `false` + rollback + no `set_paper_projects` call + no success toast, `set_paper_projects` failure → `false` + rollback + no success toast, tag-only + project-only update with no paper-row changes → `true` + no row UPDATE call.
+- `src/hooks/__tests__/usePaperAnalysisActions.test.ts` — 7 `mockResolvedValue(undefined)` lines for `updatePaper` updated to `mockResolvedValue(true)` so the runtime contract matches the widened type. Behavior unchanged (the AI hook does not consume the return).
+**Test counts:** Vitest **263/263** (257 prior + 6 new). Playwright unchanged at **71/71** and intentionally not re-run for this fix — `e2e/mutations.spec.ts` already covers the happy-path "edit → save → dialog closes" mechanic; the new failure-path branch is defensively unit-tested at the hook level rather than via a synthetic Supabase failure injection at the Playwright layer. No new E2E spec was added.
+**Verification:** `npx tsc --noEmit` clean, `npx vitest run` 263/263, `npx eslint` on touched files reports only the pre-existing `addPaperManually` `exhaustive-deps` warning that exists on `main` (unrelated to this fix).
+**No migration needed.** No DB changes, no RPC changes, no Edge Function changes, no RLS changes.
+**Explicit non-goals.** No change to `addPaperManually`, `deletePaper`, `bulkImportPapers`, `bulkImportFromParsedData`, `bulkDeletePapers`, `bulkSetProjects`, `bulkSetTags`, `reevaluateStudyTypes`, `reevaluateKeywords`, AI single / bulk analysis flow, attachments, Quick-Add Drive URL, search, filters, presets, notes UI, or any commercial / billing planning doc.
