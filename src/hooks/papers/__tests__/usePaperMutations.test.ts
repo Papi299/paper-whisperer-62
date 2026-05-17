@@ -3,12 +3,21 @@ import { renderHook, act } from "@testing-library/react";
 
 // ── Supabase mock (hoisted) ───────────────────────────────────────────
 //
-// `mockFrom` returns a builder that exposes both `insert(...)` (used by
-// `addPaperManually`) and `update(...)` (used by `updatePaper`). The
-// `update(...).eq(...)` chain resolves to `mockUpdateResolve`, defaulting to
-// success — individual tests override `mockUpdateResolve.mockResolvedValueOnce`
-// to simulate failure. `mockRpc` is used for both `set_paper_tags` and
-// `set_paper_projects`; tests override its per-call return as needed.
+// `mockFrom` returns a builder that exposes:
+//   • `insert(...)`  — used by `addPaperManually` for the row-create call.
+//   • `update(...)`  — used by `updatePaper` for the row-edit call. The
+//     `update(...).eq(...)` chain resolves to `mockUpdateResolve`, default
+//     success; individual tests override with `mockResolvedValueOnce`.
+//   • `select(...)`  — used by `addPaperManually` for the duplicate-PMID
+//     and duplicate-DOI preflight queries. The chain is
+//     `from("papers").select("id").eq("user_id", …).eq("pmid"|"doi", …)
+//     .limit(1).maybeSingle()`. `mockPreflightMaybeSingle` is the
+//     leaf that returns the result; `mockPreflightSecondEq` is the
+//     field-specific `.eq()` whose `.mock.calls` lets tests assert the
+//     field name + value (so we can verify DOI normalization and that
+//     the right identifier was queried).
+// `mockRpc` is used for both `set_paper_tags` and `set_paper_projects`;
+// tests override its per-call return as needed.
 const {
   mockInsert,
   mockSelect,
@@ -18,6 +27,11 @@ const {
   mockUpdate,
   mockUpdateEq,
   mockUpdateResolve,
+  mockPreflightTopSelect,
+  mockPreflightFirstEq,
+  mockPreflightSecondEq,
+  mockPreflightLimit,
+  mockPreflightMaybeSingle,
 } = vi.hoisted(() => {
   const mockSingle = vi.fn();
   const mockSelect = vi.fn(() => ({ single: mockSingle }));
@@ -26,8 +40,34 @@ const {
   const mockUpdateResolve = vi.fn();
   const mockUpdateEq = vi.fn(() => mockUpdateResolve());
   const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
-  const mockFrom = vi.fn(() => ({ insert: mockInsert, update: mockUpdate }));
-  return { mockInsert, mockSelect, mockSingle, mockFrom, mockRpc, mockUpdate, mockUpdateEq, mockUpdateResolve };
+
+  // Preflight chain: from("papers").select("id").eq().eq().limit(1).maybeSingle()
+  const mockPreflightMaybeSingle = vi.fn();
+  const mockPreflightLimit = vi.fn(() => ({ maybeSingle: mockPreflightMaybeSingle }));
+  const mockPreflightSecondEq = vi.fn(() => ({ limit: mockPreflightLimit }));
+  const mockPreflightFirstEq = vi.fn(() => ({ eq: mockPreflightSecondEq }));
+  const mockPreflightTopSelect = vi.fn(() => ({ eq: mockPreflightFirstEq }));
+
+  const mockFrom = vi.fn(() => ({
+    insert: mockInsert,
+    update: mockUpdate,
+    select: mockPreflightTopSelect,
+  }));
+  return {
+    mockInsert,
+    mockSelect,
+    mockSingle,
+    mockFrom,
+    mockRpc,
+    mockUpdate,
+    mockUpdateEq,
+    mockUpdateResolve,
+    mockPreflightTopSelect,
+    mockPreflightFirstEq,
+    mockPreflightSecondEq,
+    mockPreflightLimit,
+    mockPreflightMaybeSingle,
+  };
 });
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -118,6 +158,11 @@ function validManualData() {
 describe("usePaperMutations – addPaperManually return value", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: server-side duplicate preflight returns "no match" so the
+    // tests below reach their intended branch (insert / validation /
+    // duplicate-key). Tests that exercise a preflight hit or preflight
+    // failure override with `mockResolvedValueOnce`.
+    mockPreflightMaybeSingle.mockResolvedValue({ data: null, error: null });
   });
 
   it("returns false when userId is undefined", async () => {
@@ -161,14 +206,16 @@ describe("usePaperMutations – addPaperManually return value", () => {
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Invalid PMID" }));
   });
 
-  it("returns false for duplicate paper (matching PMID)", async () => {
-    const existingPaper = {
-      id: "p1", pmid: "12345678", doi: null, title: "Other",
-      tags: [], projects: [],
-    } as unknown as PaperWithTags;
+  it("returns false for duplicate paper (matching PMID) — via server-side preflight", async () => {
+    // After the manual-add server-side duplicate-detection fix, the
+    // duplicate is caught by the per-user PMID preflight query against
+    // `papers`, NOT by scanning the loaded-papers array. We pass
+    // `emptyPapers` to the hook to demonstrate that the preflight works
+    // even when the duplicate is OUTSIDE the current page / filter.
+    mockPreflightMaybeSingle.mockResolvedValueOnce({ data: { id: "existing-paper-id" }, error: null });
 
     const { result } = renderHook(() =>
-      usePaperMutations(userId, [existingPaper], emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
     );
 
     let returnValue: boolean | undefined;
@@ -178,6 +225,10 @@ describe("usePaperMutations – addPaperManually return value", () => {
 
     expect(returnValue).toBe(false);
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Duplicate paper" }));
+    // The PMID-preflight `.eq()` was called with the user-supplied PMID.
+    expect(mockPreflightSecondEq).toHaveBeenCalledWith("pmid", "12345678");
+    // Insert was NOT attempted.
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it("returns false when DB insert fails", async () => {
@@ -227,6 +278,215 @@ describe("usePaperMutations – addPaperManually return value", () => {
     expect(returnValue).toBe(true);
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
     expect(mockInvalidateAndRefetch).toHaveBeenCalled();
+  });
+});
+
+// ── addPaperManually server-side duplicate preflight ──────────────────
+//
+// These tests lock in the fix that replaces the old client-side
+// `papers.some(...)` duplicate check (which scanned only the currently
+// loaded/paginated/filtered `papers` array and additionally hard-blocked
+// on exact title match — both wrong) with two narrow `.maybeSingle()`
+// queries against `papers` scoped to the current user via PMID and
+// (normalized) DOI. The preflight is sequential (PMID first, bail on
+// hit) and is a UX improvement only — the DB partial unique indexes
+// `idx_papers_user_pmid_unique` / `idx_papers_user_doi_unique
+// (user_id, lower(doi))` plus the post-insert `23505` branch remain the
+// data-integrity backstop and are exercised by the separate
+// `returns false on duplicate key constraint (23505)` test above.
+
+describe("usePaperMutations – addPaperManually server-side duplicate preflight", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: every preflight call returns "no match" so insert is reached
+    // by tests that don't explicitly configure a hit.
+    mockPreflightMaybeSingle.mockResolvedValue({ data: null, error: null });
+    // Default: insert succeeds so success-path tests reach `return true`.
+    mockSingle.mockResolvedValue({ data: { id: "new-paper-id" }, error: null });
+    // Default: no RPC errors on the (unused-here) assignment path.
+    mockRpc.mockResolvedValue({ error: null });
+  });
+
+  it("catches a server-side PMID duplicate even when the duplicate is NOT in the loaded papers array", async () => {
+    // Loaded papers is empty — the old client-side check would have missed
+    // this duplicate. The preflight (sequential: PMID first) now catches it.
+    mockPreflightMaybeSingle.mockResolvedValueOnce({ data: { id: "existing-id" }, error: null });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData());
+    });
+
+    expect(returnValue).toBe(false);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Duplicate paper",
+      variant: "destructive",
+    }));
+    expect(mockPreflightSecondEq).toHaveBeenCalledWith("pmid", "12345678");
+    expect(mockInsert).not.toHaveBeenCalled();
+    // DOI preflight must NOT have run — PMID match short-circuits.
+    expect(mockPreflightSecondEq).not.toHaveBeenCalledWith("doi", expect.anything());
+  });
+
+  it("catches a server-side DOI duplicate when PMID preflight returned no match", async () => {
+    // PMID preflight: no match. DOI preflight: hit.
+    mockPreflightMaybeSingle
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: { id: "existing-id" }, error: null });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData());
+    });
+
+    expect(returnValue).toBe(false);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Duplicate paper",
+      variant: "destructive",
+    }));
+    expect(mockPreflightSecondEq).toHaveBeenCalledWith("pmid", "12345678");
+    expect(mockPreflightSecondEq).toHaveBeenCalledWith("doi", "10.1234/test");
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the DOI before preflight (strips `https://doi.org/` and lowercases)", async () => {
+    const data = { ...validManualData(), pmid: "", doi: "https://doi.org/10.1234/FOO" };
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    await act(async () => {
+      await result.current.addPaperManually(data);
+    });
+
+    // PMID preflight should NOT have run (empty PMID). DOI preflight should
+    // have been called with the normalized form: lowercased and stripped of
+    // the `https://doi.org/` prefix — matching the storage form behind the
+    // per-user partial unique index `idx_papers_user_doi_unique
+    // (user_id, lower(doi))`.
+    expect(mockPreflightSecondEq).toHaveBeenCalledWith("doi", "10.1234/foo");
+    expect(mockPreflightSecondEq).not.toHaveBeenCalledWith("pmid", expect.anything());
+  });
+
+  it("does not run any preflight when neither PMID nor DOI is provided", async () => {
+    const data = { ...validManualData(), pmid: "", doi: "" };
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(data);
+    });
+
+    expect(returnValue).toBe(true);
+    // Preflight `.maybeSingle()` must NOT have been called at all.
+    expect(mockPreflightMaybeSingle).not.toHaveBeenCalled();
+    // Insert proceeds normally.
+    expect(mockInsert).toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+  });
+
+  it("proceeds to insert when the preflight returns no match for either identifier", async () => {
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData());
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockPreflightMaybeSingle).toHaveBeenCalledTimes(2); // PMID + DOI
+    expect(mockInsert).toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+  });
+
+  it("returns false with a destructive error toast when the PMID preflight query itself fails", async () => {
+    mockPreflightMaybeSingle.mockResolvedValueOnce({ data: null, error: { message: "network error" } });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData());
+    });
+
+    expect(returnValue).toBe(false);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Could not check for duplicates",
+      variant: "destructive",
+    }));
+    // Must not proceed to insert.
+    expect(mockInsert).not.toHaveBeenCalled();
+    // DOI preflight must not run after the PMID preflight errored.
+    expect(mockPreflightSecondEq).not.toHaveBeenCalledWith("doi", expect.anything());
+  });
+
+  it("returns false with a destructive error toast when the DOI preflight query itself fails", async () => {
+    mockPreflightMaybeSingle
+      .mockResolvedValueOnce({ data: null, error: null }) // PMID preflight: ok / no match
+      .mockResolvedValueOnce({ data: null, error: { message: "network error" } }); // DOI preflight: errored
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData());
+    });
+
+    expect(returnValue).toBe(false);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Could not check for duplicates",
+      variant: "destructive",
+    }));
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("does NOT block on title-only match — PMID/DOI-only dedup policy", async () => {
+    // Regression for the fix that removed the title-based hard block that
+    // contradicted the PMID/DOI-only duplicate-detection policy documented
+    // in `docs/start-here.md` (Standing product decisions). The loaded
+    // papers array contains a paper with the EXACT same title as the input,
+    // but the preflight (which only checks PMID + DOI) returns no match —
+    // so insert must proceed.
+    const sameTitlePaper = {
+      id: "p1",
+      pmid: "99999999", // different PMID
+      doi: "10.9999/other", // different DOI
+      title: "A Great Paper", // SAME title as validManualData().title
+      tags: [],
+      projects: [],
+    } as unknown as PaperWithTags;
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, [sameTitlePaper], emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData());
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Duplicate paper" }));
+    expect(mockInsert).toHaveBeenCalled();
   });
 });
 

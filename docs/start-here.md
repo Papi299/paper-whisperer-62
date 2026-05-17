@@ -434,6 +434,28 @@ PMID **`41912805`** is now the established manual smoke case for the `fetch-pape
 
 Future PubMed-import work that touches the parser should re-test this case. (Smoke a known-good simple PMID alongside, to confirm personal-author behavior is unchanged.)
 
+## Manual add — server-side duplicate preflight + title-blocking removal (May 2026)
+
+Closed a data-integrity gap **and** an internal-consistency violation in `usePaperMutations.addPaperManually`.
+
+**The gap.** The previous duplicate check was a client-side `papers.some(...)` scan against the **currently loaded** (paginated/filtered) papers array. Duplicates that lived outside the current page or filter were missed at preflight; the user could submit a manual add for a paper they already owned and only discover the collision via the post-insert `23505` toast. The fix replaces the client-side scan with two narrow server-side queries scoped to the current user — `from("papers").select("id").eq("user_id", userId).eq("pmid"|"doi", v).limit(1).maybeSingle()` — that match against the **whole library**. Sequential (PMID first, bail on hit), so a typical "new paper" worst case is two RTTs and the more common PMID-match short-circuits to one. RLS + an explicit `eq("user_id", …)` give defense in depth.
+
+**The violation.** The same code path also did **exact-title hard-blocking** (`existing.title.toLowerCase() === manualTitle.toLowerCase()`), which directly contradicts the standing **PMID/DOI-only duplicate detection** product decision in this file ("Standing product decisions — do not re-propose"). Title-blocking is now removed from the manual-add path. A regression test (`does NOT block on title-only match — PMID/DOI-only dedup policy`) locks the policy in.
+
+**DOI normalization.** Input DOIs are stripped of `https://(dx.)?doi.org/` / `doi:` prefixes and lowercased before the preflight, matching the form stored behind the per-user partial unique index `idx_papers_user_doi_unique (user_id, lower(doi))`. Mirrors the DOI normalization in `src/lib/normalizePaperData.ts`.
+
+**Backstop.** The DB partial unique indexes plus the post-insert `23505` handling remain unchanged — the preflight is a UX improvement only, not a replacement for DB constraints. Race conditions (two tabs, network re-order) still surface as the existing `"Duplicate paper (duplicate PMID or DOI)"` toast.
+
+**Preflight failure handling.** If the preflight query itself errors (network, RLS misconfig), the manual-add returns `false` and surfaces a destructive `"Could not check for duplicates"` toast — never proceeds blindly to insert.
+
+**Out of scope for this PR (carried forward as an audit finding):** `useBulkMutations.ts:49-59` has an isomorphic title-blocking + loaded-array scan in the identifier-based bulk import path. Same product-decision violation, same loaded-array limitation. The bulk path's per-paper insert + `safe_bulk_insert_papers` still catches true duplicates at the DB layer, so data integrity is intact; only UX consistency is at stake. Not fixed here per the task's bulk-import scope guard.
+
+**Test counts:** Vitest **268/268 → 276/276** (+8 new in a new `describe(\"… server-side duplicate preflight\", …)` block; the one existing `returns false for duplicate paper (matching PMID)` test was rewritten to assert the server-side preflight mechanism instead of the removed loaded-array scan). Playwright unchanged at **71/71** and not re-run (same deterministic-failure-injection rationale as PRs #125/#126).
+
+**No DB / RPC / RLS / Edge Function / migration / commercial-doc changes.**
+
+See [migration-history.md](migration-history.md) for the full entry.
+
 ## Manual add — assignment-failure visibility (May 2026)
 
 Closed a silent-failure risk in `usePaperMutations.addPaperManually`: when a manually added paper inserted successfully but the follow-up `set_paper_projects` or `set_paper_tags` RPC failed, the `{ error }` return was discarded and the user saw a plain `"Paper added manually"` success toast — papers ended up in the library without their requested project / tag chips and no signal that anything had gone wrong. The fix mirrors the **same warning pattern already used by `useBulkMutations`** (`assignmentWarnings: string[]` accumulator → single destructive toast). The function still returns `true` and the dialog still closes when the paper itself was created — the destructive `"Paper added with warnings"` toast (`variant: "destructive"`, names the specific failed assignment(s)) plus the missing chips in the row are the user-visible signal that manual reassignment is needed. Five new Vitest cases pin the four toast shapes (both ok / project-only fails / tag-only fails / both fail) and the no-assignment-requested no-warning-toast invariant. Vitest **268/268** (263 prior + 5 new). Playwright unchanged at **71/71**. No DB / RPC / RLS / Edge Function / migration / commercial-doc changes. Symmetric with the Edit Paper save-failure fix below in the way it surfaces partial-success states. See [migration-history.md](migration-history.md) for the full entry.

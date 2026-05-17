@@ -87,7 +87,7 @@ Notable manual smoke case: PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors
 ## Testing
 
 ```sh
-npx vitest run               # Unit tests (268 tests)
+npx vitest run               # Unit tests (276 tests)
 npx playwright test          # E2E tests (currently 71, single-worker)
 npx playwright test --ui     # Interactive test runner
 ```

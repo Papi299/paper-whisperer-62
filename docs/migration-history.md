@@ -840,3 +840,62 @@ The `bulkImportPapers` and `bulkImportFromParsedData` paths in `useBulkMutations
 **Verification:** `npx tsc --noEmit` clean, `npx vitest run` 268/268, `npx eslint` on touched files reports only the pre-existing `addPaperManually` `react-hooks/exhaustive-deps` warning that already exists on `main` (untouched by this fix; identical on `main` and on the branch).
 **No migration needed.** No DB changes, no RPC changes, no RLS changes, no Edge Function changes.
 **Explicit non-goals.** No change to `updatePaper`, `deletePaper`, `bulkImportPapers`, `bulkImportFromParsedData`, `bulkDeletePapers`, `bulkSetProjects`, `bulkSetTags`, `reevaluateStudyTypes`, `reevaluateKeywords`, AI single / bulk analysis flow, attachments, Quick-Add Drive URL, search, filters, presets, notes UI, `AddPaperDialog`'s close-on-true behavior (the partial-success path returns `true` and the dialog still closes by design — symmetric with bulk import), or any commercial / billing planning doc.
+
+## Manual add — server-side duplicate preflight + title-blocking removal
+
+**Date:** May 2026
+**What:** Closed two issues in `usePaperMutations.addPaperManually` in one focused fix.
+  1. **Data-integrity gap:** the previous duplicate check was a client-side `papers.some(...)` scan against the **currently loaded** (paginated / filtered) papers array. A duplicate that lived outside the current page or filter was missed at preflight; the user could submit a manual add for a paper they already owned and only discover the collision via the post-insert `23505` toast.
+  2. **Standing-decision violation:** the same code path additionally did **exact-title hard-blocking** (`existing.title.toLowerCase() === manualTitle.toLowerCase()`), which directly contradicted the **PMID/DOI-only duplicate detection** product decision recorded in `docs/start-here.md` ("Standing product decisions — do not re-propose"). Title-based blocking is now removed from the manual-add path.
+
+**Root cause:**
+```ts
+const isDuplicate = papers.some((existing) => {
+  if (manualPmid && existing.pmid && manualPmid === existing.pmid) return true;
+  if (manualDoi && existing.doi && manualDoi.toLowerCase() === existing.doi.toLowerCase()) return true;
+  if (manualTitle && existing.title && manualTitle.toLowerCase() === existing.title.toLowerCase()) return true; // ← violates PMID/DOI-only policy
+  return false;
+});
+if (isDuplicate) { toast(...); return false; }
+```
+`papers` is the React-Query–hydrated paginated/filtered list — never the full library. Even when correct (PMID/DOI rows), the check was scoped to the visible page, not the user's library.
+
+**Fix:** Two sequential narrow server-side preflight queries scoped to the current user via RLS + an explicit `.eq("user_id", userId)`:
+```ts
+if (manualPmid) {
+  const { data: pmidHit, error: pmidErr } = await supabase
+    .from("papers").select("id")
+    .eq("user_id", userId).eq("pmid", manualPmid)
+    .limit(1).maybeSingle();
+  if (pmidErr) { /* "Could not check for duplicates" + return false */ }
+  if (pmidHit) { /* "Duplicate paper" + return false */ }
+}
+if (normalizedDoi) {
+  const { data: doiHit, error: doiErr } = await supabase
+    .from("papers").select("id")
+    .eq("user_id", userId).eq("doi", normalizedDoi)
+    .limit(1).maybeSingle();
+  if (doiErr) { /* "Could not check for duplicates" + return false */ }
+  if (doiHit) { /* "Duplicate paper" + return false */ }
+}
+```
+- **Sequential PMID-then-DOI** (not parallel): bail on first hit, keeps mocks simple, avoids PostgREST `.or()` value-escaping edge cases on DOIs containing reserved chars.
+- **`.maybeSingle()`**: null is non-error, deterministic given the per-user partial unique indexes (`idx_papers_user_pmid_unique`, `idx_papers_user_doi_unique` on `(user_id, lower(doi))`).
+- **DOI normalization** mirrors `src/lib/normalizePaperData.ts:226-227`: strip `https://(dx.)?doi.org/` / `doi:` prefix, lowercase. Matches the form stored behind the per-user partial unique index. Kept inline (one regex line) rather than imported to keep `addPaperManually`'s scope tight; if the two ever drift, the per-user unique index on `lower(doi)` is the backstop.
+- **Title-based blocking removed entirely.** A regression test (`does NOT block on title-only match — PMID/DOI-only dedup policy`) explicitly seeds an existing paper with the SAME title but different PMID + DOI and asserts the manual add proceeds. This brings the manual-add path into compliance with the standing PMID/DOI-only policy.
+
+**Backstop unchanged.** The post-insert `23505` branch still fires, with the existing `"Duplicate paper (duplicate PMID or DOI)"` toast and `return false`, covering races between the preflight and the insert (two tabs, network re-order, etc.). The preflight is a UX improvement layered on top of the DB constraint — not a replacement for it.
+
+**Preflight-failure handling.** If the preflight query itself returns an error (network outage, RLS misconfiguration, etc.), `addPaperManually` returns `false` and surfaces a destructive `"Could not check for duplicates"` toast. The function does NOT proceed to insert when the duplicate check could not be performed. This is symmetric with the PR #125 design principle ("server-side checks are the truth").
+
+**`useCallback` deps cleanup.** Because the closure no longer reads the loaded `papers` array, `papers` was removed from the `addPaperManually` deps array. `projects` / `tags` / `queryClient` remain (pre-existing unused deps flagged by `react-hooks/exhaustive-deps`); they are deliberately untouched here to keep this PR strictly focused on the duplicate-detection bug. The lint warning correspondingly drops from 4 unnecessary deps to 3.
+
+**Carried-forward audit finding (NOT fixed in this PR).** `useBulkMutations.ts:49-59` has an isomorphic title-blocking + loaded-array scan in the identifier-based bulk-import path. Same product-decision violation, same loaded-array limitation. The bulk path's per-paper insert + downstream `safe_bulk_insert_papers` RPC still catches true PMID/DOI duplicates at the DB layer, so **data integrity is intact**; only UX consistency is at stake. Not fixed here per the task's bulk-import scope guard.
+
+**Files changed:**
+- `src/hooks/papers/usePaperMutations.ts` — replaced the inline `papers.some(...)` block (lines 56–66 on `main`) with the two server-side preflight queries + DOI-normalization helper + `preflightFailureToast` / `duplicateToast` closures; removed `papers` from the `useCallback` deps array; new code comments document the change rationale and the backstop relationship.
+- `src/hooks/papers/__tests__/usePaperMutations.test.ts` — **8 new tests** in a new `describe(\"usePaperMutations – addPaperManually server-side duplicate preflight\", …)` block (PMID hit even when loaded array empty; DOI hit when PMID misses; DOI normalization lowercases + strips URL prefix; no preflight when both identifiers absent; insert when preflight misses; preflight failure on PMID surfaces destructive "Could not check for duplicates"; same on DOI; **title-only match does NOT block** — PMID/DOI-only policy regression test). Plus **rewrote** the existing `returns false for duplicate paper (matching PMID)` test to use the server-side preflight mechanism instead of the removed loaded-array scan; renamed to `... — via server-side preflight`. Extended the hoisted Supabase mock with a `from("papers").select("id").eq().eq().limit(1).maybeSingle()` chain (`mockPreflightTopSelect` / `mockPreflightFirstEq` / `mockPreflightSecondEq` / `mockPreflightLimit` / `mockPreflightMaybeSingle`).
+**Test counts:** Vitest **268/268 → 276/276** (+8 new; +0 net for the rewritten test). Playwright unchanged at **71/71** and not re-run for this fix — the preflight branches require deterministic Supabase RPC failure injection that isn't available in the single-real-account E2E harness, and the assertions are stronger at the hook unit level. Same rationale and same precedent as PRs #125 / #126.
+**Verification:** `npx tsc --noEmit` clean. `npx vitest run` 276/276. `npx eslint` on touched files reports only the same pre-existing `addPaperManually` `react-hooks/exhaustive-deps` warning — now listing `'projects', 'queryClient', and 'tags'` instead of `'papers', 'projects', 'queryClient', and 'tags'` (partial improvement, the `papers` dep cleanup was needed for correctness).
+**No migration needed.** No DB changes, no RPC changes, no RLS changes, no Edge Function changes. The existing partial unique indexes (`idx_papers_user_pmid_unique`, `idx_papers_user_doi_unique` on `(user_id, lower(doi))`) and the existing post-insert `23505` handling are both leveraged unchanged.
+**Explicit non-goals.** No change to `updatePaper`, `deletePaper`, `bulkImportPapers`, `bulkImportFromParsedData`, `bulkDeletePapers`, `bulkSetProjects`, `bulkSetTags`, `reevaluateStudyTypes`, `reevaluateKeywords`, AI flows, attachments, Quick-Add Drive URL, search, filters, presets, notes UI, `AddPaperDialog`, `Dashboard`, or any commercial / billing planning doc. The `addPaperManually` return-type contract (`Promise<boolean>`) is unchanged from PR #76 / PR #126. The assignment-warning behavior from PR #126 is preserved verbatim.
