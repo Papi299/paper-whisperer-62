@@ -53,16 +53,90 @@ export function usePaperMutations(
         return false;
       }
       const manualDoi = paperData.doi.trim();
-      const isDuplicate = papers.some((existing) => {
-        if (manualPmid && existing.pmid && manualPmid === existing.pmid) return true;
-        if (manualDoi && existing.doi && manualDoi.toLowerCase() === existing.doi.toLowerCase()) return true;
-        if (manualTitle && existing.title && manualTitle.toLowerCase() === existing.title.toLowerCase()) return true;
-        return false;
-      });
 
-      if (isDuplicate) {
-        toast({ title: "Duplicate paper", description: `"${manualTitle}" already exists in the index.`, variant: "destructive" });
-        return false;
+      // Normalize the input DOI to match the form the DB stores (which in
+      // turn matches the `idx_papers_user_doi_unique` partial index on
+      // `lower(doi) WHERE doi IS NOT NULL`). Mirrors the DOI normalization
+      // in `src/lib/normalizePaperData.ts` (strips `https://(dx.)?doi.org/`
+      // / `doi:` prefix and lowercases). Keeping the rule inline rather
+      // than importing keeps `addPaperManually`'s scope tight; if the two
+      // ever drift the per-user unique index on `lower(doi)` is the
+      // backstop and the post-insert `23505` branch still fires.
+      const normalizedDoi = manualDoi
+        ? manualDoi.replace(/^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:)/i, "").trim().toLowerCase()
+        : "";
+
+      // ── Server-side duplicate preflight ──────────────────────────────
+      //
+      // Replaces a previous client-side `papers.some(...)` check that
+      // scanned only the currently *loaded* (paginated/filtered) papers
+      // array. That check missed duplicates that were not on the visible
+      // page — the user could re-add a paper they already owned and only
+      // discover the collision via the post-insert `23505` toast. It also
+      // hard-blocked on title equality, which **contradicts the standing
+      // PMID/DOI-only product decision** in `docs/start-here.md`
+      // (Duplicate detection policy). Title-based blocking is now gone.
+      //
+      // We run up to two narrow queries scoped to the current user via
+      // RLS (and an explicit `eq("user_id", userId)` for clarity). Each
+      // is `.limit(1).maybeSingle()` so the per-user partial unique
+      // indexes (`idx_papers_user_pmid_unique`, `idx_papers_user_doi_unique`)
+      // make the result deterministic and `null` is a non-error.
+      // Sequential, not parallel: PMID first, bail on hit. Keeps mocks
+      // simple, avoids PostgREST `.or()` value-escaping edge cases on
+      // DOIs containing reserved chars, and saves the second RTT when
+      // PMID already matched. The preflight is a UX improvement only;
+      // DB unique-constraint handling on insert (the `23505` branch
+      // below) remains the data-integrity backstop for races.
+      const preflightFailureToast = () => {
+        toast({
+          title: "Could not check for duplicates",
+          description: "Please check your connection and try again.",
+          variant: "destructive",
+        });
+      };
+      const duplicateToast = () => {
+        toast({
+          title: "Duplicate paper",
+          description: `"${manualTitle}" already exists (duplicate PMID or DOI).`,
+          variant: "destructive",
+        });
+      };
+
+      if (manualPmid) {
+        const { data: pmidHit, error: pmidErr } = await supabase
+          .from("papers")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("pmid", manualPmid)
+          .limit(1)
+          .maybeSingle();
+        if (pmidErr) {
+          preflightFailureToast();
+          return false;
+        }
+        if (pmidHit) {
+          duplicateToast();
+          return false;
+        }
+      }
+
+      if (normalizedDoi) {
+        const { data: doiHit, error: doiErr } = await supabase
+          .from("papers")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("doi", normalizedDoi)
+          .limit(1)
+          .maybeSingle();
+        if (doiErr) {
+          preflightFailureToast();
+          return false;
+        }
+        if (doiHit) {
+          duplicateToast();
+          return false;
+        }
       }
 
       const rawPaper: RawPaperData = {
@@ -152,7 +226,13 @@ export function usePaperMutations(
       }
       return true;
     },
-    [userId, papers, projects, tags, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
+    // `papers` removed from deps: the previous client-side `papers.some(...)`
+    // duplicate check has been replaced by a server-side preflight, so the
+    // closure no longer reads the loaded papers array. `projects` / `tags` /
+    // `queryClient` are pre-existing unused deps flagged by `react-hooks/
+    // exhaustive-deps`; leaving them alone here keeps this PR strictly
+    // focused on the duplicate-detection bug.
+    [userId, projects, tags, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
   );
 
   /**
