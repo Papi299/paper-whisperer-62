@@ -434,6 +434,18 @@ PMID **`41912805`** is now the established manual smoke case for the `fetch-pape
 
 Future PubMed-import work that touches the parser should re-test this case. (Smoke a known-good simple PMID alongside, to confirm personal-author behavior is unchanged.)
 
+## Bulk-import duplicate/title-blocking audit — dead-code removal (May 2026)
+
+Closed out the PR #127 follow-up note flagging `useBulkMutations.ts:49-59` for an isomorphic title-blocking + loaded-array dedup violation. Audit found:
+
+- **Live bulk paths are already compliant.** `bulkImportPapers` (wired to `Dashboard.onBulkImport`) and `bulkImportFromParsedData` (wired to `Dashboard.onFileImport`) route entirely through `safe_bulk_insert_papers` RPC in chunks of 50; the RPC catches `unique_violation` per row against the per-user partial unique indexes (`idx_papers_user_pmid_unique`, `idx_papers_user_doi_unique (user_id, lower(doi))`) and returns `status: \"inserted\" | \"duplicate\" | \"error\"`. **No client-side `papers.some(...)` prefilter. No title-based blocking.** PMID/DOI-only policy honored.
+- **The only nonconforming code was the legacy `addPapers` function** in `useBulkMutations.ts:32-135` — a client-side `papers.some(...)` scan with exact-title hard-blocking (post-trim + lowercase + trailing-period strip). It was returned from `useBulkMutations` and re-exported from `usePapers()` but **never destructured by any UI consumer or test**. Confirmed dead code via repo-wide `grep -rn '\baddPapers\b'`.
+- **Data integrity was always safe.** The DB partial unique indexes are the source of truth — no code path could insert a true duplicate.
+
+**Fix: delete `addPapers` outright** rather than refactor an unused function. Removed the `useCallback` block, its return-object entry, and the destructure + re-export in `usePapers.ts`. **Zero behavior change** — `bulkImportPapers`, `bulkImportFromParsedData`, `safe_bulk_insert_papers`, the per-user partial unique indexes, and the post-insert `23505` handling are all untouched. Vitest unchanged at **276/276** (no test referenced `addPapers`). ESLint warning count for `useBulkMutations.ts` drops **3 → 2** (the `addPapers`-specific `react-hooks/exhaustive-deps` warning at the old line 135 is now gone; the two remaining warnings on `bulkImportPapers` / `bulkImportFromParsedData` are pre-existing and deliberately untouched).
+
+No DB / RPC / RLS / Edge Function / migration / commercial-doc changes. See [migration-history.md](migration-history.md) for the full entry.
+
 ## Manual add — server-side duplicate preflight + title-blocking removal (May 2026)
 
 Closed a data-integrity gap **and** an internal-consistency violation in `usePaperMutations.addPaperManually`.

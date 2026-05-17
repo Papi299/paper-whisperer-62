@@ -29,112 +29,6 @@ export function useBulkMutations(
   const queryClient = useQueryClient();
   const { normalize } = useNormalizationWorker();
 
-  const addPapers = useCallback(
-    async (identifiers: string[], driveUrl?: string) => {
-      if (!userId) return;
-
-      try {
-        const fetchedPapers = await fetchPaperMetadata(identifiers);
-        const successfulPapers: PaperWithTags[] = [];
-
-        // Collect non-duplicate, successfully-fetched raw papers for batch normalization
-        const rawPapersForNormalization: { raw: RawPaperData; result: typeof fetchedPapers[number] }[] = [];
-
-        for (const result of fetchedPapers) {
-          if (result.error) {
-            toast({ title: "Could not fetch paper", description: `${result.identifier}: ${result.error}`, variant: "destructive" });
-            continue;
-          }
-
-          const isDuplicate = papers.some((existing) => {
-            if (result.pmid && existing.pmid && result.pmid === existing.pmid) return true;
-            if (result.doi && existing.doi && result.doi.toLowerCase() === existing.doi.toLowerCase()) return true;
-            if (result.title && existing.title && result.title.replace(/\.\s*$/, "").trim().toLowerCase() === existing.title.toLowerCase()) return true;
-            return false;
-          });
-
-          if (isDuplicate) {
-            toast({ title: "Duplicate paper", description: `"${result.title}" already exists in the index.`, variant: "destructive" });
-            continue;
-          }
-
-          if (result.source === "crossref") {
-            toast({ title: "Paper fetched via Crossref", description: `"${result.title}" — PubMed unavailable. Some metadata (MeSH terms, keywords) may be limited.` });
-          }
-
-          const combinedKeywords = [...(result.keywords || []), ...(result.mesh_terms || []), ...(result.substances || [])];
-
-          rawPapersForNormalization.push({
-            result,
-            raw: {
-              title: result.title,
-              authors: result.authors || [],
-              year: result.year,
-              journal: result.journal,
-              pmid: result.pmid,
-              doi: result.doi,
-              abstract: result.abstract,
-              keywords: combinedKeywords,
-              mesh_terms: result.mesh_terms || [],
-              substances: result.substances || [],
-              study_type: result.study_type || null,
-              pubmed_url: result.pubmed_url,
-              journal_url: result.journal_url,
-              drive_url: driveUrl || null,
-            },
-          });
-        }
-
-        // Batch normalize via Web Worker (falls back to main thread for small batches)
-        const normalizedPapers = normalizationConfig
-          ? await normalize(rawPapersForNormalization.map((r) => r.raw), normalizationConfig)
-          : rawPapersForNormalization.map((r) => r.raw);
-
-        // Insert each normalized paper
-        for (let i = 0; i < normalizedPapers.length; i++) {
-          const normalized = normalizedPapers[i];
-          const { result } = rawPapersForNormalization[i];
-
-          const paperData = {
-            user_id: userId,
-            ...normalized,
-            raw_study_type: result.study_type || null,
-            raw_keywords: rawPapersForNormalization[i].raw.keywords || [],
-            mesh_terms: normalized.mesh_terms || [],
-            substances: normalized.substances || [],
-          };
-
-          const { data: insertedPaper, error: insertError } = await supabase
-            .from("papers")
-            .insert(paperData)
-            .select()
-            .single();
-
-          if (insertError) {
-            if (insertError.code === "23505") {
-              toast({ title: "Duplicate paper", description: `"${result.title}" already exists (duplicate PMID or DOI).`, variant: "destructive" });
-            } else {
-              toast({ title: "Error saving paper", description: insertError.message, variant: "destructive" });
-            }
-            continue;
-          }
-
-          successfulPapers.push({ ...(insertedPaper as Paper), tags: [], projects: [] });
-        }
-
-        if (successfulPapers.length > 0) {
-          // No optimistic insert — new papers may not match active filter.
-          // Invalidate to refetch with current filters.
-          invalidateAndRefetch();
-          toast({ title: "Papers added", description: `Successfully added ${successfulPapers.length} paper(s).` });
-        }
-      } catch (error: unknown) {
-        toast({ title: "Error fetching papers", description: getErrorMessage(error), variant: "destructive" });
-      }
-    },
-    [userId, papers, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
-  );
-
   const bulkImportPapers = useCallback(
     async (
       identifiers: string[],
@@ -706,5 +600,5 @@ export function useBulkMutations(
     [userId, removeStaleListCaches, queryClient, toast],
   );
 
-  return { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords };
+  return { bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords };
 }
