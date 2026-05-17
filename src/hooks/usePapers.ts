@@ -287,7 +287,7 @@ export function usePapers(
   const { addPaperManually, updatePaper, deletePaper } = usePaperMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams, serverSortParams);
 
   // ── Bulk mutations ──
-  const { addPapers, bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords } = useBulkMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams, serverSortParams);
+  const { bulkImportPapers, bulkImportFromParsedData, bulkDeletePapers, bulkSetProjects, bulkSetTags, reevaluateStudyTypes, reevaluateKeywords } = useBulkMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams, serverSortParams);
 
   // ── All keywords across ALL papers (unfiltered — for Sidebar import suggestions) ──
   const { data: allKeywords } = useQuery<string[]>({
@@ -355,7 +355,6 @@ export function usePapers(
     createTag,
     updateTag,
     deleteTag,
-    addPapers,
     addPaperManually,
     bulkImportPapers,
     bulkImportFromParsedData,
