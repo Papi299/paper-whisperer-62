@@ -810,3 +810,33 @@ The `decodeHTMLEntities` call decodes `&amp;` → `&` so the imported author rea
 **Verification:** `npx tsc --noEmit` clean, `npx vitest run` 263/263, `npx eslint` on touched files reports only the pre-existing `addPaperManually` `exhaustive-deps` warning that exists on `main` (unrelated to this fix).
 **No migration needed.** No DB changes, no RPC changes, no Edge Function changes, no RLS changes.
 **Explicit non-goals.** No change to `addPaperManually`, `deletePaper`, `bulkImportPapers`, `bulkImportFromParsedData`, `bulkDeletePapers`, `bulkSetProjects`, `bulkSetTags`, `reevaluateStudyTypes`, `reevaluateKeywords`, AI single / bulk analysis flow, attachments, Quick-Add Drive URL, search, filters, presets, notes UI, or any commercial / billing planning doc.
+
+## Manual add — assignment-failure visibility
+
+**Date:** May 2026
+**What:** Closed a silent-failure risk in `usePaperMutations.addPaperManually`. When a manually added paper inserted successfully but the follow-up `set_paper_projects` or `set_paper_tags` RPC failed, the user saw a plain `"Paper added manually"` success toast even though their selected project/tag never got attached — the paper appeared in the library without chips and the user had no way to know an assignment had failed. The fix mirrors the **already-shipped bulk-import warning pattern** (see "Bulk import assignment-failure visibility" entry above).
+**Root cause:** `addPaperManually` ignored the `{ error }` returns from the per-paper assignment RPCs:
+```ts
+if (options?.targetProjectIds && options.targetProjectIds.length > 0) {
+  await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: options.targetProjectIds });
+}
+if (options?.targetTagIds && options.targetTagIds.length > 0) {
+  await supabase.rpc("set_paper_tags", { p_paper_id: paperId, p_tag_ids: options.targetTagIds });
+}
+invalidateAndRefetch();
+toast({ title: "Paper added manually" });
+return true;
+```
+The `bulkImportPapers` and `bulkImportFromParsedData` paths in `useBulkMutations.ts` had already adopted an `assignmentWarnings: string[]` accumulator + single destructive toast pattern; the single-paper manual-add path had been left behind.
+**Fix:** Capture `{ error: projError }` / `{ error: tagError }` from each RPC, push a short human-readable label (`"project assignment failed"` / `"tag assignment failed"`) into a local `assignmentWarnings: string[]`, and surface **one** destructive toast at the end naming the specific failure(s):
+- Full success → existing `"Paper added manually"` toast (unchanged).
+- Partial success (any assignment failed) → `"Paper added with warnings"` with `variant: "destructive"` and description `"The paper was added, but <failed assignment(s)> — you may need to assign the project/tag manually."`. The static `"project/tag manually"` suffix is intentional user-guidance; the *variable* failure-label phrasing is what tells the user which specific assignment(s) failed.
+- Hard insert failure (`papers` table insert error) → unchanged: destructive `"Error adding paper"` / `"Duplicate paper"` toast and `return false`.
+**Return contract:** `addPaperManually` continues to return `Promise<boolean>`. On partial-success it returns `true` because the paper IS created and the dialog should close — the destructive toast plus the missing chips in the row are the user-visible signal that manual reassignment is needed. Hard insert failure still returns `false`. **The return-type contract is unchanged from PR #76; only the toast-fidelity changed.**
+**Files changed:**
+- `src/hooks/papers/usePaperMutations.ts` — `addPaperManually` captures both RPC errors into `assignmentWarnings`; chooses success-vs-warning toast at the end; new code comment documents the partial-success rationale and points at the bulk-import precedent.
+- `src/hooks/papers/__tests__/usePaperMutations.test.ts` — **5 new tests** in a new `describe("usePaperMutations – addPaperManually assignment-failure visibility", …)` block: (1) both assignments succeed → `true` + normal `"Paper added manually"` toast + RPCs called with correct args + invalidate fired + no warning toast; (2) only project assignment fails → `true` + warning toast (variant `"destructive"`, description contains `"project assignment failed"`, **does not** contain `"tag assignment failed"` — the static suffix `"project/tag manually"` is allowed) + no normal success toast; (3) only tag assignment fails → symmetric to (2); (4) both fail → `true` + single warning toast whose description names **both** failures; (5) no assignments requested → `true` + normal success toast + RPCs **not** called.
+**Test counts:** Vitest **268/268** (263 prior + 5 new). Playwright unchanged at **71/71** and not re-run for this fix — the failure paths require deterministic Supabase RPC failure injection that isn't available in the current single-real-account harness, and the assertions are stronger at the hook unit level. Same rationale and same precedent as PR #125.
+**Verification:** `npx tsc --noEmit` clean, `npx vitest run` 268/268, `npx eslint` on touched files reports only the pre-existing `addPaperManually` `react-hooks/exhaustive-deps` warning that already exists on `main` (untouched by this fix; identical on `main` and on the branch).
+**No migration needed.** No DB changes, no RPC changes, no RLS changes, no Edge Function changes.
+**Explicit non-goals.** No change to `updatePaper`, `deletePaper`, `bulkImportPapers`, `bulkImportFromParsedData`, `bulkDeletePapers`, `bulkSetProjects`, `bulkSetTags`, `reevaluateStudyTypes`, `reevaluateKeywords`, AI single / bulk analysis flow, attachments, Quick-Add Drive URL, search, filters, presets, notes UI, `AddPaperDialog`'s close-on-true behavior (the partial-success path returns `true` and the dialog still closes by design — symmetric with bulk import), or any commercial / billing planning doc.

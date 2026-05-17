@@ -230,6 +230,178 @@ describe("usePaperMutations – addPaperManually return value", () => {
   });
 });
 
+// ── addPaperManually assignment-failure visibility ────────────────────
+//
+// These tests lock in the mirror of the bulk-import "assignment warnings"
+// pattern (`useBulkMutations.ts`) for the single-paper manual-add flow.
+// When the paper row is successfully inserted but the follow-up
+// `set_paper_projects` / `set_paper_tags` RPCs fail, the function must:
+//   • still invalidate the list cache (so the new paper appears),
+//   • surface a destructive "Paper added with warnings" toast naming the
+//     failed assignment(s),
+//   • still return `true` (the paper exists, the dialog should close —
+//     the destructive toast + missing chips in the row are the user-
+//     visible signal that manual reassignment is needed).
+
+describe("usePaperMutations – addPaperManually assignment-failure visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: paper row insert succeeds. Individual tests override RPC outcomes.
+    mockSingle.mockResolvedValue({ data: { id: "new-paper-id" }, error: null });
+  });
+
+  it("returns true with normal success toast when both assignments succeed", async () => {
+    mockRpc.mockResolvedValue({ error: null });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData(), {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+      });
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockRpc).toHaveBeenCalledWith(
+      "set_paper_projects",
+      expect.objectContaining({ p_paper_id: "new-paper-id", p_project_ids: ["proj-1"] }),
+    );
+    expect(mockRpc).toHaveBeenCalledWith(
+      "set_paper_tags",
+      expect.objectContaining({ p_paper_id: "new-paper-id", p_tag_ids: ["tag-1"] }),
+    );
+    expect(mockInvalidateAndRefetch).toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+    // No "Paper added with warnings" toast on the full-success path.
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added with warnings" }));
+  });
+
+  it("returns true and shows a warning toast when only project assignment fails", async () => {
+    // First RPC (`set_paper_projects`) fails; second (`set_paper_tags`) succeeds.
+    mockRpc
+      .mockResolvedValueOnce({ error: { message: "project RPC failed" } })
+      .mockResolvedValueOnce({ error: null });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData(), {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+      });
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockInvalidateAndRefetch).toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Paper added with warnings",
+      description: expect.stringContaining("project assignment failed"),
+      variant: "destructive",
+    }));
+    // The warning must NOT mention tag — tag succeeded.
+    const warningCalls = mockToast.mock.calls.filter(
+      (c: unknown[]) => (c[0] as { title?: string })?.title === "Paper added with warnings",
+    );
+    expect(warningCalls).toHaveLength(1);
+    // The variable failure label must not mention tags. The static suffix
+    // ("you may need to assign the project/tag manually") intentionally
+    // names both, so we assert against the specific failure phrase, not
+    // the substring "tag" in isolation.
+    expect((warningCalls[0][0] as { description: string }).description).not.toContain("tag assignment failed");
+    // The normal success toast must NOT fire on partial-success paths.
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+  });
+
+  it("returns true and shows a warning toast when only tag assignment fails", async () => {
+    // First RPC (`set_paper_projects`) succeeds; second (`set_paper_tags`) fails.
+    mockRpc
+      .mockResolvedValueOnce({ error: null })
+      .mockResolvedValueOnce({ error: { message: "tag RPC failed" } });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData(), {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+      });
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockInvalidateAndRefetch).toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Paper added with warnings",
+      description: expect.stringContaining("tag assignment failed"),
+      variant: "destructive",
+    }));
+    const warningCalls = mockToast.mock.calls.filter(
+      (c: unknown[]) => (c[0] as { title?: string })?.title === "Paper added with warnings",
+    );
+    expect(warningCalls).toHaveLength(1);
+    // The variable failure label must not mention project. The static
+    // suffix names both for user guidance; assert against the specific
+    // failure phrase.
+    expect((warningCalls[0][0] as { description: string }).description).not.toContain("project assignment failed");
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+  });
+
+  it("returns true and shows a warning toast mentioning both when both assignments fail", async () => {
+    mockRpc
+      .mockResolvedValueOnce({ error: { message: "project RPC failed" } })
+      .mockResolvedValueOnce({ error: { message: "tag RPC failed" } });
+
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData(), {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+      });
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockInvalidateAndRefetch).toHaveBeenCalled();
+    const warningCalls = mockToast.mock.calls.filter(
+      (c: unknown[]) => (c[0] as { title?: string })?.title === "Paper added with warnings",
+    );
+    expect(warningCalls).toHaveLength(1);
+    const description = (warningCalls[0][0] as { description: string }).description;
+    expect(description).toContain("project assignment failed");
+    expect(description).toContain("tag assignment failed");
+    expect((warningCalls[0][0] as { variant: string }).variant).toBe("destructive");
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+  });
+
+  it("does not call assignment RPCs and shows normal success toast when no assignments requested", async () => {
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    let returnValue: boolean | undefined;
+    await act(async () => {
+      returnValue = await result.current.addPaperManually(validManualData());
+    });
+
+    expect(returnValue).toBe(true);
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added manually" }));
+    expect(mockToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Paper added with warnings" }));
+  });
+});
+
 // ── updatePaper return-value contract ─────────────────────────────────
 //
 // These tests lock in the contract that drives the Edit Paper dialog's
