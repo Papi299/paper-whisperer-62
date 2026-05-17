@@ -101,18 +101,55 @@ export function usePaperMutations(
 
       const paperId = (insertedPaper as Paper).id;
 
-      // Assign project/tags if specified
+      // Assign project/tags if specified. Failures here are NOT treated as a
+      // hard rollback — the paper row already exists and removing it would
+      // surprise the user. Instead, we mirror the existing bulk-import
+      // pattern in `useBulkMutations.ts` (PR for "Bulk import assignment-
+      // failure visibility"): capture each RPC's `{ error }`, push a short
+      // human-readable label into `assignmentWarnings`, and surface a single
+      // destructive toast at the end ("Paper added with warnings") with a
+      // concise description that names which assignment(s) failed. The
+      // function still returns `true` on this partial-success path because
+      // the paper IS created and the dialog should close — the destructive
+      // toast plus the missing chips in the row are the user-visible signal
+      // that manual reassignment is needed.
+      const assignmentWarnings: string[] = [];
+
       if (options?.targetProjectIds && options.targetProjectIds.length > 0) {
-        await supabase.rpc("set_paper_projects", { p_paper_id: paperId, p_project_ids: options.targetProjectIds });
+        const { error: projError } = await supabase.rpc("set_paper_projects", {
+          p_paper_id: paperId,
+          p_project_ids: options.targetProjectIds,
+        });
+        if (projError) {
+          assignmentWarnings.push("project assignment failed");
+        }
       }
       if (options?.targetTagIds && options.targetTagIds.length > 0) {
-        await supabase.rpc("set_paper_tags", { p_paper_id: paperId, p_tag_ids: options.targetTagIds });
+        const { error: tagError } = await supabase.rpc("set_paper_tags", {
+          p_paper_id: paperId,
+          p_tag_ids: options.targetTagIds,
+        });
+        if (tagError) {
+          assignmentWarnings.push("tag assignment failed");
+        }
       }
 
       // No optimistic insert — new paper may not match active server filter.
-      // Invalidate to refetch with current filters.
+      // Invalidate to refetch with current filters. Always invalidate so the
+      // newly-inserted row appears even when assignment(s) failed; without
+      // this, a partial-success would leave the user looking at a stale list
+      // and unable to see the paper that was actually created.
       invalidateAndRefetch();
-      toast({ title: "Paper added manually" });
+
+      if (assignmentWarnings.length > 0) {
+        toast({
+          title: "Paper added with warnings",
+          description: `The paper was added, but ${assignmentWarnings.join(" and ")} — you may need to assign the project/tag manually.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Paper added manually" });
+      }
       return true;
     },
     [userId, papers, projects, tags, normalizationConfig, normalize, invalidateAndRefetch, queryClient, toast],
