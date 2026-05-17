@@ -8,7 +8,7 @@ The dashboard loads a paginated, server-filtered, server-sorted list of papers. 
 
 **Hook:** `usePapers()` → `useInfiniteQuery` with PAGE_SIZE=100.
 
-**SELECT columns:** `id, user_id, title, authors, year, journal, pmid, doi, has_abstract, study_type, raw_study_type, statistical_methods, keywords, raw_keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url, tldr, insert_order, created_at, updated_at, paper_attachments(...)`.
+**SELECT columns:** `id, user_id, title, authors, year, journal, pmid, doi, has_abstract, study_type, raw_study_type, statistical_methods, keywords, raw_keywords, mesh_terms, substances, pubmed_url, journal_url, drive_url, tldr, notes, insert_order, created_at, updated_at, paper_attachments(...)`.
 
 **Excluded:** `abstract` (loaded on demand), `search_vector` (never sent to client).
 
@@ -40,12 +40,20 @@ Sort column and direction are query params. Changing sort only invalidates the p
 - `filterPaperIds` — pre-resolved IDs from keyword filter / tag filter / project filter / search
 - `yearFrom`, `yearTo` — year range
 - `studyTypes` — study type array
+- `notesPresence` — tri-state notes filter (`"all"` / `"has"` / `"none"`)
 
 `filterPaperIds` semantics:
 - `undefined` = filter still loading (show placeholder)
 - `null` = no active ID filter
 - `[]` = filter active but no matches
 - `[...ids]` = filter active, these IDs match
+
+`notesPresence` semantics (mirrors the list row sticky-note indicator's `paper.notes?.trim()` rule — NULL and whitespace-only both count as "no notes"):
+- `"all"` = no notes predicate applied (default)
+- `"has"` = only papers where `notes IS NOT NULL` AND contains at least one non-whitespace character
+- `"none"` = only papers where `notes IS NULL` OR contains only whitespace
+
+Predicate implementation lives in `applyFilterPredicates` in `src/lib/buildPapersQuery.ts` via PostgREST `match` against POSIX regex `[^[:space:]]` / `^[[:space:]]*$`.
 
 ### Keyword filter
 
@@ -63,11 +71,51 @@ Sort column and direction are query params. Changing sort only invalidates the p
 
 **Caching:** `staleTime: 30_000` (30 seconds). Keyed by filter params only (not sort).
 
-### Full-text search
+### Search (four mutually-exclusive modes)
 
-**RPC:** `search_papers_short(p_user_id, p_search_term)` for < 3 chars (ILIKE).
+The main search box routes to one of four mutually-exclusive paths based on the shape of the debounced (300 ms) query. Mode classification happens in `src/hooks/useFilterState.ts`; each mode fires at most one server-side query via `useQuery`.
 
-**Direct query:** For 3+ chars, uses `search_vector @@ websearch_to_tsquery('english', term)` with `ts_rank` ordering. GIN index `idx_papers_search_vector` provides efficient lookup.
+| User input | Mode | RPC | Server semantics |
+|---|---|---|---|
+| Empty / whitespace | None | (no query fires) | Read path runs without a search ID filter |
+| Unquoted, 1–2 chars | **Short ILIKE** | `search_papers_short(p_user_id, p_query)` | Per-field `ILIKE '%query%'` on title / abstract / journal / notes + `EXISTS` over `authors::jsonb` and `keywords::jsonb` arrays |
+| Unquoted, ≥3 chars | **Prefix-aware FTS** | `search_papers(p_user_id, p_query, p_limit, p_offset)` | `search_vector @@ to_tsquery('english', …)` — see prefix-tokenization rule below |
+| Quoted `"…"` non-empty | **Literal phrase** | `search_papers_short(p_user_id, <inner phrase>)` | Reuses the short-search RPC with the inner phrase. No stemming, no tokenizer, Unicode-safe, punctuation-preserving (e.g. `"COX-2"` works). |
+
+Phrase mode takes priority over FTS and short modes. Unterminated quotes, a single `"`, or `""` all fall back to unquoted routing. Mode classification is bit-identical to the README "Current search behavior" section.
+
+**Prefix-aware FTS tokenization** (`search_papers`, ≥3 chars). The RPC does **not** call `websearch_to_tsquery`. It strips the ten tsquery operator / control characters `& | ! ( ) : * < > ' " \` from the input, whitespace-splits, appends `:*` to each non-empty token, `&`-joins the tokens, and feeds the result to `to_tsquery('english', …)`. So `guideli` matches `guideline` and result counts narrow monotonically as the user types. Unicode codepoints (Latin diacritics, Cyrillic, Hebrew, Arabic, CJK, etc.) are preserved — the operator blacklist is byte-safe by codepoint. Ranking is `ts_rank(search_vector, tsquery)` desc. Explicit `OR` and `-` exclusion are intentionally unsupported. (Migration: `20260417030000_prefix_search.sql`.)
+
+**Fields searched.** All three non-empty modes search the same **six** fields:
+
+- **title**
+- **abstract**
+- **authors**
+- **journal**
+- **notes**
+- **keywords**
+
+The FTS path consults the generated `papers.search_vector` tsvector; the short / phrase paths run per-field ILIKE / `EXISTS` over `jsonb_array_elements_text`. (Migrations: `20260417020000_add_notes_to_search.sql` added `notes`; `20260420010000_keywords_in_search_with_attribution.sql` added `keywords`.)
+
+**`search_vector` weight ladder.** The generated column concatenates per-field weighted tsvectors:
+
+- **A** = `title`
+- **B** = `abstract`
+- **C** = `journal`, `authors::text`, `keywords::text`
+- **D** = `notes`
+
+Title remains the dominant rank signal. GIN index `idx_papers_search_vector` is recreated on the rebuilt column.
+
+### Matched-field attribution
+
+Both `search_papers` and `search_papers_short` return six per-field booleans alongside the matching row:
+
+```
+matched_title, matched_abstract, matched_authors,
+matched_journal, matched_notes, matched_keywords
+```
+
+For the FTS path each flag is computed server-side by testing the field's own `to_tsvector('english', coalesce(field, ''))` against the same prefix-aware tsquery used in the `WHERE` clause; for the short / phrase paths each flag is the corresponding `ILIKE` / `EXISTS … ILIKE`. `useFilterState.ts` assembles a `Map<paper_id, MatchFlags>` (type defined in `src/hooks/papers/types.ts`) and threads it to `PaperList`, which renders an authoritative "Matched in: …" sub-line on each matching row in fixed UI order — **Title → Abstract → Authors → Journal → Notes → Keywords**. Attribution is **server-driven**; the client must not re-tokenize the query or re-derive the flags. (Migration: `20260420010000_keywords_in_search_with_attribution.sql`.)
 
 ## Abstract on-demand loading
 

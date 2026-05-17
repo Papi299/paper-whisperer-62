@@ -917,3 +917,26 @@ if (normalizedDoi) {
 **Verification:** `npx tsc --noEmit` clean. `npx vitest run` 276/276. `npx eslint` on the two touched source files: **0 errors, 2 warnings** — the 2 are the pre-existing `bulkImportPapers` / `bulkImportFromParsedData` `react-hooks/exhaustive-deps` warnings (`'projects', 'queryClient', and 'tags'` on each), untouched. **Pre-PR baseline was 3 warnings**; the `addPapers`-specific warning at the old line 135 is now gone with the function. Net **−1 lint warning, zero new warnings**.
 **No migration needed.** No DB changes, no RPC changes, no RLS changes, no Edge Function changes.
 **Explicit non-goals.** No change to `bulkImportPapers`, `bulkImportFromParsedData`, `safe_bulk_insert_papers`, `bulkDeletePapers`, `bulkSetProjects`, `bulkSetTags`, `reevaluateStudyTypes`, `reevaluateKeywords`, `addPaperManually`, `updatePaper`, `deletePaper`, AI flows, attachments, search, filters, presets, notes UI, `AddPaperDialog`, `Dashboard`, commercial / billing / mobile / store-readiness docs, or any architecture decision in `docs/decisions-and-triggers.md` (the existing PMID/DOI-only product decision is honored, not redefined). No fuzzy matching introduced; no title-based duplicate blocking re-introduced in any path.
+
+## Docs realignment — `architecture-read-path.md` post-PR #87/#88/#91/#92
+
+**Date:** May 2026
+**What:** Docs-only realignment of `docs/architecture-read-path.md` with the current search / read-path implementation. Closes out the search-doc consistency audit. No code, SQL, RPC, migration, Edge Function, schema, or behavior change. Same precedent as PR #94 ("Docs normalization for the search wave").
+**Why:** The "Full-text search" subsection still described an older path — `search_vector @@ websearch_to_tsquery('english', term)` as a direct query — that was superseded by:
+- **PR #87** (`20260417020000_add_notes_to_search.sql`) — added `notes` to `search_vector` at weight D and to the short-search ILIKE path.
+- **PR #88** (`20260417030000_prefix_search.sql`) — replaced `websearch_to_tsquery` with a prefix-aware tokenization in the `search_papers` RPC (strip 10 tsquery operators, whitespace-split, append `:*`, `&`-join, `to_tsquery('english', …)`). Unicode preserved. Explicit `OR` / `-` exclusion intentionally dropped.
+- **PR #91** (`20260420010000_keywords_in_search_with_attribution.sql`) — added `keywords::text` to `search_vector` at weight C; rebuilt both `search_papers` and `search_papers_short` to return six per-field `matched_*` booleans (server-driven "Matched in: …" attribution).
+- **PR #92** — added quoted phrase mode (`useFilterState.ts` routes `"…"` to `search_papers_short` with the inner phrase wrapped in `%…%`), no new SQL.
+
+The README "Current search behavior" and `docs/start-here.md` "Current search behavior — at a glance" sections were already accurate (added in the PR #94 normalization pass); only `architecture-read-path.md` had not been refreshed since the older `websearch_to_tsquery` path. This entry closes that gap.
+
+**Files changed:**
+- `docs/architecture-read-path.md` — (a) added `notes` to the papers list `SELECT columns` line; (b) added `notesPresence` to the `ServerFilterParams` field list with its tri-state `"all"` / `"has"` / `"none"` semantics and a one-line note on `applyFilterPredicates`' POSIX-regex `match` predicates; (c) replaced the "Full-text search" subsection with a 4-mode search table (empty / short ILIKE / prefix-aware FTS / quoted phrase) plus a concise prefix-tokenization paragraph that explicitly states `websearch_to_tsquery` is NOT used; (d) documented the six searched fields and the `search_vector` weight ladder (A=title, B=abstract, C=journal+authors+keywords, D=notes); (e) added a new "Matched-field attribution" subsection covering the six `matched_*` flags, the `MatchFlags` Map, the fixed UI order (Title → Abstract → Authors → Journal → Notes → Keywords), and the server-driven rule. References migrations `20260417020000` / `20260417030000` / `20260420010000` inline where useful.
+
+**Test counts:** Vitest unchanged at **276/276**. Playwright unchanged at **71/71**. Neither was re-run for this docs-only change.
+
+**Verification:** `git diff --stat` shows changes only under `docs/`. No source / SQL / config / dependency files touched. No markdown lint tool exists in the repo (`package.json` declares only `"lint": "eslint ."`); skipped accordingly.
+
+**No migration.** No DB / RPC / RLS / Edge Function changes.
+
+**Explicit non-goals.** `README.md` was not updated — it already carried the accurate "Current search behavior" copy and Vitest count is unchanged. `docs/start-here.md` was not updated — the "Current search behavior — at a glance" section there is already aligned; no handoff note added to keep the change strictly narrow. `docs/decisions-and-triggers.md` was not updated — no new architecture decision. No commercial / billing / mobile / store-readiness doc was touched. No code, no SQL, no migration, no Edge Function, no test, no dependency change in this PR.
