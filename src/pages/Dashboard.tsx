@@ -464,23 +464,27 @@ function DashboardContent() {
 
   const handleSavePaper = async (
     updates: Partial<PaperWithTags> & { tagIds: string[] }
-  ) => {
-    if (editingPaper) {
-      if (updates.keywords && Array.isArray(updates.keywords)) {
-        const mapped = updates.keywords.map(kw => {
-          const canonical = synonymLookup[kw.toLowerCase()];
-          return canonical || kw;
-        });
-        const seen = new Set<string>();
-        updates.keywords = mapped.filter(kw => {
-          const lower = kw.toLowerCase();
-          if (seen.has(lower)) return false;
-          seen.add(lower);
-          return true;
-        });
-      }
-      await updatePaper(editingPaper.id, updates);
+  ): Promise<boolean> => {
+    // Forward the boolean from `usePaperMutations.updatePaper` so
+    // `EditPaperDialog` can keep the dialog open + preserve edited values
+    // when any underlying write fails. If there is no `editingPaper` we have
+    // nothing to persist; resolving `false` here keeps the dialog open
+    // defensively (the menu UX should never reach this state).
+    if (!editingPaper) return false;
+    if (updates.keywords && Array.isArray(updates.keywords)) {
+      const mapped = updates.keywords.map(kw => {
+        const canonical = synonymLookup[kw.toLowerCase()];
+        return canonical || kw;
+      });
+      const seen = new Set<string>();
+      updates.keywords = mapped.filter(kw => {
+        const lower = kw.toLowerCase();
+        if (seen.has(lower)) return false;
+        seen.add(lower);
+        return true;
+      });
     }
+    return await updatePaper(editingPaper.id, updates);
   };
 
   if (loading && papers.length === 0) {

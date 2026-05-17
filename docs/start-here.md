@@ -434,6 +434,12 @@ PMID **`41912805`** is now the established manual smoke case for the `fetch-pape
 
 Future PubMed-import work that touches the parser should re-test this case. (Smoke a known-good simple PMID alongside, to confirm personal-author behavior is unchanged.)
 
+## Edit Paper dialog stays open on save failure (May 2026)
+
+Fixed the symmetric counterpart to the prior "Manual-add dialog UX fix": `EditPaperDialog` was closing even when the underlying update failed, losing the user's edited values and giving the impression the save had succeeded. `usePaperMutations.updatePaper` now returns `Promise<boolean>` — `false` on every handled failure path (missing `userId`, papers row UPDATE error, `set_paper_tags` error, `set_paper_projects` error), `true` only after every requested write succeeds. `EditPaperDialog.handleSave` reads the boolean and gates `onOpenChange(false)` on `true`; on `false` the dialog stays open with every edited field intact. Existing rollback, destructive-toast, and optimistic-update behavior are preserved verbatim — only the return contract changed.
+
+`Dashboard.handleSavePaper` forwards the boolean. `usePaperAnalysisActions.UsePaperAnalysisActionsArgs.updatePaper` widened to `Promise<boolean>` so the real mutation drops in without a cast; the AI hook **does not** branch on the boolean (its existing error surface is unchanged). 6 new Vitest unit tests pin the contract: Vitest now **263/263** (257 prior + 6 new). Playwright unchanged at **71/71** — the new failure branch is unit-tested at the hook level rather than via synthetic Supabase failure injection in Playwright. No DB / RPC / RLS / Edge Function / migration / commercial-doc changes. See [migration-history.md](migration-history.md) for the full entry.
+
 ## Commercialization planning has started (docs-only PR)
 
 Commercialization planning for Paper Whisperer has begun. **Nothing in this area is implemented yet** — no billing, no entitlements, no quotas, no paywall, no mobile packaging. The current PR is **documentation-only** and captures the intended direction so future implementation PRs can work from an agreed model.

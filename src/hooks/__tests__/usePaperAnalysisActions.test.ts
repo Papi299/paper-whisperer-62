@@ -93,7 +93,7 @@ beforeEach(() => {
 
 describe("usePaperAnalysisActions — single-paper", () => {
   it("skips papers without an abstract — no fetch, no invoke, no update, no toast", async () => {
-    const updatePaper = vi.fn().mockResolvedValue(undefined);
+    const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const paperNoAbstract = makePaper({ id: "p-no-abs", has_abstract: false });
 
@@ -118,7 +118,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
   });
 
   it("analyzes one paper successfully and saves updates", async () => {
-    const updatePaper = vi.fn().mockResolvedValue(undefined);
+    const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const paper = makePaper({
       id: "p-1",
@@ -170,7 +170,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
   });
 
   it("shows the 'No abstract' destructive toast when fetchAbstract returns null and does not invoke or update", async () => {
-    const updatePaper = vi.fn().mockResolvedValue(undefined);
+    const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const paper = makePaper({ id: "p-null-abs" });
     mockFetchAbstract.mockResolvedValue(null);
@@ -201,7 +201,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
   });
 
   it("handles invoke error, surfaces 'AI Analysis failed' toast, and clears analyzing state", async () => {
-    const updatePaper = vi.fn().mockResolvedValue(undefined);
+    const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const paper = makePaper({ id: "p-err" });
     mockFetchAbstract.mockResolvedValue("abstract text");
@@ -235,7 +235,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
 
 describe("usePaperAnalysisActions — bulk", () => {
   it("exits early with destructive toast when no selected papers have abstracts", async () => {
-    const updatePaper = vi.fn().mockResolvedValue(undefined);
+    const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const p1 = makePaper({ id: "p1", has_abstract: false });
     const p2 = makePaper({ id: "p2", has_abstract: false });
@@ -267,7 +267,7 @@ describe("usePaperAnalysisActions — bulk", () => {
   });
 
   it("analyzes 2 selected papers successfully, sleeps once per success, and reports final counts", async () => {
-    const updatePaper = vi.fn().mockResolvedValue(undefined);
+    const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const p1 = makePaper({ id: "p1", title: "Paper One", study_type: null });
     const p2 = makePaper({ id: "p2", title: "Paper Two", study_type: null });
@@ -321,7 +321,7 @@ describe("usePaperAnalysisActions — bulk", () => {
     // Expected per-paper failure toast for p3 only.
     // Expected final summary: "1 succeeded, 2 failed out of 3 papers."
 
-    const updatePaper = vi.fn().mockResolvedValue(undefined);
+    const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const p1 = makePaper({ id: "p1", title: "Paper One", study_type: null });
     const p2 = makePaper({ id: "p2", title: "Paper Two", study_type: null });
