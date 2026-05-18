@@ -485,6 +485,26 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## SECURITY DEFINER RPC ownership enforcement (May 2026)
+
+Production-hardening migration that closes a confirmed defense-in-depth gap surfaced by the Production-Hardening audit. Four `SECURITY DEFINER` RPCs (`search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options`) previously accepted `p_user_id` and used it to scope their queries **without verifying it against `auth.uid()`**. Combined with SECURITY DEFINER (which bypasses table-level RLS), an authenticated user who knew another user's UUID could have called these RPCs and received paper IDs / match flags / ranking / keyword options for that user's library. Paper content stayed protected by RLS on the `papers` table itself, so the leak was bounded to IDs + existence-for-search-term + `matched_*` flags + ts_rank — but defense-in-depth on top of RLS is required.
+
+**Fix:** new migration `20260518010000_rpc_auth_uid_ownership_check.sql` recreates the four functions with an `auth.uid()` guard at the top of each body, mirroring `safe_bulk_insert_papers`:
+
+```sql
+IF p_user_id IS NULL OR p_user_id <> auth.uid() THEN
+  RAISE EXCEPTION 'Unauthorized: user mismatch';
+END IF;
+```
+
+`search_papers_short` and `get_keyword_options` were converted from `LANGUAGE sql` to `LANGUAGE plpgsql` to support the `IF / RAISE` guard; return shape, predicates, ORDER BY, and per-field flag expressions are byte-identical. `search_papers` and `filter_papers_by_keywords` were already PL/pgSQL — only the guard was inserted. **Signatures are bit-identical**, so no client code change is required and no generated types regeneration is needed. **For the normal-flow user (`p_user_id === auth.uid()`), behavior is unchanged.**
+
+Vitest unchanged at **276/276**. Playwright unchanged at **71/71** and not re-run from this branch — no live UI behavior changes for legitimate clients. **Local Supabase migration replay validated post-rebase:** after PR #131 + PR #132 restored end-to-end local replayability, `supabase stop --no-backup; supabase start` now applies **all 57 migrations** including this PR's `20260518010000` cleanly. The four hardened RPCs were verified post-replay to exist on the local DB, carry the `Unauthorized: user mismatch` guard, and preserve their pre-rebase signatures.
+
+**Deploy:** standard `supabase db push` against the live project — **no `--include-all` required**. After PR #131/#132's reconciliation deploy, the remote ledger's latest entry is `20260331010000`; this migration's `20260518010000` has a strictly later timestamp and is picked up by the CLI's default behavior. Run `supabase db push --dry-run` first to confirm `20260518010000` is the sole pending migration. **Independent of the frontend / Vercel deploy.**
+
+The audit also identified a separate, lower-risk client-side defense-in-depth opportunity (13 mutation call sites that could carry explicit `.eq("user_id", userId)` predicates). That work is **out of scope for this PR** and is the natural follow-up. See [migration-history.md](migration-history.md) for the full entry and [decisions-and-triggers.md](decisions-and-triggers.md) for the new architecture decision.
+
 ## Bulk-import duplicate/title-blocking audit — dead-code removal (May 2026)
 
 Closed out the PR #127 follow-up note flagging `useBulkMutations.ts:49-59` for an isomorphic title-blocking + loaded-array dedup violation. Audit found:

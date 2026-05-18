@@ -158,3 +158,32 @@ The decisions below are commercial / product decisions, not performance / archit
 **Rationale:** As commercialization, billing, mobile packaging, store submission, and AI quota work all begin in parallel, the rate of decisions outpaces what a single developer can hold in memory. Docs are the only durable record across Claude Code sessions and contributors. Stale or missing docs become a real failure mode for the owner and for future assistants.
 
 **Re-evaluation trigger:** explicit owner override only.
+
+---
+
+## Security decisions
+
+### S1. SECURITY DEFINER RPCs must enforce `auth.uid()` ownership
+
+**Decision:** Any `SECURITY DEFINER` Postgres function in this repo that accepts a `p_user_id` (or any other user-identifier) parameter and uses it to scope queries against user-owned data **must** verify it against `auth.uid()`. The standard guard is:
+
+```sql
+IF p_user_id IS NULL OR p_user_id <> auth.uid() THEN
+  RAISE EXCEPTION 'Unauthorized: user mismatch';
+END IF;
+```
+
+placed at the top of the function body. Equivalent alternative: drop the parameter and use `auth.uid()` directly in the function body. Both are acceptable; the explicit-guard form is preferred because it makes the security contract visible at the call site and matches the precedent set by `safe_bulk_insert_papers`.
+
+**Rationale:** `SECURITY DEFINER` runs with the function owner's privileges and **bypasses table-level RLS** inside the function. RLS on the underlying table is therefore not a sufficient safeguard when the function scopes queries by a client-supplied UUID. Without an `auth.uid()` check, an authenticated user who knows another user's UUID can call the function and receive that user's row IDs / metadata / aggregates — exactly the gap closed by the May 2026 migration `20260518010000_rpc_auth_uid_ownership_check.sql` for `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, and `get_keyword_options`.
+
+**Applies to (current inventory, all hardened or compliant):**
+- `safe_bulk_insert_papers` — guard already present (original precedent).
+- `set_paper_tags`, `set_paper_projects`, `bulk_set_paper_tags`, `bulk_set_paper_projects` — derive ownership from `auth.uid()` internally; no `p_user_id` parameter.
+- `bulk_update_study_types`, `bulk_update_keywords` — derive ownership from `auth.uid()` internally.
+- `get_duplicate_papers`, `merge_exact_duplicates` — `auth.uid()` only; no `p_user_id` parameter.
+- `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` — hardened by `20260518010000_rpc_auth_uid_ownership_check.sql`.
+
+**Required for any new `SECURITY DEFINER` RPC:** the migration creating it must include either the explicit guard or an `auth.uid()`-derived ownership pattern; review will reject SECURITY DEFINER RPCs that lack one of these.
+
+**Re-evaluation trigger:** if Supabase later supports a SECURITY DEFINER mode that re-applies RLS, this decision can be revisited; for now, RLS bypass inside SECURITY DEFINER is the documented Postgres behavior.
