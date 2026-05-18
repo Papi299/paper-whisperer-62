@@ -1233,3 +1233,56 @@ WHERE a.attname = 'search_vector'
 **Rollback safety:** the migration runs inside a transaction; if `20260331010000` fails partway through, the whole migration is atomically rolled back and the wrappers are not added. Production state reverts to "before `20260331010000`" with the six-field `search_vector` intact. The five repair entries in the ledger remain (they were written by separate `migration repair` calls and do not roll back with the failed `db push`), so subsequent `migration list --linked` would still show the five April versions as applied. That's still the desired end-state.
 
 **Non-goals carried over from PR #131** (all still apply): no frontend code, no Edge Functions, no RLS, no commercial / billing / mobile / store changes, no RPC return-shape changes, no PR #130 migration changes. The only delta from PR #131 is the structural fix inside `20260331010000` and the corrected deployment plan above.
+
+## SECURITY DEFINER RPC ownership enforcement (server-side defense-in-depth)
+
+**Date:** May 2026
+**What:** Server-side hardening migration `20260518010000_rpc_auth_uid_ownership_check.sql` recreates four `SECURITY DEFINER` RPCs to enforce that the client-supplied `p_user_id` matches `auth.uid()`. Closes a confirmed defense-in-depth gap surfaced by the Production-Hardening audit.
+**Functions hardened:**
+- `search_papers(UUID, TEXT, INTEGER, INTEGER)`
+- `search_papers_short(UUID, TEXT)`
+- `filter_papers_by_keywords(UUID, TEXT[])`
+- `get_keyword_options(UUID, UUID[], INT, INT, TEXT[])`
+**Why:** Each function is `SECURITY DEFINER` (bypasses table-level RLS) and used `p_user_id` to scope its queries (`WHERE p.user_id = p_user_id`) **without verifying the caller owns that UUID**. An authenticated user who knew another user's UUID could call these RPCs and receive paper IDs / match flags / ranking / keyword options for that user's library. Paper *content* stayed protected by RLS on the `papers` table itself, so the leak was bounded to paper IDs, paper-existence-for-a-given-search-term, ts_rank, and `matched_*` per-field booleans — but defense-in-depth on top of RLS is required.
+**Fix:** Each function body now opens with the same guard pattern used by `safe_bulk_insert_papers`:
+```sql
+IF p_user_id IS NULL OR p_user_id <> auth.uid() THEN
+  RAISE EXCEPTION 'Unauthorized: user mismatch';
+END IF;
+```
+A `NULL` `p_user_id` also raises, so the function never returns rows when the caller's identity cannot be verified. The error surfaces to the client via `supabase.rpc(...).error` and is caught by the existing `if (error) throw error` paths in `useFilterState.ts` and `usePapers.ts`. **For the normal-flow user (where `p_user_id === auth.uid()`), behavior is unchanged.**
+
+**Language change for two of the four.** `search_papers_short` and `get_keyword_options` were previously `LANGUAGE sql` (no support for `IF`/`RAISE`). They are recreated as `LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public` with `RETURN QUERY <original-SELECT>` wrapping the original body. Return shape, predicates, ORDER BY, per-field flag expressions, the CROSS JOIN LATERAL over the three jsonb arrays in `get_keyword_options`, the optional `p_paper_ids` / year-range / study-types filters, the prefix-aware FTS tokenization in `search_papers`, the synonym-map + NOT EXISTS double-negation AND semantics in `filter_papers_by_keywords` are all byte-identical to the prior definitions. `STABLE`, `SECURITY DEFINER`, and `SET search_path = public` are preserved.
+
+**Signatures preserved bit-for-bit** — no client code change required, no generated Supabase types regeneration needed. The four call sites in `useFilterState.ts` (`search_papers`, `search_papers_short` for both short-search and phrase-search paths, `filter_papers_by_keywords`) and the one in `usePapers.ts` (`get_keyword_options`) already pass `p_user_id: userId!` where `userId` comes from `useAuth().user.id`. **In all five client call sites, `p_user_id` is the authenticated user's ID** — there is no legitimate cross-user RPC scenario, so the guard is a pure security improvement with no normal-path behavior change.
+
+**Files changed:**
+- `supabase/migrations/20260518010000_rpc_auth_uid_ownership_check.sql` — new migration (4× DROP + CREATE + GRANT EXECUTE).
+- `docs/start-here.md` — handoff entry.
+- `docs/decisions-and-triggers.md` — new architecture decision: SECURITY DEFINER RPCs that accept user identifiers must validate `p_user_id = auth.uid()` (or derive identity from `auth.uid()` internally).
+- `docs/migration-history.md` — this entry.
+
+**Test counts:** Vitest unchanged at **276/276** (no source / test files touched). Playwright unchanged at **71/71** and not re-run from this branch — no live UI behavior changes for the normal-flow user; the new failure path is a deliberate server-side rejection that does not occur for legitimate clients. The repo's existing `e2e/search-attribution.spec.ts` and the read-path / mutation specs continue to exercise the post-migration RPCs without modification.
+
+**Verification:**
+- `npx tsc --noEmit`: clean.
+- `npx vitest run`: 276/276.
+- Structural sanity on the migration: 4 `DROP FUNCTION`, 4 `CREATE FUNCTION`, 4 `GRANT EXECUTE`, 4 `BEGIN` / 4 `END;` / 4 `$$;` — balanced.
+- **Local Supabase migration replay validated post-rebase** against the now-replayable migration chain delivered by PR #131 + PR #132 (see the two entries above). `supabase stop --no-backup; supabase start` applied **all 57 migrations** end-to-end, including this PR's `20260518010000_rpc_auth_uid_ownership_check.sql` as the final entry. The four hardened functions were verified post-replay to (a) exist on the local database, (b) carry the `Unauthorized: user mismatch` guard in their bodies, and (c) preserve their pre-rebase signatures and return shapes. The earlier note in this section saying local validation "could not be run" reflected the pre-rebase state when the migration chain was not yet locally replayable; it no longer applies.
+
+**Manual verification once deployed:**
+1. Same-user call succeeds for each RPC: confirm normal search (1-2 chars, 3+ chars, quoted phrase), keyword filter, and keyword dropdown all continue to return results in the user's own library.
+2. Cross-user attempt with another UUID fails with the `Unauthorized: user mismatch` Postgres error: e.g. from a second authenticated user, call `supabase.rpc('search_papers', { p_user_id: '<otherUUID>', p_query: 'test' })` and confirm the response carries `error.message === 'Unauthorized: user mismatch'`.
+3. Search-attribution Playwright spec (`e2e/search-attribution.spec.ts`) continues to pass against the migrated database.
+
+**Deploy:** standard Supabase migration apply (`supabase db push` against the live project). After PR #131 + PR #132 were merged and their reconciliation deploy was completed (the five April migrations were repair-marked applied; `20260331010000` was pushed via `--include-all`), the remote ledger's latest entry is `20260331010000`. This migration's `20260518010000_rpc_auth_uid_ownership_check.sql` has a strictly later timestamp, so **a plain `supabase db push` will pick it up — no `--include-all` flag is required**, and no `migration repair` step is needed for this migration. Run `supabase db push --dry-run` first to confirm `20260518010000` is the sole pending migration before applying. No Edge Function deploy required (no Edge Functions changed). **This migration is independent of the frontend / Vercel deploy.**
+
+**No frontend, RLS, Edge Function, schema, or commercial-doc changes.** No unrelated RPCs touched. No client code changed (signatures bit-identical). No generated `src/integrations/supabase/types.ts` regeneration required.
+
+**Rollback:** re-run the prior controlling migrations:
+- `20260420010000_keywords_in_search_with_attribution.sql` (restores prior `search_papers` + `search_papers_short`).
+- `20260403010000_add_filter_keywords_rpc.sql` (restores prior `filter_papers_by_keywords`).
+- `20260405010000_add_keyword_options_rpc.sql` (restores prior `get_keyword_options`).
+Rollback would re-open the defense-in-depth gap; only roll back if a normal-flow regression is observed (none expected — signatures and behavior for `p_user_id === auth.uid()` are unchanged).
+
+**Explicit non-goals.** No RLS policy change. No Edge Function change. No frontend code change. No tests added (the failure path requires cross-account RPC injection which the single-account E2E harness can't deterministically perform; documented manual smoke above mirrors the precedent for cross-user verification used in PR #96). No commercial / billing / mobile / store-readiness changes. No change to other RPCs (`safe_bulk_insert_papers`, `set_paper_tags`, `set_paper_projects`, `bulk_set_paper_tags`, `bulk_set_paper_projects`, `bulk_update_study_types`, `bulk_update_keywords`, `get_duplicate_papers`, `merge_exact_duplicates`) — these already enforce `auth.uid()` ownership internally and were not part of the audit finding. **Rebase note:** PR #130 was rebased on `main` after PR #131 + PR #132 were merged. The rebase touched only conflict-region docs (this file's entries above + `docs/start-here.md`'s entries above). The migration file `20260518010000_rpc_auth_uid_ownership_check.sql` and the four hardened RPC bodies were unaffected.
