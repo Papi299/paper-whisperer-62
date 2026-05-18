@@ -1112,3 +1112,124 @@ After this migration applies in production, future migrations (PR #130's `202605
 - **No change to PR #130's pending migration.** PR #130 sits on its own branch and is unaffected by this work; once both PRs land, PR #130 will also replay cleanly locally.
 - **No fuzzy matching introduced; no title-based duplicate blocking re-introduced.**
 - **No changes to `search_papers` / `search_papers_short` / `filter_papers_by_keywords` / `get_keyword_options` function bodies beyond what was strictly required for the schema drift.** Per-field `matched_*` attribution, prefix-aware tokenization, AND-semantics keyword filter, and ORDER BY behavior are all bit-identical to pre-PR.
+
+## `20260331010000` made production-safe after remote ledger-drift reconciliation
+
+**Date:** May 2026 (immediately follows PR #131).
+**What:** Urgent follow-up correction to `supabase/migrations/20260331010000_convert_columns_to_jsonb.sql`. The version merged in PR #131 had a **latent production regression risk** that surfaced during the post-merge remote reconciliation audit. This patch makes the entire schema-mutation portion of the migration conditional on the columns still being `text[]`, so production (where columns are already `jsonb`) is left strictly alone except for the addition of three IMMUTABLE wrapper functions.
+
+**Why:** A post-merge `supabase migration list --linked` revealed that the remote `supabase_migrations.schema_migrations` ledger is missing entries for **five April 2026 migrations** whose SQL effects are nevertheless present in the production schema:
+
+| Version | File | Effect verified present on remote |
+|---|---|---|
+| `20260417010000` | `add_notes_column.sql` | `papers.notes text NULL` exists |
+| `20260417020000` | `add_notes_to_search.sql` | `search_vector` references `notes` (weight D) |
+| `20260417030000` | `prefix_search.sql` | `search_papers` RPC uses prefix-aware tokenization |
+| `20260420010000` | `keywords_in_search_with_attribution.sql` | `search_vector` references `keywords` (weight C); `search_papers` / `search_papers_short` return six `matched_*` booleans |
+| `20260421010000` | `add_filter_presets.sql` | `filter_presets` table exists with 6 columns |
+
+This is the same Supabase/Lovable-dashboard schema-drift pattern that produced the `text[] → jsonb` divergence captured by PR #131 in the first place. The conclusion of the audit was unambiguous: **production schema is fully up-to-date with the application code; only the ledger has drifted.**
+
+**The latent bug:** the version of `20260331010000` merged in PR #131 unconditionally dropped `search_vector` and re-added it with **only four fields** (title / abstract / journal / authors — no `notes`, no `keywords`). On local fresh replay this is fine because later migrations (`20260417020000`, `20260420010000`) rebuild `search_vector` to the final six-field shape. But the production deploy plan uses `supabase migration repair --status applied <version>` to record the five April migrations as applied **without re-running their SQL** — meaning those later migrations would NOT rebuild `search_vector` on production. The unconditional DROP/ADD would therefore have **permanently lost `notes` and `keywords` from production's FTS**.
+
+**The fix:** wrap the `DROP COLUMN search_vector`, the `ALTER COLUMN ... TYPE jsonb USING to_jsonb(...)` block, the `ADD COLUMN search_vector ... GENERATED ALWAYS AS (...)` clause, and the `CREATE INDEX idx_papers_search_vector` inside the existing `IF v_data_type = 'ARRAY'` conditional. The wrappers stay unconditional at the top of the file (they're CREATE OR REPLACE so they're idempotent on local and additive on production).
+
+**Net behavior after the fix:**
+
+| Path | What runs | What changes |
+|---|---|---|
+| Fresh local replay (`data_type = 'ARRAY'`) | Wrappers created; DROP search_vector; convert 4 columns to jsonb; re-ADD search_vector with 4-field shape (authors via `_jsonb` wrapper); recreate GIN index | Local schema converges to jsonb. Later migrations `20260417020000` and `20260420010000` rebuild `search_vector` to its final 6-field shape. |
+| Production (`data_type = 'jsonb'`) | Wrappers created. Entire conditional block skipped. | Three new helper functions in `public` schema. **`search_vector` and its GIN index are untouched** — production's existing 6-field generated column (`to_tsvector('english'::regconfig, …)` over title / abstract / journal / authors / keywords / notes) stays exactly as-is. |
+
+**Files changed (in this follow-up):**
+
+- `supabase/migrations/20260331010000_convert_columns_to_jsonb.sql` — restructured. The wrapper-function declarations and the `DO $$ … END $$` block are the only top-level statements. All schema mutation (DROP / ALTER TYPE / ADD / CREATE INDEX) is inside the `IF v_data_type = 'ARRAY'` branch.
+- `docs/migration-history.md` — this entry.
+- `docs/start-here.md` — handoff note updated so future sessions follow the corrected deployment plan instead of PR #131's original plan.
+
+**Verification (local):**
+
+- `supabase stop --no-backup; supabase start` — exit 0. All 56 migration files applied end-to-end.
+- Migration ledger count: **56** (matches `ls supabase/migrations/*.sql | wc -l`).
+- Final `papers` column types: `authors`, `keywords`, `mesh_terms`, `substances` all `jsonb`; `search_vector` is `tsvector`.
+- Final `search_vector` generation expression: **all six fields present** (title / abstract / journal / authors / keywords / notes), via the wrapper functions, with weights A / B / C / C / C / D.
+- All three wrapper functions present: `immutable_english_tsvector_text`, `immutable_english_tsvector_textarr`, `immutable_english_tsvector_jsonb`.
+- `npx tsc --noEmit` clean.
+- `npx vitest run` 276/276 unchanged.
+
+### Corrected remote deployment plan
+
+> ⚠️ **Replace the original PR #131 plan with this one.** The PR #131 plan said "`supabase db push --include-all`" applies only `20260331010000`. That is now incorrect on two counts: (a) the dry-run showed `db push --include-all` would also try to re-apply the five April migrations whose SQL is already applied; (b) `20260331010000`'s previous unconditional `search_vector` rebuild would have regressed production FTS.
+
+**The safe deploy sequence, in this exact order:**
+
+```sh
+# Phase 1 — Reconcile the ledger drift.
+# `supabase migration repair --status applied <version>` writes the version into
+# `supabase_migrations.schema_migrations` WITHOUT running the migration's SQL.
+# This is the documented Supabase mechanism for recording out-of-band schema
+# changes that were applied via the dashboard.
+supabase migration repair --status applied 20260417010000
+supabase migration repair --status applied 20260417020000
+supabase migration repair --status applied 20260417030000
+supabase migration repair --status applied 20260420010000
+supabase migration repair --status applied 20260421010000
+
+# Phase 2 — Verify reconciliation.
+supabase migration list --linked
+#   Expected: the five April versions now have populated Remote columns.
+#   Only 20260331010000 should remain in the Local-only state.
+
+# Phase 3 — Dry-run the remaining push.
+supabase db push --dry-run --include-all
+#   Expected: lists exactly one pending migration:
+#     supabase/migrations/20260331010000_convert_columns_to_jsonb.sql
+#   If anything else is listed, STOP and investigate.
+
+# Phase 4 — Apply 20260331010000.
+supabase db push --include-all
+
+# Phase 5 — Verify on production.
+supabase migration list --linked
+#   Expected: 20260331010000 now in the remote ledger; all 56 versions present.
+```
+
+**Phase 5 — schema verification queries** (run in Supabase Studio SQL editor against the linked production project):
+
+```sql
+-- (A) Confirm the three wrapper functions now exist on production.
+SELECT proname
+FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace
+  AND proname IN (
+    'immutable_english_tsvector_text',
+    'immutable_english_tsvector_textarr',
+    'immutable_english_tsvector_jsonb'
+  )
+ORDER BY proname;
+-- Expected: 3 rows.
+
+-- (B) Confirm search_vector is STILL the six-field form (unchanged by 20260331010000).
+SELECT pg_get_expr(adbin, adrelid) AS search_vector_expr
+FROM pg_attrdef ad
+JOIN pg_attribute a ON a.attrelid = ad.adrelid AND a.attnum = ad.adnum
+WHERE a.attname = 'search_vector'
+  AND a.attrelid = 'public.papers'::regclass;
+-- Expected: byte-identical to the pre-deploy form — contains references to
+-- title, abstract, journal, (authors)::text, (keywords)::text, AND notes.
+-- The expression should NOT use the wrapper functions on production (production
+-- created search_vector inline before the wrappers existed; the wrappers are
+-- now defined but unused on production).
+
+-- (C) Smoke-test (in the running app):
+--   • Run a normal search query — confirm results render.
+--   • Confirm "Matched in: …" chips display for matching rows.
+--   • Confirm filter presets save / load.
+-- All should be indistinguishable from pre-deploy.
+```
+
+**If any of the Phase 5 queries returns unexpected output, STOP and report — do not attempt to fix forward without a new audit.**
+
+**Rollback safety:** the migration runs inside a transaction; if `20260331010000` fails partway through, the whole migration is atomically rolled back and the wrappers are not added. Production state reverts to "before `20260331010000`" with the six-field `search_vector` intact. The five repair entries in the ledger remain (they were written by separate `migration repair` calls and do not roll back with the failed `db push`), so subsequent `migration list --linked` would still show the five April versions as applied. That's still the desired end-state.
+
+**Non-goals carried over from PR #131** (all still apply): no frontend code, no Edge Functions, no RLS, no commercial / billing / mobile / store changes, no RPC return-shape changes, no PR #130 migration changes. The only delta from PR #131 is the structural fix inside `20260331010000` and the corrected deployment plan above.
