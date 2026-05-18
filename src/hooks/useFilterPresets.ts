@@ -295,7 +295,16 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
 
   const deletePresetMutation = useMutation({
     mutationFn: async ({ id }: { id: string; name: string }) => {
-      const { error } = await supabase.from("filter_presets").delete().eq("id", id);
+      // Defense-in-depth: explicit `user_id` filter alongside the row
+      // ID filter so a hypothetical RLS regression cannot allow a
+      // cross-user delete. Matches the existing `createPresetMutation`
+      // guard pattern.
+      if (!userId) throw new Error("Not signed in");
+      const { error } = await supabase
+        .from("filter_presets")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", userId);
       if (error) throw error;
     },
     onSuccess: (_data, variables) => {
@@ -321,10 +330,14 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
    */
   const updatePresetMutation = useMutation({
     mutationFn: async ({ id, payload }: { id: string; name: string; payload: PresetPayload }) => {
+      // Defense-in-depth: explicit `user_id` filter alongside the row
+      // ID filter — same rationale as `deletePresetMutation` above.
+      if (!userId) throw new Error("Not signed in");
       const { error } = await supabase
         .from("filter_presets")
         .update({ payload })
-        .eq("id", id);
+        .eq("id", id)
+        .eq("user_id", userId);
       if (error) throw error;
     },
     onSuccess: (_data, variables) => {
@@ -355,7 +368,14 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
    */
   const renamePresetMutation = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
-      const { error } = await supabase.from("filter_presets").update({ name }).eq("id", id);
+      // Defense-in-depth: explicit `user_id` filter alongside the row
+      // ID filter — same rationale as `deletePresetMutation` above.
+      if (!userId) throw new Error("Not signed in");
+      const { error } = await supabase
+        .from("filter_presets")
+        .update({ name })
+        .eq("id", id)
+        .eq("user_id", userId);
       if (error) throw error;
     },
     onSuccess: (_data, variables) => {

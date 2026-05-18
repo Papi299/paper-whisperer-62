@@ -38,7 +38,19 @@ const {
   const mockInsert = vi.fn(() => ({ select: mockSelect }));
   const mockRpc = vi.fn();
   const mockUpdateResolve = vi.fn();
-  const mockUpdateEq = vi.fn(() => mockUpdateResolve());
+  // `mockUpdateEq` returns a chainable thenable so the production code's
+  // `.update(x).eq("id", paperId).eq("user_id", userId)` two-eq chain
+  // resolves the same way as the legacy single-eq chain. Each `.eq` call
+  // is recorded on `mockUpdateEq.mock.calls`; the final `await` is what
+  // triggers `mockUpdateResolve()`.
+  const mockUpdateEq: ReturnType<typeof vi.fn> = vi.fn((..._args: unknown[]) => ({
+    eq: mockUpdateEq,
+    then: (onResolve: unknown, onReject: unknown) =>
+      (mockUpdateResolve() as Promise<unknown>).then(
+        onResolve as (v: unknown) => unknown,
+        onReject as (r: unknown) => unknown,
+      ),
+  }));
   const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
 
   // Preflight chain: from("papers").select("id").eq().eq().limit(1).maybeSingle()
@@ -711,6 +723,24 @@ describe("usePaperMutations – updatePaper return value", () => {
     expect(mockUpdate).toHaveBeenCalledWith({ title: "Edited" });
     expect(mockRollbackCache).not.toHaveBeenCalled();
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Paper updated" }));
+  });
+
+  it("scopes the update by both row id AND user_id (defense-in-depth on top of RLS)", async () => {
+    const { result } = renderHook(() =>
+      usePaperMutations(userId, emptyPapers, emptyProjects, emptyTags, undefined, emptyFilters, emptySort)
+    );
+
+    await act(async () => {
+      await result.current.updatePaper("paper-1", { title: "Edited" });
+    });
+
+    // The `.eq` chain on `update(...)` must include both filters in this
+    // order. Asserting on the recorded `mock.calls` is the most direct way
+    // to pin the predicate set; the existing test above already covers
+    // semantic success.
+    expect(mockUpdateEq).toHaveBeenCalledWith("id", "paper-1");
+    expect(mockUpdateEq).toHaveBeenCalledWith("user_id", userId);
+    expect(mockUpdateEq).toHaveBeenCalledTimes(2);
   });
 
   it("returns false and rolls back when the papers row UPDATE fails", async () => {

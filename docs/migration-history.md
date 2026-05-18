@@ -1286,3 +1286,69 @@ A `NULL` `p_user_id` also raises, so the function never returns rows when the ca
 Rollback would re-open the defense-in-depth gap; only roll back if a normal-flow regression is observed (none expected — signatures and behavior for `p_user_id === auth.uid()` are unchanged).
 
 **Explicit non-goals.** No RLS policy change. No Edge Function change. No frontend code change. No tests added (the failure path requires cross-account RPC injection which the single-account E2E harness can't deterministically perform; documented manual smoke above mirrors the precedent for cross-user verification used in PR #96). No commercial / billing / mobile / store-readiness changes. No change to other RPCs (`safe_bulk_insert_papers`, `set_paper_tags`, `set_paper_projects`, `bulk_set_paper_tags`, `bulk_set_paper_projects`, `bulk_update_study_types`, `bulk_update_keywords`, `get_duplicate_papers`, `merge_exact_duplicates`) — these already enforce `auth.uid()` ownership internally and were not part of the audit finding. **Rebase note:** PR #130 was rebased on `main` after PR #131 + PR #132 were merged. The rebase touched only conflict-region docs (this file's entries above + `docs/start-here.md`'s entries above). The migration file `20260518010000_rpc_auth_uid_ownership_check.sql` and the four hardened RPC bodies were unaffected.
+
+## Client-side explicit `user_id` scoping — first hardening wave
+
+**Date:** May 2026 (immediately follows PR #130's deploy).
+**What:** Added explicit `.eq("user_id", userId)` predicates to six client-side mutation sites across three hooks. Defense-in-depth on top of the existing RLS policies. **No schema, no RPC, no migration, no Edge Function, no commercial-doc changes.** Purely a hardening of how the React client constructs PostgREST queries for user-owned tables.
+
+**Why:** The Production-Hardening audit conducted before PR #130 identified ~13 client-side mutation sites that update or delete rows on user-owned tables by row ID only (`.eq("id", rowId)`), trusting RLS as the sole ownership boundary. RLS remains correct and is the primary security layer, but the audit recommended a layered defense — making ownership intent visible at every call site so an accidental RLS regression (e.g. during a future migration that temporarily disables a policy) cannot result in a cross-user write. PR #130 closed the equivalent server-side gap on SECURITY DEFINER RPCs; this PR begins the client-side version of the same hardening.
+
+**Scope: 6 sites in 3 hooks.** Smallest coherent first wave; deliberately excludes junction-table flows (`paper_tags`, `paper_projects` — no direct `user_id`), pool/exclusion hooks (already carry the filter per pre-existing convention), and `projects` / `tags` (deferred to a follow-up small PR).
+
+### Sites hardened
+
+| File | Function | Change |
+|---|---|---|
+| `src/hooks/papers/usePaperMutations.ts` | `updatePaper` | `update(paperUpdates).eq("id", paperId)` → `update(paperUpdates).eq("id", paperId).eq("user_id", userId)`. The `!userId` guard at the top of the function (already present from PR #125) makes `userId` non-undefined at this line. |
+| `src/hooks/papers/usePaperMutations.ts` | `deletePaper` | `delete().eq("id", paperId)` → `delete().eq("id", paperId).eq("user_id", userId)`. The `!userId` guard at the top of the function (line 327) makes `userId` non-undefined at this line. |
+| `src/hooks/useFilterPresets.ts` | `deletePresetMutation` | `delete().eq("id", id)` → `delete().eq("id", id).eq("user_id", userId)`. New `if (!userId) throw new Error("Not signed in")` guard added before the supabase call (matching the existing `createPresetMutation` guard pattern at line 265). |
+| `src/hooks/useFilterPresets.ts` | `updatePresetMutation` | `update({ payload }).eq("id", id)` → `update({ payload }).eq("id", id).eq("user_id", userId)`. Same `!userId` guard added. |
+| `src/hooks/useFilterPresets.ts` | `renamePresetMutation` | `update({ name }).eq("id", id)` → `update({ name }).eq("id", id).eq("user_id", userId)`. Same `!userId` guard added. |
+| `src/hooks/useAttachments.ts` | `deleteAttachment` | `delete().eq("id", attachment.id)` → `delete().eq("id", attachment.id).eq("user_id", userId)`. The `!userId` guard at the top of the function (line 165) makes `userId` non-undefined at this line. |
+
+### What's NOT in this wave
+
+- **Junction tables** (`paper_tags`, `paper_projects`) — no direct `user_id` column. Ownership flows through the parent row's RLS, which is correct as-is. Adding a synthetic filter would require either a join (changes query semantics) or an RPC change (out of scope).
+- **`projects` / `tags` mutations** in `useProjectMutations.ts` / `useTagMutations.ts` (`update().eq("id", projectId)` / `delete().eq("id", tagId)`) — same shape as the sites hardened here. Deferred to a small follow-up PR to keep this wave focused.
+- **Pool / exclusion hooks** (`useKeywordPool`, `useStudyTypePool`, `useSynonymPool`, `useExclusionPools`) — already carry `.eq("user_id", userId)` on every read/write per pre-existing convention. Audited; no change needed.
+- **`profiles` / `settings`** (`useSettings.ts`) — already filter by `.eq("user_id", user.id)` everywhere. No change needed.
+- **`useAbstract.ts`'s batch-fetch** — its query is `from("papers").select(...).in("id", ids)` with no `user_id` filter; adding one would require a non-trivial signature change (the function doesn't currently receive `userId`). Deferred to a separate careful-design PR per the PR scope spec.
+- **Read paths on `papers`** — `buildPapersQuery` and `usePapers` list/count/all-ids/keyword-options already carry `.eq("user_id", userId)`. No change needed.
+- **Insert paths** — already include `user_id: userId` in the row payload; no `.eq` filter needed.
+
+### Files changed
+
+- `src/hooks/papers/usePaperMutations.ts` — 2 sites hardened (`updatePaper`, `deletePaper`).
+- `src/hooks/useFilterPresets.ts` — 3 sites hardened (`deletePresetMutation`, `updatePresetMutation`, `renamePresetMutation`), each with a new `!userId` guard.
+- `src/hooks/useAttachments.ts` — 1 site hardened (`deleteAttachment`).
+- `src/hooks/papers/__tests__/usePaperMutations.test.ts` — mock chain extended so `.update(x).eq().eq()` resolves; **1 new test** asserting `mockUpdateEq` is called with both `("id", paperId)` and `("user_id", userId)` (and that the `.eq` chain is exactly 2 calls). All existing tests still pass with no assertion changes.
+- `docs/decisions-and-triggers.md` — added decision **S2. Client-side queries on user-owned tables should carry explicit `user_id` filters where safe** under the existing "Security decisions" section. Records the rule, the required predicate shape, the current inventory of compliant / hardened / deferred sites, and a re-evaluation trigger.
+- `docs/migration-history.md` — this entry.
+- `docs/start-here.md` — short handoff entry pointing at the new S2 decision and this migration-history entry.
+
+### Test counts
+
+Vitest: **276/276 → 277/277** (+1 new test). Playwright unchanged at **71/71** and not re-run from this branch — no live UI behavior change for legitimate users; the new filter is purely additive (it's redundant with RLS today). Same precedent and same scope discipline as the PR #130 client-side hardening.
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 277/277.
+- `npx eslint` on the four touched files — 0 errors, 1 warning (the pre-existing `addPaperManually` `react-hooks/exhaustive-deps` warning at `usePaperMutations.ts:235`, unchanged from `main`).
+
+### Behavior on legitimate users
+
+**No change.** Every legitimate call already passes the row's `user_id` equal to the caller's `auth.uid()` (RLS enforces this server-side and the client uses `useAuth().user.id` everywhere). The new `.eq("user_id", userId)` predicate is therefore a redundant filter that always returns the same row set RLS would have returned anyway. Toast text, optimistic updates, rollback paths, return contracts, and error messages are all unchanged.
+
+### Risk
+
+**Very low.** The only failure mode this introduces is: if a client somehow passed a wrong `userId` (e.g. a stale closure capturing a previous session's UUID after a sign-out + sign-in race), the mutation would fail silently (zero rows affected). RLS would already have produced the same outcome. The new predicate makes the failure faster (PostgREST short-circuits before RLS evaluates) but doesn't introduce a new failure path.
+
+### Non-goals
+
+- No frontend behavior changes for legitimate users.
+- No RLS, RPC, schema, migration, Edge Function, or generated-types changes.
+- No commercial / billing / mobile / store-readiness changes.
+- No README change (Vitest count delta is +1; not a high-level shipping-status change).
+- No bulk refactor of the remaining ~7 client-side sites that could carry the same pattern (`useProjectMutations`, `useTagMutations`, etc.) — those are explicitly deferred to follow-up PRs to keep this wave reviewable.

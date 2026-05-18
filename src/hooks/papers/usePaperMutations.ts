@@ -273,9 +273,17 @@ export function usePaperMutations(
         }),
       );
 
-      // Persist to DB
+      // Persist to DB. The explicit `.eq("user_id", userId)` is
+      // defense-in-depth on top of the `papers` table's RLS — RLS already
+      // restricts writes to rows owned by the calling user, but the
+      // client-side filter makes ownership intent explicit and prevents
+      // an accidental cross-user write if RLS were ever loosened.
       if (Object.keys(paperUpdates).length > 0) {
-        const { error } = await supabase.from("papers").update(paperUpdates).eq("id", paperId);
+        const { error } = await supabase
+          .from("papers")
+          .update(paperUpdates)
+          .eq("id", paperId)
+          .eq("user_id", userId);
         if (error) {
           rollbackCache(snapshot);
           toast({ title: "Error updating paper", description: error.message, variant: "destructive" });
@@ -341,8 +349,14 @@ export function usePaperMutations(
       adjustCount(-1);
       adjustFilteredCount(-1);
 
-      // 2. Delete from DB
-      const { error } = await supabase.from("papers").delete().eq("id", paperId);
+      // 2. Delete from DB. The explicit `.eq("user_id", userId)` is
+      // defense-in-depth on top of the `papers` table's RLS — same
+      // rationale as `updatePaper`'s ownership filter above.
+      const { error } = await supabase
+        .from("papers")
+        .delete()
+        .eq("id", paperId)
+        .eq("user_id", userId);
       if (error) {
         rollbackCache(snapshot);
         toast({ title: "Error deleting paper", description: error.message, variant: "destructive" });

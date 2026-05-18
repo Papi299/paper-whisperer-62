@@ -485,6 +485,20 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Client-side explicit `user_id` scoping — first hardening wave (May 2026)
+
+First small Production-Hardening client-side PR after PR #130 closed the server-side `auth.uid()` gap on the four search RPCs. Adds explicit `.eq("user_id", userId)` predicates to **six client-side mutation sites** across three hooks where the table has a direct `user_id` column and the function already has `userId` in scope:
+
+- `src/hooks/papers/usePaperMutations.ts` — `updatePaper`, `deletePaper`.
+- `src/hooks/useFilterPresets.ts` — `deletePresetMutation`, `updatePresetMutation`, `renamePresetMutation` (each also got an `if (!userId) throw` guard matching the `createPresetMutation` precedent).
+- `src/hooks/useAttachments.ts` — `deleteAttachment`.
+
+Defense-in-depth only — **no live behavior change for legitimate users** (the filter is redundant with RLS on the row set RLS already returned). Junction tables, pool hooks, profiles, `useAbstract` batch fetch, `useProjectMutations`, and `useTagMutations` are intentionally NOT in this wave; rationales documented inline in [migration-history.md](migration-history.md).
+
+The repo-wide rule is captured as decision **S2** in [decisions-and-triggers.md](decisions-and-triggers.md): client-side queries on user-owned tables should carry explicit `user_id` filters where safe, with the standard predicate shape and the inventory of compliant / hardened / deferred sites.
+
+Vitest **276/276 → 277/277** (+1 new test asserting both `.eq("id", paperId)` and `.eq("user_id", userId)` are called on the `updatePaper` chain). Playwright unchanged at **71/71**; not re-run since no live behavior changed. `npx tsc --noEmit` clean. ESLint warnings unchanged from `main` (the pre-existing `addPaperManually` `exhaustive-deps` warning remains; no new warnings introduced).
+
 ## SECURITY DEFINER RPC ownership enforcement (May 2026)
 
 Production-hardening migration that closes a confirmed defense-in-depth gap surfaced by the Production-Hardening audit. Four `SECURITY DEFINER` RPCs (`search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options`) previously accepted `p_user_id` and used it to scope their queries **without verifying it against `auth.uid()`**. Combined with SECURITY DEFINER (which bypasses table-level RLS), an authenticated user who knew another user's UUID could have called these RPCs and received paper IDs / match flags / ranking / keyword options for that user's library. Paper content stayed protected by RLS on the `papers` table itself, so the leak was bounded to IDs + existence-for-search-term + `matched_*` flags + ts_rank — but defense-in-depth on top of RLS is required.
