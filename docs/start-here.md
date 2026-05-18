@@ -450,7 +450,38 @@ All 56 migration files now apply cleanly end-to-end. Schema verified: the four j
 
 This unblocks local validation of every future migration. PR #130's pending `20260518010000_rpc_auth_uid_ownership_check.sql` (server-side RPC ownership hardening) is the first beneficiary — once both PRs land, PR #130 will replay cleanly locally.
 
-**Deploy-safety note:** because `20260331010000` has a timestamp earlier than several already-applied production migrations (`20260417010000`, `20260420010000`, `20260421010000`), `supabase db push` requires the **`--include-all`** flag to pick it up — without the flag the CLI's default behavior treats earlier-timestamped migrations as out-of-order and skips them. The migration is self-contained: it re-declares the three `immutable_english_tsvector_*` wrappers at the top of its body via `CREATE OR REPLACE FUNCTION` so production gets them (production's already-applied `20260305020000` was the pre-wrapper version). The recommended deploy sequence is `supabase db push --dry-run --include-all` to preview, then `supabase db push --include-all` to apply, then `supabase migration list --linked` to verify. The full deploy-safety audit (including how to verify remote column types via Supabase Studio) is in [migration-history.md](migration-history.md).
+**Deploy-safety note (SUPERSEDED — see corrected plan below):** the original PR #131 plan said `supabase db push --dry-run --include-all` followed by `supabase db push --include-all` would apply only `20260331010000`. **That plan is no longer correct.** Two post-merge findings invalidated it:
+
+1. **Ledger drift on five April migrations.** Post-merge `supabase migration list --linked` revealed that `20260417010000`, `20260417020000`, `20260417030000`, `20260420010000`, and `20260421010000` are missing from the remote `supabase_migrations.schema_migrations` ledger — even though their SQL effects are fully present in the production schema (verified column-by-column: `papers.notes` exists; `search_vector` references both `notes` and `keywords`; `search_papers` / `search_papers_short` return all six `matched_*` booleans; `filter_presets` table exists with all expected columns). Same Supabase/Lovable-dashboard schema-drift pattern that produced the `text[] → jsonb` divergence captured by PR #131. **`supabase db push --include-all` would attempt to re-run their SQL, causing collisions** (e.g. `column "notes" already exists`).
+2. **Latent regression in PR #131's `20260331010000`.** Its DROP / re-ADD of `search_vector` was unconditional. On production (where the six-field `search_vector` is already in place via the schema-drift route), it would drop the existing column and re-add a four-field version — **silently losing `notes` and `keywords` from FTS**.
+
+**The follow-up fix (this entry).** A subsequent PR makes the entire schema-mutation portion of `20260331010000` conditional on `data_type = 'ARRAY'` (i.e. only runs on fresh local replay where columns are still `text[]`). On production the conditional is skipped and the migration is **wrapper-creation-only**. The wrapper-function declarations stay unconditional at the top of the file so production gets them either way.
+
+**Corrected deploy sequence — replace the old plan with this:**
+
+```sh
+# Phase 1 — reconcile the ledger drift. Does NOT run any migration SQL.
+supabase migration repair --status applied 20260417010000
+supabase migration repair --status applied 20260417020000
+supabase migration repair --status applied 20260417030000
+supabase migration repair --status applied 20260420010000
+supabase migration repair --status applied 20260421010000
+
+# Phase 2 — verify only 20260331010000 is pending now.
+supabase migration list --linked
+supabase db push --dry-run --include-all
+#   Expected: ONLY 20260331010000_convert_columns_to_jsonb.sql is listed.
+
+# Phase 3 — apply the (now-safe) 20260331010000.
+supabase db push --include-all
+
+# Phase 4 — verify on production via Supabase Studio SQL editor:
+#   • The three immutable_english_tsvector_* wrappers exist.
+#   • search_vector is STILL the six-field form (unchanged by this migration).
+#   • Smoke-test search + filter presets in the live app.
+```
+
+The full deploy-safety audit (with the verification SQL for each phase, the Q4 evidence table, and the rationale for `migration repair` over `db push --include-all` for the five April versions) is in [migration-history.md](migration-history.md) under "`20260331010000` made production-safe after remote ledger-drift reconciliation". **Future sessions: do NOT follow PR #131's original deployment plan; use the four-phase sequence above.**
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
