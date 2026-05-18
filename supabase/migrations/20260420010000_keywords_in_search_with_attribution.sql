@@ -55,14 +55,18 @@
 -- it is re-added (sub-second at current scale, ~400 rows).
 ALTER TABLE papers DROP COLUMN IF EXISTS search_vector;
 
+-- Uses the `immutable_english_tsvector_*` wrappers from
+-- 20260305020000_add_full_text_search.sql (still present in the schema
+-- via CREATE OR REPLACE in the original migration). Tsvector outputs
+-- are byte-identical to calling `to_tsvector('english', x)` directly.
 ALTER TABLE papers ADD COLUMN search_vector tsvector
   GENERATED ALWAYS AS (
-    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(abstract, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(journal, '')), 'C') ||
-    setweight(to_tsvector('english', coalesce(authors::text, '')), 'C') ||
-    setweight(to_tsvector('english', coalesce(keywords::text, '')), 'C') ||
-    setweight(to_tsvector('english', coalesce(notes, '')), 'D')
+    setweight(immutable_english_tsvector_text(title), 'A') ||
+    setweight(immutable_english_tsvector_text(abstract), 'B') ||
+    setweight(immutable_english_tsvector_text(journal), 'C') ||
+    setweight(immutable_english_tsvector_jsonb(authors), 'C') ||
+    setweight(immutable_english_tsvector_jsonb(keywords), 'C') ||
+    setweight(immutable_english_tsvector_text(notes), 'D')
   ) STORED;
 
 CREATE INDEX IF NOT EXISTS idx_papers_search_vector
@@ -128,12 +132,12 @@ BEGIN
     -- same prefix-aware tsquery. If `search_vector @@ tsq` is true (WHERE
     -- clause), at least one of these will also be true (search_vector is
     -- the union of these per-field weighted tsvectors).
-    to_tsvector('english', coalesce(p.title, ''))            @@ v_ts_query AS matched_title,
-    to_tsvector('english', coalesce(p.abstract, ''))         @@ v_ts_query AS matched_abstract,
-    to_tsvector('english', coalesce(p.authors::text, ''))    @@ v_ts_query AS matched_authors,
-    to_tsvector('english', coalesce(p.journal, ''))          @@ v_ts_query AS matched_journal,
-    to_tsvector('english', coalesce(p.notes, ''))            @@ v_ts_query AS matched_notes,
-    to_tsvector('english', coalesce(p.keywords::text, ''))   @@ v_ts_query AS matched_keywords
+    to_tsvector('english'::regconfig, coalesce(p.title, ''))            @@ v_ts_query AS matched_title,
+    to_tsvector('english'::regconfig, coalesce(p.abstract, ''))         @@ v_ts_query AS matched_abstract,
+    to_tsvector('english'::regconfig, coalesce(p.authors::text, ''))    @@ v_ts_query AS matched_authors,
+    to_tsvector('english'::regconfig, coalesce(p.journal, ''))          @@ v_ts_query AS matched_journal,
+    to_tsvector('english'::regconfig, coalesce(p.notes, ''))            @@ v_ts_query AS matched_notes,
+    to_tsvector('english'::regconfig, coalesce(p.keywords::text, ''))   @@ v_ts_query AS matched_keywords
   FROM papers p
   WHERE p.user_id = p_user_id
     AND p.search_vector @@ v_ts_query

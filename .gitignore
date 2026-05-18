@@ -39,3 +39,4 @@ playwright-report/
 
 # Supabase CLI cache
 supabase/.temp/
+supabase/.branches/

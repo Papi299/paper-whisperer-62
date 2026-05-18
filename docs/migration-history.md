@@ -940,3 +940,175 @@ The README "Current search behavior" and `docs/start-here.md` "Current search be
 **No migration.** No DB / RPC / RLS / Edge Function changes.
 
 **Explicit non-goals.** `README.md` was not updated — it already carried the accurate "Current search behavior" copy and Vitest count is unchanged. `docs/start-here.md` was not updated — the "Current search behavior — at a glance" section there is already aligned; no handoff note added to keep the change strictly narrow. `docs/decisions-and-triggers.md` was not updated — no new architecture decision. No commercial / billing / mobile / store-readiness doc was touched. No code, no SQL, no migration, no Edge Function, no test, no dependency change in this PR.
+
+## Local migration replay — schema-drift + immutability fix wave
+
+**Date:** May 2026
+**What:** Made the full migration chain replayable from scratch via `supabase start` / `supabase db reset`. Five distinct issues blocked a clean replay; each is addressed here without changing production behavior. The work landed before any further DB migration (notably PR #130's `auth.uid()` RPC ownership hardening, which sits at `20260518010000`) so future migrations can be validated locally before deploy.
+**Why:** Until this wave, `supabase db reset` failed three times in a row at three different migrations. Local validation of every migration since `20260305020000` had been impossible without ad-hoc patches. The root causes accumulated over time as production schema diverged from the migration files via Supabase/Lovable dashboard edits.
+
+### Issue 1: `to_tsvector` immutability rejection on `search_vector` generated column
+
+**Where:** the `GENERATED ALWAYS AS (...) STORED` clause in `20260305020000_add_full_text_search.sql`, plus the two later rebuilds in `20260417020000_add_notes_to_search.sql` and `20260420010000_keywords_in_search_with_attribution.sql`.
+**Root cause:** PostgreSQL requires generated-column expressions to be IMMUTABLE. The two-argument `to_tsvector(text, text)` overload is STABLE (the first argument requires a `text → regconfig` resolution at call time), and `'english'::regconfig` alone was not sufficient on newer Postgres versions. Additionally, `jsonb_out` / `array_out` (used implicitly when casting jsonb or text[] to text) is STABLE, so `coalesce(authors::text, '')` is STABLE end-to-end even with the regconfig cast.
+**Fix:** introduce two explicitly-IMMUTABLE wrapper functions in `20260305020000_add_full_text_search.sql`:
+- `immutable_english_tsvector_text(text)` — for scalar text columns (title, abstract, journal, notes).
+- `immutable_english_tsvector_jsonb(jsonb)` — for jsonb columns (authors, keywords, mesh_terms, substances).
+- `immutable_english_tsvector_textarr(text[])` — companion wrapper kept for the pre-conversion path (see Issue 4 below); `20260305020000`'s generated column uses it because columns are still `text[]` at that point in history.
+
+The wrapper bodies still call the underlying STABLE functions; the IMMUTABLE declaration is the standard documented Postgres workaround for this exact problem. Tsvector contents produced are byte-identical to the prior form — search ranking, GIN index contents, and `matched_*` attribution are unchanged.
+
+### Issue 2: `setval(seq, 0)` rejected on empty `papers` table
+
+**Where:** `20260326000000_add_insert_order_column.sql` line 25.
+**Root cause:** The migration's final statement `SELECT setval('papers_insert_order_seq', COALESCE((SELECT MAX(insert_order) FROM papers), 0))` falls back to `0` on an empty table. PostgreSQL sequences have a minimum value of `1`, so `setval(seq, 0)` raises `value 0 is out of bounds`. Production hit `MAX(insert_order) ≥ 1` at migration time (the table had data), so the latent bug was never exercised there.
+**Fix:** switch to the 3-arg form `setval(seq, COALESCE(MAX, 1), EXISTS(SELECT 1 FROM papers))`. When rows exist the behavior is bit-identical to the original (next `nextval()` returns `MAX+1`). When the table is empty, `setval(seq, 1, false)` means the next `nextval()` returns `1`.
+
+### Issue 3: `authors`/`keywords`/`mesh_terms`/`substances` schema drift (text[] → jsonb)
+
+**Where:** column-type mismatches across the late-March / April 2026 migrations.
+**Root cause:** Production altered all four columns from `text[]` to `jsonb` via the Supabase/Lovable dashboard between the March RPC wave (which used `unnest(text[])`) and the April RPC wave (which uses `jsonb_array_elements_text(jsonb)` and `COALESCE(col, '[]'::jsonb)`). No migration captured the conversion. The drift was hinted at in code comments — `20260330010000_add_raw_keywords_column.sql` literally states "The keywords column is jsonb in the live database (altered from text[] by Supabase/Lovable)" — but never fixed in the repo. Fresh local replays diverged from production schema, breaking the April-onwards migrations.
+**Fix:** new migration **`20260331010000_convert_columns_to_jsonb.sql`**, placed between the March and April waves. It:
+1. Drops `search_vector` (depends on `authors`).
+2. Conditionally converts the four columns from `text[]` to `jsonb` via an `information_schema.columns` probe — runs only when the column is still `text[]` (fresh local replay). On production (columns already `jsonb`) the `DO` block is a no-op.
+3. Re-sets jsonb defaults (`'[]'::jsonb`).
+4. Re-adds `search_vector` using the `immutable_english_tsvector_jsonb` wrapper.
+5. Recreates the GIN index.
+
+The two later search_vector rebuilds (`20260417020000_add_notes_to_search.sql` and `20260420010000_keywords_in_search_with_attribution.sql`) were updated to use the `_jsonb` wrapper for `authors` (and for `keywords` in 20260420) since the columns are jsonb from `20260331010000` forward.
+
+### Issue 4: `raw_keywords = keywords` assignment-cast type mismatch
+
+**Where:** `20260330010000_add_raw_keywords_column.sql` line 14.
+**Root cause:** the UPDATE assigns `text[]` to a `jsonb` column on local fresh replay. PostgreSQL assignment-casts do not implicitly convert `text[]` to `jsonb`, and direct `text[]::jsonb` is rejected ("cannot cast type text[] to jsonb").
+**Fix:** wrap the RHS in `to_jsonb(keywords)`. `to_jsonb` accepts any input type — for `text[]` it returns the equivalent jsonb array; for jsonb it is identity. Works under both local (pre-conversion) and production (post-conversion) shapes.
+
+### Issue 5: leftover Supabase CLI local-state directory
+
+**Where:** `supabase/.branches/` created by `supabase start`.
+**Fix:** added to `.gitignore` alongside the existing `supabase/.temp/` entry. Local-only state; should never be committed.
+
+### Files changed
+
+- `supabase/migrations/20260305020000_add_full_text_search.sql` — added the three wrapper functions; generated column now uses `_textarr(authors)` (text[] at this point).
+- `supabase/migrations/20260326000000_add_insert_order_column.sql` — switched `setval` to the 3-arg form; added clarifying comment.
+- `supabase/migrations/20260330010000_add_raw_keywords_column.sql` — `keywords` → `to_jsonb(keywords)` in the backfill UPDATE; added clarifying comment.
+- `supabase/migrations/20260331010000_convert_columns_to_jsonb.sql` — **new** migration capturing the schema drift; idempotent via `information_schema` probe.
+- `supabase/migrations/20260417020000_add_notes_to_search.sql` — generated column switched to `_jsonb(authors)`.
+- `supabase/migrations/20260420010000_keywords_in_search_with_attribution.sql` — generated column switched to `_jsonb(authors)` and `_jsonb(keywords)`. Additionally, the **six `matched_*` per-field attribution expressions** inside the `search_papers` RPC body (which run inside a `SELECT` and were not subject to the IMMUTABLE check) were also updated from bare `to_tsvector('english', …)` to `to_tsvector('english'::regconfig, …)`. These six lines were operationally fine before the edit (STABLE is acceptable inside `SELECT`) — the change is for consistency so every `to_tsvector(...)` call in the three migrations uses `::regconfig` (either directly in the RPC body or via the IMMUTABLE wrapper for generated columns). Tsvector outputs are byte-identical; ranking and `matched_*` attribution behavior unchanged.
+- `.gitignore` — added `supabase/.branches/`.
+
+### Production impact
+
+**For each modified historical migration**, the edit either:
+- Adds new objects via `CREATE OR REPLACE FUNCTION` (the three immutability wrappers) — production gets the wrappers when the new conversion migration runs.
+- Changes only the syntactic form of an expression that is bit-equivalent at runtime (the wrapper-call rewrites of `to_tsvector('english', x)`; the `setval` 3-arg form when rows exist; the `to_jsonb(keywords)` form when `keywords` is already jsonb). Production's existing applied state is unaffected — Supabase tracks already-applied migrations by version and doesn't re-run them.
+
+**The new conversion migration `20260331010000`** will be applied to production once via `supabase db push`. The DO-block conditional means it is a structural no-op for the four columns (they're already jsonb on production). The migration's net effect on production is: drop+recreate `search_vector` using the wrapper functions, and recreate the GIN index. Same tsvector contents, same search behavior — only the underlying parse-tree expression changes (and the wrappers are added).
+
+**`search_vector` is briefly absent during the transaction** for both production and local replay. Supabase migrations run inside a transaction so the window is one transaction long (sub-second at current row count). For a single-user app this is effectively no downtime. Same risk profile as PR #91 (`20260420010000`) which also dropped+recreated `search_vector` with no incident.
+
+### Verification
+
+- **`supabase start` ran clean.** All 56 migration files applied successfully end-to-end. The migration ledger contains every version from `20260203072053` through `20260421010000`, including the new `20260331010000`.
+- **Schema check (via `docker exec ... psql`):** `papers.authors / keywords / mesh_terms / substances` are all `jsonb` post-replay. `search_vector` exists as `tsvector`. `has_abstract`, `insert_order`, `notes`, `raw_keywords`, `tldr` all present.
+- **Function inventory check:** 16 expected functions exist, including the three new `immutable_english_tsvector_*` wrappers and every RPC the application needs (`search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options`, `safe_bulk_insert_papers`, `set_paper_tags`, `set_paper_projects`, `bulk_set_paper_tags`, `bulk_set_paper_projects`, `bulk_update_keywords`, `bulk_update_study_types`, `get_duplicate_papers`, `merge_exact_duplicates`).
+- **`npx tsc --noEmit`** clean (no source code changed; only migrations).
+- **`npx vitest run`** 276/276 (unchanged).
+- **Playwright** not re-run from this branch — no client-side behavior change. Suite stands at 71/71 on `main`.
+
+### Deploy-safety audit (required reading before applying to production)
+
+**Q1: Will `supabase db push` apply `20260331010000` cleanly to the linked remote even though later migrations (e.g. `20260420010000`, `20260421010000`) are already applied?**
+
+**Yes, but only with the `--include-all` flag** (or equivalent). `supabase db push --help` documents the flag as: *"Include all migrations not found on remote history table."* The default behavior of `db push` is to apply migrations whose version is **newer than the latest version already in the remote `supabase_migrations.schema_migrations` ledger**. A new migration with a timestamp earlier than the latest applied version is treated as "out of order" and is skipped without the flag.
+
+`20260331010000` has a timestamp earlier than `20260417010000` / `20260420010000` / `20260421010000`, which are already on production. The flag is required.
+
+**Q2: Does Supabase CLI allow applying a newly-added migration whose timestamp is earlier than already-applied remote migrations?**
+
+**Yes, via `--include-all`.** Supabase's migration ledger is content-addressed by `version` (the timestamp prefix), not by sequential ordering. Once `20260331010000` is applied, the ledger contains it alongside the later versions; subsequent `db push` runs see it as already applied and won't try to re-run it.
+
+**Q3: Does this require `supabase migration repair`, additional commands, or any special sequence?**
+
+**No `repair` is needed.** `supabase migration repair` is the tool for marking migrations as applied / reverted in the ledger **without running their SQL** — it's used when SQL was applied manually outside the migration system, or when an applied migration needs to be marked as reverted. **Neither situation applies here.** We genuinely want the SQL of `20260331010000` to be executed against production (to create the IMMUTABLE wrappers and to drop + re-add `search_vector` with the wrapper-based generated expression). The single `--include-all` flag is sufficient.
+
+**Q4: If you cannot verify this safely without applying changes, the safest deployment sequence is:**
+
+The CLI session that produced this audit was not linked to the remote Supabase project (no `supabase link` had been run, and the auth credentials necessary to link are not in this environment). The recommended deployment sequence — to be executed by the project owner with appropriate credentials, **in this exact order** — is:
+
+1. **Link the project (one-time, if not already linked):**
+   ```sh
+   supabase link --project-ref <project-ref>
+   ```
+
+2. **Dry-run the push first — observe what would change without applying:**
+   ```sh
+   supabase db push --dry-run --include-all
+   ```
+   Expected output: the CLI lists `20260331010000_convert_columns_to_jsonb.sql` as the only pending migration. If it lists anything else (e.g. one of the patched historical migrations re-appearing as pending), **stop and investigate** — Supabase tracks already-applied migrations by version, not by content, so the historical edits should not produce pending entries.
+
+3. **Apply for real:**
+   ```sh
+   supabase db push --include-all
+   ```
+
+4. **Verify post-apply:**
+   ```sh
+   supabase migration list --linked
+   ```
+   Expected: `20260331010000` is now in the remote ledger.
+
+5. **Smoke-test:** in the dashboard or via the running app, run a normal search query. Confirm results render and `Matched in: …` chips display. The tsvector contents are byte-identical to pre-migration, so behavior should be indistinguishable.
+
+**Rollback note.** If the migration fails partway, Supabase migrations run inside a transaction — the entire migration is rolled back atomically. The remote state would revert to "before `20260331010000`", with the original `search_vector` column still in place. No partial-state risk.
+
+**Q5: Non-destructive command run.** `supabase migration list` was attempted in this session; it failed with `Cannot find project ref. Have you run supabase link?`, confirming the session is not linked. The flag inventory (`supabase db push --help`) was inspected and is the basis of the answers above. The user should run `supabase migration list --linked` and `supabase db push --dry-run --include-all` against their actual linked project before the real push.
+
+### Self-contained migration: wrappers re-declared in `20260331010000`
+
+A critical deploy-safety issue surfaced during this audit and was fixed in the migration file:
+
+The original draft of `20260331010000` relied on the three `immutable_english_tsvector_*` wrapper functions being defined by `20260305020000_add_full_text_search.sql`. That works for fresh local replays (where `20260305020000` runs with the wrapper-augmented content). But **production already applied `20260305020000` with its original, pre-wrapper content** — and Supabase's migration ledger tracks it as applied, so the wrappers will not exist on production when `20260331010000` runs there.
+
+**Fix:** `20260331010000` now re-declares all three wrappers at the top of its body via `CREATE OR REPLACE FUNCTION`. On a fresh local replay the re-declaration is a no-op (the functions exist with identical bodies); on production it is the first definition. The migration is fully self-contained — it can stand alone on any database that has the `papers` table.
+
+### How to verify remote column types
+
+Run this query in Supabase Studio's SQL editor (or via any psql client against the linked project) to confirm `papers.authors`, `papers.keywords`, `papers.mesh_terms`, and `papers.substances` are all `jsonb` (as expected per the schema-drift assumption that this migration captures):
+
+```sql
+SELECT column_name, data_type, udt_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'papers'
+  AND column_name IN ('authors', 'keywords', 'mesh_terms', 'substances')
+ORDER BY column_name;
+```
+
+**Expected on production (current):**
+
+```
+ column_name | data_type | udt_name
+-------------|-----------|---------
+ authors     | jsonb     | jsonb
+ keywords    | jsonb     | jsonb
+ mesh_terms  | jsonb     | jsonb
+ substances  | jsonb     | jsonb
+```
+
+If any of the four rows shows `data_type = 'ARRAY'` instead of `jsonb`, **the schema-drift assumption is wrong for that environment** and the production state does not match what was assumed. In that case, the conditional `DO` block in `20260331010000` will detect the array type and run the conversion. Either way the migration is safe (the conditional handles both states) — but the audit assumption (production is already `jsonb`) should be re-verified before the push.
+
+### Future-migration testing now works
+
+After this migration applies in production, future migrations (PR #130's `20260518010000_rpc_auth_uid_ownership_check.sql` is the first beneficiary) can be validated locally via `supabase db reset` before being applied to production. This is the first time since the late-March / April 2026 schema drift that local migration replay has been viable.
+
+### Non-goals
+
+- **No source code changed.** Frontend, hooks, components, tests untouched.
+- **No commercial / billing / mobile / store-readiness changes.** Commercial planning docs untouched.
+- **No RLS policy changes.** The existing FORCE-RLS posture on `papers` and downstream tables is unchanged.
+- **No Edge Function changes.** `analyze-paper` and `fetch-paper-metadata` untouched.
+- **No change to PR #130's pending migration.** PR #130 sits on its own branch and is unaffected by this work; once both PRs land, PR #130 will also replay cleanly locally.
+- **No fuzzy matching introduced; no title-based duplicate blocking re-introduced.**
+- **No changes to `search_papers` / `search_papers_short` / `filter_papers_by_keywords` / `get_keyword_options` function bodies beyond what was strictly required for the schema drift.** Per-field `matched_*` attribution, prefix-aware tokenization, AND-semantics keyword filter, and ORDER BY behavior are all bit-identical to pre-PR.
