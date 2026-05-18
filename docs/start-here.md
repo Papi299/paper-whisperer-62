@@ -434,6 +434,26 @@ PMID **`41912805`** is now the established manual smoke case for the `fetch-pape
 
 Future PubMed-import work that touches the parser should re-test this case. (Smoke a known-good simple PMID alongside, to confirm personal-author behavior is unchanged.)
 
+## Local migration replay — schema-drift + immutability fix wave (May 2026)
+
+Made the full `supabase/migrations/` chain replayable from scratch via `supabase start` / `supabase db reset`. Until this wave the chain failed at multiple points and local migration validation was impossible. Five issues were addressed:
+
+1. **`to_tsvector` immutability rejection on the `search_vector` generated column.** Three migrations created or rebuilt `search_vector` using `to_tsvector('english', ...)` which strict newer Postgres versions reject as STABLE. Fixed by introducing three explicitly-IMMUTABLE wrapper functions (`immutable_english_tsvector_text(text)`, `immutable_english_tsvector_textarr(text[])`, `immutable_english_tsvector_jsonb(jsonb)`) in `20260305020000`, and updating the later rebuilds in `20260417020000` and `20260420010000` to use them. For consistency, the 6 `matched_*` per-field attribution expressions inside the `search_papers` RPC body in `20260420010000` (which run inside a `SELECT` and weren't subject to the IMMUTABLE check) were also switched from bare `to_tsvector('english', …)` to `to_tsvector('english'::regconfig, …)` — same byte-identical runtime behavior, fully consistent surface.
+2. **`setval(seq, 0)` on an empty `papers` table** in `20260326000000_add_insert_order_column.sql`. Switched to the 3-arg `setval` form so empty-table replay sets the sequence with `is_called = false`.
+3. **Undocumented schema drift on `authors`/`keywords`/`mesh_terms`/`substances` (text[] → jsonb).** Production altered these columns via the Supabase/Lovable dashboard between the March and April 2026 RPC waves; no committed migration captured it. New migration **`20260331010000_convert_columns_to_jsonb.sql`** captures the drift in repo-tracked form, idempotent via `information_schema` probe — runs the type alter only on fresh local replays, no-ops on production where the columns are already jsonb.
+4. **`raw_keywords = keywords` assignment-cast mismatch** in `20260330010000_add_raw_keywords_column.sql`. Switched to `to_jsonb(keywords)` which works under both pre- and post-conversion column shapes.
+5. **`supabase/.branches/` local-state directory** added to `.gitignore`.
+
+All 56 migration files now apply cleanly end-to-end. Schema verified: the four jsonb-drift columns are `jsonb`, `search_vector` is `tsvector`, all 16 expected RPCs and the three wrapper functions exist. **Production behavior is unchanged for every modified historical migration** (Supabase tracks applied migrations by version and does not re-run them); only the new `20260331010000` migration affects production state, and its effect is bit-equivalent (recreate `search_vector` + GIN index using the wrappers; tsvector contents byte-identical to the prior form).
+
+`npx tsc --noEmit` clean. `npx vitest run` 276/276 (unchanged). No source code touched.
+
+This unblocks local validation of every future migration. PR #130's pending `20260518010000_rpc_auth_uid_ownership_check.sql` (server-side RPC ownership hardening) is the first beneficiary — once both PRs land, PR #130 will replay cleanly locally.
+
+**Deploy-safety note:** because `20260331010000` has a timestamp earlier than several already-applied production migrations (`20260417010000`, `20260420010000`, `20260421010000`), `supabase db push` requires the **`--include-all`** flag to pick it up — without the flag the CLI's default behavior treats earlier-timestamped migrations as out-of-order and skips them. The migration is self-contained: it re-declares the three `immutable_english_tsvector_*` wrappers at the top of its body via `CREATE OR REPLACE FUNCTION` so production gets them (production's already-applied `20260305020000` was the pre-wrapper version). The recommended deploy sequence is `supabase db push --dry-run --include-all` to preview, then `supabase db push --include-all` to apply, then `supabase migration list --linked` to verify. The full deploy-safety audit (including how to verify remote column types via Supabase Studio) is in [migration-history.md](migration-history.md).
+
+See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
+
 ## Bulk-import duplicate/title-blocking audit — dead-code removal (May 2026)
 
 Closed out the PR #127 follow-up note flagging `useBulkMutations.ts:49-59` for an isomorphic title-blocking + loaded-array dedup violation. Audit found:

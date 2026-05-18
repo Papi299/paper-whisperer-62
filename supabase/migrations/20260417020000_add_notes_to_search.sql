@@ -21,13 +21,17 @@
 -- it is re-added (fast at current scale: ~400 rows, sub-second).
 ALTER TABLE papers DROP COLUMN IF EXISTS search_vector;
 
+-- Uses the `immutable_english_tsvector_*` wrappers from
+-- 20260305020000_add_full_text_search.sql (still present in the schema
+-- via CREATE OR REPLACE in the original migration). Tsvector outputs
+-- are byte-identical to calling `to_tsvector('english', x)` directly.
 ALTER TABLE papers ADD COLUMN search_vector tsvector
   GENERATED ALWAYS AS (
-    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(abstract, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(journal, '')), 'C') ||
-    setweight(to_tsvector('english', coalesce(authors::text, '')), 'C') ||
-    setweight(to_tsvector('english', coalesce(notes, '')), 'D')
+    setweight(immutable_english_tsvector_text(title), 'A') ||
+    setweight(immutable_english_tsvector_text(abstract), 'B') ||
+    setweight(immutable_english_tsvector_text(journal), 'C') ||
+    setweight(immutable_english_tsvector_jsonb(authors), 'C') ||
+    setweight(immutable_english_tsvector_text(notes), 'D')
   ) STORED;
 
 CREATE INDEX IF NOT EXISTS idx_papers_search_vector

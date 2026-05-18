@@ -21,9 +21,16 @@ SET insert_order = n.rn
 FROM numbered n
 WHERE p.id = n.id;
 
--- 4. Advance the sequence past the backfilled values
+-- 4. Advance the sequence past the backfilled values.
+--    Uses the 3-arg form so an empty `papers` table at first-apply time
+--    (e.g. a fresh local replay) does not call `setval(seq, 0)`, which is
+--    invalid (sequences have minimum value 1). When rows exist, behavior
+--    is bit-identical to the original 2-arg form: `setval(seq, MAX, true)`
+--    means the next `nextval()` returns `MAX+1`. When the table is empty,
+--    `setval(seq, 1, false)` means the next `nextval()` returns `1`.
 SELECT setval('public.papers_insert_order_seq',
-  COALESCE((SELECT MAX(insert_order) FROM public.papers), 0));
+  COALESCE((SELECT MAX(insert_order) FROM public.papers), 1),
+  EXISTS(SELECT 1 FROM public.papers));
 
 -- 5. Create an index for efficient ORDER BY insert_order DESC queries
 CREATE INDEX idx_papers_insert_order ON public.papers (insert_order DESC);
