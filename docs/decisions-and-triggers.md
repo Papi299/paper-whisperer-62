@@ -187,3 +187,40 @@ placed at the top of the function body. Equivalent alternative: drop the paramet
 **Required for any new `SECURITY DEFINER` RPC:** the migration creating it must include either the explicit guard or an `auth.uid()`-derived ownership pattern; review will reject SECURITY DEFINER RPCs that lack one of these.
 
 **Re-evaluation trigger:** if Supabase later supports a SECURITY DEFINER mode that re-applies RLS, this decision can be revisited; for now, RLS bypass inside SECURITY DEFINER is the documented Postgres behavior.
+
+### S2. Client-side queries on user-owned tables should carry explicit `user_id` filters where safe
+
+**Decision:** When a hook or query in `src/` mutates or selects rows from a table that has a direct `user_id` column **and** the caller already has `userId` (from `useAuth().user.id` or a hook arg), the query should include an explicit `.eq("user_id", userId)` predicate alongside whatever other filters it uses (typically `.eq("id", rowId)`). This applies to `papers`, `paper_attachments`, `filter_presets`, `projects`, `tags`, `profiles`, and the keyword / study-type / synonym / exclusion pool tables. It does **not** apply to junction tables that lack a direct `user_id` column (e.g. `paper_tags`, `paper_projects`) — those should continue to rely on RLS-through-parent-row ownership.
+
+**Rationale:** RLS on these tables remains the primary security boundary and is sufficient by itself. The explicit client-side filter is defense-in-depth: it makes ownership intent visible at the call site, prevents an accidental cross-user write if RLS were ever loosened or temporarily disabled during a migration, and gives a clearer audit trail in PostgREST logs (the `user_id=eq.…` qualifier appears in the request URL).
+
+**Required predicate shape:**
+
+```ts
+// Update by row id:
+await supabase.from("papers")
+  .update(updates)
+  .eq("id", paperId)
+  .eq("user_id", userId);
+
+// Delete by row id:
+await supabase.from("filter_presets")
+  .delete()
+  .eq("id", presetId)
+  .eq("user_id", userId);
+
+// Inserts are exempt — the user_id is set in the insert payload itself.
+```
+
+For mutations where `userId` is not already guaranteed at the call site, add an explicit `if (!userId) { … }` guard (throwing for `useMutation` mutationFns, returning `false` for `Promise<boolean>` flows) **before** the supabase call rather than relying on a `userId!` non-null assertion. This matches the pattern in `addPaperManually` / `updatePaper`.
+
+**Applies to (current state after the May 2026 client-side hardening PR):**
+- `papers` — `updatePaper` and `deletePaper` in `usePaperMutations.ts` carry both predicates. Insert paths set `user_id` in the payload (no `.eq` needed).
+- `filter_presets` — `deletePresetMutation`, `updatePresetMutation`, `renamePresetMutation` in `useFilterPresets.ts` carry both predicates.
+- `paper_attachments` — `deleteAttachment` in `useAttachments.ts` carries both predicates.
+- All `*_pool` and `*_exclusion_pool` tables — their hooks already carry `.eq("user_id", userId)` on every read/write per pre-existing convention; no change needed.
+- `projects`, `tags` — update / delete paths in `useProjectMutations.ts` / `useTagMutations.ts` still filter by `id` only. **Not yet hardened in this wave**; same pattern can be applied in a follow-up small PR.
+
+**Required for any new client-side mutation on a user-owned table:** include `.eq("user_id", userId)` alongside any `.eq("id", rowId)` filter. Review should reject mutation hooks that omit it.
+
+**Re-evaluation trigger:** if a future feature legitimately needs to operate cross-user (none planned for the single-user MVP per [commercial-architecture.md](commercial-architecture.md) C1), the affected sites can be revisited individually.

@@ -171,11 +171,15 @@ export function useAttachments(
 
       if (storageError) throw storageError;
 
-      // 2. Delete DB record
+      // 2. Delete DB record. Explicit `user_id` filter is defense-in-depth
+      // on top of the `paper_attachments` table's RLS — the `userId` guard
+      // at the top of `deleteAttachment` already short-circuits when the
+      // session is missing, so `userId` is guaranteed non-undefined here.
       const { error: dbError } = await supabase
         .from("paper_attachments")
         .delete()
-        .eq("id", attachment.id);
+        .eq("id", attachment.id)
+        .eq("user_id", userId);
 
       if (dbError) throw dbError;
 
