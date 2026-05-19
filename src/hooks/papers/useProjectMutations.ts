@@ -76,7 +76,16 @@ export function useProjectMutations(userId: string | undefined, projects: Projec
       if (updates.description !== undefined) dbUpdates.description = updates.description;
       if (updates.color !== undefined) dbUpdates.color = updates.color;
 
-      const { error } = await supabase.from("projects").update(dbUpdates).eq("id", projectId);
+      // Defense-in-depth: explicit `user_id` filter alongside the row
+      // ID filter. RLS on `projects` is the primary boundary; this client
+      // predicate makes ownership intent visible at the call site and
+      // prevents an accidental cross-user write if RLS were ever loosened.
+      // Follows the S2 client-side hardening pattern established by PR #133.
+      const { error } = await supabase
+        .from("projects")
+        .update(dbUpdates)
+        .eq("id", projectId)
+        .eq("user_id", userId);
       if (error) {
         rollbackCache(snapshot);
         toast({ title: "Error updating project", description: error.message, variant: "destructive" });
@@ -103,7 +112,13 @@ export function useProjectMutations(userId: string | undefined, projects: Projec
         })),
       );
 
-      const { error } = await supabase.from("projects").delete().eq("id", projectId);
+      // Defense-in-depth: explicit `user_id` filter alongside the row ID
+      // filter — same rationale as `updateProject` above.
+      const { error } = await supabase
+        .from("projects")
+        .delete()
+        .eq("id", projectId)
+        .eq("user_id", userId);
       if (error) {
         rollbackCache(snapshot);
         toast({ title: "Error deleting project", description: error.message, variant: "destructive" });

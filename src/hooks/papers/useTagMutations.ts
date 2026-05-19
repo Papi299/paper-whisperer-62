@@ -71,7 +71,16 @@ export function useTagMutations(userId: string | undefined, tags: Tag[]) {
         })),
       );
 
-      const { error } = await supabase.from("tags").update(updates).eq("id", tagId);
+      // Defense-in-depth: explicit `user_id` filter alongside the row
+      // ID filter. RLS on `tags` is the primary boundary; this client
+      // predicate makes ownership intent visible at the call site and
+      // prevents an accidental cross-user write if RLS were ever loosened.
+      // Follows the S2 client-side hardening pattern established by PR #133.
+      const { error } = await supabase
+        .from("tags")
+        .update(updates)
+        .eq("id", tagId)
+        .eq("user_id", userId);
       if (error) {
         rollbackCache(snapshot);
         toast({ title: "Error updating tag", description: error.message, variant: "destructive" });
@@ -95,7 +104,13 @@ export function useTagMutations(userId: string | undefined, tags: Tag[]) {
         allPapers.map((p) => ({ ...p, tags: p.tags.filter((t) => t.id !== tagId) })),
       );
 
-      const { error } = await supabase.from("tags").delete().eq("id", tagId);
+      // Defense-in-depth: explicit `user_id` filter alongside the row ID
+      // filter — same rationale as `updateTag` above.
+      const { error } = await supabase
+        .from("tags")
+        .delete()
+        .eq("id", tagId)
+        .eq("user_id", userId);
       if (error) {
         rollbackCache(snapshot);
         toast({ title: "Error deleting tag", description: error.message, variant: "destructive" });

@@ -485,6 +485,19 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Client-side explicit `user_id` scoping — second wave: projects + tags (May 2026)
+
+Second small Production-Hardening client-side PR. Closes one of the two follow-ups deferred by PR #133's first wave. Adds explicit `.eq("user_id", userId)` predicates to **four client-side mutation sites** across two hooks:
+
+- `src/hooks/papers/useProjectMutations.ts` — `updateProject`, `deleteProject`.
+- `src/hooks/papers/useTagMutations.ts` — `updateTag`, `deleteTag`.
+
+Defense-in-depth on top of RLS only — **no live behavior change for legitimate users**. Every site already had a `if (!userId) return;` guard at the top of its function body, so no new guards were added in this wave.
+
+S2 inventory in [decisions-and-triggers.md](decisions-and-triggers.md) updated: `useProjectMutations` and `useTagMutations` moved from "Not yet hardened in this wave" to compliant. The remaining deferred work is `useAbstract`'s batch-fetch signature change (still a separate careful-design PR; not in this wave).
+
+No new tests added — the four sites are mechanical siblings of the well-tested `usePaperMutations` patterns from PR #133, and the project/tag mutation hooks have no existing test files; adding mutation-chain tests here would require building the same hoisted-mock infrastructure (scope-creep). Vitest stays at **277/277**. `npx tsc --noEmit` clean. `npx eslint` clean on both touched files (no warnings).
+
 ## Client-side explicit `user_id` scoping — first hardening wave (May 2026)
 
 First small Production-Hardening client-side PR after PR #130 closed the server-side `auth.uid()` gap on the four search RPCs. Adds explicit `.eq("user_id", userId)` predicates to **six client-side mutation sites** across three hooks where the table has a direct `user_id` column and the function already has `userId` in scope:
