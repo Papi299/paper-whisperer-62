@@ -87,7 +87,7 @@ export function EditPaperDialog({
   const { toast } = useToast();
 
   // Fetch abstract on demand — only when dialog is open
-  const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(open && paper ? paper.id : null);
+  const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(open && paper ? paper.id : null, userId);
 
   const { attachments, uploading, uploadAttachments, deleteAttachment } = useAttachments(
     paper?.id,

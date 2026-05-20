@@ -101,6 +101,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
       usePaperAnalysisActions({
         papers: [paperNoAbstract],
         selectedPaperIds: new Set<string>(),
+        userId: "user-1",
         updatePaper,
         sleep,
       }),
@@ -137,6 +138,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
       usePaperAnalysisActions({
         papers: [paper],
         selectedPaperIds: new Set<string>(),
+        userId: "user-1",
         updatePaper,
         sleep,
       }),
@@ -147,7 +149,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
     });
 
     expect(mockFetchAbstract).toHaveBeenCalledTimes(1);
-    expect(mockFetchAbstract).toHaveBeenCalledWith("p-1", expect.any(Object));
+    expect(mockFetchAbstract).toHaveBeenCalledWith("p-1", "user-1", expect.any(Object));
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke).toHaveBeenCalledWith("analyze-paper", {
       body: { title: "RCT of Drug X", abstract: "the abstract text" },
@@ -179,6 +181,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
       usePaperAnalysisActions({
         papers: [paper],
         selectedPaperIds: new Set<string>(),
+        userId: "user-1",
         updatePaper,
         sleep,
       }),
@@ -214,6 +217,7 @@ describe("usePaperAnalysisActions — single-paper", () => {
       usePaperAnalysisActions({
         papers: [paper],
         selectedPaperIds: new Set<string>(),
+        userId: "user-1",
         updatePaper,
         sleep,
       }),
@@ -244,6 +248,7 @@ describe("usePaperAnalysisActions — bulk", () => {
       usePaperAnalysisActions({
         papers: [p1, p2],
         selectedPaperIds: new Set(["p1", "p2"]),
+        userId: "user-1",
         updatePaper,
         sleep,
       }),
@@ -286,6 +291,7 @@ describe("usePaperAnalysisActions — bulk", () => {
       usePaperAnalysisActions({
         papers: [p1, p2],
         selectedPaperIds: new Set(["p1", "p2"]),
+        userId: "user-1",
         updatePaper,
         sleep,
       }),
@@ -296,7 +302,7 @@ describe("usePaperAnalysisActions — bulk", () => {
     });
 
     expect(mockFetchAbstractsBatch).toHaveBeenCalledTimes(1);
-    expect(mockFetchAbstractsBatch).toHaveBeenCalledWith(["p1", "p2"], expect.any(Object));
+    expect(mockFetchAbstractsBatch).toHaveBeenCalledWith(["p1", "p2"], "user-1", expect.any(Object));
     expect(mockInvoke).toHaveBeenCalledTimes(2);
     expect(updatePaper).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledTimes(2);
@@ -351,6 +357,7 @@ describe("usePaperAnalysisActions — bulk", () => {
       usePaperAnalysisActions({
         papers: [p1, p2, p3],
         selectedPaperIds: new Set(["p1", "p2", "p3"]),
+        userId: "user-1",
         updatePaper,
         sleep,
       }),

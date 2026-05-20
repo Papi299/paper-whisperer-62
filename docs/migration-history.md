@@ -1419,3 +1419,80 @@ TypeScript catches signature errors at compile time. The full Vitest suite passe
 - No change to `createProject` / `createTag` (insert paths already correct).
 - No change to junction-table RPC flows.
 - No change to `useAbstract` batch fetch (deferred).
+
+## Client-side explicit `user_id` scoping — third wave (abstract fetch)
+
+**Date:** May 2026 (immediately follows the PR #134 second wave).
+**What:** Added explicit `.eq("user_id", userId)` predicates to the abstract-fetch read path — three functions in `src/hooks/useAbstract.ts` (`useAbstract`, `fetchAbstract`, `fetchAbstractsBatch`) — by threading `userId: string` (or `string | null | undefined` for the hook) through their public signatures and through every call site. Pure defense-in-depth on top of the existing RLS policy on `papers`. **No schema, no RPC, no migration, no Edge Function, no commercial-doc, no generated-types changes.** Direct application of the S2 decision (see [decisions-and-triggers.md](decisions-and-triggers.md)) introduced by PR #133.
+
+**Why:** Closes out the last remaining deferred S2 follow-up from PR #133 / #134. The deferred set was originally `useProjectMutations` + `useTagMutations` (closed by PR #134) and the `useAbstract` read path (closed by this PR). With this wave the S2 client-side inventory is fully covered for read and write paths against `user_id`-bearing tables; the only remaining S2-adjacent item — making the abstract query key user-scoped — is intentionally out of scope and tracked separately (see "What's NOT in this wave").
+
+### Sites hardened
+
+| File | Function | Change |
+|---|---|---|
+| `src/hooks/useAbstract.ts` | `useAbstract(paperId, userId)` | Hook signature gains `userId: string \| null \| undefined`. Query gains `.eq("user_id", userId!)`. `enabled` predicate gains `&& !!userId` so the query stays disabled until both ids are present (matches the existing `!!paperId` guard). |
+| `src/hooks/useAbstract.ts` | `fetchAbstract(paperId, userId, queryClient)` | Imperative helper signature gains `userId: string` as the second arg (queryClient moves to third). Query gains `.eq("user_id", userId)`. |
+| `src/hooks/useAbstract.ts` | `fetchAbstractsBatch(paperIds, userId, queryClient)` | Same shape: `userId` becomes the second arg, queryClient third. The batch supabase call gains `.eq("user_id", userId)` alongside `.in("id", uncached)`. Cache-warming path (`queryClient.setQueryData(queryKeys.papers.abstract(row.id), …)`) unchanged. |
+| `src/hooks/usePaperAnalysisActions.ts` | `usePaperAnalysisActions(args)` | `UsePaperAnalysisActionsArgs` gains `userId: string`. Hook destructures `userId` and threads it into both `fetchAbstract(paper.id, userId, queryClient)` (single-paper) and `fetchAbstractsBatch(papersToAnalyze.map(p => p.id), userId, queryClient)` (bulk). `userId` added to both `useCallback` dep arrays. |
+| `src/pages/Dashboard.tsx` | `usePaperAnalysisActions({...})` call | Adds `userId: user.id`. |
+| `src/pages/Dashboard.tsx` | `<PaperList ... />` JSX | Adds `userId={user.id}` so the row-expand path can call `useAbstract` with the scoped id. |
+| `src/components/papers/PaperList.tsx` | `PaperListProps` / `PaperRowProps` / function destructures | Both interfaces gain `userId: string \| null \| undefined`. The `PaperRow` instantiation threads the prop through. The `useAbstract(isExpanded ? paper.id : null, userId)` call passes it; when `isExpanded` is false the query stays disabled as before. |
+| `src/components/papers/EditPaperDialog.tsx` | `useAbstract(open && paper ? paper.id : null, userId)` call | The component already had a `userId` prop from prior wiring; this PR just passes it into the `useAbstract` call. No JSX or prop changes. |
+
+### Why threading rather than reading from a hook
+
+The two imperative helpers (`fetchAbstract`, `fetchAbstractsBatch`) execute outside React render (called from event handlers in `usePaperAnalysisActions`), so they cannot read auth context through `useAuth()`. Threading `userId` as an argument is the natural shape: it matches the `usePaperMutations` PR #133 pattern (the mutation functions take `userId` explicitly even though `useAuth()` is available, because the helper is a pure async function), keeps the helpers side-effect-free, and makes the ownership intent visible at every call site.
+
+For the hook variant (`useAbstract`), the signature accepts `string | null | undefined` so callers can pass `useAuth().user?.id` directly without an extra non-null check. The `enabled: !!paperId && !!userId` predicate keeps the query inert until both ids are present, mirroring the existing pre-PR pattern of `enabled: !!paperId`.
+
+### What's NOT in this wave
+
+- **Cache-key user-scoping.** The query key `queryKeys.papers.abstract(paperId)` is intentionally **not** changed to include `userId`. The defense-in-depth value lives in the query *predicate* (which is what RLS-loosening or migration-temporary-disable would actually bypass); cache-key correctness for a hypothetical multi-tenant future is a separate, smaller fix that's better done in isolation. In the current single-user MVP, sign-out garbage-collects the cache via TanStack Query's `gcTime`, so there is no practical leakage risk today. This is explicitly documented in the `useAbstract.ts` JSDoc and in the updated S2 inventory.
+- **No new RLS / RPC / migration / Edge Function.** All ownership enforcement on `papers` already lives in RLS; this PR only adds redundant client-side filters on top.
+- **No commercial / billing / mobile / store-readiness changes.**
+
+### Files changed
+
+- `src/hooks/useAbstract.ts` — 3 functions hardened (the entire public API of the module).
+- `src/hooks/usePaperAnalysisActions.ts` — `userId` threaded into args + both `useCallback` closures.
+- `src/pages/Dashboard.tsx` — 2 sites updated (hook call + `PaperList` JSX).
+- `src/components/papers/PaperList.tsx` — 2 interfaces gain `userId`, both destructures updated, hook call updated, `<PaperRow>` JSX threads the prop.
+- `src/components/papers/EditPaperDialog.tsx` — `useAbstract` call gains the existing `userId` prop as a second argument.
+- `src/hooks/__tests__/usePaperAnalysisActions.test.ts` — all 7 `renderHook(() => usePaperAnalysisActions({...}))` invocations gain `userId: "user-1"`; the two `mockFetch*` `toHaveBeenCalledWith` assertions gain `"user-1"` as the new second argument.
+- `docs/decisions-and-triggers.md` — S2 inventory extended to record the abstract-fetch read path as compliant, plus an explicit note that cache-key user-scoping is intentionally out of scope. Adds a "Status" line noting the S2 client-side hardening inventory is now closed.
+- `docs/migration-history.md` — this entry.
+- `docs/start-here.md` — short handoff entry pointing at this wave and noting the S2 client-side inventory is fully closed (cache-key correctness tracked separately).
+
+### Test counts
+
+Vitest: **277/277 → 277/277 (unchanged)**. The existing 7 tests in `usePaperAnalysisActions.test.ts` continue to pass after the prop-and-assertion updates — they were already the regression check for the bulk cooldown control flow and the missing-abstract behavior, and the userId threading is mechanical relative to that behavior. Playwright unchanged at **71/71** and not re-run from this branch — no live UI behavior change for legitimate users; the new predicate is purely additive (it's redundant with RLS today).
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 277/277.
+- `npx vitest run src/hooks/__tests__/usePaperAnalysisActions.test.ts` — 7/7.
+- `npx eslint` on the six touched source files plus the one test file — 0 errors, 1 warning. The single warning (`react-hooks/exhaustive-deps` on `PaperList.tsx:302` for `isVisible`) is pre-existing and unrelated to this PR — it's on the `useMemo` for `visiblePapers`, not on any hook touched by the userId threading.
+
+### Behavior on legitimate users
+
+**No change.** Every legitimate caller already had `useAuth().user.id` in scope (or passed it through props) and the row's `user_id` always equals the caller's `auth.uid()` — RLS enforces this server-side. The new `.eq("user_id", userId)` predicate is therefore redundant with RLS for normal calls and returns the same row set. The `useAbstract` hook's `enabled` flag now requires `userId` to be non-falsy in addition to `paperId`; this is a no-op for the authenticated single-user app where every render that supplies a `paperId` also has a current `userId`. The hook stays disabled (no fetch, no error) if `userId` is missing — which mirrors the existing pre-PR behavior of staying disabled if `paperId` is null.
+
+### Risk
+
+**Very low.** Same risk profile as the PR #133 / #134 client-side hardening waves:
+1. RLS remains the primary security boundary and is unchanged.
+2. The new predicate is redundant for legitimate calls (`auth.uid()` already matches the row's `user_id`).
+3. The only new failure mode is silent zero-rows-returned if the client somehow passes a wrong `userId` (e.g., a stale closure after sign-out / sign-in race) — RLS would already produce the same outcome; the new predicate just makes the failure faster at the PostgREST layer.
+4. No public-API removals — every function gains an *additional* required argument, which TypeScript catches at compile time at every call site. The 7 call sites in this PR are exhaustive (`grep -rn "useAbstract\|fetchAbstract\|fetchAbstractsBatch" src/` is the audit).
+
+### Non-goals
+
+- No frontend behavior changes for legitimate users.
+- No RLS, RPC, schema, migration, Edge Function, or generated-types changes.
+- No commercial / billing / mobile / store-readiness changes.
+- No README change (Vitest count unchanged at 277; not a high-level shipping-status change).
+- No new tests added — the 7 existing `usePaperAnalysisActions` tests are extended (assertion updates only), and no new fail modes are introduced that aren't already covered by the existing tests + `tsc`.
+- **No change to the abstract query key** — `queryKeys.papers.abstract(paperId)` stays as-is. Cache-key correctness for hypothetical multi-tenant scenarios is a separate, smaller follow-up tracked outside this PR.
+- No broader abstract / cache refactor.
