@@ -485,6 +485,23 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Deployment checklist / release runbook (May 2026)
+
+Docs-only consolidation that follows the PRs #130–#139 production-hardening sequence. New file: [`docs/deployment.md`](deployment.md). Centralizes the operator-facing instructions that previously lived scattered across the README, this file, and individual `migration-history.md` entries.
+
+Contents:
+- Per-PR-type deploy action table (frontend / docs / migration / Edge Function / Edge secret / mixed).
+- Required env vars split by side: client (Vercel) / Edge Function secrets / auto-injected by the Edge runtime.
+- Pre-merge + pre-deploy local-check checklists.
+- The standard Supabase migration deploy sequence, plus a warning section codifying the lessons from the PR #131 / #132 ledger-drift reconciliation.
+- Per-function Edge Function deploy commands, and the rule that touching `_shared/*` requires redeploying every consumer.
+- Frontend / Vercel deploy notes (with explicit "unknown / operator-decides" callouts where the repo doesn't codify automation).
+- Post-deploy smoke checklist by area: general / search / metadata import (PMID `41912805`) / AI analysis / paper ops / projects-tags / attachments.
+- Troubleshooting playbook for the most common failure modes after each PR family (missing client env, missing Edge env, missing `GEMINI_API_KEY`, unexpected migration dry-run, Edge deploy failure, blank-screen Vercel deploy).
+- "What not to do" guard-rails: no service-role in client; no committed secrets; no `db push` for docs-only PRs; no `--include-all` outside the PR #131-style reconciliation pattern; no assumption that Vercel deploys Edge Functions.
+
+No runtime behavior changed. No migrations. No Edge Function changes. No env file changes. README gains two pointer links (in the docs table and just after the Edge Functions deploy commands).
+
 ## Edge Function env fail-fast validation + Gemini secret docs (May 2026)
 
 Second PR in the production-readiness phase; direct follow-up to PR #138. Closes the two Edge-side gaps the env audit flagged.

@@ -60,8 +60,11 @@ Do not interpret these planning docs as evidence that any commercial functionali
 | [docs/quotas-and-pricing.md](docs/quotas-and-pricing.md) | Provisional plans, quotas, open pricing questions (planning) |
 | [docs/store-launch-checklist.md](docs/store-launch-checklist.md) | App Store / Play Store launch checklist (planning) |
 | [docs/documentation-policy.md](docs/documentation-policy.md) | Documentation update rule for all changes |
+| [docs/deployment.md](docs/deployment.md) | Deployment checklist / release runbook (operator-facing) |
 
 Per [docs/documentation-policy.md](docs/documentation-policy.md), every meaningful change must update documentation in the same PR, and every Claude Code report must end with a "Documentation updates" section.
+
+**For production deployment steps, see [docs/deployment.md](docs/deployment.md)** — it consolidates the per-PR-type deploy actions, required env vars, migration deploy sequence, Edge Function deploy commands, post-deploy smoke checklist, and troubleshooting.
 
 ## Local development
 
@@ -126,6 +129,8 @@ Both functions now **fail fast with an actionable error** if any required Edge e
 `supabase/config.toml` sets `verify_jwt = false` on both functions — intentional, so the in-function `auth.getUser()` check handles stale / refreshing tokens gracefully without a 401 at the gateway.
 
 Notable manual smoke case: PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors Collaborators") for `fetch-paper-metadata` (covers bounded `<Author>...</Author>` parsing + `<CollectiveName>` consortium author support after PRs #120 / #121).
+
+For the full deployment runbook — including pre-merge / pre-deploy / migration / Edge Function / post-deploy smoke checklists and troubleshooting — see [docs/deployment.md](docs/deployment.md).
 
 ## Testing
 
