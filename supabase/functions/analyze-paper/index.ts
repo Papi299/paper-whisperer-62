@@ -1,6 +1,7 @@
 /// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireEdgeEnv } from "../_shared/env.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -93,8 +94,13 @@ Deno.serve(async (req) => {
     console.log("1a. Auth header present");
 
     console.log("2. Calling Supabase getUser");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    // Fail fast with an actionable error if either runtime-required var is
+    // missing — replaces the previous `?? ""` fallback which silently
+    // produced a broken `createClient("", "")` whose downstream
+    // `auth.getUser()` failure was hard to attribute. Auto-injected by
+    // the Supabase Edge runtime in production; the throw is a safety net.
+    const supabaseUrl = requireEdgeEnv("SUPABASE_URL");
+    const supabaseAnonKey = requireEdgeEnv("SUPABASE_ANON_KEY");
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });

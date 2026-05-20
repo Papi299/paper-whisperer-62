@@ -16,6 +16,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireEdgeEnv } from "../_shared/env.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -580,8 +581,12 @@ Deno.serve(async (req) => {
       );
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    // Fail fast with an actionable error if either runtime-required var
+    // is missing — replaces the previous `?? ""` fallback. Auto-injected
+    // by the Supabase Edge runtime in production; same safety-net
+    // pattern as `analyze-paper`.
+    const supabaseUrl = requireEdgeEnv("SUPABASE_URL");
+    const supabaseAnonKey = requireEdgeEnv("SUPABASE_ANON_KEY");
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });

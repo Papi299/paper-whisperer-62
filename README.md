@@ -103,8 +103,27 @@ Requires Node.js 18+. Supabase project config is in `supabase/config.toml`.
 Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`). **Edge Function deploys are separate from frontend / Vercel deploys** — a GitHub merge alone does not update the deployed function. After any change under `supabase/functions/<name>/`, deploy explicitly:
 
 ```sh
-supabase functions deploy <name> --project-ref <project-ref>
+supabase functions deploy analyze-paper --project-ref <project-ref>
+supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 ```
+
+### Required Edge Function secrets
+
+| Variable | Used by | Source |
+|---|---|---|
+| `SUPABASE_URL` | both | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
+| `SUPABASE_ANON_KEY` | both | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
+| `GEMINI_API_KEY` | `analyze-paper` | **Must be set manually** via `supabase secrets set`. Used for the Gemini analysis call; without it, `analyze-paper` fails fast with a clear error. |
+
+Set the Gemini key once per project (placeholder shown — substitute your real key, never commit it):
+
+```sh
+supabase secrets set GEMINI_API_KEY=<your-gemini-api-key> --project-ref <project-ref>
+```
+
+Both functions now **fail fast with an actionable error** if any required Edge env var is missing or empty — `supabase/functions/_shared/env.ts` validates each at the call site. No `SUPABASE_SERVICE_ROLE_KEY` is needed; the functions construct their Supabase client with the **caller's** auth header and rely on RLS plus in-function `auth.getUser()` for ownership enforcement.
+
+`supabase/config.toml` sets `verify_jwt = false` on both functions — intentional, so the in-function `auth.getUser()` check handles stale / refreshing tokens gracefully without a 401 at the gateway.
 
 Notable manual smoke case: PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors Collaborators") for `fetch-paper-metadata` (covers bounded `<Author>...</Author>` parsing + `<CollectiveName>` consortium author support after PRs #120 / #121).
 
