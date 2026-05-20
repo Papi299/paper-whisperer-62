@@ -1631,3 +1631,75 @@ Vitest: **280/280 → 281/281** (+1 new test). Playwright unchanged at **71/71**
 - No README change (Vitest count +1 is not a high-level shipping-status change; matches the precedent set by PRs #133 / #134 / #135).
 - No new tests added beyond the 1-test regression check (single-line chain change; the new test is the focused regression for the change being made).
 - No abstract / cache-key refactor (cache-key user-scoping remains deferred per S2 inventory).
+
+## Client env fail-fast validation + local-dev env docs
+
+**Date:** May 2026 (post-checkpoint hardening; first PR in the production-readiness phase that follows the S1/S2 ownership-hardening sequence PRs #130–#137).
+**What:** Adds a tiny client-side env validator (`src/lib/clientEnv.ts`) used by `src/integrations/supabase/client.ts` to fail fast with an actionable, project-specific error when either of the two required Vite-client env vars (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`) is missing or empty. Updates `README.md` with a new "Environment setup" subsection in Local development. Updates `.env.test.example` with an optional `BASE_URL` documentation comment. **No schema, no RPC, no migration, no Edge Function, no commercial-doc, no generated-types changes.** No new dependencies.
+
+**Why:** The post-PR-#137 production-hardening env audit (see `docs/start-here.md`) identified the biggest deployment risk as the opaque failure mode of the Supabase client when env vars are missing. A fresh contributor running `npm run dev` after `npm install` previously got `Error: supabaseUrl is required.` from `@supabase/supabase-js` at module load — no hint about `.env.example` → `.env.local`. On Vercel, a misconfigured project env would surface the same opaque error in the deployed bundle. The new helper replaces that with `Missing required environment variable: VITE_SUPABASE_URL. Copy .env.example to .env.local and set VITE_SUPABASE_URL. See README.md → Local development.` The README addition documents the previously-undocumented `.env.local` setup step. The stale "276 tests" line in the README is normalized to the actual post-PR count.
+
+### Sites changed
+
+| File | Change |
+|---|---|
+| `src/lib/clientEnv.ts` *(new)* | Two exports. `requireClientEnvValue(name, value)` is the pure value-checker (throws actionable error on `undefined` / non-string / empty / whitespace-only); exported solely so the test file can exercise it without touching `import.meta.env`. `requireClientEnv(name)` is the production entry point — reads `import.meta.env[name]` once and routes through `requireClientEnvValue`. JSDoc explains the scope (client only; not used by Edge Functions which read `Deno.env.get` and have their own pattern). |
+| `src/integrations/supabase/client.ts` | `const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;` (and `VITE_SUPABASE_PUBLISHABLE_KEY`) → `const SUPABASE_URL = requireClientEnv('VITE_SUPABASE_URL');`. New `import { requireClientEnv } from '@/lib/clientEnv';`. Auto-generated file banner preserved; `createClient` options preserved; export shape preserved. No env variable renamed; no support for `VITE_SUPABASE_ANON_KEY` / `VITE_SUPABASE_PROJECT_ID` added (those legacy vars remain unused). |
+| `src/lib/__tests__/clientEnv.test.ts` *(new)* | 4 focused tests on `requireClientEnvValue`: (1) returns the value when a non-empty string is provided; (2) throws actionable error when value is `undefined`, with full message-contract assertion covering all four required pieces (variable name, `.env.example`, `.env.local`, `Local development`); (3) throws on empty string; (4) throws on whitespace-only string. |
+| `README.md` | New "Environment setup" subsection inside "Local development" (placed between `npm install` and `npm run dev`): `cp .env.example .env.local` step, the two required `VITE_*` variables and how to find their values, `.env.local`-not-committed reminder, the new fail-fast behavior, and a guardrail note that `VITE_*` is for public anon-key style values only. Stale test count updated from `276` to `285`. |
+| `.env.test.example` | New trailing 3-line comment documenting the optional `BASE_URL` env var that `playwright.config.ts:44` reads (defaults to `http://localhost:8080`). |
+
+### What's NOT in this PR
+
+- **No Edge Function env validation.** The `Deno.env.get("SUPABASE_URL") ?? ""` / `?? ""` fallback in `supabase/functions/analyze-paper/index.ts` and `supabase/functions/fetch-paper-metadata/index.ts` is left as-is. These are auto-injected by the Supabase Edge runtime, so the fallback is theoretical-only; tightening it is tracked as a separate small PR (would require a deploy ceremony, so kept out of this client-only PR per the audit's PR-phasing recommendation).
+- **No `GEMINI_API_KEY` docs change.** The existing in-source throw in `analyze-paper/index.ts` is already actionable; a README/docs mention is deferred to the Edge env PR.
+- **No deployment checklist doc.** The audit recommended this as a longer-term `docs/deployment.md` consolidating Vercel + Supabase secrets + Edge Function deploy + post-deploy smoke. Out of scope here.
+- **No new dependencies.** No `zod`-based env schema; no `env-var`-style library. The helper is ~15 lines of pure TypeScript.
+- **No `.env.local` / `.env.test` modification.** Local secrets were never read or written by this PR.
+- **No `decisions-and-triggers.md` update.** No new architecture decision was introduced — this PR implements an audit recommendation that fits within existing patterns (defense-in-depth + actionable fail-fast); no durable design rule needed.
+- **No Vercel project settings change.** Deployment env configuration in Vercel is out of scope for code PRs.
+- **No `vite.config.ts` change** (no `envPrefix` override, no new plugin).
+- **No commercial / billing / mobile / store-readiness doc changes.**
+
+### Files changed
+
+- `src/lib/clientEnv.ts` *(new, 42 lines incl. JSDoc)*.
+- `src/lib/__tests__/clientEnv.test.ts` *(new, 50 lines)*.
+- `src/integrations/supabase/client.ts` — 3-line change (import + two `requireClientEnv` substitutions) + 4-line comment.
+- `README.md` — new "Environment setup" subsection; test count `276` → `285`.
+- `.env.test.example` — 3-line trailing comment documenting optional `BASE_URL`.
+- `docs/migration-history.md` — this entry.
+- `docs/start-here.md` — short handoff entry above the PR #137 bulk-delete entry.
+
+### Test counts
+
+Vitest: **281/281 → 285/285** (+4 new tests in the new `clientEnv.test.ts` file). Playwright unchanged at **71/71** and not re-run from this branch — the change is build-time/module-load behavior, not runtime UI; Playwright sessions all start with valid env vars and hit the success path, which is bit-identical to pre-PR behavior.
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run src/lib/__tests__/clientEnv.test.ts` — 4/4.
+- `npx vitest run` — 285/285 (was 281/281).
+- `npx eslint` on the three touched source / test files (`clientEnv.ts`, `clientEnv.test.ts`, `client.ts`) — 0 errors, 0 warnings.
+- **Playwright not run.** No fixture exercises a missing-env-var path; the change is invisible to a configured environment.
+- **No Supabase migration validation.** This PR adds no migration.
+- **No Edge Function deploy.** This PR does not touch `supabase/functions/`.
+
+### Behavior on legitimate users
+
+**Identical.** With both env vars correctly set (as is the case for every developer, CI runner, Playwright session, and production Vercel build today), `requireClientEnv` returns the value and the Supabase client is constructed exactly as before. The only observable change is the **failure-mode** error message — and only when one of the vars is missing or empty, which currently never happens in any working deploy.
+
+### Risk
+
+**Very low.** The helper is one if-statement and one throw. The Supabase client change is mechanical and exercised by every existing unit and E2E test (they all import the module). The README addition is documentation only. The `.env.test.example` addition is a commented-out optional override (no semantic change to required values). No new dependencies, no schema changes, no migration, no deploy ceremony.
+
+### Non-goals
+
+- No README change beyond Environment setup and the stale test count normalization.
+- No `decisions-and-triggers.md` change.
+- No commercial / billing / mobile / store-readiness changes.
+- No Edge Function changes, no `Deno.env.get` changes, no Edge Function deploy.
+- No real env values printed, logged, or committed.
+- No dependencies added.
+- No support for legacy unused vars (`VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_PROJECT_ID`).
+- No URL-format validation (deliberately out of scope — would expand the helper and require a richer test surface; the audit explicitly recommended avoiding this in PR 1).

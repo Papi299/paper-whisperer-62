@@ -485,6 +485,23 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Client env fail-fast validation + local-dev env docs (May 2026)
+
+First PR in the production-readiness phase that follows the S1/S2 ownership-hardening sequence (PRs #130–#137). Direct implementation of the top-priority recommendation from the post-PR-#137 production-hardening env audit.
+
+What changed:
+- New `src/lib/clientEnv.ts` exposes `requireClientEnv(name)` (production entry, reads `import.meta.env`) and `requireClientEnvValue(name, value)` (pure value-checker, exported only to support focused unit tests without mutating Vite env). Throws an actionable error naming the missing variable and pointing at the `.env.example` → `.env.local` copy step plus the README.
+- `src/integrations/supabase/client.ts` now reads both required vars (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`) through `requireClientEnv`. Opaque `supabaseUrl is required.` upstream errors at module load are replaced with project-specific, contributor-actionable messages.
+- README "Local development" now has an "Environment setup" subsection: `cp .env.example .env.local`, the two `VITE_*` values to fill in (from Supabase Studio → Project Settings → API), the not-committed reminder, the new fail-fast behavior, and a guardrail note that `VITE_*` is for public anon-key style values only. README test count normalized from a stale **276** to **285**.
+- `.env.test.example` documents the optional `BASE_URL` override (defaults to `http://localhost:8080`).
+
+What's NOT in this PR:
+- **No Edge Function env validation.** `Deno.env.get(...) ?? ""` fallbacks in `analyze-paper` / `fetch-paper-metadata` are deferred to a follow-up that will carry the explicit `supabase functions deploy` ceremony.
+- **No deployment checklist doc.** The audit's longer-term `docs/deployment.md` consolidating Vercel + Supabase secrets + Edge Function deploy + post-deploy smoke is deferred.
+- No migration / RPC / RLS / schema / generated-types / Edge Function changes. No commercial / billing / mobile / store-readiness changes. No new dependencies.
+
+4 new focused tests in `clientEnv.test.ts` (value returned on non-empty string; throws on `undefined` with full message-contract assertion; throws on empty; throws on whitespace-only). Vitest **281/281 → 285/285**. Playwright unchanged at **71/71** (not re-run — invisible-to-runtime change). `npx tsc --noEmit` clean. `npx eslint` 0 errors / 0 warnings on the three touched source / test files.
+
 ## Client-side explicit `user_id` scoping — bulk paper delete (May 2026)
 
 Small post-checkpoint follow-up to the PR #133 / #134 / #135 / #136 hardening sequence. Closes the only S2 client-side gap surfaced by the post-PR-#136 checkpoint audit: `bulkDeletePapers` in `src/hooks/papers/useBulkMutations.ts`. The single SQL chain `supabase.from("papers").delete().in("id", paperIds)` now also carries `.eq("user_id", userId)`. The pre-existing `if (!userId || paperIds.length === 0) return;` guard at the top of the callback makes the new predicate safe.
