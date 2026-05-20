@@ -1496,3 +1496,76 @@ Vitest: **277/277 → 277/277 (unchanged)**. The existing 7 tests in `usePaperAn
 - No new tests added — the 7 existing `usePaperAnalysisActions` tests are extended (assertion updates only), and no new fail modes are introduced that aren't already covered by the existing tests + `tsc`.
 - **No change to the abstract query key** — `queryKeys.papers.abstract(paperId)` stays as-is. Cache-key correctness for hypothetical multi-tenant scenarios is a separate, smaller follow-up tracked outside this PR.
 - No broader abstract / cache refactor.
+
+## Hotfix — Dashboard null-user crash after abstract userId threading (PR #135 follow-up)
+
+**Date:** May 2026 (urgent hotfix for the merged PR #135 / S2 third wave).
+**What:** Repairs the `Cannot read properties of null (reading 'id')` crash on Dashboard entry introduced by PR #135's two direct `user.id` reads inside `DashboardContent`. Replaces those reads with a nullable-safe `userId = user?.id` alias, widens the `usePaperAnalysisActions` `userId` arg to `string | null | undefined`, and adds short-circuit guards to both analysis handlers so they never call `fetchAbstract`, `fetchAbstractsBatch`, or the `analyze-paper` Edge Function with a missing user id. Also tightens the deduplication-dialog mount condition.
+
+### Root cause
+
+`DashboardContent` calls `useAuth()` and reads `user`. `useAuth()` returns `user: User | null`. The outer `Dashboard` component already short-circuits with `if (!user) return null;` before mounting `DashboardContent`, but `useAuth()` can still yield `user === null` on an intermediate render during a sign-out / sign-in transition (the parent re-render that would unmount the child has not yet committed). Pre-PR-#135 code was robust to that case because every read inside `DashboardContent` went through `user?.id`. PR #135 added two new reads in `DashboardContent` that bypassed the `?.`:
+
+- `src/pages/Dashboard.tsx` line 456 (pre-hotfix): `usePaperAnalysisActions({ ..., userId: user.id, ... })`
+- `src/pages/Dashboard.tsx` line 607 (pre-hotfix): `<PaperList ... userId={user.id} />`
+
+Either read throws `TypeError: Cannot read properties of null (reading 'id')` when `user` is null at hook-call / render time, taking the whole Dashboard down before any error boundary can render a recovery UI.
+
+A third unsafe read predated PR #135 but is in the same component: `<DeduplicationDialog userId={user!.id}/>` (line 692 pre-hotfix). It was practically guarded by `{dedupOpen && (…)}`, but the non-null assertion (`user!`) was a latent bug — same auth-transition window could fire it if `dedupOpen` was true. The hotfix tightens the gate to `{dedupOpen && userId && (…)}` and uses the local `userId` alias.
+
+The outer `Dashboard` component's `<PoolsProvider userId={user.id}>` (line 67) is left untouched — it sits below the parent's `if (!user) return null;` guard in the SAME component, so `user` is provably non-null at that line. The hotfix scope is `DashboardContent` and downstream, not the parent.
+
+### Sites changed
+
+| File | Change |
+|---|---|
+| `src/pages/Dashboard.tsx` | Inside `DashboardContent`: introduce `const userId = user?.id;` right after `const { user } = useAuth();`, with a JSDoc explaining the auth-transition window. Replace `userId: user.id` → `userId,` in the `usePaperAnalysisActions({...})` call, `userId={user.id}` → `userId={userId}` on `<PaperList>`, and the `DeduplicationDialog` mount → `{dedupOpen && userId && (<DeduplicationDialog ... userId={userId}/>)}`. The other pre-existing `user?.id` reads (line 150, 186, 190, 210, 378, 670) were already nullable-safe and are left alone to keep the hotfix diff minimal. |
+| `src/hooks/usePaperAnalysisActions.ts` | `UsePaperAnalysisActionsArgs.userId` widened from `string` to `string \| null \| undefined`. JSDoc updated to record the auth-transition rationale. `handleAnalyzePaper` gains `if (!userId) return;` immediately after the `has_abstract` guard. `handleBulkAnalyze` gains an early `if (!userId) { toast({ title: "Not signed in", … variant: "destructive" }); return; }` BEFORE the abstract batch-fetch. `userId` was already in both `useCallback` dep arrays from PR #135; unchanged. |
+| `src/hooks/__tests__/usePaperAnalysisActions.test.ts` | Added a new `describe("usePaperAnalysisActions — null/undefined userId (auth-transition hotfix)")` block with 3 focused regression tests: (a) `handleAnalyzePaper` with `userId: null` is a silent no-op (no `mockFetchAbstract`, no `mockInvoke`, no `updatePaper`, no `mockToast`); (b) same for `userId: undefined`; (c) `handleBulkAnalyze` with `userId: null` surfaces the "Not signed in" destructive toast and skips batch-fetch / invoke / sleep entirely. Existing 7 tests continue to pass with their existing `userId: "user-1"` from PR #135. |
+
+### What stays from PR #135 — unchanged
+
+- `useAbstract`, `fetchAbstract`, `fetchAbstractsBatch` signatures and `.eq("user_id", userId)` predicates: **unchanged**. The S2 third-wave hardening is fully preserved.
+- `useAbstract`'s `enabled: !!paperId && !!userId` predicate: **unchanged** — it was already nullable-safe.
+- `queryKeys.papers.abstract(paperId)` cache key: **unchanged** — the hotfix does not touch cache keys.
+- `PaperList`'s `userId: string | null | undefined` prop type: **unchanged** (was already widened in PR #135).
+- `EditPaperDialog`'s existing `userId?: string | null` prop: **unchanged**.
+
+### What's NOT in this hotfix
+
+- **No revert of PR #135.** The defense-in-depth `.eq("user_id", userId)` predicate on the abstract read path remains.
+- No migration, no RPC, no RLS, no Edge Function, no generated Supabase types touched.
+- No commercial / billing / mobile / store-readiness doc updates.
+- No cache-key change (intentionally tracked separately per the S2 inventory note).
+- No broad auth refactor — the hotfix is local to `DashboardContent` and the one hook PR #135 touched.
+- No new dashboard render/auth test harness — the repo has none for this surface, and standing one up is well beyond an urgent hotfix's scope. Coverage is provided by the 3 new focused hook tests plus the post-merge production smoke.
+
+### Files changed
+
+- `src/pages/Dashboard.tsx`
+- `src/hooks/usePaperAnalysisActions.ts`
+- `src/hooks/__tests__/usePaperAnalysisActions.test.ts`
+- `docs/migration-history.md` — this entry.
+- `docs/start-here.md` — short handoff entry above PR #135's third-wave entry.
+- `docs/decisions-and-triggers.md` — small note in the S2 inventory clarifying that threaded `userId` at auth-boundary call sites must remain nullable-safe.
+
+### Test counts
+
+Vitest: **277/277 → 280/280** (+3 new tests in the null/undefined-userId describe block). Playwright unchanged at **71/71** and not re-run from this branch — no Playwright fixture covers the sign-out / sign-in transition window, and the hotfix's behavior is fully captured by the new hook tests.
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run src/hooks/__tests__/usePaperAnalysisActions.test.ts` — 10/10 (was 7/7).
+- `npx vitest run` — 280/280 (was 277/277).
+- `npx eslint` on the three touched source / test files plus the four PR-#135-touched files for safety — 0 errors, 1 pre-existing warning (`PaperList.tsx:302` `react-hooks/exhaustive-deps` on the `visiblePapers` `useMemo`; unrelated to this hotfix, present on `main`).
+- **Playwright not run.** No fixture covers the auth-transition crash window; running the existing 71-test suite would not exercise the hotfix and would burn ~3 minutes for no signal.
+- **No Supabase migration validation.** This hotfix adds no migration; `supabase db push --dry-run` is unnecessary.
+
+### Behavior on legitimate users
+
+**Identical to PR #135** for any render where `user` is non-null (i.e. the normal authenticated case). The new guards only fire during the narrow auth-transition window where `useAuth()` momentarily yields `user === null` — and in that window the page previously crashed; now it stays mounted, the analyze button is a no-op until the next render lands `user`, and a bulk-analyze click surfaces a "Not signed in" toast that goes away on the next click. No legitimate analyze / abstract-fetch / paper-list flow is altered.
+
+### Risk
+
+**Very low.** The hotfix only adds early-return / falsy-guard branches; the happy path is bit-identical to PR #135. The only behavior change visible to a legitimate user is the bulk-analyze "Not signed in" toast in the auth-transition window — explicitly the right user-facing outcome for that state. TypeScript catches all call sites at compile time. The 3 new tests are exhaustive over the null/undefined branches.

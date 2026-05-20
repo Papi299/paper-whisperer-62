@@ -485,6 +485,20 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Hotfix — Dashboard null-user crash after PR #135 (May 2026)
+
+Urgent hotfix for `Cannot read properties of null (reading 'id')` on Dashboard entry. PR #135 added two direct `user.id` reads inside `DashboardContent` (`usePaperAnalysisActions({ ..., userId: user.id })` and `<PaperList ... userId={user.id} />`) — both crashed during the narrow auth-transition window where `useAuth()` yields `user === null` before the parent `if (!user) return null;` re-render unmounts the child.
+
+Fix:
+- `DashboardContent` introduces `const userId = user?.id;` and uses it for the two PR-#135 reads and the pre-existing `DeduplicationDialog userId={user!.id}` non-null assertion (also tightens the mount gate to `{dedupOpen && userId && (…)}`).
+- `usePaperAnalysisActions`'s `userId` widens to `string | null | undefined`; both handlers short-circuit before any `fetchAbstract` / `fetchAbstractsBatch` / Edge Function call (single → silent no-op; bulk → destructive "Not signed in" toast).
+
+**PR #135 hardening preserved.** `useAbstract` / `fetchAbstract` / `fetchAbstractsBatch` signatures + `.eq("user_id", userId)` predicates are unchanged. Cache keys are unchanged.
+
+3 new focused regression tests in `usePaperAnalysisActions.test.ts`. Vitest **277/277 → 280/280**. Playwright unchanged at **71/71** (no fixture covers the auth-transition window). `npx tsc --noEmit` clean. No new ESLint warnings.
+
+No migration / RPC / RLS / Edge Function / generated-types / commercial-doc changes.
+
 ## Client-side explicit `user_id` scoping — third wave: abstract fetch (May 2026)
 
 Third (and final) small Production-Hardening client-side PR. Closes the last remaining S2 follow-up deferred by PR #133 / PR #134: the `useAbstract` read path. Adds explicit `.eq("user_id", userId)` predicates to **three functions** in `src/hooks/useAbstract.ts` (`useAbstract`, `fetchAbstract`, `fetchAbstractsBatch`) by threading `userId` through their signatures and through every call site:

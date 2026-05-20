@@ -75,6 +75,16 @@ export function Dashboard() {
  */
 function DashboardContent() {
   const { user } = useAuth();
+  // `user` from `useAuth()` is `User | null`. The outer `Dashboard` component
+  // already short-circuits with `if (!user) return null;` before mounting
+  // `DashboardContent`, but `useAuth()` can yield `user === null` on an
+  // intermediate render during a sign-out / sign-in transition. Every read
+  // inside this component MUST go through `userId` (the nullable-safe
+  // alias) — never `user.id` or `user!.id` — so transient null values are
+  // handled gracefully instead of crashing the page. Hotfix for the
+  // `Cannot read properties of null (reading 'id')` crash introduced by
+  // PR #135's two direct `user.id` reads (the analyze hook + PaperList).
+  const userId = user?.id;
   const { toast } = useToast();
 
   // Pool data from context
@@ -453,7 +463,7 @@ function DashboardContent() {
   } = usePaperAnalysisActions({
     papers,
     selectedPaperIds,
-    userId: user.id,
+    userId,
     updatePaper,
   });
 
@@ -604,7 +614,7 @@ function DashboardContent() {
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
           <PaperList
             papers={papers}
-            userId={user.id}
+            userId={userId}
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}
@@ -685,11 +695,11 @@ function DashboardContent() {
         onSave={updateTag}
       />
 
-      {dedupOpen && (
+      {dedupOpen && userId && (
         <DeduplicationDialog
           open={dedupOpen}
           onOpenChange={setDedupOpen}
-          userId={user!.id}
+          userId={userId}
         />
       )}
     </div>

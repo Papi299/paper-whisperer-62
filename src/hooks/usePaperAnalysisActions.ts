@@ -39,14 +39,21 @@ export interface UsePaperAnalysisActionsArgs {
   papers: PaperWithTags[];
   selectedPaperIds: Set<string>;
   /**
-   * Authenticated user id (from `useAuth().user.id`). Threaded into the
+   * Authenticated user id (from `useAuth().user?.id`). Threaded into the
    * abstract-fetch helpers (`fetchAbstract` / `fetchAbstractsBatch`) so
    * the underlying Supabase queries carry an explicit `.eq("user_id",
    * userId)` predicate. Defense-in-depth on top of the `papers` table's
    * RLS — same S2 client-side hardening pattern PRs #133 and #134 used
    * for mutations.
+   *
+   * Accepts `null | undefined` because `useAuth()` can yield `user ===
+   * null` on an intermediate render during sign-out / sign-in transitions
+   * (the post-PR-#135 hotfix). Both handlers short-circuit with a no-op
+   * (single) or destructive toast (bulk) when `userId` is falsy — they
+   * MUST NOT call `fetchAbstract`, `fetchAbstractsBatch`, or the
+   * `analyze-paper` Edge Function with a missing user id.
    */
-  userId: string;
+  userId: string | null | undefined;
   /**
    * From `usePapers().updatePaper`. Returns `true` on full success, `false`
    * on any handled failure path (the mutation already shows a destructive
@@ -89,6 +96,12 @@ export function usePaperAnalysisActions({
 
   const handleAnalyzePaper = useCallback(async (paper: PaperWithTags) => {
     if (!paper.has_abstract) return;
+    // Hotfix guard: skip silently when auth context is mid-transition and
+    // `userId` is null/undefined. Mirrors the no-op behavior of the
+    // missing-abstract early return above — no fetch, no Edge Function
+    // invoke, no toast spam. The button is gated by `has_abstract` in
+    // the UI, so a legitimate user click can never reach this branch.
+    if (!userId) return;
     setAnalyzingPaperId(paper.id);
     try {
       // Fetch abstract on demand (uses cache if already loaded).
@@ -131,6 +144,15 @@ export function usePaperAnalysisActions({
   }, [updatePaper, queryClient, toast, userId]);
 
   const handleBulkAnalyze = useCallback(async () => {
+    // Hotfix guard: bail early when auth context is mid-transition and
+    // `userId` is null/undefined. Surfaces a destructive toast (the bulk
+    // button is more visible than the per-row analyze button, so a silent
+    // no-op would be confusing). Skips abstract batch-fetch and Edge
+    // Function invoke entirely.
+    if (!userId) {
+      toast({ title: "Not signed in", description: "Please wait for sign-in to complete, then try again.", variant: "destructive" });
+      return;
+    }
     const selectedPapers = papers.filter(p => selectedPaperIds.has(p.id));
     const papersToAnalyze = selectedPapers.filter(p => p.has_abstract); // skip papers without abstract
     if (papersToAnalyze.length === 0) {
