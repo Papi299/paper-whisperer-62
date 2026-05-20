@@ -2,14 +2,48 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 // ── Supabase mock (hoisted) ───────────────────────────────────────────
-const { mockRpc, mockFrom } = vi.hoisted(() => {
+// The bulk-delete path (`bulkDeletePapers`) chains
+// `.from("papers").delete().in("id", paperIds).eq("user_id", userId)`
+// after the S2 bulk-delete hardening, so the `delete()` mock must expose
+// a recordable `in().eq()` chain. The hoisted `mockDeleteIn` and
+// `mockDeleteInEq` spies are asserted against in the bulk-delete
+// describe block below. The attachments `select("file_path").in(...)`
+// pre-delete read is mocked via a separate `mockAttachmentsSelectIn`
+// returning `{ data: [], error: null }` so the storage-cleanup branch
+// is skipped (no storage paths).
+const {
+  mockRpc,
+  mockFrom,
+  mockDeleteIn,
+  mockDeleteInEq,
+  mockAttachmentsSelectIn,
+} = vi.hoisted(() => {
   const mockRpc = vi.fn();
-  const mockFrom = vi.fn(() => ({
-    insert: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn() })) })),
-    delete: vi.fn(() => ({ in: vi.fn() })),
-    select: vi.fn(() => ({ eq: vi.fn() })),
-  }));
-  return { mockRpc, mockFrom };
+  const mockDeleteInEq = vi.fn().mockResolvedValue({ error: null });
+  const mockDeleteIn = vi.fn(() => ({ eq: mockDeleteInEq }));
+  const mockAttachmentsSelectIn = vi
+    .fn()
+    .mockResolvedValue({ data: [], error: null });
+  const mockFrom = vi.fn((table: string) => {
+    if (table === "papers") {
+      return {
+        insert: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn() })) })),
+        delete: vi.fn(() => ({ in: mockDeleteIn })),
+        select: vi.fn(() => ({ eq: vi.fn() })),
+      };
+    }
+    if (table === "paper_attachments") {
+      return {
+        select: vi.fn(() => ({ in: mockAttachmentsSelectIn })),
+      };
+    }
+    return {
+      insert: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn() })) })),
+      delete: vi.fn(() => ({ in: vi.fn() })),
+      select: vi.fn(() => ({ eq: vi.fn() })),
+    };
+  });
+  return { mockRpc, mockFrom, mockDeleteIn, mockDeleteInEq, mockAttachmentsSelectIn };
 });
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -329,5 +363,49 @@ describe("useBulkMutations – assignment failure visibility (bulkImportFromPars
         variant: "destructive",
       })
     );
+  });
+});
+
+describe("useBulkMutations – bulkDeletePapers explicit user_id scoping (S2 defense-in-depth)", () => {
+  // Regression coverage for the S2 bulk-delete hardening — sibling to
+  // the PR #133 single-row `usePaperMutations.deletePaper` test that
+  // asserts `(\"id\", paperId)` AND `(\"user_id\", userId)` are both on
+  // the `.eq` chain. Here the chain shape is `.delete().in(\"id\",
+  // paperIds).eq(\"user_id\", userId)` — assert the trailing `.eq` is
+  // called exactly once with the user-scoping predicate.
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDeleteInEq.mockResolvedValue({ error: null });
+    mockAttachmentsSelectIn.mockResolvedValue({ data: [], error: null });
+  });
+
+  it("scopes the bulk delete by both row ids AND user_id (defense-in-depth on top of RLS)", async () => {
+    const paperIds = ["paper-1", "paper-2", "paper-3"];
+
+    const { result } = renderBulkHook();
+
+    await act(async () => {
+      await result.current.bulkDeletePapers(paperIds);
+    });
+
+    // The `.in(...)` predicate carries the row ids …
+    expect(mockDeleteIn).toHaveBeenCalledWith("id", paperIds);
+    expect(mockDeleteIn).toHaveBeenCalledTimes(1);
+    // … and the trailing `.eq(...)` carries the user-scoping predicate
+    // exactly once. RLS would already protect the row set; this filter
+    // makes the ownership intent visible at the call site.
+    expect(mockDeleteInEq).toHaveBeenCalledWith("user_id", userId);
+    expect(mockDeleteInEq).toHaveBeenCalledTimes(1);
+
+    // Success toast (no destructive variant) — confirms the chain
+    // resolved without taking the error branch.
+    const deleteToastCall = mockToast.mock.calls.find(
+      (c: unknown[]) =>
+        typeof (c[0] as { title?: string }).title === "string" &&
+        (c[0] as { title: string }).title.startsWith("Deleted "),
+    );
+    expect(deleteToastCall).toBeTruthy();
+    expect((deleteToastCall![0] as { variant?: string }).variant).toBeUndefined();
   });
 });

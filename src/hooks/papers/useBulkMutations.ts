@@ -386,8 +386,18 @@ export function useBulkMutations(
       adjustCount(-paperIds.length);
       adjustFilteredCount(-paperIds.length);
 
-      // 2. Delete from DB
-      const { error } = await supabase.from("papers").delete().in("id", paperIds);
+      // 2. Delete from DB.
+      // The `.eq("user_id", userId)` predicate is defense-in-depth on top
+      // of the `papers` table's RLS — same S2 client-side hardening
+      // pattern PRs #133 / #134 / #135 used for the single-row mutations
+      // and the abstract read path. The `if (!userId || …) return;` guard
+      // at the top of this callback already short-circuits on missing
+      // userId, so the non-null `userId` here is safe.
+      const { error } = await supabase
+        .from("papers")
+        .delete()
+        .in("id", paperIds)
+        .eq("user_id", userId);
       if (error) {
         rollbackCache(snapshot);
         toast({ title: "Error deleting papers", description: error.message, variant: "destructive" });

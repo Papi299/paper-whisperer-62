@@ -485,6 +485,16 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Client-side explicit `user_id` scoping — bulk paper delete (May 2026)
+
+Small post-checkpoint follow-up to the PR #133 / #134 / #135 / #136 hardening sequence. Closes the only S2 client-side gap surfaced by the post-PR-#136 checkpoint audit: `bulkDeletePapers` in `src/hooks/papers/useBulkMutations.ts`. The single SQL chain `supabase.from("papers").delete().in("id", paperIds)` now also carries `.eq("user_id", userId)`. The pre-existing `if (!userId || paperIds.length === 0) return;` guard at the top of the callback makes the new predicate safe.
+
+S2 inventory in [decisions-and-triggers.md](decisions-and-triggers.md) updated: `useBulkMutations.bulkDeletePapers` added to the compliant list, alongside the single-row `usePaperMutations.deletePaper` hardened in PR #133. **S2 client-side hardening is now fully closed across single and bulk delete paths.** Cache-key user-scoping for `queryKeys.papers.abstract` remains intentionally deferred (separate, smaller fix; documented in the S2 inventory).
+
+1 new focused regression test in `useBulkMutations-assignment.test.ts` asserts both `.in("id", paperIds)` and `.eq("user_id", userId)` are called exactly once on the bulk-delete chain. Vitest **280/280 → 281/281**. Playwright unchanged at **71/71** (not re-run). `npx tsc --noEmit` clean. No new ESLint warnings.
+
+No migration / RPC / RLS / Edge Function / generated-types / commercial-doc changes.
+
 ## Hotfix — Dashboard null-user crash after PR #135 (May 2026)
 
 Urgent hotfix for `Cannot read properties of null (reading 'id')` on Dashboard entry. PR #135 added two direct `user.id` reads inside `DashboardContent` (`usePaperAnalysisActions({ ..., userId: user.id })` and `<PaperList ... userId={user.id} />`) — both crashed during the narrow auth-transition window where `useAuth()` yields `user === null` before the parent `if (!user) return null;` re-render unmounts the child.
