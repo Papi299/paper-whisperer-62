@@ -1352,3 +1352,70 @@ Vitest: **276/276 → 277/277** (+1 new test). Playwright unchanged at **71/71**
 - No commercial / billing / mobile / store-readiness changes.
 - No README change (Vitest count delta is +1; not a high-level shipping-status change).
 - No bulk refactor of the remaining ~7 client-side sites that could carry the same pattern (`useProjectMutations`, `useTagMutations`, etc.) — those are explicitly deferred to follow-up PRs to keep this wave reviewable.
+
+## Client-side explicit `user_id` scoping — second wave (projects + tags)
+
+**Date:** May 2026 (immediately follows the PR #133 first wave).
+**What:** Added explicit `.eq("user_id", userId)` predicates to four client-side mutation sites across two hooks: `useProjectMutations` (update + delete) and `useTagMutations` (update + delete). Pure defense-in-depth on top of the existing RLS policies on `projects` and `tags`. **No schema, no RPC, no migration, no Edge Function, no commercial-doc changes.** Direct application of the S2 decision (see [decisions-and-triggers.md](decisions-and-triggers.md)) that PR #133 introduced.
+
+**Why:** Closes out one of two follow-ups PR #133 explicitly deferred. The deferred set was `useProjectMutations` / `useTagMutations` (this PR) and `useAbstract` batch-fetch (still deferred — requires a signature change and remains a separate careful-design PR).
+
+### Sites hardened
+
+| File | Function | Change |
+|---|---|---|
+| `src/hooks/papers/useProjectMutations.ts` | `updateProject` | `update(dbUpdates).eq("id", projectId)` → `…eq("id", projectId).eq("user_id", userId)`. The `!userId` guard already at the top of the function makes `userId` non-undefined at this line. |
+| `src/hooks/papers/useProjectMutations.ts` | `deleteProject` | `delete().eq("id", projectId)` → `…eq("id", projectId).eq("user_id", userId)`. Same `!userId` guard already present. |
+| `src/hooks/papers/useTagMutations.ts` | `updateTag` | `update(updates).eq("id", tagId)` → `…eq("id", tagId).eq("user_id", userId)`. Same `!userId` guard already present. |
+| `src/hooks/papers/useTagMutations.ts` | `deleteTag` | `delete().eq("id", tagId)` → `…eq("id", tagId).eq("user_id", userId)`. Same `!userId` guard already present. |
+
+No new `!userId` guards were added — every site already short-circuits with `if (!userId) return;` at the top of its function body, matching the existing `useProjectMutations` / `useTagMutations` style.
+
+### What's NOT in this wave
+
+- **`createProject` / `createTag`** — insert paths. The `.eq` predicate doesn't apply to inserts; ownership is set in the row payload (`{ user_id: userId, name }`) which both functions already do. Audited; no change needed.
+- **Junction table operations** (`paper_projects`, `paper_tags`) — handled via RPCs (`set_paper_projects`, `set_paper_tags`, `bulk_set_paper_projects`, `bulk_set_paper_tags`) which already enforce ownership server-side per the SECURITY DEFINER pattern from S1. Out of scope.
+- **`useAbstract` batch fetch** — still deferred to a separate careful-design PR (it requires threading `userId` through a public function signature change). Not in this wave.
+
+### Files changed
+
+- `src/hooks/papers/useProjectMutations.ts` — 2 sites hardened.
+- `src/hooks/papers/useTagMutations.ts` — 2 sites hardened.
+- `docs/decisions-and-triggers.md` — updated the S2 inventory: `useProjectMutations` and `useTagMutations` moved from "Not yet hardened in this wave" to compliant. Inventory now reflects the full set of compliant sites across both hardening waves.
+- `docs/migration-history.md` — this entry.
+- `docs/start-here.md` — short handoff entry pointing at this wave and the updated S2 inventory.
+
+### Test counts
+
+Vitest: **277/277 → 277/277 (unchanged)**. No new tests added; rationale below.
+
+### Why no new tests
+
+These four mutation sites are mechanical siblings of the well-tested `usePaperMutations` patterns from PR #133 (the new test there asserts `mockUpdateEq` is called with both `("id", x)` and `("user_id", y)` exactly twice). The `useProjectMutations` / `useTagMutations` hooks have **no existing test files** in the repo; adding mutation-chain tests for them here would require building the same hoisted-mock infrastructure used in `usePaperMutations.test.ts` (mockable supabase client, hoisted `mockUpdate` / `mockUpdateEq` / `mockUpdateResolve` chain, mockable `usePaperCacheHelpers`, plus a renderHook harness). That's exactly the scope-creep PR #133 explicitly avoided for `useFilterPresets` and `useAttachments`, and the same precedent applies here.
+
+TypeScript catches signature errors at compile time. The full Vitest suite passes (277/277). Manual smoke in the live app after merge will exercise the four sites through the Sidebar's Manage Projects / Manage Tags modals.
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 277/277 (unchanged from main).
+- `npx eslint src/hooks/papers/useProjectMutations.ts src/hooks/papers/useTagMutations.ts` — 0 errors, 0 warnings. (Note: ESLint emitted no output on these two specific files, in contrast to the pre-existing `useCallback` deps warning on `usePaperMutations.ts:235` that has been carried since before this hardening wave; that warning is on a different file and is not touched here.)
+
+### Behavior on legitimate users
+
+**No change.** Every legitimate `updateProject` / `deleteProject` / `updateTag` / `deleteTag` call already passes a row whose `user_id` equals the caller's `auth.uid()` — RLS enforces this server-side; the client always sources `userId` from `useAuth().user.id`. The new `.eq("user_id", userId)` predicate is therefore redundant with RLS for normal calls and returns the same row set. Toast text, optimistic updates, cache rollback, return contracts, and error messages: all bit-identical.
+
+### Risk
+
+**Very low.** Same risk profile as PR #133's first wave. The only new failure mode is silent zero-rows-affected if the client somehow passes a wrong `userId` (e.g., stale closure after sign-out / sign-in race) — RLS would already produce the same outcome; the new predicate just makes the failure faster at the PostgREST layer.
+
+### Non-goals
+
+- No frontend behavior changes for legitimate users.
+- No RLS, RPC, schema, migration, Edge Function, or generated-types changes.
+- No commercial / billing / mobile / store-readiness changes.
+- No README change (Vitest count unchanged at 277; not a high-level shipping-status change).
+- No tests added (rationale above).
+- No change to `createProject` / `createTag` (insert paths already correct).
+- No change to junction-table RPC flows.
+- No change to `useAbstract` batch fetch (deferred).

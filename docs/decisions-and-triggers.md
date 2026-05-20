@@ -219,7 +219,7 @@ For mutations where `userId` is not already guaranteed at the call site, add an 
 - `filter_presets` — `deletePresetMutation`, `updatePresetMutation`, `renamePresetMutation` in `useFilterPresets.ts` carry both predicates.
 - `paper_attachments` — `deleteAttachment` in `useAttachments.ts` carries both predicates.
 - All `*_pool` and `*_exclusion_pool` tables — their hooks already carry `.eq("user_id", userId)` on every read/write per pre-existing convention; no change needed.
-- `projects`, `tags` — update / delete paths in `useProjectMutations.ts` / `useTagMutations.ts` still filter by `id` only. **Not yet hardened in this wave**; same pattern can be applied in a follow-up small PR.
+- `projects`, `tags` — `updateProject` / `deleteProject` in `useProjectMutations.ts` and `updateTag` / `deleteTag` in `useTagMutations.ts` carry both predicates after the second client-side hardening wave (May 2026). Insert paths (`createProject`, `createTag`) set `user_id` in the row payload (no `.eq` needed).
 
 **Required for any new client-side mutation on a user-owned table:** include `.eq("user_id", userId)` alongside any `.eq("id", rowId)` filter. Review should reject mutation hooks that omit it.
 
