@@ -1569,3 +1569,65 @@ Vitest: **277/277 → 280/280** (+3 new tests in the null/undefined-userId descr
 ### Risk
 
 **Very low.** The hotfix only adds early-return / falsy-guard branches; the happy path is bit-identical to PR #135. The only behavior change visible to a legitimate user is the bulk-analyze "Not signed in" toast in the auth-transition window — explicitly the right user-facing outcome for that state. TypeScript catches all call sites at compile time. The 3 new tests are exhaustive over the null/undefined branches.
+
+## Client-side explicit `user_id` scoping — bulk paper delete
+
+**Date:** May 2026 (small post-checkpoint S2 follow-up to PRs #133 / #134 / #135 / #136).
+**What:** Adds an explicit `.eq("user_id", userId)` predicate to the single bulk-delete SQL chain in `src/hooks/papers/useBulkMutations.ts` — the only S2 client-side gap surfaced by the post-PR-#136 checkpoint audit. Pure defense-in-depth on top of the existing RLS policy on `papers`. **No schema, no RPC, no migration, no Edge Function, no commercial-doc, no generated-types changes.** Direct application of the S2 decision (see [decisions-and-triggers.md](decisions-and-triggers.md)) introduced by PR #133.
+
+**Why:** PR #133 hardened single-row `deletePaper` in `usePaperMutations.ts` but did not touch the bulk variant in `useBulkMutations.ts`. The checkpoint audit after PR #136 (see `docs/start-here.md`) identified `useBulkMutations.bulkDeletePapers` as the last S2 client-side site without an explicit user-scoping predicate. With this change the S2 client-side hardening is fully closed for read and write paths against `user_id`-bearing tables.
+
+### Site hardened
+
+| File | Function | Change |
+|---|---|---|
+| `src/hooks/papers/useBulkMutations.ts` | `bulkDeletePapers` | `supabase.from("papers").delete().in("id", paperIds)` → `supabase.from("papers").delete().in("id", paperIds).eq("user_id", userId)`. The pre-existing `if (!userId \|\| paperIds.length === 0) return;` guard at the top of the callback (already present from prior code) makes `userId` provably non-null at the DELETE site — no new guard needed. `userId` is already in the `useCallback` deps array. |
+
+No other sites were touched. The `useDeduplication`, junction-table RPC, settings, project / tag / filter-preset / attachment, and abstract-fetch paths are unchanged.
+
+### What's NOT in this PR
+
+- No change to `usePaperMutations.deletePaper` (single-row delete; already hardened by PR #133).
+- No change to junction-table operations (RPC-driven, `auth.uid()`-enforced per S1).
+- No change to bulk-import / file-import / RPC paths.
+- No migration, no RPC, no RLS, no Edge Function, no generated Supabase types.
+- No commercial / billing / mobile / store-readiness docs.
+- No cache-key change (`queryKeys.papers.abstract` correctness remains intentionally deferred per the S2 inventory).
+
+### Files changed
+
+- `src/hooks/papers/useBulkMutations.ts` — 1 site hardened (one SQL chain extended by one `.eq` call, plus a 6-line in-source comment explaining the S2 rationale and the existing `!userId` guard).
+- `src/hooks/papers/__tests__/useBulkMutations-assignment.test.ts` — hoisted mock chain extended so `from("papers").delete().in(...)` returns an inspectable `{ eq: mockDeleteInEq }`; `from("paper_attachments").select(...).in(...)` is also routed (the attachments pre-delete read returns `{ data: [], error: null }` so the storage-cleanup branch is skipped); **1 new test** in a new describe block asserts `mockDeleteIn` is called with `("id", paperIds)` exactly once and `mockDeleteInEq` is called with `("user_id", userId)` exactly once, plus a non-destructive success toast. The existing 8 tests (assignment-failure-visibility for `bulkImportPapers` and `bulkImportFromParsedData`) continue to pass with no assertion changes.
+- `docs/decisions-and-triggers.md` — S2 inventory extended to add `useBulkMutations.bulkDeletePapers` to the compliant list, including a note that the existing `!userId` guard makes the new predicate safe.
+- `docs/migration-history.md` — this entry.
+- `docs/start-here.md` — short handoff entry above the PR #136 hotfix entry noting this closes the bulk-delete S2 parity gap.
+
+### Test counts
+
+Vitest: **280/280 → 281/281** (+1 new test). Playwright unchanged at **71/71** and not re-run from this branch — the bulk-delete path is exercised by the existing UI flow and the new predicate is purely additive (it's redundant with RLS today).
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run src/hooks/papers/__tests__/useBulkMutations-assignment.test.ts` — 9/9 (was 8/8).
+- `npx vitest run` — 281/281 (was 280/280).
+- `npx eslint` on the two touched files — 0 errors, 2 pre-existing warnings (`react-hooks/exhaustive-deps` on `useBulkMutations.ts:217 / 366`, both on `bulkImportPapers` / `bulkImportFromParsedData` callbacks — present on `main`, unrelated to this PR).
+- **Playwright not run.** No focused bulk-delete spec exists and the new predicate is purely additive at the SQL layer.
+- **No Supabase migration validation.** This PR adds no migration.
+
+### Behavior on legitimate users
+
+**No change.** Every legitimate `bulkDeletePapers` call already passes a row set whose `user_id` equals the caller's `auth.uid()` (RLS enforces this server-side; the client always sources `userId` from `useAuth().user.id`). The new `.eq("user_id", userId)` predicate is therefore redundant with RLS and returns the same row set DELETE would have removed anyway. Toast text, optimistic updates, cache rollback, storage cleanup, and selection clearing: all bit-identical.
+
+### Risk
+
+**Very low.** Same risk profile as PR #133's first wave. The only new failure mode is silent zero-rows-affected if the client somehow passes a wrong `userId` (e.g., stale closure after sign-out / sign-in race) — RLS would already produce the same outcome; the new predicate just makes the failure faster at the PostgREST layer.
+
+### Non-goals
+
+- No frontend behavior changes for legitimate users.
+- No RLS, RPC, schema, migration, Edge Function, or generated-types changes.
+- No commercial / billing / mobile / store-readiness changes.
+- No README change (Vitest count +1 is not a high-level shipping-status change; matches the precedent set by PRs #133 / #134 / #135).
+- No new tests added beyond the 1-test regression check (single-line chain change; the new test is the focused regression for the change being made).
+- No abstract / cache-key refactor (cache-key user-scoping remains deferred per S2 inventory).
