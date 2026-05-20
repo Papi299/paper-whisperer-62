@@ -399,3 +399,99 @@ describe("usePaperAnalysisActions — bulk", () => {
     expect(result.current.bulkAnalyzeProgress).toEqual({ current: 0, total: 0 });
   });
 });
+
+describe("usePaperAnalysisActions — null/undefined userId (auth-transition hotfix)", () => {
+  // Regression coverage for the post-PR-#135 dashboard crash hotfix:
+  // `useAuth()` can yield `user === null` on an intermediate render during
+  // sign-out / sign-in transitions, which threads a null/undefined
+  // `userId` into this hook. Both handlers must short-circuit BEFORE
+  // calling `fetchAbstract`, `fetchAbstractsBatch`, or the
+  // `analyze-paper` Edge Function. The single-paper handler is a silent
+  // no-op (UI button is gated by `has_abstract`); the bulk handler
+  // surfaces a destructive "Not signed in" toast.
+
+  it("handleAnalyzePaper is a no-op when userId is null — no fetch, no invoke, no update, no toast", async () => {
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const paper = makePaper({ id: "p-1" }); // has_abstract: true by default
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({
+        papers: [paper],
+        selectedPaperIds: new Set<string>(),
+        userId: null,
+        updatePaper,
+        sleep,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleAnalyzePaper(paper);
+    });
+
+    expect(mockFetchAbstract).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(updatePaper).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalled();
+    expect(result.current.analyzingPaperId).toBeNull();
+  });
+
+  it("handleAnalyzePaper is a no-op when userId is undefined", async () => {
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const paper = makePaper({ id: "p-1" });
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({
+        papers: [paper],
+        selectedPaperIds: new Set<string>(),
+        userId: undefined,
+        updatePaper,
+        sleep,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleAnalyzePaper(paper);
+    });
+
+    expect(mockFetchAbstract).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(updatePaper).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalled();
+  });
+
+  it("handleBulkAnalyze short-circuits with destructive toast when userId is null — no batch-fetch, no invoke, no update, no sleep", async () => {
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const p1 = makePaper({ id: "p1" });
+    const p2 = makePaper({ id: "p2" });
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({
+        papers: [p1, p2],
+        selectedPaperIds: new Set(["p1", "p2"]),
+        userId: null,
+        updatePaper,
+        sleep,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleBulkAnalyze();
+    });
+
+    expect(mockFetchAbstractsBatch).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(updatePaper).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "Not signed in",
+      description: "Please wait for sign-in to complete, then try again.",
+      variant: "destructive",
+    });
+    expect(result.current.bulkAnalyzing).toBe(false);
+    expect(result.current.bulkAnalyzeProgress).toEqual({ current: 0, total: 0 });
+  });
+});
