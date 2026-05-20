@@ -155,6 +155,13 @@ function AttachmentPopoverBody({ attachments }: { attachments: { id: string; fil
 
 interface PaperListProps {
   papers: PaperWithTags[];
+  /**
+   * Authenticated user id, threaded into `useAbstract` for defense-in-depth
+   * ownership scoping on the underlying Supabase query. See
+   * `src/hooks/useAbstract.ts` JSDoc for the rationale (S2 client-side
+   * hardening pattern from PRs #133 / #134).
+   */
+  userId: string | null | undefined;
   onEdit: (paper: PaperWithTags) => void;
   onDelete: (paperId: string) => void;
   findMatchingKeywords: (abstract: string | null) => string[];
@@ -203,6 +210,7 @@ const EXPANDED_ROW_HEIGHT = 220;
 
 export function PaperList({
   papers,
+  userId,
   onEdit,
   onDelete,
   findMatchingKeywords,
@@ -431,6 +439,7 @@ export function PaperList({
             <PaperRow
               key={paper.id}
               paper={paper}
+              userId={userId}
               virtualIndex={virtualRow.index}
               measureElement={rowVirtualizer.measureElement}
               isExpanded={isExpanded}
@@ -506,6 +515,12 @@ export function PaperList({
 // Extracted row component to keep PaperList lean
 interface PaperRowProps {
   paper: PaperWithTags;
+  /**
+   * Authenticated user id, threaded into `useAbstract` for defense-in-
+   * depth ownership scoping on the underlying Supabase query. See
+   * `src/hooks/useAbstract.ts` JSDoc.
+   */
+  userId: string | null | undefined;
   isExpanded: boolean;
   onToggleExpand: (id: string) => void;
   /** Pool keyword strings for highlighting in expanded abstract. */
@@ -537,6 +552,7 @@ interface PaperRowProps {
 
 function PaperRow({
   paper,
+  userId,
   isExpanded,
   onToggleExpand,
   poolKeywordStrings,
@@ -560,7 +576,7 @@ function PaperRow({
   searchMatchFlags,
 }: PaperRowProps) {
   // On-demand abstract: only fetch when the row is expanded
-  const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(isExpanded ? paper.id : null);
+  const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(isExpanded ? paper.id : null, userId);
 
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>

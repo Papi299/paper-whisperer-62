@@ -453,6 +453,7 @@ function DashboardContent() {
   } = usePaperAnalysisActions({
     papers,
     selectedPaperIds,
+    userId: user.id,
     updatePaper,
   });
 
@@ -603,6 +604,7 @@ function DashboardContent() {
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
           <PaperList
             papers={papers}
+            userId={user.id}
             onEdit={setEditingPaper}
             onDelete={deletePaper}
             findMatchingKeywords={findMatchingKeywords}

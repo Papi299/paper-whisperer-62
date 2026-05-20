@@ -485,6 +485,21 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Client-side explicit `user_id` scoping — third wave: abstract fetch (May 2026)
+
+Third (and final) small Production-Hardening client-side PR. Closes the last remaining S2 follow-up deferred by PR #133 / PR #134: the `useAbstract` read path. Adds explicit `.eq("user_id", userId)` predicates to **three functions** in `src/hooks/useAbstract.ts` (`useAbstract`, `fetchAbstract`, `fetchAbstractsBatch`) by threading `userId` through their signatures and through every call site:
+
+- `src/hooks/usePaperAnalysisActions.ts` (single + bulk AI analyze flows)
+- `src/pages/Dashboard.tsx` (hook call + `<PaperList>` JSX prop)
+- `src/components/papers/PaperList.tsx` (`PaperListProps` + `PaperRowProps` + row-expand `useAbstract` call)
+- `src/components/papers/EditPaperDialog.tsx` (existing `userId` prop passed into `useAbstract`)
+
+Defense-in-depth on top of RLS only — **no live behavior change for legitimate users**. The hook's `enabled` predicate now also requires `userId` to be truthy, which is a no-op for the authenticated single-user app.
+
+S2 inventory in [decisions-and-triggers.md](decisions-and-triggers.md) updated: the abstract-fetch read path is now compliant, and a Status line records that the S2 client-side inventory is fully closed for read and write paths against `user_id`-bearing tables. **Cache-key user-scoping is intentionally out of scope** for this wave — the query key `queryKeys.papers.abstract(paperId)` is unchanged; that's a separate, smaller follow-up tracked outside S2.
+
+No new tests added — the 7 existing `usePaperAnalysisActions` tests are extended (one prop and two `toHaveBeenCalledWith` assertions updated). Vitest stays at **277/277**. `npx tsc --noEmit` clean. `npx eslint` reports 0 errors and 1 pre-existing warning (`PaperList.tsx:302` `useMemo` deps, unrelated to this PR).
+
 ## Client-side explicit `user_id` scoping — second wave: projects + tags (May 2026)
 
 Second small Production-Hardening client-side PR. Closes one of the two follow-ups deferred by PR #133's first wave. Adds explicit `.eq("user_id", userId)` predicates to **four client-side mutation sites** across two hooks:
@@ -494,7 +509,7 @@ Second small Production-Hardening client-side PR. Closes one of the two follow-u
 
 Defense-in-depth on top of RLS only — **no live behavior change for legitimate users**. Every site already had a `if (!userId) return;` guard at the top of its function body, so no new guards were added in this wave.
 
-S2 inventory in [decisions-and-triggers.md](decisions-and-triggers.md) updated: `useProjectMutations` and `useTagMutations` moved from "Not yet hardened in this wave" to compliant. The remaining deferred work is `useAbstract`'s batch-fetch signature change (still a separate careful-design PR; not in this wave).
+S2 inventory in [decisions-and-triggers.md](decisions-and-triggers.md) updated: `useProjectMutations` and `useTagMutations` moved from "Not yet hardened in this wave" to compliant. The remaining deferred work is `useAbstract`'s batch-fetch signature change (still a separate careful-design PR; not in this wave). _(Update: closed by the third wave above.)_
 
 No new tests added — the four sites are mechanical siblings of the well-tested `usePaperMutations` patterns from PR #133, and the project/tag mutation hooks have no existing test files; adding mutation-chain tests here would require building the same hoisted-mock infrastructure (scope-creep). Vitest stays at **277/277**. `npx tsc --noEmit` clean. `npx eslint` clean on both touched files (no warnings).
 

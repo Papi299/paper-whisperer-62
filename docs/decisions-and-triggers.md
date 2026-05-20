@@ -220,6 +220,10 @@ For mutations where `userId` is not already guaranteed at the call site, add an 
 - `paper_attachments` — `deleteAttachment` in `useAttachments.ts` carries both predicates.
 - All `*_pool` and `*_exclusion_pool` tables — their hooks already carry `.eq("user_id", userId)` on every read/write per pre-existing convention; no change needed.
 - `projects`, `tags` — `updateProject` / `deleteProject` in `useProjectMutations.ts` and `updateTag` / `deleteTag` in `useTagMutations.ts` carry both predicates after the second client-side hardening wave (May 2026). Insert paths (`createProject`, `createTag`) set `user_id` in the row payload (no `.eq` needed).
+- `papers` (abstract read path) — `useAbstract`, `fetchAbstract`, and `fetchAbstractsBatch` in `useAbstract.ts` carry both `.eq("id", paperId)` (or `.in("id", paperIds)`) and `.eq("user_id", userId)` after the third client-side hardening wave (May 2026). `userId` is threaded from `useAuth().user.id` through `Dashboard.tsx` → `usePaperAnalysisActions` / `PaperList` / `EditPaperDialog` to the call sites.
+  - **Out of scope for this wave (tracked separately):** the abstract query key `queryKeys.papers.abstract(paperId)` is intentionally **not** user-scoped. The defense-in-depth value lives in the query predicate; cache-key correctness for a hypothetical multi-tenant future is a smaller, isolated fix. In the current single-user MVP, sign-out garbage-collects the cache via TanStack Query's `gcTime`, so there is no practical leakage risk today.
+
+**Status:** The S2 client-side hardening inventory is now closed for read and write paths on `user_id`-bearing tables. No further sites are deferred under this decision. Cache-key correctness is a separate, smaller follow-up not covered by S2.
 
 **Required for any new client-side mutation on a user-owned table:** include `.eq("user_id", userId)` alongside any `.eq("id", rowId)` filter. Review should reject mutation hooks that omit it.
 

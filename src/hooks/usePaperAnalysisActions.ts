@@ -39,6 +39,15 @@ export interface UsePaperAnalysisActionsArgs {
   papers: PaperWithTags[];
   selectedPaperIds: Set<string>;
   /**
+   * Authenticated user id (from `useAuth().user.id`). Threaded into the
+   * abstract-fetch helpers (`fetchAbstract` / `fetchAbstractsBatch`) so
+   * the underlying Supabase queries carry an explicit `.eq("user_id",
+   * userId)` predicate. Defense-in-depth on top of the `papers` table's
+   * RLS — same S2 client-side hardening pattern PRs #133 and #134 used
+   * for mutations.
+   */
+  userId: string;
+  /**
    * From `usePapers().updatePaper`. Returns `true` on full success, `false`
    * on any handled failure path (the mutation already shows a destructive
    * toast and rolls back optimistic state). This hook does not branch on
@@ -68,6 +77,7 @@ export interface UsePaperAnalysisActionsResult {
 export function usePaperAnalysisActions({
   papers,
   selectedPaperIds,
+  userId,
   updatePaper,
   sleep = DEFAULT_SLEEP,
 }: UsePaperAnalysisActionsArgs): UsePaperAnalysisActionsResult {
@@ -81,8 +91,10 @@ export function usePaperAnalysisActions({
     if (!paper.has_abstract) return;
     setAnalyzingPaperId(paper.id);
     try {
-      // Fetch abstract on demand (uses cache if already loaded)
-      const abstract = await fetchAbstract(paper.id, queryClient);
+      // Fetch abstract on demand (uses cache if already loaded).
+      // `userId` is threaded for defense-in-depth ownership scoping on
+      // the underlying Supabase query — see useAbstract.ts JSDoc.
+      const abstract = await fetchAbstract(paper.id, userId, queryClient);
       if (!abstract) {
         toast({ title: "No abstract", description: "Paper has no abstract to analyze.", variant: "destructive" });
         return;
@@ -116,7 +128,7 @@ export function usePaperAnalysisActions({
     } finally {
       setAnalyzingPaperId(null);
     }
-  }, [updatePaper, queryClient, toast]);
+  }, [updatePaper, queryClient, toast, userId]);
 
   const handleBulkAnalyze = useCallback(async () => {
     const selectedPapers = papers.filter(p => selectedPaperIds.has(p.id));
@@ -131,9 +143,12 @@ export function usePaperAnalysisActions({
     let successCount = 0;
     let failCount = 0;
 
-    // Batch-fetch all abstracts in one query (avoids N+1)
+    // Batch-fetch all abstracts in one query (avoids N+1).
+    // `userId` is threaded for defense-in-depth ownership scoping on
+    // the underlying Supabase query — see useAbstract.ts JSDoc.
     const abstractMap = await fetchAbstractsBatch(
       papersToAnalyze.map(p => p.id),
+      userId,
       queryClient,
     );
 
@@ -177,7 +192,7 @@ export function usePaperAnalysisActions({
       title: "Bulk analysis complete",
       description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
     });
-  }, [papers, selectedPaperIds, updatePaper, queryClient, toast, sleep]);
+  }, [papers, selectedPaperIds, updatePaper, queryClient, toast, sleep, userId]);
 
   return {
     analyzingPaperId,
