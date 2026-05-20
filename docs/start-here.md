@@ -485,6 +485,30 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Edge Function env fail-fast validation + Gemini secret docs (May 2026)
+
+Second PR in the production-readiness phase; direct follow-up to PR #138. Closes the two Edge-side gaps the env audit flagged.
+
+What changed:
+- New `supabase/functions/_shared/env.ts` exposes `requireEdgeEnv(name): string` — Deno-side sibling of the client-side `requireClientEnv` from PR #138. Reads `Deno.env.get(name)`, throws on `undefined` / empty / whitespace-only with the message `Missing required Edge Function environment variable: ${name}. Set it in Supabase secrets or confirm it is auto-injected by the Supabase Edge runtime.`
+- Both Edge Functions (`analyze-paper`, `fetch-paper-metadata`) now route their two runtime-required reads (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) through the helper, replacing the previous `Deno.env.get(...) ?? ""` empty-string fallbacks. `GEMINI_API_KEY` validation in `analyze-paper` is **left as-is** — its existing single-cause throw (`"GEMINI_API_KEY not configured in Supabase secrets"`) is sharper than the generic helper's dual-cause phrasing.
+- README "Supabase Edge Functions" section now lists both `supabase functions deploy <name>` commands explicitly (was a single placeholder), adds a "Required Edge Function secrets" table separating auto-injected vars from the manually-set `GEMINI_API_KEY`, gives a `supabase secrets set GEMINI_API_KEY=<your-gemini-api-key> --project-ref <project-ref>` example (placeholder only, no real value), and notes the new fail-fast behavior plus the deliberate `verify_jwt = false` config (unchanged).
+
+What's NOT in this PR:
+- No client env helper changes from PR #138.
+- No `GEMINI_API_KEY` helper conversion (preserves the sharper bespoke message).
+- No deployment checklist doc — that consolidated `docs/deployment.md` remains deferred.
+- No migration / RPC / RLS / schema / generated-types changes. No commercial / billing / mobile / store-readiness changes. No new dependencies. No service-role key introduction.
+
+**Deploy required after merge.** Edge Function code changed:
+```
+supabase functions deploy analyze-paper --project-ref <project-ref>
+supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
+```
+`supabase db push` is **not** needed (no migration). `GEMINI_API_KEY` must already be in Supabase secrets for `analyze-paper` to operate (was required before this PR; only newly documented).
+
+Verification: `npx tsc --noEmit` clean (note: Edge Functions are not covered by `tsc` because the project's `tsconfig` only `include`s `src` and `vite.config.ts`; formal Deno check is deferred to the `supabase functions deploy` ceremony, which bundles via Deno). `npx vitest run` 285/285 (Edge Functions not exercised by Vitest). `npx eslint` on the three touched Edge Function files — exit 0. No deploy command run from this PR.
+
 ## Client env fail-fast validation + local-dev env docs (May 2026)
 
 First PR in the production-readiness phase that follows the S1/S2 ownership-hardening sequence (PRs #130–#137). Direct implementation of the top-priority recommendation from the post-PR-#137 production-hardening env audit.
