@@ -69,6 +69,30 @@ Per [docs/documentation-policy.md](docs/documentation-policy.md), every meaningf
 git clone <repo-url>
 cd paper-whisperer-62
 npm install
+```
+
+### Environment setup
+
+The client requires two Supabase env vars at build / dev-server time. Copy the example file and fill in the values from your Supabase project (Supabase Studio → Project Settings → API):
+
+```sh
+cp .env.example .env.local
+```
+
+Then edit `.env.local`:
+
+```
+VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=<your-anon-publishable-key>
+```
+
+- `.env.local` must **not** be committed (it's already in `.gitignore`).
+- If either value is missing or empty, the app **fails fast** at module load with an actionable error pointing back to this section — the helper in `src/lib/clientEnv.ts` validates both before initializing the Supabase client.
+- These are public, client-inlined values (anon / publishable key) by design; never put a service-role key in a `VITE_` variable.
+
+### Run the dev server
+
+```sh
 npm run dev
 ```
 
@@ -87,7 +111,7 @@ Notable manual smoke case: PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors
 ## Testing
 
 ```sh
-npx vitest run               # Unit tests (276 tests)
+npx vitest run               # Unit tests (285 tests)
 npx playwright test          # E2E tests (currently 71, single-worker)
 npx playwright test --ui     # Interactive test runner
 ```
