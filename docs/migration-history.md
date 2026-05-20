@@ -1778,3 +1778,63 @@ supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 - No `architecture-read-path.md` update.
 - No commercial / billing / mobile / store-readiness changes.
 - No deployment checklist doc.
+
+## Deployment checklist / release runbook (docs-only)
+
+**Date:** May 2026 (closing entry of the production-hardening sequence PRs #130–#139; docs-only consolidation, no code).
+**What:** New file [`docs/deployment.md`](deployment.md). Operator-facing checklist consolidating the deployment steps that previously lived across the README ("Local development", "Supabase Edge Functions", "Testing"), `start-here.md` (deploy callouts inline with PR entries), and individual `migration-history.md` entries (PR #131 / #132 reconciliation pattern, PRs #120 / #121 Edge Function deploy reminders, PR #138 / #139 env-validation behavior). Adds two pointer links from `README.md` (one in the docs table, one immediately after the Edge Functions deploy commands). Adds a handoff entry in `start-here.md` above the PR #139 entry.
+
+**Why:** PR #139 closed the env-validation work; the post-merge audit recommendation was to follow up with a central deployment runbook so future contributors / operators don't have to reconstruct the deploy sequence from PR history. With ten production-hardening PRs landed in two weeks and a non-trivial mix of client / migration / Edge Function deploy ceremonies, the lack of a single source of truth was the biggest remaining operational risk.
+
+### What's in `docs/deployment.md`
+
+- §1 Purpose — operator-runbook scoping.
+- §2 Deployment types table — PR scope → required deploy action mapping.
+- §3 Required environment variables — split into client / Vercel, Edge Function secrets (manually set), and auto-injected by the Edge runtime.
+- §4 Pre-merge checklist — CI green, scope match, docs updated, migration-specific and Edge-specific extras.
+- §5 Pre-deploy local checks — the standard four commands (`tsc`, `vitest`, `eslint`, `supabase migration list --linked`) with notes on tsc/Edge-Function coverage.
+- §6 Supabase migration deployment — standard six-step sequence plus a warnings subsection codifying the PR #131 / #132 lessons (don't blindly use `--include-all`; don't repair without audit; current ledger is aligned through `20260518010000`).
+- §7 Edge Function deployment — per-function commands; rule that touching `_shared/*` requires redeploying every consumer.
+- §8 Frontend deployment / Vercel — `vercel.json` is SPA-rewrite only; env vars live in Vercel project settings; explicit "operator-decides" callouts for branch protection / preview / rollback that this repo doesn't codify.
+- §9 Post-deploy smoke checklist — by area: general / search / metadata import (PMID `41912805`) / AI analysis / paper ops / projects-tags / attachments.
+- §10 Troubleshooting — six common failure modes with symptoms + fixes, all keyed to specific PRs (#136 null-user crash, #138 client env, #139 Edge env, `GEMINI_API_KEY` rotation, #131/#132 migration drift, blank-screen Vercel).
+- §11 What not to do — guard-rails: no service-role in client; no committed secrets; no `db push` for docs-only; no `--include-all` outside reconciliation; no assumption Vercel deploys Edge Functions; correct deploy ordering (migration → Edge Function → frontend).
+- §12 Quick links to the other operator-relevant docs.
+
+### Sites changed
+
+| File | Change |
+|---|---|
+| `docs/deployment.md` *(new)* | The runbook. ~360 lines. Markdown only; no code blocks executed; no real secret values; all commands use placeholder syntax (`<project-ref>`, `<your-gemini-api-key>`). |
+| `README.md` | Two pointer links added: one row in the Documentation table; one sentence after the Edge Function smoke-case line. No other README change. |
+| `docs/start-here.md` | One handoff entry placed above the PR #139 entry, summarizing the new doc's contents and explicitly noting "no runtime behavior changed". |
+| `docs/migration-history.md` | This entry. |
+
+### Files NOT touched
+
+- No source code changed (zero `src/`, `supabase/functions/`, `e2e/`, or `tests/` files in the diff).
+- No migration added — `ls supabase/migrations/` unchanged.
+- No Edge Function changed.
+- No env file changed — `.env.example` and `.env.test.example` are unchanged.
+- `docs/decisions-and-triggers.md` — not updated (no new architecture decision; this is operational documentation, not a durable policy rule).
+- `docs/architecture-read-path.md` — not updated (no read-path change).
+- `docs/commercial-architecture.md`, `docs/quotas-and-pricing.md`, `docs/store-launch-checklist.md` — not updated. The runbook deliberately points operators at the existing commercial planning docs via the Quick Links section but does not modify them; commercial scope remains separate.
+- `package.json`, `vite.config.ts`, `vercel.json`, `supabase/config.toml`, generated Supabase types — all unchanged.
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 285/285 (unchanged; docs-only PR cannot affect tests).
+- Markdown lint — not configured in this repo (`package.json` has no `lint:md` script; no `.markdownlint*` file). Visual review of the new file performed; relative links validated by inspection (`../README.md` resolves; `start-here.md`, `migration-history.md`, `decisions-and-triggers.md`, `documentation-policy.md`, `../src/lib/clientEnv.ts`, `../supabase/functions/_shared/env.ts`, `../vercel.json` all referenced and exist in the tree).
+- No Supabase migration validation needed (no migration added).
+- No Edge Function deploy needed (no Edge Function code changed).
+- No `supabase db push` run.
+
+### Non-goals
+
+- No runtime / behavior change for legitimate users.
+- No new architecture decision (no `decisions-and-triggers.md` entry).
+- No automation added (Vercel auto-deploy, CI status checks, etc. remain owner-configured in the hosting / CI dashboards, not in this repo).
+- No commercial / billing / mobile / store-readiness scope.
+- No README rewrite — only the two pointer additions described above.
+- No reformatting / re-flow of existing doc content (existing entries in `start-here.md` and `migration-history.md` are left bit-identical above and below the new entries).
