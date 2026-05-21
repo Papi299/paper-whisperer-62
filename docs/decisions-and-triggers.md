@@ -254,9 +254,11 @@ The decisions below capture the owner-approved commercial pivot from a B2C-only 
 
 **Re-evaluation trigger:** owner approval after the web paid pilot, supported by user demand signal for mobile.
 
-### C8. Stripe-first for web billing (2026-05-21)
+### C8. Stripe-first for web billing (2026-05-21) — **SUPERSEDED by C17 (2026-05-21)**
 
-**Decision:** **Stripe** is the chosen billing provider for the web MVP. Web subscriptions are sold via Stripe Checkout; subscription state is ingested into the internal `subscriptions` + `user_entitlements` model via a `stripe-webhook` Edge Function with signature verification.
+> **Superseded.** This decision was overturned the same day by [C17 — Merchant of Record (MoR)-first replaces Stripe-first for web billing](#c17-merchant-of-record-mor-first-replaces-stripe-first-for-web-billing-2026-05-21) below. The text is retained verbatim for historical accuracy. **Do not implement against this decision; read C17 instead.**
+
+**Decision (superseded):** **Stripe** is the chosen billing provider for the web MVP. Web subscriptions are sold via Stripe Checkout; subscription state is ingested into the internal `subscriptions` + `user_entitlements` model via a `stripe-webhook` Edge Function with signature verification.
 
 **Rationale:** Stripe supports the subscription model, future usage / add-on credit packs, B2B invoicing, and metered billing, without locking us into a payment provider when mobile work begins. It is the fastest provider to integrate against the planned `user_entitlements` schema.
 
@@ -354,3 +356,35 @@ The decisions below capture the owner-approved commercial pivot from a B2C-only 
 **Hard constraint:** the in-app surface (Settings → Privacy / Terms / Support / AI disclosure links + the at-Analyze AI disclosure) is a **launch blocker** for the web paid beta. The external URLs must exist and be linked before charging users.
 
 **Re-evaluation trigger:** owner decision to host legal pages in-repo as Markdown (would require routing + privacy-page React component); not currently planned.
+
+### C17. Merchant of Record (MoR)-first replaces Stripe-first for web billing (2026-05-21)
+
+**Decision:** **Supersedes C8.** The web MVP billing provider is **a Merchant of Record (MoR) service**, not Stripe directly. Final MoR provider selection (Paddle vs Lemon Squeezy is the current candidate set) is **pending a short provider-selection audit**. The internal entitlement model, the `subscriptions` / `subscription_events` ingestion shape, and the AI-quota / storage-quota server-side enforcement landed in PRs #143 / #144 are **all unchanged** — those were always designed to be provider-neutral (see C4).
+
+**Rationale:**
+
+1. **Stripe direct registration is not officially available for Israel-based businesses.** Forming a US LLC via Stripe Atlas (or equivalent) just to use Stripe is excessive operational overhead for an independent operator validating a paid SaaS MVP — annual filings, CPA fees, US-entity accounting, and tax-treaty work that the project does not need until product-market fit is real.
+2. **MoR providers reduce MVP operational burden** by acting as the seller of record for payment collection, invoicing, and international tax / VAT / sales-tax remittance (subject to provider terms; this is not a claim that MoRs remove all tax / legal obligations from the owner). For an independent operator pre-PMF, that trade — higher per-transaction fee in exchange for lower compliance overhead — is the right one for MVP.
+3. **Provider-neutral internal architecture survives the pivot.** C4 (separate billing-provider state from app entitlements), C7 (web-first), C9 (no time-based trial), C10 (no Core tier), C11 (Free / Pro baselines), C12 (Labs / Teams roadmap), C13 (add-on credits future), C14 (storage privacy + quota), C15 (no RTL), and C16 (legal on marketing site) all remain in force. Only the **identity of the web billing provider** changes.
+
+**Candidate providers (selection pending):**
+
+- **Paddle** — established MoR, broad geography, programmatic API, webhook ingestion model.
+- **Lemon Squeezy** — newer MoR, developer-focused tooling, simpler onboarding.
+- **Stripe** — retained as a future option only if owner constraints change (e.g., owner later forms a US/UK/EU entity directly). Not the MVP path.
+
+The selection between Paddle and Lemon Squeezy is the topic of a separate small audit task that must run **before** any provider integration PR. That audit should consider: account approval / onboarding requirements for an Israel-based operator; product / price / variant configuration model; webhook event surface and signature verification; customer portal capabilities; sandbox / test-mode flow; payout / fee schedule against the $15 / month Pro baseline; refund / dispute handling; tax / invoicing behavior; geographic coverage relevant to the target market.
+
+**What does NOT change:**
+
+- **Free / Pro / Labs-Teams MVP baselines** in [quotas-and-pricing.md](quotas-and-pricing.md) §2 — unchanged. Pro stays at the $15 / month baseline. The final MoR provider's fee schedule may affect margin review post-pilot but does not move the MVP baseline before real beta data justifies a change.
+- **Internal enforcement model** — `user_entitlements` is the application read model; `subscriptions` holds normalized provider state; `subscription_events` is the idempotent event log; `consume_ai_quota` / `refund_ai_quota` enforce AI server-side; the BEFORE INSERT trigger on `paper_attachments` enforces storage server-side. **None of this changes.**
+- **No live-provider call on quota paths.** The application never calls the billing provider during a render / quota check.
+- **The launch-blocker list** in [commercial-architecture.md §6](commercial-architecture.md) — minus the now-already-completed AI quota enforcement (PR #143) and storage privacy + quota (PR #144). MoR integration replaces "Stripe Checkout + webhook ingestion" as the remaining gating implementation item.
+- **Privacy / Terms / Support / Account-deletion / AI-disclosure** launch requirements (C14, C16) — still required before live paid launch. MoR adoption does **not** remove these requirements.
+
+**Implementation note (reaffirms C4):** the application code does not branch on Paddle vs Lemon Squeezy vs Stripe. Provider-specific Edge Functions (a `mor-webhook` / `paddle-webhook` / `lemon-squeezy-webhook` once selected; a `create-payment-session` / `create-checkout-session`; a `create-customer-portal-session`) ingest provider events into the same internal `subscriptions` / `user_entitlements` rows. Future Apple IAP / Google Play work for mobile remains purely additive under the same model.
+
+**Hard constraint:** future implementation PRs **must not hard-code Paddle or Lemon Squeezy as the chosen provider** in architecture docs or in code until the provider-selection audit is complete and a dated owner decision (C18 or later) records the choice. References to the provider should remain MoR-neutral (or use the placeholder `MOR_PROVIDER`) until then.
+
+**Re-evaluation trigger:** owner constraints change (formation of a US / UK / EU entity that opens direct Stripe support without the LLC overhead) — would re-open Stripe as a candidate. Major MoR-provider policy / fee change post-launch — would trigger a provider-switch evaluation (supported by C4's provider-neutral model with non-trivial customer / subscription remapping cost).

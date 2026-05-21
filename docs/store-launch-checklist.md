@@ -2,7 +2,7 @@
 
 > **Status: planning checklist only, and the mobile launch is now deferred behind the web launch.** No item below is "done" unless explicitly tracked elsewhere as shipped. Apple App Store and Google Play policies, fees, and required questionnaires change frequently. **Every policy item in this document must be re-verified against primary sources within 30 days of submission.** Do not treat any policy claim here as authoritative.
 >
-> **Strategy pivot (2026-05-21).** The MVP is now **web-first** with **Stripe-first** billing — see [commercial-architecture.md §1](commercial-architecture.md) and the C7–C15 entries in [decisions-and-triggers.md](decisions-and-triggers.md). Mobile / App Store / Play Store launch is **deferred to a later roadmap phase**. The full content of this document remains relevant for that later phase but is not on the critical path for the web MVP. Items that are *also* required before the **web** paid beta (privacy policy, terms, support URL, account deletion, AI disclosure) are still required and are tracked in [commercial-architecture.md §6](commercial-architecture.md). The web launch will land them first; the mobile checklist reuses them when the time comes.
+> **Strategy pivot (2026-05-21).** The MVP is now **web-first** with **Merchant of Record (MoR)-first** billing per [C17](decisions-and-triggers.md) (which superseded the earlier C8 Stripe-first direction the same day). Current MoR candidate set: **Paddle** and **Lemon Squeezy**; final selection pending a short provider-selection audit. Mobile / App Store / Play Store launch is **deferred to a later roadmap phase**. The full content of this document remains relevant for that later phase but is not on the critical path for the web MVP. Items that are *also* required before the **web** paid beta (privacy policy, terms, support URL, account deletion, AI disclosure) are still required and are tracked in [commercial-architecture.md §6](commercial-architecture.md). MoR adoption does **not** remove the privacy / terms / support / account-deletion requirements. The web launch will land them first; the mobile checklist reuses them when the time comes.
 
 ---
 
@@ -12,7 +12,7 @@ Each section below is a category of readiness. Items use plain Markdown checkbox
 
 **Web launch first.** Treat this checklist as the **mobile-phase** checklist. Items relevant to the web launch (privacy / terms / support URL / account deletion / AI disclosure / monitoring) have moved to the web blocker list in [commercial-architecture.md §6](commercial-architecture.md); they will be completed during the web launch and reused here when mobile work begins.
 
-**Billing-provider direction.** Stripe is the web MVP provider per the 2026-05-21 pivot. Apple IAP and Google Play Billing remain the planned ingestion paths when mobile work begins; the [commercial-architecture.md §8](commercial-architecture.md) provider-neutral ingestion model is intact and supports adding them as purely additive Edge Functions.
+**Billing-provider direction.** A Merchant of Record (MoR) provider is the web MVP path per C17 (2026-05-21 — supersedes C8 Stripe-first the same day); current candidate set is Paddle and Lemon Squeezy with final selection pending a provider-selection audit. Apple IAP and Google Play Billing remain the planned ingestion paths when mobile work begins; the [commercial-architecture.md §8](commercial-architecture.md) provider-neutral ingestion model is intact and supports adding them as purely additive Edge Functions.
 
 **Labs / Teams.** This tier is **"Coming Soon" / "Contact Sales" only** in MVP and is a **web-first marketing concern** before it is a native app-store concern. Do not configure Labs / Teams SKUs in App Store Connect or Play Console until the underlying shared-libraries architecture exists — see [commercial-architecture.md §3.3](commercial-architecture.md).
 
@@ -55,7 +55,7 @@ Each section below is a category of readiness. Items use plain Markdown checkbox
 
 ## 4. Billing / subscription readiness
 
-- [ ] Billing provider chosen (Stripe / Apple IAP / Google Play Billing / RevenueCat / multiple). Captured as a dated decision in [decisions-and-triggers.md](decisions-and-triggers.md) when made.
+- [ ] Mobile-phase billing-provider chosen (Apple IAP / Google Play Billing / RevenueCat / multiple). Captured as a dated decision in [decisions-and-triggers.md](decisions-and-triggers.md) when made. Web launch uses a Merchant of Record per C17 (Paddle / Lemon Squeezy candidate set; selection pending) — mobile is the separate concern.
 - [ ] Webhook / RTDN / S2S notification ingestion Edge Functions implemented and idempotent.
 - [ ] Internal entitlement model (`user_entitlements`, `subscriptions`, `usage_counters`) populated correctly per [commercial-architecture.md](commercial-architecture.md).
 - [ ] Free trial start / convert / cancel flows tested end-to-end on each platform.

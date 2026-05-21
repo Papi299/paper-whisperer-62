@@ -2,7 +2,9 @@
 
 > **Status: MVP baselines with instrumentation requirement, not final commitments.** Every numeric value below is an **approved starting point** for implementation. Each value must be wired with telemetry from day one of the closed beta so it can be validated against real usage, AI cost, conversion, and abuse signals before it is treated as permanent. Do not surface specific numbers in marketing copy outside the planned MVP pricing page until they are explicitly ratified post-beta. **No commercial functionality is implemented today.**
 >
-> **Strategy pivot (2026-05-21).** The prior framing (Core / AI tiers, 7-day time-based trial, single-user-only) has been superseded by a **web-first Product-Led Growth (PLG)** model with **Stripe-first** billing, a **Free forever** tier with an AI teaser, **Pro / Researcher** as the primary paid SKU, and **Labs / Teams** as a future B2B "Coming Soon / Contact Sales" tier. See the [Commercial strategy pivot (2026-05-21)](decisions-and-triggers.md) entries (C7–C15) and the rewritten [commercial-architecture.md](commercial-architecture.md).
+> **Strategy pivot (2026-05-21).** The prior framing (Core / AI tiers, 7-day time-based trial, single-user-only) has been superseded by a **web-first Product-Led Growth (PLG)** model with a **Free forever** tier (AI teaser), **Pro / Researcher** as the primary paid SKU, and **Labs / Teams** as a future B2B "Coming Soon / Contact Sales" tier. See the C7–C16 entries in [`decisions-and-triggers.md`](decisions-and-triggers.md).
+>
+> **Billing-provider pivot (2026-05-21).** The earlier "Stripe-first" billing direction (C8) has been **superseded by C17 — Merchant of Record (MoR)-first**. Web billing will be handled by a Merchant of Record provider; the candidate set is **Paddle** and **Lemon Squeezy**, with final selection pending a short provider-selection audit. **The numbers in this document are unchanged.** The $15 / month Pro baseline, the Free / Pro / Labs-Teams cap structure, and the instrumentation requirements remain authoritative. The chosen MoR provider's fee schedule may affect margin review post-pilot, but does **not** move the MVP baselines before real beta data justifies a change.
 
 ---
 
@@ -19,7 +21,7 @@ Three tiers. One is the entry funnel, one is the primary paid SKU, one is a road
 | Tier | Status | Price (MVP baseline) | Paper limit | Storage | AI quota | Key features | Notes |
 |---|---|---|---|---|---|---|---|
 | **Free** | MVP, self-serve | $0 forever | 1,500 | 500 MB | **15 lifetime** AI calls | Core library, identifier + file imports, search, filters, projects, tags, notes, saved searches / filter presets, exports, attachments (within cap), **Keyword Pool** | PLG entry point + AI teaser. Excludes Synonyms / Exclusions (Pro-only). |
-| **Pro / Researcher** | MVP, self-serve | **$15 / month** | 10,000 | 2 GB | **350 / month** | Everything in Free, plus **Synonyms pool** + **Exclusions pool**, full monthly AI quota | Primary monetization tier. Annual cadence at a discount in scope if cheap with Stripe; otherwise fast-follow. |
+| **Pro / Researcher** | MVP, self-serve | **$15 / month** | 10,000 | 2 GB | **350 / month** | Everything in Free, plus **Synonyms pool** + **Exclusions pool**, full monthly AI quota | Primary monetization tier. Annual cadence at a discount in scope if cheap with the chosen MoR provider; otherwise fast-follow. |
 | **Labs / Teams** | **Roadmap — "Coming Soon" / "Contact Sales" only. NOT self-serve.** | $99–$149 / month baseline range, **up to 5 seats** | unlimited | 10 GB | TBD (likely team-level pool) | Future: shared libraries, seats, owner / admin roles, invitations, team-level entitlements, possible SSO | Not sellable until shared-libraries + seat-management architecture exists. Lead capture + price anchoring only. |
 
 ### Free tier — feature inclusions and exclusions
@@ -51,7 +53,7 @@ Both Synonyms and Exclusions are currently user-accessible features in the codeb
 
 **What it is, today:** A row on the marketing pricing page that reads "Labs / Teams — Coming Soon — Contact Sales". A lead-capture form that emails the owner. A signal to academic labs, clinical research groups, and dietitian / clinician teams that the product has an institutional path.
 
-**What it is not, today:** Sellable. A real SKU in Stripe. A live entitlement.
+**What it is not, today:** Sellable. A real SKU on any billing provider. A live entitlement.
 
 **What it requires before it can be sold:**
 - Shared libraries (multiple users on the same paper library).
@@ -100,7 +102,7 @@ The schema, Edge Functions, and observability layer must track the following fro
 - Storage used (bytes) per user, sampled from `usage_counters` on a daily cadence.
 - Paper count per user, same cadence.
 - Library age (days since sign-up) per user.
-- Free → Pro upgrade events (Stripe webhook → `subscription_events`).
+- Free → Pro upgrade events (MoR provider webhook → `subscription_events`).
 - Pro → cancel events.
 - AI calls remaining at upgrade (how close to the wall does a converter typically get?).
 
@@ -134,17 +136,17 @@ These items are **not gating** for the next implementation PR (schema), but each
 
 1. **Labs / Teams exact AI quota model** — team-level pool vs. per-seat allocation vs. shared base + per-seat overage. Decision can wait until the shared-libraries architecture is being designed.
 2. **Add-on AI credit pack pricing** — e.g. `+100 AI calls for $X` one-time. Architecture support is required from the start (see §6); pricing is later.
-3. **Annual discount percentage** — broadly 16–20% off the monthly rate is typical; exact number owner-decided. May or may not ship at the very first paid launch depending on Stripe-side configuration cost.
+3. **Annual discount percentage** — broadly 16–20% off the monthly rate is typical; exact number owner-decided. May or may not ship at the very first paid launch depending on the chosen MoR provider's configuration cost.
 4. **Marketing site provider and legal URL structure** — Webflow / Framer / other. Decides where `privacy.paperwhisperer.com` (or equivalent) lives.
 5. **Monitoring / error-tracking provider** — Sentry / Better Stack / DataDog / PostHog-with-errors. Required before paid beta per [commercial-architecture.md §6](commercial-architecture.md).
 6. **Support channel** — `support@…` email, in-app contact form, Discord, or other. Required for the marketing site's Support URL.
-7. **Staging environment timing** — when does the second Supabase project (and second Vercel project, separate Gemini key, sandboxed Stripe) come online? Recommended before paid beta to avoid testing billing against production.
+7. **Staging environment timing** — when does the second Supabase project (and second Vercel project, separate Gemini key, sandboxed MoR provider account) come online? Recommended before paid beta to avoid testing billing against production.
 8. **Closed paid pilot cohort size and terms** — invite-only N users, charge real money or comp at a discount, length of pilot before opening to broader paid beta.
 9. **Free → Pro grandfathering** — when MVP-baseline numbers move post-pilot, do existing Free users keep the launch caps or migrate to new ones? Same question for Pro pricing.
 10. **Education / student / non-profit pricing** — out of scope unless owner adds. Recommend deferring until post-launch demand signal.
-11. **Whether the Pro tier ships with annual at launch** — Stripe configuration cost vs. SKU complexity. Default: monthly only at first paid launch; annual as fast-follow.
+11. **Whether the Pro tier ships with annual at launch** — MoR provider configuration cost vs. SKU complexity. Default: monthly only at first paid launch; annual as fast-follow.
 12. **What happens when an AI quota is exhausted on Pro** — hard stop only (today's plan), or offer add-on credit pack inline (requires §6 ahead of paid beta)?
-13. **Per-region pricing** — Stripe's defaults vs. tier-specific currency adjustments. Default: Stripe defaults.
+13. **Per-region pricing** — the chosen MoR provider's defaults vs. tier-specific currency adjustments. Default: provider defaults.
 
 ---
 
@@ -154,7 +156,7 @@ The architecture must support add-on credit packs from day one so they can ship 
 
 What add-on credits will be when they ship:
 
-- A user on Pro who exhausts their 350 / month AI quota can buy, e.g., `+100 AI analyses` as a one-time Stripe charge.
+- A user on Pro who exhausts their 350 / month AI quota can buy, e.g., `+100 AI analyses` as a one-time MoR provider charge.
 - The credit balance accrues in `usage_credits` and is consumed **after** the monthly quota is exhausted, before the user is hard-blocked.
 - The credit pack may have an expiry (e.g., consumable within 90 days) or may roll forever — owner decision later.
 - The application code (`analyze-paper`) does not change; the `consume_ai_quota` RPC absorbs the credit-pack logic.
@@ -169,7 +171,7 @@ Re-evaluation of the §2 baseline values after closed beta should be back-solved
 
 - **Gemini API cost** at observed abstract token lengths × the AI quota × adoption rate × margin target.
 - **Supabase costs** for the chosen plan tier — database compute, storage, egress, Edge Function invocations, Auth, log retention.
-- **Stripe fees** on web subscription revenue (current published structure).
+- **MoR provider fees** on web subscription revenue per the chosen provider's published structure (Paddle vs Lemon Squeezy candidate set; final fee schedule resolves at provider-selection time).
 - **Chargeback / refund / Free → Pro conversion rates** observed in closed beta.
 - **Competitor positioning** — Paperpile, Mendeley Premium, Zotero subscription, Readwise Reader, Elicit, SciSpace, Scite, Connected Papers Premium, ResearchRabbit, and the cost of substituting general-purpose LLM tools (ChatGPT Plus / Claude Pro) for paper-specific AI.
 - **Target gross margin** the owner is willing to operate at while keeping prices accessible to students and individual researchers.
