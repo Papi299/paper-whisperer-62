@@ -1913,3 +1913,141 @@ Vitest **285/285** (unchanged — docs-only). Playwright unchanged at the previo
 - No legal text drafted as final.
 - No commitment of any specific final price beyond the documented MVP baselines.
 - No commitment to a marketing site provider, monitoring provider, support channel, or staging timing — all listed as pending in `owner-decisions.md §2.1`.
+
+## Commercial foundation — entitlement and usage schema
+
+**Date:** 2026-05-21 (first implementation PR after the PR #141 commercial strategy pivot).
+**What:** New migration `20260521010000_add_entitlement_usage_schema.sql`. Creates five tables — `user_entitlements`, `subscriptions`, `usage_counters`, `subscription_events`, `usage_credits` — that constitute the internal commercial read model and the foundation for the future AI quota enforcement RPCs and Stripe webhook ingestion. Extends the canonical `public.handle_new_user()` trigger to also seed the default Free entitlement and the lifetime AI counter on every new signup. Backfills existing `auth.users` rows. **No application code, no Edge Function, no Stripe SDK, no UI changes, no generated-types update, no env file changes.** Migration is prepared in the repo but **not deployed** — the user runs `supabase db push` after merge per the standard sequence in `docs/deployment.md`.
+
+**Why:** PR #141 (2026-05-21) approved the web-first PLG strategy and explicitly named "entitlement + usage schema" as the next implementation PR (per [commercial-architecture.md §7](commercial-architecture.md) item 2 and [owner-decisions.md §3](owner-decisions.md) item 2). This PR is the single bottleneck unblocking three downstream phases: server-side AI quota enforcement (which reads from these tables), storage-quota enforcement (which reads `user_entitlements.storage_quota_bytes`), and Stripe webhook ingestion (which writes to `subscriptions` and recomputes `user_entitlements`). Stripe implementation is **explicitly blocked** by C8 until this schema exists; the unblock lands with this PR's merge + remote deploy.
+
+### Tables created
+
+| Table | Purpose | Client access | Writes |
+|---|---|---|---|
+| `user_entitlements` | Hot-path read model: plan, status, paper/storage/AI quotas, premium-taxonomy flag, period bounds. One row per user. | **SELECT-own only** (`auth.uid() = user_id`). | Server-only (future Stripe webhook / admin RPC). |
+| `subscriptions` | Provider-normalized billing state. Provider-neutral schema supporting `stripe` (MVP), `apple` / `google` / `revenuecat` / `manual` (future). | **No client policy** — the UI reads `user_entitlements`, not raw subscription rows. | Server-only. |
+| `usage_counters` | Per-user, per-feature, per-period (lifetime / monthly) usage counters. `feature='ai_analysis'` for now. Uses `'epoch'::timestamptz` sentinel for lifetime `period_start` so uniqueness works without NULL handling. | **No client policy** — future `consume_ai_quota` RPC reads on the user's behalf via SECURITY DEFINER. | Server-only. |
+| `subscription_events` | Append-only audit log of provider webhook / S2S events. Provider + `provider_event_id` uniqueness gives idempotency. | **No client policy** — operator / support reads via service-role only. | Server-only. |
+| `usage_credits` | Placeholder for future add-on AI credit packs (C13). Schema shape exists from day one so the future `consume_ai_quota` RPC can fall through to credits after the quota wall. NOT consumed in MVP. | **SELECT-own** (anticipating Settings → Credits view). | Server-only. |
+
+### Important columns and constraints
+
+- `user_entitlements.plan` ∈ `{free, pro, labs_team}` — `labs_team` reserved per C12; not sellable in MVP.
+- `user_entitlements.plan_status` ∈ `{active, trialing, past_due, canceled, incomplete, paused}` — `trialing` retained for **provider-state compatibility** (Stripe may emit it if an SKU later attaches an introductory offer), with an inline comment noting MVP doesn't generate trialing rows on the application-write path (C9 — no time-based trial).
+- `subscriptions.status` covers the full Stripe-compatible set: `{active, trialing, past_due, canceled, incomplete, incomplete_expired, paused, unpaid}`.
+- `subscriptions.provider` and `subscription_events.provider` constrained to `{stripe, apple, google, revenuecat, manual}` (matches `commercial-architecture.md §8`).
+- All quota / limit columns are non-negative (`CHECK (quota >= 0)`).
+- `usage_credits.quantity_remaining <= quantity_granted` (CHECK) and `quantity_granted > 0`.
+- Unique `(provider, provider_subscription_id)` on `subscriptions` and `(provider, provider_event_id)` on `subscription_events` for idempotent webhook ingestion.
+
+### Free-tier seed defaults (column defaults on `user_entitlements`)
+
+| Column | Value |
+|---|---|
+| `plan` | `free` |
+| `plan_status` | `active` |
+| `paper_limit` | 1500 |
+| `storage_quota_bytes` | 524288000 (500 MB) |
+| `ai_lifetime_quota` | 15 |
+| `ai_monthly_quota` | 0 |
+| `premium_taxonomy_enabled` | `false` |
+| `labs_team_enabled` | `false` |
+
+These match the C11 MVP baselines in [quotas-and-pricing.md §2](quotas-and-pricing.md). Numeric values are explicitly **MVP baselines with instrumentation** — not permanent — per C11.
+
+### Indexes
+
+- `user_entitlements`: unique `(user_id)`; `(plan)`; partial `(billing_provider, billing_customer_id)`; partial `(billing_provider, billing_subscription_id)`.
+- `subscriptions`: unique partial `(provider, provider_subscription_id)`; `(user_id)`; partial `(provider, provider_customer_id)`; `(status)`.
+- `usage_counters`: unique `(user_id, feature, period_type, period_start)`; `(user_id, feature, period_type)`.
+- `subscription_events`: unique `(provider, provider_event_id)`; `(user_id)`; `(subscription_id)`; `(event_type)`; `(created_at DESC)`.
+- `usage_credits`: `(user_id, feature)`; partial `(expires_at)` WHERE NOT NULL; partial unique `(provider, provider_reference_id)` WHERE both NOT NULL.
+
+### RLS posture
+
+`ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY` on all five tables (canonical posture from `20260412030000_fix_rls_all_tables.sql`). Two SELECT-own policies (`user_entitlements`, `usage_credits`). **No INSERT / UPDATE / DELETE policy on any of the five tables.** All commercial state is server-write-only. Future Stripe webhook ingestion runs as service-role inside an Edge Function and bypasses RLS by design.
+
+### Signup trigger behavior
+
+`public.handle_new_user()` (the canonical signup trigger, last reset by `20260411010000`) is rewritten in this migration to do three idempotent INSERTs per new `auth.users` row:
+
+1. `INSERT INTO public.profiles (user_id, email)` — unchanged from prior migration.
+2. `INSERT INTO public.user_entitlements (user_id)` — column defaults supply the Free baseline.
+3. `INSERT INTO public.usage_counters (user_id, feature, period_type, period_start) VALUES (NEW.id, 'ai_analysis', 'lifetime', 'epoch'::timestamptz)` — lifetime counter at zero.
+
+Every INSERT has `ON CONFLICT … DO NOTHING` so the trigger is safe to re-run / re-apply against a partially-populated state. `SECURITY DEFINER SET search_path = public` preserved from the prior version. The trigger attachment (`on_auth_user_created`) is dropped and recreated to ensure the new function body takes effect.
+
+### Backfill behavior
+
+Migration end runs two idempotent backfill INSERTs:
+
+- One `user_entitlements` row per existing `auth.users` user (`ON CONFLICT (user_id) DO NOTHING`).
+- One lifetime `ai_analysis` `usage_counters` row per existing user (`ON CONFLICT (user_id, feature, period_type, period_start) DO NOTHING`).
+
+Re-running the migration on a partially-populated remote (e.g., the trigger has already created rows for users who signed up between phases) is a safe no-op for existing rows.
+
+### What is intentionally NOT included
+
+- No `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs (next PR).
+- No change to `analyze-paper` Edge Function. Quota is **not enforced yet** by this PR.
+- No `BEFORE INSERT` trigger on `paper_attachments` for storage quota (separate PR).
+- No change to the `attachments` Storage bucket SELECT policy (separate PR; C14 launch blocker).
+- No Stripe Checkout, no `stripe-webhook` Edge Function, no Stripe dependency.
+- No UI / Settings surface, no paywall, no upgrade nudge.
+- No generated-types update in `src/integrations/supabase/types.ts` — the new tables are not yet read by any client hook, so the type drift is harmless until a future PR adds a hook against `user_entitlements`. Per the task brief: when uncertain about generated-types convention, avoid them in this PR.
+- No env file changes; no `package.json` changes; no new dependency.
+
+### Verification
+
+- `supabase stop --no-backup` — clean.
+- `supabase start` (from this worktree) — all 58 migrations replay successfully end-to-end. Container set up clean.
+- Schema verification (via `docker exec supabase_db_lioxtgiputfniqbktcsz psql …`):
+  - All 5 new tables present in `public`.
+  - `pg_class.relrowsecurity = t` AND `relforcerowsecurity = t` on all 5.
+  - `pg_policies` shows exactly two `SELECT` policies (`user_entitlements`, `usage_credits`), both `(auth.uid() = user_id)`; zero INSERT/UPDATE/DELETE policies on any of the five tables.
+  - Trigger smoke: inserted one row into `auth.users`; `handle_new_user` fired and created a row in `profiles` + `user_entitlements` + `usage_counters` with exactly the documented Free defaults (`plan=free, plan_status=active, paper_limit=1500, storage_quota_bytes=524288000, ai_lifetime_quota=15, ai_monthly_quota=0, premium_taxonomy_enabled=f, labs_team_enabled=f`; counter `feature=ai_analysis, period_type=lifetime, period_start=1970-01-01 00:00:00+00, used=0, reserved=0`). Deleting the `auth.users` row cascaded out the derived rows correctly.
+  - Backfill on empty `auth.users` produced zero rows in the derived tables, as expected.
+- `npx tsc --noEmit` — clean (no source changes).
+- `npx vitest run` — 285/285 (unchanged; no test code touched).
+- `supabase migration list --linked` (run from the linked main worktree) — Local = Remote through `20260518010000`; the new `20260521010000` is **not yet on remote**, as intended.
+- **`supabase db push` was NOT run.** Remote deployment is the operator's next step per the standard sequence in `docs/deployment.md`.
+
+### Deployment note
+
+Standard sequence per `docs/deployment.md §6.1`:
+
+```sh
+supabase migration list --linked       # confirm Local = Remote through 20260518010000
+supabase db push --dry-run             # should list ONLY 20260521010000_add_entitlement_usage_schema.sql
+supabase db push                       # apply
+supabase migration list --linked       # confirm new row aligned
+```
+
+Post-deploy spot-check SQL (Supabase Studio):
+
+```sql
+SELECT count(*) FROM public.user_entitlements;   -- == count(*) FROM auth.users
+SELECT count(*) FROM public.usage_counters
+  WHERE feature='ai_analysis' AND period_type='lifetime';   -- == count(*) FROM auth.users
+SELECT plan, plan_status, paper_limit, storage_quota_bytes,
+       ai_lifetime_quota, ai_monthly_quota, premium_taxonomy_enabled
+  FROM public.user_entitlements
+  WHERE user_id = '<owner-uid>';                  -- should show the Free defaults
+```
+
+No Edge Function deploy needed (no `supabase/functions/` change).
+
+### Risk
+
+**Very low.** Migration adds new tables only — no schema mutation on existing tables. The single existing-object change is `CREATE OR REPLACE FUNCTION public.handle_new_user()`, which extends the prior signup behavior with two additional idempotent INSERTs and an `ON CONFLICT DO NOTHING` on the existing `profiles` INSERT (slightly more defensive than the prior version). Backfill statements are idempotent.
+
+### Non-goals
+
+- No AI quota enforcement.
+- No Stripe integration.
+- No storage-quota enforcement (separate launch-blocker PR per C14).
+- No attachments bucket privacy change (separate launch-blocker PR per C14).
+- No UI surface for plan / quota / billing.
+- No new architecture decision in `decisions-and-triggers.md` — this PR implements C7–C16 from PR #141 without introducing a new durable rule.
+- No README test-count change (Vitest stays at 285/285).

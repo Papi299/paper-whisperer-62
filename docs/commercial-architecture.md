@@ -232,7 +232,7 @@ When `consume_ai_quota` would return `quota_exceeded`, a future variant checks `
 
 The following items **must** be complete before opening the closed paid pilot (real Stripe live-mode). They are the minimum bar at which charging users is defensible.
 
-1. **Entitlement + quota schema.** `user_entitlements`, `subscriptions`, `usage_counters` (and `subscription_events` as audit log). RLS: client SELECT-only on its own `user_entitlements` row; everything else server-only.
+1. **Entitlement + quota schema.** ✅ **Implemented** in migration `20260521010000_add_entitlement_usage_schema.sql` (repo only — remote deploy pending). Five tables: `user_entitlements`, `subscriptions`, `usage_counters`, `subscription_events`, `usage_credits`. RLS posture: client SELECT-own only on `user_entitlements` and `usage_credits`; everything else server-only. Signup trigger extended to seed Free defaults. See [migration-history.md](migration-history.md) under "Commercial foundation — entitlement and usage schema".
 2. **Server-side AI quota enforcement inside `analyze-paper`.** `consume_ai_quota` / `refund_ai_quota` RPCs; `analyze-paper` consults them before calling Gemini.
 3. **Attachment bucket privacy hardening.** Drop the public-read SELECT policy on the `attachments` bucket. Restrict SELECT to owner-only path-prefix RLS. Keep signed URLs as the only read path.
 4. **Storage quota enforcement.** `BEFORE INSERT` trigger on `paper_attachments` checking sum vs `storage_quota_bytes` per `user_entitlements`. `AFTER INSERT/DELETE` triggers maintaining `usage_counters.storage_used_bytes`.
@@ -251,8 +251,8 @@ Items not on this list (mobile packaging, app-store assets, Labs/Teams shared li
 
 The next ~6 PRs are blocked by each other in a clear order. This is the recommended sequence:
 
-1. **Commercial strategy docs pivot** *(this PR — docs only).*
-2. **Entitlement + usage schema** — migration + RLS + Free-tier seeding for the existing user.
+1. **Commercial strategy docs pivot** *(PR #141, merged 2026-05-21).* ✅ Done.
+2. **Entitlement + usage schema** — migration + RLS + Free-tier seeding for the existing user. ✅ **Implemented** in `20260521010000_add_entitlement_usage_schema.sql` (remote deploy pending).
 3. **AI quota enforcement in `analyze-paper`** — `consume_ai_quota` / `refund_ai_quota` RPCs + Edge Function wiring + client UI for quota state + quota-exceeded toast.
 4. **Attachments privacy hardening + storage-quota enforcement** — bucket SELECT-policy tightening + `BEFORE INSERT` size trigger.
 5. **Stripe Checkout + webhook ingestion** — `stripe-webhook` Edge Function + Settings → "Upgrade to Pro" flow + Stripe customer portal link.

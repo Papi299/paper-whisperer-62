@@ -76,9 +76,9 @@ Each row below is the next PR that becomes implementable when its prerequisites 
 
 | # | PR | Prerequisites | Status |
 |---|---|---|---|
-| 1 | **Commercial strategy docs pivot** *(this PR)* | None — docs only. | **Unblocked.** |
-| 2 | **Entitlement + usage schema** — migration adding `user_entitlements`, `subscriptions`, `usage_counters`, `subscription_events`, and the `usage_credits` shape. Seeds the existing user as `plan = 'free'`. | This PR (C7–C16 captured). | **Unblocked** after this PR merges. |
-| 3 | **AI quota enforcement in `analyze-paper`** — `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs with `auth.uid()` guards; Edge Function consults them before calling Gemini. | #2. | Blocked on #2. |
+| 1 | **Commercial strategy docs pivot** *(PR #141)* | None — docs only. | ✅ **Done** (merged 2026-05-21). |
+| 2 | **Entitlement + usage schema** — migration adding `user_entitlements`, `subscriptions`, `usage_counters`, `subscription_events`, and the `usage_credits` shape. Seeds the existing user as `plan = 'free'`. | PR #141 (C7–C16 captured). | ✅ **Implemented** in `20260521010000_add_entitlement_usage_schema.sql` (in this PR; remote deploy pending). |
+| 3 | **AI quota enforcement in `analyze-paper`** — `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs with `auth.uid()` guards; Edge Function consults them before calling Gemini. | #2. | **Unblocked** after this PR's remote deploy. Recommended next implementation PR. |
 | 4 | **Attachments privacy + storage-quota enforcement** — tighten bucket SELECT policy; `BEFORE INSERT` quota trigger; `AFTER INSERT/DELETE` usage triggers. | #2 (`user_entitlements` must exist for the trigger to read the quota). | Blocked on #2. |
 | 5 | **Stripe Checkout + webhook ingestion** — `stripe-webhook` Edge Function; Settings → "Upgrade to Pro" flow; Stripe customer portal link. | #2 + #3 (server-side AI enforcement must exist before charging). | Blocked on #2, #3 per C8. |
 | 6 | **UI: paywall / upgrade / quota state** — `<UpgradeNudge>`, per-action quota display, Settings → subscription / billing-portal / cancel. | #5. | Blocked on #5. |
