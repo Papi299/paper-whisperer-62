@@ -1838,3 +1838,78 @@ supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 - No commercial / billing / mobile / store-readiness scope.
 - No README rewrite — only the two pointer additions described above.
 - No reformatting / re-flow of existing doc content (existing entries in `start-here.md` and `migration-history.md` are left bit-identical above and below the new entries).
+
+## Commercial strategy pivot — web-first PLG + Stripe-first (docs-only)
+
+**Date:** 2026-05-21 (post-PR #140 Pre-Commercial Readiness Audit follow-up).
+**What:** Docs-only PR that records the owner-approved commercial pivot from a B2C-only / single-user / Core+AI / 7-day-trial framing to a **web-first Product-Led Growth (PLG)** model with **Stripe-first** web billing, a **Free forever** entry tier, **Pro / Researcher** as the primary self-serve paid SKU at a $15 / month MVP baseline, and **Labs / Teams** as a future B2B "Coming Soon / Contact Sales" tier. **No application code, schema, RPC, RLS, Edge Function, migration, env file, dependency, or deploy. No legal text shipped as final.**
+
+**Why:** The post-PR-#140 Pre-Commercial Readiness Audit established that the engineering foundation is strong but the commercial-product layer is unbuilt, and recommended a small docs-only pivot PR before any schema or billing implementation begins. The owner approved the pivot's strategic direction; this PR captures it as durable documentation so future implementation PRs use the correct commercial direction.
+
+### Sites changed
+
+| File | Change |
+|---|---|
+| `docs/commercial-architecture.md` | Substantial rewrite. New "MVP product model" (web-first / Stripe-first / Freemium PLG / Free / Pro / Labs-Teams roadmap / English-only). New "Commercial tiers (MVP baselines)" section with three-tier table. New "Launch blockers" section (10 items required before paid beta). New "Recommended future implementation order" (10-step sequence). "Architecture principles" (§2.1–§2.4), "Proposed tables" (§4 — `user_entitlements` / `subscriptions` / `usage_counters` / `subscription_events` / new `usage_credits` placeholder), and "Why commercial state is not added to profiles" (§9) preserved with light adaptations. New "Legal pages location" (§11) records the external-marketing-site decision. |
+| `docs/quotas-and-pricing.md` | Replaced trial / Core / AI framing with the Free / Pro / Labs-Teams tier table and explicit "MVP baseline vs final pricing" + "Instrumentation required" sections. Added "Add-on credit packs (future, not MVP)" section. Updated "Inputs that must drive the final numbers" and "Open questions" to match the pivot. |
+| `docs/store-launch-checklist.md` | Banner clarifies this is now the **mobile-phase checklist** post-web-launch. Section 1 product-readiness bullets updated to Free / Pro tier language. App Store Connect §6 SKU bullet updated to "Pro monthly / annual, no Trial, no Labs/Teams". Play Console §7 SKU bullet matched. New §8a "Attachments / PDF storage readiness (shared with web launch)" lists the bucket-tightening + quota-trigger items as shared with the web blockers. |
+| `docs/decisions-and-triggers.md` | New dated section "Commercial strategy pivot (2026-05-21)" with **C7–C16**. C1 clarified inline (still accurate for shippable MVP; Labs/Teams is roadmap only). C2 marked **superseded by C8**. C3 marked **refined by C8 / C10**. C4 / C5 / C6 unchanged (still valid principles). |
+| `docs/owner-decisions.md` *(new)* | Compact ledger: §1 resolved decisions C7–C16 with implementation unlocks; §2 still-pending / needs-validation items grouped by gating phase (before Stripe, before paid pilot, before Labs/Teams becomes sellable, non-gating); §3 next-implementation-PR table matching `commercial-architecture.md §7`. |
+| `docs/start-here.md` | New handoff entry above the PR #140 entry summarizing the pivot. |
+| `docs/migration-history.md` | This entry. |
+
+### Decisions recorded (in `decisions-and-triggers.md`)
+
+| ID | Decision (one-liner) |
+|---|---|
+| **C7** | Web-first launch; Apple App Store / Google Play deferred. |
+| **C8** | Stripe-first for web billing. Stripe implementation blocked until entitlement schema + AI quota enforcement exist. |
+| **C9** | Freemium PLG replaces 7-day time-based trial. No `trialing` state in MVP. |
+| **C10** | No paid AI-free "Core" tier in MVP. Two-tier MVP: Free → Pro. |
+| **C11** | Free + Pro MVP baselines. Numeric values are MVP baselines with mandatory instrumentation — not permanent. |
+| **C12** | Labs / Teams is "Coming Soon / Contact Sales" only. Not sellable until shared-libraries + seat-management architecture exists. |
+| **C13** | Add-on AI credit packs — future feature; architecture must support from day one. |
+| **C14** | Attachments in launch scope; privacy hardening + storage-quota enforcement are launch blockers. |
+| **C15** | Hebrew / RTL out of scope for MVP. |
+| **C16** | Legal pages on external marketing site. Repo links to HTTPS URLs. |
+
+### What's NOT in this PR
+
+- No application code changes — no `src/`, no `e2e/`, no `package.json`.
+- No migrations — no `supabase/migrations/`.
+- No Edge Function changes — no `supabase/functions/`.
+- No Stripe SDK / billing dependency added.
+- No entitlement / quota schema (next PR).
+- No quota enforcement code.
+- No storage bucket policy change.
+- No env file changes.
+- No final legal text — drafts not yet authored; reference is to a future external marketing site.
+- No deploy. No `supabase db push`. No `supabase functions deploy`.
+
+### Test counts
+
+Vitest **285/285** (unchanged — docs-only). Playwright unchanged at the previously documented count; not re-run (docs change cannot affect E2E behavior).
+
+### Verification
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 285/285.
+- Markdown lint — **not run.** The repo has no markdown linter configured (`package.json` has no `lint:md` script; no `.markdownlint*` file). Visual review performed.
+- No Supabase migration validation (no migration added).
+- No Edge Function deploy (no Edge Function changed).
+- No `supabase db push`.
+
+### Behavior on legitimate users
+
+**No change.** Docs-only PR. The running app's runtime behavior is bit-identical to `main` immediately before this PR.
+
+### Risk
+
+**Very low.** Documentation accuracy is the only failure mode (e.g., a future contributor reading a stale decision). Mitigated by the inline supersession notes on C1 / C2 / C3 and by `owner-decisions.md` §1 acting as the index of the latest position.
+
+### Non-goals
+
+- No implementation. The implementation phases (entitlement schema → AI quota → attachments privacy + quota → Stripe → UI paywall → privacy/account-deletion/AI disclosure → closed beta → paid pilot → open beta) are documented in `commercial-architecture.md §7` and `owner-decisions.md §3` but not executed here.
+- No legal text drafted as final.
+- No commitment of any specific final price beyond the documented MVP baselines.
+- No commitment to a marketing site provider, monitoring provider, support channel, or staging timing — all listed as pending in `owner-decisions.md §2.1`.

@@ -485,6 +485,30 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Commercial strategy pivot — web-first PLG + Stripe-first (2026-05-21)
+
+Docs-only PR that records the owner-approved commercial pivot. Closes the §13 / §14 recommendations from the post-PR-#140 Pre-Commercial Readiness Audit.
+
+What changed (docs only — no runtime / source / migration / Edge Function changes):
+
+- **Launch channel:** **web-first**. Apple App Store / Google Play deferred. Mobile work must not block the web commercial beta.
+- **Billing provider:** **Stripe-first** for web. Apple IAP / Google Play / RevenueCat remain future ingestion paths under the same provider-neutral model from [commercial-architecture.md §8](commercial-architecture.md). Stripe implementation is **blocked** until the entitlement / quota schema and server-side AI quota enforcement exist.
+- **Acquisition model:** **Freemium PLG**. No 7-day time-based trial. Free forever with a small lifetime AI teaser is the trial mechanism.
+- **Paid tiers:** **Free + Pro + Labs/Teams**. No paid AI-free "Core" tier. Labs / Teams is **"Coming Soon / Contact Sales" only** in MVP — not self-serve, not sellable until shared-libraries + seat-management architecture exists.
+- **MVP baselines (numeric values; instrumentation mandatory; not permanent):**
+  - Free: $0 forever / 1,500 papers / 500 MB / 15 lifetime AI.
+  - Pro / Researcher: $15 / month / 10,000 papers / 2 GB / 350 AI per month, with Synonyms + Exclusions pools.
+  - Labs / Teams baseline range: $99–$149 / month for up to 5 seats / unlimited papers / 10 GB. Marketing copy + lead capture only.
+- **Attachments:** in launch scope, but bucket privacy hardening (close the public-read gap) and storage-quota enforcement are **launch blockers** before paid beta.
+- **Hebrew / RTL:** out of scope for MVP.
+- **Legal pages:** live on an external marketing site (Webflow / Framer / other; owner choice). App links to HTTPS URLs.
+
+Files updated: `commercial-architecture.md` (substantial rewrite around PLG + Stripe + Free / Pro / Labs); `quotas-and-pricing.md` (replaced Core/AI/trial framing with Free / Pro tier table + instrumentation requirements + MVP-baseline-vs-final-pricing language); `store-launch-checklist.md` (banner + section 1 / SKU items / new §8a Attachments aligned to the web-launch blockers); `decisions-and-triggers.md` (C7–C16 dated 2026-05-21; C1 / C2 / C3 marked clarified/superseded inline); new `docs/owner-decisions.md` compact ledger; this entry.
+
+What's NOT in this PR: no source code, no migration, no Stripe SDK, no entitlement schema, no quota enforcement, no storage-bucket policy change, no Edge Function change, no env file change, no legal text drafted as final, no deploy. The implementation order is documented in [commercial-architecture.md §7](commercial-architecture.md) and [owner-decisions.md §3](owner-decisions.md). **The next implementation PR is the entitlement + usage schema migration.**
+
+`npx tsc --noEmit` clean; `npx vitest run` 285/285 (docs-only — tests unchanged).
+
 ## Deployment checklist / release runbook (May 2026)
 
 Docs-only consolidation that follows the PRs #130–#139 production-hardening sequence. New file: [`docs/deployment.md`](deployment.md). Centralizes the operator-facing instructions that previously lived scattered across the README, this file, and individual `migration-history.md` entries.
