@@ -485,6 +485,41 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Commercial foundation — entitlement and usage schema (2026-05-21)
+
+First implementation PR after the PR #141 commercial strategy pivot. Adds the internal commercial read model the application will use at render time, plus the provider-normalized billing tables, the append-only event log, and the placeholder credits table.
+
+What changed (migration only — no application code / Edge Function / Stripe / UI / dependency / env):
+
+- New migration `supabase/migrations/20260521010000_add_entitlement_usage_schema.sql` creates five tables:
+  - **`user_entitlements`** — hot-path read model (plan, status, paper / storage / AI quotas, premium-taxonomy flag, period bounds). One row per user. Client SELECT-own only; writes server-only.
+  - **`subscriptions`** — provider-normalized billing state (Stripe in MVP; Apple / Google / RevenueCat / Manual reserved). No client policy; server-only.
+  - **`usage_counters`** — per-user, per-feature, per-period (lifetime / monthly) counters. `feature='ai_analysis'` for now. Uses `'epoch'::timestamptz` sentinel for the lifetime row so uniqueness works without NULLs. No client policy; future `consume_ai_quota` SECURITY DEFINER RPC will read on the user's behalf.
+  - **`subscription_events`** — append-only webhook audit log. Unique `(provider, provider_event_id)` for idempotency. No client policy; server-only.
+  - **`usage_credits`** — placeholder for future add-on AI credit packs (C13). NOT consumed in MVP. SELECT-own policy added so a future Settings → Credits view doesn't need a policy migration.
+- All five tables use `ENABLE ROW LEVEL SECURITY + FORCE ROW LEVEL SECURITY`. Two SELECT-own policies (`user_entitlements`, `usage_credits`); zero INSERT/UPDATE/DELETE policies on any of the five.
+- The canonical `public.handle_new_user()` signup trigger is extended to also create the default Free entitlement and the lifetime AI counter on every new signup. All INSERTs are `ON CONFLICT DO NOTHING` so the trigger and the migration's backfill are both idempotent.
+- Backfill: one entitlement + one lifetime counter per existing `auth.users` user. Local replay starts from empty `auth.users`, so the backfill is a no-op locally; on production it will create the owner's row and any other existing users' rows.
+
+Free-tier baseline values from C11 (2026-05-21) are encoded as column defaults on `user_entitlements`: `plan=free`, `plan_status=active`, `paper_limit=1500`, `storage_quota_bytes=524288000` (500 MB), `ai_lifetime_quota=15`, `ai_monthly_quota=0`, `premium_taxonomy_enabled=false`, `labs_team_enabled=false`. Per C11 these are **MVP baselines with instrumentation**, not permanent.
+
+What's NOT in this PR (intentionally deferred):
+- No `consume_ai_quota` / `refund_ai_quota` RPCs. Quota is NOT enforced yet by `analyze-paper`.
+- No Stripe integration. C8 blocked Stripe on the schema landing; that unblock lands at remote-deploy time.
+- No storage-quota `BEFORE INSERT` trigger on `paper_attachments`. Separate launch-blocker PR per C14.
+- No `attachments` bucket SELECT policy change. Separate launch-blocker PR per C14.
+- No UI / paywall / Settings surface.
+- No `src/integrations/supabase/types.ts` regeneration. The new tables are not yet read by any client hook; type-drift is harmless until a future PR adds a hook.
+
+Verification: full local replay (`supabase stop --no-backup` + `supabase start`) succeeded across all 58 migrations. SQL spot-checks confirmed table creation, RLS posture (5/5 `relrowsecurity = t` AND `relforcerowsecurity = t`), policies (only two SELECT-own; zero write policies), trigger smoke (inserting one `auth.users` row created exactly one entitlement + one counter with the documented Free defaults), and CASCADE delete behavior. `npx tsc --noEmit` clean; `npx vitest run` 285/285 (unchanged). `supabase db push` NOT run — remote deploy is the operator's next step per `docs/deployment.md §6.1`. Dry-run is expected to list exactly one pending migration (`20260521010000_add_entitlement_usage_schema.sql`).
+
+**Next implementation step.** Two candidates are unblocked by this schema; only one can be next:
+
+- **AI quota enforcement** — `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs + `analyze-paper` Edge Function wiring. This is the highest-leverage next step because it closes the AI cost-exposure gap (today any authenticated user can drive `analyze-paper` against Gemini without a server-side cap) and unblocks Stripe (C8 requires server-side AI quota enforcement). Recommended next.
+- **Attachments privacy + storage quota** — tighten the `attachments` bucket SELECT policy from public-read to owner-only RLS, and add the `BEFORE INSERT` + `AFTER INSERT/DELETE` triggers on `paper_attachments`. C14 launch blocker. Important but does not unblock Stripe directly.
+
+Recommend AI quota enforcement next, then attachments privacy + storage quota, then Stripe.
+
 ## Commercial strategy pivot — web-first PLG + Stripe-first (2026-05-21)
 
 Docs-only PR that records the owner-approved commercial pivot. Closes the §13 / §14 recommendations from the post-PR-#140 Pre-Commercial Readiness Audit.
