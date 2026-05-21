@@ -485,6 +485,32 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Commercial architecture pivot — Stripe-first superseded by MoR-first (2026-05-21)
+
+Docs-only PR. **C17 supersedes C8.** The web MVP billing direction changes from Stripe-direct to a Merchant of Record (MoR) provider; current candidate set is **Paddle** and **Lemon Squeezy**, with final selection pending a short provider-selection audit.
+
+**Reason for the pivot:** Stripe does not officially support direct registration for Israel-based businesses. Forming a US LLC via Stripe Atlas just to use Stripe is excessive operational, accounting, and tax overhead for an independent operator validating MVP. A Merchant of Record provider (subject to provider terms) acts as the seller of record for payment collection, invoicing, and international tax / VAT / sales-tax operations, which reduces compliance burden for the MVP. **MoR adoption does not remove the obligation to publish a privacy policy, terms of service, support contact, account-deletion path, or AI disclosure** — those are still launch blockers per C14 / C16.
+
+**What stays unchanged:**
+
+- Web-first launch (C7), Freemium PLG (C9), no time-based trial, no AI-free Core tier (C10), Free / Pro MVP baselines and instrumentation (C11), Labs / Teams as "Coming Soon / Contact Sales" only (C12), add-on credits as future (C13), attachments in launch scope (C14), no Hebrew / RTL in MVP (C15), legal docs on the external marketing site (C16) — **all in force**.
+- All MVP baseline numbers in `quotas-and-pricing.md` are **unchanged**. Pro stays at the $15 / month baseline; the chosen MoR's fee schedule may affect margin review post-pilot but does not move the baseline before real beta data justifies a change.
+- Internal entitlement model (`user_entitlements`, `subscriptions`, `subscription_events`, `usage_counters`, `usage_credits`, `user_storage_usage`) — provider-neutral by design (C4) and **entirely unchanged**. Same `subscriptions.provider IN ('stripe', 'apple', 'google', 'revenuecat', 'manual')` enum already accepts the future Paddle / Lemon Squeezy values once added by a small follow-up; or the existing rows can record `provider = 'manual'` interim if a tighter migration is preferred. (Decide during provider-selection.)
+- Server-side enforcement landed in PRs #143 (AI quota) and #144 (storage privacy + quota) — both **complete and live**. The MoR pivot does not re-block them.
+
+**What is now pending (was previously "Stripe Checkout + webhook"):**
+
+- **MoR provider-selection audit (Paddle vs Lemon Squeezy)** — short docs / audit task. Output: a dated owner decision (C18 or later) recording the choice. **This is the recommended next task.** No code lands until this resolves.
+- After provider selection: provider-specific MoR integration (webhook + checkout + portal Edge Functions).
+
+**Files updated:** `commercial-architecture.md` (banner + §1 billing-provider bullet + §2.1 narrative + §3 column descriptions + §6 launch-blockers list + §7 implementation sequence + §8 provider-neutral header + §10 non-goals), `quotas-and-pricing.md` (banner + tier-table note + open-questions cleanup), `owner-decisions.md` (C8 marked superseded + new C17 row + §2.1 split into "pending before MoR integration" and "resolved (no longer pending)" + §3 implementation table renumbered), `decisions-and-triggers.md` (C8 marked superseded + new C17 entry), `store-launch-checklist.md` (banner + billing-provider-direction paragraph + billing-row note), `start-here.md` (this entry), `migration-history.md` (this PR's entry).
+
+**What's NOT in this PR:** no application code, no migration, no Edge Function change, no env file change, no dependency, no Stripe SDK, no Paddle SDK, no Lemon Squeezy SDK, no billing-provider selection (still pending the audit), no deploy commands. **Numeric MVP baselines unchanged.**
+
+Verification: `npx tsc --noEmit` clean. `npx vitest run` 285/285 (unchanged; docs-only PR cannot affect tests). Markdown lint not configured in this repo (no `lint:md` script in `package.json`, no `.markdownlint*` file; visual review performed). `supabase migration list --linked` shows Local = Remote through `20260521030000` (PR #144 deployed); no migration added in this PR. **No deploy commands run.**
+
+**Next implementation task.** MoR provider-selection audit (Paddle vs Lemon Squeezy). Scope: account approval / onboarding requirements for an Israel-based operator; product / price / variant model; webhook event surface and signature verification; customer portal capabilities; sandbox / test-mode flow; payout / fee schedule against the $15 / month Pro baseline; refund / dispute handling; tax / invoicing behavior; geographic coverage for the target market. Output: a docs-only audit + a dated C18 owner decision recording the choice.
+
 ## Commercial foundation — attachments storage quota enforcement (2026-05-21)
 
 Closes the storage-quota half of the C14 launch blocker. The privacy half (public-read bucket policy) turned out to be **already closed** by the previously-undocumented migration `20260327100000_private_attachments_bucket.sql`; this PR records that retroactively and implements only the storage-quota work.

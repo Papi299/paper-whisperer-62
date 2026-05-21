@@ -2371,3 +2371,73 @@ Post-deploy smoke (browser, optional but recommended):
 - No `handle_new_user` extension (the trigger UPSERT covers on-demand row creation; extending the signup pipeline is unnecessary surface area).
 - No generated-types regeneration (no client hook reads `user_storage_usage` yet).
 - No new dependency, no env file, no Edge Function change, no deploy.
+
+## Commercial architecture pivot — Stripe-first superseded by Merchant of Record (MoR)-first (docs-only)
+
+**Date:** 2026-05-21 (same-day pivot — C17 supersedes C8 the day C8 was authored).
+**What:** Docs-only PR recording the owner / CMO decision to replace the previously planned Stripe-first web billing direction with a Merchant of Record (MoR)-first direction. Current MoR candidate set: **Paddle** and **Lemon Squeezy**. Final provider selection is pending a separate short provider-selection audit. **No code, no migration, no Edge Function, no Stripe / Paddle / Lemon Squeezy SDK, no dependency, no env file change, no deploy.** Numeric MVP baselines unchanged.
+
+**Why:**
+
+- Stripe does not officially support direct account registration for Israel-based businesses. Creating a US LLC via Stripe Atlas (or equivalent) only to use Stripe is excessive overhead for an independent operator validating MVP — annual US-entity filings, CPA fees, tax-treaty work, and ongoing entity-maintenance cost the project does not need until product-market fit is real.
+- MoR providers act as the seller of record for payment collection, invoicing, and international tax / VAT / sales-tax operations (subject to provider terms), which **reduces** operational and compliance overhead for the MVP. This is a "lower compliance overhead in exchange for a higher per-transaction fee" trade — the right one for a single operator at pre-PMF stage.
+- The internal entitlement / subscriptions / event-log architecture was already provider-neutral by design (C4), so the pivot affects **only the identity of the chosen web billing provider** — no schema or enforcement code changes.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `docs/decisions-and-triggers.md` | New **C17** dated 2026-05-21: "Merchant of Record (MoR)-first replaces Stripe-first for web billing". Marks C8 as "**SUPERSEDED by C17**" with a banner pointing readers at C17. C8's text retained verbatim for historical accuracy. |
+| `docs/commercial-architecture.md` | New banner paragraph at the top explicitly recording the C17 pivot. §1 billing-provider bullet rewritten in MoR-neutral language. §2.1 narrative updated to "single-provider MVP" instead of "Stripe-first". §3 column descriptions for `subscriptions` updated to record `paddle` / `lemon_squeezy` as candidate values (`stripe` retained as future). §6 launch-blocker #5 rewritten as "MoR provider-selection audit + provider integration". §7 implementation sequence renumbered (5 → audit, 6 → MoR integration, 7 → UI, 8 → privacy/account/AI, 9 → technical beta, 10 → paid pilot, 11 → open beta). §8 heading updated to "MoR-first, multi-provider-ready". §10 non-goals references to Stripe defaults / Stripe annual cost made MoR-neutral. |
+| `docs/quotas-and-pricing.md` | New banner paragraph below the strategy-pivot banner recording the C17 pivot. Inline references to "Stripe configuration cost" / "Stripe webhook" / "Stripe fees" / "Stripe defaults" / "Stripe annual SKU" / "Stripe one-time charge" / "Stripe in MVP" replaced with MoR-neutral language. Numeric MVP baseline values unchanged. |
+| `docs/owner-decisions.md` | §1 resolved decisions: C8 row marked superseded; new C17 row added. C10 / C12 inline references to Stripe SKUs / configuration scope made MoR-neutral. §2.1 retitled "Required before MoR provider integration begins" with a new top-row recording the provider-selection audit as the next task. New §2.1a "Resolved (no longer pending)" subsection records C17, US LLC / Stripe Atlas rejection, attachment bucket privacy, storage-quota enforcement, and AI quota enforcement as all closed. §2.2 / §2.3 inline Stripe references made MoR-neutral. §3 implementation-unlocks table renumbered: row #5 changed from "Stripe Checkout + webhook" to "MoR provider-selection audit" (next task); new row #6 is "MoR integration"; rows #7–#11 shifted down. Cross-references updated to mention C1–C17. |
+| `docs/store-launch-checklist.md` | Top banner updated to record the C17 pivot. "Billing-provider direction" paragraph updated. The single "billing provider chosen" checkbox in §4 reframed as the **mobile-phase** choice (Apple IAP / Google Play / RevenueCat) with a note that the **web-phase** choice is the MoR per C17. |
+| `docs/start-here.md` | New handoff entry above the PR #144 entry recording the C17 pivot, what stays unchanged, what is now pending (provider-selection audit), file inventory, and the recommended next task. |
+| `docs/migration-history.md` | This entry. |
+| `docs/deployment.md`, `docs/architecture-read-path.md`, `docs/documentation-policy.md`, `README.md` | **Not changed.** None of these mention Stripe or the previously planned web-billing direction. Confirmed via `grep -n "Stripe\|stripe" docs/deployment.md README.md` returning zero matches. |
+
+### What is now pending (was previously "Stripe Checkout + webhook")
+
+- **MoR provider-selection audit: Paddle vs Lemon Squeezy.** Short docs/audit task. Output: a dated owner decision (C18 or later) recording the choice and the rationale. Scope: account approval / onboarding requirements for an Israel-based operator; product / price / variant configuration model; webhook event surface and signature verification; customer portal capabilities; sandbox / test-mode flow; payout / fee schedule against the $15 / month Pro baseline; refund / dispute handling; tax / invoicing behavior; geographic coverage for the target market.
+- After the audit resolves: provider-specific MoR integration PR.
+
+### What stays unchanged
+
+- **All MVP baseline numbers.** Free $0 / 1,500 papers / 500 MB / 15 lifetime AI; Pro $15 / month / 10,000 papers / 2 GB / 350 AI per month; Labs / Teams future $99–$149 / month range and 10 GB cap. `quotas-and-pricing.md` explicit "MVP baselines with instrumentation" framing preserved.
+- **Internal commercial schema.** `user_entitlements`, `subscriptions`, `subscription_events`, `usage_counters`, `usage_credits` (PR #142) and `user_storage_usage` (PR #144) all unchanged. Provider-neutral by design.
+- **Server-side enforcement.** `consume_ai_quota` / `refund_ai_quota` (PR #143) and `check_and_consume_storage_quota` / `refund_storage_quota` (PR #144) all unchanged. The MoR pivot does not re-block enforcement work.
+- **Launch blockers other than billing-provider integration.** Privacy / terms / support / account-deletion / AI disclosure / monitoring still required before paid beta. **MoR adoption does not remove these requirements.**
+- **Provider-neutral architecture rule** (C4). The application code does not branch on which billing provider produced a subscription.
+
+### Verification
+
+- `git status --short` — only the seven docs files in the diff before commit.
+- `npx tsc --noEmit` — clean. (Docs change, no source files touched.)
+- `npx vitest run` — 285/285 (unchanged; docs-only PR cannot affect tests).
+- `npx eslint` — not run (no `.ts` / `.tsx` files touched).
+- Markdown lint — not configured in this repo (no `lint:md` script in `package.json`, no `.markdownlint*` file). Visual review performed; relative links checked by inspection.
+- `supabase migration list --linked` — Local = Remote through `20260521030000` (PR #144 deployed). **No migration added in this PR.**
+- `supabase db push` — **not run.**
+- `supabase functions deploy` — **not run.**
+- Stripe / Paddle / Lemon Squeezy API calls — **not made.**
+
+### Wording constraints honored
+
+- This entry does **not** assert that Paddle or Lemon Squeezy has been selected. Selection remains pending.
+- This entry does **not** claim that MoR adoption removes all tax or legal obligations. It records that MoR providers act as the seller of record for payment / tax operations **subject to provider terms** and that this reduces operational burden.
+- This entry does **not** offer legal or tax advice.
+- This entry does **not** claim the product is ready for paid beta solely because the billing-provider direction changed. The launch blockers in `commercial-architecture.md §6` remain in force.
+
+### Non-goals
+
+- No application / source code changes.
+- No migration.
+- No Edge Function (`mor-webhook`, `create-payment-session`, `create-customer-portal-session`, etc. are not implemented — they will come in a separate PR **after** the provider-selection audit).
+- No billing-provider SDK / dependency.
+- No env file changes (`.env.example`, `.env.test.example` untouched).
+- No `package.json` change.
+- No generated Supabase types regeneration.
+- No legal text drafted as final.
+- No README change (zero Stripe mentions; nothing to update).
+- No `docs/deployment.md` change (zero Stripe mentions; standard deploy sequence applies for the future MoR Edge Function PR).
+- No `docs/architecture-read-path.md` change (no read-path impact).
