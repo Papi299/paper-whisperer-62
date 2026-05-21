@@ -108,6 +108,8 @@ The decisions below are commercial / product decisions, not performance / archit
 
 ### C1. Single-user MVP — no teams, no shared libraries
 
+> **Clarified by C12 (2026-05-21).** C1 remains accurate **for the shippable MVP scope**. Labs / Teams is now documented as a future roadmap / "Coming Soon / Contact Sales" tier (C12) — present on the marketing surface for price anchoring and B2B lead capture, but **not sellable and not implemented** in MVP. C1's substance (single-user shippable MVP, no shared libraries, no collaboration code) is unchanged.
+
 **Decision:** The first commercial release is single-user only. One subscription = one individual user. No team accounts, no shared libraries, no collaboration features.
 
 **Rationale:** The current data model partitions every user-scoped table on `user_id` and the RLS scheme is built around that assumption. Multi-user sharing is a non-trivial refactor (new ownership model, share permissions, invite flow, RLS rewrite) and is not required by the target audience for v1 (researchers, students, clinicians, dietitians, evidence-based knowledge workers managing their *own* libraries).
@@ -116,6 +118,8 @@ The decisions below are commercial / product decisions, not performance / archit
 
 ### C2. Plan direction — Core + AI
 
+> **Superseded by C8 (2026-05-21).** The Core + AI split has been collapsed into **Free + Pro + Labs/Teams** (Labs/Teams as future "Coming Soon / Contact Sales"). The 7-day free trial has been replaced by a **Free forever** tier with a small lifetime AI teaser. Retained below as historical context.
+
 **Decision:** Two plans for v1: a **Core** plan (organize / import / search / filter / tags / projects / notes / saved searches / attachments / export) and an **AI** plan (everything in Core plus a defined monthly AI-analysis quota). Monthly + annual cadence per plan, with a 7-day free trial on first subscribe.
 
 **Rationale:** AI is the only meaningfully variable cost (Gemini per-call). Tiering on AI access maps directly to the cost model and minimizes the SKU count for App Store / Play Store review.
@@ -123,6 +127,8 @@ The decisions below are commercial / product decisions, not performance / archit
 **Out of scope for MVP:** credit packs / one-time AI top-ups, permanent free tier, family / household plans, education pricing. May be revisited post-launch.
 
 ### C3. AI is premium and bounded
+
+> **Refined by C8 / C10 (2026-05-21).** The "AI is premium and bounded" principle stands. The shape now is: **Free** ships with 15 lifetime AI calls (taste, not trial); **Pro** ships with 350 / month; the 7-day-trial cap has been removed because there is no time-based trial. Server-side enforcement requirement is unchanged.
 
 **Decision:** AI usage is **never unlimited**. The AI plan ships with an explicit monthly quota; the Core plan ships with no AI or, at most, a very small monthly "taste" (TBD per [quotas-and-pricing.md](quotas-and-pricing.md)). Trial AI usage is itself capped at a small total so a 7-day trial cannot burn an AI-plan-month's worth of Gemini calls.
 
@@ -231,3 +237,120 @@ For mutations where `userId` is not already guaranteed at the call site, add an 
 **Required for any new client-side mutation on a user-owned table:** include `.eq("user_id", userId)` alongside any `.eq("id", rowId)` filter. Review should reject mutation hooks that omit it.
 
 **Re-evaluation trigger:** if a future feature legitimately needs to operate cross-user (none planned for the single-user MVP per [commercial-architecture.md](commercial-architecture.md) C1), the affected sites can be revisited individually.
+
+---
+
+## Commercial strategy pivot (2026-05-21)
+
+The decisions below capture the owner-approved commercial pivot from a B2C-only / single-user / Core+AI / 7-day-trial framing to a web-first **Product-Led Growth (PLG)** model with **Stripe-first** billing, a **Free forever** entry tier, **Pro / Researcher** as the primary self-serve SKU, and **Labs / Teams** as a future B2B "Coming Soon / Contact Sales" tier. They supersede or refine C1–C5 where indicated. **No commercial code is implemented yet** — see [commercial-architecture.md §6](commercial-architecture.md) for the launch-blocker list and [quotas-and-pricing.md](quotas-and-pricing.md) for the MVP baseline values.
+
+### C7. Web-first launch; mobile / app-store deferred (2026-05-21)
+
+**Decision:** The MVP commercial launch is **web only**, delivered via the existing Vercel-hosted React SPA. Apple App Store and Google Play submissions are deferred to a later roadmap phase. Mobile work must not block the web commercial beta.
+
+**Rationale:** Serious academic research workflows — systematic reviews, large bulk imports, multi-column filtering, AI-driven study classification — happen on desktop browsers. The product's strongest UX surface is already the web. App-store distribution adds policy, billing, packaging, and review work that is not on the path to first paid users.
+
+**Implication:** Apple IAP and Google Play Billing are not implemented in MVP. Stripe (C8) is the only billing-provider ingestion path in the first paid release. The [commercial-architecture.md §8](commercial-architecture.md) provider-neutral ingestion model is intact; adding Apple / Google later is purely additive.
+
+**Re-evaluation trigger:** owner approval after the web paid pilot, supported by user demand signal for mobile.
+
+### C8. Stripe-first for web billing (2026-05-21)
+
+**Decision:** **Stripe** is the chosen billing provider for the web MVP. Web subscriptions are sold via Stripe Checkout; subscription state is ingested into the internal `subscriptions` + `user_entitlements` model via a `stripe-webhook` Edge Function with signature verification.
+
+**Rationale:** Stripe supports the subscription model, future usage / add-on credit packs, B2B invoicing, and metered billing, without locking us into a payment provider when mobile work begins. It is the fastest provider to integrate against the planned `user_entitlements` schema.
+
+**Hard constraint (blocker):** **Stripe implementation must not begin until the internal entitlement + quota schema and server-side enforcement exist.** Charging users without server-side quota enforcement on `analyze-paper` would mean the AI cost surface is unbounded for any user with a valid JWT. The implementation order in [commercial-architecture.md §7](commercial-architecture.md) — schema → AI quota enforcement → storage privacy + quota → Stripe — is the gating sequence; Stripe is item 5, not item 1.
+
+**Implementation note (reaffirms C4):** the application code does not branch on Stripe. The webhook ingestion writes provider-agnostic rows into `subscriptions` / `user_entitlements`; the rest of the application reads from those rows. Adding Apple IAP / Google Play / RevenueCat later is purely additive.
+
+**Re-evaluation trigger:** explicit owner approval. Switching providers post-launch is supported by C4 but is a non-trivial migration of customer / subscription mappings.
+
+### C9. Freemium PLG replaces the 7-day time-based trial (2026-05-21)
+
+**Decision:** There is **no 7-day time-based trial** in MVP. The trial mechanism is **Free forever** with a small lifetime AI teaser; users upgrade to Pro when they exhaust the AI teaser or want premium taxonomy features.
+
+**Rationale:** Research workflows often do not reach the "aha" moment within a fixed 7-day window — building a library, importing existing references, and seeing the AI analysis prove useful on a real systematic-review use case takes weeks for many users. A time-bounded trial converts poorly against that workflow. A Free forever tier supports habit formation, and the AI teaser exhaustion is a sharper, behavior-driven upgrade signal than a calendar countdown.
+
+**Implication:** `user_entitlements.subscription_status` does **not** include a `trialing` state in MVP. Free users have `subscription_status = 'none'` and `plan = 'free'`. The state machine is simpler than the C2-era plan.
+
+**Re-evaluation trigger:** if closed-pilot data shows Free users routinely never upgrading (very low conversion despite high engagement), revisit by introducing a time-bounded AI bonus (e.g., "first 30 days get 50 AI calls") as a layer on top of Free — without reintroducing a hard time-based trial.
+
+### C10. No paid AI-free "Core" tier in MVP (2026-05-21)
+
+**Decision:** The MVP monetization focuses on **Free → Pro**. There is no paid AI-free "Core" tier. The previously-planned Core (organize) and AI (organize + AI) split has been collapsed.
+
+**Rationale:** Two paid tiers complicate the funnel without clear evidence that a meaningful segment wants paid organization-only. The single Pro tier at $15 / month baseline includes the AI quota by default. If post-launch data shows demand for a cheaper organization-only paid tier, it can be added as a strictly additive change.
+
+**Re-evaluation trigger:** closed-pilot data showing users willing to pay but explicitly not wanting AI, OR a competitor positioning shift that makes a Core SKU strategically important.
+
+### C11. Free + Pro MVP baselines (2026-05-21)
+
+**Decision (MVP baseline values, with mandatory instrumentation — not permanent):**
+
+- **Free:** $0 forever; **1,500 papers**; **500 MB** PDF storage; **15 lifetime** AI calls; Keyword Pool included; Synonyms / Exclusions excluded (Pro-only premium taxonomy).
+- **Pro / Researcher:** **$15 / month** baseline; **10,000 papers**; **2 GB** PDF storage; **350 AI calls / month**; Synonyms pool + Exclusions pool included; eligible for future add-on AI credit packs (C13).
+
+**Critical framing:** these numbers are **MVP baselines with instrumentation**, not final or permanent pricing. They are high-confidence starting values approved for closed beta and the first paid pilot. They **must** be reviewed against real Gemini-cost data, real storage / paper usage per user, and real Free → Pro conversion observed in pilot before being treated as permanent. Future PRs **must not** describe these numbers as fixed or immutable; they live in [quotas-and-pricing.md](quotas-and-pricing.md) and any change is a dated decision here.
+
+**Instrumentation requirement (blocker for closed beta).** The schema and Edge Functions must surface the per-user usage, AI-success / AI-fail / quota-exhausted, storage, paper-count, and Free → Pro conversion metrics enumerated in [quotas-and-pricing.md §4](quotas-and-pricing.md) from day one. Without these, the post-pilot re-evaluation is impossible.
+
+**Re-evaluation trigger:** every 60–90 days of pilot / open-beta data, OR when Gemini's per-token pricing changes materially.
+
+### C12. Labs / Teams is "Coming Soon / Contact Sales" only — NOT self-serve in MVP (2026-05-21)
+
+**Decision:** **Labs / Teams** appears on the marketing pricing page and inside the app as **"Coming Soon" / "Contact Sales"** only. It is **not sellable in MVP** and **must not be implemented as a self-serve SKU** until the underlying shared-libraries + seat-management architecture exists.
+
+**Baseline range (anchor, not commitment):** $99–$149 / month for up to 5 seats; unlimited papers; 10 GB storage; AI quota TBD (likely team-level).
+
+**Architectural prerequisites (none currently implemented; all out of MVP scope):**
+- Shared libraries — multiple users on the same paper library; requires a new ownership model (`team_id` column or parallel ACL layer), an RLS rewrite, and a refactor of every mutation hook to respect team-level ownership.
+- Seat management — owner + member roles, invitations, removal, owner-transfer.
+- Team-level entitlements — `team_entitlements` table (or extension to `user_entitlements`) so quotas apply to the team, not per-seat.
+- Audit log of team actions.
+- Optional SSO for institutional buyers.
+
+**Hard constraint:** future PRs **must not** treat Labs / Teams as a sellable SKU. Specifically, no Stripe product, no App Store SKU, no Play Console SKU is configured for Labs / Teams until the architecture above exists. The role today is strictly **price anchoring + B2B lead capture** (a "Contact Sales" form that emails the owner).
+
+**Re-evaluation trigger:** owner-approved roadmap PR to begin shared-libraries work, supported by lead-capture volume from the marketing site.
+
+### C13. Add-on AI credit packs — future architectural requirement, not MVP feature (2026-05-21)
+
+**Decision:** The commercial model must support **add-on AI credit packs** (e.g., one-time purchase of `+100 AI analyses` when a Pro user exhausts their monthly quota) **at the architecture level from day one**. Add-on credits are **not built in MVP**.
+
+**Rationale:** Hard quota walls mid-systematic-review create churn pressure and dampen trial-to-paid conversion. Researchers expect a way to keep going when they hit a wall. Shipping Pro with a hard wall is acceptable for the first paid pilot **if and only if** the architecture lets add-on credits be added in a small fast-follow PR; shipping a Pro tier that cannot accept credit packs without a schema rewrite is a long-tail risk.
+
+**Implementation contract:** the next schema PR (entitlement + usage) must shape `usage_credits` and the `consume_ai_quota` RPC so credits can be consumed after the monthly quota is exhausted, before the user is hard-blocked. See [commercial-architecture.md §4.5 and §5.3](commercial-architecture.md). The application code (`analyze-paper`) will not change when credit packs ship — the RPC absorbs the logic.
+
+**Re-evaluation trigger:** closed-paid-pilot data showing meaningful churn or "I'd pay more" feedback at the Pro quota wall.
+
+### C14. Attachments / PDF storage in MVP scope; privacy + storage-quota enforcement are launch blockers (2026-05-21)
+
+**Decision:** Attachments / PDF storage are **in the launch feature set** (Free 500 MB, Pro 2 GB, Labs/Teams future 10 GB). However:
+
+- **Attachment privacy hardening is a launch blocker.** The Supabase Storage `attachments` bucket currently has a public-read SELECT policy (`bucket_id = 'attachments'`, no owner check). The client uses signed URLs with a 1-hour TTL as a convention only — anyone with the underlying file URL can fetch it indefinitely. Before paid beta, the SELECT policy must be tightened to owner-only path-prefix RLS, and signed URLs become the only access path.
+- **Storage quota enforcement is a launch blocker.** A `BEFORE INSERT` trigger on `paper_attachments` must enforce `storage_quota_bytes` from `user_entitlements`. `AFTER INSERT / DELETE` triggers must maintain `usage_counters.storage_used_bytes`. The client should also show storage used / quota in Settings for UX.
+
+**Implication:** these items are added to the launch-blocker list in [commercial-architecture.md §6](commercial-architecture.md). They are also documented as web-launch-shared items in [store-launch-checklist.md §8a](store-launch-checklist.md) so the mobile build inherits them.
+
+**Re-evaluation trigger:** if owner decides to ship without attachments after all (would simplify the launch significantly but loses an obvious differentiator vs. Zotero / Mendeley), revisit by removing attachment UI surface and the relevant blocker items.
+
+### C15. Hebrew / RTL is out of scope for MVP (2026-05-21)
+
+**Decision:** Hebrew / Right-to-Left UI support is **out of scope** for the MVP commercial release. The app remains English-only LTR at launch.
+
+**Rationale:** The initial academic research market — primary target users are English-speaking researchers, students, clinicians, dietitians — is English-first. i18n + RTL framework adoption is a non-trivial cross-cutting change (every component, every form, every dialog) that is not on the path to first paid users.
+
+**Re-evaluation trigger:** explicit owner priority change supported by Hebrew-speaking user demand signal.
+
+### C16. Legal pages on external marketing site; repo drafts may be versioned later (2026-05-21)
+
+**Decision:** Public-facing legal pages — **Privacy Policy**, **Terms of Service**, **AI disclosure**, **Support / contact** — live on an **external marketing site** (Webflow, Framer, or another dedicated marketing-site platform; owner choice). The app links to HTTPS URLs hosted on that site; it does not serve legal text from the repo.
+
+**Rationale:** Legal pages are owned by the marketing surface, not the application repo. They are subject to copy / SEO / design iteration on the marketing team's cadence and benefit from a CMS workflow. The app's responsibility is to link out to authoritative URLs and to surface the AI-disclosure line at the relevant in-app action.
+
+**Implication:** repo-tracked drafts of legal text may be created later for versioning convenience, but the **authoritative published copies are on the external site**, and the in-app links resolve to that site. No legal text in this repo should be treated as final or legally reviewed.
+
+**Hard constraint:** the in-app surface (Settings → Privacy / Terms / Support / AI disclosure links + the at-Analyze AI disclosure) is a **launch blocker** for the web paid beta. The external URLs must exist and be linked before charging users.
+
+**Re-evaluation trigger:** owner decision to host legal pages in-repo as Markdown (would require routing + privacy-page React component); not currently planned.

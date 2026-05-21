@@ -1,6 +1,8 @@
-# App Store / Play Store Launch Checklist (Planning)
+# App Store / Play Store Launch Checklist (Planning — Mobile Phase, Post-Web)
 
-> **Status: planning checklist only.** No item below is "done" unless explicitly tracked elsewhere as shipped. Apple App Store and Google Play policies, fees, and required questionnaires change frequently. **Every policy item in this document must be re-verified against primary sources within 30 days of submission.** Do not treat any policy claim here as authoritative.
+> **Status: planning checklist only, and the mobile launch is now deferred behind the web launch.** No item below is "done" unless explicitly tracked elsewhere as shipped. Apple App Store and Google Play policies, fees, and required questionnaires change frequently. **Every policy item in this document must be re-verified against primary sources within 30 days of submission.** Do not treat any policy claim here as authoritative.
+>
+> **Strategy pivot (2026-05-21).** The MVP is now **web-first** with **Stripe-first** billing — see [commercial-architecture.md §1](commercial-architecture.md) and the C7–C15 entries in [decisions-and-triggers.md](decisions-and-triggers.md). Mobile / App Store / Play Store launch is **deferred to a later roadmap phase**. The full content of this document remains relevant for that later phase but is not on the critical path for the web MVP. Items that are *also* required before the **web** paid beta (privacy policy, terms, support URL, account deletion, AI disclosure) are still required and are tracked in [commercial-architecture.md §6](commercial-architecture.md). The web launch will land them first; the mobile checklist reuses them when the time comes.
 
 ---
 
@@ -8,14 +10,21 @@
 
 Each section below is a category of readiness. Items use plain Markdown checkboxes for tracking. A few items are gated on policy verification — those are flagged and must be re-checked at submission time.
 
-This document does not commit to a launch date or a chosen billing provider. Both are owner decisions to be added later as separate dated entries in [decisions-and-triggers.md](decisions-and-triggers.md).
+**Web launch first.** Treat this checklist as the **mobile-phase** checklist. Items relevant to the web launch (privacy / terms / support URL / account deletion / AI disclosure / monitoring) have moved to the web blocker list in [commercial-architecture.md §6](commercial-architecture.md); they will be completed during the web launch and reused here when mobile work begins.
+
+**Billing-provider direction.** Stripe is the web MVP provider per the 2026-05-21 pivot. Apple IAP and Google Play Billing remain the planned ingestion paths when mobile work begins; the [commercial-architecture.md §8](commercial-architecture.md) provider-neutral ingestion model is intact and supports adding them as purely additive Edge Functions.
+
+**Labs / Teams.** This tier is **"Coming Soon" / "Contact Sales" only** in MVP and is a **web-first marketing concern** before it is a native app-store concern. Do not configure Labs / Teams SKUs in App Store Connect or Play Console until the underlying shared-libraries architecture exists — see [commercial-architecture.md §3.3](commercial-architecture.md).
 
 ---
 
 ## 1. Product readiness
 
-- [ ] Core plan feature surface frozen for v1 (import / search / filters / tags / projects / notes / saved searches / attachments / export).
-- [ ] AI plan feature surface frozen for v1 (single AI analysis + bulk AI analysis with quota).
+> **Updated for the 2026-05-21 pivot.** Core / AI tiers replaced with Free / Pro / Labs-Teams; the bullets below now describe the **Pro** feature surface that the mobile build will ship with at parity with the web launch.
+
+- [ ] **Free** tier feature surface frozen for v1 (library, identifier + file imports, search, filters, projects, tags, notes, saved searches, exports, attachments within 500 MB, Keyword Pool, 15 lifetime AI calls).
+- [ ] **Pro / Researcher** tier feature surface frozen for v1 (everything in Free, plus Synonyms pool, Exclusions pool, full 350 / month AI quota, 2 GB storage, 10,000 paper cap).
+- [ ] **Labs / Teams** tier surfaced only as "Coming Soon / Contact Sales" — no IAP SKUs configured.
 - [ ] Mobile responsive review for the dashboard, add/edit dialogs, and settings.
 - [ ] Paywall / upgrade nudge flow designed and wired (placeholder until billing provider chosen).
 - [ ] Subscription manage / cancel / restore links visible from inside the app.
@@ -88,7 +97,7 @@ This document does not commit to a launch date or a chosen billing provider. Bot
 - [ ] Marketing URL set (if any).
 - [ ] Apple **App Privacy** ("Privacy Nutrition Label") questionnaire answered accurately for every data type collected.
 - [ ] Apple Sign In considered (required if other third-party sign-in is offered — verify at submission time).
-- [ ] Subscription products configured in App Store Connect (Trial introductory offer, Core M, Core A, AI M, AI A).
+- [ ] Subscription products configured in App Store Connect — **Pro monthly** (and **Pro annual** if shipped). **No Trial introductory offer** (the freemium PLG model replaces the 7-day trial — see [commercial-architecture.md §1](commercial-architecture.md)). **No Labs / Teams SKU** until the shared-libraries architecture exists.
 - [ ] Subscription group(s) configured so Apple's auto-renewable upgrade/downgrade UX works.
 - [ ] StoreKit testing configuration in Xcode for local QA.
 - [ ] Sandbox tester accounts created.
@@ -105,7 +114,7 @@ This document does not commit to a launch date or a chosen billing provider. Bot
 - [ ] Content rating questionnaire answered.
 - [ ] **Data Safety** form answered accurately.
 - [ ] Target API level meets current Play requirements at submission time.
-- [ ] Subscriptions configured in Play Console (matching the Apple SKUs).
+- [ ] Subscriptions configured in Play Console — match the Pro monthly (and annual if shipped) SKUs from Apple. **No Labs / Teams SKU** until shared libraries exist.
 - [ ] Real-Time Developer Notifications (RTDN) Pub/Sub topic configured if Google billing is used.
 - [ ] License signing key handled correctly.
 - [ ] Play App Signing enrolled.
@@ -122,6 +131,15 @@ This document does not commit to a launch date or a chosen billing provider. Bot
 - [ ] Quota exhaustion paths tested (AI used = quota; storage used = quota).
 - [ ] Period rollover tested (artificially advance period_end and confirm counters reset).
 - [ ] Crash-free session rate baseline collected before submitting for review.
+
+## 8a. Attachments / PDF storage readiness (shared with web launch)
+
+> The **attachments bucket privacy hardening** and **per-plan storage quota enforcement** items below are also web-launch blockers per [commercial-architecture.md §6](commercial-architecture.md). They will be completed during the web launch and inherited by the mobile build at no additional work.
+
+- [ ] Supabase Storage `attachments` bucket SELECT policy tightened from public-read to owner-only RLS. Signed URLs continue as the read path.
+- [ ] `BEFORE INSERT` trigger on `paper_attachments` enforces `storage_quota_bytes` from `user_entitlements` (500 MB Free / 2 GB Pro / 10 GB Labs-Teams future).
+- [ ] `AFTER INSERT / DELETE` triggers maintain `usage_counters.storage_used_bytes`.
+- [ ] Settings → Storage view shows used / quota.
 
 ## 9. Production operations readiness
 
