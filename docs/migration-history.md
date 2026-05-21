@@ -2206,3 +2206,168 @@ Identical to the pre-quota version **as long as the user is within their quota**
 - No quota numbers changed; the C11 MVP baselines from PR #141 / PR #142 are unchanged.
 - No new architecture decision in `decisions-and-triggers.md` — this PR implements the existing C7–C16 (specifically C8 unblock + C11 enforcement).
 - No README test-count change (Vitest stays at 285/285).
+
+## Retro-doc — `20260327100000_private_attachments_bucket.sql` (attachments bucket privacy)
+
+**Date discovered:** 2026-05-21 during PR #144 implementation.
+**Status of the migration itself:** already in `supabase/migrations/`, already applied to remote (`supabase migration list --linked` confirms `20260327100000 | 20260327100000`).
+
+**What this retro-doc records:** the migration `20260327100000_private_attachments_bucket.sql` made the `attachments` Supabase Storage bucket private (`public = false`) and replaced the broad `attachments_public_read` SELECT policy (introduced by `20260318020000`) with an owner-scoped `attachments_owner_read` SELECT policy keyed on the existing path prefix (`{userId}/{paperId}/{filename}`, first folder must equal `auth.uid()::text`). That migration was added to the repo and applied to production around 27 March 2026 but never surfaced in `migration-history.md` or `start-here.md` — likely because it was authored through the Supabase / Lovable dashboard workflow before the active documentation-policy from C6.
+
+**Why it matters now:** the post-PR-#140 production-readiness audit and the resulting C14 launch-blocker entry in PR #141 / `owner-decisions.md` §3 both believed the `attachments_public_read` policy was still outstanding. It wasn't. The local schema and remote schema both already had `bucket.public = false` and the owner-scoped SELECT policy in place. The "attachments privacy hardening" half of C14 was closed by `20260327100000`; only the storage-quota-enforcement half remained, and that is what PR #144 (this entry's adjacent commit) implements.
+
+**Retro-doc rather than new migration:** because the schema state is already correct, this is a documentation-only entry. No new migration was created to "redo" the privacy work. The C14 audit gap was a doc/awareness miss, not a code gap.
+
+
+## Commercial foundation — attachments storage quota enforcement
+
+**Date:** 2026-05-21 (fourth implementation PR after the PR #141 commercial strategy pivot; closes the storage-quota half of the C14 launch blocker. The privacy half was already closed by `20260327100000_private_attachments_bucket.sql` — see retro-doc above).
+**What:** New migration `20260521030000_harden_attachment_privacy_and_storage_quota.sql`. Adds a dedicated `user_storage_usage` table (`bigint used_bytes`), BEFORE INSERT and AFTER DELETE triggers on `paper_attachments` for atomic quota enforcement, and a backfill that records existing per-user usage. **No application code, no Edge Function, no Stripe, no UI, no generated-types update, no env file change, no dependency.** Migration-only PR; remote deploy via `supabase db push` is the operator's next step.
+
+**Why:** PR #142 added `user_entitlements.storage_quota_bytes` (Free 500 MB, Pro 2 GB, Labs/Teams future 10 GB) but enforced nothing. Any authenticated user could insert `paper_attachments` rows for arbitrary file sizes; the only cap was the 20 MB per-file limit on the bucket. Closing this is a C14 launch blocker and the last remaining server-side enforcement gap before Stripe per `commercial-architecture.md §6`.
+
+### Scope correction during implementation
+
+Inspection of the migration history revealed that the public-read policy on the `attachments` bucket — the half of C14 that the audit thought was outstanding — was **already** removed by `20260327100000_private_attachments_bucket.sql` (repo-tracked, already applied to remote). The bucket has been `public = false` with an owner-scoped `attachments_owner_read` SELECT policy since March 2026. That earlier migration was undocumented in `migration-history.md` (see the retro-doc entry above). This PR therefore **does NOT modify any storage.objects policies** — creating a redundant `attachments_owner_select` policy would be noise. The migration body addresses only the storage-quota half.
+
+### Sites changed
+
+| File | Change |
+|---|---|
+| `supabase/migrations/20260521030000_harden_attachment_privacy_and_storage_quota.sql` *(new)* | New `public.user_storage_usage` table (PK on `user_id`, `used_bytes BIGINT`, non-negative CHECK, FORCE RLS, SELECT-own client policy, `updated_at` trigger). Two SECURITY DEFINER trigger functions: `check_and_consume_storage_quota` (BEFORE INSERT — atomic check-and-increment) and `refund_storage_quota` (AFTER DELETE — decrement floored at zero). Two triggers attached to `public.paper_attachments`. Backfill computes real `used_bytes` per existing user from existing attachments. |
+
+### Atomicity / race-safety
+
+The BEFORE INSERT trigger does the check AND the increment in a single atomic UPDATE gated on the quota predicate:
+
+```sql
+UPDATE public.user_storage_usage
+SET used_bytes = used_bytes + NEW.size_bytes,
+    updated_at = now()
+WHERE user_id = NEW.user_id
+  AND used_bytes + NEW.size_bytes <= v_quota
+RETURNING used_bytes INTO v_new_used;
+
+IF v_new_used IS NULL THEN
+  RAISE EXCEPTION 'Storage quota exceeded ...';
+END IF;
+```
+
+If the UPDATE matches a row → trigger returns NEW → `paper_attachments` INSERT proceeds → row inserted. If it matches zero rows (over-quota OR missing entitlement) → `v_new_used` stays NULL → trigger raises → metadata insert fails. Two concurrent INSERTs serialize on the `user_storage_usage` row lock; the second one sees the incremented value and may correctly fail. Because the BEFORE trigger has already incremented, there is NO AFTER INSERT trigger — if the surrounding transaction rolls back, the increment rolls back too (same transaction).
+
+### Backfill behavior
+
+```sql
+INSERT INTO public.user_storage_usage (user_id, used_bytes)
+SELECT u.id, COALESCE(SUM(pa.size_bytes)::BIGINT, 0)
+FROM auth.users u
+LEFT JOIN public.paper_attachments pa ON pa.user_id = u.id
+GROUP BY u.id
+ON CONFLICT (user_id) DO NOTHING;
+```
+
+One row per existing `auth.users` user. Idempotent. Users with zero attachments get a zero row so the trigger UPSERT sees an existing row on first upload.
+
+### Why a dedicated `user_storage_usage` table (not `usage_counters`)
+
+`usage_counters.used` is `integer`, capped at ~2.1 GB. Free fits (500 MB), Pro is tight (2 GB), Labs/Teams (10 GB) would overflow silently. Migrating `usage_counters.used` to `bigint` would touch the AI quota RPCs landed in PR #143; the blast radius is larger than a dedicated `bigint`-typed table. The two tables also have semantically different shapes (AI is per-period with `period_start`; storage is a single per-user running total).
+
+### Existing-orphan / existing-overage handling
+
+- **Orphan on metadata reject:** `useAttachments.uploadAttachments` (in `src/hooks/useAttachments.ts`) uploads to Storage FIRST, then inserts metadata. On metadata insert failure it already calls `storage.from('attachments').remove([filePath])` to clean up the orphan. The over-quota error path goes through the same code; no client change needed.
+- **Existing overage:** if any existing user is over their Free 500 MB cap when this migration deploys, the backfill records the real `used_bytes`. New uploads are blocked until the user deletes attachments to drop below quota OR until their entitlement is upgraded. No data is destroyed; existing files remain readable via signed URLs.
+
+### Security posture
+
+- New `user_storage_usage` table: `ENABLE ROW LEVEL SECURITY + FORCE ROW LEVEL SECURITY`. Single SELECT-own policy (anticipates future Settings → Storage UI). No INSERT / UPDATE / DELETE policy — writes are server-only via the SECURITY DEFINER triggers.
+- Trigger functions: `SECURITY DEFINER SET search_path = public`. They read from `user_entitlements` and write to `user_storage_usage` (both have FORCE RLS and no client write policies). They trust `NEW.user_id` because the existing `paper_attachments` RLS INSERT policy (`auth.uid() = user_id`) already constrains it to the caller's own id — no separate `auth.uid()` guard in the trigger.
+- Storage bucket privacy: already private since `20260327100000`. This migration does not modify it.
+
+### Verification
+
+- **Local replay (`supabase stop --no-backup` + `supabase start`)**: clean across all 61 migrations (60 prior + this PR).
+- **Schema state**:
+  - Storage policies: `attachments_owner_delete` / `attachments_owner_insert` / `attachments_owner_read` / `attachments_owner_update` — all owner-scoped, zero public-read policies.
+  - Bucket: `public = false`.
+  - New table + columns: `user_storage_usage(user_id uuid PK, used_bytes bigint, created_at timestamptz, updated_at timestamptz)`; RLS enabled + forced.
+  - Triggers on `paper_attachments`: `trg_paper_attachments_check_storage_quota` (BEFORE INSERT), `trg_paper_attachments_refund_storage_quota` (AFTER DELETE).
+  - Trigger functions: `check_and_consume_storage_quota` and `refund_storage_quota`, both `prosecdef=t` with `proconfig={search_path=public}`.
+- **Functional test (9 cases via copied `/tmp/storage_test.sql`)**:
+  1. ✅ Fresh user has Free 500 MB entitlement; no `user_storage_usage` row yet (created on first upload via trigger UPSERT).
+  2. ✅ 10 MB insert succeeds; `used_bytes = 10,485,760`.
+  3. ✅ 200 MB insert succeeds; `used_bytes = 220,200,960`.
+  4. ✅ 350 MB insert (would total 560 MB > 500 MB cap) → **raises** `Storage quota exceeded (quota 524288000, attempted +367001600 bytes)`; `used_bytes` stays 220 MB (no partial state).
+  5. ✅ Delete 200 MB attachment → `used_bytes` decrements to 10,485,760.
+  6. ✅ Negative `size_bytes` → **raises** `paper_attachments.size_bytes must be non-negative (got -100)`.
+  7. ✅ Missing entitlement (entitlement row deleted) → **raises** `Missing entitlement: cannot upload attachment for user ...`.
+  8. ✅ Pro promotion (2 GB cap) → 200 MB insert succeeds; `used_bytes = 220 MB`.
+  9. ✅ `DELETE FROM auth.users` → CASCADE removes `user_storage_usage` row; 0 rows remain.
+- **`npx tsc --noEmit`**: clean (no source changes).
+- **`npx vitest run`**: 285/285 (unchanged; no test code touched).
+- **`npx eslint`**: not run on touched files (migration is SQL; no `.ts` / `.tsx` files changed).
+- **Playwright (`e2e/attachments.spec.ts`)**: **not run.** The dev server's `.env` points at the **remote** Supabase project, which doesn't yet have this migration applied. Running Playwright now would exercise the pre-migration behavior (no trigger), which provides no signal for the new triggers. The 9-case SQL functional test exercises every trigger code path more thoroughly than Playwright could (Playwright can't easily push past 500 MB). Post-merge smoke (under the standard `e2e/attachments.spec.ts` upload cases of small PNGs) is the natural validation point.
+- **`supabase migration list --linked`**: Local = Remote through `20260521020000` (PRs #142 + #143 deployed); this PR's `20260521030000` not yet on remote.
+- **`supabase db push`**: not run.
+- **`supabase functions deploy`**: not run (no Edge Function change).
+
+### Deployment instructions (post-merge)
+
+Migration-only PR. Per `docs/deployment.md §2`:
+
+```sh
+supabase migration list --linked       # confirm Local = Remote through 20260521020000
+supabase db push --dry-run             # expected: ONLY 20260521030000_…
+supabase db push                       # apply
+supabase migration list --linked       # confirm 20260521030000 aligned
+```
+
+Post-deploy spot-check SQL (Supabase Studio):
+
+```sql
+-- Schema state
+SELECT count(*) FROM public.user_storage_usage;   -- should equal count(*) FROM auth.users
+SELECT used_bytes FROM public.user_storage_usage WHERE user_id = '<owner-uid>';
+
+-- Trigger inventory
+SELECT tgname FROM pg_trigger
+WHERE tgrelid = 'public.paper_attachments'::regclass AND NOT tgisinternal
+ORDER BY tgname;
+-- Expected:
+--   trg_paper_attachments_check_storage_quota
+--   trg_paper_attachments_refund_storage_quota
+
+-- Storage privacy (should be unchanged from the existing 20260327100000 state)
+SELECT id, public FROM storage.buckets WHERE id = 'attachments';   -- public = f
+SELECT policyname FROM pg_policies
+WHERE schemaname='storage' AND tablename='objects' AND policyname ILIKE '%attachments%'
+ORDER BY policyname;
+-- Expected (no public-read; only owner-scoped):
+--   attachments_owner_delete / _insert / _read / _update
+```
+
+Post-deploy smoke (browser, optional but recommended):
+
+- [ ] Sign in → upload a small PDF → succeeds; `user_storage_usage.used_bytes` increments by the file size.
+- [ ] Delete the same attachment → succeeds; `user_storage_usage.used_bytes` decrements back.
+- [ ] (Optional, requires DB access) `UPDATE user_entitlements SET storage_quota_bytes = <current_usage>` to set a very tight cap; attempt to upload a 1 KB file → expect a generic "Failed to save" toast; the `paper_attachments` metadata insert returns the `Storage quota exceeded` error from the trigger and `useAttachments` cleans up the orphan storage object. Restore the cap afterward.
+
+### Limitations / non-goals
+
+- **Client trusts `file.size` for the metadata insert.** A client could in theory spoof a smaller `size_bytes` than the actual uploaded file. The bucket-level `file_size_limit = 20971520` (20 MB) caps the upstream object regardless, so the worst-case spoof is N × 20 MB on a Free 500 MB cap — bounded. Future hardening: verify against `storage.objects.metadata.size` in the trigger or in a deferred reconciliation job. Not in MVP scope.
+- **No client UI for storage usage / quota state.** The Edge Function returns generic Postgres errors as toasts; the client surfaces "Failed to save" today. A future client-quota-state PR will read `user_storage_usage` (the SELECT-own policy supports this) and surface a "Storage quota exceeded — upgrade to Pro" toast / Settings gauge.
+- **No protection against `paper_attachments` UPDATE corrupting usage.** Today `paper_attachments` has no UPDATE RLS policy, so client UPDATE is blocked. If a future migration adds an UPDATE policy + changes `size_bytes` or `user_id` mid-life, the usage will silently drift. Comment in the migration documents this contract.
+- **No new architecture decision in `decisions-and-triggers.md`** — implements existing C14 (storage half) without introducing a new durable rule.
+
+### Risk
+
+**Low.** The new triggers fire on every `paper_attachments` INSERT / DELETE. The happy path under quota is bit-identical to the pre-trigger version (the INSERT succeeds, the row appears in the table). The only new failure mode is "over-quota INSERT fails with Postgres exception" — which the client already handles cleanly (cleans up the orphan storage object, shows generic toast). Race-safe via the atomic check-and-increment UPDATE. Backfill is idempotent.
+
+### Non-goals (recap)
+
+- No Stripe integration.
+- No client paywall / quota-state UI.
+- No `analyze-paper` / AI quota changes.
+- No bucket privacy work (already done by `20260327100000`).
+- No `handle_new_user` extension (the trigger UPSERT covers on-demand row creation; extending the signup pipeline is unnecessary surface area).
+- No generated-types regeneration (no client hook reads `user_storage_usage` yet).
+- No new dependency, no env file, no Edge Function change, no deploy.
