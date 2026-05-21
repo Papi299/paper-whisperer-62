@@ -85,6 +85,8 @@ What "MVP baseline" means concretely:
 
 ---
 
+> **Server-side enforcement status (2026-05-21).** The AI quota values above are now backed by **server-side enforcement** inside the `analyze-paper` Edge Function via the `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs (`20260521020000_add_ai_quota_rpcs.sql`). Paper / storage quotas remain client-side-only until the attachments + storage-quota PR lands per C14. Numeric values are unchanged.
+
 ## 4. Instrumentation requirements (mandatory before closed beta)
 
 The schema, Edge Functions, and observability layer must track the following from day one. Without this telemetry, the §3 re-evaluation is impossible.
