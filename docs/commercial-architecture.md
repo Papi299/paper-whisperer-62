@@ -4,7 +4,9 @@
 >
 > **Strategy pivot (2026-05-21).** The earlier "Core + AI plan + 7-day trial + provider-neutral / single-user only" framing has been superseded by a web-first **Product-Led Growth (PLG) freemium** model with a **Free forever** tier (AI teaser), **Pro / Researcher** as the primary paid self-serve SKU, and **Labs / Teams** as a future B2B "Coming Soon / Contact Sales" tier. See the C7–C16 entries in [`decisions-and-triggers.md`](decisions-and-triggers.md).
 >
-> **Billing-provider pivot (2026-05-21).** The earlier **Stripe-first** direction (C8) has been **superseded by C17 — Merchant of Record (MoR)-first**. Stripe direct registration is not officially available for Israel-based businesses, and forming a US LLC via Stripe Atlas is excessive overhead for an independent operator validating MVP. Web billing will be implemented via a Merchant of Record provider (current candidates: **Paddle** and **Lemon Squeezy**; final selection pending a short provider-selection audit). The internal entitlement / `subscriptions` / `subscription_events` model is **unchanged** — it was designed provider-neutral from day one. References to `Stripe` / `stripe-webhook` / `STRIPE_*` below remain visible for history but should be read as MoR-neutral (`mor-webhook` / `MOR_*` / `MOR_PROVIDER=paddle|lemon_squeezy`) when planning implementation. **Do not hard-code Paddle or Lemon Squeezy as the chosen provider in any new architecture text until the provider-selection audit completes and a dated C18 decision records the choice.**
+> **Billing-provider pivot (2026-05-21).** The earlier **Stripe-first** direction (C8) was **superseded by C17 — Merchant of Record (MoR)-first**. Stripe direct registration is not officially available for Israel-based businesses, and forming a US LLC via Stripe Atlas is excessive overhead for an independent operator validating MVP. Web billing will be implemented via a Merchant of Record provider. The internal entitlement / `subscriptions` / `subscription_events` model is **unchanged** — it was designed provider-neutral from day one.
+>
+> **Provider selection (2026-05-21, C18).** **Paddle** is the selected MoR provider for the web MVP under C17. Lemon Squeezy is retained as a fallback only — to be reconsidered if Paddle onboarding fails, Paddle materially changes pricing/policy, or Paddle proves insufficient during the implementation spike. **Implementation of Paddle integration is blocked** until owner-side Paddle setup (Sandbox account, KYB, domain verification, Product + $15/mo Price, customer-portal config, API key, webhook secret) is complete. **The internal architecture stays provider-neutral**: `subscriptions.provider` records `'paddle'` rows in MVP, with `apple` / `google` / `revenuecat` / `manual` reserved; future providers add as additive ingestion paths without schema rework. References to `MOR_*` and `mor-webhook` in older planning text are now read as **Paddle-specific** (`PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_PRO_MONTHLY_PRICE_ID`, `paddle-webhook`).
 
 ---
 
@@ -16,7 +18,7 @@ The first commercial release of Paper Whisperer is a **web-first PLG** product.
 - **Acquisition mechanism.** A **Free forever** tier replaces the previously-planned 7-day time-based trial. Researchers often need weeks to reach the "aha" moment (build a library, run a real systematic review, hit AI in earnest); a fixed 7-day window converts poorly for that workflow. Free forever supports habit formation; the AI teaser (a small lifetime allowance) is the upgrade lever.
 - **Paid monetization.** A single self-serve paid tier — **Pro / Researcher** — at an MVP baseline of **$15/month**. No paid AI-free "Core" tier in MVP; the previously-planned Core / AI split has been collapsed into Free / Pro.
 - **B2B future path.** A **Labs / Teams** tier is included in marketing and pricing copy as **"Coming Soon" / "Contact Sales"** only. It is **not self-serve in MVP** and **must not be sold** until shared libraries, seat management, team-owner / admin roles, invitations, and team-level entitlements exist. Its role today is price anchoring and B2B lead capture for academic labs, clinical research groups, and dietitian / clinician teams.
-- **Billing provider.** **Merchant of Record (MoR)-first** for the web MVP (C17, 2026-05-21 — supersedes the earlier C8 Stripe-first direction). Final MoR provider selection (Paddle vs Lemon Squeezy candidate set) is pending a separate audit. The chosen MoR will act as the seller of record for payment collection, invoicing, and international tax / VAT / sales-tax operations (subject to provider terms), reducing operational and accounting overhead for an Israel-based independent operator. **Provider integration is blocked** until (a) the provider-selection audit completes and a dated decision records the choice, and (b) the launch-blocker items in §6 are complete. (a) AI quota enforcement and (b) storage privacy + quota are **already complete** — see PRs #143 / #144.
+- **Billing provider.** **Merchant of Record (MoR)-first** for the web MVP (C17, 2026-05-21 — supersedes the earlier C8 Stripe-first direction). **Provider selected: Paddle** (C18, 2026-05-21). **Lemon Squeezy** remains a fallback only and would be reconsidered if Paddle onboarding fails. Paddle acts as the seller of record for payment collection, invoicing, and international tax / VAT / sales-tax operations **subject to Paddle's terms**, which reduces operational and accounting overhead for an Israel-based independent operator (it does **not** remove all tax / legal obligations). **Paddle integration is blocked** until (a) owner-side Paddle setup (Sandbox / KYB / domain / Product + $15/mo Price / customer-portal config / secrets) is complete, and (b) the launch-blocker items in §6 below are complete. (b)(1) AI quota enforcement and (b)(2) storage privacy + quota are **already complete** — see PRs #143 / #144.
 - **Storage.** Attachments / PDF storage are **in launch scope**. Attachment privacy hardening (close the public-bucket gap) and storage-quota enforcement are **launch blockers** before paid beta. See §7.
 - **Locale.** English-only LTR for MVP. Hebrew / RTL is out of scope.
 
@@ -92,7 +94,7 @@ This avoids forcing every render to scan a multi-row history of subscription eve
 - **PDF storage:** 2 GB.
 - **AI quota:** **350 calls / month** (resets on billing-period rollover).
 - **Includes everything in Free, plus:** Synonyms pool, Exclusions pool, the full monthly AI quota.
-- **Annual cadence:** an annual SKU at a discount (broadly comparable to other productivity SaaS, exact percentage owner-decided) is in scope for MVP if the chosen MoR provider's configuration allows it cheaply; otherwise it ships in a fast-follow.
+- **Annual cadence:** an annual SKU at a discount (broadly comparable to other productivity SaaS, exact percentage owner-decided) is in scope for MVP if Paddle's configuration allows it cheaply; otherwise it ships in a fast-follow.
 - **Add-on AI credit packs:** **future, not MVP.** Researchers should not be hard-blocked mid-project at the quota wall, so the architecture must support add-on credits later (see §5.3); we do not build them in the first paid release.
 
 ### 3.3 Labs / Teams (roadmap — "Coming Soon" / "Contact Sales" only)
@@ -147,9 +149,9 @@ Conceptual fields:
 
 - `id` (PK)
 - `user_id`
-- `billing_provider` (the chosen MoR provider's identifier per C17 — `paddle` or `lemon_squeezy` once selected; `apple` / `google` / `revenuecat` / `stripe` / `manual` reserved for later)
-- `billing_customer_id` (provider customer / subscription customer ID for now)
-- `billing_subscription_id` (provider subscription / variant subscription ID for now)
+- `billing_provider` (`paddle` per C18 for MVP; `apple` / `google` / `revenuecat` / `lemon_squeezy` / `stripe` / `manual` reserved for later)
+- `billing_customer_id` (Paddle Customer ID `ctm_...` for MVP)
+- `billing_subscription_id` (Paddle Subscription ID `sub_...` for MVP)
 - `plan` (e.g. `pro`)
 - `billing_period` (`monthly` / `annual`)
 - `status`
@@ -157,7 +159,7 @@ Conceptual fields:
 - `raw_payload` (JSONB — last verified provider event, for forensics)
 - `created_at`, `updated_at`
 
-Uniqueness: `(billing_provider, billing_subscription_id)`. Writes only by the MoR provider's webhook ingestion Edge Function.
+Uniqueness: `(billing_provider, billing_subscription_id)`. Writes only by the `paddle-webhook` Edge Function (the MVP ingestion path under C18).
 
 ### 4.3 `usage_counters` (one row per user per billing period)
 
@@ -177,11 +179,11 @@ Uniqueness: `(user_id, period_start)`. Writes only via SECURITY DEFINER RPCs.
 
 ### 4.4 `subscription_events` (append-only audit log)
 
-Every webhook event we processed (MoR provider for MVP per C17; Apple S2S / Google RTDN later): provider, event type, raw payload, signature verification result, resulting entitlement change, timestamp. Service-role-only writes; admin-only reads. Useful for support, dispute resolution, billing reconciliation.
+Every webhook event we processed (Paddle for MVP per C18; Apple S2S / Google RTDN later): provider, event type, raw payload, signature verification result, resulting entitlement change, timestamp. Service-role-only writes; admin-only reads. Useful for support, dispute resolution, billing reconciliation. Idempotency: `(provider, provider_event_id)` unique on `subscription_events`. Paddle supplies a stable globally-unique `event.id` that lands directly in `provider_event_id`.
 
 ### 4.5 `usage_credits` (future — not MVP)
 
-Add-on credit packs. Conceptual fields: `user_id`, `kind` (`ai`), `amount_remaining`, `purchased_at`, `expires_at`, `source` (MoR provider one-time charge ID for MVP per C17). Consumed by `analyze-paper` **after** the monthly quota is exhausted. Not built in MVP.
+Add-on credit packs. Conceptual fields: `user_id`, `kind` (`ai`), `amount_remaining`, `purchased_at`, `expires_at`, `source` (Paddle one-time `transaction.id` for MVP per C18). Consumed by `analyze-paper` **after** the monthly quota is exhausted. Not built in MVP.
 
 ---
 
@@ -232,20 +234,20 @@ When `consume_ai_quota` would return `quota_exceeded`, a future variant checks `
 
 ## 6. Launch blockers (must ship before paid beta)
 
-The following items **must** be complete before opening the closed paid pilot (the chosen MoR provider in live mode). They are the minimum bar at which charging users is defensible.
+The following items **must** be complete before opening the closed paid pilot (Paddle Live mode under C18). They are the minimum bar at which charging users is defensible.
 
 1. **Entitlement + quota schema.** ✅ **Implemented** in migration `20260521010000_add_entitlement_usage_schema.sql` (repo only — remote deploy pending). Five tables: `user_entitlements`, `subscriptions`, `usage_counters`, `subscription_events`, `usage_credits`. RLS posture: client SELECT-own only on `user_entitlements` and `usage_credits`; everything else server-only. Signup trigger extended to seed Free defaults. See [migration-history.md](migration-history.md) under "Commercial foundation — entitlement and usage schema".
 2. **Server-side AI quota enforcement inside `analyze-paper`.** ✅ **Implemented** in migration `20260521020000_add_ai_quota_rpcs.sql` + the `analyze-paper` Edge Function (repo only — remote DB push + Edge Function deploy pending). `consume_ai_quota` is called before Gemini; on `allowed=false` the function returns HTTP 402 `Payment Required` with a structured body and does not invoke Gemini. `refund_ai_quota` is called best-effort if the Gemini call or response parsing fails after a successful consume. See [migration-history.md](migration-history.md) under "Commercial foundation — AI quota enforcement".
 3. **Attachment bucket privacy hardening.** ✅ **Already implemented** in `20260327100000_private_attachments_bucket.sql` (repo-tracked, applied to remote since March 2026; retro-documented in `migration-history.md` during PR #144). Bucket is `public = false`; `attachments_owner_read` SELECT policy keys on the `{userId}/{paperId}/…` path prefix. Signed URLs are the client read path.
 4. **Storage quota enforcement.** ✅ **Implemented** in `20260521030000_harden_attachment_privacy_and_storage_quota.sql` (repo only — remote `db push` pending). Dedicated `user_storage_usage` table (BIGINT-typed `used_bytes`); `BEFORE INSERT` trigger does atomic check-and-increment via a single quota-gated UPDATE; `AFTER DELETE` trigger decrements floored at zero. Backfill computes real usage per existing user.
-5. **MoR provider-selection audit + provider integration.** (C17, supersedes the earlier "Stripe Checkout + webhook ingestion" item.) First: a short provider-selection audit between Paddle and Lemon Squeezy (account approval, product / price / variant model, webhook event surface and signature verification, customer portal capabilities, sandbox / test-mode flow, payout / fee schedule against the $15 / month baseline, refund / dispute handling, tax / invoicing behavior). Then: provider-specific Edge Functions — a `mor-webhook` (or provider-specific name) for idempotent ingestion into `subscriptions` and recompute of `user_entitlements`; a `create-payment-session` / `create-checkout-session` for authenticated users; a `create-customer-portal-session` for the provider's hosted billing portal. Signature verification on the webhook is **mandatory**. All provider-specific configuration lives in Supabase secrets (`MOR_API_KEY`, `MOR_WEBHOOK_SECRET`, `MOR_PRO_MONTHLY_PRICE_ID` / variant id, `APP_URL`); no client-side billing-provider SDK; no `VITE_MOR_*` secret of any kind.
+5. **Paddle integration** (C18, 2026-05-21; selected via the MoR provider-selection audit recorded in `migration-history.md` and PR #145's follow-up). Three Edge Functions: `paddle-webhook` (idempotent ingestion into `subscriptions` + recompute of `user_entitlements` via `recompute_entitlement_from_subscription`); `create-payment-session` (authenticated; creates a Paddle checkout/transaction with `custom_data: { supabase_user_id }`); `create-customer-portal-session` (authenticated; returns the Paddle customer portal URL). Signature verification on `paddle-webhook` is **mandatory** (`Paddle-Signature` header → `HMAC-SHA256(secret, ts + ":" + rawBody)` against `h1`; 5-second timestamp tolerance — public `atomica-software/deno_paddle_verify` library is the recommended helper). All provider-specific configuration lives in Supabase secrets (`PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_PRO_MONTHLY_PRICE_ID`, `APP_URL`); no client-side Paddle SDK; no `VITE_PADDLE_*` secret of any kind. A small migration extends the `provider` CHECK constraint on `subscriptions` and `subscription_events` to include `'paddle'` (and adds the value to `user_entitlements.billing_provider`, which has no CHECK today). **Implementation of this PR is blocked until owner-side Paddle setup is complete** — see `owner-decisions.md §2.1`.
 6. **Privacy policy + terms + support URL + AI disclosure** linked from inside the app (URLs hosted on the external marketing site — see §11).
 7. **In-app account deletion.** Edge Function that cascades user data deletion across tables + Storage bucket prefix + finally `auth.admin.deleteUser`. Confirmation UI in Settings.
 8. **Minimal monitoring / error tracking.** Sentry-equivalent on the client with PII redaction; Edge Function log inspection cadence documented.
 9. **Per-user app-level rate limit on `analyze-paper`** (separate from the quota; defense in depth against credential abuse).
 10. **Premium-feature gating for Synonyms / Exclusions** if those remain user-accessible — see §3.1.
 
-Items not on this list (mobile packaging, app-store assets, Labs/Teams shared libraries, add-on credit packs, annual SKU if the chosen MoR provider makes it expensive, RTL/Hebrew) are explicitly **not** beta blockers.
+Items not on this list (mobile packaging, app-store assets, Labs/Teams shared libraries, add-on credit packs, annual SKU if Paddle makes it expensive, RTL/Hebrew) are explicitly **not** beta blockers.
 
 ---
 
@@ -257,23 +259,25 @@ The next ~6 PRs are blocked by each other in a clear order. This is the recommen
 2. **Entitlement + usage schema** — migration + RLS + Free-tier seeding for the existing user. ✅ **Implemented** in `20260521010000_add_entitlement_usage_schema.sql` (remote deploy pending).
 3. **AI quota enforcement in `analyze-paper`** — `consume_ai_quota` / `refund_ai_quota` RPCs + Edge Function wiring. ✅ **Implemented** in `20260521020000_add_ai_quota_rpcs.sql` + the `analyze-paper` Edge Function (remote deploy pending). Client UI for quota state + quota-exceeded toast is **deferred** to a later PR — the Edge Function already returns a structured 402 body that the UI consumes later.
 4. **Attachments privacy hardening + storage-quota enforcement** — ✅ **Completed.** Privacy hardening was previously done by `20260327100000` (retro-documented). Storage-quota enforcement implemented in `20260521030000_harden_attachment_privacy_and_storage_quota.sql` (remote deploy pending).
-5. **MoR provider-selection audit** — short audit between Paddle and Lemon Squeezy producing a dated C18 owner decision recording the choice. No code in this step. **Recommended next.**
-6. **MoR integration** — provider-specific Edge Functions: `mor-webhook` (or provider-specific name) for idempotent ingestion + recompute of `user_entitlements`; `create-payment-session` / `create-checkout-session`; `create-customer-portal-session`. Settings → "Upgrade to Pro" button. Customer portal link from Settings.
-7. **UI: paywall / upgrade / quota state** — `<UpgradeNudge>` component, per-action quota display, Settings → subscription / billing portal / cancel.
-8. **Privacy + account deletion + AI disclosure + support links** — Edge Function for deletion + Settings surface + external URLs wired.
-9. **Closed technical beta on MoR provider sandbox / test mode.** Internal testing only; not "paid beta" because the provider is in sandbox.
-10. **Closed paid pilot on MoR provider live mode** — small invited cohort with real charges.
-11. **Open beta** — public sign-up; marketing site live; Labs / Teams "Contact Sales" lead capture form live.
+5. **MoR provider-selection audit** — short audit between Paddle and Lemon Squeezy producing a dated C18 owner decision recording the choice. ✅ **Completed (C18, 2026-05-21) — Paddle selected.** Lemon Squeezy retained as fallback only. See `decisions-and-triggers.md` C18.
+6. **Owner-side Paddle setup gate** (no code; owner action). Paddle Sandbox account; KYB / business verification; domain verification; Product creation; $15 / month recurring Price; capture Price ID; Paddle API key; webhook signing secret once endpoint is registered; customer portal config; `APP_URL` decided. **Recommended next.**
+7. **Paddle integration** — three Edge Functions (`paddle-webhook`, `create-payment-session`, `create-customer-portal-session`) + `_shared/paddle.ts` initializer + two SECURITY DEFINER RPCs (`set_billing_customer`, `recompute_entitlement_from_subscription`) + a small migration extending the `provider` CHECK constraints to include `'paddle'`. Blocked on #6 (owner setup gate).
+8. **UI: paywall / upgrade / quota state** — `<UpgradeNudge>` component, per-action quota display, Settings → subscription / Paddle customer portal / cancel; quota-aware error toasts surfacing the existing 402 (AI) and the `Storage quota exceeded` Postgres error (storage).
+9. **Privacy + account deletion + AI disclosure + support links** — Edge Function for deletion + Settings surface + external URLs wired.
+10. **Closed technical beta on Paddle Sandbox.** Internal testing only; not "paid beta" because Paddle is in Sandbox mode.
+11. **Closed paid pilot on Paddle Live** — small invited cohort with real charges.
+12. **Open beta** — public sign-up; marketing site live; Labs / Teams "Contact Sales" lead capture form live.
 
 Each item produces its own PR and `migration-history.md` entry per `docs/documentation-policy.md`.
 
 ---
 
-## 8. Billing-provider neutrality (MoR-first, multi-provider-ready)
+## 8. Billing-provider neutrality (Paddle MVP under MoR-first, multi-provider-ready)
 
 The same `user_entitlements` and `subscriptions` rows can be produced by:
 
-- **A Merchant of Record (MoR)** (web, MVP per C17 — Paddle or Lemon Squeezy is the current candidate set; final selection pending the §7 step 5 audit), via a provider-specific webhook Edge Function (`mor-webhook` / `paddle-webhook` / `lemon-squeezy-webhook` depending on selection) that verifies the provider's signature header. **This is the only provider we ship in MVP.**
+- **Paddle** (web, MVP per C18 — selected provider under the C17 MoR-first architecture), via a `paddle-webhook` Edge Function that verifies `Paddle-Signature` via HMAC-SHA256 over `ts:rawBody`. **This is the only provider we ship in MVP.**
+- **Lemon Squeezy** (fallback only per C18; not implemented in MVP). Would be revisited if Paddle onboarding fails or Paddle materially changes policy.
 - **Apple IAP** (future iOS app), via an `apple-notification` Edge Function that verifies Apple Server-to-Server Notifications V2 JWS.
 - **Google Play Billing** (future Android app), via a `google-rtdn` Edge Function subscribed to Real-Time Developer Notifications.
 - **RevenueCat** (optional cross-platform unification later), via a `revenuecat-webhook` Edge Function.
@@ -293,7 +297,7 @@ Because every ingestion path lands data in the same internal model, **the applic
 
 ## 9. Why commercial state is not added to `profiles`
 
-(Unchanged from the pre-pivot architecture; same five reasons apply equally to the PLG / MoR-first model from C17.)
+(Unchanged from the pre-pivot architecture; same five reasons apply equally to the PLG / MoR-first model from C17 and to the Paddle-as-MVP-provider selection from C18.)
 
 It would be technically possible to add `plan`, `subscription_status`, `ai_monthly_quota`, `ai_used_this_period`, `storage_used_bytes` etc. as new columns on `profiles`. We chose not to:
 
@@ -317,12 +321,12 @@ These are intentionally **out of scope** for the first commercial release:
 - **Collaboration features** of any kind (comments, shares, real-time co-edit).
 - **Credit packs / one-time AI top-ups.** Future architecture-supported but not built in MVP. See §5.3.
 - **Family sharing / household plans.**
-- **Coupon and promo-code logic** beyond what the chosen MoR provider supplies for free.
+- **Coupon and promo-code logic** beyond what Paddle supplies for free.
 - **Apple IAP / Google Play Billing / RevenueCat.** All deferred to the post-web-launch mobile packaging phase.
 - **Mobile-native packaging.** Capacitor / React Native / true native shells are not built. Web-first; mobile is later.
 - **Hebrew / RTL.** English-only LTR.
 - **Education / student / non-profit pricing.** Out of scope unless owner adds.
-- **Per-region pricing differentiation** beyond the chosen MoR provider's defaults.
+- **Per-region pricing differentiation** beyond Paddle's defaults.
 
 When any of the above is later approved as in-scope, it must be added as a separate, dated decision in [decisions-and-triggers.md](decisions-and-triggers.md) and accompanied by its own architecture section here.
 
