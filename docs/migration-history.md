@@ -2441,3 +2441,83 @@ Post-deploy smoke (browser, optional but recommended):
 - No README change (zero Stripe mentions; nothing to update).
 - No `docs/deployment.md` change (zero Stripe mentions; standard deploy sequence applies for the future MoR Edge Function PR).
 - No `docs/architecture-read-path.md` change (no read-path impact).
+
+## Commercial provider selection — Paddle selected as MoR provider (C18)
+
+**Date:** 2026-05-21 (same-day follow-up to C17 / PR #145 — the MoR provider-selection audit ran immediately after the MoR pivot landed).
+**What:** Docs-only PR recording the owner-approved provider-selection decision following the Paddle vs Lemon Squeezy audit. **Paddle is selected as the Merchant of Record provider for the web MVP.** Lemon Squeezy is retained as a fallback only. **No application code, no migration, no Edge Function, no Stripe / Paddle / Lemon Squeezy SDK, no dependency, no env file change, no deploy. No accounts / products / prices / variants / webhooks / customer-portal configurations were created on any provider.**
+
+**Decision (C18, see `decisions-and-triggers.md`):**
+
+- **Paddle is selected as the MoR provider** for the web MVP under the C17 MoR-first architecture.
+- **Lemon Squeezy is retained as a fallback only** — to be reconsidered if Paddle rejects or materially delays the Israeli operator during KYB / verification, materially changes its pricing or policy posture before launch, or proves insufficient during the implementation spike.
+- **C17 (MoR-first) remains the parent architectural decision.** C18 is the provider selection under it. C8 (Stripe-first) is still superseded.
+- **The internal commercial architecture stays provider-neutral.** `subscriptions.provider` will record `'paddle'` rows in MVP; the column type and the existing enum-extension pattern accommodate `apple` / `google` / `revenuecat` / future MoR providers without rework.
+- **MVP baselines are unchanged.** Free 1,500 papers / 500 MB / 15 lifetime AI; Pro $15 / month / 10,000 papers / 2 GB / 350 AI per month; Labs / Teams Coming Soon / Contact Sales only with $99–$149 / month future baseline range.
+- **Paddle reduces payment / tax operational burden subject to Paddle's terms.** It does **not** remove all tax / legal obligations.
+- **Paddle approval is not guaranteed by this decision.** If KYB fails, the Lemon Squeezy fallback is re-opened.
+
+**Rationale (full audit attached as the prior turn's report):**
+
+1. **C17 alignment.** Lemon Squeezy was acquired by Stripe (July 2024) and is migrating into Stripe Managed Payments (public preview Feb 2026). Choosing Lemon Squeezy today binds the project to a platform whose end-state inherits Stripe's underlying country-support model — recreating the original Israel-onboarding constraint that C17 was created to avoid. Paddle is an independent MoR with no announced platform transition.
+2. **Israel onboarding fit.** Paddle's stated policy is "software businesses anywhere in the world except the unsupported countries listed below"; Israel is **not** on the unsupported list and is listed in the Asia section of `supportedcountries.com/paddle/`. Standard KYB / domain / identity verification applies.
+3. **Engineering / Deno-Supabase fit.** A public Deno library (`atomica-software/deno_paddle_verify`) for `Paddle-Signature` HMAC-SHA256 verification exists, plus a public Supabase Edge Function integration tutorial. The internal `subscriptions` / `subscription_events` schema from PR #142 is provider-neutral and supports Paddle without structural changes.
+4. **Pricing fit at the $15 / month baseline.** Paddle's all-in 5% + $0.50 per transaction is structurally simpler than Lemon Squeezy's base + 0.5% subscription + 1.5% international + 1.5% PayPal surcharge stack. Pro Net per $15 is approximately equal-or-better in every realistic scenario.
+5. **Provider stability.** Paddle is independent with broad SaaS adoption.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `docs/decisions-and-triggers.md` | New **C18** dated 2026-05-21 with full decision text, rationale, constraints, re-evaluation triggers. C17 stays in force as the parent architectural decision (unchanged). C8 stays superseded. |
+| `docs/commercial-architecture.md` | New banner-section line below the existing C17 banner explicitly noting C18 / Paddle selection. §1 billing-provider bullet updated from "Final MoR provider selection ... is pending" to "Provider selected: Paddle (C18); Lemon Squeezy retained as fallback only". §3 column descriptions for `subscriptions.provider` / `billing_customer_id` / `billing_subscription_id` updated to record Paddle as MVP value (with `lemon_squeezy` added to the reserved-for-later list). §6 launch-blocker #5 rewritten as Paddle integration with the full Edge Function / RPC / migration scope. §7 implementation sequence renumbered: row #5 marked completed (C18 — Paddle selected), new row #6 records the owner-side Paddle setup gate, new row #7 records the Paddle integration PR, rows shifted to land on row #12 (Open beta). §8 provider list updated: Paddle listed as the MVP-MoR provider; Lemon Squeezy listed as fallback only. §10 non-goals references made Paddle-specific (annual SKU configuration cost, coupons beyond Paddle defaults, per-region pricing beyond Paddle defaults). |
+| `docs/quotas-and-pricing.md` | Banner updated from MoR-neutral candidate language to Paddle-selected language. Inline references (Pro tier note, AI quota note, instrumentation note, annual SKU note, staging-environment note, fee-input note) made Paddle-specific. **Numeric baselines unchanged.** |
+| `docs/owner-decisions.md` | C17 row simplified (now points at C18 for the provider choice). New C18 row added. §2.1 retitled "Required before Paddle integration begins"; top row replaced from "MoR provider selection" to "Owner-side Paddle Sandbox setup" with the full 10-step owner action list. §2.1a "Resolved" subsection extended with the MoR-provider-selection row. §3 implementation-unlocks table: row #5 marked done (C18 — Paddle selected); new row #6 is the owner-side Paddle setup gate (marked as the next required task, NOT engineering work); new row #7 is the Paddle integration PR (blocked on row #6); rows shifted to land on row #12 (Open beta). Cross-references updated to C1–C18. |
+| `docs/store-launch-checklist.md` | Banner updated to reflect C18 / Paddle selected. Billing-direction paragraph updated. The mobile-phase items (Apple IAP / Google Play) are unchanged — those remain the mobile-phase ingestion paths under C4 provider-neutrality. |
+| `docs/start-here.md` | New handoff entry above the PR #145 entry recording C18 / Paddle selected, what stays unchanged, what is now the next required owner action, what the future Paddle integration PR's scope looks like, and explicit "no Paddle code in this PR" markers. |
+| `docs/migration-history.md` | This entry. |
+
+### Files not changed
+
+- `docs/deployment.md` — zero Stripe / Paddle / Lemon / MoR references (`grep` confirmed). Standard mixed-PR deploy sequence in §2 / §6.1 / §7 still applies for the future Paddle integration PR (one migration via `db push` + three Edge Function deploys). No update needed.
+- `README.md` — zero Stripe / Paddle / Lemon / MoR / billing-provider references (`grep` confirmed). No high-level shipping-status change. No update needed.
+- `docs/architecture-read-path.md` — no read-path change.
+- `docs/documentation-policy.md` — no documentation-policy change.
+
+### Wording constraints honored
+
+- ✅ "**Paddle is selected as the MoR provider for the web MVP.**"
+- ✅ "**Implementation remains blocked until owner-side Paddle onboarding and sandbox setup are complete.**"
+- ✅ "**Paddle reduces payment / tax operational burden subject to Paddle's terms.**"
+- ❌ Does NOT say "Paddle removes all tax / legal obligations."
+- ❌ Does NOT say "Paddle approval is guaranteed."
+- ❌ Does NOT say "The product is ready for paid beta."
+- ❌ Does NOT say "Lemon Squeezy is bad." Says it is not recommended for this MVP because its Stripe-transition reintroduces strategic uncertainty.
+- ❌ Does NOT say "The app is now Paddle-only forever." The provider-neutral internal architecture stays in force.
+
+### Verification
+
+- `git status --short` — only the seven docs files in the diff before commit.
+- `npx tsc --noEmit` — clean. (Docs change, no source files touched.)
+- `npx vitest run` — 285/285 (unchanged; docs-only PR cannot affect tests).
+- `npx eslint` — not run (no `.ts` / `.tsx` files touched).
+- Markdown lint — not configured in this repo (no `lint:md` script in `package.json`, no `.markdownlint*` file). Visual review of all seven files performed; relative links checked by inspection.
+- `supabase migration list --linked` — Local = Remote through `20260521030000` (PR #144 deployed). **No migration added in this PR.**
+- `supabase db push` — **not run.**
+- `supabase functions deploy` — **not run.**
+- Paddle / Lemon Squeezy / Stripe API calls — **not made.**
+- No Paddle / Lemon Squeezy accounts were created. No products / prices / variants / webhooks / customer portals were configured.
+
+### Non-goals
+
+- No application / source code changes.
+- No migration. (The future Paddle integration PR will include a small CHECK-constraint migration; not in this PR.)
+- No Edge Function (`paddle-webhook`, `create-payment-session`, `create-customer-portal-session` will come in the Paddle integration PR, **after** owner-side Paddle setup completes).
+- No billing-provider SDK / dependency added.
+- No env file changes (`.env.example`, `.env.test.example` untouched; no `PADDLE_*` keys added).
+- No `package.json` change.
+- No generated Supabase types regeneration.
+- No legal text drafted as final.
+- No `README.md` change (no billing-provider mention to update).
+- No `docs/deployment.md` change (no Stripe / MoR / Paddle-specific content present today; future Paddle integration PR will add a single line under §7).
+- No `docs/architecture-read-path.md` change (no read-path impact).
