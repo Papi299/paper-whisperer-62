@@ -485,6 +485,41 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Commercial foundation — attachments storage quota enforcement (2026-05-21)
+
+Closes the storage-quota half of the C14 launch blocker. The privacy half (public-read bucket policy) turned out to be **already closed** by the previously-undocumented migration `20260327100000_private_attachments_bucket.sql`; this PR records that retroactively and implements only the storage-quota work.
+
+What changed:
+
+- New migration `20260521030000_harden_attachment_privacy_and_storage_quota.sql`:
+  - New `public.user_storage_usage` table (`user_id` PK, `used_bytes BIGINT`, RLS forced, client SELECT-own only, server-only writes). Bigint is intentional — `integer` would overflow at the future Labs/Teams 10 GB cap.
+  - SECURITY DEFINER trigger `check_and_consume_storage_quota` on `BEFORE INSERT ON paper_attachments`. Atomically checks-and-increments via a single quota-gated `UPDATE … WHERE used_bytes + NEW.size_bytes <= quota RETURNING …`. Raises `Storage quota exceeded` if the UPDATE matches zero rows. Race-safe across concurrent uploads.
+  - SECURITY DEFINER trigger `refund_storage_quota` on `AFTER DELETE ON paper_attachments`. Decrements floored at zero.
+  - Backfill: one `user_storage_usage` row per existing `auth.users` user, `used_bytes = SUM(size_bytes)` from existing `paper_attachments` rows.
+- **No** changes to `storage.objects` policies — the existing `attachments_owner_read` policy from `20260327100000` is the authoritative owner-scoped SELECT policy and is correctly in place on both local and remote.
+- Documentation:
+  - New retro-doc entry in `migration-history.md` for `20260327100000` (undocumented since March; surfaced during this PR's inspection).
+  - Full entry in `migration-history.md` for this PR.
+
+What's NOT in this PR (deferred):
+
+- No Stripe integration (next major commercial PR).
+- No client UI for storage usage / quota state (a future PR will read the new SELECT-own policy on `user_storage_usage` and render a Settings → Storage gauge + "Storage quota exceeded — upgrade to Pro" toast).
+- No `analyze-paper` / AI quota changes.
+- No `handle_new_user` extension — the trigger UPSERT covers on-demand row creation for new users.
+- No generated-types regeneration. No env file changes. No new dependency. No Edge Function change.
+
+Verification: full local replay clean across all 61 migrations. Nine functional test cases via copied SQL into the local Postgres container — all pass: fresh-user defaults; 10 MB + 200 MB inserts under Free 500 MB cap succeed; 350 MB push (would total 560 MB) raises `Storage quota exceeded`, `used_bytes` stays at 220 MB; delete-200 MB decrements to 10 MB; negative `size_bytes` raises; missing-entitlement raises; Pro 2 GB upgrade allows 200 MB insert; CASCADE cleanup works. `npx tsc --noEmit` clean. `npx vitest run` 285/285 (unchanged). `supabase migration list --linked` shows Local = Remote through `20260521020000` (PR #143 deployed); this PR's `20260521030000` not yet on remote. **`supabase db push` was NOT run** — operator's next step per `docs/deployment.md §6.1` (migration-only PR; no Edge Function deploy needed).
+
+**Playwright** (`e2e/attachments.spec.ts`) was not re-run from this branch — the dev server's `.env` points at the **remote** project which doesn't have this PR's migration yet; running Playwright now would exercise pre-migration behavior. The SQL functional test exercises every trigger code path more thoroughly than Playwright could. Post-merge smoke is the natural validation point.
+
+**Next implementation step.** With AI quota enforcement (PR #143) and storage quota enforcement (this PR) both landed, the remaining server-side enforcement gaps before Stripe are closed. The next implementation candidates are:
+
+- **Stripe Checkout + webhook ingestion** — `stripe-webhook` Edge Function ingesting Stripe events into `subscriptions` + recomputing `user_entitlements`. Settings → "Upgrade to Pro" Checkout link. Customer portal link. **Recommended next** because it's the largest single piece of remaining commercial work and finally lets the owner sell Pro.
+- **Client UI for quota state** — paywall / upgrade nudge / `<UpgradeNudge>` component, per-action quota display, quota-aware error toasts that surface the structured 402 from PR #143 and the `Storage quota exceeded` Postgres error from this PR. Smaller; nice to have before paid pilot but does not unblock Stripe.
+
+Recommend Stripe next; client UI can land in parallel.
+
 ## Commercial foundation — AI quota enforcement (2026-05-21)
 
 Direct follow-up to PR #142. Closes the AI cost-exposure gap by enforcing the quota server-side inside the `analyze-paper` Edge Function. Unblocks the next phases per C8 (Stripe was explicitly gated on this PR).

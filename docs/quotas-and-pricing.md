@@ -85,7 +85,7 @@ What "MVP baseline" means concretely:
 
 ---
 
-> **Server-side enforcement status (2026-05-21).** The AI quota values above are now backed by **server-side enforcement** inside the `analyze-paper` Edge Function via the `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs (`20260521020000_add_ai_quota_rpcs.sql`). Paper / storage quotas remain client-side-only until the attachments + storage-quota PR lands per C14. Numeric values are unchanged.
+> **Server-side enforcement status (2026-05-21).** The AI quota values above are now backed by **server-side enforcement** inside the `analyze-paper` Edge Function via the `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs (`20260521020000_add_ai_quota_rpcs.sql`). The **storage quota** values are now backed by server-side enforcement via the BEFORE INSERT / AFTER DELETE triggers on `paper_attachments` and the new `user_storage_usage` table (`20260521030000_harden_attachment_privacy_and_storage_quota.sql`). The `attachments` Storage bucket has been **private with owner-scoped SELECT** since `20260327100000_private_attachments_bucket.sql` (retro-documented in `migration-history.md`). Paper-count limits remain client-side-only for now (low priority; the `safe_bulk_insert_papers` RPC can be extended in a small later PR if needed). Numeric values are unchanged.
 
 ## 4. Instrumentation requirements (mandatory before closed beta)
 
