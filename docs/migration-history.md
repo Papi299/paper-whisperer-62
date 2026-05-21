@@ -2051,3 +2051,158 @@ No Edge Function deploy needed (no `supabase/functions/` change).
 - No UI surface for plan / quota / billing.
 - No new architecture decision in `decisions-and-triggers.md` — this PR implements C7–C16 from PR #141 without introducing a new durable rule.
 - No README test-count change (Vitest stays at 285/285).
+
+## Commercial foundation — AI quota enforcement
+
+**Date:** 2026-05-21 (second implementation PR after the PR #141 commercial strategy pivot; direct follow-up to PR #142's schema landing).
+**What:** New migration `20260521020000_add_ai_quota_rpcs.sql` adding two SECURITY DEFINER RPCs (`consume_ai_quota`, `refund_ai_quota`) plus the integration into `supabase/functions/analyze-paper/index.ts` so AI quota is now enforced server-side **before** Gemini is called. Closes the AI cost-exposure gap that PR #142 left in place. **No Stripe, no UI changes, no client hook changes, no storage-quota trigger, no attachments bucket policy change, no generated-types update, no env file change, no dependency.** Edge Function code changed; deploy required post-merge.
+
+**Why:** PR #142 created the schema but did not enforce quotas. Any authenticated user could call `analyze-paper` repeatedly with no server-side cap on Gemini cost — the 3-second client cooldown is UX-only and trivially bypassable. C8 in `decisions-and-triggers.md` explicitly blocked Stripe integration until server-side AI quota enforcement exists, so this PR is the gating step before Stripe.
+
+### Sites changed
+
+| File | Change |
+|---|---|
+| `supabase/migrations/20260521020000_add_ai_quota_rpcs.sql` *(new)* | Creates `public.consume_ai_quota(p_user_id UUID)` and `public.refund_ai_quota(p_user_id UUID)`. Both SECURITY DEFINER + `SET search_path = public` + `#variable_conflict use_column` (resolves the OUT-parameter-vs-table-column ambiguity that breaks `ON CONFLICT (..., period_type, ...)` otherwise). Both gated by the S1 ownership pattern from PR #130 (`IF p_user_id IS NULL OR auth.uid() IS NULL OR p_user_id <> auth.uid() THEN RAISE EXCEPTION 'Unauthorized: user mismatch'`). Grant pattern matches PR #130 (`REVOKE … FROM PUBLIC; GRANT EXECUTE … TO authenticated`; the runtime `auth.uid() IS NULL` check blocks any residual anon EXECUTE grant from Supabase's default privileges). |
+| `supabase/functions/analyze-paper/index.ts` | Inserts a quota consume between auth+input-parse and the Gemini call; wraps the Gemini-and-parse block in an inner try/catch that issues a best-effort refund on failure. New `safeRefundAiQuota(supabase, userId)` helper at the top of the file (structural `RpcClient` type, no `any`). Auth, CORS, request validation, Gemini prompt / body, JSON-clean / parsing, success response shape, and the outer 500 generic-error catch-all are bit-identical to the pre-quota version. |
+
+### RPC return shapes
+
+`consume_ai_quota` returns `TABLE (allowed boolean, reason text, plan text, period_type text, used integer, quota integer, remaining integer, reset_at timestamptz)`. Reasons used: `'ok'`, `'quota_exceeded'`, `'missing_entitlement'`, `'inactive_entitlement'`. On `allowed=false` no counter increment happens; on `allowed=true` exactly one increment happens.
+
+`refund_ai_quota` returns `TABLE (refunded boolean, period_type text, used integer)`. Best-effort: returns `(false, NULL, 0)` when there's no entitlement or no counter, never raises. Decrement is `GREATEST(used - 1, 0)` so duplicate refunds are not destructive.
+
+### Quota selection rule
+
+The RPCs choose the quota bucket the same way:
+
+- **`ai_monthly_quota > 0`** → monthly bucket. `period_start = date_trunc('month', timezone('UTC', now())) AT TIME ZONE 'UTC'`; `period_end = period_start + INTERVAL '1 month'`.
+- **Else if `ai_lifetime_quota > 0`** → lifetime bucket. `period_start = 'epoch'::TIMESTAMPTZ`; `period_end = NULL`.
+- **Else (both zero)** → `quota_exceeded`.
+
+This matches the C11 baselines: Free has `ai_lifetime_quota=15, ai_monthly_quota=0` and hits the lifetime branch; Pro will have `ai_monthly_quota=350, ai_lifetime_quota=0` and hit the monthly branch.
+
+### Concurrency / atomicity
+
+The consume function takes a row-level `SELECT … FOR UPDATE` lock on `user_entitlements` to serialize per-user quota consumption against any concurrent webhook-driven entitlement mutation (a Pro recompute landing while the user is analyzing). The increment itself is `UPDATE … WHERE used < quota RETURNING used`, which is race-safe across two concurrent analyzes: even if both sessions read the same `used` value, only one passes the WHERE predicate on the actual UPDATE (Postgres row-level locking around the UPDATE serializes the matched row). Two simultaneous `consume_ai_quota` calls cannot both succeed and double-spend a quota unit.
+
+### Edge Function flow
+
+```
+CORS preflight        → unchanged
+Auth header check     → unchanged
+auth.getUser()        → unchanged (401 on failure)
+Parse body            → unchanged (400 on invalid abstract)
+consume_ai_quota RPC  → NEW
+  • RPC error         → 500 generic (no quota consumed)
+  • allowed=false     → 402 with structured { error, message, details: { plan, period_type, used, quota, remaining, reset_at } }
+  • allowed=true      → proceed (quota incremented by 1)
+GEMINI_API_KEY check  → on missing: refund + throw (outer catch → 500)
+Inner try:
+  fetchWithRetry      → unchanged
+  parse JSON          → unchanged
+  return 200 with     → unchanged (tldr, studyType, statisticalMethods)
+Inner catch:
+  refund_ai_quota     → best-effort, errors swallowed
+  rethrow             → outer catch returns 500 generic
+```
+
+### Behavior on quota exhaustion
+
+When `consume_ai_quota` returns `allowed=false`, the Edge Function returns HTTP **402 Payment Required** with this body:
+
+```json
+{
+  "error": "quota_exceeded",
+  "message": "AI analysis quota exceeded.",
+  "details": {
+    "plan": "free",
+    "period_type": "lifetime",
+    "used": 15,
+    "quota": 15,
+    "remaining": 0,
+    "reset_at": null
+  }
+}
+```
+
+Gemini is **not called**. No cost incurred. The current client treats non-2xx as generic — UI quota-state work lands in a later PR; the structured `details` block is ready for that UI without an Edge Function change.
+
+### What is intentionally NOT included
+
+- ❌ No Stripe Checkout / webhook ingestion (separate PR per C8).
+- ❌ No client UI for quota state, paywall, upgrade nudge (separate PR).
+- ❌ No `BEFORE INSERT` storage quota trigger on `paper_attachments` (separate launch-blocker PR per C14).
+- ❌ No `attachments` bucket SELECT policy change (separate launch-blocker PR per C14).
+- ❌ No `usage_credits` consumption (future per C13; not MVP).
+- ❌ No `src/integrations/supabase/types.ts` regeneration — the new RPCs are not yet called from client code; the Edge Function uses `supabase.rpc()` which is untyped at the call site.
+- ❌ No new dependency, no env file change, no `package.json` change.
+- ❌ No deploy commands run from this PR.
+
+### Verification
+
+- **Local replay (`supabase stop --no-backup` + `supabase start`)**: clean across all 60 migrations (57 prior + PR #142 + this PR's RPCs).
+- **Function definitions exist**: `pg_proc` shows both `consume_ai_quota` and `refund_ai_quota` with `prosecdef=t` (SECURITY DEFINER) and `proconfig={search_path=public}`.
+- **Functional test (8 cases via copied `/tmp/quota_test.sql`)**:
+  1. ✅ Trigger creates entitlement (Free defaults) + lifetime counter at `used=0` on new signup.
+  2. ✅ Anon (no JWT context) → `Unauthorized: user mismatch` raised.
+  3. ✅ Authenticated consume → `(allowed=t, reason=ok, plan=free, period_type=lifetime, used=1, quota=15, remaining=14, reset_at=NULL)`; refund → `used=0`; double-refund → `used=0` (floored at zero, not negative).
+  4. ✅ Exhaustion (used=15) → `(allowed=f, reason=quota_exceeded, used=15, quota=15, remaining=0)`; `used` stays 15 (no over-increment).
+  5. ✅ Pro monthly path (UPDATE entitlement to `ai_monthly_quota=350, ai_lifetime_quota=0`) → consume creates a new `usage_counters` row with `period_type=monthly`, `period_start = 2026-05-01 UTC`, `period_end = 2026-06-01 UTC`; returns `(allowed=t, reason=ok, plan=pro, period_type=monthly, used=1, quota=350, remaining=349, reset_at=2026-06-01 00:00:00+00)`.
+  6. ✅ Auth-mismatch (caller sub ≠ p_user_id, both non-null) → `Unauthorized: user mismatch` raised.
+  7. ✅ Missing entitlement (entitlement row deleted, then consume) → `(allowed=f, reason=missing_entitlement)`.
+  8. ✅ Cleanup via `DELETE FROM auth.users` → cascades out entitlement + counter rows.
+- **`npx tsc --noEmit`**: clean. The Edge Function file is **not** covered by `tsc` (Edge Functions target Deno; tsconfig only includes `src`). Static check for Edge Function code happens at `supabase functions deploy` time via Deno bundling.
+- **`npx vitest run`**: 285/285 (unchanged; no test code touched).
+- **`npx eslint supabase/functions/analyze-paper/index.ts`**: clean (0 errors, 0 warnings). Initial `// deno-lint-ignore no-explicit-any` workaround was replaced with a proper structural `RpcClient` type.
+- **`deno check`**: not run; Deno is not installed in this environment. The `supabase functions deploy` step at remote-deploy time runs the canonical Deno bundler and surfaces any compile error before publishing.
+- **`supabase migration list --linked`**: Local = Remote through `20260521010000` (PR #142 deployed); the new `20260521020000` is not yet on remote.
+- **`supabase db push`**: not run.
+- **`supabase functions deploy`**: not run.
+
+### Deployment instructions (post-merge)
+
+This PR is a **mixed PR** — both a migration and an Edge Function change. Per `docs/deployment.md §2` deployment-types table, the order is migration first, then Edge Function:
+
+```sh
+# 1. Migration
+supabase migration list --linked       # confirm Local = Remote through 20260521010000
+supabase db push --dry-run             # expected: ONLY 20260521020000_add_ai_quota_rpcs.sql
+supabase db push                       # apply
+supabase migration list --linked       # confirm 20260521020000 row aligned
+
+# 2. Edge Function
+supabase functions deploy analyze-paper --project-ref <project-ref>
+```
+
+Post-deploy spot-check SQL (Supabase Studio):
+
+```sql
+-- Functions exist
+SELECT proname FROM pg_proc WHERE proname IN ('consume_ai_quota','refund_ai_quota');
+
+-- Run one AI Analyze in the live app, then:
+SELECT used FROM public.usage_counters
+WHERE user_id = '<owner-uid>'
+  AND feature = 'ai_analysis'
+  AND period_type = 'lifetime';   -- should now be 1 (was 0 before the Analyze)
+```
+
+Post-deploy smoke (browser):
+- Sign in → Dashboard → click Analyze on a paper with an abstract → expected: normal success, `tldr` / `studyType` / `statisticalMethods` populate; `usage_counters.used` increments by 1.
+- (Optional, requires DB access) `UPDATE user_entitlements SET ai_lifetime_quota = 1 WHERE user_id = '<owner-uid>'` temporarily, run two Analyzes, expect the second to return 402 `quota_exceeded` with `Gemini NOT called` confirmed in Supabase logs. Restore the quota afterward.
+
+### Behavior on legitimate users
+
+Identical to the pre-quota version **as long as the user is within their quota**. The first 15 analyses on Free (or first 350/month on Pro) succeed exactly as before — same response shape, same UI flow. The behavior change is **only when the quota wall is reached**: instead of unlimited Gemini calls, the Edge Function returns 402 with a structured body and Gemini is not called. The 402 will be invisible to the current UI (which surfaces a generic "AI Analysis failed" toast for any non-2xx) until the next PR adds a quota-aware error handler — that's intentional; this PR establishes the contract, the UI consumes it.
+
+### Risk
+
+**Low.** RPCs use the S1 pattern from PR #130 (extensively tested via the search-RPC sequence). The increment is race-safe via `UPDATE … WHERE used < quota`. Refund is best-effort and floored at zero. The Edge Function happy path is bit-identical pre/post change. Only-new-behavior failure mode: a `consume_ai_quota` RPC outage would return 500 instead of 402, which the UI already handles. A spurious 402 cannot leak any data because the RPC's S1 guard requires `auth.uid() = p_user_id`.
+
+### Non-goals
+
+- No client UI changes (the structured 402 body is unused until a later PR).
+- No quota numbers changed; the C11 MVP baselines from PR #141 / PR #142 are unchanged.
+- No new architecture decision in `decisions-and-triggers.md` — this PR implements the existing C7–C16 (specifically C8 unblock + C11 enforcement).
+- No README test-count change (Vitest stays at 285/285).

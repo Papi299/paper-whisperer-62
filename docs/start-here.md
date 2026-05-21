@@ -485,6 +485,36 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Commercial foundation — AI quota enforcement (2026-05-21)
+
+Direct follow-up to PR #142. Closes the AI cost-exposure gap by enforcing the quota server-side inside the `analyze-paper` Edge Function. Unblocks the next phases per C8 (Stripe was explicitly gated on this PR).
+
+What changed:
+
+- New migration `20260521020000_add_ai_quota_rpcs.sql` adds two SECURITY DEFINER RPCs:
+  - `public.consume_ai_quota(p_user_id UUID)` — atomically picks the right quota bucket (monthly if `ai_monthly_quota > 0`, else lifetime), ensures the counter row exists, and increments `used` only if `used < quota`. Returns `(allowed, reason, plan, period_type, used, quota, remaining, reset_at)`. Reasons: `'ok'`, `'quota_exceeded'`, `'missing_entitlement'`, `'inactive_entitlement'`.
+  - `public.refund_ai_quota(p_user_id UUID)` — best-effort decrement floored at 0; mirrors `consume`'s bucket selection. Returns `(refunded, period_type, used)`.
+  - Both use the S1 ownership guard from PR #130 (`auth.uid()`-vs-`p_user_id` check) and `#variable_conflict use_column` to resolve the OUT-parameter-vs-table-column ambiguity that otherwise breaks `ON CONFLICT (..., period_type, ...)`.
+  - Granted to `authenticated`; the runtime `auth.uid() IS NULL` check blocks anon.
+- `supabase/functions/analyze-paper/index.ts` calls `consume_ai_quota` after auth + body validation. On `allowed=false`, returns **HTTP 402 `Payment Required`** with a structured body (`{ error, message, details: { plan, period_type, used, quota, remaining, reset_at } }`) and **does not call Gemini**. On `allowed=true`, proceeds to the existing Gemini flow; the Gemini-and-parse block is wrapped in an inner try/catch that issues a best-effort `refund_ai_quota` on failure. New `safeRefundAiQuota` helper with a structural `RpcClient` type — no `any`.
+
+What's NOT in this PR (deferred):
+
+- No client UI handling for the 402 (next PR — UI paywall / quota state). The current UI's generic "AI Analysis failed" toast continues to surface for any non-2xx; the structured 402 body is ready for the next PR to consume.
+- No Stripe Checkout / webhook ingestion. Now unblocked per C8, but a separate PR.
+- No storage-quota trigger, no attachments bucket policy change (still C14 launch blockers; separate PR).
+- No add-on credit pack consumption (C13 future; not MVP).
+- No generated-types regeneration. No env file changes. No new dependency.
+
+Verification: full local replay (`supabase stop --no-backup` + `supabase start`) clean across all 60 migrations. Eight functional test cases via copied SQL into the local Postgres container — all pass: initial Free defaults; anon → raise; authenticated consume + refund + double-refund (floored); lifetime exhaustion → `quota_exceeded`; Pro monthly path with correct UTC month boundaries (`reset_at = 2026-06-01 00:00:00+00`); sub-vs-p_user_id mismatch → raise; missing entitlement → `missing_entitlement`; CASCADE delete cleanup. `npx tsc --noEmit` clean. `npx vitest run` 285/285 (unchanged). `npx eslint supabase/functions/analyze-paper/index.ts` clean (0 errors / 0 warnings). `supabase migration list --linked` shows Local = Remote through `20260521010000` (PR #142 deployed); this PR's `20260521020000` not yet on remote. **`supabase db push` and `supabase functions deploy` were NOT run — both are the operator's next step per `docs/deployment.md §2` (mixed PR: migration first, then Edge Function deploy).**
+
+**Next implementation step.** Two candidates:
+
+- **Client UI for quota state** — `<UpgradeNudge>` component, per-action quota display in Settings / Analyze button tooltip, quota-aware error toast (so 402 surfaces as "AI quota exhausted — upgrade to Pro" instead of generic "Analysis failed"). Smaller, immediate UX win; could land before Stripe to let the owner self-host quota observability while preparing for billing.
+- **Attachments privacy hardening + storage-quota enforcement** — closes the public-bucket gap (C14 launch blocker) and ships the `BEFORE INSERT` trigger on `paper_attachments`. Larger scope (Storage RLS + paper_attachments trigger + storage-counter trigger). Required before paid beta regardless.
+
+Recommend **attachments privacy + storage quota** next: it's a launch blocker, and the UI quota work can land in parallel or just after. The Stripe PR doesn't strictly require the UI quota work — it requires both AI quota enforcement (this PR ✅) and storage privacy / quota.
+
 ## Commercial foundation — entitlement and usage schema (2026-05-21)
 
 First implementation PR after the PR #141 commercial strategy pivot. Adds the internal commercial read model the application will use at render time, plus the provider-normalized billing tables, the append-only event log, and the placeholder credits table.
