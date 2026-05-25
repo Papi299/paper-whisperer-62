@@ -190,6 +190,103 @@ If Vercel automation is not yet set up for a given environment, follow the hosti
 
 ---
 
+## 8a. Production domain, DNS, and email architecture
+
+> **Status (2026-05-21, C19).** The brand / domain decision is captured; no DNS records, no provider connections, and no SMTP setup exist yet. This section is the **target architecture** for paid beta — not the current state.
+
+### Brand and domain
+
+- **Working commercial brand:** **Paperlume** (working brand only — not a registered trademark; see C19 for the constraints and re-evaluation triggers).
+- **Primary working domain:** **`paperlume.app`**, secured through **Cloudflare Registrar**.
+- Cloudflare is both registrar and DNS control plane; Cloudflare nameservers are the source of truth for `paperlume.app`.
+- `.app` is part of Google's HSTS-preload list and requires HTTPS — appropriate for a SaaS / web app; the hosting provider (Vercel) and Cloudflare both supply HTTPS automatically.
+
+### Target URL layout (future — not configured yet)
+
+| URL | Hosts | Notes |
+|---|---|---|
+| `paperlume.app` | Marketing site (landing, pricing, Contact Sales / Labs lead-capture, privacy / terms / AI disclosure / support / security pages) | Provider TBD (Framer / Webflow / Vercel / Cloudflare Pages / other). Owner picks at marketing-site setup time. |
+| `www.paperlume.app` | Optional alias for the marketing site | Configured at marketing-site setup time. |
+| `app.paperlume.app` | Authenticated React SPA, deployed on Vercel | This is the value of `APP_URL` in production once the Vercel custom domain is connected. |
+| `auth.paperlume.app` | Transactional auth-email sending subdomain via Resend (Supabase Auth Custom SMTP target) | Used by Resend for SPF / DKIM / DMARC alignment. |
+| `notifications.paperlume.app` *(optional, future)* | Broader transactional-email subdomain if auth email and product-notification email are split later | Not configured at MVP. |
+
+The repo does not contain DNS record values; those are set in the Cloudflare dashboard when each subdomain is connected.
+
+### Hosting (Vercel)
+
+- Vercel remains the planned host for the authenticated React SPA per `vercel.json` and §8 above.
+- Future production URL: **`app.paperlume.app`**.
+- DNS remains managed in **Cloudflare**, not Vercel.
+- **Initial-connection recommendation:** when first connecting `app.paperlume.app` to Vercel, use **DNS-only ("grey-cloud")** Cloudflare records — i.e., do not put Cloudflare proxy / orange-cloud in front of Vercel during initial setup. Vercel manages SSL / HTTPS certificates for `*.vercel.app` automatically; layering Cloudflare proxy on top during initial setup creates well-known SSL / caching / origin-CNAME issues that are easier to debug if you start in DNS-only mode and only later (if at all) enable proxy.
+- Vercel custom-domain setup happens later, in its own PR / operator action — not in this PR.
+
+### Marketing site
+
+- The root `paperlume.app` will host the marketing surface.
+- The marketing site must eventually serve:
+  - **Landing page.**
+  - **Pricing page** (Free / Pro / Labs-Teams Coming Soon — see [quotas-and-pricing.md §2](quotas-and-pricing.md)).
+  - **Contact Sales / Labs lead-capture form** (per C12).
+  - **Privacy Policy** (URL linked from the app per C16).
+  - **Terms of Service** (per C16).
+  - **AI disclosure** (what content goes to Google Gemini and how; per C14 / C16).
+  - **Support / contact** (per C16).
+  - **Security / data-handling page** (recommended for B2B credibility; not strictly required at MVP).
+- Marketing-site provider selection is a separate owner decision in `owner-decisions.md §2.1`. **Not configured in this PR.**
+
+### Business email (Google Workspace)
+
+- **Future business email** is planned on **Google Workspace** on the `paperlume.app` domain.
+- Likely addresses:
+  - `maor@paperlume.app` (owner inbox)
+  - `support@paperlume.app` (group or alias)
+  - `billing@paperlume.app` (group or alias)
+  - `legal@paperlume.app` (group or alias)
+- Aliases / groups can route to a single inbox at MVP to minimize per-user license cost.
+- Google Workspace setup adds operational credibility for Paddle KYB (per C18), vendor onboarding, B2B outreach, and support response. **It does not guarantee Paddle approval.**
+- **Not configured in this PR.**
+
+### Transactional auth email (Resend → Supabase Auth Custom SMTP)
+
+- **Resend** is the planned provider for **Supabase Auth Custom SMTP** — transactional auth email (signup confirmation, password reset, magic links / OTP if used, account-critical auth emails) routed via the **`auth.paperlume.app`** sending subdomain.
+- Required DNS records on `auth.paperlume.app` once Resend is set up: **SPF**, **DKIM**, and **DMARC** alignment per Resend's verification flow.
+- **Supabase default SMTP** is fine for development and personal use; it **should not be used for production / commercial launch** — it has low daily limits, no per-domain reputation, and "from" addresses that look like Supabase rather than Paperlume.
+- A custom-SMTP setup improves **operational control and deliverability posture** (per-domain reputation, on-brand "from" addresses, observable bounce / complaint rates). It does **not** guarantee perfect deliverability — Gmail / Outlook anti-spam decisions are upstream of any sender.
+- **Not configured in this PR.** No Resend account, no SPF / DKIM / DMARC, no Supabase Auth Custom SMTP settings have been changed.
+
+### Billing provider (Paddle, per C18)
+
+- `paperlume.app` is the domain Paddle will verify during KYB (per C18's owner-side setup gate in [owner-decisions.md §2.1](owner-decisions.md)).
+- Paddle's customer-facing checkout / receipts / customer portal will render under `paperlume.app` branding (logo / colour set in the Paddle dashboard) once Sandbox setup completes.
+- **C18 remains active.** Paddle integration is still blocked on owner-side setup. C19 (this section) records the domain that Paddle will use; it does not unblock the Paddle integration PR.
+
+### Pre-paid-beta checklist (domain / email / hosting)
+
+A separate, additive checklist that lives alongside the existing §4 / §5 pre-deploy work and the C18 owner-side Paddle setup gate. None of these are completed yet.
+
+- [ ] `paperlume.app` purchased via Cloudflare Registrar.
+- [ ] Cloudflare auto-renew confirmed on `paperlume.app`.
+- [ ] Cloudflare domain transfer-lock enabled.
+- [ ] Domain receipt / RDAP info saved privately (password manager, not the repo).
+- [ ] Marketing-site provider chosen.
+- [ ] Marketing site live at `paperlume.app` with privacy / terms / AI disclosure / support URLs reachable.
+- [ ] Vercel custom domain `app.paperlume.app` connected (DNS-only Cloudflare records during initial connection).
+- [ ] Supabase Auth **Site URL** updated to `https://app.paperlume.app` (Supabase dashboard → Authentication → URL Configuration).
+- [ ] Supabase Auth **Redirect URLs** reviewed (`https://app.paperlume.app/auth/callback`, `https://app.paperlume.app/reset-password`, plus any Sandbox / preview URLs).
+- [ ] Google Workspace configured on `paperlume.app` with business addresses live.
+- [ ] Resend account configured with `auth.paperlume.app` sending subdomain.
+- [ ] SPF / DKIM / DMARC records active on `auth.paperlume.app` and verified in Resend.
+- [ ] Supabase Auth Custom SMTP configured to use Resend (Supabase dashboard → Authentication → SMTP Settings).
+- [ ] Signup, password-reset, and confirmation auth-email smoke tests pass end-to-end on a real inbox.
+- [ ] No production auth-email path relies on Supabase default SMTP.
+- [ ] Paddle KYB / domain verification completed using `paperlume.app` per C18.
+- [ ] APP_URL Supabase secret on the Edge Function project updated to `https://app.paperlume.app`.
+
+When all of these are ✅ alongside the existing C16 (legal-page URLs live), C18 (Paddle Sandbox / Live setup), and the launch-blocker items in [commercial-architecture.md §6](commercial-architecture.md), the web paid pilot is operationally ready. **None of those is true today.**
+
+---
+
 ## 9. Post-deploy smoke checklist
 
 Run from a real browser session signed into the production app. Tick each item; investigate any failure before declaring the deploy done.

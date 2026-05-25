@@ -485,6 +485,41 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Commercial operations — Paperlume working brand and `paperlume.app` secured (C19, 2026-05-21)
+
+Docs-only PR. Records the brand / domain decision that completes the C17 / C18 / C19 commercial-foundation triplet of decisions.
+
+What changed:
+
+- **Working commercial brand:** **Paperlume**. Selected after the owner's low-cost knockout checks against the Israeli trademark database, App Store, Google Play, and a basic web / social sweep returned no direct conflicts on `Paperlume` / close variants. A small art / drawing-focused YouTube channel named "Paperlume" was found and assessed as unrelated to the SaaS / research category. **Not a registered trademark.** Israeli trademark filing was explored and **deferred** (~1,900 ILS for Class 42 alone) until closer to paid public launch / serious B2B outreach.
+- **Primary working domain:** **`paperlume.app`**, secured through **Cloudflare Registrar**. Cloudflare is also the DNS control plane. `.app` requires HTTPS — appropriate for a SaaS / web app.
+- **Target future URL layout** (none configured yet — captured in [`deployment.md §8a`](deployment.md)):
+  - `paperlume.app` — marketing site (provider TBD: Framer / Webflow / Vercel / Cloudflare Pages / other).
+  - `app.paperlume.app` — authenticated React SPA on Vercel.
+  - `auth.paperlume.app` — Resend transactional auth-email sending subdomain (Supabase Auth Custom SMTP target).
+  - Optional `notifications.paperlume.app` for future broader transactional notifications.
+- **Future Google Workspace** business email on `paperlume.app` (`maor@`, `support@`, `billing@`, `legal@` — aliases / groups acceptable at MVP).
+- C17 (MoR-first) and C18 (Paddle as MoR) **remain unchanged**. The domain supports Paddle's KYB / domain verification step; this PR does not unblock Paddle integration on its own.
+
+What's NOT in this PR:
+
+- ❌ **No rename of the codebase**, npm package, repository, app routes, UI labels, Supabase project, Edge Functions, database tables, or environment variables. A future rebrand PR (or small PR sequence) will move user-visible surfaces to "Paperlume" once the brand is ready for public commitment.
+- ❌ **No DNS records configured** on `paperlume.app`. Cloudflare DNS remains at its post-purchase default state.
+- ❌ **No provider setup performed.** No Vercel connection, no Google Workspace, no Resend, no Supabase Auth Custom SMTP, no Paddle account / product / webhook.
+- ❌ **No WHOIS / RDAP personal data** in the repo. WHOIS privacy is on by default at Cloudflare Registrar.
+- ❌ **No deploy / migration / Edge Function / env / dependency change.** No `supabase db push`. No `supabase functions deploy`. No provider API calls.
+- ❌ **No claim that Paperlume is legally cleared, registered, or protected.** No use of `®`. `™` is reserved for explicit future owner approval in marketing.
+
+**Files updated in this PR:** `docs/decisions-and-triggers.md` (new **C19** entry); `docs/deployment.md` (new **§8a** "Production domain, DNS, and email architecture" between §8 Vercel and §9 post-deploy smoke); `docs/commercial-architecture.md` (new C19 banner line below the C17 / C18 banners + a new launch-blocker item #11 covering the production-domain / email / hosting setup); `docs/owner-decisions.md` (new C19 row in §1; two new pending rows in §2.1 — Cloudflare domain hygiene + DNS/hosting/email setup; new §2.1a resolved row for brand+domain); `docs/store-launch-checklist.md` (banner updated to record C19); `docs/start-here.md` (this entry); `docs/migration-history.md` (full PR entry).
+
+**Recommended next owner tasks (no engineering work yet):**
+
+1. **Cloudflare domain hygiene** (today, 5 minutes): confirm auto-renew is enabled on `paperlume.app`; enable transfer-lock / registry-lock; save the domain receipt + RDAP details in a private password manager (not in the repo).
+2. **Decide whether to defer further setup until closer to paid beta** vs. start now on the DNS / Vercel custom-domain / Google Workspace / Resend / Supabase Auth Custom SMTP chain. Either is reasonable — the existing app at the current Vercel default URL continues to work fine; nothing breaks if DNS / email setup waits. Doing it sooner mostly helps Paddle KYB credibility (per C18 owner setup gate).
+3. **Trademark revisit** — schedule a check-in before paid public launch or before serious B2B outreach. Triggers and timing are documented in C19's "Re-evaluation triggers" section.
+
+Verification: `npx tsc --noEmit` clean. `npx vitest run` 285/285 (unchanged). `supabase migration list --linked` shows Local = Remote through `20260521030000` (PR #144 deployed); **no migration added in this PR**. **No DNS, no Cloudflare API, no Vercel deploy, no Google Workspace, no Resend, no Paddle, no provider call of any kind. No accounts created. No WHOIS data exposed.**
+
 ## Commercial provider selection — Paddle selected as MoR provider (C18, 2026-05-21)
 
 Docs-only PR. Records the owner decision following the Paddle vs Lemon Squeezy provider-selection audit (run after C17 / PR #145). **Paddle is selected as the Merchant of Record provider for the web MVP.** Lemon Squeezy is retained as a fallback only — to be reconsidered if Paddle onboarding fails, Paddle materially changes its pricing or policy posture, or Paddle proves insufficient during the implementation spike. **C17 (MoR-first) remains the parent architectural decision; C18 is the provider selection under it.**

@@ -417,3 +417,44 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 - **A future mobile / app-store strategy requires a different or additional provider.** Treated as additive under C4 — Apple IAP / Google Play Billing / RevenueCat remain reserved provider values.
 
 **Lemon Squeezy stays documented as a fallback only.** This decision does not deprecate Lemon Squeezy as a future possibility; it deselects it for MVP because the Stripe-Managed-Payments transition reintroduces the strategic uncertainty C17 exists to avoid. If a future business reason justifies revisiting (e.g., Stripe Managed Payments definitively opens Israel-based merchant onboarding), C18 itself can be revisited under the C4 provider-neutral architecture without a schema migration.
+
+### C19. Paperlume working commercial brand and `paperlume.app` domain secured (2026-05-21)
+
+**Decision:** **Paperlume** is selected as the current working commercial brand for the project, and **`paperlume.app`** is the primary working domain (secured via **Cloudflare Registrar**, which is also the DNS control plane). This decision records the brand and the domain; it does **not** rename the codebase, the running app, the Supabase project, the Edge Functions, the database tables, or any environment variable. It also does **not** confer trademark rights or constitute legal clearance.
+
+**Rationale:**
+
+1. **Knockout checks were clean.** The owner's initial knockout checks against the Israeli trademark database, Apple App Store, Google Play, and a basic web/social sweep found no identical or close conflicts on `Paperlume` / `Paper Lume` / `Paper-lume` / `Paperlum` / `Paperloom` / `Paperlumi`. Many marks exist on the bare word `Lume` in Class 9 / 42, but none of the close-variant searches surfaced a direct `Paperlume`-style conflict. A small art / drawing-focused YouTube channel named "Paperlume" was found and assessed as unrelated to the SaaS / research category this product targets. **This is not a substitute for legal trademark clearance** — it is a low-cost validation step.
+2. **`paperlume.app` was available at low cost** via Cloudflare Registrar. `paperlume.com` is registered but appears inactive; the `.app` TLD is appropriate for a web / SaaS product. Cloudflare Registrar charges at-cost (no markup) and includes free WHOIS privacy by default.
+3. **Domain ownership enables the rest of the commercial setup.** It is a prerequisite for Paddle KYB / domain verification (C18), Google Workspace business email, Resend transactional-email sending subdomain, Supabase Auth Custom SMTP, the marketing-site landing pages that C14 / C16 require, and any future B2B outreach.
+4. **`.app` requires HTTPS.** This is appropriate for a SaaS / web application and aligns with the existing Vercel hosting model where HTTPS is the default.
+5. **Trademark registration was explored and deferred** because the Israeli filing fee was approximately 1,900 ILS for Class 42 alone, and the appropriate timing is closer to paid launch / B2B outreach, not pre-PMF. **Paperlume is therefore a working commercial brand, not a registered trademark.**
+
+**Scope of this decision:**
+
+- Brand name in use: **Paperlume**.
+- Primary working domain: **`paperlume.app`**.
+- Registrar / DNS control plane: **Cloudflare**.
+- The decision covers the brand identity, the domain, and the high-level future architecture for hosting / email / billing on that domain.
+
+**Constraints (read carefully — these matter for downstream PRs):**
+
+- **Not a registered trademark.** Paperlume is a working commercial brand, not a legally cleared or registered mark. Do not use `®` anywhere in the product or marketing. If `™` is used at all, only as optional future marketing usage after explicit owner approval; not in this PR.
+- **No legal clearance has been performed.** The knockout checks above are not a professional trademark search. Before paid public launch, heavier marketing spend, B2B outreach, or international expansion, the owner should commission a professional trademark search via legal counsel.
+- **No rename in this PR.** Repository name, npm package name, app routes, UI labels, README headings, Supabase project name, Edge Function names, database table names, environment variables, and Vercel project name **all remain unchanged**. A future rebrand PR (or a sequence of small PRs) will move user-visible surfaces to "Paperlume" once the brand is ready to commit to publicly.
+- **No DNS records were created or modified in this PR.** Cloudflare DNS for `paperlume.app` remains in its post-purchase default state (Cloudflare nameservers active; no application records configured beyond what Cloudflare creates automatically).
+- **No provider setup was performed in this PR.** Vercel is not connected to the domain; Google Workspace is not configured; Resend is not configured; Supabase Auth Custom SMTP is not configured; Paddle is not configured with the domain.
+- **No WHOIS / RDAP personal data is committed.** WHOIS privacy is on by default at Cloudflare Registrar; never paste registrant personal data into the repo.
+- **C17 (MoR-first) and C18 (Paddle as selected MoR) remain in force.** This C19 decision is brand / domain only; it does not affect the billing-provider architecture or the provider-neutral internal model.
+- **No runtime behavior changes.** AI quota enforcement (PR #143), storage privacy and quota enforcement (PR #144), and the existing app at the current Vercel URL all continue to work exactly as before.
+
+**Re-evaluation triggers:**
+
+- **Trademark conflict surfaces.** Owner becomes aware of a competing `Paperlume` / close-variant mark in a relevant class / geography. Triggers professional legal review, possibly a rebrand.
+- **`paperlume.com` becomes available** at a reasonable price. Triggers a buy-vs-stay-on-`.app` evaluation.
+- **Paddle / KYB / domain-verification issue** with `paperlume.app` specifically. Unusual, but triggers a closer look at the domain choice.
+- **A clearly better brand option appears** before launch (e.g., another low-cost candidate clears legal review). Triggers re-evaluation of the brand-name decision before public launch.
+- **Approaching paid public launch, significant marketing spend, or serious B2B outreach.** Triggers the deferred professional trademark search and possibly a registration filing in the relevant geographies.
+- **Meaningful beta traction** (e.g., a real paid pilot cohort) generates the budget and the risk profile that justify trademark registration. Triggers the deferred filing.
+- **International expansion** beyond Israel / EN-speaking academic markets. Triggers per-geography trademark review.
+- **Legal counsel advises otherwise** at any point. Always overrides this decision.

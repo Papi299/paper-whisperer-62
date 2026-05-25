@@ -2521,3 +2521,98 @@ Post-deploy smoke (browser, optional but recommended):
 - No `README.md` change (no billing-provider mention to update).
 - No `docs/deployment.md` change (no Stripe / MoR / Paddle-specific content present today; future Paddle integration PR will add a single line under §7).
 - No `docs/architecture-read-path.md` change (no read-path impact).
+
+## Commercial operations — Paperlume working brand and `paperlume.app` domain secured (C19)
+
+**Date:** 2026-05-21 (same-day follow-up to C18 / PR #146 — the commercial-foundation triplet of decisions C17 / C18 / C19 all landed on the same day).
+**What:** Docs-only PR recording the brand / domain decision. **`Paperlume`** is selected as the current working commercial brand; **`paperlume.app`** is the primary working domain (secured via **Cloudflare Registrar**, which is also the DNS control plane). **No application code, no migration, no Edge Function, no DNS records, no provider connections, no env file change, no dependency, no deploy. No Cloudflare / Vercel / Google Workspace / Resend / Paddle API calls. No accounts created on any provider. No WHOIS / RDAP personal data committed.**
+
+**Decision (C19, see `decisions-and-triggers.md`):**
+
+- Working commercial brand: **Paperlume**.
+- Primary working domain: **`paperlume.app`**.
+- Registrar / DNS: **Cloudflare**.
+- **Not a registered trademark.** Israeli trademark filing was explored and deferred due to cost (~1,900 ILS for Class 42 alone). Revisited closer to paid public launch / serious B2B outreach.
+- **No rename in this PR.** Repository name, npm package, app routes, UI labels, Supabase project, Edge Functions, database tables, environment variables — **all unchanged**.
+- **No runtime behavior changes.**
+- C17 (MoR-first) and C18 (Paddle as MoR) **remain in force**.
+
+**Rationale (summary; full text in C19 of `decisions-and-triggers.md`):**
+
+1. Knockout checks (Israeli trademark database; App Store; Google Play; basic web / social) returned no direct `Paperlume` / close-variant conflicts. **Not a substitute for legal trademark clearance** — a low-cost validation step only. A small art / drawing YouTube channel named "Paperlume" was found and assessed as unrelated to the SaaS / research category.
+2. `paperlume.app` was available at low cost via Cloudflare Registrar (at-cost pricing; free WHOIS privacy).
+3. Domain ownership unblocks downstream commercial setup: Paddle KYB / domain verification (C18), Google Workspace business email, Resend transactional-email sending subdomain, Supabase Auth Custom SMTP, marketing-site landing pages required by C14 / C16, B2B outreach.
+4. `.app` is appropriate for a SaaS / web app (HTTPS-required).
+5. Trademark registration was deferred — the appropriate timing is closer to paid public launch / B2B outreach, not pre-PMF.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `docs/decisions-and-triggers.md` | New **C19** dated 2026-05-21 with full decision text, rationale, scope, constraints (no rename, not legally cleared, no DNS, no provider setup, no WHOIS in repo), and re-evaluation triggers (trademark conflict, `.com` becomes available, Paddle / KYB issue, better brand option appears, approaching paid launch, meaningful beta traction, international expansion, legal counsel advice). C17 / C18 / C8 unchanged. |
+| `docs/deployment.md` | New **§8a** "Production domain, DNS, and email architecture" inserted between §8 (Vercel) and §9 (Post-deploy smoke). Covers: brand + domain identity; target URL layout table (`paperlume.app` / `www.paperlume.app` / `app.paperlume.app` / `auth.paperlume.app` / optional `notifications.paperlume.app`); Vercel hosting with DNS-only Cloudflare records initially; marketing-site requirements; Google Workspace business email plan; Resend + Supabase Auth Custom SMTP plan on `auth.paperlume.app` with SPF / DKIM / DMARC requirement; Paddle relationship with `paperlume.app` for KYB / domain verification; full pre-paid-beta checklist with ~17 items spanning domain hygiene → marketing site → Vercel custom domain → Supabase Auth URLs → business email → transactional email → Paddle setup → APP_URL Supabase secret. |
+| `docs/commercial-architecture.md` | New C19 banner line below the existing C17 / C18 banners. New launch-blocker item #11 in §6 covering the production-domain / email / hosting setup with a pointer to `deployment.md §8a`. |
+| `docs/owner-decisions.md` | New **C19** row in §1. Two new pending rows in §2.1: (a) Cloudflare domain hygiene (auto-renew + transfer-lock + receipt/RDAP saved privately) marked as recommended within first few days of purchase; (b) DNS / hosting / email setup on `paperlume.app` pointing at `deployment.md §8a`. New §2.1a resolved row recording brand+domain as resolved by C19. Cross-references updated to C1–C19. |
+| `docs/store-launch-checklist.md` | Banner updated to record C19 — adds "Working commercial brand: Paperlume; primary working domain: `paperlume.app` (Cloudflare Registrar); not a registered trademark; trademark registration deferred" alongside the existing C17 / C18 banner text. |
+| `docs/start-here.md` | New handoff entry above the PR #146 (C18) entry. |
+| `docs/migration-history.md` | This entry. |
+
+### Files not changed
+
+- `docs/quotas-and-pricing.md` — does not reference `Paper Whisperer` brand or any domain by name. Free / Pro / Labs-Teams numeric baselines unchanged (per the PR brief: "Do not change pricing numbers"). Not updated.
+- `README.md` — does not reference a billing provider, a marketing domain, a trademark, or a commercial brand by name. Repository name and npm package name unchanged per the no-rename rule. Not updated.
+- `docs/architecture-read-path.md` — no read-path change.
+- `docs/documentation-policy.md` — no documentation-policy change.
+- `.env.example`, `.env.test.example`, `supabase/config.toml`, `package.json`, generated Supabase types, `src/integrations/supabase/client.ts`, and every other source / config file — all unchanged.
+
+### Wording constraints honored
+
+- ✅ "Working commercial brand" / "current working brand" — used throughout.
+- ✅ "Primary working domain" / "domain secured" — used throughout.
+- ✅ "Trademark registration deferred" — used; **not** "trademark unnecessary".
+- ✅ "Cloudflare registrar/DNS" — used.
+- ✅ "Future setup" / "no runtime change" — used throughout.
+- ❌ Does NOT say "registered trademark", "legally cleared", "final legal brand", "guaranteed trademark safe", or "domain proves ownership of trademark".
+- ❌ Does NOT say "Resend guarantees deliverability" — says "improves operational control and deliverability posture".
+- ❌ Does NOT say "Google Workspace guarantees Paddle approval" — says "adds operational credibility for Paddle KYB; does not guarantee approval".
+- ❌ Does NOT say "Cloudflare eliminates all lock-in" — says "reduces hosting lock-in but does not eliminate all operational lock-in".
+- ❌ Does NOT say "DNS configured", "Vercel connected", "Paddle ready", or "paid beta ready".
+- ❌ No `®` is used anywhere in this PR. `™` is reserved for future owner-approved marketing usage.
+
+### Verification
+
+- `git status --short` — only the seven docs files in the diff before commit.
+- `npx tsc --noEmit` — clean. (Docs change, no source files touched.)
+- `npx vitest run` — 285/285 (unchanged; docs-only PR cannot affect tests).
+- `npx eslint` — not run (no `.ts` / `.tsx` files touched).
+- Markdown lint — not configured in this repo (no `lint:md` script in `package.json`, no `.markdownlint*` file). Visual review of all seven files performed; relative links checked by inspection.
+- `supabase migration list --linked` — Local = Remote through `20260521030000` (PR #144 deployed). **No migration added in this PR.**
+- `supabase db push` — **not run.**
+- `supabase functions deploy` — **not run.**
+- Cloudflare API / CLI — **not called.**
+- Vercel API / CLI — **not called.** Vercel custom domain not connected; Vercel project unchanged.
+- Google Workspace setup — **not performed.**
+- Resend setup — **not performed.**
+- Supabase Auth Custom SMTP — **not configured.** Supabase Auth `Site URL` and `Redirect URLs` unchanged.
+- Paddle setup — **not performed** (still blocked on owner-side gate per C18).
+- No accounts were created on any provider.
+- No WHOIS / RDAP personal data was committed or referenced.
+
+### Non-goals
+
+- No application / source code changes.
+- No migration.
+- No Edge Function changes.
+- No env file changes (`.env.example`, `.env.test.example` untouched; no `PADDLE_*` / `RESEND_*` / `WORKSPACE_*` / `MOR_*` keys added).
+- No `package.json` change.
+- No generated Supabase types regeneration.
+- No legal text drafted as final.
+- No Cloudflare DNS records created or modified.
+- No Vercel custom domain connection.
+- No Google Workspace account creation.
+- No Resend account creation.
+- No Supabase Auth Custom SMTP configuration change.
+- No Paddle Sandbox / Live setup (still owner action per C18).
+- No `README.md` change (no billing-provider / brand / domain mention to update).
+- No `docs/architecture-read-path.md` change (no read-path impact).
+- No `docs/quotas-and-pricing.md` change (no brand / domain references in current text; numeric baselines unchanged).
