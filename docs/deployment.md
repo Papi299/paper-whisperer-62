@@ -192,7 +192,9 @@ If Vercel automation is not yet set up for a given environment, follow the hosti
 
 ## 8a. Production domain, DNS, and email architecture
 
-> **Status (2026-05-21, C19).** The brand / domain decision is captured; no DNS records, no provider connections, and no SMTP setup exist yet. This section is the **target architecture** for paid beta — not the current state.
+> **Status.**
+> - **2026-05-21 (C19):** brand / domain decision captured. No DNS records, no provider connections, no SMTP setup.
+> - **2026-05-22 (operational setup PR — this section update):** owner has completed the **app-domain + transactional-auth-email half** of C19's pre-paid-beta checklist. `app.paperlume.app` is live on Vercel; Supabase Auth URL configuration is updated; Resend is configured with `auth.paperlume.app` and verified; Supabase Auth Custom SMTP routes through Resend; Auth email templates are Paperlume-branded; owner tested several auth emails — they arrive in the regular inbox (not spam) across multiple tested mailboxes; an import smoke test passed on the new domain. **Google Workspace business email, marketing-site setup, legal-page URLs, Paddle setup, and `APP_URL` Supabase secret remain pending.** Detailed status in the §8a checklist at the end of this section.
 
 ### Brand and domain
 
@@ -245,15 +247,16 @@ The repo does not contain DNS record values; those are set in the Cloudflare das
   - `legal@paperlume.app` (group or alias)
 - Aliases / groups can route to a single inbox at MVP to minimize per-user license cost.
 - Google Workspace setup adds operational credibility for Paddle KYB (per C18), vendor onboarding, B2B outreach, and support response. **It does not guarantee Paddle approval.**
-- **Not configured in this PR.**
+- **Status: still pending owner setup.** Auth email delivery does not depend on Google Workspace — that is handled by Resend (next subsection). However: if any user-facing template (Auth email footer, marketing copy) references `support@paperlume.app` or another `@paperlume.app` address, that address **must resolve to a real inbox / group / alias before broader beta** — otherwise users replying to support get bounce-backs. Owner should ensure any address referenced in the customized Auth templates is reachable before the closed paid pilot.
 
 ### Transactional auth email (Resend → Supabase Auth Custom SMTP)
 
-- **Resend** is the planned provider for **Supabase Auth Custom SMTP** — transactional auth email (signup confirmation, password reset, magic links / OTP if used, account-critical auth emails) routed via the **`auth.paperlume.app`** sending subdomain.
-- Required DNS records on `auth.paperlume.app` once Resend is set up: **SPF**, **DKIM**, and **DMARC** alignment per Resend's verification flow.
-- **Supabase default SMTP** is fine for development and personal use; it **should not be used for production / commercial launch** — it has low daily limits, no per-domain reputation, and "from" addresses that look like Supabase rather than Paperlume.
-- A custom-SMTP setup improves **operational control and deliverability posture** (per-domain reputation, on-brand "from" addresses, observable bounce / complaint rates). It does **not** guarantee perfect deliverability — Gmail / Outlook anti-spam decisions are upstream of any sender.
-- **Not configured in this PR.** No Resend account, no SPF / DKIM / DMARC, no Supabase Auth Custom SMTP settings have been changed.
+- **Resend** is the configured provider for **Supabase Auth Custom SMTP** — transactional auth email (signup confirmation, password reset, magic links / OTP if used, account-critical auth emails) routed via the **`auth.paperlume.app`** sending subdomain.
+- Required DNS records on `auth.paperlume.app`: **SPF**, **DKIM**, and **DMARC** alignment per Resend's verification flow. **Configured and verified by the owner (2026-05-22).** Specific record values are not committed to the repo — they live in Cloudflare DNS for `paperlume.app` and are visible in the owner's Resend dashboard.
+- **Supabase default SMTP** is fine for development and personal use; it **should not be used for production / commercial launch** — it has low daily limits, no per-domain reputation, and "from" addresses that look like Supabase rather than Paperlume. **The production Auth email path no longer relies on Supabase default SMTP** — all transactional Auth email routes through Resend on `auth.paperlume.app` since 2026-05-22.
+- A custom-SMTP setup improves **operational control and deliverability posture** (per-domain reputation, on-brand "from" addresses, observable bounce / complaint rates). It does **not** guarantee perfect deliverability — Gmail / Outlook anti-spam decisions are upstream of any sender. **Ongoing deliverability still depends on**: domain reputation building over time, low bounce / complaint rate, correctly aligned SPF / DKIM / DMARC, gradual sending behavior (no sudden volume spikes), and template content quality (which the owner addressed in the customized Paperlume-branded Auth templates).
+- **Owner smoke-test result (2026-05-22):** reset / signup auth emails now arrive in the regular inbox (not spam) across multiple tested mailboxes. This is consistent with branded Resend-authenticated email from a new sending subdomain after initial reputation training; **monitor over the next 2–4 weeks** for inbox stability as the `auth.paperlume.app` reputation continues to mature with Gmail / Outlook.
+- The Resend API key, the Resend SMTP password, the DKIM selector private value, and any account / dashboard IDs **are not committed to the repo**. They live in the owner's password manager and in the Supabase Auth → SMTP Settings dashboard (Resend API key as the SMTP password).
 
 ### Billing provider (Paddle, per C18)
 
@@ -263,27 +266,49 @@ The repo does not contain DNS record values; those are set in the Cloudflare das
 
 ### Pre-paid-beta checklist (domain / email / hosting)
 
-A separate, additive checklist that lives alongside the existing §4 / §5 pre-deploy work and the C18 owner-side Paddle setup gate. None of these are completed yet.
+A separate, additive checklist that lives alongside the existing §4 / §5 pre-deploy work and the C18 owner-side Paddle setup gate. **Updated 2026-05-22** with the owner's operational-setup completion.
 
-- [ ] `paperlume.app` purchased via Cloudflare Registrar.
-- [ ] Cloudflare auto-renew confirmed on `paperlume.app`.
-- [ ] Cloudflare domain transfer-lock enabled.
-- [ ] Domain receipt / RDAP info saved privately (password manager, not the repo).
-- [ ] Marketing-site provider chosen.
-- [ ] Marketing site live at `paperlume.app` with privacy / terms / AI disclosure / support URLs reachable.
-- [ ] Vercel custom domain `app.paperlume.app` connected (DNS-only Cloudflare records during initial connection).
-- [ ] Supabase Auth **Site URL** updated to `https://app.paperlume.app` (Supabase dashboard → Authentication → URL Configuration).
-- [ ] Supabase Auth **Redirect URLs** reviewed (`https://app.paperlume.app/auth/callback`, `https://app.paperlume.app/reset-password`, plus any Sandbox / preview URLs).
-- [ ] Google Workspace configured on `paperlume.app` with business addresses live.
-- [ ] Resend account configured with `auth.paperlume.app` sending subdomain.
-- [ ] SPF / DKIM / DMARC records active on `auth.paperlume.app` and verified in Resend.
-- [ ] Supabase Auth Custom SMTP configured to use Resend (Supabase dashboard → Authentication → SMTP Settings).
-- [ ] Signup, password-reset, and confirmation auth-email smoke tests pass end-to-end on a real inbox.
-- [ ] No production auth-email path relies on Supabase default SMTP.
+**Completed (owner setup, smoke-tested 2026-05-22):**
+
+- [x] ✅ `paperlume.app` purchased via Cloudflare Registrar.
+- [x] ✅ Cloudflare auto-renew confirmed on `paperlume.app`.
+- [x] ✅ Cloudflare domain transfer-lock enabled.
+- [x] ✅ Domain receipt / RDAP info saved privately (password manager, not the repo).
+- [x] ✅ Vercel custom domain `app.paperlume.app` connected (DNS-only Cloudflare records on initial connection per the §8.1 recommendation; the authenticated app now runs on `https://app.paperlume.app`).
+- [x] ✅ Supabase Auth **Site URL** updated to `https://app.paperlume.app` (Supabase dashboard → Authentication → URL Configuration).
+- [x] ✅ Supabase Auth **Redirect URLs** updated to cover `https://app.paperlume.app/**`. The old Vercel default URL pattern is retained during the cutover window per the §1.4 safety note; remove after ~1–2 weeks of stability.
+- [x] ✅ Resend account configured with `auth.paperlume.app` sending subdomain.
+- [x] ✅ SPF / DKIM / DMARC records active on `auth.paperlume.app` and verified in Resend.
+- [x] ✅ Supabase Auth Custom SMTP configured to use Resend (Supabase dashboard → Authentication → SMTP Settings).
+- [x] ✅ Paperlume-branded Supabase Auth email templates configured (Reset Password, Confirm Signup, Magic Link as applicable — owner customized from the default minimal templates to include branding header, expiry note, "if this wasn't you" guidance, support contact, and plain-text fallback URL).
+- [x] ✅ Signup, password-reset, and confirmation auth-email smoke tests passed end-to-end on multiple real inboxes (2026-05-22). Emails arrive in the regular inbox, not spam, in tested mailboxes.
+- [x] ✅ No production auth-email path relies on Supabase default SMTP.
+- [x] ✅ App import smoke test passed on `app.paperlume.app` after the URL cutover (existing identifier / file import flows continue to work; no regression from the domain change).
+
+**Pending (still required before closed paid pilot):**
+
+- [ ] Marketing-site provider chosen (Framer / Webflow / Vercel / Cloudflare Pages / other).
+- [ ] Marketing site live at `paperlume.app` (root) with privacy / terms / AI disclosure / support URLs reachable.
+- [ ] `www.paperlume.app` routing decided (optional marketing-site alias).
+- [ ] Google Workspace configured on `paperlume.app` with business addresses live (`support@paperlume.app` must resolve to a real inbox / group / alias before broader beta — see the Google Workspace subsection above).
 - [ ] Paddle KYB / domain verification completed using `paperlume.app` per C18.
-- [ ] APP_URL Supabase secret on the Edge Function project updated to `https://app.paperlume.app`.
+- [ ] `APP_URL` Supabase secret on the Edge Function project set to `https://app.paperlume.app`. (No Edge Function reads `APP_URL` today; this is set when the Paddle integration PR ships.)
 
-When all of these are ✅ alongside the existing C16 (legal-page URLs live), C18 (Paddle Sandbox / Live setup), and the launch-blocker items in [commercial-architecture.md §6](commercial-architecture.md), the web paid pilot is operationally ready. **None of those is true today.**
+**Ongoing (post-completion monitoring):**
+
+- Track auth-email inbox-placement rate as the `auth.paperlume.app` sending reputation matures with Gmail / Outlook (the first ~2–4 weeks of any new sending subdomain are the most volatile).
+- Monitor Resend's deliverability dashboard for SPF / DKIM / DMARC pass rates and bounce / complaint rates.
+- (Optional, recommended) Set up Gmail Postmaster Tools and Microsoft SNDS for receiver-side reputation visibility on `auth.paperlume.app`.
+- Do **not** escalate DMARC from `p=none` to `p=quarantine` / `p=reject` for at least 2–4 weeks of stable pass rates.
+
+When all the pending items above are ✅ alongside the existing C16 (legal-page URLs live), C18 (Paddle Sandbox / Live setup), and the launch-blocker items in [commercial-architecture.md §6](commercial-architecture.md), the web paid pilot is operationally ready.
+
+### Operational notes (Do / Don't)
+
+- **Do not** commit DNS record values, SMTP credentials, Resend API keys, DKIM private keys, account IDs, dashboard URLs, message headers, reset-link URLs, or any other provider-side artifacts to the repo. They live in Cloudflare / Resend / Supabase / Vercel dashboards and in the owner's password manager only.
+- **Do not** paste screenshots of provider dashboards into PR descriptions or repo docs.
+- If deliverability issues recur (e.g., emails start going to spam again), the first diagnostic step is **reading email headers** (`Authentication-Results:` line) and checking **Resend's deliverability dashboard** — not changing code. Deliverability problems are 99% configuration / reputation, not application code.
+- The application code itself was **not modified** during the operational setup. The Supabase project URL didn't change, the `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` env vars in the Vercel project didn't change, no `package.json` change, no migration, no Edge Function deploy.
 
 ---
 
