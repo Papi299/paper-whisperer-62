@@ -485,6 +485,45 @@ The full deploy-safety audit (with the verification SQL for each phase, the Q4 e
 
 See [migration-history.md](migration-history.md) for the full entry including per-issue root-cause analysis, the production-impact reasoning for each edited historical migration, and the structural verification details.
 
+## Operational setup — Paperlume app domain and Auth email delivery configured (2026-05-22)
+
+Docs-only PR. Records the **execution** of the C19 pre-paid-beta checklist's app-domain + transactional-auth-email half. This is **not a new architecture decision** — it is the completion of work already documented in C19 / `deployment.md §8a`. No new C-numbered decision was created (per the rule in `documentation-policy.md`: operational completion notes go under the existing decision, not as a new C20).
+
+**What's now live (owner completed, smoke-tested 2026-05-22):**
+
+- ✅ **Cloudflare domain hygiene** completed: auto-renew on `paperlume.app`, transfer-lock enabled, domain receipt + RDAP info saved privately in the owner's password manager (not in the repo).
+- ✅ **Vercel custom domain** `app.paperlume.app` connected. The authenticated React SPA now runs on `https://app.paperlume.app`. Initial DNS connection used DNS-only Cloudflare records per the §8.1 safety recommendation; the existing Vercel default URL also continues to serve the app during the cutover window.
+- ✅ **Supabase Auth URL configuration** updated: Site URL points at `https://app.paperlume.app`; Redirect URLs cover `https://app.paperlume.app/**`. The old Vercel default URL pattern is retained in Redirect URLs during the cutover window and will be removed after ~1–2 weeks of stability.
+- ✅ **Resend configured** on `auth.paperlume.app`. SPF / DKIM / DMARC records active in Cloudflare DNS and verified in Resend. (DMARC at `p=none` per the C19 / §8a guidance — does not escalate for at least 2–4 weeks.)
+- ✅ **Supabase Auth Custom SMTP** routes through Resend on `auth.paperlume.app`. The production Auth email path no longer relies on Supabase default SMTP.
+- ✅ **Paperlume-branded Supabase Auth email templates** configured (Reset Password, Confirm Signup, Magic Link as applicable). Templates include branding header, expiry note, "if this wasn't you" guidance, support contact, and plain-text fallback URL — moved from the minimal default templates that look like phishing kits to templates that look like legitimate transactional email.
+- ✅ **Multi-mailbox smoke test passed.** Owner sent test reset / signup emails to multiple inboxes; emails arrive in the regular inbox (not spam) across tested mailboxes. Branded templates + Resend + authenticated sending domain improved deliverability in owner tests.
+- ✅ **App import smoke test passed** on `app.paperlume.app` after the URL cutover. Existing identifier and file imports continue to work; no regression from the domain change.
+
+**Ongoing deliverability still depends on**: domain reputation building over time, low bounce / complaint rate, correctly aligned SPF / DKIM / DMARC, gradual sending behavior, and template content quality. **Deliverability is not guaranteed by this setup** — owner should monitor inbox-placement rate for the first 2–4 weeks as `auth.paperlume.app` reputation matures with Gmail / Outlook, and watch Resend's deliverability dashboard for bounce / complaint metrics.
+
+**What's still pending (does not block this PR; required before closed paid pilot):**
+
+- ⏳ **Google Workspace business email** on `paperlume.app`. Independent of Auth email (which Resend handles). Important before broader beta because the customized Auth email templates reference `support@paperlume.app` — that address must resolve to a real inbox / group / alias before users start replying to support emails.
+- ⏳ **Marketing site** on root `paperlume.app` with privacy / terms / AI disclosure / support URLs reachable (C14 / C16).
+- ⏳ **Paddle Sandbox / KYB / Product / $15 monthly Price / API key / webhook secret / customer-portal config** (C18 owner setup gate). This is the next major owner-action gate that unblocks the Paddle integration engineering PR.
+- ⏳ **`APP_URL` Supabase secret** set to `https://app.paperlume.app`. No Edge Function reads it today; this is set when the Paddle integration PR ships.
+
+**C17 (MoR-first), C18 (Paddle as MoR provider), and C19 (Paperlume brand + `paperlume.app` domain) are all unchanged.** Paperlume remains a **working commercial brand only — not a registered trademark**; trademark registration is deferred per C19.
+
+**What's NOT in this PR:**
+
+- ❌ No application code changes. No source / migration / Edge Function / env / dependency change.
+- ❌ No Claude-side provider API calls. No DNS records were modified by Claude; no SMTP, Resend, Cloudflare, Vercel, or Supabase API calls were made.
+- ❌ No secrets, SMTP credentials, Resend API keys, DKIM private values, DNS record values, account IDs, WHOIS / RDAP details, screenshots, reset links, or message headers committed to the repo.
+- ❌ No rename of the codebase, app routes, UI labels, Supabase project, Edge Functions, database tables, or environment variables. The C19 "no rename" rule continues to apply.
+
+**Files updated:** `docs/deployment.md` (§8a status banner + Resend / SMTP subsection language + pre-paid-beta checklist marked ✅ where complete + new "Do / Don't operational notes" subsection); `docs/owner-decisions.md` (§2.1 rows marked ✅ for Cloudflare hygiene and app-domain + auth-email setup; new pending rows for Google Workspace and marketing site; §2.1a resolved subsection extended); `docs/commercial-architecture.md` (launch-blocker #11 updated to reflect partial completion); `docs/store-launch-checklist.md` (banner extended with the operational-setup completion); `docs/decisions-and-triggers.md` (a single-paragraph operational note under C19 — no new C-numbered decision); `docs/start-here.md` (this entry); `docs/migration-history.md` (full entry).
+
+Verification: `npx tsc --noEmit` clean. `npx vitest run` 285/285 (unchanged; docs-only PR cannot affect tests). `supabase migration list --linked` shows Local = Remote through `20260521030000` (PR #144 deployed); no migration added in this PR. **No deploy commands, no provider API calls, no DNS modifications, no SMTP credentials or secrets touched by Claude.**
+
+**Recommended next owner-side task:** **Google Workspace business email on `paperlume.app`** — required before broader beta if the customized Auth email templates reference `support@paperlume.app` (they do). After that, **Paddle Sandbox / KYB / Product / Price / API key / webhook secret / customer-portal config per C18** — this is the larger owner-action gate that unblocks the Paddle integration engineering PR. Marketing-site provider + legal URLs (C14 / C16) can land in parallel.
+
 ## Commercial operations — Paperlume working brand and `paperlume.app` secured (C19, 2026-05-21)
 
 Docs-only PR. Records the brand / domain decision that completes the C17 / C18 / C19 commercial-foundation triplet of decisions.

@@ -2616,3 +2616,107 @@ Post-deploy smoke (browser, optional but recommended):
 - No `README.md` change (no billing-provider / brand / domain mention to update).
 - No `docs/architecture-read-path.md` change (no read-path impact).
 - No `docs/quotas-and-pricing.md` change (no brand / domain references in current text; numeric baselines unchanged).
+
+## Operational setup — Paperlume app domain and Auth email delivery configured
+
+**Date:** 2026-05-22 (next-day follow-up to PR #147 / C19, which had captured the brand + domain decision and the target architecture).
+**What:** Docs-only PR recording that the owner completed the **app-domain + transactional-auth-email half** of the C19 pre-paid-beta checklist in `deployment.md §8a`. **No application code, no migration, no Edge Function, no DNS modifications by Claude, no env file change, no dependency, no deploy. No Cloudflare / Vercel / Resend / Supabase / Paddle API calls from Claude. No secrets, SMTP credentials, Resend API keys, DKIM private values, DNS record values, account IDs, WHOIS / RDAP details, message headers, reset-link URLs, screenshots, or other provider artifacts committed to the repo.**
+
+This is **execution of C19, not a new decision** — no new C-numbered decision was created. Per `documentation-policy.md`'s convention, operational-completion notes go under the existing decision (a single paragraph appended to C19 in `decisions-and-triggers.md`) rather than as a separate C20.
+
+**Completed (owner setup, smoke-tested 2026-05-22):**
+
+| Item | Status |
+|---|---|
+| Cloudflare domain hygiene on `paperlume.app` (auto-renew, transfer-lock, receipt + RDAP info saved privately) | ✅ Completed |
+| Vercel custom domain `app.paperlume.app` connected | ✅ Live. Initial DNS connection used DNS-only Cloudflare records per the §8.1 safety recommendation. The existing Vercel default URL also continues to serve the app during the cutover window. |
+| Supabase Auth Site URL updated to `https://app.paperlume.app` | ✅ Completed |
+| Supabase Auth Redirect URLs updated to cover `https://app.paperlume.app/**` | ✅ Completed. Old Vercel default URL pattern retained during the cutover window per the §1.4 safety note; will be removed after ~1–2 weeks of stability. |
+| Resend account configured with `auth.paperlume.app` sending subdomain | ✅ Completed |
+| SPF / DKIM / DMARC records active on `auth.paperlume.app` and verified in Resend | ✅ Completed. DMARC at `p=none` per the C19 / §8a guidance — do not escalate for at least 2–4 weeks of stable pass rates. |
+| Supabase Auth Custom SMTP configured to route through Resend | ✅ Completed. The production Auth email path no longer relies on Supabase default SMTP. |
+| Paperlume-branded Supabase Auth email templates configured (Reset Password, Confirm Signup, Magic Link as applicable) | ✅ Completed. Templates moved from the minimal default Supabase templates to branded templates with header, expiry note, "if this wasn't you" guidance, support contact at `support@paperlume.app`, and plain-text fallback URL — a measurable improvement over the default templates that look like phishing kits. |
+| Multi-mailbox auth-email smoke test | ✅ Passed. Reset / signup emails arrive in the regular inbox (not spam) across multiple tested mailboxes. |
+| App import smoke test on `app.paperlume.app` | ✅ Passed. Existing identifier and file imports continue to work; no regression from the domain change. |
+
+**Still pending (does not block this PR; required before the closed paid pilot):**
+
+- Google Workspace business email on `paperlume.app` — required before broader beta because the customized Auth templates reference `support@paperlume.app`; that address must resolve to a real inbox / group / alias before users start replying to support emails. Independent of Auth email delivery (Resend handles that) and independent of Paddle integration.
+- Marketing site live at root `paperlume.app` with privacy / terms / AI disclosure / support URLs (C14 / C16).
+- `www.paperlume.app` routing decision (optional marketing-site alias).
+- Paddle Sandbox / KYB / Product / $15/mo Price / API key / webhook signing secret / customer-portal config per C18.
+- `APP_URL` Supabase secret on the Edge Function project set to `https://app.paperlume.app` — set when the Paddle integration PR ships; no Edge Function reads `APP_URL` today.
+
+**Trademark status unchanged.** Paperlume remains a working commercial brand per C19; trademark registration still deferred; not legally cleared.
+
+**Wording constraints honored:**
+
+- ✅ Documents that the setup was **completed and tested by the owner**.
+- ✅ Says "branded templates + Resend + authenticated sending domain **improved deliverability** in owner tests".
+- ✅ Says "ongoing deliverability still depends on domain reputation, low bounce rate, correct authentication, and gradual sending behavior".
+- ❌ Does NOT claim deliverability is guaranteed.
+- ❌ Does NOT claim Paperlume is a registered trademark.
+- ❌ Does NOT include DNS record values, SMTP credentials, Resend API keys, account IDs, WHOIS / RDAP details, screenshots, reset links, message headers, or SPF / DKIM selector values.
+- ❌ Does NOT include private email addresses beyond the intended public addresses (`support@paperlume.app`) referenced in user-facing copy.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `docs/deployment.md` | §8a Status banner updated with the 2026-05-22 completion line. Google Workspace subsection updated (still pending; explicit note about `support@paperlume.app` needing a real inbox before broader beta). Resend / SMTP subsection updated from "planned" / "Not configured" language to "configured" / "verified" language with the owner smoke-test result and the deliverability-caveat language. Pre-paid-beta checklist updated: 13 items marked ✅ completed; 6 items marked still pending; new "Ongoing (post-completion monitoring)" subsection added. New "Operational notes (Do / Don't)" subsection added at the bottom of §8a covering: no DNS values in repo; no screenshots; deliverability-debug-via-headers-and-Resend-dashboard guidance. |
+| `docs/owner-decisions.md` | §2.1 Cloudflare-hygiene row marked ✅ completed. Previous "DNS / hosting / email setup" row split into (a) ✅ completed "App-domain + transactional-auth-email setup" row and (b) two new pending rows for Google Workspace and marketing-site. §2.1a Resolved subsection extended with the operational-setup completion entry. |
+| `docs/commercial-architecture.md` | §6 launch-blocker item #11 updated to reflect partial completion: app-domain + auth-email work is ✅ done; marketing site + Google Workspace + `APP_URL` Supabase secret remain pending. |
+| `docs/store-launch-checklist.md` | Banner extended with the operational-setup progress line summarizing what's now live vs. still pending. |
+| `docs/decisions-and-triggers.md` | Single-paragraph operational note appended at the bottom of the C19 entry — **not a new C-numbered decision.** Records the 2026-05-22 completion, explicitly notes "this is execution of C19, not a new decision", and reiterates that trademark status is unchanged. |
+| `docs/start-here.md` | New handoff entry above the PR #147 / C19 entry — full summary of what's live, what's still pending, the ongoing-deliverability caveat, what's NOT in this PR, and the recommended next owner-side task. |
+| `docs/migration-history.md` | This entry. |
+
+### Files not changed
+
+- `docs/quotas-and-pricing.md` — no brand / domain / email references that need updating. Numeric MVP baselines unchanged.
+- `docs/architecture-read-path.md` — no read-path change.
+- `docs/documentation-policy.md` — no documentation-policy change.
+- `README.md` — no billing-provider / brand / domain mention to update. Repo / npm package name unchanged per the C19 no-rename rule.
+- All source / migration / Edge Function / env / config / generated-types files — unchanged.
+
+### Verification
+
+- `git status --short` — only the seven docs files in the diff before commit.
+- `npx tsc --noEmit` — clean. (Docs change, no source files touched.)
+- `npx vitest run` — 285/285 (unchanged; docs-only PR cannot affect tests).
+- `npx eslint` — not run (no `.ts` / `.tsx` files touched).
+- Markdown lint — not configured in this repo (no `lint:md` script in `package.json`, no `.markdownlint*` file). Visual review of all seven files performed; relative links checked by inspection.
+- `supabase migration list --linked` — Local = Remote through `20260521030000` (PR #144 deployed). **No migration added in this PR.**
+- `supabase db push` — **not run.**
+- `supabase functions deploy` — **not run.**
+- Cloudflare / Vercel / Resend / Supabase / Paddle API calls — **not made.** No DNS records were modified by Claude; no SMTP test was performed by Claude; no provider dashboard was accessed via API.
+- No accounts created. No products / prices / variants / webhooks / customer portals configured by Claude.
+- No secrets, SMTP credentials, Resend API keys, DKIM private values, DNS record values, account IDs, WHOIS / RDAP details, message headers, reset-link URLs, screenshots, or other provider artifacts committed.
+
+### Recommended next task
+
+**Owner-side: Google Workspace business email on `paperlume.app`.** This is the smaller of the two remaining owner-action gates and is required before broader beta because the customized Auth email templates reference `support@paperlume.app` — that address must resolve to a real inbox / group / alias.
+
+After that: the **Paddle Sandbox / KYB / Product / $15/mo Price / API key / webhook signing secret / customer-portal config** per C18 owner setup gate. That is the larger remaining owner-action gate; it unblocks the Paddle integration engineering PR.
+
+Marketing-site provider + legal URLs (C14 / C16) can land in parallel with either of the above.
+
+### Non-goals
+
+- No application / source code changes.
+- No migration.
+- No Edge Function changes.
+- No env file changes.
+- No `package.json` change.
+- No generated Supabase types regeneration.
+- No legal text drafted as final.
+- No Cloudflare DNS records created or modified by Claude.
+- No Vercel custom domain manipulation by Claude.
+- No Google Workspace account creation.
+- No Resend account / domain / API key creation by Claude.
+- No Supabase Auth Custom SMTP configuration change by Claude.
+- No Paddle setup.
+- No `README.md` change.
+- No `docs/architecture-read-path.md` change.
+- No `docs/quotas-and-pricing.md` change.
+- No `docs/documentation-policy.md` change.
