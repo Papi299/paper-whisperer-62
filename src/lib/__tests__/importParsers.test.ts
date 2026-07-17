@@ -61,7 +61,7 @@ describe("parseBibTeX", () => {
   it("decodes LaTeX accents in author names", () => {
     const bib = `@article{key,
   title = {A Study},
-  author = {Garc{\\'i}a, Mar{\\'i}a and M{\\\"u}ller, Hans and Gon{\\c{c}}alves, Jo{\\~a}o}
+  author = {Garc{\\'i}a, Mar{\\'i}a and M{\\"u}ller, Hans and Gon{\\c{c}}alves, Jo{\\~a}o}
 }`;
     const result = parseBibTeX(bib);
     expect(result.papers[0].authors).toEqual([

@@ -5,7 +5,9 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist"] },
+  // .claude/worktrees/ holds gitignored Claude Code auxiliary worktree copies
+  // of the repo; without this ignore, local lint double-reports their contents.
+  { ignores: ["dist", ".claude/worktrees/**"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
