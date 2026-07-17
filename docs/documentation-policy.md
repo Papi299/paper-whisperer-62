@@ -1,122 +1,95 @@
 # Documentation Policy
 
-> **Status: active. From this PR forward, every meaningful change to Paper Whisperer must update documentation alongside the change.**
+> **Status: active.** Documentation ships in the same PR as the change it describes, is **proportional** to that change, and is maintained **in place**. This policy replaces the earlier append-oriented policy that routed every meaningful PR into multiple documents.
 
 ---
 
-## 1. Purpose
+## 1. Document authority
 
-Paper Whisperer is moving from a single-developer hobby project to a commercial product. The repository's documentation has been a strength so far — `README.md`, [docs/start-here.md](start-here.md), [docs/migration-history.md](migration-history.md), [docs/decisions-and-triggers.md](decisions-and-triggers.md), and [docs/architecture-read-path.md](architecture-read-path.md) all reflect what actually shipped. As commercialization, billing, mobile packaging, store submission, legal, and AI quota work all begin in parallel, the **rate of decisions outpaces what any single developer can hold in memory**. Stale or missing docs become a real failure mode — for the owner, for future Claude Code sessions, and for any reviewer.
+Each document below is the single authority for its area. When a change makes one of them inaccurate, fix **that** document. Do not restate the same fact in several documents — link instead.
 
-This policy locks in the rule that **docs ship in the same PR as the change** and that every Claude Code report explicitly accounts for documentation.
-
----
-
-## 2. The documentation update rule
-
-> **Every meaningful change must update documentation, or the change author must explicitly state why no documentation update is needed.**
-
-A change is **meaningful** when any of the following is true:
-
-- A new feature or user-visible behavior was added.
-- An existing user-visible behavior changed.
-- A bug fix changed observable behavior, error messages, or UX flow.
-- The database schema changed (new table, column, index, RPC, RLS policy, trigger, generated column).
-- An Edge Function changed (request/response shape, error contract, side effects, deploy steps).
-- An architecture decision was made or revisited.
-- A commercial / product / pricing / quota / store decision was made.
-- A function, hook, or module was added or removed.
-- A test convention or build / deploy convention changed.
-
-A change is **trivial enough to skip docs** only when **all** of the following are true:
-
-- No user-visible behavior change.
-- No developer-visible API change.
-- No schema, RLS, RPC, Edge Function, or deploy-step change.
-- No architectural / commercial decision.
-- The change is mechanical (typo fix, import sort, single-line lint cleanup, dependency patch with no behavior change).
-
-When in doubt, **update docs**. A 30-second doc edit is always cheaper than a future contributor or future Claude Code session reasoning from stale information.
-
----
-
-## 3. Which file to update by change type
-
-Use this table to decide where the doc update lands. **Multiple destinations are common** — a feature ship that includes a migration touches all of: the README status block, `start-here.md`, and `migration-history.md`.
-
-| Change type | Update at minimum |
+| Document | Authority |
 |---|---|
-| High-level shipping status, "what's done now" | `README.md` |
-| Fresh-chat handoff context, latest-state summary | `docs/start-here.md` |
-| New migration / schema change / RLS policy / RPC / Edge Function deploy | `docs/migration-history.md` |
-| Architecture decision, performance trade-off, re-evaluation trigger | `docs/decisions-and-triggers.md` |
-| Read-path architecture detail | `docs/architecture-read-path.md` |
-| Commercial / product / pricing / plan / billing-architecture decision | `docs/commercial-architecture.md` and/or `docs/quotas-and-pricing.md` |
-| App Store / Play Store / mobile packaging / launch ops | `docs/store-launch-checklist.md` |
-| New complex subsystem (e.g., a new Edge Function family, a new background job system) | New feature-specific doc under `docs/<topic>.md`, plus a link from `docs/start-here.md` |
-| Test convention change | `README.md` Testing section + the relevant feature doc |
-| Deploy / ops convention change | `README.md` Edge Functions section + `docs/store-launch-checklist.md` Production operations section |
-
-If a change spans multiple destinations, **update all of them in the same PR**. Do not split docs into a follow-up PR — the follow-up rarely lands.
+| [README.md](../README.md) | Concise public/developer entry point: what the project is, stack, local setup, test/deploy pointers |
+| [start-here.md](start-here.md) | Bounded current-state handoff for fresh sessions (see §2) |
+| [decisions-and-triggers.md](decisions-and-triggers.md) | Durable architecture/product/security decisions (C-numbers, S1/S2) and their re-evaluation triggers |
+| [owner-decisions.md](owner-decisions.md) | Owner actions, blockers, approvals, and the implementation unlock order |
+| [deployment.md](deployment.md) | Deployment and operational procedures (env vars, migration/Edge Function deploys, domains, smoke checks) |
+| [architecture-read-path.md](architecture-read-path.md) (and future topic docs) | Subsystem architecture detail |
+| [commercial-architecture.md](commercial-architecture.md), [quotas-and-pricing.md](quotas-and-pricing.md), [store-launch-checklist.md](store-launch-checklist.md) | Pricing, entitlement, billing, and launch planning |
+| [migration-history.md](migration-history.md) | Historical chronology of schema/database/security/operational changes. **History, not a second current-state handoff** |
+| Git history, merged PRs, `supabase/migrations/` | Authoritative historical implementation evidence — never duplicated into active docs to "preserve" it |
 
 ---
 
-## 4. Required final-report section for every Claude Code task
+## 2. `start-here.md` is a bounded current-state document
 
-Every Claude Code task report from this point forward must end with a section titled exactly **"Documentation updates"** containing one of:
+- **Target size: 150–250 lines. Hard maximum: 300 lines.**
+- It is updated **in place**. Obsolete statements are replaced or deleted, not amended with narrative.
+- **No automatic PR-by-PR appends.** A PR touches `start-here.md` only when it changes something the handoff asserts (architecture, capabilities, deployment model, decisions, risks, blockers, next action).
+- There is **no requirement to preserve every historical sentence**. Removed content is not moved to another document to avoid deletion; Git history preserves it.
+- Prefer links to authoritative documents over copied detail.
+- An optional **"Recent material changes"** section may list at most **3–5** genuinely material items; remove the oldest when adding.
+- **No exact test counts** in `start-here.md` or `README.md` — counts go stale immediately; run the suites for current numbers.
 
-- **A list of every doc file changed**, each with a one-line note on why it changed.
+---
 
-  Example:
-  > **Documentation updates**
-  > - `docs/migration-history.md` — added entry for migration `2026XXXX_add_foo.sql`.
-  > - `docs/decisions-and-triggers.md` — added §6 capturing the choice of LATERAL JOIN vs. CTE.
-  > - `README.md` — bumped Vitest count from 257 to 261; added the new feature to the status list.
+## 3. Proportional documentation
 
-- **An explicit "no docs change needed" statement with reasons.**
+- A meaningful change must update **whichever authoritative document becomes inaccurate** — and only those.
+- A meaningful change does **not** automatically require updates to every documentation file. Do not mechanically touch `README.md`, `start-here.md`, and `migration-history.md` when only one source of truth is affected.
+- Documentation changes must be proportional to the implementation. A one-line fix does not need a narrative entry anywhere.
+- Do not create documentation churn merely to report that unrelated areas were unchanged ("what did not change" sections are prohibited in active docs).
+- Historical implementation detail belongs in Git, PRs, and migrations — not in the current-state handoff.
+- **When in doubt about facts, still update docs:** if new implementation contradicts existing documentation, fix the affected doc in the same PR. Label planned-but-unimplemented work explicitly ("Status: planning only"); never write prose that reads as if unshipped work ships.
 
-  Example:
-  > **Documentation updates**
-  > No documentation changes needed because the only change is a one-line lint fix in a test file (`e2e/notes.spec.ts`); no user behavior, no developer API, no schema, no architecture decision changed.
+### `migration-history.md`
+
+Update it **only** for material chronological changes that belong in a migration, database, security, deployment, or operational history — typically one concise entry per material schema/RPC/RLS/Edge-Function change. Docs-only refactors do not require an entry. Do not transfer removed `start-here.md` narrative into it.
+
+---
+
+## 4. Validation by change type
+
+### Docs-only changes
+
+Normally require:
+
+- diff-scope verification (only intended files changed);
+- `git diff --check`;
+- relative-link validation;
+- heading/anchor validation (no other file links to a removed heading);
+- factual consistency review against the authoritative sources;
+- Markdown rendering review.
+
+Docs-only changes do **not** automatically require Playwright, Vitest, TypeScript compilation, an application build, or a Supabase migration replay. Those heavier checks are required only when executable files changed, a repository-required CI check mandates them, documentation tooling executes code, or the change exposes an unexpected executable impact.
+
+### Code changes
+
+Follow the pre-merge baseline in [start-here.md](start-here.md) (lint, typecheck, Vitest, build; Playwright when UI behavior changes) and the deploy checklists in [deployment.md](deployment.md).
+
+---
+
+## 5. Required final-report section for every Claude Code task
+
+Every Claude Code task report must end with a section titled exactly:
+
+`Documentation updates`
+
+containing one of:
+
+- **a list of every documentation file changed**, each with a one-line reason; or
+- **an explicit statement that no documentation update was required, with reasons.**
 
 A task report without this section is incomplete and should be rejected on review.
 
 ---
 
-## 5. Preventing stale docs
+## 6. PR checklist (non-trivial PRs)
 
-- **If new implementation contradicts existing documentation, update the docs in the same PR.** Discovering that the code says one thing and the docs another is the most expensive form of docs debt.
-- **Label planned-but-not-implemented work clearly.** Use phrases like "Status: planning only", "Status: provisional", "Status: not implemented yet". Never write a doc paragraph that reads as if a feature ships when it does not.
-- **Do not mark future work as shipped.** If a PR adds a feature gate but the feature is not yet wired to the UI, the docs must say so — not imply completion.
-- **Cross-link aggressively.** Every commercial doc above links to the others; every migration entry links to the relevant code path. A reader landing on any single page should be able to find the rest.
-- **Old docs are not historical artifacts unless explicitly labelled.** Either the doc reflects current truth or it is removed. If a feature is sunset, update or delete the doc and add a sunset note in `decisions-and-triggers.md`.
-
----
-
-## 6. PR checklist
-
-Every non-trivial PR description should include answers to the following:
-
-- [ ] **Code changed?** (which files / area)
-- [ ] **Schema changed?** (new migration? RLS / RPC / trigger / generated column?)
-- [ ] **Edge Function changed?** (which function? deploy required? `supabase functions deploy …` command in the PR description?)
-- [ ] **User-facing behavior changed?** (what would a user notice?)
-- [ ] **Architecture decision made?** (recorded in `decisions-and-triggers.md`?)
-- [ ] **Commercial / product / pricing / plan decision made?** (recorded in `commercial-architecture.md` or `quotas-and-pricing.md`?)
-- [ ] **Tests added or updated?** (Vitest unit / Playwright E2E / both / N/A — and updated counts)
-- [ ] **Docs updated?** (which docs — see §3)
-
-When using Claude Code, this checklist is mirrored in the required **Documentation updates** section of the task report (see §4).
-
----
-
-## 7. Cross-references
-
-- [README.md](../README.md) — top-level status; canonical source for current shipping state.
-- [docs/start-here.md](start-here.md) — fresh-chat handoff for new assistants and contributors.
-- [docs/migration-history.md](migration-history.md) — schema / RPC / Edge Function chronology.
-- [docs/decisions-and-triggers.md](decisions-and-triggers.md) — architecture decisions and re-evaluation triggers.
-- [docs/architecture-read-path.md](architecture-read-path.md) — read-path internals.
-- [docs/commercial-architecture.md](commercial-architecture.md) — entitlement / billing-neutral architecture (planning).
-- [docs/quotas-and-pricing.md](quotas-and-pricing.md) — provisional plan structure (planning).
-- [docs/store-launch-checklist.md](store-launch-checklist.md) — App Store / Play Store readiness (planning).
+- [ ] **Code changed?** (which area)
+- [ ] **Schema / RLS / RPC / Edge Function changed?** (migration name; deploy command in the PR description if a deploy is required)
+- [ ] **User-facing behavior changed?**
+- [ ] **Decision made?** (recorded in `decisions-and-triggers.md` / `owner-decisions.md`?)
+- [ ] **Tests added or updated?** (which layer)
+- [ ] **Docs updated?** (which authoritative document — see §1; or why none)
