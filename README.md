@@ -70,7 +70,7 @@ Final prices and quotas are MVP baselines subject to instrumentation, and remain
 | [docs/architecture-read-path.md](docs/architecture-read-path.md) | Current read-path architecture |
 | [docs/migration-history.md](docs/migration-history.md) | What changed, when, and why |
 | [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) | Architectural decisions and re-evaluation triggers |
-| [docs/commercial-architecture.md](docs/commercial-architecture.md) | Commercial / entitlement architecture (planning) |
+| [docs/commercial-architecture.md](docs/commercial-architecture.md) | Commercial / entitlement architecture and implementation status |
 | [docs/quotas-and-pricing.md](docs/quotas-and-pricing.md) | Provisional plans, quotas, open pricing questions (planning) |
 | [docs/store-launch-checklist.md](docs/store-launch-checklist.md) | App Store / Play Store launch checklist (planning) |
 | [docs/documentation-policy.md](docs/documentation-policy.md) | Documentation update rule for all changes |
@@ -113,7 +113,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=<your-anon-publishable-key>
 npm run dev
 ```
 
-Requires Node.js 18+. Supabase project config is in `supabase/config.toml`.
+Requires Node.js 20.19+ or 22.12+. Supabase project config is in `supabase/config.toml`.
 
 ## Supabase Edge Functions
 
