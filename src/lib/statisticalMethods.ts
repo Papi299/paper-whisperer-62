@@ -12,8 +12,16 @@
  *  - array element order is preserved;
  *  - elements join with ", ";
  *  - JSON `null` elements are omitted (string_agg skips SQL NULLs);
- *  - non-string elements use their JSON text representation;
  *  - an empty array (or all-null array) becomes "".
+ *
+ * Equivalence scope: output is exactly equal to the SQL normalization for
+ * null/undefined, strings, empty arrays, arrays of strings, and the tested
+ * scalar JSON elements (numbers, booleans). Nested composite elements
+ * (objects/arrays inside the array) are serialized deterministically with
+ * JSON.stringify; that is NOT claimed to be universally byte-identical to
+ * PostgreSQL's JSONB text rendering (which differs in whitespace for
+ * objects). Production evidence shows all transitional arrays are empty,
+ * so composite elements cannot occur in the real normalization set.
  *
  * Unsupported top-level categories (object, number, boolean) throw instead of
  * being silently converted into misleading domain text.

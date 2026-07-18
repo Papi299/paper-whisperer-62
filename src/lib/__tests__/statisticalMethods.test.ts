@@ -48,11 +48,19 @@ describe("normalizeStatisticalMethodsForDomain", () => {
     expect(normalizeStatisticalMethodsForDomain([null, null])).toBe("");
   });
 
-  it("renders non-string array elements via their JSON text representation", () => {
+  it("renders scalar non-string array elements identically to the SQL path", () => {
     expect(normalizeStatisticalMethodsForDomain([3.14, true, "chi-square"])).toBe(
       "3.14, true, chi-square",
     );
+  });
+
+  it("serializes nested composite array elements deterministically (JSON.stringify)", () => {
+    // Deterministic, order-preserving output; byte identity with PostgreSQL's
+    // JSONB text rendering is not claimed for composite elements.
     expect(normalizeStatisticalMethodsForDomain([["nested"]])).toBe('["nested"]');
+    expect(normalizeStatisticalMethodsForDomain([{ method: "ANOVA" }, "t-test"])).toBe(
+      '{"method":"ANOVA"}, t-test',
+    );
   });
 
   it("throws TypeError for a top-level object", () => {
