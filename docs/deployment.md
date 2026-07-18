@@ -105,14 +105,14 @@ Before clicking **Merge** on the PR:
 Run these from the project root on the merged `main` (after `git pull --ff-only origin main`):
 
 ```sh
-npx tsc --noEmit
+npx tsc --noEmit -p tsconfig.node.json    # Node-side config check (passes)
 npx vitest run
 npx eslint .                              # or scope to touched files for speed
 supabase migration list --linked          # confirm Local = Remote on every row
 ```
 
-- `npx tsc --noEmit` covers `src/` and `vite.config.ts` only. **Edge Functions are not covered by tsc** (they target Deno; not part of any `tsconfig` `include`). Edge Function code is bundled and checked by Deno during `supabase functions deploy`.
-- `npx vitest run` should match the count in README's Testing section (currently **285**). A mismatch usually means tests were added/removed in the PR; verify against the PR's stated test delta.
+- **Do not use plain `npx tsc --noEmit` as a check** — the root solution-style `tsconfig.json` has an empty file set, so it validates nothing (2026-07-18 audit). The application-project check is `npx tsc --noEmit -p tsconfig.app.json`, which **currently fails** pending schema reconciliation and the TypeScript-baseline repair (see [schema-reconciliation.md](schema-reconciliation.md), decision C25); until then it is not a merge gate. **Edge Functions are not covered by tsc** (they target Deno; not part of any `tsconfig` `include`). Edge Function code is bundled and checked by Deno during `supabase functions deploy`.
+- `npx vitest run` should pass in full. A count change versus the previous run usually means tests were added/removed in the PR; verify against the PR's stated test delta.
 - `npx eslint .` should be 0 errors. Pre-existing warnings (e.g. `react-hooks/exhaustive-deps` on `PaperList.tsx:302`, `useBulkMutations.ts:217/366`, `usePaperMutations.ts:235`) are tolerated; **new** warnings on touched files are not.
 - `supabase migration list --linked` (from a worktree linked to the project — `/Users/maor/Documents/GitHub/paper-whisperer-62` on the primary dev box) should show **identical values in the Local and Remote columns on every row**. Drift is the trigger for §6.2.
 

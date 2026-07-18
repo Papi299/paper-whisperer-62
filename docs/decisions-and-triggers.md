@@ -460,3 +460,79 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 - **Legal counsel advises otherwise** at any point. Always overrides this decision.
 
 **Operational-setup update (2026-05-22):** owner completed the **app-domain + transactional-auth-email half** of C19's pre-paid-beta checklist. `https://app.paperlume.app` is live on Vercel; Resend is configured on `auth.paperlume.app` with SPF / DKIM / DMARC verified; Supabase Auth Custom SMTP routes through Resend; Paperlume-branded Auth email templates are configured; multi-mailbox smoke test passed (inbox, not spam); app import smoke test passed on the new domain. **This is execution of C19, not a new decision** — no new C-numbered decision was created. **Trademark status unchanged**: Paperlume remains a working commercial brand, not a registered trademark; registration still deferred. **Still pending under C19:** Google Workspace business email, marketing site at root `paperlume.app` with legal URLs, `APP_URL` Supabase secret (set when Paddle integration ships per C18). Detailed status with completion timestamps in [`deployment.md §8a`](deployment.md).
+
+## Schema reconciliation decisions (2026-07-18)
+
+**Context for all of C20–C25:** the 2026-07-18 read-only audit ([schema-reconciliation.md](schema-reconciliation.md)) proved that production predates the first tracked migration: the migration ledger matches 60/60, but a clean local replay produces a schema that materially differs from production (junction shapes, `statistical_methods` type, legacy columns, nullability, defaults). RLS policies, security RPCs, and all commercial tables were confirmed in parity. The decisions below fix the canonical end state; the ordered implementation plan lives in [schema-reconciliation.md](schema-reconciliation.md).
+
+### C20. `papers.statistical_methods` is canonically `jsonb` holding a JSON string (or SQL NULL)
+
+**Decision:** keep the production `jsonb` type; the stored-value invariant is SQL `NULL` or a JSON string of the display text. Transitional JSON `null`s → SQL `NULL`; JSON arrays → comma-joined strings; then a CHECK constraint locks the invariant. Domain type stays `string | null`.
+
+**Alternatives rejected:** converting the column back to `text` (fights production and requires a riskier in-place type rewrite of live data); declaring arrays canonical (would require changing the analyze-flow writer and every reader for zero product benefit — the UI renders comma-joined text).
+
+**Rationale:** production already stores `jsonb`; the UI already reads defensively; strings are what the application writes today. Normalize the minority representations rather than the majority.
+
+**Consequence:** `RECON-STATISTICAL-METHODS-001` (type reconciliation + data normalization + constraint + boundary mapping/tests).
+
+**Re-evaluation trigger:** the product adopts *structured* statistical-method objects (per-method metadata, filtering by method) rather than display text — that would justify an array-of-objects schema and a real migration of the display pipeline.
+
+### C21. Dead legacy columns are dropped
+
+**Decision:** drop `papers.urls`, `synonym_pool.primary_term`, `synonym_pool.variants` after re-verifying emptiness at deploy time.
+
+**Alternatives rejected:** retaining them as a future contract (nothing reads or writes them; they exist only as pre-migration residue and keep every schema diff noisy).
+
+**Rationale:** audit evidence — all values empty/NULL across all rows; zero references in application code, RPCs, policies, migrations, or Edge Functions.
+
+**Consequence:** `RECON-LEGACY-COLUMNS-001`.
+
+**Re-evaluation trigger:** a future feature genuinely needs a multi-URL field on papers or a synonym-variant model — re-add deliberately with real semantics rather than resurrecting the dead columns.
+
+### C22. Junction tables use composite primary keys
+
+**Decision:** `paper_tags (paper_id, tag_id)` and `paper_projects (paper_id, project_id)` are the primary keys; no surrogate UUID `id`, no unused `created_at`; reverse-lookup indexes retained/added where justified; the four atomic assignment RPCs and RLS-through-parent ownership preserved.
+
+**Alternatives rejected:** migrating production to the surrogate-ID shape the migrations currently declare (rewrites hundreds of live junction rows to add columns no consumer uses).
+
+**Rationale:** production already has composite PKs; every consumer uses only the pair columns; pairs uniquely identify rows by construction.
+
+**Consequence:** `RECON-JUNCTIONS-001` — the first reconciliation PR (also aligns domain types that currently declare runtime-absent fields).
+
+**Re-evaluation trigger:** a junction gains independent business metadata (e.g., per-assignment notes, ordering, timestamps with product meaning) — that is the point to introduce a richer entity, not before.
+
+### C23. Ownership and pool integrity constraints are enforced
+
+**Decision:** NOT NULL on `user_id` across the eight drifted owner-scoped tables, plus `synonym_pool.canonical_term`/`synonyms` and `study_type_pool.hierarchy_rank`/`specificity_weight`, guarded by migration-time zero-null preflight that fails safely.
+
+**Alternatives rejected:** leaving columns nullable because current data happens to be clean (leaves the RLS-invisible null-owner row class open forever).
+
+**Rationale:** every RLS policy and S1/S2 pattern assumes an owner; audit found zero NULLs, so tightening is backfill-free today and only gets harder later.
+
+**Consequence:** `RECON-INTEGRITY-001`.
+
+**Re-evaluation trigger:** system-owned or shared rows are introduced (e.g., global default pools, team libraries) — ownership modeling then changes deliberately, with its own RLS design.
+
+### C24. Every reconciliation migration is applied remotely
+
+**Decision:** each new migration is applied to a clean local replay *and* to the linked project via the deployment runbook, even when it is structurally a no-op against production.
+
+**Alternatives rejected:** treating "production already looks like this" as a reason to skip remote application (silently breaks ledger parity, the exact failure mode this effort exists to eliminate).
+
+**Rationale:** reconciliation's definition of done is schema parity *plus* ledger parity; an unapplied merged migration destroys the latter immediately.
+
+**Consequence:** a mandatory step in every RECON-* PR checklist.
+
+**Re-evaluation trigger:** a staging environment or branch-database workflow changes the migration deployment model — the rule then adapts to the new pipeline, not away from parity.
+
+### C25. Schema → types → TypeScript → CI ordering
+
+**Decision:** generated Supabase types are regenerated and committed only after every type-affecting schema difference is reconciled and exact local-vs-linked parity is verified; then the TypeScript baseline is repaired and a truthful `npm run typecheck` added; only then the `Validate` CI workflow and branch protection.
+
+**Alternatives rejected:** regenerating types from either side now (encodes a falsehood about one environment); building CI around the empty root `tsc --noEmit` (a gate that can never fail is worse than no gate).
+
+**Rationale:** each later stage consumes the previous stage's guarantee; committing types early would need a second regeneration churn after every RECON PR.
+
+**Consequence:** `TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` stay paused until `RECON-METADATA-PARITY-001` verifies parity.
+
+**Re-evaluation trigger:** none expected — this is a sequencing rule that expires naturally when reconciliation completes.

@@ -1,14 +1,16 @@
 # Owner Decisions — Compact Ledger
 
-> **Purpose.** A compact, owner-facing ledger of commercial decisions: what's **resolved**, what's **still pending**, and what each resolved decision **unlocks** for implementation. Not a duplicate of the full architecture or pricing docs — those live in [commercial-architecture.md](commercial-architecture.md) and [quotas-and-pricing.md](quotas-and-pricing.md). This file is the index; the durable narrative is in [decisions-and-triggers.md](decisions-and-triggers.md).
+> **Purpose.** The compact, owner-facing ledger of durable owner-approved decisions, owner actions, blockers, approvals, and the implementation each decision **unlocks** — across product, commercial, architecture, schema, security, deployment, and operational matters as applicable. This file is the index only: detailed rationale lives in [decisions-and-triggers.md](decisions-and-triggers.md); topic-specific implementation detail lives in the relevant authoritative document — commercial detail in [commercial-architecture.md](commercial-architecture.md) and [quotas-and-pricing.md](quotas-and-pricing.md), schema-reconciliation detail in [schema-reconciliation.md](schema-reconciliation.md).
 >
-> **How to use this file.** When the owner answers a pending question, move the row from §2 to §1 and add a dated entry to `decisions-and-triggers.md`. When a resolved decision unlocks an implementation PR, the unlock is listed inline. Keep this file short — long-form goes in the architecture / pricing docs.
+> **How to use this file.** When the owner answers a pending question, move the row from §2 to the appropriate §1 subsection and add a dated entry to `decisions-and-triggers.md`. When a resolved decision unlocks an implementation PR, the unlock is listed inline. Keep this file short — long-form goes in the authoritative topic documents.
 
 ---
 
-## 1. Resolved decisions (2026-05-21 pivot)
+## 1. Resolved decisions
 
 Full text and rationale for each is in [decisions-and-triggers.md](decisions-and-triggers.md) at the referenced ID.
+
+### 1.1 Commercial, product, and launch decisions (2026-05-21 pivot)
 
 | ID | Decision | Resolved | Implementation unlocked |
 |---|---|---|---|
@@ -26,11 +28,24 @@ Full text and rationale for each is in [decisions-and-triggers.md](decisions-and
 | **C15** | **Hebrew / RTL** is out of scope for MVP. | 2026-05-21 | No i18n / RTL framework work in MVP. |
 | **C16** | **Legal pages** (Privacy / Terms / AI disclosure / Support) live on an **external marketing site**. Repo links to HTTPS URLs. | 2026-05-21 | In-app links to the external URLs are a launch blocker. No legal text shipped in the repo. |
 
+### 1.2 Schema reconciliation decisions (2026-07-18)
+
+Canonical end state and the ordered implementation roadmap: [schema-reconciliation.md](schema-reconciliation.md).
+
+| ID | Decision | Resolved | Implementation unlocked |
+|---|---|---|---|
+| **C20** | **`papers.statistical_methods` canonical type is `jsonb`** with a stored-value invariant of SQL `NULL` or a JSON string; existing JSON `null`s / arrays are transitional and get normalized, then constrained. Domain type stays `string \| null`. Details: [schema-reconciliation.md](schema-reconciliation.md). | 2026-07-18 | `RECON-STATISTICAL-METHODS-001`. |
+| **C21** | **Dead legacy columns are removed**: `papers.urls`, `synonym_pool.primary_term`, `synonym_pool.variants` (all empty/unreferenced; emptiness re-verified at deploy time). | 2026-07-18 | `RECON-LEGACY-COLUMNS-001`. |
+| **C22** | **Composite-PK junction model** for `paper_tags` / `paper_projects` (matches production); no surrogate IDs, no unused `created_at`; RPCs and types aligned. | 2026-07-18 | `RECON-JUNCTIONS-001` — first reconciliation PR. |
+| **C23** | **Constraint hardening**: NOT NULL on the eight drifted `user_id` columns plus `synonym_pool.canonical_term`/`synonyms` and `study_type_pool.hierarchy_rank`/`specificity_weight`, guarded by zero-null preflight; never deletes or invents data. | 2026-07-18 | `RECON-INTEGRITY-001`. |
+| **C24** | **Every reconciliation migration is applied remotely** through the deployment runbook even when it is a structural no-op against production — ledger parity is mandatory alongside schema parity. | 2026-07-18 | Applies to every RECON-* PR. |
+| **C25** | **Ordering: schema reconciliation → parity verification → generated types → TypeScript baseline → CI → branch protection.** Generated Supabase types are not committed until every type-affecting difference is reconciled. | 2026-07-18 | Gates `TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` resumption. |
+
 ---
 
 ## 2. Still pending / needs validation
 
-Pending decisions and validation tasks. Each must be resolved (or scheduled) before the listed implementation phase can begin. Items are ordered by approximate gating order.
+Pending decisions and validation tasks — currently all commercial/launch items; future non-commercial owner decisions (schema, security, operational) belong here too. Each must be resolved (or scheduled) before the listed implementation phase can begin. Items are ordered by approximate gating order.
 
 ### 2.1 Required before Paddle integration begins
 

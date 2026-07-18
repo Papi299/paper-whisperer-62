@@ -54,7 +54,7 @@
 
 ## Commercial and entitlement state
 
-**Implemented and applied to the linked Supabase project** (verified by read-only remote inspection during the 2026-07-17 Phase 0 audit — migration ledger matches the repo and both Edge Functions are deployed and current):
+**Implemented and applied to the linked Supabase project** (verified by read-only remote inspection during the 2026-07-17 Phase 0 audit — the migration ledger matches the repo and both Edge Functions are deployed and current; note that ledger parity does **not** imply full structural schema parity — see the drift risk below; the commercial/RLS enforcement objects themselves were verified in parity):
 
 - **Entitlement/usage schema** (`20260521010000_add_entitlement_usage_schema.sql`): `user_entitlements`, `subscriptions`, `subscription_events`, `usage_counters`, `usage_credits`; `handle_new_user()` seeds a Free entitlement on signup. `subscriptions`/`subscription_events`/`usage_counters` are intentionally deny-all under RLS (server-only).
 - **AI quota enforcement** (`20260521020000_add_ai_quota_rpcs.sql`): `consume_ai_quota` / `refund_ai_quota` SECURITY DEFINER RPCs with S1 guards; `analyze-paper` consumes a unit **before** calling Gemini, refunds best-effort on provider failure, and returns a structured **HTTP 402** when quota is unavailable.
@@ -81,13 +81,13 @@
 
 ## Testing and merge-safety baseline
 
-- **There is no GitHub Actions CI** and **no branch protection on `main`** (both re-verified 2026-07-17). Since merges to `main` auto-deploy the frontend, **the only merge gate is the author running checks locally.**
+- **There is no GitHub Actions CI** and **no branch protection on `main`** (re-verified 2026-07-18). Since merges to `main` auto-deploy the frontend, **the only merge gate is the author running checks locally.**
 - Manual pre-merge baseline:
-  - `npm run lint`
-  - `npx tsc --noEmit` (there is no `typecheck` script in `package.json`)
-  - `npm test` (Vitest)
-  - `npm run build`
+  - `npm run lint` — passes (0 errors).
+  - `npm test` (Vitest) — passes.
+  - `npm run build` — passes.
   - Targeted or full Playwright (`npm run test:e2e`) when UI behavior changes.
+- **TypeScript status (important):** the root solution-style `tsconfig.json` has an empty file set, so plain `npx tsc --noEmit` checks **no application files** and is **not valid validation evidence**. The real application command is `npx tsc --noEmit -p tsconfig.app.json`, which **currently fails** (~dozens of diagnostics) — blocked primarily by the schema drift below plus source/test typing defects. `npx tsc --noEmit -p tsconfig.node.json` passes. No truthful `typecheck` package script exists yet.
 - **Test layers that exist:**
   - Vitest unit/integration tests — pure lib logic, import parsers, export pipeline, hooks with a mocked Supabase client.
   - Playwright E2E — Chromium-only, single-worker serial, authenticated once via a dedicated test account (`.env.test`); it runs the local dev server **against the production Supabase project** (no isolated test environment exists).
@@ -112,7 +112,8 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 
 **Engineering risks:**
 
-- No CI / no branch protection while `main` auto-deploys (highest-leverage gap; see next action).
+- **Schema drift (highest-priority blocker):** production predates the first tracked migration, so a clean replay of all 60 migrations produces a schema that materially differs from production even though the migration ledger matches 60/60. Generated Supabase types cannot be treated as authoritative until reconciliation completes; reconciliation precedes the TypeScript baseline and CI. Full inventory, owner decisions (C20–C25), and roadmap: [schema-reconciliation.md](schema-reconciliation.md). The audit confirmed RLS policies, security RPCs, and all commercial tables are **in parity** — enforcement is not broken.
+- No CI / no branch protection while `main` auto-deploys (second-highest gap; gated behind reconciliation + TypeScript per C25).
 - E2E runs against the production Supabase project; a staging environment is a pending owner decision.
 - Supabase security advisors (2026-07-17): mutable `search_path` on five functions (incl. `search_papers`); SECURITY DEFINER RPCs executable by `anon` (all are `auth.uid()`-guarded, so unexploited, but the surface is wider than needed); Auth leaked-password protection disabled.
 - Repository visibility is **public** — confirm this is intentional for a commercial codebase (no secrets are committed).
@@ -125,7 +126,7 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 
 ## Current recommended next action
 
-**Establish a minimal CI baseline and branch protection** — a GitHub Actions workflow running `eslint`, `tsc --noEmit`, `vitest run`, and `vite build` on every PR, with the check required on `main` — before further feature or commercial implementation work. Everything else in the commercial sequence is either owner-gated or safer once this gate exists.
+Execute the approved schema-reconciliation sequence, beginning with **RECON-JUNCTIONS-001**. After exact schema parity is restored, resume the TypeScript baseline and then establish CI and branch protection. The full ordered sequence and per-migration rules are in [schema-reconciliation.md](schema-reconciliation.md) (decisions C20–C25).
 
 ## Authoritative documents
 
@@ -139,6 +140,7 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 | [commercial-architecture.md](commercial-architecture.md) | Entitlement/billing architecture |
 | [quotas-and-pricing.md](quotas-and-pricing.md) | Plan structure, MVP baselines, instrumentation |
 | [store-launch-checklist.md](store-launch-checklist.md) | Launch/store readiness (mobile deferred) |
+| [schema-reconciliation.md](schema-reconciliation.md) | Schema drift inventory, canonical decisions C20–C25, reconciliation roadmap |
 | [migration-history.md](migration-history.md) | Historical chronology (not current state) |
 | [documentation-policy.md](documentation-policy.md) | Documentation rules, incl. this file's line budget |
 
@@ -146,8 +148,8 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 
 Keep at most 5 items; remove the oldest when adding.
 
-1. Commercial enforcement foundation implemented **and deployed**: entitlement/usage schema, AI quota RPCs + `analyze-paper` 402 enforcement, storage quota triggers (migrations `20260521010000`–`20260521030000`).
-2. Billing direction pivoted to MoR-first (C17) with **Paddle** selected (C18); implementation blocked on owner-side Paddle setup.
-3. Paperlume brand + `paperlume.app` secured (C19); `app.paperlume.app` live on Vercel; Auth email via Resend Custom SMTP configured (owner-attested).
-4. Phase 0 repository/security/operations audit completed (2026-07-17); findings drove this documentation refactor and the CI-baseline recommendation.
-5. This document converted from an append-only journal to a bounded current-state handoff; [documentation-policy.md](documentation-policy.md) updated to match.
+1. Read-only schema-reconciliation audit (2026-07-18) proved material production-vs-migrations drift despite 60/60 ledger parity; canonical decisions C20–C25 and the reconciliation roadmap recorded in [schema-reconciliation.md](schema-reconciliation.md).
+2. ESLint baseline restored to zero errors (PR #150); lint is now a reliable local gate.
+3. Billing direction pivoted to MoR-first (C17) with **Paddle** selected (C18); implementation blocked on owner-side Paddle setup.
+4. Paperlume brand + `paperlume.app` secured (C19); `app.paperlume.app` live on Vercel; Auth email via Resend Custom SMTP configured (owner-attested).
+5. Phase 0 repository/security/operations audit completed (2026-07-17); findings drove the bounded-handoff docs refactor (PR #149).
