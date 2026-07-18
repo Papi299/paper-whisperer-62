@@ -25,6 +25,12 @@ Full text and rationale for each is in [decisions-and-triggers.md](decisions-and
 | **C14** | **Attachments / PDF storage** are in launch scope. **Privacy hardening** (close public-bucket gap) and **storage quota enforcement** are launch blockers. | 2026-05-21 | Migration: tighten `attachments` SELECT to owner-only; add `BEFORE INSERT` quota trigger and `AFTER INSERT/DELETE` usage trigger. Required before paid beta. |
 | **C15** | **Hebrew / RTL** is out of scope for MVP. | 2026-05-21 | No i18n / RTL framework work in MVP. |
 | **C16** | **Legal pages** (Privacy / Terms / AI disclosure / Support) live on an **external marketing site**. Repo links to HTTPS URLs. | 2026-05-21 | In-app links to the external URLs are a launch blocker. No legal text shipped in the repo. |
+| **C20** | **`papers.statistical_methods` canonical type is `jsonb`** with a stored-value invariant of SQL `NULL` or a JSON string; existing JSON `null`s / arrays are transitional and get normalized, then constrained. Domain type stays `string \| null`. Details: [schema-reconciliation.md](schema-reconciliation.md). | 2026-07-18 | `RECON-STATISTICAL-METHODS-001`. |
+| **C21** | **Dead legacy columns are removed**: `papers.urls`, `synonym_pool.primary_term`, `synonym_pool.variants` (all empty/unreferenced; emptiness re-verified at deploy time). | 2026-07-18 | `RECON-LEGACY-COLUMNS-001`. |
+| **C22** | **Composite-PK junction model** for `paper_tags` / `paper_projects` (matches production); no surrogate IDs, no unused `created_at`; RPCs and types aligned. | 2026-07-18 | `RECON-JUNCTIONS-001` — first reconciliation PR. |
+| **C23** | **Constraint hardening**: NOT NULL on the eight drifted `user_id` columns plus `synonym_pool.canonical_term`/`synonyms` and `study_type_pool.hierarchy_rank`/`specificity_weight`, guarded by zero-null preflight; never deletes or invents data. | 2026-07-18 | `RECON-INTEGRITY-001`. |
+| **C24** | **Every reconciliation migration is applied remotely** through the deployment runbook even when it is a structural no-op against production — ledger parity is mandatory alongside schema parity. | 2026-07-18 | Applies to every RECON-* PR. |
+| **C25** | **Ordering: schema reconciliation → parity verification → generated types → TypeScript baseline → CI → branch protection.** Generated Supabase types are not committed until every type-affecting difference is reconciled. | 2026-07-18 | Gates `TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` resumption. |
 
 ---
 
