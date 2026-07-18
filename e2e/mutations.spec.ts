@@ -5,6 +5,7 @@ import {
   createTag,
   deleteProject,
   deleteTag,
+  deletePapersByTitleSubstrings,
   collectConsoleErrors,
 } from "./helpers";
 
@@ -17,6 +18,8 @@ import {
 
 const TEST_PROJECT = `_e2e_proj_${Date.now()}`;
 const TEST_TAG = `_e2e_tag_${Date.now()}`;
+const TEST_PAPER = `_e2e_paper_${Date.now()}`;
+const TEST_METHODS = "ANOVA, linear regression";
 
 test.describe("Mutation persistence regression", () => {
   test.describe.configure({ mode: "serial" });
@@ -269,5 +272,78 @@ test.describe("Mutation persistence regression", () => {
     // Delete the test tag
     await deleteTag(page, TEST_TAG);
     await page.waitForTimeout(500);
+  });
+});
+
+/**
+ * Statistical-methods round-trip (RECON-STATISTICAL-METHODS-001 / C20).
+ *
+ * Proves the application boundary handles the statistical_methods column
+ * correctly against whatever schema production currently has: create a
+ * temporary paper, save canonical comma-separated text, verify the table
+ * renders one badge per method, refresh, verify persistence, and verify the
+ * Edit dialog round-trips the exact text. Cleans up its own paper.
+ */
+test.describe("Statistical methods round-trip", () => {
+  test("should persist statistical methods through edit, table render, and refresh", async ({ page }) => {
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    try {
+      // ── Create a uniquely named temporary paper via Add Papers → Manual ──
+      await page.getByRole("button", { name: /add papers/i }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.getByRole("tab", { name: /manual/i }).click();
+      await page.locator("#manual-title").fill(TEST_PAPER);
+      await page.getByRole("button", { name: /^add paper$/i }).click();
+      await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 10_000 });
+      await page.waitForTimeout(1_000);
+
+      // Default sort is insert_order DESC — the new paper is the first row.
+      const paperRow = page.locator("tbody tr").filter({ hasText: TEST_PAPER }).first();
+      await expect(paperRow).toBeVisible({ timeout: 10_000 });
+
+      // ── Edit: set statistical methods and save ──
+      await paperRow.getByRole("button", { name: /edit/i }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.locator("#statisticalMethods").fill(TEST_METHODS);
+      await page.getByRole("dialog").getByRole("button", { name: /save/i }).click();
+      await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 5_000 });
+      await page.waitForTimeout(1_000);
+
+      // ── Enable the Statistical Methods column (hidden by default) ──
+      await page.getByRole("button", { name: /columns/i }).click();
+      const columnItem = page.getByRole("menuitemcheckbox", { name: /statistical methods/i });
+      if (!(await columnItem.getAttribute("aria-checked").then((v) => v === "true"))) {
+        await columnItem.click();
+      }
+      await page.keyboard.press("Escape");
+
+      // Both methods render as individual badges in the paper's row.
+      await expect(paperRow.getByText("ANOVA", { exact: true })).toBeVisible({ timeout: 5_000 });
+      await expect(paperRow.getByText("linear regression", { exact: true })).toBeVisible();
+
+      // ── Refresh: values persist ──
+      await page.reload({ waitUntil: "networkidle" });
+      await waitForDashboard(page);
+      const rowAfterReload = page.locator("tbody tr").filter({ hasText: TEST_PAPER }).first();
+      await expect(rowAfterReload).toBeVisible({ timeout: 10_000 });
+      await expect(rowAfterReload.getByText("ANOVA", { exact: true })).toBeVisible({ timeout: 5_000 });
+      await expect(rowAfterReload.getByText("linear regression", { exact: true })).toBeVisible();
+
+      // ── Reopen Edit: the field contains the canonical text ──
+      await rowAfterReload.getByRole("button", { name: /edit/i }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(page.locator("#statisticalMethods")).toHaveValue(TEST_METHODS);
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 5_000 });
+    } finally {
+      // ── Clean up the temporary paper (leave zero _e2e_ artifacts) ──
+      await page.reload({ waitUntil: "networkidle" }).catch(() => {});
+      await waitForDashboard(page).catch(() => {});
+      await deletePapersByTitleSubstrings(page, [TEST_PAPER]).catch(() => {});
+      await page.waitForTimeout(1_000);
+      await expect(page.locator("tbody tr").filter({ hasText: TEST_PAPER })).toHaveCount(0);
+    }
   });
 });

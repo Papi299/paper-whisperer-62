@@ -715,8 +715,7 @@ function PaperRow({
             style={{ width: getWidth("statisticalMethods"), minWidth: getWidth("statisticalMethods"), maxWidth: getWidth("statisticalMethods") }}
           >
             {(() => {
-              const rawVal = paper.statistical_methods;
-              const raw = (typeof rawVal === "string" ? rawVal : Array.isArray(rawVal) ? rawVal.join(", ") : String(rawVal ?? "")).trim();
+              const raw = (paper.statistical_methods ?? "").trim();
               if (!raw || raw.toLowerCase() === "not specified") return <span>-</span>;
               const methods = raw.split(",").map(m => m.trim()).filter(Boolean);
               return (
