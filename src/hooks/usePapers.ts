@@ -5,6 +5,7 @@ import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { queryKeys } from "@/lib/queryKeys";
 import { buildPapersQuery, buildPapersCountQuery } from "@/lib/buildPapersQuery";
+import { normalizeStatisticalMethodsForDomain } from "@/lib/statisticalMethods";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { timedQueryFn } from "@/lib/queryTiming";
 import { PapersPage, ServerFilterParams, ServerSortParams, areServerFiltersReady } from "./papers/types";
@@ -15,6 +16,13 @@ import { usePaperMutations } from "./papers/usePaperMutations";
 import { useBulkMutations } from "./papers/useBulkMutations";
 
 const PAGE_SIZE = 100;
+
+/** Raw database row shape at the query boundary: identical to `Paper` except
+ *  `statistical_methods`, which can still be a transitional JSON value (null,
+ *  string, or array) until the C20 reconciliation migration reaches production. */
+type RawPaperRow = Omit<Paper, "statistical_methods"> & {
+  statistical_methods: unknown;
+};
 
 export function usePapers(
   userId: string | undefined,
@@ -75,7 +83,11 @@ export function usePapers(
       const { data: papersData, error: papersError } = await query.range(from, to);
       if (papersError) throw papersError;
 
-      const rawPapers = (papersData as Paper[]) || [];
+      const rawRows = (papersData as unknown as RawPaperRow[]) || [];
+      const rawPapers: Paper[] = rawRows.map((row) => ({
+        ...row,
+        statistical_methods: normalizeStatisticalMethodsForDomain(row.statistical_methods),
+      }));
       const paperIds = rawPapers.map((p) => p.id);
 
       // Fetch junction tables for this page's papers
