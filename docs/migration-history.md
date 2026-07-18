@@ -2720,3 +2720,11 @@ Marketing-site provider + legal URLs (C14 / C16) can land in parallel with eithe
 - No `docs/architecture-read-path.md` change.
 - No `docs/quotas-and-pricing.md` change.
 - No `docs/documentation-policy.md` change.
+
+## 2026-07-18 — RECON-JUNCTIONS-001: junction tables reconciled to composite primary keys
+
+**Migration:** `20260718063657_reconcile_junction_tables.sql` (decision C22; roadmap in [schema-reconciliation.md](schema-reconciliation.md)).
+
+Converges `paper_tags` / `paper_projects` from the two known starting states to one canonical shape: on clean local replay it drops the surrogate `id` primary key, `id`, and `created_at`, and installs `PRIMARY KEY (paper_id, tag_id)` / `(paper_id, project_id)`; against production (already composite-keyed) the conversion path is a verified no-op. Fail-safe metadata assertions run before any destructive DDL (pair NULLs, duplicate pairs, FK definitions, external `id`/`created_at` dependents, unexpected PK shapes, conflicting index names); no `CASCADE`, no row deletion or rewriting. Junction behavior, `ON DELETE CASCADE` foreign keys, RLS enablement/FORCE, and all six policies are preserved (proven by catalog comparison). The redundant pair `UNIQUE` constraint and the redundant `idx_*_paper_id` indexes are removed; the canonical reverse indexes `idx_paper_tags_tag_id` / `idx_paper_projects_project_id` are ensured (production currently lacks the former and gains it on deploy). The four assignment RPCs are re-declared in production's exact text form — semantics unchanged; this only removes formatting-only schema-diff noise. Client side: `PaperTag` / `PaperProject` in `src/types/database.ts` reduced to pair columns; `usePapers.ts` junction reads switched from `select("*")` to explicit pair projections.
+
+**Deployment:** per C24 this migration **must be applied to the linked project after merge** (`supabase db push` per [deployment.md](deployment.md) §6) even though most of it no-ops there — the remote application records the ledger row and creates `idx_paper_tags_tag_id`. Not yet applied remotely at merge time. Generated Supabase types remain deferred under C25 until all type-affecting drift is reconciled.

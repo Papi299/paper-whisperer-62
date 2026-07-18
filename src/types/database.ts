@@ -26,10 +26,8 @@ export interface Tag {
 }
 
 export interface PaperProject {
-  id: string;
   paper_id: string;
   project_id: string;
-  created_at: string;
 }
 
 export interface Paper {
@@ -65,10 +63,8 @@ export interface Paper {
 }
 
 export interface PaperTag {
-  id: string;
   paper_id: string;
   tag_id: string;
-  created_at: string;
 }
 
 export interface PaperAttachment {

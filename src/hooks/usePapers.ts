@@ -82,8 +82,8 @@ export function usePapers(
       const [paperTagsResult, paperProjectsResult] =
         paperIds.length > 0
           ? await Promise.all([
-              supabase.from("paper_tags").select("*").in("paper_id", paperIds),
-              supabase.from("paper_projects").select("*").in("paper_id", paperIds),
+              supabase.from("paper_tags").select("paper_id, tag_id").in("paper_id", paperIds),
+              supabase.from("paper_projects").select("paper_id, project_id").in("paper_id", paperIds),
             ])
           : [{ data: [], error: null }, { data: [], error: null }];
 
