@@ -64,8 +64,13 @@ DECLARE
   v_pk_name text;
   v_pk_cols text[];
   v_pk_count int;
+  v_pk_oid oid;
   v_uq_count int;
   v_uq_name text;
+  v_uq_oid oid;
+  v_uq_indexrelid oid;
+  v_fk_oids oid[];
+  v_fk_oid oid;
   v_cnt bigint;
   v_fk record;
   v_idx record;
@@ -127,10 +132,12 @@ BEGIN
         RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: %.id is not a plain uuid NOT NULL column', t.tbl;
       END IF;
       PERFORM 1 FROM pg_attribute
-      WHERE attrelid = v_relid AND attname = 'created_at'
-        AND atttypid = 'timestamptz'::regtype AND attnotnull;
+      WHERE attrelid = v_relid AND attname = 'created_at' AND attnum > 0
+        AND NOT attisdropped
+        AND atttypid = 'timestamptz'::regtype AND attnotnull
+        AND attgenerated = '' AND attidentity = '';
       IF NOT FOUND THEN
-        RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: %.created_at is not timestamptz NOT NULL', t.tbl;
+        RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: %.created_at is not a plain timestamptz NOT NULL column', t.tbl;
       END IF;
     END IF;
 
@@ -141,11 +148,11 @@ BEGIN
       RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: % has % primary keys', t.tbl, v_pk_count;
     END IF;
 
-    SELECT con.conname,
+    SELECT con.oid, con.conname,
            (SELECT array_agg(att.attname::text ORDER BY ord.n)
             FROM unnest(con.conkey) WITH ORDINALITY AS ord(attnum, n)
             JOIN pg_attribute att ON att.attrelid = v_relid AND att.attnum = ord.attnum)
-    INTO v_pk_name, v_pk_cols
+    INTO v_pk_oid, v_pk_name, v_pk_cols
     FROM pg_constraint con
     WHERE con.conrelid = v_relid AND con.contype = 'p';
 
@@ -161,7 +168,11 @@ BEGIN
 
     -- A6. Pair UNIQUE inventory: exactly one in surrogate state, zero
     -- in composite state; never more than one (deterministic drop).
-    SELECT count(*), min(con.conname::text) INTO v_uq_count, v_uq_name
+    -- The single surrogate constraint is bound to its backing unique
+    -- index through pg_constraint.conindid, and that backing index is
+    -- validated here; A9 then permits a unique pair index ONLY when
+    -- its indexrelid equals this captured conindid.
+    SELECT count(*) INTO v_uq_count
     FROM pg_constraint con
     WHERE con.conrelid = v_relid AND con.contype = 'u'
       AND (SELECT array_agg(att.attname::text ORDER BY att.attname)
@@ -171,6 +182,38 @@ BEGIN
     IF (v_state = 'surrogate' AND v_uq_count <> 1)
        OR (v_state = 'composite' AND v_uq_count <> 0) THEN
       RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: % has % pair UNIQUE constraints (state %)', t.tbl, v_uq_count, v_state;
+    END IF;
+
+    v_uq_oid := NULL; v_uq_name := NULL; v_uq_indexrelid := NULL;
+    IF v_state = 'surrogate' THEN
+      SELECT con.oid, con.conname::text, con.conindid
+      INTO v_uq_oid, v_uq_name, v_uq_indexrelid
+      FROM pg_constraint con
+      WHERE con.conrelid = v_relid AND con.contype = 'u'
+        AND (SELECT array_agg(att.attname::text ORDER BY att.attname)
+             FROM unnest(con.conkey) ck(attnum)
+             JOIN pg_attribute att ON att.attrelid = v_relid AND att.attnum = ck.attnum)
+            = (SELECT array_agg(x ORDER BY x) FROM unnest(ARRAY['paper_id', t.col2]) x);
+
+      IF v_uq_indexrelid IS NULL OR v_uq_indexrelid = 0 THEN
+        RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: % pair UNIQUE % has no backing index (conindid)', t.tbl, v_uq_name;
+      END IF;
+      PERFORM 1
+      FROM pg_index i
+      WHERE i.indexrelid = v_uq_indexrelid
+        AND i.indrelid = v_relid
+        AND i.indisunique AND i.indisvalid AND i.indisready
+        AND i.indnatts = 2 AND i.indnkeyatts = 2
+        AND i.indpred IS NULL AND i.indexprs IS NULL
+        AND (SELECT array_agg(CASE WHEN k.attnum = 0 THEN '<expr>'
+                                   ELSE (SELECT attname::text FROM pg_attribute
+                                         WHERE attrelid = i.indrelid AND attnum = k.attnum) END
+                              ORDER BY k.ord)
+             FROM unnest(i.indkey::int2[]) WITH ORDINALITY k(attnum, ord))
+            = ARRAY['paper_id', t.col2];
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: % pair UNIQUE % backing index is not the canonical ordered pair index', t.tbl, v_uq_name;
+      END IF;
     END IF;
 
     -- A7. Exact FK validation via catalog fields: exactly one FK per
@@ -183,6 +226,7 @@ BEGIN
       RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: % has % foreign keys (expected exactly 2)', t.tbl, v_cnt;
     END IF;
 
+    v_fk_oids := ARRAY[]::oid[];
     FOR v_fk IN
       SELECT * FROM (VALUES
         ('paper_id', 'papers'),
@@ -198,7 +242,7 @@ BEGIN
         RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: %.% has % FKs (expected exactly 1)', t.tbl, v_fk.src_col, v_cnt;
       END IF;
 
-      PERFORM 1
+      SELECT con.oid INTO v_fk_oid
       FROM pg_constraint con
       WHERE con.conrelid = v_relid AND con.contype = 'f'
         AND con.conkey = ARRAY[(SELECT attnum FROM pg_attribute
@@ -212,10 +256,30 @@ BEGIN
         AND con.convalidated
         AND NOT con.condeferrable
         AND NOT con.condeferred;
-      IF NOT FOUND THEN
+      IF v_fk_oid IS NULL THEN
         RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: %.% FK is not the canonical validated single-column FK to %(id) ON DELETE CASCADE', t.tbl, v_fk.src_col, v_fk.ref_tbl;
       END IF;
+      v_fk_oids := v_fk_oids || v_fk_oid;
+      v_fk_oid := NULL;
     END LOOP;
+
+    -- A7b. Exact constraint inventory: the identified canonical
+    -- constraint OIDs (PK + 2 FKs, plus the single pair UNIQUE in the
+    -- surrogate state) must account for EVERY pg_constraint row on the
+    -- table. Any additional constraint of any type — CHECK, exclusion,
+    -- extra UNIQUE/FK, or anything else — is an unsupported state.
+    SELECT count(*) INTO v_cnt
+    FROM pg_constraint con
+    WHERE con.conrelid = v_relid
+      AND con.oid <> ALL (v_fk_oids || v_pk_oid || COALESCE(v_uq_oid, 0::oid));
+    IF v_cnt > 0 THEN
+      RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: % has % constraint(s) beyond the canonical inventory (types found: %)',
+        t.tbl, v_cnt,
+        (SELECT string_agg(DISTINCT con.contype::text, ',')
+         FROM pg_constraint con
+         WHERE con.conrelid = v_relid
+           AND con.oid <> ALL (v_fk_oids || v_pk_oid || COALESCE(v_uq_oid, 0::oid)));
+    END IF;
 
     -- A8. Row soundness (schema NOT NULL is asserted above; this
     -- guards data on the off-chance of an invalid constraint).
@@ -236,7 +300,8 @@ BEGIN
     v_legacy_present := false;
     v_rev_present := false;
     FOR v_idx IN
-      SELECT ic.relname AS idx_name,
+      SELECT i.indexrelid,
+             ic.relname AS idx_name,
              i.indisunique, i.indisprimary, i.indisvalid, i.indisready,
              am.amname,
              i.indnkeyatts,
@@ -280,10 +345,18 @@ BEGIN
         RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: unexpected equivalent paper_id index % on %', v_idx.idx_name, t.tbl;
       ELSIF NOT v_idx.indisunique AND v_idx.indnatts = 1 AND v_idx.keycols = ARRAY[t.col2] THEN
         RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: unexpected equivalent % index % on %', t.col2, v_idx.idx_name, t.tbl;
-      ELSIF v_state = 'surrogate' AND v_idx.indisunique
-            AND (SELECT array_agg(x ORDER BY x) FROM unnest(v_idx.keycols) x)
-                = (SELECT array_agg(x ORDER BY x) FROM unnest(ARRAY['paper_id', t.col2]) x) THEN
-        CONTINUE;  -- backing index of the single pair UNIQUE constraint (A6).
+      ELSIF (SELECT array_agg(x ORDER BY x) FROM unnest(v_idx.keycols) x)
+            = (SELECT array_agg(x ORDER BY x) FROM unnest(ARRAY['paper_id', t.col2]) x) THEN
+        -- Pair-equivalent index (unique or not, any name): permitted
+        -- ONLY when it is exactly the backing index of the single pair
+        -- UNIQUE constraint captured in A6 (matched by conindid OID,
+        -- never inferred from key columns alone).
+        IF v_state = 'surrogate' AND v_idx.indisunique
+           AND v_idx.indexrelid = v_uq_indexrelid THEN
+          CONTINUE;
+        END IF;
+        RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: additional pair-equivalent index % on % (unique=%, not the UNIQUE-constraint backing index)',
+          v_idx.idx_name, t.tbl, v_idx.indisunique;
       ELSE
         RAISE EXCEPTION 'RECON-JUNCTIONS Phase A: unexpected index % on % (keys=%)', v_idx.idx_name, t.tbl, v_idx.keycols;
       END IF;
@@ -405,10 +478,17 @@ BEGIN
       RAISE EXCEPTION 'RECON-JUNCTIONS Phase C: % final primary key is not canonical', t.tbl;
     END IF;
 
-    -- zero pair UNIQUE constraints, exactly two FKs, no other constraint types
-    IF (SELECT count(*) FROM pg_constraint WHERE conrelid = v_relid AND contype = 'u') <> 0
-       OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_relid AND contype = 'f') <> 2 THEN
-      RAISE EXCEPTION 'RECON-JUNCTIONS Phase C: % final constraint inventory is not canonical', t.tbl;
+    -- Exact final constraint inventory: exactly three constraints in
+    -- total — one PK and two FKs; zero UNIQUE, zero CHECK, zero
+    -- exclusion, zero constraints of any other type.
+    IF (SELECT count(*) FROM pg_constraint WHERE conrelid = v_relid) <> 3
+       OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_relid AND contype = 'p') <> 1
+       OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_relid AND contype = 'f') <> 2
+       OR (SELECT count(*) FROM pg_constraint WHERE conrelid = v_relid AND contype NOT IN ('p','f')) <> 0 THEN
+      RAISE EXCEPTION 'RECON-JUNCTIONS Phase C: % final constraint inventory is not canonical (types: %)',
+        t.tbl,
+        (SELECT string_agg(contype::text || ':' || conname, ', ' ORDER BY conname)
+         FROM pg_constraint WHERE conrelid = v_relid);
     END IF;
 
     -- exactly two indexes: the PK index and the canonical reverse index
