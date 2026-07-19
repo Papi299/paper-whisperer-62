@@ -538,3 +538,15 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 **Consequence:** `TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` stay paused until `RECON-METADATA-PARITY-001` verifies parity.
 
 **Re-evaluation trigger:** none expected — this is a sequencing rule that expires naturally when reconciliation completes.
+
+### C26. Remaining metadata and index parity (final reconciliation step)
+
+**Decision:** `RECON-METADATA-PARITY-001` converges both a clean local replay (S1) and current production (S2) to one canonical metadata end state: drop `projects.updated_at` (+ its `update_projects_updated_at` trigger); keep exactly one `papers` updated-at trigger (`trg_papers_updated_at` / `set_updated_at()`) and drop the duplicate `update_papers_updated_at`; set the eight drifted `created_at` defaults to `now()`; enforce `study_type_pool.created_at` NOT NULL (zero-NULL preflight, rechecked under lock, no backfill); set `tags.color` default to `'#e2e8f0'`; and drop seven redundant single-column indexes superseded by production's covering composite/unique indexes. `papers.search_vector` (semantically-equivalent generation expression, corpus-proven) and the SEC-4 default-grant diff (effective privileges consistent with the RLS-forced model) are **approved benign/artifact exclusions — deliberately not changed.**
+
+**Alternatives rejected:** dropping/recreating the `search_vector` generated column for textual identity (needless table rewrite for a proven-equal expression); applying the shadow-database default grants (would widen `anon`/`authenticated` table access to silence a diff-tool artifact); keeping `projects.updated_at` or the duplicate trigger (perpetuates drift with no consumer); canonicalizing `created_at` to `timezone('utc', now())` (adds an unnecessary `timestamp`-without-tz round-trip vs. `now()`).
+
+**Rationale:** these are the last differences between the migration-defined schema and production; resolving them makes generated types authoritative (unblocking C25) while production is mutated only for the `created_at` defaults — a metadata change that alters no stored row. Production is the reference for every other item.
+
+**Consequence:** the migration is local-only until applied remotely under C24; only then do the C25 type-baseline steps begin.
+
+**Re-evaluation trigger:** none — a one-time convergence that expires once applied remotely and verified. An index later proven to serve a real query path is added by a separate performance migration, not by reopening C26.
