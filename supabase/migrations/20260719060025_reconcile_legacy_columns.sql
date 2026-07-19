@@ -8,8 +8,26 @@
 -- Supported global starting states (anything else fails in Phase A, before DDL):
 --   S1 — clean replay / already reconciled: all three live columns absent → no DDL.
 --   S2 — audited production state: all three present with the exact metadata
---        hard-coded below, only canonical-empty values, and no dependency other
---        than each column's own default object → lock, recheck, drop.
+--        hard-coded below (type OID, typmod, attnum, nullability, default,
+--        collation, storage, compression, statistics target, ACL, comment and
+--        zero security labels), only canonical-empty values, and no dependency
+--        other than each column's own default object → lock, recheck, drop.
+--
+-- Hardened (RECON-LEGACY-COLUMNS-001A) to close whole-row, publication and
+-- exact-metadata gaps:
+--   * exact attnum / type OID / typmod / security-label guards per target;
+--   * exact approved routine inventory (behavioral fingerprint identical across
+--     environments; owner/ACL fingerprint pinned per state) so a new, removed or
+--     changed routine aborts rather than being silently accepted;
+--   * whole-row routine idioms (%ROWTYPE, SELECT *, to_jsonb/row_to_json/agg of a
+--     whole row, row-type results) and whole-row views/rules/composite-type
+--     consumers are rejected — a function can consume the full row without ever
+--     naming a target column;
+--   * strict publication guard (no FOR ALL TABLES, neither table a member, no
+--     column list pins a target);
+--   * expanded preservation inventory (extended statistics, publications,
+--     security labels, comments, and every remaining column's full definition)
+--     proven byte-identical in Phase C.
 --
 -- Dropping a column is structurally irreversible: original attnums and any
 -- unrecorded values cannot be reconstructed. Approved because the aggregate
@@ -21,15 +39,27 @@
 DO $recon$
 DECLARE
   -- Exact audited S2 manifest (linked project lioxtgiputfniqbktcsz, 2026-07-19).
+  -- att  = exact live attnum. toid = exact pg_type OID. tmod = exact atttypmod.
   -- def is the deparsed pg_get_expr() form of the column's own default, or NULL
   -- for "must have no default". coll: 'none' = attcollation 0, 'db_default' =
   -- the database default collation. empt: approved emptiness rule.
   v_manifest CONSTANT jsonb := jsonb_build_array(
-    jsonb_build_object('tbl','papers',       'col','urls',         'typ','jsonb', 'def','''[]''::jsonb', 'coll','none',       'empt','jsonb_empty_array'),
-    jsonb_build_object('tbl','synonym_pool', 'col','primary_term', 'typ','text',  'def',NULL,            'coll','db_default', 'empt','all_sql_null'),
-    jsonb_build_object('tbl','synonym_pool', 'col','variants',     'typ','jsonb', 'def','''[]''::jsonb', 'coll','none',       'empt','jsonb_empty_array')
+    jsonb_build_object('tbl','papers',       'col','urls',         'att',11, 'typ','jsonb', 'toid',3802, 'tmod',-1, 'def','''[]''::jsonb', 'coll','none',       'empt','jsonb_empty_array'),
+    jsonb_build_object('tbl','synonym_pool', 'col','primary_term', 'att',2,  'typ','text',  'toid',25,   'tmod',-1, 'def',NULL,            'coll','db_default', 'empt','all_sql_null'),
+    jsonb_build_object('tbl','synonym_pool', 'col','variants',     'att',3,  'typ','jsonb', 'toid',3802, 'tmod',-1, 'def','''[]''::jsonb', 'coll','none',       'empt','jsonb_empty_array')
   );
   v_tables CONSTANT text[] := ARRAY['papers','synonym_pool'];  -- deterministic lock order
+
+  -- Exact approved public routine inventory (23 routines). The behavioral
+  -- fingerprint (schema, name, identity args, result, kind, language, security
+  -- definer, volatility, strictness, leakproof, parallel, config, body md5) is
+  -- byte-identical between the linked project and a clean local replay, so it is
+  -- required in every state. Owner/ACL differ by environment, so the full
+  -- fingerprint is pinned per state. Any drift aborts the migration.
+  v_routines_count   CONSTANT int  := 23;
+  v_routines_noacl   CONSTANT text := 'c0c14ef5f3e85c33a5eebec8402fc0db';
+  v_routines_full_s1 CONSTANT text := '1f65886109bf875238c517d764af4c5f';  -- clean local replay
+  v_routines_full_s2 CONSTANT text := 'c0b444c8102b5e3b0fc241ba7b53dde9';  -- audited production
 
   m            record;
   t            text;
@@ -40,6 +70,9 @@ DECLARE
   v_rows       bigint;
   v_expect_coll oid;
   r            record;
+  v_rt_count   int;
+  v_rt_full    text;
+  v_rt_noacl   text;
 
   -- pre-DDL captures (Phase A / under-lock), compared again in Phase C
   v_rows_papers  bigint;
@@ -105,6 +138,49 @@ BEGIN
     END IF;
 
     ----------------------------------------------------------------
+    -- Exact approved routine inventory (whole-row API-shape gate).
+    -- Runs in EVERY state: a new/removed/changed routine — including one
+    -- that consumes a full table row without naming a target column —
+    -- aborts before any DDL, in both S1 and S2, pre-lock and under lock.
+    ----------------------------------------------------------------
+    SELECT count(*),
+           md5(string_agg(
+             n.nspname||'|'||p.proname||'|'||pg_get_function_identity_arguments(p.oid)||'|'||
+             pg_get_function_result(p.oid)||'|'||p.prokind::text||'|'||l.lanname||'|'||
+             p.prosecdef::text||'|'||p.provolatile::text||'|'||p.proisstrict::text||'|'||
+             p.proleakproof::text||'|'||p.proparallel::text||'|'||
+             COALESCE(array_to_string(p.proconfig,','),'-')||'|'||
+             pg_get_userbyid(p.proowner)||'|'||COALESCE(p.proacl::text,'-')||'|'||md5(p.prosrc),
+             chr(10) ORDER BY p.proname, pg_get_function_identity_arguments(p.oid))),
+           md5(string_agg(
+             n.nspname||'|'||p.proname||'|'||pg_get_function_identity_arguments(p.oid)||'|'||
+             pg_get_function_result(p.oid)||'|'||p.prokind::text||'|'||l.lanname||'|'||
+             p.prosecdef::text||'|'||p.provolatile::text||'|'||p.proisstrict::text||'|'||
+             p.proleakproof::text||'|'||p.proparallel::text||'|'||
+             COALESCE(array_to_string(p.proconfig,','),'-')||'|'||md5(p.prosrc),
+             chr(10) ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)))
+      INTO v_rt_count, v_rt_full, v_rt_noacl
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_language  l ON l.oid = p.prolang
+     WHERE n.nspname = 'public';
+
+    IF v_rt_count <> v_routines_count THEN
+      RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: public routine count is % (expected %) — inventory drift', v_rt_count, v_routines_count;
+    END IF;
+    -- Behavioral fingerprint is byte-identical across environments: any added,
+    -- removed or changed routine (body/signature/behavior) aborts everywhere.
+    IF v_rt_noacl <> v_routines_noacl THEN
+      RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: public routine behavioral inventory drift (a routine was added, removed or changed)';
+    END IF;
+    -- Owner/ACL is environment-determined (the clean-replay baseline uses local
+    -- roles; production uses its own). Both are audited; the live inventory must
+    -- match one of them exactly. A tampered owner/ACL matches neither and aborts.
+    IF v_rt_full <> v_routines_full_s1 AND v_rt_full <> v_routines_full_s2 THEN
+      RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: public routine owner/ACL inventory matches neither the audited clean-replay nor the production baseline';
+    END IF;
+
+    ----------------------------------------------------------------
     -- Preservation inventory + expected final live-column set + row
     -- counts (captured every pass; in S2 the pass-2 under-lock capture
     -- is the authoritative pre-DDL state Phase C compares against)
@@ -126,10 +202,27 @@ BEGIN
                   FROM pg_indexes WHERE schemaname = 'public' AND tablename = t),
         'trg', (SELECT COALESCE(md5(string_agg(tg.tgname || ':' || pg_get_triggerdef(tg.oid), '|' ORDER BY tg.tgname)), 'none')
                   FROM pg_trigger tg WHERE tg.tgrelid = ('public.' || t)::regclass AND NOT tg.tgisinternal),
-        'cols', (SELECT md5(string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' ||
+        'xstat', (SELECT COALESCE(md5(string_agg(s.stxname || ':' || pg_get_statisticsobjdef(s.oid), '|' ORDER BY s.stxname)), 'none')
+                  FROM pg_statistic_ext s WHERE s.stxrelid = ('public.' || t)::regclass),
+        'pub', (SELECT COALESCE(md5(string_agg(z.pubname || ':' || z.attrs, '|' ORDER BY z.pubname, z.attrs)), 'none') FROM (
+                  SELECT pub.pubname AS pubname, COALESCE(pr.prattrs::text, 'ALL') AS attrs
+                    FROM pg_publication_rel pr JOIN pg_publication pub ON pub.oid = pr.prpubid
+                   WHERE pr.prrelid = ('public.' || t)::regclass
+                  UNION ALL
+                  SELECT pub.pubname, 'FOR_ALL_TABLES' FROM pg_publication pub WHERE pub.puballtables
+                ) z),
+        'seclab', (SELECT COALESCE(md5(string_agg(sl.provider || ':' || sl.objsubid::text || ':' || sl.label, '|' ORDER BY sl.provider, sl.objsubid)), 'none')
+                  FROM pg_seclabel sl WHERE sl.classoid = 'pg_class'::regclass AND sl.objoid = ('public.' || t)::regclass),
+        'comment', (SELECT COALESCE(obj_description(('public.' || t)::regclass, 'pg_class'), '-')),
+        'cols', (SELECT md5(string_agg(a.attname || ':' || a.atttypid::text || ':' || format_type(a.atttypid, a.atttypmod) || ':' ||
                         a.attnotnull::text || ':' || COALESCE(pg_get_expr(ad.adbin, ad.adrelid), '-') || ':' ||
                         a.attgenerated::text || ':' || a.attidentity::text || ':' ||
-                        a.attcollation::text || ':' || a.attstorage::text, '|' ORDER BY a.attname))
+                        a.attcollation::text || ':' || a.attstorage::text || ':' || COALESCE(a.attcompression::text, '') || ':' ||
+                        COALESCE(a.attstattarget::text, '-') || ':' || COALESCE(a.attacl::text, '-') || ':' ||
+                        COALESCE(col_description(a.attrelid, a.attnum), '-') || ':' ||
+                        (SELECT COALESCE(md5(string_agg(sl.provider || '=' || sl.label, ',' ORDER BY sl.provider)), '-')
+                           FROM pg_seclabel sl WHERE sl.classoid = 'pg_class'::regclass
+                            AND sl.objoid = a.attrelid AND sl.objsubid = a.attnum), '|' ORDER BY a.attname))
                    FROM pg_attribute a
                    LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
                   WHERE a.attrelid = ('public.' || t)::regclass AND a.attnum > 0 AND NOT a.attisdropped
@@ -163,9 +256,9 @@ BEGIN
     -- S2: exact metadata validation for every target
     ----------------------------------------------------------------
     FOR m IN SELECT * FROM jsonb_to_recordset(v_manifest)
-             AS x(tbl text, col text, typ text, def text, coll text, empt text) LOOP
+             AS x(tbl text, col text, att int, typ text, toid oid, tmod int, def text, coll text, empt text) LOOP
 
-      SELECT a.attnum, format_type(a.atttypid, a.atttypmod) AS ftype,
+      SELECT a.attnum, a.atttypid, a.atttypmod, format_type(a.atttypid, a.atttypmod) AS ftype,
              a.attnotnull, a.attgenerated, a.attidentity, a.attcollation,
              a.attstorage, a.attcompression, a.attstattarget, a.attacl,
              ad.oid AS def_oid, pg_get_expr(ad.adbin, ad.adrelid) AS def_expr,
@@ -180,6 +273,17 @@ BEGIN
         RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: %.% disappeared during validation', m.tbl, m.col;
       END IF;
 
+      -- Exact live attnum.
+      IF r.attnum <> m.att THEN
+        RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: %.% is at attnum % (expected %)', m.tbl, m.col, r.attnum, m.att;
+      END IF;
+      -- Exact type OID and typmod, in addition to the rendered type.
+      IF r.atttypid <> m.toid THEN
+        RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: %.% has type OID % (expected %)', m.tbl, m.col, r.atttypid, m.toid;
+      END IF;
+      IF r.atttypmod <> m.tmod THEN
+        RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: %.% has typmod % (expected %)', m.tbl, m.col, r.atttypmod, m.tmod;
+      END IF;
       IF r.ftype <> m.typ THEN
         RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: %.% has type % (expected %)', m.tbl, m.col, r.ftype, m.typ;
       END IF;
@@ -211,6 +315,15 @@ BEGIN
       END IF;
       IF r.col_comment IS NOT NULL THEN
         RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: %.% carries a comment', m.tbl, m.col;
+      END IF;
+
+      -- Security labels (all providers). The audited S2 state has none.
+      SELECT count(*) INTO v_cnt FROM pg_seclabel sl
+       WHERE sl.classoid = 'pg_class'::regclass
+         AND sl.objoid = ('public.' || m.tbl)::regclass
+         AND sl.objsubid = r.attnum;
+      IF v_cnt <> 0 THEN
+        RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: %.% carries % security label(s)', m.tbl, m.col, v_cnt;
       END IF;
 
       --------------------------------------------------------------
@@ -323,6 +436,71 @@ BEGIN
       END IF;
     END LOOP;
 
+    ----------------------------------------------------------------
+    -- S2 table-level whole-row and publication guards (once per pass)
+    ----------------------------------------------------------------
+
+    -- (1) Strict publication state: no FOR ALL TABLES publication anywhere,
+    -- and neither target table is a member of any publication (with or
+    -- without a column list). A whole-table publication would stream the
+    -- row shape downstream and must block the drop.
+    SELECT count(*) INTO v_cnt FROM pg_publication WHERE puballtables;
+    IF v_cnt <> 0 THEN
+      RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: % FOR ALL TABLES publication(s) exist; refusing to drop', v_cnt;
+    END IF;
+    FOREACH t IN ARRAY v_tables LOOP
+      SELECT count(*) INTO v_cnt FROM pg_publication_rel pr
+       WHERE pr.prrelid = ('public.' || t)::regclass;
+      IF v_cnt <> 0 THEN
+        RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: public.% is a member of % publication(s); refusing to drop', t, v_cnt;
+      END IF;
+    END LOOP;
+
+    -- (2) Whole-row routine consumers: a function/procedure that references a
+    -- target table and uses a whole-row idiom (%ROWTYPE, SELECT *, to_jsonb/
+    -- row_to_json/json(b)_agg of a whole-row variable, or a row-type result)
+    -- consumes every column — including the ones being dropped — without
+    -- naming them. Scoped to routines that mention a target table.
+    SELECT count(*) INTO v_cnt
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+       AND (p.prosrc ~* '\y(papers|synonym_pool)\y'
+            OR pg_get_function_arguments(p.oid) ~* '\y(papers|synonym_pool)\y'
+            OR pg_get_function_result(p.oid)    ~* '\y(papers|synonym_pool)\y')
+       AND (p.prosrc ~* '(papers|synonym_pool)[[:space:]]*%[[:space:]]*rowtype'
+            OR p.prosrc ~* 'select[[:space:]]+\*[[:space:]]+from[[:space:]]+(public\.)?(papers|synonym_pool)\y'
+            OR p.prosrc ~* '(to_jsonb|to_json|row_to_json|json_agg|jsonb_agg)[[:space:]]*\([[:space:]]*[a-z_][a-z0-9_]*[[:space:]]*\)'
+            OR pg_get_function_result(p.oid) ~* '\y(setof[[:space:]]+)?(public\.)?(papers|synonym_pool)\y');
+    IF v_cnt <> 0 THEN
+      RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: % routine(s) consume a papers/synonym_pool whole row (whole-row-contract drift)', v_cnt;
+    END IF;
+
+    -- (3) Whole-row views / materialized views / rules: a SELECT * or a
+    -- whole-row projection of a target table depends on the full row shape.
+    SELECT count(*) INTO v_cnt
+      FROM pg_rewrite w
+      JOIN pg_class c ON c.oid = w.ev_class
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+       AND c.relkind IN ('v', 'm')
+       AND pg_get_ruledef(w.oid) ~* 'select[[:space:]]+\*[[:space:]]+from[[:space:]]+(public\.)?(papers|synonym_pool)\y';
+    IF v_cnt <> 0 THEN
+      RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: % view/matview(s) select the whole papers/synonym_pool row', v_cnt;
+    END IF;
+
+    -- (4) Composite row-type consumers: anything that references either table's
+    -- composite row type (a column, parameter or object typed `papers`/
+    -- `synonym_pool`) depends on the row shape. Internal/automatic dependencies
+    -- (the tables' own array types) are deptype 'i'/'a' and excluded.
+    SELECT count(*) INTO v_cnt FROM pg_depend d
+     WHERE d.refclassid = 'pg_type'::regclass
+       AND d.refobjid IN (SELECT c.reltype FROM pg_class c
+                          WHERE c.oid IN ('public.papers'::regclass, 'public.synonym_pool'::regclass))
+       AND d.deptype = 'n';
+    IF v_cnt <> 0 THEN
+      RAISE EXCEPTION 'RECON-LEGACY-COLUMNS-001: % object(s) depend on the papers/synonym_pool composite row type', v_cnt;
+    END IF;
+
     -- No function may return either table's row type (whole-row API contract).
     SELECT count(*) INTO v_cnt
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -394,8 +572,10 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Preservation: policies, constraints, indexes, triggers, RLS/owner/ACL and
-  -- every remaining live-column definition are byte-identical to the pre-state.
+  -- Preservation: policies, constraints, indexes, triggers, extended statistics,
+  -- publications, security labels, comments, RLS/owner/ACL and every remaining
+  -- live-column definition are byte-identical to the pre-state. (Identical
+  -- expression to the Phase A capture above.)
   FOREACH t IN ARRAY v_tables LOOP
     SELECT jsonb_build_object(
       'rls', (SELECT c.relrowsecurity::text || '/' || c.relforcerowsecurity::text || '/' ||
@@ -411,10 +591,27 @@ BEGIN
                 FROM pg_indexes WHERE schemaname = 'public' AND tablename = t),
       'trg', (SELECT COALESCE(md5(string_agg(tg.tgname || ':' || pg_get_triggerdef(tg.oid), '|' ORDER BY tg.tgname)), 'none')
                 FROM pg_trigger tg WHERE tg.tgrelid = ('public.' || t)::regclass AND NOT tg.tgisinternal),
-      'cols', (SELECT md5(string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' ||
+      'xstat', (SELECT COALESCE(md5(string_agg(s.stxname || ':' || pg_get_statisticsobjdef(s.oid), '|' ORDER BY s.stxname)), 'none')
+                FROM pg_statistic_ext s WHERE s.stxrelid = ('public.' || t)::regclass),
+      'pub', (SELECT COALESCE(md5(string_agg(z.pubname || ':' || z.attrs, '|' ORDER BY z.pubname, z.attrs)), 'none') FROM (
+                SELECT pub.pubname AS pubname, COALESCE(pr.prattrs::text, 'ALL') AS attrs
+                  FROM pg_publication_rel pr JOIN pg_publication pub ON pub.oid = pr.prpubid
+                 WHERE pr.prrelid = ('public.' || t)::regclass
+                UNION ALL
+                SELECT pub.pubname, 'FOR_ALL_TABLES' FROM pg_publication pub WHERE pub.puballtables
+              ) z),
+      'seclab', (SELECT COALESCE(md5(string_agg(sl.provider || ':' || sl.objsubid::text || ':' || sl.label, '|' ORDER BY sl.provider, sl.objsubid)), 'none')
+                FROM pg_seclabel sl WHERE sl.classoid = 'pg_class'::regclass AND sl.objoid = ('public.' || t)::regclass),
+      'comment', (SELECT COALESCE(obj_description(('public.' || t)::regclass, 'pg_class'), '-')),
+      'cols', (SELECT md5(string_agg(a.attname || ':' || a.atttypid::text || ':' || format_type(a.atttypid, a.atttypmod) || ':' ||
                       a.attnotnull::text || ':' || COALESCE(pg_get_expr(ad.adbin, ad.adrelid), '-') || ':' ||
                       a.attgenerated::text || ':' || a.attidentity::text || ':' ||
-                      a.attcollation::text || ':' || a.attstorage::text, '|' ORDER BY a.attname))
+                      a.attcollation::text || ':' || a.attstorage::text || ':' || COALESCE(a.attcompression::text, '') || ':' ||
+                      COALESCE(a.attstattarget::text, '-') || ':' || COALESCE(a.attacl::text, '-') || ':' ||
+                      COALESCE(col_description(a.attrelid, a.attnum), '-') || ':' ||
+                      (SELECT COALESCE(md5(string_agg(sl.provider || '=' || sl.label, ',' ORDER BY sl.provider)), '-')
+                         FROM pg_seclabel sl WHERE sl.classoid = 'pg_class'::regclass
+                          AND sl.objoid = a.attrelid AND sl.objsubid = a.attnum), '|' ORDER BY a.attname))
                  FROM pg_attribute a
                  LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
                 WHERE a.attrelid = ('public.' || t)::regclass AND a.attnum > 0 AND NOT a.attisdropped)
