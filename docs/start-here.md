@@ -112,7 +112,7 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 
 **Engineering risks:**
 
-- **Schema drift (highest-priority blocker, reconciliation in progress):** production predates the first tracked migration, so a clean replay of the tracked migrations produces a schema that materially differs from production even though the migration ledger fully matches. **RECON-JUNCTIONS-001 and RECON-STATISTICAL-METHODS-001 are complete** — merged, applied remotely (all 62 ledger rows in parity), and verified. The remaining drift (NOT NULL/defaults — in progress via `RECON-INTEGRITY-001` under amended C23 — then legacy columns and papers metadata/index parity) is being worked through the ordered RECON sequence. Generated Supabase types cannot be treated as authoritative until reconciliation completes; reconciliation precedes the TypeScript baseline and CI. Full inventory, owner decisions (C20–C25), and roadmap: [schema-reconciliation.md](schema-reconciliation.md). The audit confirmed RLS policies, security RPCs, and all commercial tables are **in parity** — enforcement is not broken.
+- **Schema drift (highest-priority blocker, reconciliation in progress):** production predates the first tracked migration, so a clean replay of the tracked migrations produces a schema that materially differs from production even though the migration ledger fully matches. **RECON-JUNCTIONS-001, RECON-STATISTICAL-METHODS-001, and RECON-INTEGRITY-001 are complete** — merged, applied remotely, and verified; the aligned ledger holds **63** migrations. The remaining drift — the three empty production-only legacy columns (being removed by `RECON-LEGACY-COLUMNS-001`, the current task, under C21) and then metadata/index parity (`RECON-METADATA-PARITY-001`) — is being worked through the ordered RECON sequence. Generated Supabase types cannot be treated as authoritative until reconciliation completes; reconciliation precedes the TypeScript baseline and CI. Full inventory, owner decisions (C20–C25), and roadmap: [schema-reconciliation.md](schema-reconciliation.md). The audit confirmed RLS policies, security RPCs, and all commercial tables are **in parity** — enforcement is not broken.
 - No CI / no branch protection while `main` auto-deploys (second-highest gap; gated behind reconciliation + TypeScript per C25).
 - E2E runs against the production Supabase project; a staging environment is a pending owner decision.
 - Supabase security advisors (2026-07-17): mutable `search_path` on five functions (incl. `search_papers`); SECURITY DEFINER RPCs executable by `anon` (all are `auth.uid()`-guarded, so unexploited, but the surface is wider than needed); Auth leaked-password protection disabled.
@@ -126,7 +126,7 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 
 ## Current recommended next action
 
-Continue the approved schema-reconciliation sequence: **RECON-JUNCTIONS-001 and RECON-STATISTICAL-METHODS-001 are done** (merged, applied remotely, verified; 62 aligned ledger rows); **RECON-INTEGRITY-001** is the current task (C23 as amended 2026-07-19: twelve NOT NULL constraints plus restoring the `synonym_pool.synonyms` empty-array default). After exact schema parity is restored, resume the TypeScript baseline and then establish CI and branch protection. The full ordered sequence and per-migration rules are in [schema-reconciliation.md](schema-reconciliation.md) (decisions C20–C25).
+Continue the approved schema-reconciliation sequence: **RECON-JUNCTIONS-001, RECON-STATISTICAL-METHODS-001, and RECON-INTEGRITY-001 are done** (merged, applied remotely, verified; 63 aligned ledger rows); **RECON-LEGACY-COLUMNS-001** is the current task (C21: drop the three empty production-only legacy columns — `papers.urls`, `synonym_pool.primary_term`, `synonym_pool.variants` — after re-proving emptiness at deploy time). Then `RECON-METADATA-PARITY-001` closes the remaining metadata/index drift. After exact schema parity is restored, resume the TypeScript baseline and then establish CI and branch protection. The full ordered sequence and per-migration rules are in [schema-reconciliation.md](schema-reconciliation.md) (decisions C20–C25).
 
 ## Authoritative documents
 
@@ -148,8 +148,8 @@ Continue the approved schema-reconciliation sequence: **RECON-JUNCTIONS-001 and 
 
 Keep at most 5 items; remove the oldest when adding.
 
-1. RECON-STATISTICAL-METHODS-001 completed end-to-end (2026-07-18): `papers.statistical_methods` converged to canonical JSON-string storage (PR #153), applied remotely and verified; C23 amended (2026-07-19) to fold the production-missing `synonym_pool.synonyms` default into RECON-INTEGRITY-001.
-2. RECON-JUNCTIONS-001 completed end-to-end (2026-07-18): junction tables converged to composite PKs, migration applied remotely, exact junction parity verified (PR #152).
-3. Read-only schema-reconciliation audit (2026-07-18) proved material production-vs-migrations drift despite full ledger parity; canonical decisions C20–C25 and the reconciliation roadmap recorded in [schema-reconciliation.md](schema-reconciliation.md).
-4. ESLint baseline restored to zero errors (PR #150); lint is now a reliable local gate.
-5. Billing direction pivoted to MoR-first (C17) with **Paddle** selected (C18); implementation blocked on owner-side Paddle setup.
+1. RECON-INTEGRITY-001 completed end-to-end (2026-07-19): twelve NOT NULL constraints enforced and the `synonym_pool.synonyms` empty-array default restored per amended C23 (PR #154), applied remotely and verified; aligned ledger now 63 migrations.
+2. RECON-STATISTICAL-METHODS-001 completed end-to-end (2026-07-18): `papers.statistical_methods` converged to canonical JSON-string storage (PR #153), applied remotely and verified.
+3. RECON-JUNCTIONS-001 completed end-to-end (2026-07-18): junction tables converged to composite PKs, migration applied remotely, exact junction parity verified (PR #152).
+4. Read-only schema-reconciliation audit (2026-07-18) proved material production-vs-migrations drift despite full ledger parity; canonical decisions C20–C25 and the reconciliation roadmap recorded in [schema-reconciliation.md](schema-reconciliation.md).
+5. ESLint baseline restored to zero errors (PR #150); lint is now a reliable local gate.
