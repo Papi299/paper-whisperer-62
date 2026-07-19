@@ -513,6 +513,8 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 
 **Re-evaluation trigger:** system-owned or shared rows are introduced (e.g., global default pools, team libraries) — ownership modeling then changes deliberately, with its own RLS design.
 
+**Addendum (2026-07-19) — `synonym_pool.synonyms` default alignment.** The `RECON-INTEGRITY-001` read-only preflight discovered that production `synonym_pool.synonyms` is `text[]` with **no default**, while the migration-defined schema has carried `DEFAULT '{}'::text[]` since `20260203133100` — a metadata difference the original audit's drift inventory did not record. The owner resolved the resulting blocker by amending C23: `RECON-INTEGRITY-001` also sets exactly this one default (a no-data metadata convergence; no stored value changes) alongside its NOT NULL enforcement. **Deferral to `RECON-METADATA-PARITY-001` was rejected** because enforcing NOT NULL without the default would make local and production behave differently for INSERTs omitting `synonyms` (local fills `{}`, production raises `not_null_violation`) and would leave a type-affecting Insert-optionality difference in place under C25 — exactly the divergence class the reconciliation exists to close. No other default enters C23 scope. Re-evaluation trigger: none — the amendment expires naturally once the migration is applied remotely and verified.
+
 ### C24. Every reconciliation migration is applied remotely
 
 **Decision:** each new migration is applied to a clean local replay *and* to the linked project via the deployment runbook, even when it is structurally a no-op against production.
