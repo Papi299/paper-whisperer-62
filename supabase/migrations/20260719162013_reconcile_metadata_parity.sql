@@ -105,9 +105,11 @@ DECLARE
 
   -- Exact approved public routine inventory (23 routines). Behavioral fingerprint
   -- is environment-independent (required in every state); the full fingerprint
-  -- (adds owner + ACL) is environment-specific, so the live value must equal one
-  -- of the two audited baselines. Any added/removed/changed routine — including
-  -- a changed volatility/secdef/owner/ACL/config with an unchanged body — aborts.
+  -- (adds owner + ACL) is environment-specific, so the live value must equal the
+  -- baseline for the CLASSIFIED starting state — S1 must equal v_routines_full_s1
+  -- and S2 must equal v_routines_full_s2 (the alternate environment's owner/ACL
+  -- fingerprint is rejected). Any added/removed/changed routine — including a
+  -- changed volatility/secdef/owner/ACL/config with an unchanged body — aborts.
   v_routines_count   CONSTANT int  := 23;
   v_routines_beh     CONSTANT text := 'c0c14ef5f3e85c33a5eebec8402fc0db';   -- behavioral (env-independent)
   v_routines_full_s1 CONSTANT text := '1f65886109bf875238c517d764af4c5f';   -- clean local replay
@@ -129,6 +131,7 @@ DECLARE
   v_rt_count int;
   v_rt_beh   text;
   v_rt_full  text;
+  v_expected_rt_full text;
 
   -- preservation captures (pass 2 / under-lock authoritative), re-proved in Phase C
   v_prov_pre  jsonb := '{}'::jsonb;
@@ -347,6 +350,81 @@ BEGIN
       IF v_cnt <> 0 THEN RAISE EXCEPTION 'RECON-METADATA-PARITY-001: public.projects is a member of % publication(s)', v_cnt; END IF;
       SELECT count(*) INTO v_cnt FROM pg_publication WHERE puballtables;
       IF v_cnt <> 0 THEN RAISE EXCEPTION 'RECON-METADATA-PARITY-001: % FOR ALL TABLES publication(s) exist', v_cnt; END IF;
+
+      ----------------------------------------------------------------
+      -- (A2b) Whole-row projects consumers. pg_depend does NOT track column
+      -- references inside SQL / PL-pgSQL string bodies, so this is a precise
+      -- source scan that complements the qualified-reference check above.
+      -- It rejects any routine that binds a COMPLETE projects row to an alias,
+      -- record variable, %ROWTYPE variable, or the bare table name, and then
+      -- projects / serializes / aggregates that whole row — via to_jsonb /
+      -- to_json / row_to_json / json_agg / jsonb_agg / array_agg, a bare
+      -- "SELECT <row>" (incl. RETURN QUERY SELECT <row>), or "RETURN <row>" —
+      -- EVEN when it never names updated_at. Alias correlation keeps it precise:
+      -- a routine that merely mentions projects, uses paper_projects, or
+      -- serializes an unrelated scalar (e.g. merge_exact_duplicates, which uses
+      -- paper_projects and array_agg over scalar subqueries) is NOT matched.
+      DECLARE
+        pr        record;
+        psrc      text;
+        v_aliases text[];
+        v_al      text;
+        v_hit     boolean;
+      BEGIN
+        FOR pr IN
+          SELECT p.proname,
+                 lower(regexp_replace(p.prosrc, '--[^'||chr(10)||']*', ' ', 'g')) AS src
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+           WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+        LOOP
+          psrc := pr.src;
+          -- aliases bound to a full projects row: FROM/JOIN [public.]projects <alias>
+          v_aliases := ARRAY(
+            SELECT DISTINCT mm.arr[1]
+              FROM regexp_matches(psrc,
+                     '(?:from|join)[[:space:]]+(?:public\.)?projects[[:space:]]+(?:as[[:space:]]+)?([a-z_][a-z0-9_]*)', 'g') AS mm(arr)
+             WHERE mm.arr[1] NOT IN ('where','group','order','having','limit','on','using','left','right',
+                                     'inner','outer','full','cross','join','union','returning','set','natural',
+                                     'tablesample','for','loop','where','offset'));
+          -- record variable driven by a whole projects row: FOR <v> IN SELECT * FROM projects
+          v_aliases := v_aliases || ARRAY(
+            SELECT DISTINCT mm.arr[1]
+              FROM regexp_matches(psrc,
+                     'for[[:space:]]+([a-z_][a-z0-9_]*)[[:space:]]+in[[:space:]]+select[[:space:]]+\*[[:space:]]+from[[:space:]]+(?:public\.)?projects\y', 'g') AS mm(arr));
+          -- SELECT * INTO [STRICT] <v> FROM projects
+          v_aliases := v_aliases || ARRAY(
+            SELECT DISTINCT mm.arr[1]
+              FROM regexp_matches(psrc,
+                     'select[[:space:]]+\*[[:space:]]+into[[:space:]]+(?:strict[[:space:]]+)?([a-z_][a-z0-9_]*)[[:space:]]+from[[:space:]]+(?:public\.)?projects\y', 'g') AS mm(arr));
+          -- variable declared as the projects row type: <v> [public.]projects%ROWTYPE
+          v_aliases := v_aliases || ARRAY(
+            SELECT DISTINCT mm.arr[1]
+              FROM regexp_matches(psrc,
+                     '([a-z_][a-z0-9_]*)[[:space:]]+(?:public\.)?projects[[:space:]]*%[[:space:]]*rowtype', 'g') AS mm(arr));
+          -- unqualified whole-row reference: the table name itself is the row value
+          IF psrc ~ '(?:from|join)[[:space:]]+(?:public\.)?projects\y' THEN
+            v_aliases := v_aliases || ARRAY['projects'];
+          END IF;
+
+          v_hit := false;
+          IF v_aliases IS NOT NULL THEN
+            FOREACH v_al IN ARRAY v_aliases LOOP
+              IF v_al IS NULL OR v_al = '' THEN CONTINUE; END IF;
+              -- JSON conversion / row aggregation of the whole row (alias alone in parens)
+              IF psrc ~ ('\y(to_jsonb|to_json|row_to_json|json_agg|jsonb_agg|array_agg)[[:space:]]*\([[:space:]]*'||v_al||'[[:space:]]*\)') THEN v_hit := true; EXIT; END IF;
+              -- bare whole-row projection in a SELECT list ("SELECT <row>" / "SELECT <row> FROM")
+              IF psrc ~ ('\yselect[[:space:]]+'||v_al||'[[:space:]]*(?:,|;|\)|$)') THEN v_hit := true; EXIT; END IF;
+              IF psrc ~ ('\yselect[[:space:]]+'||v_al||'[[:space:]]+from\y') THEN v_hit := true; EXIT; END IF;
+              -- RETURN / RETURN NEXT of a whole-row variable
+              IF psrc ~ ('\yreturn[[:space:]]+(?:next[[:space:]]+)?'||v_al||'[[:space:]]*;') THEN v_hit := true; EXIT; END IF;
+            END LOOP;
+          END IF;
+
+          IF v_hit THEN
+            RAISE EXCEPTION 'RECON-METADATA-PARITY-001: routine %() consumes the projects whole row via an alias/JSON/aggregate idiom without naming updated_at', pr.proname;
+          END IF;
+        END LOOP;
+      END;
     ELSE
       PERFORM 1 FROM pg_trigger tg WHERE tg.tgrelid='public.projects'::regclass AND tg.tgname=v_trg_proj AND NOT tg.tgisinternal;
       IF FOUND THEN RAISE EXCEPTION 'RECON-METADATA-PARITY-001: S2 but update_projects_updated_at present'; END IF;
@@ -441,8 +519,15 @@ BEGIN
     IF v_rt_beh <> v_routines_beh THEN
       RAISE EXCEPTION 'RECON-METADATA-PARITY-001: public routine behavioral inventory drift (a routine was added, removed, or its signature/behavior/body changed)';
     END IF;
-    IF v_rt_full <> v_routines_full_s1 AND v_rt_full <> v_routines_full_s2 THEN
-      RAISE EXCEPTION 'RECON-METADATA-PARITY-001: public routine owner/ACL inventory matches neither audited baseline (a routine owner, ACL, volatility, security-definer or config changed)';
+    -- State-specific: the full owner/ACL fingerprint must equal the baseline for
+    -- the CLASSIFIED starting state, not merely one of the two. This rejects a DB
+    -- that is structurally S1 but carries S2's owner/ACL image (or vice versa).
+    v_expected_rt_full := CASE v_state
+                            WHEN 'S1' THEN v_routines_full_s1
+                            WHEN 'S2' THEN v_routines_full_s2
+                          END;
+    IF v_rt_full <> v_expected_rt_full THEN
+      RAISE EXCEPTION 'RECON-METADATA-PARITY-001: public routine owner/ACL inventory does not match the % baseline (a routine owner, ACL, volatility, security-definer or config changed)', v_state;
     END IF;
 
     ----------------------------------------------------------------
@@ -604,6 +689,10 @@ BEGIN
    WHERE n.nspname='public';
   IF (v_rt_beh||'/'||v_rt_full||'/'||v_rt_count::text) IS DISTINCT FROM (v_prov_pre ->> '_routines') THEN
     RAISE EXCEPTION 'RECON-METADATA-PARITY-001: Phase C — public routine inventory changed';
+  END IF;
+  -- and the full fingerprint still equals the baseline for the classified state
+  IF v_rt_full <> v_expected_rt_full THEN
+    RAISE EXCEPTION 'RECON-METADATA-PARITY-001: Phase C — public routine owner/ACL fingerprint no longer matches the % baseline', v_state;
   END IF;
 
   -- Preserved inventory + row counts + remaining-data fingerprints byte-identical.
