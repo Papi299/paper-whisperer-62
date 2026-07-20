@@ -535,9 +535,9 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 
 **Rationale:** each later stage consumes the previous stage's guarantee; committing types early would need a second regeneration churn after every RECON PR.
 
-**Consequence:** `TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` stay paused until `RECON-METADATA-PARITY-001` verifies parity.
+**Consequence:** ~~`TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` stay paused until `RECON-METADATA-PARITY-001` verifies parity.~~ **Fulfilled (2026-07-20):** `RECON-METADATA-PARITY-001` is applied remotely and parity is verified, and `TYPESCRIPT-BASELINE-001` has regenerated the authoritative types (local/linked semantically identical) and restored `npm run typecheck` to 0 diagnostics. `CI-BASELINE-001` remains the only paused stage and has not started.
 
-**Re-evaluation trigger:** none expected — this is a sequencing rule that expires naturally when reconciliation completes.
+**Re-evaluation trigger:** none expected — this sequencing rule has expired now that reconciliation and the TypeScript baseline are complete; only the CI stage remains.
 
 ### C26. Remaining metadata and index parity (final reconciliation step)
 
@@ -547,6 +547,6 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 
 **Rationale:** these are the last differences between the migration-defined schema and production; resolving them makes generated types authoritative (unblocking C25) while production is mutated only for the `created_at` defaults — a metadata change that alters no stored row. Production is the reference for every other item.
 
-**Consequence:** the migration is local-only until applied remotely under C24; only then do the C25 type-baseline steps begin.
+**Consequence:** ~~the migration is local-only until applied remotely under C24; only then do the C25 type-baseline steps begin.~~ **Fulfilled (2026-07-20):** the migration (`20260719162013`) is merged (PR #156, merge `4f26c85d`) and applied remotely as an S2 convergence (the eight `created_at` defaults → `now()`); the 65-row ledger is aligned and the C25 type-baseline steps have begun and completed.
 
-**Re-evaluation trigger:** none — a one-time convergence that expires once applied remotely and verified. An index later proven to serve a real query path is added by a separate performance migration, not by reopening C26.
+**Re-evaluation trigger:** none — a one-time convergence that has now been applied remotely and verified. An index later proven to serve a real query path is added by a separate performance migration, not by reopening C26.

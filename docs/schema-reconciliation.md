@@ -82,17 +82,17 @@ Rules for **every** migration task below: the migration must replay from a clean
 2. **RECON-STATISTICAL-METHODS-001** — reconcile the column type to `jsonb`; normalize JSON `null`s and arrays per C20; enforce the supported JSON-category invariant via constraint; update the application boundary mapping and tests where required. **✓ Complete (PR #153, applied & verified).**
 3. **RECON-INTEGRITY-001** — NOT NULL enforcement per amended C23 with migration-time zero-null guards, plus restoration of the canonical `synonym_pool.synonyms` empty-array default. **✓ Complete (PR #154, applied & verified).**
 4. **RECON-LEGACY-COLUMNS-001** — repeat aggregate emptiness checks, then drop the three legacy columns per C21. **✓ Complete (PR #155, applied & verified; aligned ledger 64, last `20260719060025`).**
-5. **RECON-METADATA-PARITY-001** — `projects.updated_at`, duplicate-trigger cleanup, `created_at`/`tags.color` defaults, `study_type_pool.created_at` NOT NULL, seven redundant indexes, and the approved `search_vector`/SEC-4 exclusions per C26; ends with exact diff/type parity verification. **◐ Migration `20260719162013_reconcile_metadata_parity.sql` prepared and open for review; local-only, unapplied remotely (deploys under C24 in a later task).**
-6. **Resume TYPESCRIPT-BASELINE-001** — regenerate deterministic schema types; repair the remaining non-schema TypeScript diagnostics; add truthful npm typecheck scripts. Starts only after item 5 is deployed remotely and exact parity is verified.
+5. **RECON-METADATA-PARITY-001** — `projects.updated_at`, duplicate-trigger cleanup, `created_at`/`tags.color` defaults, `study_type_pool.created_at` NOT NULL, seven redundant indexes, and the approved `search_vector`/SEC-4 exclusions per C26; ends with exact diff/type parity verification. **✓ Complete — PR #156 merged (merge `4f26c85d`), migration `20260719162013_reconcile_metadata_parity.sql` applied remotely as an S2 convergence, 65-row ledger aligned, schema and generated-type parity verified.**
+6. **TYPESCRIPT-BASELINE-001** — regenerate the authoritative Supabase types from the reconciled linked schema, prove local/linked type parity, repair the application TypeScript diagnostic baseline (former ~48 → 0) without weakening type safety, and add truthful npm typecheck scripts. **◐ In progress — PR open (branch `baseline/typescript`), not merged; `npm run typecheck` passes with 0 diagnostics (application + Node).**
 7. **Resume CI-BASELINE-001** — lint, real typecheck, Vitest, production build in a required `Validate` workflow; then branch protection.
 
 ## 6. Completion criteria
 
-Schema reconciliation is complete only when all of the following hold:
+Schema reconciliation is **complete** — all criteria below are now satisfied (verified 2026-07-19/20 across RECON-METADATA-PARITY-001 deployment and TYPESCRIPT-BASELINE-001):
 
-- all committed migrations replay cleanly on a fresh local database;
-- local and linked migration ledgers match;
-- schema-only dumps of local and linked show no material drift;
-- generated local and linked public-schema types are semantically identical;
-- any approved benign textual differences (e.g., the `search_vector` wrapper-vs-inline expression) are documented here;
-- no unexplained diff remains.
+- ✓ all committed migrations replay cleanly on a fresh local database (65 migrations);
+- ✓ local and linked migration ledgers match (65 aligned, 0 local-only, 0 remote-only, last `20260719162013`);
+- ✓ schema-only comparison of local and linked shows no material drift;
+- ✓ generated local and linked public-schema types are semantically identical, and the committed `src/integrations/supabase/types.ts` matches the linked output;
+- ✓ the two approved residual differences remain documented and retained: the `search_vector` wrapper-vs-inline generation expression (proven semantically equal) and the Supabase default-grant shadow-database artifact (SEC-4);
+- ✓ no unexplained diff remains.
