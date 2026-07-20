@@ -98,13 +98,24 @@ export interface DuplicatePaperInfo {
   created_at: string;
 }
 
+/** A non-empty set of at least two distinct papers. A duplicate group is only
+ *  meaningful when it holds two or more papers to compare/merge, so the type
+ *  makes that invariant unrepresentable-if-violated: `papers[0]` and `papers[1]`
+ *  are always present. Constructed exclusively by `parseDuplicateGroups`, which
+ *  discards any group that does not reach two distinct valid papers. */
+export type DuplicatePaperSet = [
+  DuplicatePaperInfo,
+  DuplicatePaperInfo,
+  ...DuplicatePaperInfo[],
+];
+
 /** A group of papers sharing the same PMID or DOI, returned by get_duplicate_papers().
  *  `match_type` is "doi" | "pmid" as emitted by the RPC; `mergeOverlappingGroups`
  *  additionally produces "both" when a group matches on both identifiers. */
 export interface DuplicateGroup {
   match_type: "doi" | "pmid" | "both";
   match_value: string;
-  papers: DuplicatePaperInfo[];
+  papers: DuplicatePaperSet;
 }
 
 /** Per-row result from the safe_bulk_insert_papers RPC. */

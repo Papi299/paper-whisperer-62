@@ -1,16 +1,26 @@
 import type { Json } from "@/integrations/supabase/types";
-import type { DuplicateGroup, DuplicatePaperInfo } from "@/types/database";
+import type { DuplicateGroup, DuplicatePaperInfo, DuplicatePaperSet } from "@/types/database";
 
 /**
  * Runtime-validating parser for the `get_duplicate_papers()` RPC result.
  *
  * The RPC returns `jsonb`, which the generated types surface as the opaque
  * `Json` union. This guard narrows that untrusted payload into the strongly
- * typed `DuplicateGroup[]` domain shape at the query boundary, dropping any
- * entry that does not match the expected structure rather than asserting
- * blindly. Malformed rows are skipped so a single bad group can never crash
- * the dedup scan.
+ * typed `DuplicateGroup[]` domain shape at the query boundary. For each raw
+ * group it requires a valid `"doi"`/`"pmid"` `match_type`, a non-empty
+ * (trimmed) `match_value`, and an array of papers; each paper is parsed
+ * through a runtime guard, malformed papers are dropped, papers are
+ * deduplicated by `id` (preserving RPC order), and the **entire group is
+ * discarded unless at least two distinct valid papers remain**. This upholds
+ * the `DuplicatePaperSet` at-least-two invariant, so downstream consumers
+ * (`suggestKeepPaper`, the dedup dialog) can safely access `papers[0]` /
+ * `papers[1]` without optional chaining or placeholder papers.
  */
+
+/** Type guard proving an array holds at least two elements (a `DuplicatePaperSet`). */
+function hasAtLeastTwo(items: DuplicatePaperInfo[]): items is DuplicatePaperSet {
+  return items.length >= 2;
+}
 
 function asStringArray(value: Json | undefined): string[] {
   if (!Array.isArray(value)) return [];
@@ -42,11 +52,24 @@ export function parseDuplicateGroups(data: Json | null): DuplicateGroup[] {
   for (const item of data) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
     const row = item as { [key: string]: Json | undefined };
+    // The raw RPC only ever emits "doi" or "pmid"; "both" is synthesized later
+    // by mergeOverlappingGroups and must not appear in parser input.
     if (row.match_type !== "doi" && row.match_type !== "pmid") continue;
-    if (typeof row.match_value !== "string") continue;
-    const papers = Array.isArray(row.papers)
-      ? row.papers.map(parsePaper).filter((p): p is DuplicatePaperInfo => p !== null)
-      : [];
+    if (typeof row.match_value !== "string" || row.match_value.trim() === "") continue;
+    if (!Array.isArray(row.papers)) continue;
+
+    // Parse, drop malformed papers, then deduplicate by id (RPC order preserved).
+    const seen = new Set<string>();
+    const papers: DuplicatePaperInfo[] = [];
+    for (const rawPaper of row.papers) {
+      const paper = parsePaper(rawPaper);
+      if (paper === null || seen.has(paper.id)) continue;
+      seen.add(paper.id);
+      papers.push(paper);
+    }
+
+    // A group is meaningful only with at least two distinct valid papers.
+    if (!hasAtLeastTwo(papers)) continue;
     groups.push({ match_type: row.match_type, match_value: row.match_value, papers });
   }
   return groups;

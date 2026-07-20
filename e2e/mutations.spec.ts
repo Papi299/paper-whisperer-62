@@ -186,33 +186,29 @@ test.describe("Mutation persistence regression", () => {
     await waitForDashboard(page);
     await page.waitForTimeout(2_000);
 
-    // Open Edit on the first paper again
+    // Re-open Edit on the same (first) paper that received the assignment in the
+    // prior test. This is a real reload — the dialog reflects persisted server state.
     const firstRow = page.locator("tbody tr").first();
     await firstRow.getByRole("button", { name: /edit/i }).click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-
-    // The dialog should show our test project and tag as selected
-    // They appear as badges in the edit dialog
     const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
 
-    // Check project is assigned (badge text should be visible)
-    const projectBadge = dialog.getByText(TEST_PROJECT);
-    const projectVisible = await projectBadge.isVisible({ timeout: 3_000 }).catch(() => false);
+    // Mandatory persistence assertions, scoped to the edited paper's dialog.
+    // Each *selected* project/tag renders a per-badge remove button whose
+    // aria-label embeds the exact name (EditPaperDialog.tsx) — these controls
+    // exist only for assigned items, so this is a definitive assignment proof
+    // and the same stable representation the cleanup test drives. A missing
+    // project or tag now FAILS the test instead of passing silently.
+    await expect(
+      dialog.getByRole("button", { name: `Remove project "${TEST_PROJECT}"` }),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(
+      dialog.getByRole("button", { name: `Remove tag "${TEST_TAG}"` }),
+    ).toBeVisible({ timeout: 5_000 });
 
-    // Check tag is assigned
-    const tagBadge = dialog.getByText(TEST_TAG);
-    const tagVisible = await tagBadge.isVisible({ timeout: 3_000 }).catch(() => false);
-
-    // At least verify the dialog opened; assignment may be shown differently
-    // Close dialog for cleanup
+    // Close the dialog without mutating anything.
     await page.keyboard.press("Escape");
-
-    // If the badges weren't found, check if the assignment is visible in the table row instead
-    if (!projectVisible || !tagVisible) {
-      // Some UIs show tags directly in the row
-      const rowText = await firstRow.textContent();
-      // This is informational — the assignment was made in a prior test
-    }
+    await expect(dialog).not.toBeVisible({ timeout: 5_000 });
   });
 
   test("should clean up: remove assignments, delete project and tag", async ({ page }) => {

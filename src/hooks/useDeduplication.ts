@@ -11,8 +11,12 @@ import { parseDuplicateGroups } from "@/lib/parseDuplicateGroups";
  * E.g. if a pair of papers matches on BOTH DOI and PMID, they appear in two
  * separate groups from the RPC — this function consolidates them into one
  * group with match_type "both".
+ *
+ * Exported for focused testing; each input group already satisfies the
+ * at-least-two `DuplicatePaperSet` invariant (from `parseDuplicateGroups`),
+ * and merging only ever adds distinct papers, so the invariant is preserved.
  */
-function mergeOverlappingGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
+export function mergeOverlappingGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
   if (groups.length === 0) return [];
 
   // Build a union-find structure based on paper IDs
