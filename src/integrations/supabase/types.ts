@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.4"
   }
   public: {
     Tables: {
@@ -83,22 +83,57 @@ export type Database = {
         }
         Relationships: []
       }
-      paper_projects: {
+      paper_attachments: {
         Row: {
           created_at: string
+          file_name: string
+          file_path: string
+          file_type: string
           id: string
+          paper_id: string
+          size_bytes: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          file_name: string
+          file_path: string
+          file_type: string
+          id?: string
+          paper_id: string
+          size_bytes: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          file_name?: string
+          file_path?: string
+          file_type?: string
+          id?: string
+          paper_id?: string
+          size_bytes?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "paper_attachments_paper_id_fkey"
+            columns: ["paper_id"]
+            isOneToOne: false
+            referencedRelation: "papers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      paper_projects: {
+        Row: {
           paper_id: string
           project_id: string
         }
         Insert: {
-          created_at?: string
-          id?: string
           paper_id: string
           project_id: string
         }
         Update: {
-          created_at?: string
-          id?: string
           paper_id?: string
           project_id?: string
         }
@@ -121,20 +156,14 @@ export type Database = {
       }
       paper_tags: {
         Row: {
-          created_at: string
-          id: string
           paper_id: string
           tag_id: string
         }
         Insert: {
-          created_at?: string
-          id?: string
           paper_id: string
           tag_id: string
         }
         Update: {
-          created_at?: string
-          id?: string
           paper_id?: string
           tag_id?: string
         }
@@ -158,70 +187,84 @@ export type Database = {
       papers: {
         Row: {
           abstract: string | null
-          authors: string[] | null
+          authors: Json | null
           created_at: string
           doi: string | null
           drive_url: string | null
-          has_abstract: boolean
+          has_abstract: boolean | null
           id: string
+          insert_order: number
           journal: string | null
           journal_url: string | null
-          keywords: string[] | null
-          mesh_terms: string[] | null
+          keywords: Json | null
+          mesh_terms: Json | null
+          notes: string | null
           pmid: string | null
           pubmed_url: string | null
-          raw_keywords: string[] | null
+          raw_keywords: Json | null
           raw_study_type: string | null
-          statistical_methods: string | null
+          search_vector: unknown
+          statistical_methods: Json | null
           study_type: string | null
-          substances: string[] | null
+          substances: Json | null
           title: string
+          tldr: string | null
           updated_at: string
           user_id: string
           year: number | null
         }
         Insert: {
           abstract?: string | null
-          authors?: string[] | null
+          authors?: Json | null
           created_at?: string
           doi?: string | null
           drive_url?: string | null
+          has_abstract?: boolean | null
           id?: string
+          insert_order?: number
           journal?: string | null
           journal_url?: string | null
-          keywords?: string[] | null
-          mesh_terms?: string[] | null
+          keywords?: Json | null
+          mesh_terms?: Json | null
+          notes?: string | null
           pmid?: string | null
           pubmed_url?: string | null
-          raw_keywords?: string[] | null
+          raw_keywords?: Json | null
           raw_study_type?: string | null
-          statistical_methods?: string | null
+          search_vector?: unknown
+          statistical_methods?: Json | null
           study_type?: string | null
-          substances?: string[] | null
+          substances?: Json | null
           title: string
+          tldr?: string | null
           updated_at?: string
           user_id: string
           year?: number | null
         }
         Update: {
           abstract?: string | null
-          authors?: string[] | null
+          authors?: Json | null
           created_at?: string
           doi?: string | null
           drive_url?: string | null
+          has_abstract?: boolean | null
           id?: string
+          insert_order?: number
           journal?: string | null
           journal_url?: string | null
-          keywords?: string[] | null
-          mesh_terms?: string[] | null
+          keywords?: Json | null
+          mesh_terms?: Json | null
+          notes?: string | null
           pmid?: string | null
           pubmed_url?: string | null
-          raw_keywords?: string[] | null
+          raw_keywords?: Json | null
           raw_study_type?: string | null
-          statistical_methods?: string | null
+          search_vector?: unknown
+          statistical_methods?: Json | null
           study_type?: string | null
-          substances?: string[] | null
+          substances?: Json | null
           title?: string
+          tldr?: string | null
           updated_at?: string
           user_id?: string
           year?: number | null
@@ -265,7 +308,6 @@ export type Database = {
           description: string | null
           id: string
           name: string
-          updated_at: string
           user_id: string
         }
         Insert: {
@@ -274,7 +316,6 @@ export type Database = {
           description?: string | null
           id?: string
           name: string
-          updated_at?: string
           user_id: string
         }
         Update: {
@@ -283,7 +324,6 @@ export type Database = {
           description?: string | null
           id?: string
           name?: string
-          updated_at?: string
           user_id?: string
         }
         Relationships: []
@@ -311,7 +351,7 @@ export type Database = {
       }
       study_type_pool: {
         Row: {
-          created_at: string | null
+          created_at: string
           group_name: string | null
           hierarchy_rank: number
           id: string
@@ -320,7 +360,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
-          created_at?: string | null
+          created_at?: string
           group_name?: string | null
           hierarchy_rank?: number
           id?: string
@@ -329,13 +369,120 @@ export type Database = {
           user_id: string
         }
         Update: {
-          created_at?: string | null
+          created_at?: string
           group_name?: string | null
           hierarchy_rank?: number
           id?: string
           specificity_weight?: number
           study_type?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      subscription_events: {
+        Row: {
+          created_at: string
+          event_type: string
+          id: string
+          metadata: Json
+          payload: Json
+          processed_at: string | null
+          provider: string
+          provider_event_id: string
+          subscription_id: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_type: string
+          id?: string
+          metadata?: Json
+          payload: Json
+          processed_at?: string | null
+          provider: string
+          provider_event_id: string
+          subscription_id?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_type?: string
+          id?: string
+          metadata?: Json
+          payload?: Json
+          processed_at?: string | null
+          provider?: string
+          provider_event_id?: string
+          subscription_id?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subscription_events_subscription_id_fkey"
+            columns: ["subscription_id"]
+            isOneToOne: false
+            referencedRelation: "subscriptions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      subscriptions: {
+        Row: {
+          cancel_at_period_end: boolean
+          canceled_at: string | null
+          created_at: string
+          current_period_end: string | null
+          current_period_start: string | null
+          id: string
+          metadata: Json
+          plan: string | null
+          provider: string
+          provider_customer_id: string | null
+          provider_price_id: string | null
+          provider_product_id: string | null
+          provider_subscription_id: string | null
+          quantity: number
+          status: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          cancel_at_period_end?: boolean
+          canceled_at?: string | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          metadata?: Json
+          plan?: string | null
+          provider: string
+          provider_customer_id?: string | null
+          provider_price_id?: string | null
+          provider_product_id?: string | null
+          provider_subscription_id?: string | null
+          quantity?: number
+          status: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          cancel_at_period_end?: boolean
+          canceled_at?: string | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          metadata?: Json
+          plan?: string | null
+          provider?: string
+          provider_customer_id?: string | null
+          provider_price_id?: string | null
+          provider_product_id?: string | null
+          provider_subscription_id?: string | null
+          quantity?: number
+          status?: string
+          updated_at?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -387,78 +534,283 @@ export type Database = {
         }
         Relationships: []
       }
+      usage_counters: {
+        Row: {
+          created_at: string
+          feature: string
+          id: string
+          metadata: Json
+          period_end: string | null
+          period_start: string
+          period_type: string
+          reserved: number
+          updated_at: string
+          used: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          feature: string
+          id?: string
+          metadata?: Json
+          period_end?: string | null
+          period_start: string
+          period_type: string
+          reserved?: number
+          updated_at?: string
+          used?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          feature?: string
+          id?: string
+          metadata?: Json
+          period_end?: string | null
+          period_start?: string
+          period_type?: string
+          reserved?: number
+          updated_at?: string
+          used?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      usage_credits: {
+        Row: {
+          created_at: string
+          expires_at: string | null
+          feature: string
+          id: string
+          metadata: Json
+          provider: string | null
+          provider_reference_id: string | null
+          quantity_granted: number
+          quantity_remaining: number
+          source: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string | null
+          feature?: string
+          id?: string
+          metadata?: Json
+          provider?: string | null
+          provider_reference_id?: string | null
+          quantity_granted: number
+          quantity_remaining: number
+          source: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string | null
+          feature?: string
+          id?: string
+          metadata?: Json
+          provider?: string | null
+          provider_reference_id?: string | null
+          quantity_granted?: number
+          quantity_remaining?: number
+          source?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_entitlements: {
+        Row: {
+          ai_lifetime_quota: number
+          ai_monthly_quota: number
+          billing_customer_id: string | null
+          billing_provider: string | null
+          billing_subscription_id: string | null
+          created_at: string
+          current_period_end: string | null
+          current_period_start: string | null
+          id: string
+          labs_team_enabled: boolean
+          metadata: Json
+          paper_limit: number
+          plan: string
+          plan_status: string
+          premium_taxonomy_enabled: boolean
+          storage_quota_bytes: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          ai_lifetime_quota?: number
+          ai_monthly_quota?: number
+          billing_customer_id?: string | null
+          billing_provider?: string | null
+          billing_subscription_id?: string | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          labs_team_enabled?: boolean
+          metadata?: Json
+          paper_limit?: number
+          plan?: string
+          plan_status?: string
+          premium_taxonomy_enabled?: boolean
+          storage_quota_bytes?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          ai_lifetime_quota?: number
+          ai_monthly_quota?: number
+          billing_customer_id?: string | null
+          billing_provider?: string | null
+          billing_subscription_id?: string | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          labs_team_enabled?: boolean
+          metadata?: Json
+          paper_limit?: number
+          plan?: string
+          plan_status?: string
+          premium_taxonomy_enabled?: boolean
+          storage_quota_bytes?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_storage_usage: {
+        Row: {
+          created_at: string
+          updated_at: string
+          used_bytes: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          updated_at?: string
+          used_bytes?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          updated_at?: string
+          used_bytes?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      safe_bulk_insert_papers: {
-        Args: {
-          p_user_id: string
-          p_papers: Json
-        }
-        Returns: Json
-      }
       bulk_set_paper_projects: {
-        Args: {
-          p_paper_ids: string[]
-          p_project_ids: string[]
-        }
+        Args: { p_paper_ids: string[]; p_project_ids: string[] }
         Returns: undefined
       }
       bulk_set_paper_tags: {
-        Args: {
-          p_paper_ids: string[]
-          p_tag_ids: string[]
-        }
+        Args: { p_paper_ids: string[]; p_tag_ids: string[] }
         Returns: undefined
       }
-      set_paper_projects: {
-        Args: {
-          p_paper_id: string
-          p_project_ids: string[]
-        }
-        Returns: undefined
-      }
-      set_paper_tags: {
-        Args: {
-          p_paper_id: string
-          p_tag_ids: string[]
-        }
-        Returns: undefined
-      }
-      bulk_update_study_types: {
-        Args: {
-          updates: Json
-        }
-        Returns: Json
-      }
-      bulk_update_keywords: {
-        Args: {
-          updates: Json
-        }
-        Returns: undefined
+      bulk_update_keywords: { Args: { updates: Json }; Returns: undefined }
+      bulk_update_study_types: { Args: { updates: Json }; Returns: undefined }
+      consume_ai_quota: {
+        Args: { p_user_id: string }
+        Returns: {
+          allowed: boolean
+          period_type: string
+          plan: string
+          quota: number
+          reason: string
+          remaining: number
+          reset_at: string
+          used: number
+        }[]
       }
       filter_papers_by_keywords: {
-        Args: {
-          p_user_id: string
-          p_keywords: string[]
-        }
+        Args: { p_keywords: string[]; p_user_id: string }
         Returns: {
           paper_id: string
         }[]
       }
+      get_duplicate_papers: { Args: never; Returns: Json }
       get_keyword_options: {
         Args: {
+          p_paper_ids?: string[]
+          p_study_types?: string[]
           p_user_id: string
-          p_paper_ids?: string[] | null
-          p_year_from?: number | null
-          p_year_to?: number | null
-          p_study_types?: string[] | null
+          p_year_from?: number
+          p_year_to?: number
         }
         Returns: {
           keyword: string
         }[]
+      }
+      immutable_english_tsvector_jsonb: { Args: { j: Json }; Returns: unknown }
+      immutable_english_tsvector_text: { Args: { t: string }; Returns: unknown }
+      immutable_english_tsvector_textarr: {
+        Args: { arr: string[] }
+        Returns: unknown
+      }
+      merge_exact_duplicates: {
+        Args: { p_discard_ids: string[]; p_keep_id: string }
+        Returns: undefined
+      }
+      refund_ai_quota: {
+        Args: { p_user_id: string }
+        Returns: {
+          period_type: string
+          refunded: boolean
+          used: number
+        }[]
+      }
+      safe_bulk_insert_papers: {
+        Args: { p_papers: Json; p_user_id: string }
+        Returns: Json
+      }
+      search_papers: {
+        Args: {
+          p_limit?: number
+          p_offset?: number
+          p_query: string
+          p_user_id: string
+        }
+        Returns: {
+          matched_abstract: boolean
+          matched_authors: boolean
+          matched_journal: boolean
+          matched_keywords: boolean
+          matched_notes: boolean
+          matched_title: boolean
+          paper_id: string
+          rank: number
+        }[]
+      }
+      search_papers_short: {
+        Args: { p_query: string; p_user_id: string }
+        Returns: {
+          matched_abstract: boolean
+          matched_authors: boolean
+          matched_journal: boolean
+          matched_keywords: boolean
+          matched_notes: boolean
+          matched_title: boolean
+          paper_id: string
+        }[]
+      }
+      set_paper_projects: {
+        Args: { p_paper_id: string; p_project_ids: string[] }
+        Returns: undefined
+      }
+      set_paper_tags: {
+        Args: { p_paper_id: string; p_tag_ids: string[] }
+        Returns: undefined
       }
     }
     Enums: {
