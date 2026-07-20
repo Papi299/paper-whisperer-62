@@ -38,8 +38,8 @@ export interface PoolsContextValue {
     id: string,
     updates: Partial<Pick<PoolStudyType, "study_type" | "group_name" | "hierarchy_rank">>
   ) => Promise<void>;
-  deleteStudyType: (id: string) => void;
-  deleteAllStudyTypes: () => void;
+  deleteStudyType: (id: string) => Promise<void>;
+  deleteAllStudyTypes: () => Promise<void>;
   renameGroup: (oldName: string, newName: string, newRank?: number) => Promise<void>;
   deleteGroup: (groupName: string) => Promise<void>;
 

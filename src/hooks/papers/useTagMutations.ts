@@ -3,15 +3,21 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tag } from "@/types/database";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
+import type { ServerFilterParams, ServerSortParams } from "./types";
 
-export function useTagMutations(userId: string | undefined, tags: Tag[]) {
+export function useTagMutations(
+  userId: string | undefined,
+  tags: Tag[],
+  serverFilterParams: ServerFilterParams,
+  serverSortParams: ServerSortParams,
+) {
   const {
     snapshotCache,
     rollbackCache,
     cancelQueries,
     updatePapersCache,
     updateMetaCache,
-  } = usePaperCacheHelpers(userId);
+  } = usePaperCacheHelpers(userId, serverFilterParams, serverSortParams);
   const { toast } = useToast();
 
   const createTag = useCallback(

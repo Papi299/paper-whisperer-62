@@ -55,7 +55,7 @@ import {
  * condition and the parent's submit handler re-validates anyway).
  */
 interface PresetNameFormProps {
-  inputRef: React.RefObject<HTMLInputElement | null>;
+  inputRef: React.RefObject<HTMLInputElement>;
   value: string;
   onChange: (next: string) => void;
   placeholder?: string;

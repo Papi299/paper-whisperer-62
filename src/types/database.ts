@@ -98,9 +98,11 @@ export interface DuplicatePaperInfo {
   created_at: string;
 }
 
-/** A group of papers sharing the same PMID or DOI, returned by get_duplicate_papers(). */
+/** A group of papers sharing the same PMID or DOI, returned by get_duplicate_papers().
+ *  `match_type` is "doi" | "pmid" as emitted by the RPC; `mergeOverlappingGroups`
+ *  additionally produces "both" when a group matches on both identifiers. */
 export interface DuplicateGroup {
-  match_type: "doi" | "pmid";
+  match_type: "doi" | "pmid" | "both";
   match_value: string;
   papers: DuplicatePaperInfo[];
 }

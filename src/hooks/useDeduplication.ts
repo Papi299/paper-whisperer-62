@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { DuplicateGroup, DuplicatePaperInfo } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
 import { queryKeys } from "@/lib/queryKeys";
+import { parseDuplicateGroups } from "@/lib/parseDuplicateGroups";
 
 /**
  * Merges duplicate groups that share overlapping paper IDs.
@@ -44,7 +45,7 @@ function mergeOverlappingGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
 
       // Update match_type to indicate both identifiers matched
       if (existing.match_type !== group.match_type) {
-        (existing as DuplicateGroup & { match_type: string }).match_type = "both";
+        existing.match_type = "both";
       }
 
       // Update index for all papers
@@ -127,7 +128,7 @@ export function useDeduplication(userId: string | undefined) {
         return;
       }
 
-      const rawGroups: DuplicateGroup[] = (data as DuplicateGroup[]) || [];
+      const rawGroups = parseDuplicateGroups(data);
       const merged = mergeOverlappingGroups(rawGroups);
       setDuplicateGroups(merged);
     } catch (err) {

@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
+import { Paper, PaperAttachment, PaperWithTags, Project, Tag } from "@/types/database";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { queryKeys } from "@/lib/queryKeys";
 import { buildPapersQuery, buildPapersCountQuery } from "@/lib/buildPapersQuery";
@@ -22,6 +22,8 @@ const PAGE_SIZE = 100;
  *  string, or array) until the C20 reconciliation migration reaches production. */
 type RawPaperRow = Omit<Paper, "statistical_methods"> & {
   statistical_methods: unknown;
+  /** Nested rows from the `paper_attachments(...)` embed in the select. */
+  paper_attachments?: PaperAttachment[];
 };
 
 export function usePapers(
@@ -84,7 +86,7 @@ export function usePapers(
       if (papersError) throw papersError;
 
       const rawRows = (papersData as unknown as RawPaperRow[]) || [];
-      const rawPapers: Paper[] = rawRows.map((row) => ({
+      const rawPapers = rawRows.map((row) => ({
         ...row,
         statistical_methods: normalizeStatisticalMethodsForDomain(row.statistical_methods),
       }));
@@ -119,9 +121,7 @@ export function usePapers(
           ...paper,
           tagIds,
           projectIds,
-          paper_attachments: (paper as Record<string, unknown>).paper_attachments as
-            | { id: string; file_name: string; file_path: string; file_type: string }[]
-            | undefined,
+          paper_attachments: paper.paper_attachments,
         };
       });
 
@@ -241,12 +241,15 @@ export function usePapers(
       if (filterPaperIds !== null && filterPaperIds !== undefined && filterPaperIds.length === 0) {
         return [];
       }
+      // These RPC args default to NULL server-side. The generated types make
+      // them optional (`?: T`), so omit them via `?? undefined` (JSON-dropped)
+      // rather than passing `null` — the DB default yields the same SQL NULL.
       const { data, error } = await supabase.rpc("get_keyword_options", {
         p_user_id: userId!,
-        p_paper_ids: filterPaperIds ?? null,
-        p_year_from: yearFrom ?? null,
-        p_year_to: yearTo ?? null,
-        p_study_types: studyTypes ?? null,
+        p_paper_ids: filterPaperIds ?? undefined,
+        p_year_from: yearFrom ?? undefined,
+        p_year_to: yearTo ?? undefined,
+        p_study_types: studyTypes ?? undefined,
       });
       if (error) throw error;
       return (data as { keyword: string }[]).map((r) => r.keyword);
@@ -292,8 +295,8 @@ export function usePapers(
   const { updatePapersCache, invalidateAndRefetch } = usePaperCacheHelpers(userId, serverFilterParams, serverSortParams);
 
   // ── Taxonomy mutations ──
-  const { createProject, updateProject, deleteProject } = useProjectMutations(userId, projects);
-  const { createTag, updateTag, deleteTag } = useTagMutations(userId, tags);
+  const { createProject, updateProject, deleteProject } = useProjectMutations(userId, projects, serverFilterParams, serverSortParams);
+  const { createTag, updateTag, deleteTag } = useTagMutations(userId, tags, serverFilterParams, serverSortParams);
 
   // ── Paper mutations ──
   const { addPaperManually, updatePaper, deletePaper } = usePaperMutations(userId, papers, projects, tags, normalizationConfig, serverFilterParams, serverSortParams);

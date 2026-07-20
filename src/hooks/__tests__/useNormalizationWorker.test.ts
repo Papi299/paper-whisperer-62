@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 // ── Mock normalizePaperData (main-thread fallback) ───────────────────
-const mockNormalizePaperData = vi.fn((raw: unknown) => raw);
+const mockNormalizePaperData = vi.fn((...args: unknown[]) => args[0]);
 vi.mock("@/lib/normalizePaperData", () => ({
   normalizePaperData: (...args: unknown[]) => mockNormalizePaperData(...args),
 }));
@@ -28,6 +28,7 @@ vi.stubGlobal("Worker", MockWorker);
 
 // ── Import after mocks ──────────────────────────────────────────────
 import { useNormalizationWorker } from "../useNormalizationWorker";
+import type { NormalizationConfig } from "@/lib/normalizePaperData";
 
 // ── Test helpers ────────────────────────────────────────────────────
 function makeRawPaper(title: string) {
@@ -49,12 +50,11 @@ function makeRawPaper(title: string) {
   };
 }
 
-const dummyConfig = {
-  keywordPool: [],
-  synonymPool: [],
-  exclusionPool: [],
-  studyTypePool: [],
-  studyTypeExclusionPool: [],
+const dummyConfig: NormalizationConfig = {
+  synonymLookup: {},
+  poolStudyTypes: [],
+  poolKeywords: [],
+  synonymGroups: [],
 };
 
 describe("useNormalizationWorker", () => {
