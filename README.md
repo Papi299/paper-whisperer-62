@@ -149,10 +149,13 @@ For the full deployment runbook — including pre-merge / pre-deploy / migration
 ## Testing
 
 ```sh
+npm run typecheck            # TypeScript (application + Node projects; 0 diagnostics)
 npx vitest run               # Unit / integration tests
 npx playwright test          # E2E tests (Chromium, single-worker serial)
 npx playwright test --ui     # Interactive test runner
 ```
+
+> Use `npm run typecheck` (not a bare `tsc --noEmit`): the root `tsconfig.json` has an empty file set, so it delegates to the `tsconfig.app.json` and `tsconfig.node.json` project references that the script checks.
 
 E2E auth credentials are in `.env.test` (dedicated test account). The Playwright suite covers the read path, filters, paper import/order, bulk actions, attachments, mutations, saved searches / filter presets (`e2e/filter-presets.spec.ts`), notes (`e2e/notes.spec.ts`), and the server-driven `Matched in:` search-attribution UI for all six sources (`e2e/search-attribution.spec.ts`).
 

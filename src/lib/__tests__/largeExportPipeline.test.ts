@@ -59,7 +59,7 @@ describe("large export pipeline (>1000 rows)", () => {
     }));
 
     // ── Step 1: fetchAllPages for papers ──
-    const fetchedPapers = await fetchAllPages(
+    const fetchedPapers = await fetchAllPages<(typeof allPapers)[number]>(
       () => ({
         range: async (from: number, to: number) => ({
           data: allPapers.slice(from, to + 1),

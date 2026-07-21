@@ -1,4 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
+import type { Database } from "@/integrations/supabase/types";
+
+type PublicTable = keyof Database["public"]["Tables"];
 
 /**
  * Fetch rows from a table where a column matches any ID in a large array,
@@ -14,7 +17,7 @@ import { supabase } from "@/integrations/supabase/client";
  * @param chunkSize Number of IDs per batch (default 500)
  */
 export async function fetchInChunks<T>(
-  table: string,
+  table: PublicTable,
   select: string,
   filterColumn: string,
   ids: string[],
@@ -24,12 +27,15 @@ export async function fetchInChunks<T>(
   const allRows: T[] = [];
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize);
-    const { data, error } = await supabase
+    // The dynamic select string erases PostgREST's row inference, so the result
+    // is typed at this boundary: `data` is `unknown` and the caller supplies the
+    // runtime row shape via `T`. `PostgrestError` satisfies `Error`.
+    const { data, error }: { data: unknown; error: Error | null } = await supabase
       .from(table)
       .select(select)
       .in(filterColumn, chunk);
     if (error) throw error;
-    allRows.push(...((data as T[]) || []));
+    allRows.push(...((data as T[] | null) ?? []));
   }
   return allRows;
 }

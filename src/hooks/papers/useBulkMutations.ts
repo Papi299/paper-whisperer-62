@@ -130,7 +130,7 @@ export function useBulkMutations(
       const CHUNK_SIZE = 50;
       const { results: allRpcResults, lastError } = await processChunkedInsert(
         insertPayload,
-        (chunk) => supabase.rpc("safe_bulk_insert_papers", {
+        async (chunk) => supabase.rpc("safe_bulk_insert_papers", {
           p_user_id: userId,
           p_papers: chunk as unknown as Json,
         }),
@@ -283,7 +283,7 @@ export function useBulkMutations(
       const CHUNK_SIZE = 50;
       const { results: allRpcResults, lastError } = await processChunkedInsert(
         insertPayload,
-        (chunk) => supabase.rpc("safe_bulk_insert_papers", {
+        async (chunk) => supabase.rpc("safe_bulk_insert_papers", {
           p_user_id: userId,
           p_papers: chunk as unknown as Json,
         }),
@@ -559,9 +559,12 @@ export function useBulkMutations(
       if (!userId) return;
 
       // 1. Fetch ALL papers (safe pagination via fetchAllPages)
-      let allPapers: { id: string; raw_keywords: string[] | null; title: string; abstract: string | null; keywords: string[] }[];
+      type ReevalKeywordRow = { id: string; raw_keywords: string[] | null; title: string; abstract: string | null; keywords: string[] };
+      let allPapers: ReevalKeywordRow[];
       try {
-        allPapers = await fetchAllPages(() =>
+        // jsonb array columns (raw_keywords, keywords) deserialize to string[] at
+        // runtime; `fetchAllPages<ReevalKeywordRow>` asserts that shape at the boundary.
+        allPapers = await fetchAllPages<ReevalKeywordRow>(() =>
           supabase
             .from("papers")
             .select("id, raw_keywords, title, abstract, keywords")

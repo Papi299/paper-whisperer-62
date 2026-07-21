@@ -97,7 +97,10 @@ export function buildAnalysisUpdates(
 ): { updates: AnalysisUpdates; keptStudyType: boolean } {
   const updates: AnalysisUpdates = {
     tldr: aiData.tldr || paper.tldr,
-    study_type: resolveStudyTypeAfterAnalysis(paper.study_type, aiData.studyType),
+    // `paper.study_type` is `string | null` here, so the resolver never returns
+    // `undefined`; `?? null` collapses the resolver's wider `| undefined` return
+    // to the field's `string | null` without altering runtime behavior.
+    study_type: resolveStudyTypeAfterAnalysis(paper.study_type, aiData.studyType) ?? null,
     statistical_methods: aiData.statisticalMethods || paper.statistical_methods,
   };
   const keptStudyType = Boolean(

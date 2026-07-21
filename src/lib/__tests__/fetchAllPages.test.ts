@@ -26,7 +26,7 @@ describe("fetchAllPages", () => {
       },
     });
 
-    const result = await fetchAllPages(buildQuery, 1000);
+    const result = await fetchAllPages<{ id: string }>(buildQuery, 1000);
     expect(result).toHaveLength(2500);
     expect(callCount).toBe(3);
     // Verify order preserved
@@ -107,7 +107,7 @@ describe("fetchAllPages", () => {
       },
     });
 
-    const result = await fetchAllPages(buildQuery, 1000);
+    const result = await fetchAllPages<{ id: string; title: string }>(buildQuery, 1000);
     expect(result).toHaveLength(totalPapers);
     // Verify no data loss — first, middle, and last rows present
     expect(result[0].id).toBe("paper-0");

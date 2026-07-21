@@ -121,8 +121,14 @@ const userId = "user-1";
 const emptyPapers: PaperWithTags[] = [];
 const emptyProjects: Project[] = [];
 const emptyTags: Tag[] = [];
-const emptyFilters: ServerFilterParams = {};
-const emptySort: ServerSortParams = { column: "created_at", direction: "desc" };
+const emptyFilters: ServerFilterParams = {
+  filterPaperIds: null,
+  yearFrom: null,
+  yearTo: null,
+  studyTypes: null,
+  notesPresence: "all",
+};
+const emptySort: ServerSortParams = { sortColumn: null, sortAscending: null };
 
 function renderBulkHook() {
   return renderHook(() =>
