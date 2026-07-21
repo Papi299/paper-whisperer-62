@@ -80,7 +80,7 @@ Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_sh
 
 Before clicking **Merge** on the PR:
 
-- [ ] CI / PR checks are green (or the failures are acknowledged and triaged in the PR description).
+- [ ] **The required `Validate` GitHub Actions check is green on the PR's latest head.** `main` is protected to require it: the `.github/workflows/validate.yml` workflow (`npm ci`, lint, `npm run typecheck`, Vitest, production build on Node 22) must pass before the **Merge** button is enabled — a PR cannot be merged while it is pending or failing, and pushing a new commit re-runs it against the new head under strict/up-to-date mode. This required check — **not** operator-attested local validation — is the authoritative merge gate. Playwright is deliberately **not** part of it (production-backed E2E, no isolated staging); run it locally when UI behavior changes. Zero human approvals are required, but unresolved PR conversations block the merge.
 - [ ] PR scope matches the title and description — no surprise migration, no surprise Edge Function change, no commercial-doc edit smuggled in.
 - [ ] Docs are updated alongside the change, per [`docs/documentation-policy.md`](documentation-policy.md). The PR report ends with a "Documentation updates" section.
 - [ ] **If the PR adds a migration:**
@@ -102,7 +102,7 @@ Before clicking **Merge** on the PR:
 
 ## 5. Pre-deploy local checks
 
-Run these from the project root on the merged `main` (after `git pull --ff-only origin main`):
+These are **pre-deploy** checks on the merged `main` (and, run before pushing, useful pre-push evidence). They are no longer the authoritative merge gate — the required `Validate` GitHub Actions check (§4) is. Run them from the project root on the merged `main` (after `git pull --ff-only origin main`):
 
 ```sh
 npm run typecheck                         # tsconfig.app.json + tsconfig.node.json (0 diagnostics)

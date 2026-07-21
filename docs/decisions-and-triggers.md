@@ -535,9 +535,9 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 
 **Rationale:** each later stage consumes the previous stage's guarantee; committing types early would need a second regeneration churn after every RECON PR.
 
-**Consequence:** ~~`TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` stay paused until `RECON-METADATA-PARITY-001` verifies parity.~~ **Fulfilled (2026-07-20):** `RECON-METADATA-PARITY-001` is applied remotely and parity is verified, and `TYPESCRIPT-BASELINE-001` has regenerated the authoritative types (local/linked semantically identical) and restored `npm run typecheck` to 0 diagnostics. `CI-BASELINE-001` remains the only paused stage and has not started.
+**Consequence:** ~~`TYPESCRIPT-BASELINE-001` and `CI-BASELINE-001` stay paused until `RECON-METADATA-PARITY-001` verifies parity.~~ **Fulfilled (2026-07-20/21):** `RECON-METADATA-PARITY-001` is applied remotely and parity is verified; `TYPESCRIPT-BASELINE-001` regenerated the authoritative types (local/linked semantically identical) and restored `npm run typecheck` to 0 diagnostics; and `CI-BASELINE-001` added the required `Validate` GitHub Actions workflow (lint, typecheck, Vitest, production build on Node 22) with `main` branch protection requiring the `validate` check. The full schema → types → TypeScript → CI → branch-protection sequence is now fulfilled; no stage remains paused.
 
-**Re-evaluation trigger:** none expected — this sequencing rule has expired now that reconciliation and the TypeScript baseline are complete; only the CI stage remains.
+**Re-evaluation trigger:** none expected — this sequencing rule has expired now that reconciliation, the TypeScript baseline, and the CI / branch-protection stage are all complete.
 
 ### C26. Remaining metadata and index parity (final reconciliation step)
 
