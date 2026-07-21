@@ -1,0 +1,70 @@
+name: Validate
+
+# Deterministic required validation baseline for `main`.
+# Runs the repository's real lint, TypeScript, unit/integration test and
+# production-build gates. No secrets, no deployment, no Supabase access, no
+# Playwright — the build uses inert public placeholders for the two required
+# VITE_ variables so it never touches a real project.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Read-only token: the workflow never mutates GitHub state.
+permissions:
+  contents: read
+
+# One run per PR (or branch); superseded runs are cancelled.
+concurrency:
+  group: validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      CI: true
+      # Intentionally public, inert placeholders. The client env validator only
+      # requires non-empty build-time values; no real project is contacted.
+      VITE_SUPABASE_URL: https://example.supabase.co
+      VITE_SUPABASE_PUBLISHABLE_KEY: ci-placeholder-publishable-key
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Report tool versions
+        run: |
+          node --version
+          npm --version
+          npx tsc --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
