@@ -81,8 +81,8 @@
 
 ## Testing and merge-safety baseline
 
-- **There is no GitHub Actions CI** and **no branch protection on `main`** (re-verified 2026-07-18). Since merges to `main` auto-deploy the frontend, **the only merge gate is the author running checks locally.**
-- Manual pre-merge baseline:
+- **GitHub Actions CI is the required merge gate.** The **`Validate`** workflow (`.github/workflows/validate.yml`) runs `npm ci`, lint, `npm run typecheck`, Vitest and the production build on Node 22 for every pull request to `main` (and every push to `main`); `main` is protected to require the `validate` check — strict/up-to-date, administrators included, zero required human approvals, force-push and branch deletion disabled, regular merge commits allowed, Vercel **not** a required check. Because merges to `main` auto-deploy the frontend, the local commands below remain useful pre-push evidence but are no longer the sole gate.
+- Local pre-push baseline (lint / typecheck / Vitest / build are also the required CI gate; Playwright is local-only):
   - `npm run lint` — passes (0 errors).
   - `npm run typecheck` — passes (0 diagnostics, both projects).
   - `npm test` (Vitest) — passes.
@@ -95,7 +95,7 @@
 - **Test layers that do not exist:**
   - Database tests (no pgTAP) — RLS isolation, S1 guards, and quota consume/refund atomicity have **no automated verification**.
   - Edge Function (Deno) tests — validation is manual post-deploy smoke (established metadata smoke case: PMID `41912805`).
-  - Any CI execution of any layer.
+  - CI execution of the **database** (pgTAP) or **Edge Function** (Deno) layers, or of the **Playwright** E2E suite. (Required CI *does* run lint, `npm run typecheck`, Vitest and the production build — see the merge-safety baseline above; the production-backed Playwright suite is excluded until an isolated staging project exists.)
 - Do not cite exact test counts here — run the suites for current numbers.
 
 ## Active decisions and constraints — do not casually reopen
@@ -114,7 +114,7 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 **Engineering risks:**
 
 - **Schema drift — reconciliation complete:** production predated the first tracked migration, so a clean replay of the tracked migrations produced a schema that materially differed from production even though the migration ledger matched. **All reconciliation tasks are now complete** — RECON-JUNCTIONS-001, RECON-STATISTICAL-METHODS-001, RECON-INTEGRITY-001, RECON-LEGACY-COLUMNS-001, and the final **RECON-METADATA-PARITY-001** (PR #156) — merged, applied remotely, and verified; the aligned ledger holds **65** migrations (last `20260719162013`). Freshly generated **local and linked** `public`-schema Supabase types are **semantically identical**, and the committed generated types now match the linked output (TYPESCRIPT-BASELINE-001). `papers.search_vector` (proven semantically equivalent) and the SEC-4 default-grant diff remain approved benign/artifact exclusions. Full inventory, owner decisions (C20–C26), and roadmap: [schema-reconciliation.md](schema-reconciliation.md). The audit confirmed RLS policies, security RPCs, and all commercial tables are **in parity** — enforcement is not broken.
-- No CI / no branch protection while `main` auto-deploys (now the top structural gap): **CI-BASELINE-001 remains next and has not started.**
+- **CI and branch protection are now in place (CI-BASELINE-001):** the required `Validate` workflow gates pull requests to `main`, and `main` protection requires the `validate` check — closing the former top structural gap where `main` auto-deployed with no merge gate.
 - E2E runs against the production Supabase project; a staging environment is a pending owner decision.
 - Supabase security advisors (2026-07-17): mutable `search_path` on five functions (incl. `search_papers`); SECURITY DEFINER RPCs executable by `anon` (all are `auth.uid()`-guarded, so unexploited, but the surface is wider than needed); Auth leaked-password protection disabled.
 - Repository visibility is **public** — confirm this is intentional for a commercial codebase (no secrets are committed).
@@ -127,7 +127,7 @@ Authoritative record with rationale and re-evaluation triggers: [decisions-and-t
 
 ## Current recommended next action
 
-Schema reconciliation is **complete** (all five RECON tasks merged, applied remotely, verified; **65** aligned ledger rows, last `20260719162013`) and **TYPESCRIPT-BASELINE-001** has regenerated the authoritative Supabase types and driven `npm run typecheck` to **0 diagnostics** (application + Node). The next task is **CI-BASELINE-001** — establish GitHub Actions CI (lint, typecheck, test, build) and branch protection on `main`, which has **not** started. The full ordered sequence and per-decision rules are in [schema-reconciliation.md](schema-reconciliation.md) (decisions C20–C26).
+Schema reconciliation is **complete** (all five RECON tasks merged, applied remotely, verified; **65** aligned ledger rows, last `20260719162013`), **TYPESCRIPT-BASELINE-001** drove `npm run typecheck` to **0 diagnostics** (application + Node), and **CI-BASELINE-001** has established the required GitHub Actions `Validate` workflow (lint, typecheck, Vitest, build) with `main` protected to require it — completing decision C25's schema → types → CI → branch-protection sequence. The next gate is an **owner action, not engineering work**: owner-side **Paddle Sandbox setup** (C18; [owner-decisions.md](owner-decisions.md) §2.1), which unblocks the Paddle integration PR. The full ordered sequence and per-decision rules are in [schema-reconciliation.md](schema-reconciliation.md) (decisions C20–C26).
 
 ## Authoritative documents
 
@@ -149,8 +149,8 @@ Schema reconciliation is **complete** (all five RECON tasks merged, applied remo
 
 Keep at most 5 items; remove the oldest when adding.
 
-1. TYPESCRIPT-BASELINE-001 completed end-to-end (2026-07-21, PR #157, merge `2161ba6e`): committed the authoritative linked `src/integrations/supabase/types.ts` (local and linked `public`-schema types semantically identical), reduced the former ~48-diagnostic application TypeScript baseline to **0** (Node remains **0**) without weakening type safety, and added the truthful `typecheck` / `typecheck:app` / `typecheck:node` npm scripts. Two reviewed remediation commits within the same PR hardened runtime type boundaries: the duplicate-scan RPC JSON is now runtime-validated, duplicate groups enforce an at-least-two invariant, duplicate consolidation is transitively connected-component-safe, and project/tag mutation cache targeting was corrected. Full lint, typecheck, Vitest, build and targeted Playwright validation passed; no migration or database mutation occurred. **CI-BASELINE-001** is next and has not started.
-2. RECON-METADATA-PARITY-001 completed end-to-end (2026-07-20, PR #156, merge `4f26c85d`): the final metadata/index parity migration (`20260719162013_reconcile_metadata_parity.sql`) merged and applied remotely as an S2 convergence (eight `created_at` defaults → `now()`); aligned ledger now **65** migrations, schema and generated-type parity verified; `search_vector`/SEC-4 grants retained as approved benign/artifact exclusions.
-3. RECON-LEGACY-COLUMNS-001 completed end-to-end (2026-07-19): the three empty production-only legacy columns (`papers.urls`, `synonym_pool.primary_term`, `synonym_pool.variants`) dropped per C21 (PR #155), applied remotely and verified.
-4. RECON-INTEGRITY-001 completed end-to-end (2026-07-19): twelve NOT NULL constraints enforced and the `synonym_pool.synonyms` empty-array default restored per amended C23 (PR #154), applied remotely and verified.
-5. RECON-STATISTICAL-METHODS-001 completed end-to-end (2026-07-18): `papers.statistical_methods` converged to canonical JSON storage (PR #153), applied remotely and verified.
+1. CI-BASELINE-001 established the required GitHub Actions CI baseline: the **`Validate`** workflow (`.github/workflows/validate.yml`) runs `npm ci`, lint, `npm run typecheck`, Vitest and the production build on Node 22 for pull requests to `main`, pushes to `main`, and manual dispatch — official actions pinned to full commit SHAs, read-only token, inert placeholder build env (no secrets). `main` protection now requires the `validate` check (strict/up-to-date, administrators included, zero human approvals, force-push and deletion disabled, regular merge commits allowed, Vercel not required). Playwright is intentionally excluded from required CI (production-backed E2E, no isolated staging). No migration or database mutation occurred.
+2. TYPESCRIPT-BASELINE-001 completed end-to-end (2026-07-21, PR #157, merge `2161ba6e`): committed the authoritative linked `src/integrations/supabase/types.ts` (local and linked `public`-schema types semantically identical), reduced the former ~48-diagnostic application TypeScript baseline to **0** (Node remains **0**) without weakening type safety, and added the truthful `typecheck` / `typecheck:app` / `typecheck:node` npm scripts. Two reviewed remediation commits within the same PR hardened runtime type boundaries: the duplicate-scan RPC JSON is now runtime-validated, duplicate groups enforce an at-least-two invariant, duplicate consolidation is transitively connected-component-safe, and project/tag mutation cache targeting was corrected. Full lint, typecheck, Vitest, build and targeted Playwright validation passed; no migration or database mutation occurred.
+3. RECON-METADATA-PARITY-001 completed end-to-end (2026-07-20, PR #156, merge `4f26c85d`): the final metadata/index parity migration (`20260719162013_reconcile_metadata_parity.sql`) merged and applied remotely as an S2 convergence (eight `created_at` defaults → `now()`); aligned ledger now **65** migrations, schema and generated-type parity verified; `search_vector`/SEC-4 grants retained as approved benign/artifact exclusions.
+4. RECON-LEGACY-COLUMNS-001 completed end-to-end (2026-07-19): the three empty production-only legacy columns (`papers.urls`, `synonym_pool.primary_term`, `synonym_pool.variants`) dropped per C21 (PR #155), applied remotely and verified.
+5. RECON-INTEGRITY-001 completed end-to-end (2026-07-19): twelve NOT NULL constraints enforced and the `synonym_pool.synonyms` empty-array default restored per amended C23 (PR #154), applied remotely and verified.
