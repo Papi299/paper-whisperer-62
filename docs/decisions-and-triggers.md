@@ -550,3 +550,19 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 **Consequence:** ~~the migration is local-only until applied remotely under C24; only then do the C25 type-baseline steps begin.~~ **Fulfilled (2026-07-20):** the migration (`20260719162013`) is merged (PR #156, merge `4f26c85d`) and applied remotely as an S2 convergence (the eight `created_at` defaults → `now()`); the 65-row ledger is aligned and the C25 type-baseline steps have begun and completed.
 
 **Re-evaluation trigger:** none — a one-time convergence that has now been applied remotely and verified. An index later proven to serve a real query path is added by a separate performance migration, not by reopening C26.
+
+## Product-direction reset (2026-07-21)
+
+### C27. Public-launch and commercial-launch implementation are paused; feature development is the active priority (2026-07-21)
+
+**Decision:** by owner decision, public-launch and commercial-launch **implementation** work is **paused** and is **not on the active critical path**. The active engineering priority returns to **product feature and workflow development** — building new features, completing incomplete user workflows, improving existing functionality and usability, and maintaining the existing technical quality gates (required CI + branch protection). This is a **priority reset, not a reversal** of any prior technical or commercial decision.
+
+**What is paused** (must not be started as the immediate next engineering task without a new explicit owner decision): Paddle checkout implementation, billing integration, subscription-activation workflows, payment webhooks, production pricing enforcement, paywalls, upgrade/downgrade flows, public-signup launch work, public commercial rollout, store-launch work, launch campaigns, public marketing readiness, and legal-launch execution that exists solely to unblock public release.
+
+**What remains valid** (unchanged, future-facing): C17 (MoR-first) and C18 (Paddle selected) remain the approved future billing direction; the Free/Pro plan concepts (C9–C11) remain valid future concepts; the already-implemented entitlement, quota, subscription, usage and storage infrastructure remains part of the architecture and **must not be deleted**; the commercial tables and their security controls remain intentionally preserved; and owner-side account/sandbox setup may still be performed later but is no longer part of the active critical path.
+
+**Alternatives rejected:** cancelling commercialization outright (rejected — this is a re-prioritization, and the built commercial architecture stays); reopening the C17/C18 provider decisions (rejected — no contradiction requires it).
+
+**Consequence:** the active next sequence is (1) record this reset, (2) perform a focused product-feature and incomplete-workflow audit, (3) produce a prioritized feature backlog, (4) select one bounded feature, (5) implement it through the normal PR + required CI process. Owner-side Paddle Sandbox setup is no longer described anywhere as the immediate active next task. No commercial-implementation task begins without a new explicit owner instruction.
+
+**Re-evaluation trigger:** resume launch planning only after the owner explicitly decides the product is ready to return to commercialization or public-release work.
