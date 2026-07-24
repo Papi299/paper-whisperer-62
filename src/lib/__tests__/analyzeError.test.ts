@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseAnalyzeError, formatQuotaExceededMessage } from "@/lib/analyzeError";
+import { parseAnalyzeError, formatQuotaExceededMessage, formatResetDate } from "@/lib/analyzeError";
 
 /** Build a FunctionsHttpError-like object with a Response `.context`. */
 function httpError(status: number, body: string): unknown {
@@ -81,11 +81,83 @@ describe("parseAnalyzeError", () => {
     expect(result).toEqual({ kind: "other", message: "Unknown error" });
   });
 
-  it("tolerates missing details (defaults numbers to 0, strings to null)", async () => {
-    const result = await parseAnalyzeError(httpError(402, JSON.stringify({ error: "quota_exceeded", message: "x" })));
+  it("parses a valid non-exhausted lifetime payload", async () => {
+    const body = JSON.stringify({
+      error: "quota_exceeded",
+      message: "x",
+      details: { plan: "free", period_type: "lifetime", used: 3, quota: 15, remaining: 12, reset_at: null },
+    });
+    const result = await parseAnalyzeError(httpError(402, body));
     expect(result.kind).toBe("quota_exceeded");
     if (result.kind !== "quota_exceeded") throw new Error("unreachable");
-    expect(result.info).toMatchObject({ used: 0, quota: 0, remaining: 0, plan: null, periodType: null, resetAt: null });
+    expect(result.info).toMatchObject({ used: 3, quota: 15, remaining: 12, periodType: "lifetime" });
+  });
+
+  // ── Strict details validation: a missing/malformed details object must NOT
+  //    be coerced into an authoritative zero-quota response. ────────────────
+  it("falls back to 'other' when details is missing", async () => {
+    const result = await parseAnalyzeError(httpError(402, JSON.stringify({ error: "quota_exceeded", message: "x" })));
+    expect(result).toEqual({ kind: "other", message: "Edge Function returned a non-2xx status code" });
+  });
+
+  it("falls back to 'other' when details is not an object", async () => {
+    const result = await parseAnalyzeError(httpError(402, JSON.stringify({ error: "quota_exceeded", details: "nope" })));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' when a numeric detail field is missing", async () => {
+    const body = JSON.stringify({ error: "quota_exceeded", details: { plan: "free", period_type: "lifetime", quota: 15, remaining: 0, reset_at: null } });
+    const result = await parseAnalyzeError(httpError(402, body));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for a negative numeric detail field", async () => {
+    const body = JSON.stringify({ error: "quota_exceeded", details: { plan: "free", period_type: "lifetime", used: -1, quota: 15, remaining: 0, reset_at: null } });
+    const result = await parseAnalyzeError(httpError(402, body));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for a non-finite numeric detail field", async () => {
+    // JSON cannot carry Infinity, so emulate the parsed body via a fake context.
+    const err = {
+      context: {
+        status: 402,
+        clone: () => ({
+          status: 402,
+          json: async () => ({
+            error: "quota_exceeded",
+            details: { plan: "free", period_type: "lifetime", used: Number.POSITIVE_INFINITY, quota: 15, remaining: 0, reset_at: null },
+          }),
+        }),
+        json: async () => ({}),
+      },
+    };
+    const result = await parseAnalyzeError(err);
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for a non-number (string) numeric detail field", async () => {
+    const body = JSON.stringify({ error: "quota_exceeded", details: { plan: "free", period_type: "lifetime", used: "15", quota: 15, remaining: 0, reset_at: null } });
+    const result = await parseAnalyzeError(httpError(402, body));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for an invalid period_type", async () => {
+    const body = JSON.stringify({ error: "quota_exceeded", details: { plan: "free", period_type: "weekly", used: 1, quota: 15, remaining: 14, reset_at: null } });
+    const result = await parseAnalyzeError(httpError(402, body));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for an invalid reset_at type", async () => {
+    const body = JSON.stringify({ error: "quota_exceeded", details: { plan: "free", period_type: "monthly", used: 1, quota: 15, remaining: 14, reset_at: 123 } });
+    const result = await parseAnalyzeError(httpError(402, body));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for an invalid plan type", async () => {
+    const body = JSON.stringify({ error: "quota_exceeded", details: { plan: 7, period_type: "lifetime", used: 1, quota: 15, remaining: 14, reset_at: null } });
+    const result = await parseAnalyzeError(httpError(402, body));
+    expect(result.kind).toBe("other");
   });
 });
 
@@ -107,5 +179,33 @@ describe("formatQuotaExceededMessage", () => {
     const msg = formatQuotaExceededMessage({ periodType: "lifetime", used: 0, quota: 0, resetAt: null });
     expect(msg.length).toBeGreaterThan(0);
     expect(msg).not.toMatch(/upgrade|paywall/i);
+  });
+
+  it("uses neutral 'unavailable' wording when periodType is null (never 'lifetime')", () => {
+    const msg = formatQuotaExceededMessage({ periodType: null, used: 0, quota: 0, resetAt: null });
+    expect(msg).toMatch(/unavailable/i);
+    expect(msg).not.toMatch(/lifetime/i);
+  });
+
+  it("renders the monthly reset date in UTC (Aug 1)", () => {
+    const aug1 = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 1)));
+    const msg = formatQuotaExceededMessage({ periodType: "monthly", used: 350, quota: 350, resetAt: "2026-08-01T00:00:00Z" });
+    expect(msg).toContain(aug1);
+  });
+});
+
+describe("formatResetDate", () => {
+  it("renders the UTC calendar date (Aug 1, not the timezone-shifted Jul 31)", () => {
+    const aug1 = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 1)));
+    const jul31 = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 6, 31)));
+    expect(formatResetDate("2026-08-01T00:00:00Z")).toBe(aug1);
+    expect(formatResetDate("2026-08-01T00:00:00Z")).not.toBe(jul31);
+  });
+
+  it("fails soft (null) for invalid, empty, or absent input", () => {
+    expect(formatResetDate("not-a-date")).toBeNull();
+    expect(formatResetDate("")).toBeNull();
+    expect(formatResetDate(null)).toBeNull();
+    expect(formatResetDate(undefined)).toBeNull();
   });
 });

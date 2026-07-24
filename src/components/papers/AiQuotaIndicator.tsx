@@ -1,5 +1,6 @@
 import { Sparkles } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatResetDate } from "@/lib/analyzeError";
 import type { AiQuotaStatus } from "@/hooks/useAiQuota";
 
 interface AiQuotaIndicatorProps {
@@ -51,9 +52,9 @@ export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicato
   const isEmpty = status.remaining <= 0;
 
   let resetText = "";
-  if (status.periodType === "monthly" && status.resetAt) {
-    const d = new Date(status.resetAt);
-    if (!Number.isNaN(d.getTime())) resetText = ` Resets ${d.toLocaleDateString()}.`;
+  if (status.periodType === "monthly") {
+    const reset = formatResetDate(status.resetAt);
+    if (reset) resetText = ` Resets ${reset}.`;
   }
 
   const supporting = `${periodLabel} AI analysis allowance: ${status.remaining} of ${status.quota} remaining.${resetText}`;

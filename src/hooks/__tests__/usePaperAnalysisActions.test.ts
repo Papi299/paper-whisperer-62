@@ -250,6 +250,38 @@ describe("usePaperAnalysisActions — single-paper", () => {
     });
     await waitFor(() => expect(result.current.analyzingPaperId).toBeNull());
   });
+
+  it("single: handles fetchAbstract rejection, shows generic failure, and clears state", async () => {
+    // The whole operation (fetchAbstract → invoke → update) is inside one
+    // failure boundary. A `fetchAbstract` rejection must NOT leak out of the
+    // handler, must show one generic destructive failure toast (preserving the
+    // original message), must not invoke `analyze-paper` or update the paper,
+    // must NOT sync the quota query (no server attempt occurred), and must
+    // always clear `analyzingPaperId`.
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const paper = makePaper({ id: "p-fetch-reject" });
+    mockFetchAbstract.mockRejectedValue(new Error("network down fetching abstract"));
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({ papers: [paper], selectedPaperIds: new Set<string>(), userId: "user-1", updatePaper, sleep }),
+    );
+
+    // The handler must not reject.
+    await act(async () => {
+      await expect(result.current.handleAnalyzePaper(paper)).resolves.toBeUndefined();
+    });
+
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(updatePaper).not.toHaveBeenCalled();
+    // Exactly one destructive failure toast, carrying the original message.
+    const failureToasts = mockToast.mock.calls.filter((c) => (c[0] as { title?: string }).title === "AI Analysis failed");
+    expect(failureToasts).toHaveLength(1);
+    expect(failureToasts[0][0]).toMatchObject({ description: "network down fetching abstract", variant: "destructive" });
+    // No server attempt → no quota invalidation.
+    expect(mockInvalidateQueries).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.analyzingPaperId).toBeNull());
+  });
 });
 
 describe("usePaperAnalysisActions — bulk", () => {
@@ -587,7 +619,7 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     expect(updatePaper).toHaveBeenCalledTimes(1);
   });
 
-  it("bulk: stops after the first authoritative 402 — no further invokes, remaining reported as unattempted", async () => {
+  it("bulk: stops after a mid-run 402 — one success, quota-denied counts as failed, rest unattempted, ONE quota toast", async () => {
     const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
     const p1 = makePaper({ id: "p1", title: "One", study_type: null });
@@ -610,21 +642,73 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
       await result.current.handleBulkAnalyze();
     });
 
-    // p1 + p2 invoked; p3 NOT invoked (terminal break).
+    // Only two Edge Function invocations (p1, p2); p3 NOT invoked (terminal break).
     expect(mockInvoke).toHaveBeenCalledTimes(2);
+    const invokedTitles = mockInvoke.mock.calls.map((c) => (c[1] as { body: { title: string } }).body.title);
+    expect(invokedTitles).toEqual(["One", "Two"]);
     // Only p1 analyzed.
     expect(updatePaper).toHaveBeenCalledTimes(1);
     expect(updatePaper).toHaveBeenCalledWith("p1", expect.objectContaining({ tldr: "t1" }));
-    // Exactly one quota toast (not one per remaining paper).
+
+    // EXACTLY ONE quota notification for the whole run.
     const quotaToasts = mockToast.mock.calls.filter((c) => (c[0] as { title?: string }).title === "AI analyses used up");
-    expect(quotaToasts.length).toBeGreaterThanOrEqual(1);
-    // Final summary distinguishes analyzed / failed / not-attempted (p3 unattempted).
-    const summary = mockToast.mock.calls.map((c) => c[0] as { description?: string }).find((a) => /not attempted/.test(a.description ?? ""));
-    expect(summary?.description).toMatch(/1 analyzed/);
-    expect(summary?.description).toMatch(/1 not attempted/);
-    // No cooldown after the terminal quota break (only p1's success cooldown ran).
+    expect(quotaToasts).toHaveLength(1);
+    // It carries authoritative allowance detail plus complete run accounting:
+    //   1 analyzed (p1), 1 failed (p2 quota-denied), 1 not attempted (p3).
+    const desc = (quotaToasts[0][0] as { description: string }).description;
+    expect(desc).toMatch(/1 analyzed/);
+    expect(desc).toMatch(/1 failed/);
+    expect(desc).toMatch(/1 not attempted/);
+    // successCount + failCount + unattempted === total (1 + 1 + 1 === 3).
+    const [analyzed] = desc.match(/(\d+) analyzed/)!.slice(1).map(Number);
+    const [failed] = desc.match(/(\d+) failed/)!.slice(1).map(Number);
+    const [notAttempted] = desc.match(/(\d+) not attempted/)!.slice(1).map(Number);
+    expect(analyzed + failed + notAttempted).toBe(3);
+    // No billing/upgrade language.
+    expect(desc).not.toMatch(/upgrade|pay|billing|purchase|checkout/i);
+
+    // Exactly one cooldown — from p1's success; none after the quota response.
     expect(sleep).toHaveBeenCalledTimes(1);
-    // Quota query synced after the run.
+    // Quota query synced once after the run.
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.aiQuota.status("user-1") });
+    await waitFor(() => expect(result.current.bulkAnalyzing).toBe(false));
+  });
+
+  it("bulk: 402 on the very first paper — 0 analyzed, 1 failed, rest unattempted, one invoke, zero cooldowns", async () => {
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const p1 = makePaper({ id: "p1", title: "One", study_type: null });
+    const p2 = makePaper({ id: "p2", title: "Two", study_type: null });
+    const p3 = makePaper({ id: "p3", title: "Three", study_type: null });
+    mockFetchAbstractsBatch.mockResolvedValue(new Map<string, string | null>([["p1", "a1"], ["p2", "a2"], ["p3", "a3"]]));
+
+    // First paper immediately hits the quota wall → terminal before any success.
+    mockInvoke.mockResolvedValue({ data: null, error: quota402() });
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({ papers: [p1, p2, p3], selectedPaperIds: new Set(["p1", "p2", "p3"]), userId: "user-1", updatePaper, sleep }),
+    );
+
+    await act(async () => {
+      await result.current.handleBulkAnalyze();
+    });
+
+    // Exactly one invocation (p1); p2 and p3 never attempted.
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(updatePaper).not.toHaveBeenCalled();
+    // Zero cooldowns (terminal break preceded the sleep).
+    expect(sleep).not.toHaveBeenCalled();
+
+    const quotaToasts = mockToast.mock.calls.filter((c) => (c[0] as { title?: string }).title === "AI analyses used up");
+    expect(quotaToasts).toHaveLength(1);
+    const desc = (quotaToasts[0][0] as { description: string }).description;
+    expect(desc).toMatch(/0 analyzed/);
+    expect(desc).toMatch(/1 failed/);
+    expect(desc).toMatch(/2 not attempted/);
+    const analyzed = Number(desc.match(/(\d+) analyzed/)![1]);
+    const failed = Number(desc.match(/(\d+) failed/)![1]);
+    const notAttempted = Number(desc.match(/(\d+) not attempted/)![1]);
+    expect(analyzed + failed + notAttempted).toBe(3);
     expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.aiQuota.status("user-1") });
     await waitFor(() => expect(result.current.bulkAnalyzing).toBe(false));
   });

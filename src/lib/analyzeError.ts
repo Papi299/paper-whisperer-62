@@ -36,10 +36,19 @@ export type ParsedAnalyzeError =
   | { kind: "quota_exceeded"; info: QuotaExceededInfo }
   | { kind: "other"; message: string };
 
-/** Coerce an unknown value to a finite number, defaulting to `fallback`. */
-function toNumber(value: unknown, fallback = 0): number {
-  const n = typeof value === "string" ? Number(value) : value;
-  return typeof n === "number" && Number.isFinite(n) ? n : fallback;
+/** True only for an actual finite, non-negative JS number (not a numeric string). */
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/** True for the allowed nullable-string fields (`plan`, `reset_at`). */
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+/** True for the allowed `period_type` values. */
+function isValidPeriodType(value: unknown): value is "monthly" | "lifetime" | null {
+  return value === "monthly" || value === "lifetime" || value === null;
 }
 
 /** Coerce an unknown value to a non-empty string, or null. */
@@ -97,23 +106,64 @@ export async function parseAnalyzeError(error: unknown): Promise<ParsedAnalyzeEr
   // Validate the machine field, not English prose.
   if (record.error !== "quota_exceeded") return fallback;
 
-  const details =
-    record.details && typeof record.details === "object"
-      ? (record.details as Record<string, unknown>)
-      : {};
+  // Strict `details` validation. A missing or malformed `details` object must
+  // NOT be silently coerced into an authoritative zero-quota response — that
+  // would fabricate a quota wall the server never asserted. Any shape that
+  // fails these checks falls through to the generic `{ kind: "other" }`.
+  if (!record.details || typeof record.details !== "object") return fallback;
+  const details = record.details as Record<string, unknown>;
+
+  const { used, quota, remaining, period_type, reset_at, plan } = details;
+  if (
+    !isNonNegativeFiniteNumber(used) ||
+    !isNonNegativeFiniteNumber(quota) ||
+    !isNonNegativeFiniteNumber(remaining) ||
+    !isValidPeriodType(period_type) ||
+    !isNullableString(reset_at) ||
+    !isNullableString(plan)
+  ) {
+    return fallback;
+  }
 
   return {
     kind: "quota_exceeded",
     info: {
-      plan: toStringOrNull(details.plan),
-      periodType: toStringOrNull(details.period_type),
-      used: toNumber(details.used),
-      quota: toNumber(details.quota),
-      remaining: toNumber(details.remaining),
-      resetAt: toStringOrNull(details.reset_at),
+      plan,
+      periodType: period_type,
+      used,
+      quota,
+      remaining,
+      resetAt: reset_at,
       message: toStringOrNull(record.message) ?? "AI analysis quota exceeded.",
     },
   };
+}
+
+/**
+ * Format an absolute reset timestamp as its **UTC** calendar date.
+ *
+ * Quota periods roll over at UTC month boundaries (see `consume_ai_quota` /
+ * `get_ai_quota_status`), so the reset date must be rendered in UTC — a naive
+ * local-timezone render would shift `2026-08-01T00:00:00Z` back to July 31 for
+ * viewers in negative UTC offsets. Returns `null` for absent/invalid input so
+ * callers can omit the reset clause entirely rather than print "Invalid Date".
+ * Shared by `formatQuotaExceededMessage` and `AiQuotaIndicator` so the two
+ * surfaces never diverge. The locale is left to the runtime (not hard-coded).
+ */
+export function formatResetDate(resetAt: string | null | undefined): string | null {
+  if (typeof resetAt !== "string" || resetAt.length === 0) return null;
+  const d = new Date(resetAt);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC",
+    }).format(d);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -125,16 +175,20 @@ export async function parseAnalyzeError(error: unknown): Promise<ParsedAnalyzeEr
  * consistent and testable.
  */
 export function formatQuotaExceededMessage(info: Pick<QuotaExceededInfo, "periodType" | "used" | "quota" | "resetAt">): string {
+  // No active AI bucket (period_type null) → neutral "unavailable" wording,
+  // consistent with the indicator. Do NOT describe a null-period allowance as
+  // "lifetime" — there is no lifetime bucket to have exhausted.
+  if (info.periodType === null) {
+    return "AI analysis is currently unavailable.";
+  }
   const periodLabel = info.periodType === "monthly" ? "monthly" : "lifetime";
   const base =
     info.quota > 0
       ? `You've used all ${info.quota} of your ${periodLabel} AI analyses.`
       : `You have no AI analyses remaining on your ${periodLabel} allowance.`;
-  if (info.periodType === "monthly" && info.resetAt) {
-    const d = new Date(info.resetAt);
-    if (!Number.isNaN(d.getTime())) {
-      return `${base} Your quota resets on ${d.toLocaleDateString()}.`;
-    }
+  if (info.periodType === "monthly") {
+    const reset = formatResetDate(info.resetAt);
+    if (reset) return `${base} Your quota resets on ${reset}.`;
   }
   return base;
 }

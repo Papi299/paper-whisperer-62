@@ -38,6 +38,9 @@ describe("AiQuotaIndicator", () => {
     const el = screen.getByRole("status");
     expect(el).toHaveTextContent("This month");
     expect(el.getAttribute("aria-label")).toMatch(/Resets/);
+    // Reset date is rendered in UTC (Aug 1), not shifted to Jul 31.
+    const aug1 = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 1)));
+    expect(el.getAttribute("aria-label")).toContain(aug1);
   });
 
   it("renders an unavailable state when there is no active AI bucket", () => {
