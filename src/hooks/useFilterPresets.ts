@@ -6,17 +6,28 @@ import { queryKeys } from "@/lib/queryKeys";
 import type { NotesPresence } from "@/hooks/papers/types";
 import type { Project, Tag } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
-import { dedupeIds } from "@/lib/filterSets";
+import { dedupeIds, type EntityMatchMode } from "@/lib/filterSets";
 
 /**
- * Current payload schema version. Bumped 1 → 2 by PROJECT-TAG-SELECTOR-UX-001
- * when the dashboard Project/Tag filters became multi-select: the scalar
- * `selectedProjectId` / `selectedTagId` fields were replaced by the
- * `selectedProjectIds` / `selectedTagIds` string arrays. Version-1 payloads
- * still on disk are read via `presetPayloadV1Schema` and normalized up to the
- * current shape by `parsePresetPayload` — no automatic DB rewrite happens.
+ * Current payload schema version.
+ *
+ *  • 1 → 2 (PROJECT-TAG-SELECTOR-UX-001): the dashboard Project/Tag filters
+ *    became multi-select — the scalar `selectedProjectId` / `selectedTagId`
+ *    fields were replaced by the `selectedProjectIds` / `selectedTagIds`
+ *    string arrays.
+ *  • 2 → 3 (PROJECT-TAG-MATCH-MODE-001): each category gained an independent
+ *    Any/All match mode — `projectMatchMode` / `tagMatchMode` were added.
+ *
+ * Version-1 and version-2 payloads still on disk are read via
+ * `presetPayloadV1Schema` / `presetPayloadV2Schema` and normalized up to the
+ * current shape by `parsePresetPayload` (both modes default to `"any"`, which
+ * preserves the meaning a pre-mode preset had when it was saved). The upgrade
+ * is in-memory only — no automatic DB rewrite happens on read.
  */
-export const PRESET_PAYLOAD_VERSION = 2 as const;
+export const PRESET_PAYLOAD_VERSION = 3 as const;
+
+/** Match-mode enum, mirrored from `EntityMatchMode` for strict payload parsing. */
+const matchModeSchema = z.enum(["any", "all"]);
 
 /** Maximum allowed preset name length. */
 export const PRESET_NAME_MAX_LENGTH = 80;
@@ -43,6 +54,11 @@ export const presetPayloadSchema = z.object({
   selectedKeywords: z.array(z.string()),
   selectedProjectIds: z.array(z.string()),
   selectedTagIds: z.array(z.string()),
+  // Any/All match mode per category. Parsed strictly via an enum so a corrupted
+  // value (hand-edited JSONB, a buggy writer) fails the schema and the row is
+  // dropped rather than silently accepting an arbitrary string into state.
+  projectMatchMode: matchModeSchema,
+  tagMatchMode: matchModeSchema,
 });
 
 export type PresetPayload = z.infer<typeof presetPayloadSchema>;
@@ -50,8 +66,8 @@ export type PresetPayload = z.infer<typeof presetPayloadSchema>;
 /**
  * Legacy version-1 payload shape (scalar Project/Tag). Retained for READS only
  * so existing saved presets keep loading. `parsePresetPayload` upgrades a
- * matched v1 row into the current in-memory `PresetPayload` (v2) — it is never
- * written back to the DB by the read path; a v1 row is persisted as v2 only
+ * matched v1 row into the current in-memory `PresetPayload` (v3) — it is never
+ * written back to the DB by the read path; a v1 row is persisted as v3 only
  * when the user explicitly re-saves or updates the preset through the normal
  * product workflow.
  */
@@ -65,6 +81,24 @@ export const presetPayloadV1Schema = z.object({
   selectedKeywords: z.array(z.string()),
   selectedProjectId: z.string().nullable(),
   selectedTagId: z.string().nullable(),
+});
+
+/**
+ * Legacy version-2 payload shape (multi-select arrays, no match mode). Retained
+ * for READS only. `parsePresetPayload` normalizes a matched v2 row up to v3 in
+ * memory with both modes defaulting to `"any"` — the exact semantics the preset
+ * had when it was saved, before match modes existed. No DB rewrite on read.
+ */
+export const presetPayloadV2Schema = z.object({
+  version: z.literal(2),
+  searchQuery: z.string(),
+  yearFrom: z.string(),
+  yearTo: z.string(),
+  studyType: z.string(),
+  notesPresence: notesPresenceSchema,
+  selectedKeywords: z.array(z.string()),
+  selectedProjectIds: z.array(z.string()),
+  selectedTagIds: z.array(z.string()),
 });
 
 /** Normalize a nullable scalar ID into a 0-or-1-element array. */
@@ -83,22 +117,24 @@ export interface FilterPreset {
 
 /**
  * Safe-parse a JSONB `payload` read back from the DB into the current
- * (version-2) in-memory shape. Returns null for rows with a shape we cannot
+ * (version-3) in-memory shape. Returns null for rows with a shape we cannot
  * reconcile (unknown/future version, missing fields, corrupted write) — the
  * caller drops them from the menu and warns to the console so the user still
  * sees every preset we can load.
  *
  * Set-semantics guarantee: the `selectedProjectIds` / `selectedTagIds` arrays
- * are mathematical sets. Even a schema-valid version-2 payload can carry
- * duplicate IDs (hand-edited JSONB, an older buggy writer), so both arrays are
- * deduplicated (first-seen order preserved) before the payload crosses into
- * the app. `dedupeIds` returns new arrays, so the original `raw` object is
- * never mutated.
+ * are mathematical sets. Even a schema-valid version-2 or version-3 payload can
+ * carry duplicate IDs (hand-edited JSONB, an older buggy writer), so both arrays
+ * are deduplicated (first-seen order preserved) before the payload crosses into
+ * the app. `dedupeIds` returns new arrays, so the original `raw` object is never
+ * mutated.
  *
- * Backward compatibility: a valid version-1 payload (scalar Project/Tag) is
- * accepted and normalized up to version 2 in memory. The scalar
- * `selectedProjectId` / `selectedTagId` become 0-or-1-element arrays. This
- * upgrade is read-only — nothing is written back to the DB here.
+ * Backward compatibility (read-only — nothing is written back to the DB here):
+ *  • version 2 (arrays, no mode) → version 3 with both modes = `"any"`.
+ *  • version 1 (scalar Project/Tag) → version 3; the scalar IDs become
+ *    0-or-1-element arrays and both modes = `"any"`.
+ * Defaulting to `"any"` reproduces exactly the OR-within semantics those
+ * presets had when they were saved, before match modes existed.
  */
 export function parsePresetPayload(raw: unknown): PresetPayload | null {
   const parsed = presetPayloadSchema.safeParse(raw);
@@ -107,6 +143,21 @@ export function parsePresetPayload(raw: unknown): PresetPayload | null {
       ...parsed.data,
       selectedProjectIds: dedupeIds(parsed.data.selectedProjectIds),
       selectedTagIds: dedupeIds(parsed.data.selectedTagIds),
+    };
+  }
+
+  // Not a v3 row — try the legacy v2 shape (arrays, no mode) and normalize it
+  // forward with Any/Any. Duplicate arrays are still deduped.
+  const v2 = presetPayloadV2Schema.safeParse(raw);
+  if (v2.success) {
+    const { version: _v2version, ...rest } = v2.data;
+    return {
+      ...rest,
+      version: PRESET_PAYLOAD_VERSION,
+      selectedProjectIds: dedupeIds(v2.data.selectedProjectIds),
+      selectedTagIds: dedupeIds(v2.data.selectedTagIds),
+      projectMatchMode: "any",
+      tagMatchMode: "any",
     };
   }
 
@@ -120,6 +171,8 @@ export function parsePresetPayload(raw: unknown): PresetPayload | null {
       version: PRESET_PAYLOAD_VERSION,
       selectedProjectIds: scalarToArray(selectedProjectId),
       selectedTagIds: scalarToArray(selectedTagId),
+      projectMatchMode: "any",
+      tagMatchMode: "any",
     };
   }
 
@@ -138,6 +191,8 @@ export interface PresetSetters {
   setSelectedKeywords: (v: string[]) => void;
   setSelectedProjectIds: (v: string[]) => void;
   setSelectedTagIds: (v: string[]) => void;
+  setProjectMatchMode: (v: EntityMatchMode) => void;
+  setTagMatchMode: (v: EntityMatchMode) => void;
 }
 
 /**
@@ -163,6 +218,13 @@ export interface ApplyPresetResult {
  * and the per-category drop count reflects **unique** missing selections
  * (`["missing","missing"]` → dropped count `1`, not `2`). This keeps the
  * caller's toast ("1 project" vs "2 projects") accurate.
+ *
+ * Match mode: each category's saved Any/All mode is restored **when at least
+ * one valid selected ID remains** after the stale-ID guard. If every selected
+ * ID in a category was stale (nothing left to match), that category's applied
+ * mode is normalized to `"any"` — an empty category must never carry a stale
+ * `"all"`, mirroring the "no selection ⇒ Any" invariant enforced in
+ * `useFilterState`. The two categories are handled independently.
  *
  * Pure apart from the setter side-effects, so it is straightforward to
  * unit-test with jest/vitest mocks.
@@ -193,6 +255,11 @@ export function applyPreset(
 
   setters.setSelectedProjectIds(keptProjectIds);
   setters.setSelectedTagIds(keptTagIds);
+
+  // Preserve the saved mode only while the category still has a valid member;
+  // otherwise fall back to Any so an emptied category never keeps a stale All.
+  setters.setProjectMatchMode(keptProjectIds.length > 0 ? payload.projectMatchMode : "any");
+  setters.setTagMatchMode(keptTagIds.length > 0 ? payload.tagMatchMode : "any");
 
   return {
     droppedProjectCount: uniqueProjectIds.length - keptProjectIds.length,
@@ -264,6 +331,11 @@ export function buildPresetPayload(fields: Omit<PresetPayload, "version">): Pres
  * selecting in a different order, should not read as dirty. `applyPreset`
  * still restores the saved order on load; only this comparator is set-based.
  *
+ * `projectMatchMode` and `tagMatchMode` are scalars and compare exactly: an
+ * `"any"` vs `"all"` difference is a real semantic change and must read as
+ * dirty. This is what makes a legacy v2 preset (loaded as Any) show clean
+ * against current Any state but dirty against current All state.
+ *
  * A `version` mismatch (future schema bump) reads as not-equal, which
  * correctly surfaces a dirty signal so the user can re-save under the
  * current schema.
@@ -275,6 +347,8 @@ export function arePresetPayloadsEqual(a: PresetPayload, b: PresetPayload): bool
   if (a.yearTo !== b.yearTo) return false;
   if (a.studyType !== b.studyType) return false;
   if (a.notesPresence !== b.notesPresence) return false;
+  if (a.projectMatchMode !== b.projectMatchMode) return false;
+  if (a.tagMatchMode !== b.tagMatchMode) return false;
   return (
     areStringSetsEqual(a.selectedKeywords, b.selectedKeywords) &&
     areStringSetsEqual(a.selectedProjectIds, b.selectedProjectIds) &&

@@ -139,10 +139,14 @@ function DashboardContent() {
     replaceSelectedProjectIds,
     handleProjectToggle,
     clearProjects,
+    projectMatchMode,
+    setProjectMatchMode,
     selectedTagIds,
     replaceSelectedTagIds,
     handleTagToggle,
     clearTags,
+    tagMatchMode,
+    setTagMatchMode,
     studyTypeFilterOptions,
     sortKey,
     sortDirection,
@@ -240,6 +244,8 @@ function DashboardContent() {
       selectedKeywords,
       selectedProjectIds,
       selectedTagIds,
+      projectMatchMode,
+      tagMatchMode,
     });
   }, [
     searchQuery,
@@ -250,6 +256,8 @@ function DashboardContent() {
     selectedKeywords,
     selectedProjectIds,
     selectedTagIds,
+    projectMatchMode,
+    tagMatchMode,
   ]);
 
   /**
@@ -290,6 +298,8 @@ function DashboardContent() {
           setSelectedKeywords,
           setSelectedProjectIds: replaceSelectedProjectIds,
           setSelectedTagIds: replaceSelectedTagIds,
+          setProjectMatchMode,
+          setTagMatchMode,
         },
         projects,
         tags,
@@ -329,6 +339,8 @@ function DashboardContent() {
       setSelectedKeywords,
       replaceSelectedProjectIds,
       replaceSelectedTagIds,
+      setProjectMatchMode,
+      setTagMatchMode,
       toast,
     ],
   );
@@ -613,6 +625,10 @@ function DashboardContent() {
             onTagToggle={handleTagToggle}
             onClearProjects={clearProjects}
             onClearTags={clearTags}
+            projectMatchMode={projectMatchMode}
+            tagMatchMode={tagMatchMode}
+            onProjectMatchModeChange={setProjectMatchMode}
+            onTagMatchModeChange={setTagMatchMode}
             isExportReady={isExportReady}
             isExporting={isExporting}
             filterPresets={filterPresets}

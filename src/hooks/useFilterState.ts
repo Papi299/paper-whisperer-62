@@ -7,7 +7,15 @@ import type { PoolStudyType } from "@/hooks/useStudyTypePool";
 import type { MatchFlags, NotesPresence, ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { timedQueryFn } from "@/lib/queryTiming";
-import { canonicalizeIds, dedupeIds, resolveFilterPaperIds } from "@/lib/filterSets";
+import { fetchAllPages } from "@/lib/fetchAllPages";
+import {
+  canonicalizeIds,
+  dedupeIds,
+  junctionQueryKey,
+  resolveFilterPaperIds,
+  resolveJunctionPaperIds,
+  type EntityMatchMode,
+} from "@/lib/filterSets";
 
 /** Minimum query length to trigger server-side full-text search. */
 const SERVER_SEARCH_MIN_LENGTH = 3;
@@ -32,6 +40,12 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   // ── Filter state ──
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  // Per-category Any/All match mode. Default `"any"` preserves the OR-within
+  // behavior shipped by PROJECT-TAG-SELECTOR-UX-001 and the meaning of every
+  // preset saved before match modes existed. The two modes are fully
+  // independent; neither is ever coupled to the other.
+  const [projectMatchMode, setProjectMatchModeState] = useState<EntityMatchMode>("any");
+  const [tagMatchMode, setTagMatchModeState] = useState<EntityMatchMode>("any");
   const [searchQuery, setSearchQuery] = useState("");
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
@@ -201,41 +215,67 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   ]);
 
   // ── Junction pre-queries (project/tag ID resolution) ──
-  // Multiple selected Projects/Tags use OR semantics: a paper matches when it
-  // belongs to *at least one* selected entity. We resolve that with a single
-  // bounded `.in(...)` query per category and dedupe the resulting paper IDs
-  // (one paper can belong to several selected entities → several rows).
+  // Each category resolves to one paper-ID set, then `resolveJunctionPaperIds`
+  // applies the category's Any/All mode:
+  //   • Any — a paper matches when it belongs to at least one selected entity
+  //     (OR-union), deduped.
+  //   • All — a paper matches only when it belongs to every selected entity
+  //     (membership-count intersection); we select the entity ID column too so
+  //     the resolver can count unique matched entities per paper.
+  // We issue exactly one *paginated* fetch per category (never one per selected
+  // ID). Pagination is mandatory: PostgREST caps a single response at ~1000
+  // rows, so an unpaginated `.in(...)` would silently truncate the junction
+  // rows — Any would drop matching papers, and All could falsely reject a paper
+  // whose required membership row fell beyond the first page. `fetchAllPages`
+  // walks every page so both modes always resolve against the complete row set.
   //
-  // Query keys are canonicalized (deduped + sorted) so `[A,B]` and `[B,A]`
-  // hit the same React Query cache entry — selection order never spawns a
-  // redundant fetch. `canonicalizeIds` returns a new array, so React state is
-  // never mutated.
+  // Offset/range pagination requires a stable, unique ORDER BY: without one,
+  // SQL result order is undefined and rows could shift between separate page
+  // requests, duplicating some across page boundaries and dropping others. The
+  // junction tables hold unique `(paper_id, entity_id)` pairs, so ordering by
+  // both columns ascending gives a deterministic, total order. All raw pages
+  // are concatenated by `fetchAllPages`, and `resolveJunctionPaperIds` runs once
+  // on the complete set (never per page).
+  //
+  // Query keys are canonicalized (deduped + sorted) AND include the active mode
+  // so `[A,B]` and `[B,A]` share one cache entry while Any and All never do —
+  // switching the mode resolves the correct set immediately rather than showing
+  // the previous mode's stale answer. `canonicalizeIds` returns a new array, so
+  // React state is never mutated.
   const projectIdsKey = useMemo(() => canonicalizeIds(selectedProjectIds), [selectedProjectIds]);
   const tagIdsKey = useMemo(() => canonicalizeIds(selectedTagIds), [selectedTagIds]);
 
   const { data: projectPaperIds } = useQuery<string[]>({
-    queryKey: ["junction", "paper_projects", projectIdsKey],
+    queryKey: junctionQueryKey("paper_projects", projectMatchMode, selectedProjectIds),
     queryFn: timedQueryFn("junction.paper_projects", async () => {
-      const { data, error } = await supabase
-        .from("paper_projects")
-        .select("paper_id")
-        .in("project_id", projectIdsKey);
-      if (error) throw error;
-      return dedupeIds(data.map((r) => r.paper_id));
+      const rows = await fetchAllPages<{ paper_id: string; project_id: string }>(() =>
+        supabase
+          .from("paper_projects")
+          .select("paper_id, project_id")
+          .in("project_id", projectIdsKey)
+          .order("paper_id", { ascending: true })
+          .order("project_id", { ascending: true }),
+      );
+      const junctionRows = rows.map((r) => ({ paper_id: r.paper_id, entity_id: r.project_id }));
+      return resolveJunctionPaperIds(junctionRows, projectIdsKey, projectMatchMode);
     }),
     enabled: projectIdsKey.length > 0,
     staleTime: 30_000,
   });
 
   const { data: tagPaperIds } = useQuery<string[]>({
-    queryKey: ["junction", "paper_tags", tagIdsKey],
+    queryKey: junctionQueryKey("paper_tags", tagMatchMode, selectedTagIds),
     queryFn: timedQueryFn("junction.paper_tags", async () => {
-      const { data, error } = await supabase
-        .from("paper_tags")
-        .select("paper_id")
-        .in("tag_id", tagIdsKey);
-      if (error) throw error;
-      return dedupeIds(data.map((r) => r.paper_id));
+      const rows = await fetchAllPages<{ paper_id: string; tag_id: string }>(() =>
+        supabase
+          .from("paper_tags")
+          .select("paper_id, tag_id")
+          .in("tag_id", tagIdsKey)
+          .order("paper_id", { ascending: true })
+          .order("tag_id", { ascending: true }),
+      );
+      const junctionRows = rows.map((r) => ({ paper_id: r.paper_id, entity_id: r.tag_id }));
+      return resolveJunctionPaperIds(junctionRows, tagIdsKey, tagMatchMode);
     }),
     enabled: tagIdsKey.length > 0,
     staleTime: 30_000,
@@ -343,26 +383,55 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     );
   }, []);
 
-  // ── Project / Tag toggles (multi-select, OR within category) ──
+  // ── Project / Tag match-mode setters (guarded) ──
+  // The raw `setState` functions stay private; callers change the mode only
+  // through these guarded callbacks, which reject any value outside the
+  // `EntityMatchMode` enum as defense-in-depth against a corrupted preset
+  // payload reaching state. The two modes are never coupled.
+  const setProjectMatchMode = useCallback((mode: EntityMatchMode) => {
+    if (mode === "any" || mode === "all") setProjectMatchModeState(mode);
+  }, []);
+  const setTagMatchMode = useCallback((mode: EntityMatchMode) => {
+    if (mode === "any" || mode === "all") setTagMatchModeState(mode);
+  }, []);
+
+  // ── Project / Tag toggles (multi-select, Any/All within category) ──
   // Toggling never introduces a duplicate ID during user interaction: an
-  // already-present ID is removed, an absent one is appended. The raw React
-  // state setters remain private to this hook; the full-replacement path
-  // (preset load) goes through the dedupe-guarded `replaceSelectedProjectIds`
-  // / `replaceSelectedTagIds` callbacks defined below.
+  // already-present ID is removed, an absent one is appended. When the final
+  // selected member is toggled off, the category's match mode is reset to
+  // `"any"` so an empty category never carries a stale `"all"` — the invariant
+  // "no selection ⇒ Any" holds regardless of how the category was emptied.
+  // The raw React state setters remain private to this hook; the
+  // full-replacement path (preset load) goes through the dedupe-guarded
+  // `replaceSelectedProjectIds` / `replaceSelectedTagIds` callbacks below.
   const handleProjectToggle = useCallback((projectId: string) => {
-    setSelectedProjectIds((prev) =>
-      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],
-    );
+    setSelectedProjectIds((prev) => {
+      const next = prev.includes(projectId)
+        ? prev.filter((id) => id !== projectId)
+        : [...prev, projectId];
+      if (next.length === 0) setProjectMatchModeState("any");
+      return next;
+    });
   }, []);
 
   const handleTagToggle = useCallback((tagId: string) => {
-    setSelectedTagIds((prev) =>
-      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId],
-    );
+    setSelectedTagIds((prev) => {
+      const next = prev.includes(tagId)
+        ? prev.filter((id) => id !== tagId)
+        : [...prev, tagId];
+      if (next.length === 0) setTagMatchModeState("any");
+      return next;
+    });
   }, []);
 
-  const clearProjects = useCallback(() => setSelectedProjectIds([]), []);
-  const clearTags = useCallback(() => setSelectedTagIds([]), []);
+  const clearProjects = useCallback(() => {
+    setSelectedProjectIds([]);
+    setProjectMatchModeState("any");
+  }, []);
+  const clearTags = useCallback(() => {
+    setSelectedTagIds([]);
+    setTagMatchModeState("any");
+  }, []);
 
   // Full-array replacement boundary (used by preset load). The raw `setState`
   // functions are kept private to this hook; callers replace the whole
@@ -407,6 +476,10 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     setSelectedKeywords([]);
     setSelectedProjectIds([]);
     setSelectedTagIds([]);
+    // Modes are view-independent of selection but must not survive a global
+    // clear: both return to the backward-compatible default.
+    setProjectMatchModeState("any");
+    setTagMatchModeState("any");
   }, []);
 
   return {
@@ -437,10 +510,14 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     replaceSelectedProjectIds,
     handleProjectToggle,
     clearProjects,
+    projectMatchMode,
+    setProjectMatchMode,
     selectedTagIds,
     replaceSelectedTagIds,
     handleTagToggle,
     clearTags,
+    tagMatchMode,
+    setTagMatchMode,
     studyTypeFilterOptions,
 
     // Sort state

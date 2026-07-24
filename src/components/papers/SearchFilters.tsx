@@ -18,6 +18,7 @@ import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
 import { SearchableEntityMultiFilter } from "./SearchableEntityMultiFilter";
 import { FilterPresetsMenu, type FilterPresetsMenuProps } from "./FilterPresetsMenu";
 import { Project, Tag } from "@/types/database";
+import type { EntityMatchMode } from "@/lib/filterSets";
 import type { NotesPresence } from "@/hooks/papers/types";
 import type { ExportFormat } from "@/hooks/useExportPapers";
 
@@ -47,6 +48,10 @@ interface SearchFiltersProps {
   onTagToggle: (tagId: string) => void;
   onClearProjects: () => void;
   onClearTags: () => void;
+  projectMatchMode: EntityMatchMode;
+  tagMatchMode: EntityMatchMode;
+  onProjectMatchModeChange: (mode: EntityMatchMode) => void;
+  onTagMatchModeChange: (mode: EntityMatchMode) => void;
   isExportReady?: boolean;
   isExporting?: boolean;
   /**
@@ -83,6 +88,10 @@ export function SearchFilters({
   onTagToggle,
   onClearProjects,
   onClearTags,
+  projectMatchMode,
+  tagMatchMode,
+  onProjectMatchModeChange,
+  onTagMatchModeChange,
   isExportReady,
   isExporting = false,
   filterPresets,
@@ -163,6 +172,11 @@ export function SearchFilters({
           searchPlaceholder="Search projects..."
           emptyMessage="No projects found."
           ariaLabel="Filter by project"
+          matchMode={projectMatchMode}
+          onMatchModeChange={onProjectMatchModeChange}
+          matchModeGroupLabel="Match projects"
+          matchAnyDescription="Match papers in at least one selected project"
+          matchAllDescription="Match papers in every selected project"
         />
 
         {/* Tag Filter (searchable multi-select) */}
@@ -177,6 +191,11 @@ export function SearchFilters({
           searchPlaceholder="Search tags..."
           emptyMessage="No tags found."
           ariaLabel="Filter by tag"
+          matchMode={tagMatchMode}
+          onMatchModeChange={onTagMatchModeChange}
+          matchModeGroupLabel="Match tags"
+          matchAnyDescription="Match papers with at least one selected tag"
+          matchAllDescription="Match papers with every selected tag"
         />
 
         {/* Keywords Dropdown */}
