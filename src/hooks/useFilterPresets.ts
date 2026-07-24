@@ -257,11 +257,12 @@ export function buildPresetPayload(fields: Omit<PresetPayload, "version">): Pres
  * `Update "<name>"` action.
  *
  * Scalar fields compare with strict `===`. `selectedKeywords`,
- * `selectedProjectIds` and `selectedTagIds` compare **order-insensitively**
- * (same length + same set of members), because each is semantically "match
- * any of these" — toggling a member off and back on, or selecting in a
- * different order, should not read as dirty. `applyPreset` still restores the
- * saved order on load; only this comparator is order-insensitive.
+ * `selectedProjectIds` and `selectedTagIds` are compared as **mathematical
+ * sets** — order is ignored and duplicate multiplicity is ignored, so
+ * equality is determined purely by unique membership — because each is
+ * semantically "match any of these" — toggling a member off and back on, or
+ * selecting in a different order, should not read as dirty. `applyPreset`
+ * still restores the saved order on load; only this comparator is set-based.
  *
  * A `version` mismatch (future schema bump) reads as not-equal, which
  * correctly surfaces a dirty signal so the user can re-save under the

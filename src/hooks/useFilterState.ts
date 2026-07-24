@@ -344,9 +344,11 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   }, []);
 
   // ── Project / Tag toggles (multi-select, OR within category) ──
-  // Toggling never introduces a duplicate ID: an already-present ID is removed,
-  // an absent one is appended. The setters are also exposed directly for the
-  // full-replacement path (preset load).
+  // Toggling never introduces a duplicate ID during user interaction: an
+  // already-present ID is removed, an absent one is appended. The raw React
+  // state setters remain private to this hook; the full-replacement path
+  // (preset load) goes through the dedupe-guarded `replaceSelectedProjectIds`
+  // / `replaceSelectedTagIds` callbacks defined below.
   const handleProjectToggle = useCallback((projectId: string) => {
     setSelectedProjectIds((prev) =>
       prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],

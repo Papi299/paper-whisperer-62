@@ -255,8 +255,10 @@ function DashboardContent() {
   /**
    * Derived "unsaved changes relative to the loaded preset" signal. `true`
    * when a preset is loaded AND the current filter state differs from that
-   * preset's stored payload (order-insensitive for `selectedKeywords`, exact
-   * for everything else). Purely derived — no new state, no effects.
+   * preset's stored payload (`selectedKeywords`, `selectedProjectIds` and
+   * `selectedTagIds` are compared with order-insensitive, duplicate-insensitive
+   * set semantics; the scalar fields are compared exactly). Purely derived —
+   * no new state, no effects.
    *
    * When no preset is loaded, this is `false` by definition (there is
    * nothing to be dirty relative to). The Presets dropdown uses this to
