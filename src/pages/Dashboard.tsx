@@ -135,10 +135,14 @@ function DashboardContent() {
     setNotesPresence,
     selectedKeywords,
     setSelectedKeywords,
-    selectedProjectId,
-    setSelectedProjectId,
-    selectedTagId,
-    setSelectedTagId,
+    selectedProjectIds,
+    replaceSelectedProjectIds,
+    handleProjectToggle,
+    clearProjects,
+    selectedTagIds,
+    replaceSelectedTagIds,
+    handleTagToggle,
+    clearTags,
     studyTypeFilterOptions,
     sortKey,
     sortDirection,
@@ -234,8 +238,8 @@ function DashboardContent() {
       studyType,
       notesPresence,
       selectedKeywords,
-      selectedProjectId,
-      selectedTagId,
+      selectedProjectIds,
+      selectedTagIds,
     });
   }, [
     searchQuery,
@@ -244,15 +248,17 @@ function DashboardContent() {
     studyType,
     notesPresence,
     selectedKeywords,
-    selectedProjectId,
-    selectedTagId,
+    selectedProjectIds,
+    selectedTagIds,
   ]);
 
   /**
    * Derived "unsaved changes relative to the loaded preset" signal. `true`
    * when a preset is loaded AND the current filter state differs from that
-   * preset's stored payload (order-insensitive for `selectedKeywords`, exact
-   * for everything else). Purely derived — no new state, no effects.
+   * preset's stored payload (`selectedKeywords`, `selectedProjectIds` and
+   * `selectedTagIds` are compared with order-insensitive, duplicate-insensitive
+   * set semantics; the scalar fields are compared exactly). Purely derived —
+   * no new state, no effects.
    *
    * When no preset is loaded, this is `false` by definition (there is
    * nothing to be dirty relative to). The Presets dropdown uses this to
@@ -282,8 +288,8 @@ function DashboardContent() {
           setStudyType,
           setNotesPresence,
           setSelectedKeywords,
-          setSelectedProjectId,
-          setSelectedTagId,
+          setSelectedProjectIds: replaceSelectedProjectIds,
+          setSelectedTagIds: replaceSelectedTagIds,
         },
         projects,
         tags,
@@ -291,13 +297,19 @@ function DashboardContent() {
 
       setLoadedPresetId(preset.id);
 
-      if (result.droppedProjectId || result.droppedTagId) {
+      if (result.droppedProjectCount > 0 || result.droppedTagCount > 0) {
         const parts: string[] = [];
-        if (result.droppedProjectId) parts.push("project");
-        if (result.droppedTagId) parts.push("tag");
+        if (result.droppedProjectCount > 0) {
+          parts.push(`${result.droppedProjectCount} project${result.droppedProjectCount !== 1 ? "s" : ""}`);
+        }
+        if (result.droppedTagCount > 0) {
+          parts.push(`${result.droppedTagCount} tag${result.droppedTagCount !== 1 ? "s" : ""}`);
+        }
         toast({
           title: "Preset loaded with missing references",
-          description: `The ${parts.join(" and ")} saved in "${preset.name}" no longer exists — skipped.`,
+          description: `${parts.join(" and ")} saved in "${preset.name}" no longer ${
+            result.droppedProjectCount + result.droppedTagCount === 1 ? "exists" : "exist"
+          } — skipped.`,
         });
       } else {
         toast({
@@ -315,8 +327,8 @@ function DashboardContent() {
       setStudyType,
       setNotesPresence,
       setSelectedKeywords,
-      setSelectedProjectId,
-      setSelectedTagId,
+      replaceSelectedProjectIds,
+      replaceSelectedTagIds,
       toast,
     ],
   );
@@ -595,10 +607,12 @@ function DashboardContent() {
             hasActiveFilters={hasActiveFilters}
             projects={projects}
             tags={tags}
-            selectedProjectId={selectedProjectId}
-            selectedTagId={selectedTagId}
-            onProjectChange={setSelectedProjectId}
-            onTagChange={setSelectedTagId}
+            selectedProjectIds={selectedProjectIds}
+            selectedTagIds={selectedTagIds}
+            onProjectToggle={handleProjectToggle}
+            onTagToggle={handleTagToggle}
+            onClearProjects={clearProjects}
+            onClearTags={clearTags}
             isExportReady={isExportReady}
             isExporting={isExporting}
             filterPresets={filterPresets}

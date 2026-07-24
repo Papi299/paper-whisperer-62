@@ -7,6 +7,7 @@ import type { PoolStudyType } from "@/hooks/useStudyTypePool";
 import type { MatchFlags, NotesPresence, ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { timedQueryFn } from "@/lib/queryTiming";
+import { canonicalizeIds, dedupeIds, resolveFilterPaperIds } from "@/lib/filterSets";
 
 /** Minimum query length to trigger server-side full-text search. */
 const SERVER_SEARCH_MIN_LENGTH = 3;
@@ -29,8 +30,8 @@ interface UseFilterStateArgs {
 
 export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   // ── Filter state ──
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
@@ -200,31 +201,43 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   ]);
 
   // ── Junction pre-queries (project/tag ID resolution) ──
+  // Multiple selected Projects/Tags use OR semantics: a paper matches when it
+  // belongs to *at least one* selected entity. We resolve that with a single
+  // bounded `.in(...)` query per category and dedupe the resulting paper IDs
+  // (one paper can belong to several selected entities → several rows).
+  //
+  // Query keys are canonicalized (deduped + sorted) so `[A,B]` and `[B,A]`
+  // hit the same React Query cache entry — selection order never spawns a
+  // redundant fetch. `canonicalizeIds` returns a new array, so React state is
+  // never mutated.
+  const projectIdsKey = useMemo(() => canonicalizeIds(selectedProjectIds), [selectedProjectIds]);
+  const tagIdsKey = useMemo(() => canonicalizeIds(selectedTagIds), [selectedTagIds]);
+
   const { data: projectPaperIds } = useQuery<string[]>({
-    queryKey: ["junction", "paper_projects", selectedProjectId],
+    queryKey: ["junction", "paper_projects", projectIdsKey],
     queryFn: timedQueryFn("junction.paper_projects", async () => {
       const { data, error } = await supabase
         .from("paper_projects")
         .select("paper_id")
-        .eq("project_id", selectedProjectId!);
+        .in("project_id", projectIdsKey);
       if (error) throw error;
-      return data.map((r) => r.paper_id);
+      return dedupeIds(data.map((r) => r.paper_id));
     }),
-    enabled: !!selectedProjectId,
+    enabled: projectIdsKey.length > 0,
     staleTime: 30_000,
   });
 
   const { data: tagPaperIds } = useQuery<string[]>({
-    queryKey: ["junction", "paper_tags", selectedTagId],
+    queryKey: ["junction", "paper_tags", tagIdsKey],
     queryFn: timedQueryFn("junction.paper_tags", async () => {
       const { data, error } = await supabase
         .from("paper_tags")
         .select("paper_id")
-        .eq("tag_id", selectedTagId!);
+        .in("tag_id", tagIdsKey);
       if (error) throw error;
-      return data.map((r) => r.paper_id);
+      return dedupeIds(data.map((r) => r.paper_id));
     }),
-    enabled: !!selectedTagId,
+    enabled: tagIdsKey.length > 0,
     staleTime: 30_000,
   });
 
@@ -246,45 +259,32 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
 
   // ── ID intersection (4-state model) ──
   const filterPaperIds = useMemo((): string[] | null | undefined => {
-    const needsProject = !!selectedProjectId;
-    const needsTag = !!selectedTagId;
-    const needsPhraseSearch = usePhraseSearch;
-    const needsFtsSearch = useFtsSearch;
-    const needsShortSearch = useShortSearch;
-    const needsKeywords = selectedKeywords.length > 0;
-
-    // No ID-based filter active → null (no filtering)
-    if (!needsProject && !needsTag && !needsPhraseSearch && !needsFtsSearch && !needsShortSearch && !needsKeywords) return null;
-
-    // Any required ID set still loading → undefined (block papers query)
-    if (needsProject && projectPaperIds === undefined) return undefined;
-    if (needsTag && tagPaperIds === undefined) return undefined;
-    if (needsPhraseSearch && phraseSearchMatches === undefined) return undefined;
-    if (needsFtsSearch && serverSearchMatches === undefined) return undefined;
-    if (needsShortSearch && shortSearchMatches === undefined) return undefined;
-    if (needsKeywords && keywordPaperIds === undefined) return undefined;
-
-    // All required sets resolved — intersect them
-    const idSets: string[][] = [];
-    if (needsProject) idSets.push(projectPaperIds!);
-    if (needsTag) idSets.push(tagPaperIds!);
-    if (needsPhraseSearch) idSets.push(Array.from(phraseSearchMatches!.keys()));
-    if (needsFtsSearch) idSets.push(Array.from(serverSearchMatches!.keys()));
-    if (needsShortSearch) idSets.push(Array.from(shortSearchMatches!.keys()));
-    if (needsKeywords) idSets.push(keywordPaperIds!);
-
-    if (idSets.length === 0) return null; // shouldn't happen, safe fallback
-
-    let result = new Set(idSets[0]);
-    for (let i = 1; i < idSets.length; i++) {
-      const next = new Set(idSets[i]);
-      result = new Set([...result].filter((id) => next.has(id)));
-    }
-    return Array.from(result);
+    // Each active category contributes exactly one resolved set. The Project
+    // set is already the OR-union of the selected projects (single `.in(...)`
+    // query above); the Tag set likewise. `resolveFilterPaperIds` implements
+    // the four-state model — null (no filter) / undefined (loading) / [] (no
+    // match) / resolved intersection — and ANDs the categories together once.
+    return resolveFilterPaperIds([
+      { active: selectedProjectIds.length > 0, ids: projectPaperIds },
+      { active: selectedTagIds.length > 0, ids: tagPaperIds },
+      {
+        active: usePhraseSearch,
+        ids: phraseSearchMatches ? Array.from(phraseSearchMatches.keys()) : undefined,
+      },
+      {
+        active: useFtsSearch,
+        ids: serverSearchMatches ? Array.from(serverSearchMatches.keys()) : undefined,
+      },
+      {
+        active: useShortSearch,
+        ids: shortSearchMatches ? Array.from(shortSearchMatches.keys()) : undefined,
+      },
+      { active: selectedKeywords.length > 0, ids: keywordPaperIds },
+    ]);
   }, [
-    selectedProjectId,
+    selectedProjectIds,
     projectPaperIds,
-    selectedTagId,
+    selectedTagIds,
     tagPaperIds,
     usePhraseSearch,
     phraseSearchMatches,
@@ -343,6 +343,41 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     );
   }, []);
 
+  // ── Project / Tag toggles (multi-select, OR within category) ──
+  // Toggling never introduces a duplicate ID during user interaction: an
+  // already-present ID is removed, an absent one is appended. The raw React
+  // state setters remain private to this hook; the full-replacement path
+  // (preset load) goes through the dedupe-guarded `replaceSelectedProjectIds`
+  // / `replaceSelectedTagIds` callbacks defined below.
+  const handleProjectToggle = useCallback((projectId: string) => {
+    setSelectedProjectIds((prev) =>
+      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],
+    );
+  }, []);
+
+  const handleTagToggle = useCallback((tagId: string) => {
+    setSelectedTagIds((prev) =>
+      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId],
+    );
+  }, []);
+
+  const clearProjects = useCallback(() => setSelectedProjectIds([]), []);
+  const clearTags = useCallback(() => setSelectedTagIds([]), []);
+
+  // Full-array replacement boundary (used by preset load). The raw `setState`
+  // functions are kept private to this hook; callers replace the whole
+  // selection only through these callbacks, which deduplicate first so the
+  // set-uniqueness invariant cannot be violated even by a payload carrying
+  // duplicate IDs. `dedupeIds` returns a new array (no input mutation).
+  const replaceSelectedProjectIds = useCallback(
+    (ids: string[]) => setSelectedProjectIds(dedupeIds(ids)),
+    [],
+  );
+  const replaceSelectedTagIds = useCallback(
+    (ids: string[]) => setSelectedTagIds(dedupeIds(ids)),
+    [],
+  );
+
   // ── Study type filter options (unique group names) ──
   const studyTypeFilterOptions = useMemo(() => {
     const groupSet = new Set<string>();
@@ -360,8 +395,8 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     studyType !== "all" ||
     notesPresence !== "all" ||
     selectedKeywords.length > 0 ||
-    selectedProjectId !== null ||
-    selectedTagId !== null;
+    selectedProjectIds.length > 0 ||
+    selectedTagIds.length > 0;
 
   const clearFilters = useCallback(() => {
     setSearchQuery("");
@@ -370,8 +405,8 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
     setStudyType("all");
     setNotesPresence("all");
     setSelectedKeywords([]);
-    setSelectedProjectId(null);
-    setSelectedTagId(null);
+    setSelectedProjectIds([]);
+    setSelectedTagIds([]);
   }, []);
 
   return {
@@ -398,10 +433,14 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
      * `useFilterPresets.applyPreset` when restoring a saved filter preset).
      */
     setSelectedKeywords,
-    selectedProjectId,
-    setSelectedProjectId,
-    selectedTagId,
-    setSelectedTagId,
+    selectedProjectIds,
+    replaceSelectedProjectIds,
+    handleProjectToggle,
+    clearProjects,
+    selectedTagIds,
+    replaceSelectedTagIds,
+    handleTagToggle,
+    clearTags,
     studyTypeFilterOptions,
 
     // Sort state
