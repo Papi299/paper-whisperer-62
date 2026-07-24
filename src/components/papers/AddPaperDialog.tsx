@@ -1,4 +1,4 @@
-import { useState, useCallback, type DragEvent } from "react";
+import { useState, useCallback, useRef, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -118,6 +118,11 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const [projectOpen, setProjectOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
 
+  // Refs used only to restore focus after a continuation transition
+  // (Import More / Import Another File) — never for reading/writing values.
+  const bulkInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileDropzoneRef = useRef<HTMLDivElement>(null);
+
   const toggleProject = (projectId: string) => {
     setSelectedProjectIds((prev) =>
       prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId]
@@ -204,6 +209,12 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     e.target.value = "";
   }, []);
 
+  // The hidden native <input type="file"> remains the authoritative picker; the
+  // dropzone (mouse or keyboard) just forwards to it.
+  const openFilePicker = useCallback(() => {
+    document.getElementById("file-import-input")?.click();
+  }, []);
+
   const processImportFile = (file: File) => {
     const ext = "." + file.name.split(".").pop()?.toLowerCase();
     if (!ACCEPTED_FILE_EXTENSIONS.includes(ext)) {
@@ -243,6 +254,10 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
 
   const handleBulkImport = async () => {
     if (!onBulkImport) return;
+    // Defensive: a completed run must first return to the ready state via
+    // "Import More" before another import can begin, so the already-processed
+    // identifier batch can never be re-imported by an unexpected re-invocation.
+    if (bulkComplete) return;
     const ids = parseBulkIdentifiers(bulkInput);
     if (ids.length === 0) return;
 
@@ -271,9 +286,13 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
       await onFileImport(parsedFile.papers, (current, total, added, skipped, failed) => {
         setFileImportProgress({ current, total, added, skipped, failed });
       }, getImportOptions());
+      // Only a run that resolved without throwing reaches the completed
+      // continuation state. If the callback throws, completion is skipped so a
+      // partial run is never presented as successful and the parsed file and
+      // assignment selections are preserved for a retry.
+      setFileImportComplete(true);
     } finally {
       setFileImportRunning(false);
-      setFileImportComplete(true);
     }
   };
 
@@ -290,15 +309,52 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     setFileImportProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
     setSelectedProjectIds([]);
     setSelectedTagIds([]);
+    // Transient interaction state must not survive a close/reopen: clear both
+    // drop-zone drag overlays and both controlled assignment popovers so the
+    // reopened dialog is in a clean, non-dragging, no-popover state.
+    setIsDragging(false);
+    setIsFileDragging(false);
+    setProjectOpen(false);
+    setTagOpen(false);
     setActiveTab("import");
     onOpenChange(false);
   };
 
+  // ── Continuation resets (per-run only; assignments and tab preserved) ──
+
+  // Identifier-run reset — used by "Import More". Clears only the identifier
+  // run so the user can enter a fresh batch. Selected Projects/Tags, the active
+  // tab, the manual form and any parsed-file state are intentionally preserved.
+  const resetBulkImport = () => {
+    setBulkInput("");
+    setBulkRunning(false);
+    setBulkProgress({ current: 0, total: 0 });
+    setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
+    setIsDragging(false);
+  };
+
+  const handleImportMore = () => {
+    resetBulkImport();
+    // Return focus to the identifier textarea once the ready state re-renders.
+    setTimeout(() => bulkInputRef.current?.focus(), 0);
+  };
+
+  // File-run reset — used by "Import Another File" and the file-change/Back
+  // action. Clears only the file run; selected Projects/Tags and the active tab
+  // are preserved.
   const resetFileImport = () => {
     setParsedFile(null);
     setFileName(null);
+    setFileImportRunning(false);
     setFileImportComplete(false);
     setFileImportProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
+    setIsFileDragging(false);
+  };
+
+  const handleImportAnotherFile = () => {
+    resetFileImport();
+    // Return focus to the dropzone once it re-renders.
+    setTimeout(() => fileDropzoneRef.current?.focus(), 0);
   };
 
   const updateManualField = (field: keyof ManualPaperData, value: string) => {
@@ -311,10 +367,24 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const fileProgressPercent = fileImportProgress.total > 0 ? Math.round((fileImportProgress.current / fileImportProgress.total) * 100) : 0;
   const isAnyRunning = bulkRunning || fileImportRunning;
 
-  // Shared assign-to section rendered in all tabs
-  const assignToSection = (projects.length > 0 || tags.length > 0) ? (
+  // Shared assign-to section rendered in all tabs. The `context` distinguishes
+  // configuring the imminent run ("current-import") from configuring the *next*
+  // run while a completed run's summary is shown ("next-import"). The selector
+  // implementation is identical in both cases — only the heading and helper copy
+  // change — so the Project/Tag controls are never duplicated.
+  const renderAssignSection = (context: "current-import" | "next-import") => {
+    if (projects.length === 0 && tags.length === 0) return null;
+    const isNext = context === "next-import";
+    return (
     <div className="space-y-3 rounded-md border border-dashed p-3">
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assign on Import</p>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        {isNext ? "Assignments for next import" : "Assign on Import"}
+      </p>
+      {isNext && (
+        <p className="text-xs text-muted-foreground">
+          These selections apply to the next batch, not the completed import.
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         {projects.length > 0 && (
           <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={true}>
@@ -390,7 +460,12 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
               <Badge key={id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
                 {project.name}
-                <button onClick={() => toggleProject(id)} className="hover:bg-muted rounded p-0.5">
+                <button
+                  type="button"
+                  onClick={() => toggleProject(id)}
+                  aria-label={`Remove project ${project.name}`}
+                  className="hover:bg-muted rounded p-0.5"
+                >
                   <X className="h-3 w-3" />
                 </button>
               </Badge>
@@ -402,7 +477,12 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
               <Badge key={id} variant="secondary" className="text-xs flex items-center gap-1 pr-1">
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }} />
                 {tag.name}
-                <button onClick={() => toggleTag(id)} className="hover:bg-muted rounded p-0.5">
+                <button
+                  type="button"
+                  onClick={() => toggleTag(id)}
+                  aria-label={`Remove tag ${tag.name}`}
+                  className="hover:bg-muted rounded p-0.5"
+                >
                   <X className="h-3 w-3" />
                 </button>
               </Badge>
@@ -411,7 +491,8 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
         </div>
       )}
     </div>
-  ) : null;
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={isAnyRunning ? undefined : resetAndClose}>
@@ -441,6 +522,9 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
 
           {/* ── Import IDs Tab ── */}
           <TabsContent value="import" className="space-y-4 mt-4">
+            {/* Source input — hidden in completed state so the already-processed
+                identifier batch cannot be accidentally re-imported. */}
+            {!bulkComplete && (
             <div className="space-y-2">
               <Label htmlFor="bulk-identifiers">
                 Paste PMIDs or DOIs, or drop a .txt/.csv file
@@ -462,6 +546,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                   </div>
                 )}
                 <Textarea
+                  ref={bulkInputRef}
                   id="bulk-identifiers"
                   placeholder={`Paste your list of identifiers here, or drag & drop a .txt/.csv file:
 38237512
@@ -483,9 +568,10 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 Title-based import may match the wrong paper. PMID/DOI import is more reliable.
               </p>
             </div>
+            )}
 
-            {/* Assign to project/tags */}
-            {!bulkRunning && !bulkComplete && assignToSection}
+            {/* Assign to project/tags — configures the imminent run */}
+            {!bulkRunning && !bulkComplete && renderAssignSection("current-import")}
 
             {bulkRunning && (
               <div className="space-y-3">
@@ -547,17 +633,25 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
               </div>
             )}
 
-            <div className="flex justify-end gap-2">
+            {/* After completion the assignment controls configure the NEXT run,
+                not the completed one. */}
+            {bulkComplete && renderAssignSection("next-import")}
+
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={resetAndClose} disabled={bulkRunning}>
                 {bulkRunning ? "Running…" : (bulkComplete ? "Close" : "Cancel")}
               </Button>
-              <Button
-                onClick={handleBulkImport}
-                disabled={bulkRunning || bulkIds.length === 0 || !onBulkImport}
-              >
-                {bulkRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Import {bulkIds.length > 0 ? `${bulkIds.length} Paper${bulkIds.length !== 1 ? "s" : ""}` : "Papers"}
-              </Button>
+              {bulkComplete ? (
+                <Button onClick={handleImportMore}>Import More</Button>
+              ) : (
+                <Button
+                  onClick={handleBulkImport}
+                  disabled={bulkRunning || bulkIds.length === 0 || !onBulkImport}
+                >
+                  {bulkRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Import {bulkIds.length > 0 ? `${bulkIds.length} Paper${bulkIds.length !== 1 ? "s" : ""}` : "Papers"}
+                </Button>
+              )}
             </div>
           </TabsContent>
 
@@ -565,16 +659,27 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
           <TabsContent value="file" className="space-y-4 mt-4">
             {!parsedFile && !fileImportRunning && (
               <div
+                ref={fileDropzoneRef}
+                role="button"
+                tabIndex={0}
+                aria-label="Choose a file to import"
                 onDragOver={handleFileDragOver}
                 onDragLeave={handleFileDragLeave}
                 onDrop={handleFileDrop}
                 className={cn(
                   "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors cursor-pointer",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                   isFileDragging
                     ? "border-primary bg-primary/5"
                     : "border-muted-foreground/25 hover:border-muted-foreground/50"
                 )}
-                onClick={() => document.getElementById("file-import-input")?.click()}
+                onClick={openFilePicker}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openFilePicker();
+                  }
+                }}
               >
                 <FileUp className={cn("h-10 w-10 mb-3", isFileDragging ? "text-primary" : "text-muted-foreground")} />
                 <p className="text-sm font-medium mb-1">
@@ -665,7 +770,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 )}
 
                 {/* Assign to project/tags */}
-                {parsedFile.papers.length > 0 && assignToSection}
+                {parsedFile.papers.length > 0 && renderAssignSection("current-import")}
               </div>
             )}
 
@@ -709,18 +814,26 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
               </div>
             )}
 
-            <div className="flex justify-end gap-2">
+            {/* After completion the assignment controls configure the NEXT file
+                import, not the completed one. */}
+            {fileImportComplete && renderAssignSection("next-import")}
+
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={fileImportComplete ? resetAndClose : (parsedFile ? resetFileImport : resetAndClose)} disabled={fileImportRunning}>
                 {fileImportRunning ? "Running…" : (fileImportComplete ? "Close" : (parsedFile ? "Back" : "Cancel"))}
               </Button>
-              {parsedFile && parsedFile.papers.length > 0 && !fileImportComplete && (
-                <Button
-                  onClick={handleFileImport}
-                  disabled={fileImportRunning || !onFileImport}
-                >
-                  {fileImportRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Import {parsedFile.papers.length} Paper{parsedFile.papers.length !== 1 ? "s" : ""}
-                </Button>
+              {fileImportComplete ? (
+                <Button onClick={handleImportAnotherFile}>Import Another File</Button>
+              ) : (
+                parsedFile && parsedFile.papers.length > 0 && (
+                  <Button
+                    onClick={handleFileImport}
+                    disabled={fileImportRunning || !onFileImport}
+                  >
+                    {fileImportRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Import {parsedFile.papers.length} Paper{parsedFile.papers.length !== 1 ? "s" : ""}
+                  </Button>
+                )
               )}
             </div>
           </TabsContent>
@@ -850,7 +963,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                 </div>
 
                 {/* Assign to project/tags */}
-                {assignToSection}
+                {renderAssignSection("current-import")}
               </div>
             </div>
 
