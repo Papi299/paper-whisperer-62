@@ -64,4 +64,8 @@ export const queryKeys = {
   filterPresets: {
     all: (userId: string) => ["filterPresets", userId] as const,
   },
+  aiQuota: {
+    /** Per-user AI-analysis quota status (read-only get_ai_quota_status RPC). */
+    status: (userId: string) => ["aiQuota", userId, "status"] as const,
+  },
 } as const;

@@ -7,11 +7,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.4"
-  }
   public: {
     Tables: {
       filter_presets: {
@@ -737,6 +732,20 @@ export type Database = {
         Args: { p_keywords: string[]; p_user_id: string }
         Returns: {
           paper_id: string
+        }[]
+      }
+      get_ai_quota_status: {
+        Args: { p_user_id: string }
+        Returns: {
+          allowed: boolean
+          period_type: string
+          plan: string
+          plan_status: string
+          quota: number
+          reason: string
+          remaining: number
+          reset_at: string
+          used: number
         }[]
       }
       get_duplicate_papers: { Args: never; Returns: Json }
