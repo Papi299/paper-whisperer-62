@@ -1,5 +1,7 @@
 # Quotas and Pricing (MVP Baselines)
 
+> **Launch implementation paused (C27, 2026-07-24).** These plan and pricing baselines remain valid **future-facing** planning, but public-launch/commercial-launch **implementation** is paused by owner decision. This document is **not** the active next engineering plan and does not authorize paywall, pricing-enforcement or billing work; the active priority is feature and workflow development. Reactivation requires a new explicit owner decision. See [decisions-and-triggers.md](decisions-and-triggers.md) C27.
+>
 > **Status: MVP baselines with instrumentation requirement, not final commitments.** Every numeric value below is an **approved starting point** for implementation. Each value must be wired with telemetry from day one of the closed beta so it can be validated against real usage, AI cost, conversion, and abuse signals before it is treated as permanent. Do not surface specific numbers in marketing copy outside the planned MVP pricing page until they are explicitly ratified post-beta. **No commercial functionality is implemented today.**
 >
 > **Strategy pivot (2026-05-21).** The prior framing (Core / AI tiers, 7-day time-based trial, single-user-only) has been superseded by a **web-first Product-Led Growth (PLG)** model with a **Free forever** tier (AI teaser), **Pro / Researcher** as the primary paid SKU, and **Labs / Teams** as a future B2B "Coming Soon / Contact Sales" tier. See the C7–C16 entries in [`decisions-and-triggers.md`](decisions-and-triggers.md).

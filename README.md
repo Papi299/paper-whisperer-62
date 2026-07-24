@@ -50,7 +50,7 @@ Deeper DB optimization is evidence-deferred until the library grows past ~2,000â
 
 ## Commercialization
 
-Commercialization is **in progress**, not planning-only. The provider-neutral entitlement schema and server-side AI + storage quota enforcement listed under Current status are implemented and live. Billing itself is not: **Paddle** is the selected Merchant-of-Record provider (decision C18), and integration is gated on owner-side Paddle setup. There is no checkout, webhook ingestion, customer portal, paywall UX, legal page set, or store listing today, and no mobile packaging.
+**Commercial-launch implementation is currently paused** (owner decision C27, 2026-07-24): the active priority is product feature and workflow development, and Paddle/billing/launch work is off the active critical path until a new explicit owner decision. Commercialization is **paused, not cancelled**. The provider-neutral entitlement schema and server-side AI + storage quota enforcement listed under Current status are already implemented and live and remain part of the architecture. Billing itself is not implemented: **Paddle** remains the selected future Merchant-of-Record provider (decision C18), gated on owner-side Paddle setup whenever launch work resumes. There is no checkout, webhook ingestion, customer portal, paywall UX, legal page set, or store listing today, and no mobile packaging.
 
 | Doc | Purpose |
 |---|---|
