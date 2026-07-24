@@ -13,8 +13,10 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { EntityMatchMode } from "@/lib/filterSets";
 
 /** Minimal shape the filter needs from a Project or Tag. */
 export interface EntityFilterItem {
@@ -45,6 +47,21 @@ interface SearchableEntityMultiFilterProps {
   emptyMessage: string;
   /** Accessible name for the trigger button (announced to screen readers). */
   ariaLabel: string;
+  /**
+   * Current Any/All match mode for this category. When provided together with
+   * `onMatchModeChange`, an in-dropdown mode selector appears once two or more
+   * items are selected, and the closed trigger shows the active mode. Omit both
+   * to render the category without a mode (legacy count-only behavior).
+   */
+  matchMode?: EntityMatchMode;
+  /** Change the Any/All match mode. Keeps the popover open. */
+  onMatchModeChange?: (mode: EntityMatchMode) => void;
+  /** Accessible group label for the mode selector, e.g. "Match projects". */
+  matchModeGroupLabel?: string;
+  /** Description of Any, e.g. "Match papers in at least one selected project". */
+  matchAnyDescription?: string;
+  /** Description of All, e.g. "Match papers in every selected project". */
+  matchAllDescription?: string;
   /** Optional extra classes for the trigger button. */
   className?: string;
 }
@@ -57,10 +74,13 @@ interface SearchableEntityMultiFilterProps {
  *  • zero selected  → trigger shows `allLabel` ("All Projects").
  *  • one selected   → trigger shows the single name (truncated, full name in
  *    `title` + `aria-label`), on one line, never overflowing the fixed trigger.
- *  • many selected  → trigger shows a compact `N Projects` count.
+ *    Any/All is logically a no-op for one item, so no mode is appended.
+ *  • many selected  → trigger shows a compact `N Projects · Any/All` count, and
+ *    an in-dropdown mode selector lets the user switch Any↔All.
  *
- * Selection semantics are OR *within* this category — the parent intersects the
- * resulting paper-ID set with the other filter categories (AND across).
+ * Selection semantics within this category are Any (OR-union) or All
+ * (AND-intersection) per `matchMode`; the parent intersects the resulting
+ * paper-ID set with the other filter categories (AND across).
  *
  * Search is case-insensitive substring matching, whitespace-tolerant, computed
  * here (`shouldFilter={false}` on `Command`) so behavior is deterministic and
@@ -78,6 +98,11 @@ export function SearchableEntityMultiFilter({
   searchPlaceholder,
   emptyMessage,
   ariaLabel,
+  matchMode,
+  onMatchModeChange,
+  matchModeGroupLabel,
+  matchAnyDescription,
+  matchAllDescription,
   className,
 }: SearchableEntityMultiFilterProps) {
   const [open, setOpen] = useState(false);
@@ -96,6 +121,12 @@ export function SearchableEntityMultiFilter({
     () => (selectedIds.length === 1 ? items.find((i) => i.id === selectedIds[0]) ?? null : null),
     [selectedIds, items],
   );
+
+  // Mode selector is meaningful only when >= 2 items are selected (Any and All
+  // are identical for 0 or 1) and the category actually has a mode wired in.
+  const modeEnabled = !!matchMode && !!onMatchModeChange;
+  const showModeSelector = modeEnabled && selectedIds.length >= 2;
+  const modeWord = matchMode === "all" ? "All" : "Any";
 
   // Trigger label + accessible name.
   const count = selectedIds.length;
@@ -120,10 +151,17 @@ export function SearchableEntityMultiFilter({
     );
     accessibleName = `${ariaLabel}. ${singleSelected.name} selected`;
   } else {
-    // One selected but not yet loaded into `items`, or many selected.
-    const label = `${count} ${count === 1 ? nounSingular : nounPlural}`;
+    // One selected but not yet loaded into `items`, or many selected. For a
+    // multi-selection with a wired mode, the active mode is shown exactly once
+    // ("2 Projects · Any") so it is visible while the dropdown is closed.
+    const noun = count === 1 ? nounSingular : nounPlural;
+    const label =
+      modeEnabled && count >= 2 ? `${count} ${noun} · ${modeWord}` : `${count} ${noun}`;
     triggerContent = <span className="truncate">{label}</span>;
-    accessibleName = `${ariaLabel}. ${label} selected`;
+    accessibleName =
+      modeEnabled && count >= 2
+        ? `${ariaLabel}. ${count} ${noun} selected, matching ${matchMode === "all" ? "all" : "any"}`
+        : `${ariaLabel}. ${count} ${noun} selected`;
   }
 
   return (
@@ -152,6 +190,42 @@ export function SearchableEntityMultiFilter({
         className="w-[16rem] max-w-[calc(100vw-2rem)] p-0 bg-popover"
         align="start"
       >
+        {showModeSelector && (
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              Match selected
+            </span>
+            <ToggleGroup
+              type="single"
+              value={matchMode}
+              // Radix single-mode fires "" when the active item is re-clicked;
+              // ignore anything outside the enum so the mode can never be
+              // cleared to an empty value.
+              onValueChange={(next) => {
+                if (next === "any" || next === "all") onMatchModeChange?.(next);
+              }}
+              aria-label={matchModeGroupLabel ?? "Match selected"}
+              className="gap-0.5"
+            >
+              <ToggleGroupItem
+                value="any"
+                aria-label={matchAnyDescription}
+                title={matchAnyDescription}
+                className="h-7 px-2.5 text-xs"
+              >
+                Any
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="all"
+                aria-label={matchAllDescription}
+                title={matchAllDescription}
+                className="h-7 px-2.5 text-xs"
+              >
+                All
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+        )}
         <Command shouldFilter={false}>
           <CommandInput
             placeholder={searchPlaceholder}

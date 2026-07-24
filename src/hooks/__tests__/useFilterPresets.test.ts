@@ -39,6 +39,8 @@ function makeSetters(): PresetSetters & {
     setSelectedKeywords: [],
     setSelectedProjectIds: [],
     setSelectedTagIds: [],
+    setProjectMatchMode: [],
+    setTagMatchMode: [],
   };
   return {
     calls,
@@ -50,6 +52,8 @@ function makeSetters(): PresetSetters & {
     setSelectedKeywords: (v) => calls.setSelectedKeywords.push(v),
     setSelectedProjectIds: (v) => calls.setSelectedProjectIds.push(v),
     setSelectedTagIds: (v) => calls.setSelectedTagIds.push(v),
+    setProjectMatchMode: (v) => calls.setProjectMatchMode.push(v),
+    setTagMatchMode: (v) => calls.setTagMatchMode.push(v),
   };
 }
 
@@ -64,6 +68,8 @@ function defaultPayload(): PresetPayload {
     selectedKeywords: [],
     selectedProjectIds: [],
     selectedTagIds: [],
+    projectMatchMode: "any",
+    tagMatchMode: "any",
   };
 }
 
@@ -79,6 +85,23 @@ function v1Payload(overrides: Record<string, unknown> = {}): Record<string, unkn
     selectedKeywords: [],
     selectedProjectId: null,
     selectedTagId: null,
+    ...overrides,
+  };
+}
+
+/** A raw version-2 payload (multi-select arrays, no match mode) as it would sit
+ * in the DB before the v3 bump. */
+function v2Payload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 2,
+    searchQuery: "",
+    yearFrom: "",
+    yearTo: "",
+    studyType: "all",
+    notesPresence: "all",
+    selectedKeywords: [],
+    selectedProjectIds: [],
+    selectedTagIds: [],
     ...overrides,
   };
 }
@@ -117,7 +140,7 @@ describe("validatePresetName", () => {
 // ── buildPresetPayload ──────────────────────────────────────────────────
 
 describe("buildPresetPayload", () => {
-  it("attaches the current (version-2) version constant", () => {
+  it("attaches the current (version-3) version constant", () => {
     const payload = buildPresetPayload({
       searchQuery: "foo",
       yearFrom: "",
@@ -127,8 +150,10 @@ describe("buildPresetPayload", () => {
       selectedKeywords: [],
       selectedProjectIds: [],
       selectedTagIds: [],
+      projectMatchMode: "any",
+      tagMatchMode: "any",
     });
-    expect(PRESET_PAYLOAD_VERSION).toBe(2);
+    expect(PRESET_PAYLOAD_VERSION).toBe(3);
     expect(payload.version).toBe(PRESET_PAYLOAD_VERSION);
     expect(payload.searchQuery).toBe("foo");
   });
@@ -143,27 +168,89 @@ describe("buildPresetPayload", () => {
       selectedKeywords: [],
       selectedProjectIds: ["p1", "p2"],
       selectedTagIds: ["t1"],
+      projectMatchMode: "any",
+      tagMatchMode: "any",
     });
     expect(payload.selectedProjectIds).toEqual(["p1", "p2"]);
     expect(payload.selectedTagIds).toEqual(["t1"]);
+  });
+
+  it("emits version 3 and carries both match modes", () => {
+    const payload = buildPresetPayload({
+      searchQuery: "",
+      yearFrom: "",
+      yearTo: "",
+      studyType: "all",
+      notesPresence: "all",
+      selectedKeywords: [],
+      selectedProjectIds: ["p1", "p2"],
+      selectedTagIds: ["t1", "t2"],
+      projectMatchMode: "all",
+      tagMatchMode: "any",
+    });
+    expect(payload.version).toBe(3);
+    expect(payload.projectMatchMode).toBe("all");
+    expect(payload.tagMatchMode).toBe("any");
   });
 });
 
 // ── parsePresetPayload (Zod + v1 back-compat) ───────────────────────────
 
 describe("parsePresetPayload", () => {
-  it("returns the parsed payload for a valid version-2 row", () => {
+  it("returns the parsed payload for a valid version-3 row", () => {
     const payload = defaultPayload();
     expect(parsePresetPayload(payload)).toEqual(payload);
   });
 
-  it("accepts a fully-populated version-2 payload", () => {
+  it("accepts a fully-populated version-3 payload with mixed modes", () => {
     const payload: PresetPayload = {
       ...defaultPayload(),
       selectedProjectIds: ["p1", "p2"],
       selectedTagIds: ["t1"],
+      projectMatchMode: "all",
+      tagMatchMode: "any",
     };
     expect(parsePresetPayload(payload)).toEqual(payload);
+  });
+
+  it("rejects an invalid projectMatchMode value", () => {
+    const bad = { ...defaultPayload(), projectMatchMode: "sometimes" };
+    expect(parsePresetPayload(bad)).toBeNull();
+  });
+
+  it("rejects an invalid tagMatchMode value", () => {
+    const bad = { ...defaultPayload(), tagMatchMode: "both" };
+    expect(parsePresetPayload(bad)).toBeNull();
+  });
+
+  it("normalizes a version-2 payload to version 3 with Any/Any", () => {
+    const parsed = parsePresetPayload(
+      v2Payload({ selectedProjectIds: ["p1", "p2"], selectedTagIds: ["t1"] }),
+    );
+    expect(parsed?.version).toBe(PRESET_PAYLOAD_VERSION);
+    expect(parsed?.selectedProjectIds).toEqual(["p1", "p2"]);
+    expect(parsed?.selectedTagIds).toEqual(["t1"]);
+    expect(parsed?.projectMatchMode).toBe("any");
+    expect(parsed?.tagMatchMode).toBe("any");
+  });
+
+  it("deduplicates a version-2 payload's arrays while upgrading to v3", () => {
+    const parsed = parsePresetPayload(
+      v2Payload({ selectedProjectIds: ["p1", "p1", "p2"], selectedTagIds: ["t1", "t1"] }),
+    );
+    expect(parsed?.selectedProjectIds).toEqual(["p1", "p2"]);
+    expect(parsed?.selectedTagIds).toEqual(["t1"]);
+    expect(parsed?.projectMatchMode).toBe("any");
+    expect(parsed?.tagMatchMode).toBe("any");
+  });
+
+  it("normalizes a version-1 payload to version 3 with Any/Any", () => {
+    const parsed = parsePresetPayload(
+      v1Payload({ selectedProjectId: "proj-1", selectedTagId: "tag-1" }),
+    );
+    expect(parsed?.version).toBe(PRESET_PAYLOAD_VERSION);
+    expect(parsed?.projectMatchMode).toBe("any");
+    expect(parsed?.tagMatchMode).toBe("any");
   });
 
   it("round-trips a raw quoted search string verbatim", () => {
@@ -243,9 +330,9 @@ describe("parsePresetPayload", () => {
     expect(parsePresetPayload({})).toBeNull();
   });
 
-  // ── Set-semantics normalization of version-2 arrays ──
+  // ── Set-semantics normalization of version-3 arrays ──
 
-  it("deduplicates duplicate project IDs in a version-2 payload (first-seen order)", () => {
+  it("deduplicates duplicate project IDs in a version-3 payload (first-seen order)", () => {
     const parsed = parsePresetPayload({
       ...defaultPayload(),
       selectedProjectIds: ["A", "A", "B", "A"],
@@ -253,7 +340,7 @@ describe("parsePresetPayload", () => {
     expect(parsed?.selectedProjectIds).toEqual(["A", "B"]);
   });
 
-  it("deduplicates duplicate tag IDs in a version-2 payload", () => {
+  it("deduplicates duplicate tag IDs in a version-3 payload", () => {
     const parsed = parsePresetPayload({
       ...defaultPayload(),
       selectedTagIds: ["T1", "T2", "T1"],
@@ -303,6 +390,9 @@ describe("applyPreset", () => {
     expect(setters.calls.setSelectedKeywords).toEqual([[]]);
     expect(setters.calls.setSelectedProjectIds).toEqual([[]]);
     expect(setters.calls.setSelectedTagIds).toEqual([[]]);
+    // Empty categories normalize both modes to Any.
+    expect(setters.calls.setProjectMatchMode).toEqual(["any"]);
+    expect(setters.calls.setTagMatchMode).toEqual(["any"]);
     expect(result).toEqual({ droppedProjectCount: 0, droppedTagCount: 0 });
   });
 
@@ -318,6 +408,8 @@ describe("applyPreset", () => {
       selectedKeywords: ["sleep", "exercise"],
       selectedProjectIds: ["proj-1", "proj-2"],
       selectedTagIds: ["tag-1"],
+      projectMatchMode: "all",
+      tagMatchMode: "any",
     };
     const result = applyPreset(
       payload,
@@ -330,7 +422,53 @@ describe("applyPreset", () => {
     expect(setters.calls.setSelectedKeywords).toEqual([["sleep", "exercise"]]);
     expect(setters.calls.setSelectedProjectIds).toEqual([["proj-1", "proj-2"]]);
     expect(setters.calls.setSelectedTagIds).toEqual([["tag-1"]]);
+    // Both categories keep valid members, so their saved modes are restored.
+    expect(setters.calls.setProjectMatchMode).toEqual(["all"]);
+    expect(setters.calls.setTagMatchMode).toEqual(["any"]);
     expect(result).toEqual({ droppedProjectCount: 0, droppedTagCount: 0 });
+  });
+
+  it("restores each category's saved mode independently", () => {
+    const setters = makeSetters();
+    const payload: PresetPayload = {
+      ...defaultPayload(),
+      selectedProjectIds: ["proj-1"],
+      selectedTagIds: ["tag-1"],
+      projectMatchMode: "any",
+      tagMatchMode: "all",
+    };
+    applyPreset(payload, setters, [{ id: "proj-1" }], [{ id: "tag-1" }]);
+    expect(setters.calls.setProjectMatchMode).toEqual(["any"]);
+    expect(setters.calls.setTagMatchMode).toEqual(["all"]);
+  });
+
+  it("preserves a saved 'all' mode when at least one valid ID remains after stale removal", () => {
+    const setters = makeSetters();
+    const payload: PresetPayload = {
+      ...defaultPayload(),
+      selectedProjectIds: ["proj-1", "proj-gone"],
+      projectMatchMode: "all",
+    };
+    const result = applyPreset(payload, setters, [{ id: "proj-1" }], []);
+    expect(setters.calls.setSelectedProjectIds).toEqual([["proj-1"]]);
+    expect(setters.calls.setProjectMatchMode).toEqual(["all"]);
+    expect(result.droppedProjectCount).toBe(1);
+  });
+
+  it("resets a category's mode to Any when every selected ID is stale", () => {
+    const setters = makeSetters();
+    const payload: PresetPayload = {
+      ...defaultPayload(),
+      selectedProjectIds: ["gone-1", "gone-2"],
+      selectedTagIds: ["tag-1"],
+      projectMatchMode: "all",
+      tagMatchMode: "all",
+    };
+    applyPreset(payload, setters, [], [{ id: "tag-1" }]);
+    // Projects: all stale → mode normalized to Any. Tags: valid → keeps All.
+    expect(setters.calls.setSelectedProjectIds).toEqual([[]]);
+    expect(setters.calls.setProjectMatchMode).toEqual(["any"]);
+    expect(setters.calls.setTagMatchMode).toEqual(["all"]);
   });
 
   it("partially drops stale project ids and keeps valid siblings", () => {
@@ -466,6 +604,8 @@ function populatedPayload(): PresetPayload {
     selectedKeywords: ["sleep", "asthma", "HIIT"],
     selectedProjectIds: ["11111111-1111-1111-1111-111111111111", "aaaa"],
     selectedTagIds: ["22222222-2222-2222-2222-222222222222"],
+    projectMatchMode: "any",
+    tagMatchMode: "any",
   };
 }
 
@@ -581,6 +721,59 @@ describe("arePresetPayloadsEqual", () => {
     const a = { ...populatedPayload(), searchQuery: "sleep" };
     const b = { ...populatedPayload(), searchQuery: "sleep " };
     expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  // ── Match-mode comparison (scalar, exact) ──
+
+  it("returns false when projectMatchMode differs (Any vs All is dirty)", () => {
+    const a = { ...populatedPayload(), projectMatchMode: "any" as const };
+    const b = { ...populatedPayload(), projectMatchMode: "all" as const };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+    expect(arePresetPayloadsEqual(b, a)).toBe(false);
+  });
+
+  it("returns false when tagMatchMode differs (Any vs All is dirty)", () => {
+    const a = { ...populatedPayload(), tagMatchMode: "any" as const };
+    const b = { ...populatedPayload(), tagMatchMode: "all" as const };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  it("a legacy v2 preset (loaded as Any) is clean against current Any state", () => {
+    // A v2 row normalizes to Any/Any; comparing it to an equivalent Any/Any
+    // current state must read as clean.
+    const legacyLoaded = parsePresetPayload(
+      v2Payload({ selectedProjectIds: ["A"], selectedTagIds: ["T"] }),
+    );
+    const currentAny: PresetPayload = {
+      ...defaultPayload(),
+      selectedProjectIds: ["A"],
+      selectedTagIds: ["T"],
+      projectMatchMode: "any",
+      tagMatchMode: "any",
+    };
+    expect(legacyLoaded).not.toBeNull();
+    expect(arePresetPayloadsEqual(legacyLoaded!, currentAny)).toBe(true);
+  });
+
+  it("a legacy v2 preset (loaded as Any) is dirty against current All state", () => {
+    const legacyLoaded = parsePresetPayload(
+      v2Payload({ selectedProjectIds: ["A"], selectedTagIds: ["T"] }),
+    );
+    const currentAll: PresetPayload = {
+      ...defaultPayload(),
+      selectedProjectIds: ["A"],
+      selectedTagIds: ["T"],
+      projectMatchMode: "all",
+      tagMatchMode: "any",
+    };
+    expect(legacyLoaded).not.toBeNull();
+    expect(arePresetPayloadsEqual(legacyLoaded!, currentAll)).toBe(false);
+  });
+
+  it("stays clean when only selection order differs but modes match", () => {
+    const a = { ...populatedPayload(), selectedProjectIds: ["A", "B"], projectMatchMode: "all" as const };
+    const b = { ...populatedPayload(), selectedProjectIds: ["B", "A"], projectMatchMode: "all" as const };
+    expect(arePresetPayloadsEqual(a, b)).toBe(true);
   });
 });
 

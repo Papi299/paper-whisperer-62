@@ -5,6 +5,7 @@ import {
   SearchableEntityMultiFilter,
   type EntityFilterItem,
 } from "../SearchableEntityMultiFilter";
+import type { EntityMatchMode } from "@/lib/filterSets";
 
 // Radix Popover + cmdk rely on a few DOM APIs jsdom does not implement.
 // Polyfill them locally (not in the shared setup) so this component test can
@@ -40,10 +41,26 @@ const PROJECTS: EntityFilterItem[] = [
  * current selection is surfaced via a hidden testid so assertions can inspect
  * it (and prove no duplicates ever accumulate).
  */
-function Harness({ items = PROJECTS }: { items?: EntityFilterItem[] }) {
+function Harness({
+  items = PROJECTS,
+  withMode = true,
+}: {
+  items?: EntityFilterItem[];
+  withMode?: boolean;
+}) {
   const [selected, setSelected] = useState<string[]>([]);
+  const [mode, setMode] = useState<EntityMatchMode>("any");
   const toggle = (id: string) =>
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const modeProps = withMode
+    ? {
+        matchMode: mode,
+        onMatchModeChange: setMode,
+        matchModeGroupLabel: "Match projects",
+        matchAnyDescription: "Match papers in at least one selected project",
+        matchAllDescription: "Match papers in every selected project",
+      }
+    : {};
   return (
     <>
       <SearchableEntityMultiFilter
@@ -57,14 +74,20 @@ function Harness({ items = PROJECTS }: { items?: EntityFilterItem[] }) {
         searchPlaceholder="Search projects..."
         emptyMessage="No projects found."
         ariaLabel="Filter by project"
+        {...modeProps}
       />
       <div data-testid="selection">{JSON.stringify(selected)}</div>
+      <div data-testid="mode">{mode}</div>
     </>
   );
 }
 
 function selection(): string[] {
   return JSON.parse(screen.getByTestId("selection").textContent || "[]");
+}
+
+function currentMode(): string {
+  return screen.getByTestId("mode").textContent || "";
 }
 
 // The trigger and cmdk's search input both expose role="combobox"; the trigger
@@ -89,6 +112,18 @@ function search(value: string) {
   });
 }
 
+// The Any/All controls are single-mode ToggleGroup items → role="radio",
+// named by their category-specific aria-label description.
+function modeRadio(re: RegExp) {
+  return screen.getByRole("radio", { name: re });
+}
+
+async function selectTwo() {
+  await openPopover();
+  fireEvent.click(option(/Alpha/));
+  fireEvent.click(option(/Beta/));
+}
+
 describe("SearchableEntityMultiFilter", () => {
   it("shows the zero-selection label", () => {
     render(<Harness />);
@@ -105,26 +140,39 @@ describe("SearchableEntityMultiFilter", () => {
     expect(selection()).toEqual(["p1"]);
   });
 
-  it("shows a compact count for multiple selections", async () => {
+  it("shows a compact count with the active mode for multiple selections", async () => {
     render(<Harness />);
     await openPopover();
     fireEvent.click(option(/Alpha/));
     fireEvent.click(option(/Beta/));
-    expect(trigger()).toHaveTextContent("2 Projects");
+    expect(trigger()).toHaveTextContent("2 Projects · Any");
     expect(selection()).toEqual(["p1", "p2"]);
   });
 
-  it("renders the multi-selection count exactly once (no duplicate badge)", async () => {
+  it("renders the multi-selection count and mode exactly once (no duplicate badge)", async () => {
     render(<Harness />);
     await openPopover();
     fireEvent.click(option(/Alpha/));
     fireEvent.click(option(/Beta/));
     const el = trigger();
-    // Normalized trigger text is exactly "2 Projects" — not "2 Projects 2".
-    expect(el.textContent?.replace(/\s+/g, " ").trim()).toBe("2 Projects");
+    // Normalized trigger text is exactly "2 Projects · Any" — no "2 Projects 2"
+    // and no doubled mode word ("Any Any").
+    expect(el.textContent?.replace(/\s+/g, " ").trim()).toBe("2 Projects · Any");
     // The numeric count appears exactly once.
     expect((el.textContent?.match(/2/g) || []).length).toBe(1);
+    // The mode word appears exactly once.
+    expect((el.textContent?.match(/Any/g) || []).length).toBe(1);
     expect(el).not.toHaveTextContent("2 Projects 2");
+  });
+
+  it("shows count-only (no mode) when the category has no mode wired in", async () => {
+    render(<Harness withMode={false} />);
+    await openPopover();
+    fireEvent.click(option(/Alpha/));
+    fireEvent.click(option(/Beta/));
+    const el = trigger();
+    expect(el.textContent?.replace(/\s+/g, " ").trim()).toBe("2 Projects");
+    expect(el).not.toHaveTextContent("·");
   });
 
   it("filters the list by a case-insensitive substring search", async () => {
@@ -205,5 +253,87 @@ describe("SearchableEntityMultiFilter", () => {
     expect(el).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(el);
     expect(el).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // ── Match-mode selector ──
+
+  it("does not show the mode selector below two selected items", async () => {
+    render(<Harness />);
+    await openPopover();
+    // Zero selected — no mode selector.
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    fireEvent.click(option(/Alpha/));
+    // One selected — Any/All is a no-op, still no selector.
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+
+  it("shows the mode selector once two items are selected", async () => {
+    render(<Harness />);
+    await selectTwo();
+    expect(screen.getByText("Match selected")).toBeInTheDocument();
+    expect(modeRadio(/at least one selected project/i)).toBeInTheDocument();
+    expect(modeRadio(/every selected project/i)).toBeInTheDocument();
+  });
+
+  it("defaults to Any", async () => {
+    render(<Harness />);
+    await selectTwo();
+    expect(modeRadio(/at least one selected project/i)).toHaveAttribute("aria-checked", "true");
+    expect(modeRadio(/every selected project/i)).toHaveAttribute("aria-checked", "false");
+    expect(currentMode()).toBe("any");
+  });
+
+  it("switches to All without closing the popover", async () => {
+    render(<Harness />);
+    await selectTwo();
+    fireEvent.click(modeRadio(/every selected project/i));
+    expect(currentMode()).toBe("all");
+    // Popover still open: the search box is still mounted.
+    expect(screen.getByPlaceholderText("Search projects...")).toBeInTheDocument();
+    expect(modeRadio(/every selected project/i)).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("exposes category-specific accessible descriptions on both options", async () => {
+    render(<Harness />);
+    await selectTwo();
+    expect(modeRadio(/Match papers in at least one selected project/i)).toBeInTheDocument();
+    expect(modeRadio(/Match papers in every selected project/i)).toBeInTheDocument();
+  });
+
+  it("shows the active mode in the closed trigger (2 Projects · All)", async () => {
+    render(<Harness />);
+    await selectTwo();
+    fireEvent.click(modeRadio(/every selected project/i));
+    // Close the popover.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(trigger()); // re-open to read trigger text deterministically
+    const el = trigger();
+    expect(el).toHaveTextContent("2 Projects · All");
+    expect((el.textContent?.match(/All/g) || []).length).toBe(1);
+  });
+
+  it("exposes the mode options as focusable native radio buttons (keyboard-operable)", async () => {
+    render(<Harness />);
+    await selectTwo();
+    const any = modeRadio(/at least one selected project/i);
+    const all = modeRadio(/every selected project/i);
+    // Real <button> elements with radio semantics — not clickable <div>s — so
+    // they are in the tab order and respond to Enter/Space in a real browser.
+    expect(any.tagName).toBe("BUTTON");
+    expect(all.tagName).toBe("BUTTON");
+    any.focus();
+    expect(any).toHaveFocus();
+    all.focus();
+    expect(all).toHaveFocus();
+  });
+
+  it("resets to the zero-selection label when all items are cleared", async () => {
+    render(<Harness />);
+    await selectTwo();
+    fireEvent.click(screen.getByRole("button", { name: /Clear projects/i }));
+    expect(selection()).toEqual([]);
+    expect(trigger()).toHaveTextContent("All Projects");
+    // No mode selector once empty.
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
   });
 });
