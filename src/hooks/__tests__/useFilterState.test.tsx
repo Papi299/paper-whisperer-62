@@ -2,27 +2,103 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// Mock the Supabase client with a paginated PostgREST-style builder. `.range()`
-// returns a slice of a shared, per-test row set, so `fetchAllPages` walks real
-// page boundaries. The state-machine tests never await a query (they assert
-// synchronous transitions), so the default empty row set is inert for them; the
-// pagination test drives the junction query to resolution against >1 page.
-const { setJunctionRows, mockFrom, mockRpc } = vi.hoisted(() => {
-  let rows: Array<Record<string, string>> = [];
-  const makeBuilder = () => {
+// Table-aware, paginated PostgREST-style mock. Each `.from(table)` yields a
+// fresh builder (matching `fetchAllPages`' fresh-builder-per-page contract) that
+// records the full query chain — selected columns, the `.in(...)` column, the
+// `.order(...)` calls, and every `.range(from,to)` — into `recordedQueries`, and
+// serves rows by slicing that table's own row set. Projects and Tags keep
+// separate row sets so cross-table behavior is unambiguous. A per-table,
+// per-page error can be injected to prove page failures are not swallowed.
+// State-machine tests never await a query, so the default empty row sets are
+// inert for them.
+interface RecordedQuery {
+  table: string;
+  columns: string | null;
+  inColumn: string | null;
+  inValues: unknown;
+  orders: Array<{ column: string; ascending: boolean }>;
+  ranges: Array<{ from: number; to: number }>;
+}
+
+const {
+  setProjectJunctionRows,
+  setTagJunctionRows,
+  setErrorOnPage,
+  recordedQueries,
+  resetMock,
+  mockFrom,
+  mockRpc,
+} = vi.hoisted(() => {
+  type Row = Record<string, string>;
+  const store: Record<string, Row[]> = { paper_projects: [], paper_tags: [] };
+  let errorInjection: { table: string; page: number } | null = null;
+  const recordedQueries: RecordedQueryLike[] = [];
+
+  const makeBuilder = (table: string) => {
+    const rec: RecordedQueryLike = {
+      table,
+      columns: null,
+      inColumn: null,
+      inValues: null,
+      orders: [],
+      ranges: [],
+    };
+    recordedQueries.push(rec);
     const builder = {
-      select: () => builder,
-      in: () => builder,
-      range: (from: number, to: number) =>
-        Promise.resolve({ data: rows.slice(from, to + 1), error: null }),
+      select: (columns: string) => {
+        rec.columns = columns;
+        return builder;
+      },
+      in: (column: string, values: unknown) => {
+        rec.inColumn = column;
+        rec.inValues = values;
+        return builder;
+      },
+      order: (column: string, options: { ascending: boolean }) => {
+        rec.orders.push({ column, ascending: options.ascending });
+        return builder;
+      },
+      range: (from: number, to: number) => {
+        rec.ranges.push({ from, to });
+        const page = Math.floor(from / 1000);
+        if (errorInjection && errorInjection.table === table && errorInjection.page === page) {
+          return Promise.resolve({ data: null, error: new Error(`page ${page} of ${table} failed`) });
+        }
+        return Promise.resolve({ data: (store[table] ?? []).slice(from, to + 1), error: null });
+      },
     };
     return builder;
   };
+
+  // `RecordedQueryLike` is declared inside hoisted scope; the exported interface
+  // `RecordedQuery` (top-level) is structurally identical for assertions.
+  type RecordedQueryLike = {
+    table: string;
+    columns: string | null;
+    inColumn: string | null;
+    inValues: unknown;
+    orders: Array<{ column: string; ascending: boolean }>;
+    ranges: Array<{ from: number; to: number }>;
+  };
+
   return {
-    setJunctionRows: (r: Array<Record<string, string>>) => {
-      rows = r;
+    setProjectJunctionRows: (r: Row[]) => {
+      store.paper_projects = r;
     },
-    mockFrom: vi.fn(() => makeBuilder()),
+    setTagJunctionRows: (r: Row[]) => {
+      store.paper_tags = r;
+    },
+    setErrorOnPage: (table: string, page: number) => {
+      errorInjection = { table, page };
+    },
+    recordedQueries,
+    resetMock: () => {
+      store.paper_projects = [];
+      store.paper_tags = [];
+      errorInjection = null;
+      recordedQueries.length = 0;
+    },
+    mockFrom: vi.fn((table: string) => makeBuilder(table)),
     mockRpc: vi.fn(() => Promise.resolve({ data: [], error: null })),
   };
 });
@@ -33,29 +109,39 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 import { useFilterState } from "../useFilterState";
 
+/** Recorded junction queries for one table (one entry per fetched page). */
+function queriesFor(table: string): RecordedQuery[] {
+  return (recordedQueries as RecordedQuery[]).filter((q) => q.table === table);
+}
+
+/** All `.range()` requests recorded for a table, flattened across pages. */
+function rangesFor(table: string): Array<{ from: number; to: number }> {
+  return queriesFor(table).flatMap((q) => q.ranges);
+}
+
 /**
  * These tests exercise the fully-synchronous match-mode state machine. The
  * junction *query* semantics (Any union / All membership-count) live in the
  * pure `resolveJunctionPaperIds` helper and are covered exhaustively in
  * `filterSets.test.ts`; here we assert the hook's mode/selection transitions.
  */
-function wrapper({ children }: { children: React.ReactNode }) {
+function setup() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}
-
-function setup() {
-  return renderHook(() => useFilterState({ poolStudyTypes: [], userId: undefined }), {
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  const utils = renderHook(() => useFilterState({ poolStudyTypes: [], userId: undefined }), {
     wrapper,
   });
+  return { ...utils, client };
 }
 
 describe("useFilterState — match modes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    setJunctionRows([]);
+    resetMock();
   });
 
   it("defaults both categories to Any", () => {
@@ -190,22 +276,18 @@ describe("useFilterState — match modes", () => {
     expect(result.current.projectMatchMode).toBe("all");
   });
 
-  // ── Junction pagination (PROJECT-TAG-MATCH-MODE-001A) ──
-  // Regression guard: the junction fetch must paginate. A paper whose second
-  // required membership row lands beyond the first PostgREST page (>1000 rows)
-  // must still resolve under All mode — an unpaginated `.in(...)` would only see
-  // page one and falsely reject it.
-  it("resolves All against junction rows spanning more than one page", async () => {
-    // 1001 rows: "target" is linked to pA at index 0 and pB at index 1000; the
-    // 999 filler papers (indices 1..999) are linked only to pA.
-    const rows: Array<Record<string, string>> = [
-      { paper_id: "target", project_id: "pA" },
-    ];
-    for (let i = 1; i < 1000; i++) {
-      rows.push({ paper_id: `filler-${i}`, project_id: "pA" });
-    }
-    rows.push({ paper_id: "target", project_id: "pB" }); // index 1000 → page 2
-    setJunctionRows(rows);
+  // ── Deterministic paginated junction retrieval (PROJECT-TAG-MATCH-MODE-001) ──
+  // These integration tests drive the real junction queryFns through the
+  // paginated, table-aware mock: they prove cross-page Any/All correctness for
+  // both categories, the stable composite ORDER BY, and that a page failure is
+  // surfaced (never swallowed into a partial success).
+
+  it("8.1 Project All: resolves a paper whose second membership row is on page 2", async () => {
+    // 1001 rows: target/pA at index 0; 999 fillers/pA; target/pB at index 1000.
+    const rows: Array<Record<string, string>> = [{ paper_id: "target", project_id: "pA" }];
+    for (let i = 1; i < 1000; i++) rows.push({ paper_id: `filler-${i}`, project_id: "pA" });
+    rows.push({ paper_id: "target", project_id: "pB" }); // page 2
+    setProjectJunctionRows(rows);
 
     const { result } = setup();
     act(() => {
@@ -214,10 +296,136 @@ describe("useFilterState — match modes", () => {
       result.current.setProjectMatchMode("all");
     });
 
-    // Only "target" is linked to BOTH pA and pB, and pB is only visible after
-    // the second page is fetched.
     await waitFor(() =>
       expect(result.current.serverFilterParams.filterPaperIds).toEqual(["target"]),
     );
+    // At least two pages were requested (fresh builder per page).
+    expect(rangesFor("paper_projects").length).toBeGreaterThanOrEqual(2);
+    expect(rangesFor("paper_projects").some((r) => r.from === 1000)).toBe(true);
+  });
+
+  it("8.2 Project Any: includes a paper found only on page 2 (unique output)", async () => {
+    // Page 1: 1000 filler papers linked to pA. Page 2: one paper linked to pB.
+    const rows: Array<Record<string, string>> = [];
+    for (let i = 0; i < 1000; i++) rows.push({ paper_id: `filler-${i}`, project_id: "pA" });
+    rows.push({ paper_id: "page2", project_id: "pB" }); // index 1000 → page 2
+    setProjectJunctionRows(rows);
+
+    const { result } = setup();
+    act(() => {
+      result.current.handleProjectToggle("pA");
+      result.current.handleProjectToggle("pB");
+      // Any is the default; set explicitly for clarity.
+      result.current.setProjectMatchMode("any");
+    });
+
+    await waitFor(() => {
+      const ids = result.current.serverFilterParams.filterPaperIds;
+      expect(ids).toBeTruthy();
+      expect(ids).toContain("page2");
+    });
+    const ids = result.current.serverFilterParams.filterPaperIds!;
+    expect(new Set(ids).size).toBe(ids.length); // unique
+    expect(rangesFor("paper_projects").some((r) => r.from === 1000)).toBe(true);
+  });
+
+  it("8.3 Tag All: resolves across pages and excludes a single-tag paper", async () => {
+    // Page 1: target-tag/tA (idx0), only-one/tA (idx1), 998 fillers/tA. Page 2:
+    // target-tag/tB (idx1000).
+    const rows: Array<Record<string, string>> = [
+      { paper_id: "target-tag", tag_id: "tA" },
+      { paper_id: "only-one", tag_id: "tA" },
+    ];
+    for (let i = 2; i < 1000; i++) rows.push({ paper_id: `filler-${i}`, tag_id: "tA" });
+    rows.push({ paper_id: "target-tag", tag_id: "tB" }); // page 2
+    setTagJunctionRows(rows);
+
+    const { result } = setup();
+    act(() => {
+      result.current.handleTagToggle("tA");
+      result.current.handleTagToggle("tB");
+      result.current.setTagMatchMode("all");
+    });
+
+    await waitFor(() =>
+      expect(result.current.serverFilterParams.filterPaperIds).toEqual(["target-tag"]),
+    );
+    // Tag query used; Project query never issued (no projects selected).
+    expect(queriesFor("paper_tags").length).toBeGreaterThan(0);
+    expect(queriesFor("paper_projects").length).toBe(0);
+    expect(rangesFor("paper_tags").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("8.4 Tag Any: includes a paper found only on page 2", async () => {
+    const rows: Array<Record<string, string>> = [];
+    for (let i = 0; i < 1000; i++) rows.push({ paper_id: `filler-${i}`, tag_id: "tA" });
+    rows.push({ paper_id: "tag-page2", tag_id: "tB" }); // page 2
+    setTagJunctionRows(rows);
+
+    const { result } = setup();
+    act(() => {
+      result.current.handleTagToggle("tA");
+      result.current.handleTagToggle("tB");
+      result.current.setTagMatchMode("any");
+    });
+
+    await waitFor(() =>
+      expect(result.current.serverFilterParams.filterPaperIds).toContain("tag-page2"),
+    );
+    expect(rangesFor("paper_tags").some((r) => r.from === 1000)).toBe(true);
+  });
+
+  it("8.5 applies a deterministic composite ORDER BY to the Project query", async () => {
+    setProjectJunctionRows([{ paper_id: "p", project_id: "pA" }]);
+    const { result } = setup();
+    act(() => result.current.handleProjectToggle("pA"));
+
+    await waitFor(() => expect(queriesFor("paper_projects").length).toBeGreaterThan(0));
+    const q = queriesFor("paper_projects")[0];
+    expect(q.columns).toBe("paper_id, project_id");
+    expect(q.inColumn).toBe("project_id");
+    expect(q.orders).toEqual([
+      { column: "paper_id", ascending: true },
+      { column: "project_id", ascending: true },
+    ]);
+  });
+
+  it("8.6 applies a deterministic composite ORDER BY to the Tag query", async () => {
+    setTagJunctionRows([{ paper_id: "p", tag_id: "tA" }]);
+    const { result } = setup();
+    act(() => result.current.handleTagToggle("tA"));
+
+    await waitFor(() => expect(queriesFor("paper_tags").length).toBeGreaterThan(0));
+    const q = queriesFor("paper_tags")[0];
+    expect(q.columns).toBe("paper_id, tag_id");
+    expect(q.inColumn).toBe("tag_id");
+    expect(q.orders).toEqual([
+      { column: "paper_id", ascending: true },
+      { column: "tag_id", ascending: true },
+    ]);
+  });
+
+  it("8.7 surfaces a second-page error instead of a partial success", async () => {
+    // 1001 rows so a second page is requested; fail that second page.
+    const rows: Array<Record<string, string>> = [];
+    for (let i = 0; i < 1000; i++) rows.push({ paper_id: `filler-${i}`, project_id: "pA" });
+    rows.push({ paper_id: "page2", project_id: "pA" });
+    setProjectJunctionRows(rows);
+    setErrorOnPage("paper_projects", 1); // second page (from=1000)
+
+    const { result, client } = setup();
+    act(() => result.current.handleProjectToggle("pA"));
+
+    // The junction query reaches an error state (page failure not swallowed)…
+    await waitFor(() => {
+      const q = client
+        .getQueryCache()
+        .getAll()
+        .find((entry) => Array.isArray(entry.queryKey) && entry.queryKey[1] === "paper_projects");
+      expect(q?.state.status).toBe("error");
+    });
+    // …and no partial paper-ID set is exposed as a resolved filter result.
+    expect(result.current.serverFilterParams.filterPaperIds).toBeUndefined();
+    expect(rangesFor("paper_projects").some((r) => r.from === 1000)).toBe(true);
   });
 });

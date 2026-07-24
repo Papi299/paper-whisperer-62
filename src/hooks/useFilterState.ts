@@ -229,6 +229,14 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   // whose required membership row fell beyond the first page. `fetchAllPages`
   // walks every page so both modes always resolve against the complete row set.
   //
+  // Offset/range pagination requires a stable, unique ORDER BY: without one,
+  // SQL result order is undefined and rows could shift between separate page
+  // requests, duplicating some across page boundaries and dropping others. The
+  // junction tables hold unique `(paper_id, entity_id)` pairs, so ordering by
+  // both columns ascending gives a deterministic, total order. All raw pages
+  // are concatenated by `fetchAllPages`, and `resolveJunctionPaperIds` runs once
+  // on the complete set (never per page).
+  //
   // Query keys are canonicalized (deduped + sorted) AND include the active mode
   // so `[A,B]` and `[B,A]` share one cache entry while Any and All never do —
   // switching the mode resolves the correct set immediately rather than showing
@@ -244,7 +252,9 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
         supabase
           .from("paper_projects")
           .select("paper_id, project_id")
-          .in("project_id", projectIdsKey),
+          .in("project_id", projectIdsKey)
+          .order("paper_id", { ascending: true })
+          .order("project_id", { ascending: true }),
       );
       const junctionRows = rows.map((r) => ({ paper_id: r.paper_id, entity_id: r.project_id }));
       return resolveJunctionPaperIds(junctionRows, projectIdsKey, projectMatchMode);
@@ -260,7 +270,9 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
         supabase
           .from("paper_tags")
           .select("paper_id, tag_id")
-          .in("tag_id", tagIdsKey),
+          .in("tag_id", tagIdsKey)
+          .order("paper_id", { ascending: true })
+          .order("tag_id", { ascending: true }),
       );
       const junctionRows = rows.map((r) => ({ paper_id: r.paper_id, entity_id: r.tag_id }));
       return resolveJunctionPaperIds(junctionRows, tagIdsKey, tagMatchMode);
