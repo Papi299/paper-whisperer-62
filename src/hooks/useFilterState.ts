@@ -7,6 +7,7 @@ import type { PoolStudyType } from "@/hooks/useStudyTypePool";
 import type { MatchFlags, NotesPresence, ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { timedQueryFn } from "@/lib/queryTiming";
+import { fetchAllPages } from "@/lib/fetchAllPages";
 import {
   canonicalizeIds,
   dedupeIds,
@@ -214,14 +215,19 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   ]);
 
   // ── Junction pre-queries (project/tag ID resolution) ──
-  // Each category resolves to one paper-ID set via a single bounded `.in(...)`
-  // query, then `resolveJunctionPaperIds` applies the category's Any/All mode:
+  // Each category resolves to one paper-ID set, then `resolveJunctionPaperIds`
+  // applies the category's Any/All mode:
   //   • Any — a paper matches when it belongs to at least one selected entity
   //     (OR-union), deduped.
   //   • All — a paper matches only when it belongs to every selected entity
   //     (membership-count intersection); we select the entity ID column too so
   //     the resolver can count unique matched entities per paper.
-  // We still issue exactly one query per category (never one per selected ID).
+  // We issue exactly one *paginated* fetch per category (never one per selected
+  // ID). Pagination is mandatory: PostgREST caps a single response at ~1000
+  // rows, so an unpaginated `.in(...)` would silently truncate the junction
+  // rows — Any would drop matching papers, and All could falsely reject a paper
+  // whose required membership row fell beyond the first page. `fetchAllPages`
+  // walks every page so both modes always resolve against the complete row set.
   //
   // Query keys are canonicalized (deduped + sorted) AND include the active mode
   // so `[A,B]` and `[B,A]` share one cache entry while Any and All never do —
@@ -234,13 +240,14 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   const { data: projectPaperIds } = useQuery<string[]>({
     queryKey: junctionQueryKey("paper_projects", projectMatchMode, selectedProjectIds),
     queryFn: timedQueryFn("junction.paper_projects", async () => {
-      const { data, error } = await supabase
-        .from("paper_projects")
-        .select("paper_id, project_id")
-        .in("project_id", projectIdsKey);
-      if (error) throw error;
-      const rows = data.map((r) => ({ paper_id: r.paper_id, entity_id: r.project_id }));
-      return resolveJunctionPaperIds(rows, projectIdsKey, projectMatchMode);
+      const rows = await fetchAllPages<{ paper_id: string; project_id: string }>(() =>
+        supabase
+          .from("paper_projects")
+          .select("paper_id, project_id")
+          .in("project_id", projectIdsKey),
+      );
+      const junctionRows = rows.map((r) => ({ paper_id: r.paper_id, entity_id: r.project_id }));
+      return resolveJunctionPaperIds(junctionRows, projectIdsKey, projectMatchMode);
     }),
     enabled: projectIdsKey.length > 0,
     staleTime: 30_000,
@@ -249,13 +256,14 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   const { data: tagPaperIds } = useQuery<string[]>({
     queryKey: junctionQueryKey("paper_tags", tagMatchMode, selectedTagIds),
     queryFn: timedQueryFn("junction.paper_tags", async () => {
-      const { data, error } = await supabase
-        .from("paper_tags")
-        .select("paper_id, tag_id")
-        .in("tag_id", tagIdsKey);
-      if (error) throw error;
-      const rows = data.map((r) => ({ paper_id: r.paper_id, entity_id: r.tag_id }));
-      return resolveJunctionPaperIds(rows, tagIdsKey, tagMatchMode);
+      const rows = await fetchAllPages<{ paper_id: string; tag_id: string }>(() =>
+        supabase
+          .from("paper_tags")
+          .select("paper_id, tag_id")
+          .in("tag_id", tagIdsKey),
+      );
+      const junctionRows = rows.map((r) => ({ paper_id: r.paper_id, entity_id: r.tag_id }));
+      return resolveJunctionPaperIds(junctionRows, tagIdsKey, tagMatchMode);
     }),
     enabled: tagIdsKey.length > 0,
     staleTime: 30_000,

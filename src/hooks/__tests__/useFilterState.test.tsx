@@ -1,13 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// Mock the Supabase client so importing the hook does not spin up the real
-// auth client. No query in these tests is ever `enabled` (no userId, no
-// selections until we toggle synchronously), so `from`/`rpc` are never called;
-// the mock exists purely to satisfy the import graph.
+// Mock the Supabase client with a paginated PostgREST-style builder. `.range()`
+// returns a slice of a shared, per-test row set, so `fetchAllPages` walks real
+// page boundaries. The state-machine tests never await a query (they assert
+// synchronous transitions), so the default empty row set is inert for them; the
+// pagination test drives the junction query to resolution against >1 page.
+const { setJunctionRows, mockFrom, mockRpc } = vi.hoisted(() => {
+  let rows: Array<Record<string, string>> = [];
+  const makeBuilder = () => {
+    const builder = {
+      select: () => builder,
+      in: () => builder,
+      range: (from: number, to: number) =>
+        Promise.resolve({ data: rows.slice(from, to + 1), error: null }),
+    };
+    return builder;
+  };
+  return {
+    setJunctionRows: (r: Array<Record<string, string>>) => {
+      rows = r;
+    },
+    mockFrom: vi.fn(() => makeBuilder()),
+    mockRpc: vi.fn(() => Promise.resolve({ data: [], error: null })),
+  };
+});
+
 vi.mock("@/integrations/supabase/client", () => ({
-  supabase: { from: vi.fn(), rpc: vi.fn() },
+  supabase: { from: mockFrom, rpc: mockRpc },
 }));
 
 import { useFilterState } from "../useFilterState";
@@ -32,7 +53,10 @@ function setup() {
 }
 
 describe("useFilterState — match modes", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setJunctionRows([]);
+  });
 
   it("defaults both categories to Any", () => {
     const { result } = setup();
@@ -164,5 +188,36 @@ describe("useFilterState — match modes", () => {
     });
     expect(result.current.selectedProjectIds).toEqual(["p1", "p2"]);
     expect(result.current.projectMatchMode).toBe("all");
+  });
+
+  // ── Junction pagination (PROJECT-TAG-MATCH-MODE-001A) ──
+  // Regression guard: the junction fetch must paginate. A paper whose second
+  // required membership row lands beyond the first PostgREST page (>1000 rows)
+  // must still resolve under All mode — an unpaginated `.in(...)` would only see
+  // page one and falsely reject it.
+  it("resolves All against junction rows spanning more than one page", async () => {
+    // 1001 rows: "target" is linked to pA at index 0 and pB at index 1000; the
+    // 999 filler papers (indices 1..999) are linked only to pA.
+    const rows: Array<Record<string, string>> = [
+      { paper_id: "target", project_id: "pA" },
+    ];
+    for (let i = 1; i < 1000; i++) {
+      rows.push({ paper_id: `filler-${i}`, project_id: "pA" });
+    }
+    rows.push({ paper_id: "target", project_id: "pB" }); // index 1000 → page 2
+    setJunctionRows(rows);
+
+    const { result } = setup();
+    act(() => {
+      result.current.handleProjectToggle("pA");
+      result.current.handleProjectToggle("pB");
+      result.current.setProjectMatchMode("all");
+    });
+
+    // Only "target" is linked to BOTH pA and pB, and pB is only visible after
+    // the second page is fetched.
+    await waitFor(() =>
+      expect(result.current.serverFilterParams.filterPaperIds).toEqual(["target"]),
+    );
   });
 });
