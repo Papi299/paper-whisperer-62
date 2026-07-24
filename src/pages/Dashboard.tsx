@@ -135,10 +135,14 @@ function DashboardContent() {
     setNotesPresence,
     selectedKeywords,
     setSelectedKeywords,
-    selectedProjectId,
-    setSelectedProjectId,
-    selectedTagId,
-    setSelectedTagId,
+    selectedProjectIds,
+    setSelectedProjectIds,
+    handleProjectToggle,
+    clearProjects,
+    selectedTagIds,
+    setSelectedTagIds,
+    handleTagToggle,
+    clearTags,
     studyTypeFilterOptions,
     sortKey,
     sortDirection,
@@ -234,8 +238,8 @@ function DashboardContent() {
       studyType,
       notesPresence,
       selectedKeywords,
-      selectedProjectId,
-      selectedTagId,
+      selectedProjectIds,
+      selectedTagIds,
     });
   }, [
     searchQuery,
@@ -244,8 +248,8 @@ function DashboardContent() {
     studyType,
     notesPresence,
     selectedKeywords,
-    selectedProjectId,
-    selectedTagId,
+    selectedProjectIds,
+    selectedTagIds,
   ]);
 
   /**
@@ -282,8 +286,8 @@ function DashboardContent() {
           setStudyType,
           setNotesPresence,
           setSelectedKeywords,
-          setSelectedProjectId,
-          setSelectedTagId,
+          setSelectedProjectIds,
+          setSelectedTagIds,
         },
         projects,
         tags,
@@ -291,13 +295,19 @@ function DashboardContent() {
 
       setLoadedPresetId(preset.id);
 
-      if (result.droppedProjectId || result.droppedTagId) {
+      if (result.droppedProjectCount > 0 || result.droppedTagCount > 0) {
         const parts: string[] = [];
-        if (result.droppedProjectId) parts.push("project");
-        if (result.droppedTagId) parts.push("tag");
+        if (result.droppedProjectCount > 0) {
+          parts.push(`${result.droppedProjectCount} project${result.droppedProjectCount !== 1 ? "s" : ""}`);
+        }
+        if (result.droppedTagCount > 0) {
+          parts.push(`${result.droppedTagCount} tag${result.droppedTagCount !== 1 ? "s" : ""}`);
+        }
         toast({
           title: "Preset loaded with missing references",
-          description: `The ${parts.join(" and ")} saved in "${preset.name}" no longer exists — skipped.`,
+          description: `${parts.join(" and ")} saved in "${preset.name}" no longer ${
+            result.droppedProjectCount + result.droppedTagCount === 1 ? "exists" : "exist"
+          } — skipped.`,
         });
       } else {
         toast({
@@ -315,8 +325,8 @@ function DashboardContent() {
       setStudyType,
       setNotesPresence,
       setSelectedKeywords,
-      setSelectedProjectId,
-      setSelectedTagId,
+      setSelectedProjectIds,
+      setSelectedTagIds,
       toast,
     ],
   );
@@ -595,10 +605,12 @@ function DashboardContent() {
             hasActiveFilters={hasActiveFilters}
             projects={projects}
             tags={tags}
-            selectedProjectId={selectedProjectId}
-            selectedTagId={selectedTagId}
-            onProjectChange={setSelectedProjectId}
-            onTagChange={setSelectedTagId}
+            selectedProjectIds={selectedProjectIds}
+            selectedTagIds={selectedTagIds}
+            onProjectToggle={handleProjectToggle}
+            onTagToggle={handleTagToggle}
+            onClearProjects={clearProjects}
+            onClearTags={clearTags}
             isExportReady={isExportReady}
             isExporting={isExporting}
             filterPresets={filterPresets}
