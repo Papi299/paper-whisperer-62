@@ -114,6 +114,19 @@ describe("SearchableEntityMultiFilter", () => {
     expect(selection()).toEqual(["p1", "p2"]);
   });
 
+  it("renders the multi-selection count exactly once (no duplicate badge)", async () => {
+    render(<Harness />);
+    await openPopover();
+    fireEvent.click(option(/Alpha/));
+    fireEvent.click(option(/Beta/));
+    const el = trigger();
+    // Normalized trigger text is exactly "2 Projects" — not "2 Projects 2".
+    expect(el.textContent?.replace(/\s+/g, " ").trim()).toBe("2 Projects");
+    // The numeric count appears exactly once.
+    expect((el.textContent?.match(/2/g) || []).length).toBe(1);
+    expect(el).not.toHaveTextContent("2 Projects 2");
+  });
+
   it("filters the list by a case-insensitive substring search", async () => {
     render(<Harness />);
     await openPopover();

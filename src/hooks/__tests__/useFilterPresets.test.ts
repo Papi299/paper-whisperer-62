@@ -8,6 +8,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: vi.fn() },
 }));
 
+import { supabase } from "@/integrations/supabase/client";
 import {
   applyPreset,
   arePresetPayloadsEqual,
@@ -241,6 +242,50 @@ describe("parsePresetPayload", () => {
     expect(parsePresetPayload("nope")).toBeNull();
     expect(parsePresetPayload({})).toBeNull();
   });
+
+  // ── Set-semantics normalization of version-2 arrays ──
+
+  it("deduplicates duplicate project IDs in a version-2 payload (first-seen order)", () => {
+    const parsed = parsePresetPayload({
+      ...defaultPayload(),
+      selectedProjectIds: ["A", "A", "B", "A"],
+    });
+    expect(parsed?.selectedProjectIds).toEqual(["A", "B"]);
+  });
+
+  it("deduplicates duplicate tag IDs in a version-2 payload", () => {
+    const parsed = parsePresetPayload({
+      ...defaultPayload(),
+      selectedTagIds: ["T1", "T2", "T1"],
+    });
+    expect(parsed?.selectedTagIds).toEqual(["T1", "T2"]);
+  });
+
+  it("deduplicates project and tag arrays independently", () => {
+    const parsed = parsePresetPayload({
+      ...defaultPayload(),
+      selectedProjectIds: ["A", "A"],
+      selectedTagIds: ["T1", "T1", "T2"],
+    });
+    expect(parsed?.selectedProjectIds).toEqual(["A"]);
+    expect(parsed?.selectedTagIds).toEqual(["T1", "T2"]);
+  });
+
+  it("does not mutate the original payload object while normalizing", () => {
+    const raw = { ...defaultPayload(), selectedProjectIds: ["A", "A", "B"], selectedTagIds: ["T1", "T1"] };
+    const projectsBefore = [...raw.selectedProjectIds];
+    const tagsBefore = [...raw.selectedTagIds];
+    parsePresetPayload(raw);
+    expect(raw.selectedProjectIds).toEqual(projectsBefore);
+    expect(raw.selectedTagIds).toEqual(tagsBefore);
+  });
+
+  it("performs no database access during parsing/normalization", () => {
+    (supabase.from as ReturnType<typeof vi.fn>).mockClear();
+    parsePresetPayload({ ...defaultPayload(), selectedProjectIds: ["A", "A"] });
+    parsePresetPayload(v1Payload({ selectedProjectId: "p1" }));
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
 });
 
 // ── applyPreset ─────────────────────────────────────────────────────────
@@ -342,6 +387,69 @@ describe("applyPreset", () => {
     const result = applyPreset(defaultPayload(), setters, [], []);
     expect(result).toEqual({ droppedProjectCount: 0, droppedTagCount: 0 });
   });
+
+  // ── Set-semantics: duplicates never reach state; drops count uniquely ──
+
+  it("passes duplicate valid project IDs to the setter only once", () => {
+    const setters = makeSetters();
+    const payload = { ...defaultPayload(), selectedProjectIds: ["p1", "p1"] };
+    const result = applyPreset(payload, setters, [{ id: "p1" }], []);
+    expect(setters.calls.setSelectedProjectIds).toEqual([["p1"]]);
+    expect(result.droppedProjectCount).toBe(0);
+  });
+
+  it("passes duplicate valid tag IDs to the setter only once", () => {
+    const setters = makeSetters();
+    const payload = { ...defaultPayload(), selectedTagIds: ["t1", "t1", "t1"] };
+    const result = applyPreset(payload, setters, [], [{ id: "t1" }]);
+    expect(setters.calls.setSelectedTagIds).toEqual([["t1"]]);
+    expect(result.droppedTagCount).toBe(0);
+  });
+
+  it("counts duplicate stale project IDs as one dropped project", () => {
+    const setters = makeSetters();
+    const payload = { ...defaultPayload(), selectedProjectIds: ["valid", "missing", "missing"] };
+    const result = applyPreset(payload, setters, [{ id: "valid" }], []);
+    expect(setters.calls.setSelectedProjectIds).toEqual([["valid"]]);
+    expect(result.droppedProjectCount).toBe(1);
+  });
+
+  it("keeps valid siblings alongside duplicate stale project IDs", () => {
+    const setters = makeSetters();
+    const payload = {
+      ...defaultPayload(),
+      selectedProjectIds: ["valid-a", "valid-a", "missing", "valid-b"],
+    };
+    const result = applyPreset(payload, setters, [{ id: "valid-a" }, { id: "valid-b" }], []);
+    expect(setters.calls.setSelectedProjectIds).toEqual([["valid-a", "valid-b"]]);
+    expect(result.droppedProjectCount).toBe(1);
+  });
+
+  it("counts duplicate stale tag IDs as one dropped tag", () => {
+    const setters = makeSetters();
+    const payload = { ...defaultPayload(), selectedTagIds: ["t1", "gone", "gone", "gone"] };
+    const result = applyPreset(payload, setters, [], [{ id: "t1" }]);
+    expect(setters.calls.setSelectedTagIds).toEqual([["t1"]]);
+    expect(result.droppedTagCount).toBe(1);
+  });
+
+  it("processes both categories with duplicates and stale IDs independently", () => {
+    const setters = makeSetters();
+    const payload = {
+      ...defaultPayload(),
+      selectedProjectIds: ["p1", "p1", "p-gone"],
+      selectedTagIds: ["t1", "t2", "t2", "t-gone", "t-gone"],
+    };
+    const result = applyPreset(
+      payload,
+      setters,
+      [{ id: "p1" }],
+      [{ id: "t1" }, { id: "t2" }],
+    );
+    expect(setters.calls.setSelectedProjectIds).toEqual([["p1"]]);
+    expect(setters.calls.setSelectedTagIds).toEqual([["t1", "t2"]]);
+    expect(result).toEqual({ droppedProjectCount: 1, droppedTagCount: 1 });
+  });
 });
 
 // ── arePresetPayloadsEqual ──────────────────────────────────────────────
@@ -424,6 +532,49 @@ describe("arePresetPayloadsEqual", () => {
     const a = populatedPayload();
     const b = { ...populatedPayload(), version: 99 as unknown as typeof PRESET_PAYLOAD_VERSION };
     expect(arePresetPayloadsEqual(a, b)).toBe(false);
+  });
+
+  // ── Duplicate-insensitive, symmetric set equality (via payload comparison) ──
+
+  it("treats ['A','A'] and ['A'] as equal project selections (duplicate-insensitive)", () => {
+    const a = { ...populatedPayload(), selectedProjectIds: ["A", "A"] };
+    const b = { ...populatedPayload(), selectedProjectIds: ["A"] };
+    expect(arePresetPayloadsEqual(a, b)).toBe(true);
+    expect(arePresetPayloadsEqual(b, a)).toBe(true);
+  });
+
+  it("treats ['A','A'] and ['A','B'] as unequal in BOTH directions (symmetric)", () => {
+    const a = { ...populatedPayload(), selectedProjectIds: ["A", "A"] };
+    const b = { ...populatedPayload(), selectedProjectIds: ["A", "B"] };
+    expect(arePresetPayloadsEqual(a, b)).toBe(false);
+    expect(arePresetPayloadsEqual(b, a)).toBe(false);
+    // Explicit symmetry assertion.
+    expect(arePresetPayloadsEqual(a, b)).toBe(arePresetPayloadsEqual(b, a));
+  });
+
+  it("is duplicate-insensitive and symmetric for tags too", () => {
+    const a = { ...populatedPayload(), selectedTagIds: ["T", "T"] };
+    const b = { ...populatedPayload(), selectedTagIds: ["T"] };
+    expect(arePresetPayloadsEqual(a, b)).toBe(true);
+    expect(arePresetPayloadsEqual(b, a)).toBe(true);
+
+    const c = { ...populatedPayload(), selectedTagIds: ["T", "T"] };
+    const d = { ...populatedPayload(), selectedTagIds: ["T", "U"] };
+    expect(arePresetPayloadsEqual(c, d)).toBe(false);
+    expect(arePresetPayloadsEqual(d, c)).toBe(false);
+  });
+
+  it("treats empty project and tag arrays as equal", () => {
+    const a = { ...populatedPayload(), selectedProjectIds: [], selectedTagIds: [] };
+    const b = { ...populatedPayload(), selectedProjectIds: [], selectedTagIds: [] };
+    expect(arePresetPayloadsEqual(a, b)).toBe(true);
+  });
+
+  it("still marks a preset dirty when a unique project ID is added or removed", () => {
+    const base = { ...populatedPayload(), selectedProjectIds: ["A"] };
+    const added = { ...populatedPayload(), selectedProjectIds: ["A", "B"] };
+    expect(arePresetPayloadsEqual(base, added)).toBe(false);
+    expect(arePresetPayloadsEqual(added, base)).toBe(false);
   });
 
   it("treats whitespace differences in searchQuery as dirty", () => {

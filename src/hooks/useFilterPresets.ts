@@ -6,6 +6,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import type { NotesPresence } from "@/hooks/papers/types";
 import type { Project, Tag } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
+import { dedupeIds } from "@/lib/filterSets";
 
 /**
  * Current payload schema version. Bumped 1 → 2 by PROJECT-TAG-SELECTOR-UX-001
@@ -87,6 +88,13 @@ export interface FilterPreset {
  * caller drops them from the menu and warns to the console so the user still
  * sees every preset we can load.
  *
+ * Set-semantics guarantee: the `selectedProjectIds` / `selectedTagIds` arrays
+ * are mathematical sets. Even a schema-valid version-2 payload can carry
+ * duplicate IDs (hand-edited JSONB, an older buggy writer), so both arrays are
+ * deduplicated (first-seen order preserved) before the payload crosses into
+ * the app. `dedupeIds` returns new arrays, so the original `raw` object is
+ * never mutated.
+ *
  * Backward compatibility: a valid version-1 payload (scalar Project/Tag) is
  * accepted and normalized up to version 2 in memory. The scalar
  * `selectedProjectId` / `selectedTagId` become 0-or-1-element arrays. This
@@ -94,9 +102,16 @@ export interface FilterPreset {
  */
 export function parsePresetPayload(raw: unknown): PresetPayload | null {
   const parsed = presetPayloadSchema.safeParse(raw);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) {
+    return {
+      ...parsed.data,
+      selectedProjectIds: dedupeIds(parsed.data.selectedProjectIds),
+      selectedTagIds: dedupeIds(parsed.data.selectedTagIds),
+    };
+  }
 
-  // Not a v2 row — try the legacy v1 shape and normalize it forward.
+  // Not a v2 row — try the legacy v1 shape and normalize it forward. A v1
+  // scalar can never be a duplicate set, so no dedupe is needed here.
   const v1 = presetPayloadV1Schema.safeParse(raw);
   if (v1.success) {
     const { selectedProjectId, selectedTagId, version: _v1version, ...rest } = v1.data;
@@ -140,11 +155,14 @@ export interface ApplyPresetResult {
  * exactly once. Full-replacement semantics: every one of the 8 fields is
  * overwritten, deterministically, regardless of the pre-load state.
  *
- * Stale-ID guard (partial): each `selectedProjectIds` / `selectedTagIds`
- * member that no longer exists in the current `projects` / `tags` lists (e.g.
- * the user deleted it since saving the preset) is dropped individually —
- * valid sibling selections are kept. The result reports the per-category drop
- * count so the caller can toast "1 project" vs "2 projects", etc.
+ * Set semantics: the saved arrays are treated as sets. Each category is first
+ * deduplicated, so a duplicated ID reaches the setter at most once and counts
+ * as a single semantic selection. The stale-ID guard is then applied to the
+ * *unique* selections — each member that no longer exists in the current
+ * `projects` / `tags` lists is dropped individually, valid siblings are kept,
+ * and the per-category drop count reflects **unique** missing selections
+ * (`["missing","missing"]` → dropped count `1`, not `2`). This keeps the
+ * caller's toast ("1 project" vs "2 projects") accurate.
  *
  * Pure apart from the setter side-effects, so it is straightforward to
  * unit-test with jest/vitest mocks.
@@ -165,15 +183,20 @@ export function applyPreset(
   const projectIdSet = new Set(projects.map((p) => p.id));
   const tagIdSet = new Set(tags.map((t) => t.id));
 
-  const keptProjectIds = payload.selectedProjectIds.filter((id) => projectIdSet.has(id));
-  const keptTagIds = payload.selectedTagIds.filter((id) => tagIdSet.has(id));
+  // Deduplicate first so duplicates count once and cannot reach state twice,
+  // then drop stale members. `dedupeIds` preserves first-seen order.
+  const uniqueProjectIds = dedupeIds(payload.selectedProjectIds);
+  const uniqueTagIds = dedupeIds(payload.selectedTagIds);
+
+  const keptProjectIds = uniqueProjectIds.filter((id) => projectIdSet.has(id));
+  const keptTagIds = uniqueTagIds.filter((id) => tagIdSet.has(id));
 
   setters.setSelectedProjectIds(keptProjectIds);
   setters.setSelectedTagIds(keptTagIds);
 
   return {
-    droppedProjectCount: payload.selectedProjectIds.length - keptProjectIds.length,
-    droppedTagCount: payload.selectedTagIds.length - keptTagIds.length,
+    droppedProjectCount: uniqueProjectIds.length - keptProjectIds.length,
+    droppedTagCount: uniqueTagIds.length - keptTagIds.length,
   };
 }
 
@@ -259,15 +282,19 @@ export function arePresetPayloadsEqual(a: PresetPayload, b: PresetPayload): bool
 }
 
 /**
- * Order-insensitive set equality for two string arrays. Lengths must match,
- * then a one-way membership check suffices (every member of `a` present in
- * `b`, with equal lengths, implies equal sets). Duplicate members are not
- * expected in these filter arrays, so length + one-way membership is exact.
+ * True set equality for two string arrays: **order-insensitive**,
+ * **duplicate-insensitive**, and **symmetric**. Both inputs are collapsed to
+ * `Set`s first, so multiplicity is ignored (`["A","A"]` equals `["A"]`), then
+ * the two sets are compared by size and membership. Comparing raw array
+ * lengths would be wrong and asymmetric in the presence of duplicates
+ * (e.g. `["A","A"]` vs `["A","B"]`), so we deliberately do not do that.
+ * Neither input is mutated.
  */
 function areStringSetsEqual(a: readonly string[], b: readonly string[]): boolean {
-  if (a.length !== b.length) return false;
+  const aSet = new Set(a);
   const bSet = new Set(b);
-  for (const value of a) {
+  if (aSet.size !== bSet.size) return false;
+  for (const value of aSet) {
     if (!bSet.has(value)) return false;
   }
   return true;

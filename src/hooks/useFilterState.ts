@@ -362,6 +362,20 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
   const clearProjects = useCallback(() => setSelectedProjectIds([]), []);
   const clearTags = useCallback(() => setSelectedTagIds([]), []);
 
+  // Full-array replacement boundary (used by preset load). The raw `setState`
+  // functions are kept private to this hook; callers replace the whole
+  // selection only through these callbacks, which deduplicate first so the
+  // set-uniqueness invariant cannot be violated even by a payload carrying
+  // duplicate IDs. `dedupeIds` returns a new array (no input mutation).
+  const replaceSelectedProjectIds = useCallback(
+    (ids: string[]) => setSelectedProjectIds(dedupeIds(ids)),
+    [],
+  );
+  const replaceSelectedTagIds = useCallback(
+    (ids: string[]) => setSelectedTagIds(dedupeIds(ids)),
+    [],
+  );
+
   // ── Study type filter options (unique group names) ──
   const studyTypeFilterOptions = useMemo(() => {
     const groupSet = new Set<string>();
@@ -418,11 +432,11 @@ export function useFilterState({ poolStudyTypes, userId }: UseFilterStateArgs) {
      */
     setSelectedKeywords,
     selectedProjectIds,
-    setSelectedProjectIds,
+    replaceSelectedProjectIds,
     handleProjectToggle,
     clearProjects,
     selectedTagIds,
-    setSelectedTagIds,
+    replaceSelectedTagIds,
     handleTagToggle,
     clearTags,
     studyTypeFilterOptions,

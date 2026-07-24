@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Popover,
   PopoverContent,
@@ -145,11 +144,6 @@ export function SearchableEntityMultiFilter({
         >
           <span className="flex items-center gap-1.5 min-w-0 overflow-hidden">
             {triggerContent}
-            {count > 1 && (
-              <Badge variant="secondary" className="ml-0.5 h-5 px-1.5 shrink-0">
-                {count}
-              </Badge>
-            )}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
