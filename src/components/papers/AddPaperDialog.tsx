@@ -209,6 +209,12 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     e.target.value = "";
   }, []);
 
+  // The hidden native <input type="file"> remains the authoritative picker; the
+  // dropzone (mouse or keyboard) just forwards to it.
+  const openFilePicker = useCallback(() => {
+    document.getElementById("file-import-input")?.click();
+  }, []);
+
   const processImportFile = (file: File) => {
     const ext = "." + file.name.split(".").pop()?.toLowerCase();
     if (!ACCEPTED_FILE_EXTENSIONS.includes(ext)) {
@@ -303,6 +309,13 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     setFileImportProgress({ current: 0, total: 0, added: 0, skipped: 0, failed: 0 });
     setSelectedProjectIds([]);
     setSelectedTagIds([]);
+    // Transient interaction state must not survive a close/reopen: clear both
+    // drop-zone drag overlays and both controlled assignment popovers so the
+    // reopened dialog is in a clean, non-dragging, no-popover state.
+    setIsDragging(false);
+    setIsFileDragging(false);
+    setProjectOpen(false);
+    setTagOpen(false);
     setActiveTab("import");
     onOpenChange(false);
   };
@@ -317,6 +330,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     setBulkRunning(false);
     setBulkProgress({ current: 0, total: 0 });
     setBulkResults({ addedIds: [], skippedIds: [], failedIds: [] });
+    setIsDragging(false);
   };
 
   const handleImportMore = () => {
@@ -646,17 +660,26 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
             {!parsedFile && !fileImportRunning && (
               <div
                 ref={fileDropzoneRef}
-                tabIndex={-1}
+                role="button"
+                tabIndex={0}
+                aria-label="Choose a file to import"
                 onDragOver={handleFileDragOver}
                 onDragLeave={handleFileDragLeave}
                 onDrop={handleFileDrop}
                 className={cn(
-                  "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors cursor-pointer outline-none",
+                  "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors cursor-pointer",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                   isFileDragging
                     ? "border-primary bg-primary/5"
                     : "border-muted-foreground/25 hover:border-muted-foreground/50"
                 )}
-                onClick={() => document.getElementById("file-import-input")?.click()}
+                onClick={openFilePicker}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openFilePicker();
+                  }
+                }}
               >
                 <FileUp className={cn("h-10 w-10 mb-3", isFileDragging ? "text-primary" : "text-muted-foreground")} />
                 <p className="text-sm font-medium mb-1">

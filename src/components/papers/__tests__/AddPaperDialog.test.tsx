@@ -182,6 +182,44 @@ beforeEach(() => {
   });
 });
 
+// ── Controlled-parent harness for close/reopen (full-reset) tests ─────────
+
+/** Renders the dialog under a parent that owns `open`, plus a "reopen" button.
+ *  Closing through the dialog's own controls drives `onOpenChange(false)` and
+ *  the internal full reset; "reopen" re-mounts the content to inspect state. */
+function renderControlled() {
+  function Controlled() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button onClick={() => setOpen(true)}>reopen</button>
+        <AddPaperDialog
+          open={open}
+          onOpenChange={setOpen}
+          onBulkImport={makeBulkImport()}
+          onFileImport={makeFileImport()}
+          projects={PROJECTS}
+          tags={TAGS}
+        />
+      </>
+    );
+  }
+  render(<Controlled />);
+}
+
+const reopen = () => fireEvent.click(screen.getByRole("button", { name: "reopen" }));
+
+/** Trigger the dialog's full close/reset. The dialog's built-in top-right Close
+ *  and any footer Close both route through `resetAndClose`; the first match
+ *  suffices, and `hidden: true` still finds it when a modal popover is open. */
+function fullClose() {
+  const closes = screen.getAllByRole("button", { name: "Close", hidden: true });
+  fireEvent.click(closes[0]);
+}
+
+const fileDropzone = () =>
+  screen.getByRole("button", { name: "Choose a file to import" });
+
 // ══════════════════════════════════════════════════════════════════════════
 // Identifier-import continuation
 // ══════════════════════════════════════════════════════════════════════════
@@ -433,41 +471,102 @@ describe("AddPaperDialog — shared state and resets", () => {
     expect(screen.getByLabelText("Remove tag Omega")).toBeInTheDocument();
   });
 
-  it("14.12 full close resets everything on reopen", async () => {
-    function Controlled() {
-      const [open, setOpen] = useState(true);
-      return (
-        <>
-          <button onClick={() => setOpen(true)}>reopen</button>
-          <AddPaperDialog
-            open={open}
-            onOpenChange={setOpen}
-            onBulkImport={makeBulkImport()}
-            onFileImport={makeFileImport()}
-            projects={PROJECTS}
-            tags={TAGS}
-          />
-        </>
-      );
-    }
-    render(<Controlled />);
+  it("14.12 / 9.5 full close resets identifier, Project and Tag state on reopen", async () => {
+    renderControlled();
 
     await selectProjects("Alpha");
+    await selectTags("Omega");
     typeIdentifiers("111\n222");
     fireEvent.click(screen.getByRole("button", { name: /Import 2 Papers/i }));
     await screen.findByText("Import Results Summary");
 
     // Close (full reset) then reopen.
-    fireEvent.click(footerCloseButton("Import More"));
+    fullClose();
     await waitFor(() =>
       expect(screen.queryByText("Import Results Summary")).toBeNull(),
     );
-    fireEvent.click(screen.getByRole("button", { name: "reopen" }));
+    reopen();
 
-    // Import IDs is the active tab and everything is empty.
+    // Import IDs is the active tab and every field/selection is cleared.
     expect(idTextarea()).toHaveValue("");
     expect(screen.queryByText("Import Results Summary")).toBeNull();
     expect(screen.queryByLabelText("Remove project Alpha")).toBeNull();
+    expect(screen.queryByLabelText("Remove tag Omega")).toBeNull();
+  });
+
+  it("9.6 full close resets the manual form", async () => {
+    renderControlled();
+    switchTab(/Manual/i);
+    fireEvent.change(screen.getByLabelText("Title *"), {
+      target: { value: "My Paper" },
+    });
+    fireEvent.change(screen.getByLabelText("Journal"), {
+      target: { value: "Journal of Tests" },
+    });
+
+    fullClose();
+    reopen();
+
+    // Active tab is back to Import IDs; the manual fields are empty.
+    expect(idTextarea()).toBeInTheDocument();
+    switchTab(/Manual/i);
+    expect(screen.getByLabelText("Title *")).toHaveValue("");
+    expect(screen.getByLabelText("Journal")).toHaveValue("");
+  });
+
+  it("9.7 full close resets file state", async () => {
+    renderControlled();
+    switchTab(/Import File/i);
+    await loadFile("myfile.ris");
+    expect(screen.getByText("myfile.ris")).toBeInTheDocument();
+
+    fullClose();
+    reopen();
+    switchTab(/Import File/i);
+
+    expect(screen.queryByText("myfile.ris")).toBeNull();
+    expect(screen.queryByText(/Found \d+ paper/i)).toBeNull();
+    expect(screen.getByText(/Drop a file or click to browse/i)).toBeInTheDocument();
+  });
+
+  it("9.8 full close resets identifier drag state", async () => {
+    renderControlled();
+    // The drop overlay lives in the textarea's wrapping drop container.
+    fireEvent.dragOver(idTextarea().parentElement!);
+    expect(screen.getByText("Drop .txt or .csv file")).toBeInTheDocument();
+
+    fullClose();
+    reopen();
+
+    expect(screen.queryByText("Drop .txt or .csv file")).toBeNull();
+  });
+
+  it("9.8b full close resets file drag state", async () => {
+    renderControlled();
+    switchTab(/Import File/i);
+    fireEvent.dragOver(fileDropzone());
+    expect(screen.getByText("Drop your file here")).toBeInTheDocument();
+
+    fullClose();
+    reopen();
+    switchTab(/Import File/i);
+
+    expect(screen.queryByText("Drop your file here")).toBeNull();
+    expect(screen.getByText(/Drop a file or click to browse/i)).toBeInTheDocument();
+  });
+
+  it("9.9 open assignment popover does not survive full close", async () => {
+    renderControlled();
+    // Open the Project popover (modal — it aria-hides the dialog's own controls).
+    fireEvent.click(triggerButton(/projects?/i));
+    await screen.findByPlaceholderText("Search projects...");
+
+    // Close the dialog through its built-in Close (reachable via hidden:true),
+    // then reopen: the popover must not auto-open.
+    fullClose();
+    reopen();
+
+    expect(screen.queryByPlaceholderText("Search projects...")).toBeNull();
   });
 
   it("14.14 changing selections after completion invokes no import/db callback", async () => {
@@ -483,5 +582,67 @@ describe("AddPaperDialog — shared state and resets", () => {
     expect(onBulkImport).not.toHaveBeenCalled();
     // The completed summary is historical and stays put.
     expect(screen.getByText("Import Results Summary")).toBeInTheDocument();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Continuation accessibility and focus (IMPORT-CONTINUATION-WORKFLOW-001A)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("AddPaperDialog — continuation accessibility and focus", () => {
+  it("9.1 Import More returns focus to the identifier textarea", async () => {
+    renderDialog();
+    typeIdentifiers("111");
+    fireEvent.click(screen.getByRole("button", { name: /Import 1 Paper/i }));
+    await screen.findByText("Import Results Summary");
+
+    fireEvent.click(screen.getByRole("button", { name: "Import More" }));
+    await waitFor(() => expect(idTextarea()).toHaveFocus());
+  });
+
+  it("9.2 Import Another File returns focus to the dropzone", async () => {
+    renderDialog();
+    switchTab(/Import File/i);
+    await loadFile();
+    fireEvent.click(screen.getByRole("button", { name: /Import 1 Paper/i }));
+    await screen.findByText("File Import Results");
+
+    fireEvent.click(screen.getByRole("button", { name: "Import Another File" }));
+    const dz = await screen.findByRole("button", {
+      name: "Choose a file to import",
+    });
+    await waitFor(() => expect(dz).toHaveFocus());
+  });
+
+  it("9.3 Enter and Space on the dropzone open the file picker", async () => {
+    renderDialog();
+    switchTab(/Import File/i);
+    const dz = fileDropzone();
+    const input = document.getElementById("file-import-input") as HTMLInputElement;
+    // Spy + no-op so no real OS picker is invoked.
+    const clickSpy = vi.spyOn(input, "click").mockImplementation(() => {});
+
+    fireEvent.keyDown(dz, { key: "Enter" });
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+
+    clickSpy.mockClear();
+    // fireEvent returns false when the event's default action was prevented.
+    const notCancelled = fireEvent.keyDown(dz, { key: " " });
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(notCancelled).toBe(false); // Space default (page scroll) is prevented
+
+    clickSpy.mockRestore();
+  });
+
+  it("9.4 dropzone is a semantic, keyboard-operable, visibly-focusable button", async () => {
+    renderDialog();
+    switchTab(/Import File/i);
+    const dz = fileDropzone();
+
+    expect(dz).toHaveAttribute("role", "button");
+    expect(dz).toHaveAttribute("tabindex", "0");
+    expect(dz).toHaveAccessibleName("Choose a file to import");
+    // Visible focus replacement for the removed raw outline.
+    expect(dz.className).toMatch(/focus-visible:ring-2/);
   });
 });
