@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Search, X, Download, FileText, FileSpreadsheet, BookOpen, Loader2 } from "lucide-react";
 import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
+import { SearchableEntityMultiFilter } from "./SearchableEntityMultiFilter";
 import { FilterPresetsMenu, type FilterPresetsMenuProps } from "./FilterPresetsMenu";
 import { Project, Tag } from "@/types/database";
 import type { NotesPresence } from "@/hooks/papers/types";
@@ -40,10 +41,12 @@ interface SearchFiltersProps {
   hasActiveFilters: boolean;
   projects: Project[];
   tags: Tag[];
-  selectedProjectId: string | null;
-  selectedTagId: string | null;
-  onProjectChange: (projectId: string | null) => void;
-  onTagChange: (tagId: string | null) => void;
+  selectedProjectIds: string[];
+  selectedTagIds: string[];
+  onProjectToggle: (projectId: string) => void;
+  onTagToggle: (tagId: string) => void;
+  onClearProjects: () => void;
+  onClearTags: () => void;
   isExportReady?: boolean;
   isExporting?: boolean;
   /**
@@ -74,10 +77,12 @@ export function SearchFilters({
   hasActiveFilters,
   projects,
   tags,
-  selectedProjectId,
-  selectedTagId,
-  onProjectChange,
-  onTagChange,
+  selectedProjectIds,
+  selectedTagIds,
+  onProjectToggle,
+  onTagToggle,
+  onClearProjects,
+  onClearTags,
   isExportReady,
   isExporting = false,
   filterPresets,
@@ -146,53 +151,33 @@ export function SearchFilters({
           </SelectContent>
         </Select>
 
-        {/* Project Filter */}
-        <Select
-          value={selectedProjectId ?? "all"}
-          onValueChange={(v) => onProjectChange(v === "all" ? null : v)}
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Project" />
-          </SelectTrigger>
-          <SelectContent className="bg-popover">
-            <SelectItem value="all">All Projects</SelectItem>
-            {projects.map((project) => (
-              <SelectItem key={project.id} value={project.id}>
-                <div className="flex items-center gap-2">
-                  <div
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: project.color }}
-                  />
-                  {project.name}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Project Filter (searchable multi-select) */}
+        <SearchableEntityMultiFilter
+          items={projects}
+          selectedIds={selectedProjectIds}
+          onToggle={onProjectToggle}
+          onClear={onClearProjects}
+          allLabel="All Projects"
+          nounSingular="Project"
+          nounPlural="Projects"
+          searchPlaceholder="Search projects..."
+          emptyMessage="No projects found."
+          ariaLabel="Filter by project"
+        />
 
-        {/* Tag Filter */}
-        <Select
-          value={selectedTagId ?? "all"}
-          onValueChange={(v) => onTagChange(v === "all" ? null : v)}
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Tag" />
-          </SelectTrigger>
-          <SelectContent className="bg-popover">
-            <SelectItem value="all">All Tags</SelectItem>
-            {tags.map((tag) => (
-              <SelectItem key={tag.id} value={tag.id}>
-                <div className="flex items-center gap-2">
-                  <div
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: tag.color }}
-                  />
-                  {tag.name}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Tag Filter (searchable multi-select) */}
+        <SearchableEntityMultiFilter
+          items={tags}
+          selectedIds={selectedTagIds}
+          onToggle={onTagToggle}
+          onClear={onClearTags}
+          allLabel="All Tags"
+          nounSingular="Tag"
+          nounPlural="Tags"
+          searchPlaceholder="Search tags..."
+          emptyMessage="No tags found."
+          ariaLabel="Filter by tag"
+        />
 
         {/* Keywords Dropdown */}
         <KeywordFilterDropdown

@@ -6,12 +6,17 @@ import { queryKeys } from "@/lib/queryKeys";
 import type { NotesPresence } from "@/hooks/papers/types";
 import type { Project, Tag } from "@/types/database";
 import { useToast } from "@/hooks/use-toast";
+import { dedupeIds } from "@/lib/filterSets";
 
 /**
- * Current payload schema version. Bump + branch in `parsePresetPayload`
- * if the persisted shape ever changes in a non-backward-compatible way.
+ * Current payload schema version. Bumped 1 → 2 by PROJECT-TAG-SELECTOR-UX-001
+ * when the dashboard Project/Tag filters became multi-select: the scalar
+ * `selectedProjectId` / `selectedTagId` fields were replaced by the
+ * `selectedProjectIds` / `selectedTagIds` string arrays. Version-1 payloads
+ * still on disk are read via `presetPayloadV1Schema` and normalized up to the
+ * current shape by `parsePresetPayload` — no automatic DB rewrite happens.
  */
-export const PRESET_PAYLOAD_VERSION = 1 as const;
+export const PRESET_PAYLOAD_VERSION = 2 as const;
 
 /** Maximum allowed preset name length. */
 export const PRESET_NAME_MAX_LENGTH = 80;
@@ -22,6 +27,9 @@ export const PRESET_NAME_MAX_LENGTH = 80;
  * restoring `"muscle protein synthesis"` reproduces the exact quoted query
  * and thus the phrase-search routing. `yearFrom` / `yearTo` are kept as
  * strings (not parsed to numbers) to round-trip empty-string exactly.
+ *
+ * `selectedProjectIds` / `selectedTagIds` are order-insensitive sets — the
+ * dirty-check comparator treats them as such (see `arePresetPayloadsEqual`).
  */
 const notesPresenceSchema = z.enum(["all", "has", "none"]);
 
@@ -33,11 +41,36 @@ export const presetPayloadSchema = z.object({
   studyType: z.string(),
   notesPresence: notesPresenceSchema,
   selectedKeywords: z.array(z.string()),
+  selectedProjectIds: z.array(z.string()),
+  selectedTagIds: z.array(z.string()),
+});
+
+export type PresetPayload = z.infer<typeof presetPayloadSchema>;
+
+/**
+ * Legacy version-1 payload shape (scalar Project/Tag). Retained for READS only
+ * so existing saved presets keep loading. `parsePresetPayload` upgrades a
+ * matched v1 row into the current in-memory `PresetPayload` (v2) — it is never
+ * written back to the DB by the read path; a v1 row is persisted as v2 only
+ * when the user explicitly re-saves or updates the preset through the normal
+ * product workflow.
+ */
+export const presetPayloadV1Schema = z.object({
+  version: z.literal(1),
+  searchQuery: z.string(),
+  yearFrom: z.string(),
+  yearTo: z.string(),
+  studyType: z.string(),
+  notesPresence: notesPresenceSchema,
+  selectedKeywords: z.array(z.string()),
   selectedProjectId: z.string().nullable(),
   selectedTagId: z.string().nullable(),
 });
 
-export type PresetPayload = z.infer<typeof presetPayloadSchema>;
+/** Normalize a nullable scalar ID into a 0-or-1-element array. */
+function scalarToArray(id: string | null): string[] {
+  return id === null ? [] : [id];
+}
 
 /** A single saved preset with server-provided metadata. */
 export interface FilterPreset {
@@ -49,19 +82,50 @@ export interface FilterPreset {
 }
 
 /**
- * Safe-parse a JSONB `payload` read back from the DB. Returns null for
- * rows with a shape we cannot reconcile (future schema version, missing
- * fields, corrupted write) — the caller drops them from the menu and
- * warns to the console so the user still sees every preset we can load.
+ * Safe-parse a JSONB `payload` read back from the DB into the current
+ * (version-2) in-memory shape. Returns null for rows with a shape we cannot
+ * reconcile (unknown/future version, missing fields, corrupted write) — the
+ * caller drops them from the menu and warns to the console so the user still
+ * sees every preset we can load.
+ *
+ * Set-semantics guarantee: the `selectedProjectIds` / `selectedTagIds` arrays
+ * are mathematical sets. Even a schema-valid version-2 payload can carry
+ * duplicate IDs (hand-edited JSONB, an older buggy writer), so both arrays are
+ * deduplicated (first-seen order preserved) before the payload crosses into
+ * the app. `dedupeIds` returns new arrays, so the original `raw` object is
+ * never mutated.
+ *
+ * Backward compatibility: a valid version-1 payload (scalar Project/Tag) is
+ * accepted and normalized up to version 2 in memory. The scalar
+ * `selectedProjectId` / `selectedTagId` become 0-or-1-element arrays. This
+ * upgrade is read-only — nothing is written back to the DB here.
  */
 export function parsePresetPayload(raw: unknown): PresetPayload | null {
   const parsed = presetPayloadSchema.safeParse(raw);
-  if (!parsed.success) {
-    // Deliberately not a throw — invalid rows must not break the menu.
-    console.warn("[useFilterPresets] Dropping invalid preset payload:", parsed.error.issues);
-    return null;
+  if (parsed.success) {
+    return {
+      ...parsed.data,
+      selectedProjectIds: dedupeIds(parsed.data.selectedProjectIds),
+      selectedTagIds: dedupeIds(parsed.data.selectedTagIds),
+    };
   }
-  return parsed.data;
+
+  // Not a v2 row — try the legacy v1 shape and normalize it forward. A v1
+  // scalar can never be a duplicate set, so no dedupe is needed here.
+  const v1 = presetPayloadV1Schema.safeParse(raw);
+  if (v1.success) {
+    const { selectedProjectId, selectedTagId, version: _v1version, ...rest } = v1.data;
+    return {
+      ...rest,
+      version: PRESET_PAYLOAD_VERSION,
+      selectedProjectIds: scalarToArray(selectedProjectId),
+      selectedTagIds: scalarToArray(selectedTagId),
+    };
+  }
+
+  // Deliberately not a throw — invalid rows must not break the menu.
+  console.warn("[useFilterPresets] Dropping invalid preset payload:", parsed.error.issues);
+  return null;
 }
 
 /** Filter-state setter surface that `applyPreset` targets. */
@@ -72,14 +136,18 @@ export interface PresetSetters {
   setStudyType: (v: string) => void;
   setNotesPresence: (v: NotesPresence) => void;
   setSelectedKeywords: (v: string[]) => void;
-  setSelectedProjectId: (v: string | null) => void;
-  setSelectedTagId: (v: string | null) => void;
+  setSelectedProjectIds: (v: string[]) => void;
+  setSelectedTagIds: (v: string[]) => void;
 }
 
-/** Result of applying a preset — reports any stale references that were skipped. */
+/**
+ * Result of applying a preset — reports how many stale references were skipped
+ * per category so the caller can build an accurately-pluralized toast. Zero
+ * means nothing was dropped for that category.
+ */
 export interface ApplyPresetResult {
-  droppedProjectId: boolean;
-  droppedTagId: boolean;
+  droppedProjectCount: number;
+  droppedTagCount: number;
 }
 
 /**
@@ -87,10 +155,14 @@ export interface ApplyPresetResult {
  * exactly once. Full-replacement semantics: every one of the 8 fields is
  * overwritten, deterministically, regardless of the pre-load state.
  *
- * Stale-ID guard: if the preset references a `selectedProjectId` or
- * `selectedTagId` that no longer exists in the current `projects` / `tags`
- * lists (e.g. the user deleted it since saving the preset), the field is
- * set to `null` and the result reports the drop so the caller can toast.
+ * Set semantics: the saved arrays are treated as sets. Each category is first
+ * deduplicated, so a duplicated ID reaches the setter at most once and counts
+ * as a single semantic selection. The stale-ID guard is then applied to the
+ * *unique* selections — each member that no longer exists in the current
+ * `projects` / `tags` lists is dropped individually, valid siblings are kept,
+ * and the per-category drop count reflects **unique** missing selections
+ * (`["missing","missing"]` → dropped count `1`, not `2`). This keeps the
+ * caller's toast ("1 project" vs "2 projects") accurate.
  *
  * Pure apart from the setter side-effects, so it is straightforward to
  * unit-test with jest/vitest mocks.
@@ -108,18 +180,23 @@ export function applyPreset(
   setters.setNotesPresence(payload.notesPresence);
   setters.setSelectedKeywords(payload.selectedKeywords);
 
-  const projectExists =
-    payload.selectedProjectId === null ||
-    projects.some((p) => p.id === payload.selectedProjectId);
-  const tagExists =
-    payload.selectedTagId === null || tags.some((t) => t.id === payload.selectedTagId);
+  const projectIdSet = new Set(projects.map((p) => p.id));
+  const tagIdSet = new Set(tags.map((t) => t.id));
 
-  setters.setSelectedProjectId(projectExists ? payload.selectedProjectId : null);
-  setters.setSelectedTagId(tagExists ? payload.selectedTagId : null);
+  // Deduplicate first so duplicates count once and cannot reach state twice,
+  // then drop stale members. `dedupeIds` preserves first-seen order.
+  const uniqueProjectIds = dedupeIds(payload.selectedProjectIds);
+  const uniqueTagIds = dedupeIds(payload.selectedTagIds);
+
+  const keptProjectIds = uniqueProjectIds.filter((id) => projectIdSet.has(id));
+  const keptTagIds = uniqueTagIds.filter((id) => tagIdSet.has(id));
+
+  setters.setSelectedProjectIds(keptProjectIds);
+  setters.setSelectedTagIds(keptTagIds);
 
   return {
-    droppedProjectId: !projectExists,
-    droppedTagId: !tagExists,
+    droppedProjectCount: uniqueProjectIds.length - keptProjectIds.length,
+    droppedTagCount: uniqueTagIds.length - keptTagIds.length,
   };
 }
 
@@ -179,11 +256,13 @@ export function buildPresetPayload(fields: Omit<PresetPayload, "version">): Pres
  * `false`, the UI surfaces a dot on the Presets trigger and enables the
  * `Update "<name>"` action.
  *
- * All scalar/nullable fields compare with strict `===`. `selectedKeywords`
- * compares **order-insensitively** (same length + same set of members),
- * because the keyword filter is semantically "match any of these" — toggling
- * a keyword off and back on should not read as dirty. `applyPreset` still
- * restores keyword order on load; only this comparator is order-insensitive.
+ * Scalar fields compare with strict `===`. `selectedKeywords`,
+ * `selectedProjectIds` and `selectedTagIds` are compared as **mathematical
+ * sets** — order is ignored and duplicate multiplicity is ignored, so
+ * equality is determined purely by unique membership — because each is
+ * semantically "match any of these" — toggling a member off and back on, or
+ * selecting in a different order, should not read as dirty. `applyPreset`
+ * still restores the saved order on load; only this comparator is set-based.
  *
  * A `version` mismatch (future schema bump) reads as not-equal, which
  * correctly surfaces a dirty signal so the user can re-save under the
@@ -196,15 +275,28 @@ export function arePresetPayloadsEqual(a: PresetPayload, b: PresetPayload): bool
   if (a.yearTo !== b.yearTo) return false;
   if (a.studyType !== b.studyType) return false;
   if (a.notesPresence !== b.notesPresence) return false;
-  if (a.selectedProjectId !== b.selectedProjectId) return false;
-  if (a.selectedTagId !== b.selectedTagId) return false;
-  if (a.selectedKeywords.length !== b.selectedKeywords.length) return false;
-  // Order-insensitive set equality. Lengths match, so a one-way membership
-  // check is sufficient (if every element of `a` is in `b`, and they're the
-  // same length, the sets are equal).
-  const bSet = new Set(b.selectedKeywords);
-  for (const kw of a.selectedKeywords) {
-    if (!bSet.has(kw)) return false;
+  return (
+    areStringSetsEqual(a.selectedKeywords, b.selectedKeywords) &&
+    areStringSetsEqual(a.selectedProjectIds, b.selectedProjectIds) &&
+    areStringSetsEqual(a.selectedTagIds, b.selectedTagIds)
+  );
+}
+
+/**
+ * True set equality for two string arrays: **order-insensitive**,
+ * **duplicate-insensitive**, and **symmetric**. Both inputs are collapsed to
+ * `Set`s first, so multiplicity is ignored (`["A","A"]` equals `["A"]`), then
+ * the two sets are compared by size and membership. Comparing raw array
+ * lengths would be wrong and asymmetric in the presence of duplicates
+ * (e.g. `["A","A"]` vs `["A","B"]`), so we deliberately do not do that.
+ * Neither input is mutated.
+ */
+function areStringSetsEqual(a: readonly string[], b: readonly string[]): boolean {
+  const aSet = new Set(a);
+  const bSet = new Set(b);
+  if (aSet.size !== bSet.size) return false;
+  for (const value of aSet) {
+    if (!bSet.has(value)) return false;
   }
   return true;
 }
