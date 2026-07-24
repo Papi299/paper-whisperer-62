@@ -1,6 +1,6 @@
 # App Store / Play Store Launch Checklist (Planning — Mobile Phase, Post-Web)
 
-> **Launch implementation paused (C27, 2026-07-21).** This checklist remains valid **future-facing** planning, but public-launch/commercial-launch **implementation** is paused by owner decision and is **not** the active next engineering plan. The active priority is product feature and workflow development. Nothing here should be treated as an authorized current task; reactivation requires a new explicit owner decision. See [decisions-and-triggers.md](decisions-and-triggers.md) C27.
+> **Launch implementation paused (C27, 2026-07-24).** This checklist remains valid **future-facing** planning, but public-launch/commercial-launch **implementation** is paused by owner decision and is **not** the active next engineering plan. The active priority is product feature and workflow development. Nothing here should be treated as an authorized current task; reactivation requires a new explicit owner decision. See [decisions-and-triggers.md](decisions-and-triggers.md) C27.
 >
 > **Status: planning checklist only, and the mobile launch is now deferred behind the web launch.** No item below is "done" unless explicitly tracked elsewhere as shipped. Apple App Store and Google Play policies, fees, and required questionnaires change frequently. **Every policy item in this document must be re-verified against primary sources within 30 days of submission.** Do not treat any policy claim here as authoritative.
 >

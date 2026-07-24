@@ -551,9 +551,9 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 
 **Re-evaluation trigger:** none — a one-time convergence that has now been applied remotely and verified. An index later proven to serve a real query path is added by a separate performance migration, not by reopening C26.
 
-## Product-direction reset (2026-07-21)
+## Product-direction reset (2026-07-24)
 
-### C27. Public-launch and commercial-launch implementation are paused; feature development is the active priority (2026-07-21)
+### C27. Public-launch and commercial-launch implementation are paused; feature development is the active priority (2026-07-24)
 
 **Decision:** by owner decision, public-launch and commercial-launch **implementation** work is **paused** and is **not on the active critical path**. The active engineering priority returns to **product feature and workflow development** — building new features, completing incomplete user workflows, improving existing functionality and usability, and maintaining the existing technical quality gates (required CI + branch protection). This is a **priority reset, not a reversal** of any prior technical or commercial decision.
 
