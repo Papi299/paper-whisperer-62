@@ -68,4 +68,8 @@ export const queryKeys = {
     /** Per-user AI-analysis quota status (read-only get_ai_quota_status RPC). */
     status: (userId: string) => ["aiQuota", userId, "status"] as const,
   },
+  access: {
+    /** Per-user effective internal role + capabilities (get_current_user_access RPC). */
+    current: (userId: string) => ["access", userId, "current"] as const,
+  },
 } as const;
