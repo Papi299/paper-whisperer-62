@@ -2853,3 +2853,18 @@ Frontend-only correction commit on `feat/pfa-c01-ai-quota-ux`. The approved read
 **Tests:** `analyzeError` 12 → 25 (strict-validation fallbacks, valid lifetime/monthly/zero, UTC `formatResetDate`, neutral wording), `usePaperAnalysisActions` 15 → 17 (single fetch-rejection boundary, first-paper `402`; the mid-run `402` test now asserts exactly one quota toast and the full count invariant). Full suite green; lint/typecheck/build clean.
 
 **Generated types:** unchanged in this correction (the migration did not change, so no regeneration was required). Investigation of the earlier `__InternalSupabase.PostgrestVersion` drop: local Supabase CLI is **2.108.0**; `supabase gen types typescript --local` with this version omits that non-functional PostgREST-version hint that `main` carried (`"14.4"`), while still emitting the harmless `Omit<Database, "__InternalSupabase">`. This is a generator-version/source artifact, not a schema change; `typecheck`/`build` pass without it. Per task constraints the linked/Production project was **not** used for generation and generated types were **not** hand-edited, so the honest local output stands.
+
+## 2026-07-25 — PFA-C01-FINAL-RECONCILIATION-001: PFA-C01 deployed to Production + migration-history label repair (deploy + docs only)
+
+Finalizing entry for PFA-C01. This makes the chronology explicit; the prior `20260724120000` and `20260724120000A` entries above are unchanged.
+
+- **Production project:** `lioxtgiputfniqbktcsz` (academic-papers-index).
+- **Migration applied:** the approved additive migration `20260724120000_add_ai_quota_status_rpc.sql` was applied to Production on **2026-07-25**. Schema result verified by read-only inspection: `public.get_ai_quota_status(uuid)` is deployed — `SECURITY DEFINER`, `STABLE`, `search_path = public`, S1 `auth.uid()` guard, `EXECUTE` granted only to `authenticated` (revoked from `PUBLIC`/`anon`); `usage_counters` still `FORCE ROW LEVEL SECURITY` with **no** client SELECT policy; `consume_ai_quota` / `refund_ai_quota` unchanged.
+- **PR #166 merge commit:** `fb876c8b6020de83d23ce2877effa0881ed5c4e4` (regular merge commit; second parent = approved head `adaa1d2b3d62de2f34e9b24c6f325704e61be48e`).
+- **Merged-main CI:** the `push`-triggered `Validate / validate` run for the merge commit succeeded (Lint / Typecheck / Unit & integration tests / Production build).
+- **Vercel:** the automatic Git-integrated **Production** deployment for the merge commit is Ready on `app.paperlume.app` (no manual deploy/promote/rollback).
+- **Migration-history label repair.** The migration was originally applied via the Supabase MCP `apply_migration` tool during the deploy step, which recorded an auto-generated history version `20260725054400` (current-timestamp) instead of the canonical file version `20260724120000`. This was reconciled with the linked Supabase CLI:
+  - `supabase migration repair --status applied 20260724120000` → `Repaired migration history: [20260724120000] => applied`
+  - `supabase migration repair --status reverted 20260725054400` → `Repaired migration history: [20260725054400] => reverted`
+  - After repair, `supabase migration list --linked` shows **Local = Remote** through `20260724120000` (66 aligned rows); `20260725054400` no longer appears on either side.
+- **Scope of the repair:** migration-history **metadata only**. No migration SQL was re-executed, no `supabase db push`, no function drop/recreate, no manual edit of `supabase_migrations.schema_migrations`. **No Edge Function, quota value, table, policy, RLS object, or user/application data changed.**
