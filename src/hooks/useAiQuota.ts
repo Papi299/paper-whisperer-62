@@ -25,6 +25,13 @@ export interface AiQuotaStatus {
   remaining: number;
   /** ISO reset timestamp for monthly plans; null for lifetime / unavailable. */
   resetAt: string | null;
+  /**
+   * True when the caller is an internal user with an explicit AI-quota
+   * exemption (server `reason: "quota_exempt"`). The commercial quota is not
+   * enforced for them; `used` stays visible but `remaining`/`quota` are
+   * operational context only and must NOT be shown as an enforcement wall.
+   */
+  isExempt: boolean;
 }
 
 /** Raw row shape returned by the RPC (SETOF → array in supabase-js). */
@@ -38,6 +45,7 @@ interface AiQuotaStatusRow {
   quota: number;
   remaining: number;
   reset_at: string | null;
+  is_exempt?: boolean | null;
 }
 
 function normalize(row: AiQuotaStatusRow): AiQuotaStatus {
@@ -51,6 +59,7 @@ function normalize(row: AiQuotaStatusRow): AiQuotaStatus {
     quota: row.quota ?? 0,
     remaining: row.remaining ?? 0,
     resetAt: row.reset_at,
+    isExempt: !!row.is_exempt,
   };
 }
 

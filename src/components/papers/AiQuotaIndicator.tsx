@@ -32,6 +32,27 @@ export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicato
   // Fail soft: nothing to show on error or before the status resolves.
   if (isError || !status) return null;
 
+  // Internal AI-quota exemption (owner / granted manager). Show "Unlimited" —
+  // never a fabricated number — with an accessible explanation. No Labs/Teams
+  // wording, no checkout/upgrade CTA.
+  if (status.isExempt) {
+    const supporting =
+      "Unlimited AI analyses — internal owner access. Paperlume's commercial quota is not enforced for your account; analyses are still recorded for operational usage.";
+    return (
+      <div
+        className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm text-muted-foreground"
+        role="status"
+        aria-label={supporting}
+        title={supporting}
+      >
+        <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="whitespace-nowrap">
+          AI analyses: <span className="font-medium">Unlimited</span>
+        </span>
+      </div>
+    );
+  }
+
   const periodLabel = status.periodType === "monthly" ? "This month" : "Lifetime";
 
   // No active AI bucket (inactive / missing entitlement, or a zero-AI plan).

@@ -4,7 +4,7 @@ import { AiQuotaIndicator } from "../AiQuotaIndicator";
 import type { AiQuotaStatus } from "@/hooks/useAiQuota";
 
 function status(overrides: Partial<AiQuotaStatus> = {}): AiQuotaStatus {
-  return { allowed: true, reason: "ok", plan: "free", planStatus: "active", periodType: "lifetime", used: 3, quota: 15, remaining: 12, resetAt: null, ...overrides };
+  return { allowed: true, reason: "ok", plan: "free", planStatus: "active", periodType: "lifetime", used: 3, quota: 15, remaining: 12, resetAt: null, isExempt: false, ...overrides };
 }
 
 describe("AiQuotaIndicator", () => {
@@ -41,6 +41,26 @@ describe("AiQuotaIndicator", () => {
     // Reset date is rendered in UTC (Aug 1), not shifted to Jul 31.
     const aug1 = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 1)));
     expect(el.getAttribute("aria-label")).toContain(aug1);
+  });
+
+  it("renders 'Unlimited' (never a fabricated number) for an exempt internal user", () => {
+    // Exempt owner past the nominal cap: used > quota, remaining 0.
+    render(
+      <AiQuotaIndicator
+        status={status({ isExempt: true, reason: "quota_exempt", plan: "pro", periodType: "monthly", used: 412, quota: 350, remaining: 0 })}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    const el = screen.getByRole("status");
+    expect(el).toHaveTextContent("Unlimited");
+    // No fabricated number and no commercial/Labs wording.
+    expect(el).not.toHaveTextContent("350");
+    expect(el).not.toHaveTextContent("412");
+    expect(el.textContent).not.toMatch(/upgrade|pay|billing|labs|team/i);
+    // Accessible description explains internal access + still-recorded usage.
+    expect(el.getAttribute("aria-label")).toMatch(/internal owner access/i);
+    expect(el.getAttribute("aria-label")).toMatch(/recorded/i);
   });
 
   it("renders an unavailable state when there is no active AI bucket", () => {

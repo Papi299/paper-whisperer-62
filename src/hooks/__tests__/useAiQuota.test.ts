@@ -57,8 +57,45 @@ describe("useAiQuota", () => {
       quota: 15,
       remaining: 12,
       resetAt: null,
+      isExempt: false,
     });
     expect(result.current.isError).toBe(false);
+  });
+
+  it("normalizes the additive is_exempt field for an exempt internal user", async () => {
+    mockRpc.mockResolvedValue({
+      data: [
+        {
+          allowed: true,
+          reason: "quota_exempt",
+          plan: "pro",
+          plan_status: "active",
+          period_type: "monthly",
+          used: 412,
+          quota: 350,
+          remaining: 0,
+          reset_at: "2026-08-01T00:00:00Z",
+          is_exempt: true,
+        },
+      ],
+      error: null,
+    });
+    const { result } = renderHook(() => useAiQuota("owner-1"), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.status).not.toBeNull());
+    expect(result.current.status?.isExempt).toBe(true);
+    expect(result.current.status?.reason).toBe("quota_exempt");
+    // Usage stays visible even though remaining reads 0 past the nominal cap.
+    expect(result.current.status?.used).toBe(412);
+  });
+
+  it("defaults isExempt to false when the RPC omits the field (older shape)", async () => {
+    mockRpc.mockResolvedValue({
+      data: [{ allowed: true, reason: "ok", plan: "free", plan_status: "active", period_type: "lifetime", used: 1, quota: 15, remaining: 14, reset_at: null }],
+      error: null,
+    });
+    const { result } = renderHook(() => useAiQuota("user-1"), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.status).not.toBeNull());
+    expect(result.current.status?.isExempt).toBe(false);
   });
 
   it("returns null status when the RPC yields an empty result set", async () => {

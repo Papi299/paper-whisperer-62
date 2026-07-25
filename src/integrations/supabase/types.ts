@@ -765,6 +765,7 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: {
           allowed: boolean
+          is_exempt: boolean
           period_type: string
           plan: string
           plan_status: string
