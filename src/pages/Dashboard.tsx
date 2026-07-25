@@ -35,7 +35,9 @@ import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
 import { Plus, Loader2, Layers, Sparkles } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { usePaperAnalysisActions } from "@/hooks/usePaperAnalysisActions";
+import { useAiQuota } from "@/hooks/useAiQuota";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
+import { AiQuotaIndicator } from "@/components/papers/AiQuotaIndicator";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
 /**
@@ -478,6 +480,15 @@ function DashboardContent() {
   // `bulkAnalyzeProgress`) and both async handlers (`handleAnalyzePaper`,
   // `handleBulkAnalyze`); pure merge / payload logic lives in
   // `src/lib/studyTypeUtils.ts` (PR #117).
+  // Read-only AI-analysis quota status (used/remaining, lifetime vs monthly).
+  // Fails soft: if this query errors the indicator hides and analysis is NOT
+  // blocked — the server 402 remains the enforcement boundary.
+  const {
+    status: aiQuotaStatus,
+    isLoading: aiQuotaLoading,
+    isError: aiQuotaError,
+  } = useAiQuota(userId);
+
   const {
     analyzingPaperId,
     bulkAnalyzing,
@@ -489,6 +500,7 @@ function DashboardContent() {
     selectedPaperIds,
     userId,
     updatePaper,
+    quotaStatus: aiQuotaStatus,
   });
 
   const handleAttachmentsChange = useCallback((paperId: string, atts: PaperAttachment[]) => {
@@ -584,6 +596,11 @@ function DashboardContent() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <AiQuotaIndicator
+                status={aiQuotaStatus}
+                isLoading={aiQuotaLoading}
+                isError={aiQuotaError}
+              />
               <ColumnVisibilityDropdown
                 availableColumns={availableColumns}
                 visibleColumns={visibleColumns}

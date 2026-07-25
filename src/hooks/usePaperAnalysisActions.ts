@@ -4,6 +4,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { fetchAbstract, fetchAbstractsBatch } from "@/hooks/useAbstract";
 import { useToast } from "@/hooks/use-toast";
 import { buildAnalysisUpdates } from "@/lib/studyTypeUtils";
+import { parseAnalyzeError, formatQuotaExceededMessage } from "@/lib/analyzeError";
+import type { QuotaExceededInfo } from "@/lib/analyzeError";
+import { queryKeys } from "@/lib/queryKeys";
+import type { AiQuotaStatus } from "@/hooks/useAiQuota";
 import type { Paper, PaperWithTags } from "@/types/database";
 
 /**
@@ -16,20 +20,34 @@ import type { Paper, PaperWithTags } from "@/types/database";
  *   - the single-paper handler (`handleAnalyzePaper`)
  *   - the bulk handler (`handleBulkAnalyze`)
  *
- * **Pure-orchestration extraction — no behavior change** vs. the previously
- * inline Dashboard code. Bodies are lifted verbatim from `Dashboard.tsx`'s
- * `handleAnalyzePaper` / `handleBulkAnalyze`, with **only one substitution**:
- * the inline `new Promise(resolve => setTimeout(resolve, 3000))` cooldown
- * becomes `await sleep(3000)`. `sleep` defaults to a real 3-second sleep in
- * production; tests inject `vi.fn().mockResolvedValue(undefined)` to make
- * the cooldown a synchronous no-op while still asserting the call shape.
+ * **Quota experience (PFA-C01).** The server (`analyze-paper` +
+ * `consume_ai_quota`) is the authoritative enforcement boundary and returns a
+ * structured **HTTP 402** when the quota is exhausted. This hook:
+ *   - parses that 402 (via `parseAnalyzeError`) and shows a specific,
+ *     actionable message instead of the generic non-2xx string — with **no**
+ *     upgrade/paywall language;
+ *   - stops a bulk run the moment the server reports quota exhaustion; the
+ *     quota-denied paper counts as failed and the papers after it are reported
+ *     as unattempted, so every selected paper stays accounted for
+ *     (successCount + failCount + unattempted === total). The run emits
+ *     exactly ONE quota notification (never one per remaining paper);
+ *   - optionally intercepts a click **before** invoking when the read-only
+ *     quota status (`quotaStatus`) is known to be zero — convenience only;
+ *   - keeps the indicator fresh by invalidating the quota-status query: the
+ *     single-paper path invalidates only when the Edge Function was actually
+ *     invoked (a pre-invoke failure such as an abstract-fetch rejection does
+ *     not), and the bulk path invalidates once after the whole run completes.
+ *     A completed attempt may have consumed a unit (success) or
+ *     consumed-then-refunded (upstream provider failure).
+ * The client `quotaStatus.remaining` is advisory and may be stale; it is
+ * NEVER used as the enforcement boundary — the server 402 is authoritative.
  *
  * **Cooldown control flow (locked-in current behavior):** the `await sleep`
- * runs after success and after caught per-paper failures, but **NOT** after
- * missing-abstract skips — because the bulk loop's `if (!abstract) {
- * failCount++; continue; }` jumps to the next iteration BEFORE the cooldown
- * line. Do not relocate `sleep` into a `finally` or to the top of the loop;
- * doing so would change the cooldown control flow.
+ * runs after success and after caught **non-terminal** (non-quota) per-paper
+ * failures, but NOT after missing-abstract skips (the bulk loop's
+ * `if (!abstract) { failCount++; continue; }` jumps to the next iteration
+ * BEFORE the cooldown line) and NOT after a terminal quota-exhausted response
+ * (the loop `break`s before the cooldown). Do not relocate `sleep`.
  */
 
 const DEFAULT_SLEEP = (ms: number): Promise<void> =>
@@ -67,6 +85,14 @@ export interface UsePaperAnalysisActionsArgs {
     updates: Partial<Paper> & { tagIds?: string[]; projectIds?: string[] },
   ) => Promise<boolean>;
   /**
+   * Read-only AI quota status (from `useAiQuota`). Optional and advisory:
+   *   - `undefined` / `null` → unknown (loading or failed) → NEVER block; the
+   *     server stays authoritative.
+   *   - `remaining <= 0` → known-zero → the handlers intercept the click and
+   *     show the quota message instead of making a doomed request.
+   */
+  quotaStatus?: AiQuotaStatus | null;
+  /**
    * Optional cooldown function — defaults to a real 3-second sleep via
    * `setTimeout`. Tests inject `vi.fn().mockResolvedValue(undefined)`.
    */
@@ -86,6 +112,7 @@ export function usePaperAnalysisActions({
   selectedPaperIds,
   userId,
   updatePaper,
+  quotaStatus,
   sleep = DEFAULT_SLEEP,
 }: UsePaperAnalysisActionsArgs): UsePaperAnalysisActionsResult {
   const { toast } = useToast();
@@ -93,6 +120,27 @@ export function usePaperAnalysisActions({
   const [analyzingPaperId, setAnalyzingPaperId] = useState<string | null>(null);
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
   const [bulkAnalyzeProgress, setBulkAnalyzeProgress] = useState({ current: 0, total: 0 });
+
+  /** true only when we positively know the user has zero remaining analyses. */
+  const isKnownZeroQuota = !!quotaStatus && quotaStatus.remaining <= 0;
+
+  /** Refresh the quota indicator after any server attempt (consume/refund). */
+  const invalidateQuota = useCallback(() => {
+    if (!userId) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.aiQuota.status(userId) });
+  }, [queryClient, userId]);
+
+  /** Consistent, non-commercial quota-exhausted toast. */
+  const toastQuotaExhausted = useCallback(
+    (info: { periodType: string | null; used: number; quota: number; resetAt: string | null }) => {
+      toast({
+        title: "AI analyses used up",
+        description: formatQuotaExceededMessage(info),
+        variant: "destructive",
+      });
+    },
+    [toast],
+  );
 
   const handleAnalyzePaper = useCallback(async (paper: PaperWithTags) => {
     if (!paper.has_abstract) return;
@@ -102,7 +150,22 @@ export function usePaperAnalysisActions({
     // invoke, no toast spam. The button is gated by `has_abstract` in
     // the UI, so a legitimate user click can never reach this branch.
     if (!userId) return;
+
+    // Known-zero convenience intercept: if the read-only quota status says
+    // the user has none left, surface the message without a doomed request.
+    // When status is unknown (loading/failed) this is false → we proceed and
+    // let the server's 402 be authoritative.
+    if (isKnownZeroQuota && quotaStatus) {
+      toastQuotaExhausted(quotaStatus);
+      return;
+    }
+
     setAnalyzingPaperId(paper.id);
+    // Track whether an Edge Function attempt actually happened. Only then may a
+    // consume/refund have occurred, so only then do we sync the quota query.
+    // A failure BEFORE invocation (e.g. `fetchAbstract` rejecting) must not
+    // trigger an invalidation, because the server was never called.
+    let attempted = false;
     try {
       // Fetch abstract on demand (uses cache if already loaded).
       // `userId` is threaded for defense-in-depth ownership scoping on
@@ -113,6 +176,7 @@ export function usePaperAnalysisActions({
         return;
       }
 
+      attempted = true;
       const { data, error } = await supabase.functions.invoke("analyze-paper", {
         body: { title: paper.title, abstract },
       });
@@ -133,15 +197,30 @@ export function usePaperAnalysisActions({
           : "TLDR, study type, and statistical methods updated.",
       });
     } catch (err: unknown) {
-      toast({
-        title: "AI Analysis failed",
-        description: err instanceof Error ? err.message : "Unknown error",
-        variant: "destructive",
-      });
+      // Single failure boundary around the WHOLE operation (abstract fetch,
+      // invoke, merge, update). `parseAnalyzeError` distinguishes a structured
+      // quota-exhausted 402 from every other failure — including a
+      // `fetchAbstract` rejection, which falls through to the generic branch
+      // with its original message preserved. On quota exhaustion the paper is
+      // NOT updated (the throw precedes `updatePaper`).
+      const parsed = await parseAnalyzeError(err);
+      if (parsed.kind === "quota_exceeded") {
+        toastQuotaExhausted(parsed.info);
+      } else {
+        toast({
+          title: "AI Analysis failed",
+          description: parsed.message,
+          variant: "destructive",
+        });
+      }
     } finally {
+      // Sync the indicator only when the server was actually called: it may
+      // have consumed a unit (success) or consumed-then-refunded (upstream
+      // provider failure). Skip when we failed before invoking.
+      if (attempted) invalidateQuota();
       setAnalyzingPaperId(null);
     }
-  }, [updatePaper, queryClient, toast, userId]);
+  }, [updatePaper, queryClient, toast, userId, isKnownZeroQuota, quotaStatus, toastQuotaExhausted, invalidateQuota]);
 
   const handleBulkAnalyze = useCallback(async () => {
     // Hotfix guard: bail early when auth context is mid-transition and
@@ -160,10 +239,21 @@ export function usePaperAnalysisActions({
       return;
     }
 
+    // Known-zero convenience intercept before any batch-fetch / invoke.
+    if (isKnownZeroQuota && quotaStatus) {
+      toastQuotaExhausted(quotaStatus);
+      return;
+    }
+
     setBulkAnalyzing(true);
     setBulkAnalyzeProgress({ current: 0, total: papersToAnalyze.length });
     let successCount = 0;
     let failCount = 0;
+    let unattempted = 0;
+    let quotaExhausted = false;
+    // Parsed authoritative details from the terminal 402, used to build the
+    // ONE quota notification after the loop (never toasted inside the loop).
+    let quotaInfo: QuotaExceededInfo | null = null;
 
     // Batch-fetch all abstracts in one query (avoids N+1).
     // `userId` is threaded for defense-in-depth ownership scoping on
@@ -174,7 +264,8 @@ export function usePaperAnalysisActions({
       queryClient,
     );
 
-    for (const paper of papersToAnalyze) {
+    for (let i = 0; i < papersToAnalyze.length; i++) {
+      const paper = papersToAnalyze[i];
       setBulkAnalyzeProgress(prev => ({ ...prev, current: prev.current + 1 }));
       const abstract = abstractMap.get(paper.id);
       if (!abstract) {
@@ -193,28 +284,58 @@ export function usePaperAnalysisActions({
         await updatePaper(paper.id, updates);
         successCount++;
       } catch (err: unknown) {
+        const parsed = await parseAnalyzeError(err);
+        if (parsed.kind === "quota_exceeded") {
+          // Terminal: the server enforced the quota wall. Stop making further
+          // Edge Function calls; the remaining papers (after this one) are
+          // UNATTEMPTED. This current paper WAS attempted and denied, so it is
+          // counted as failed — every selected paper stays accounted for
+          // (successCount + failCount + unattempted === papersToAnalyze.length).
+          // No toast here: the single combined notification is emitted after
+          // the loop. Break BEFORE the cooldown — no sleep.
+          quotaExhausted = true;
+          quotaInfo = parsed.info;
+          failCount++;
+          unattempted = papersToAnalyze.length - (i + 1);
+          break;
+        }
+        // Non-terminal per-paper failure: count, notify, and continue (with cooldown).
         failCount++;
         toast({
           title: `Failed: ${paper.title?.slice(0, 50)}...`,
-          description: err instanceof Error ? err.message : "Unknown error",
+          description: parsed.message,
           variant: "destructive",
         });
       }
 
       // 3-second cooldown to avoid Gemini rate limits.
-      // Reachable only when the missing-abstract `continue` above did NOT
-      // fire, so missing-abstract skips do not consume cooldown time —
-      // see hook JSDoc for the locked-in cooldown control flow.
+      // Reachable only when the missing-abstract `continue` and the terminal
+      // quota `break` above did NOT fire — see hook JSDoc for the locked-in
+      // cooldown control flow.
       await sleep(3000);
     }
 
     setBulkAnalyzing(false);
     setBulkAnalyzeProgress({ current: 0, total: 0 });
-    toast({
-      title: "Bulk analysis complete",
-      description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
-    });
-  }, [papers, selectedPaperIds, updatePaper, queryClient, toast, sleep, userId]);
+    // Sync the indicator once after the run (consumption / refunds).
+    invalidateQuota();
+
+    if (quotaExhausted) {
+      // EXACTLY ONE quota notification for the whole run: the authoritative
+      // allowance/reset detail from the parsed 402 plus the run accounting.
+      const allowance = quotaInfo ? `${formatQuotaExceededMessage(quotaInfo)} ` : "";
+      toast({
+        title: "AI analyses used up",
+        description: `${allowance}This run: ${successCount} analyzed, ${failCount} failed, ${unattempted} not attempted.`,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Bulk analysis complete",
+        description: `${successCount} succeeded, ${failCount} failed out of ${papersToAnalyze.length} papers.`,
+      });
+    }
+  }, [papers, selectedPaperIds, updatePaper, queryClient, toast, sleep, userId, isKnownZeroQuota, quotaStatus, toastQuotaExhausted, invalidateQuota]);
 
   return {
     analyzingPaperId,
