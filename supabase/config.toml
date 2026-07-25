@@ -11,3 +11,10 @@ verify_jwt = false
 # cause 401 before the function code executes.
 [functions.analyze-paper]
 verify_jwt = false
+
+# get-gemini-provider-quota verifies auth inside the function body (getUser())
+# AND re-checks the owner/manager role via the get_current_user_access RPC.
+# Same bearer-token-in-body model as the other functions; gateway JWT
+# verification disabled so the in-code auth + role check are authoritative.
+[functions.get-gemini-provider-quota]
+verify_jwt = false

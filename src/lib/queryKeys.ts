@@ -72,4 +72,12 @@ export const queryKeys = {
     /** Per-user effective internal role + capabilities (get_current_user_access RPC). */
     current: (userId: string) => ["access", userId, "current"] as const,
   },
+  geminiProviderQuota: {
+    /**
+     * Manager-only SHARED Google Gemini provider quota. Deliberately NOT under
+     * `aiQuota` (the per-user Paperlume allowance) — this is a project-level
+     * shared metric with a distinct authorization boundary and cadence.
+     */
+    all: (userId: string) => ["geminiProviderQuota", userId] as const,
+  },
 } as const;

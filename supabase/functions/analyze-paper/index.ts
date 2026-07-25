@@ -2,6 +2,12 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
+import { resolveGeminiModel } from "../_shared/geminiModel.ts";
+import {
+  classifyProviderError,
+  NEUTRAL_ANALYSIS_UNAVAILABLE_MESSAGE,
+  type ProviderErrorClass,
+} from "../_shared/providerError.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -235,7 +241,11 @@ Deno.serve(async (req) => {
     }
     console.log("4a. Gemini key present");
 
-    const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+    // Centralized model config (Part D): GEMINI_MODEL secret with the exact
+    // historical fallback. analyze-paper and get-gemini-provider-quota resolve
+    // the same value so they can never silently disagree.
+    const geminiModel = resolveGeminiModel(Deno.env.get("GEMINI_MODEL"));
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
     console.log("5. Calling Gemini API");
 
     const geminiBody = {
@@ -268,11 +278,14 @@ CRITICAL RULES:
       },
     };
 
-    // Gemini-call-and-parse block. Any throw inside this block triggers
-    // a best-effort refund of the quota unit consumed above. The throw
-    // is then re-raised so the outer catch returns the existing 500
-    // generic-error response — the user-visible failure surface is
-    // bit-identical to the pre-quota behavior.
+    // Gemini-call-and-parse block. Any failure triggers a best-effort refund of
+    // the quota unit consumed above, then returns a NEUTRAL 500 carrying a
+    // machine-readable provider-error `code` (Part F). A provider rate-limit /
+    // quota event is NEVER converted into a Paperlume 402 — it stays a 500, the
+    // user sees neutral wording, and the classification (for telemetry + the
+    // manager-only provider panel) never leaks Google project detail.
+    let providerErrorClass: ProviderErrorClass = "unknown";
+    let classified = false;
     try {
       const geminiRes = await fetchWithRetry(geminiUrl, {
         method: "POST",
@@ -284,7 +297,9 @@ CRITICAL RULES:
 
       if (!geminiRes.ok) {
         console.log("5b. Gemini error, status:", geminiRes.status);
-        throw new Error("Gemini API Error (" + geminiRes.status + ")");
+        providerErrorClass = classifyProviderError({ kind: "http", status: geminiRes.status });
+        classified = true;
+        throw new Error("gemini_http_" + geminiRes.status);
       }
 
       const geminiData = await geminiRes.json();
@@ -293,7 +308,9 @@ CRITICAL RULES:
       const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!rawText) {
         console.log("6a. Empty Gemini response (no candidates/text)");
-        throw new Error("Empty response from Gemini");
+        providerErrorClass = classifyProviderError({ kind: "empty" });
+        classified = true;
+        throw new Error("gemini_empty");
       }
       console.log("6b. Gemini response received");
 
@@ -302,7 +319,9 @@ CRITICAL RULES:
       const endIndex = cleanText.lastIndexOf("}");
       if (startIndex === -1 || endIndex === -1) {
         console.log("6c. No JSON object found in Gemini response");
-        throw new Error("Gemini response did not contain valid JSON");
+        providerErrorClass = classifyProviderError({ kind: "parse" });
+        classified = true;
+        throw new Error("gemini_no_json");
       }
       cleanText = cleanText.substring(startIndex, endIndex + 1);
       let parsed;
@@ -310,7 +329,9 @@ CRITICAL RULES:
         parsed = JSON.parse(cleanText);
       } catch (parseErr) {
         console.log("6c. JSON parse failed");
-        throw new Error("Failed to parse Gemini JSON: " + (parseErr instanceof Error ? parseErr.message : "unknown"));
+        providerErrorClass = classifyProviderError({ kind: "parse" });
+        classified = true;
+        throw new Error("gemini_parse_failed: " + (parseErr instanceof Error ? parseErr.message : "unknown"));
       }
       console.log("7. Success! Returning parsed result");
 
@@ -325,12 +346,28 @@ CRITICAL RULES:
         { status: 200, headers: jsonHeaders },
       );
     } catch (geminiErr) {
-      // Best-effort refund. We log a swallowed refund error rather
-      // than mask the original Gemini failure — the user sees the
-      // real reason for the failure, and the operator sees both
-      // events in Supabase logs.
+      // Reached without an HTTP/empty/parse classification → network / timeout.
+      if (!classified) {
+        providerErrorClass = classifyProviderError({ kind: "network" });
+      }
+      // Best-effort refund — the user did not receive a valid analysis.
       await safeRefundAiQuota(supabase, user.id);
-      throw geminiErr;
+      // Log the class + a bounded reason; never the raw Google body.
+      console.error(
+        "analyze-paper provider failure:",
+        providerErrorClass,
+        geminiErr instanceof Error ? geminiErr.message : "unknown",
+      );
+      // Neutral, non-operational wording for the user. A provider limit is NOT a
+      // Paperlume plan wall — this stays a 500, never a 402.
+      return new Response(
+        JSON.stringify({
+          error: "analysis_unavailable",
+          code: providerErrorClass,
+          message: NEUTRAL_ANALYSIS_UNAVAILABLE_MESSAGE,
+        }),
+        { status: 500, headers: jsonHeaders },
+      );
     }
   } catch (err) {
     console.error("analyze-paper error:", err instanceof Error ? err.message : "Unknown error");

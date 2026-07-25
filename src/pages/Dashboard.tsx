@@ -36,8 +36,11 @@ import { Plus, Loader2, Layers, Sparkles } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { usePaperAnalysisActions } from "@/hooks/usePaperAnalysisActions";
 import { useAiQuota } from "@/hooks/useAiQuota";
+import { useCurrentUserAccess } from "@/hooks/useCurrentUserAccess";
+import { useGeminiProviderQuota } from "@/hooks/useGeminiProviderQuota";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 import { AiQuotaIndicator } from "@/components/papers/AiQuotaIndicator";
+import { GeminiProviderQuotaCard } from "@/components/papers/GeminiProviderQuotaCard";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
 /**
@@ -489,6 +492,18 @@ function DashboardContent() {
     isError: aiQuotaError,
   } = useAiQuota(userId);
 
+  // Internal owner/manager access (safe default 'user'; fails closed). Drives
+  // the manager-only provider-quota panel below — the server re-checks the role
+  // regardless, so this is UX gating, not the security boundary.
+  const { access } = useCurrentUserAccess(userId);
+  const {
+    data: geminiProviderQuota,
+    isLoading: geminiProviderQuotaLoading,
+    isError: geminiProviderQuotaError,
+    isFetching: geminiProviderQuotaFetching,
+    refresh: refreshGeminiProviderQuota,
+  } = useGeminiProviderQuota(userId, access.canViewProviderQuota);
+
   const {
     analyzingPaperId,
     bulkAnalyzing,
@@ -656,6 +671,18 @@ function DashboardContent() {
             isOpen={isAnalyticsOpen}
             onOpenChange={setIsAnalyticsOpen}
           />
+          {/* Manager-only shared provider-quota panel. Rendered ONLY when the
+              viewer may see it (ordinary users never mount it or fetch its
+              data); the Edge Function re-checks the role server-side. */}
+          {access.canViewProviderQuota && (
+            <GeminiProviderQuotaCard
+              data={geminiProviderQuota}
+              isLoading={geminiProviderQuotaLoading}
+              isError={geminiProviderQuotaError}
+              isFetching={geminiProviderQuotaFetching}
+              onRefresh={refreshGeminiProviderQuota}
+            />
+          )}
         </div>
 
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
