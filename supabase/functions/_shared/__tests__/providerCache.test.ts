@@ -37,13 +37,39 @@ describe("credential identity + token cache reuse", () => {
 });
 
 describe("response cache reuse", () => {
-  it("reuses within TTL for the same project+model, not across a config change", () => {
-    const idA = buildProviderConfigIdentity("proj-1", "gemini-flash-latest");
-    const idB = buildProviderConfigIdentity("proj-1", "gemini-2.0-flash");
+  it("reuses within TTL for the same full identity, not across a config change", () => {
+    const idA = buildProviderConfigIdentity("proj-1", "gemini-flash-latest", "sa@x.iam", "fp-aaa");
+    const idB = buildProviderConfigIdentity("proj-1", "gemini-2.0-flash", "sa@x.iam", "fp-aaa"); // model changed
     const cache: CachedResponse<{ x: number }> = { identity: idA, atMs: 1000, body: { x: 1 } };
     expect(isCachedResponseUsable(cache, idA, 1000 + 60_000, 120_000)).toBe(true);
     expect(isCachedResponseUsable(cache, idA, 1000 + 200_000, 120_000)).toBe(false); // past TTL
     expect(isCachedResponseUsable(cache, idB, 1000 + 60_000, 120_000)).toBe(false); // model changed
     expect(isCachedResponseUsable(null, idA, 0, 120_000)).toBe(false);
+  });
+
+  it("misses when ANY credential/config component changes (rotation is exercised next call)", () => {
+    const base = buildProviderConfigIdentity("proj-1", "gemini-flash-latest", "sa@x.iam", "fp-aaa");
+    const cache: CachedResponse<{ x: number }> = { identity: base, atMs: 1000, body: { x: 1 } };
+    const within = 1000 + 60_000;
+    // Same everything → hit.
+    expect(isCachedResponseUsable(cache, base, within, 120_000)).toBe(true);
+    // Each single change → miss, so a rotated key / changed SA / project / model
+    // is never served a response produced under the previous credential.
+    const changed = [
+      buildProviderConfigIdentity("proj-2", "gemini-flash-latest", "sa@x.iam", "fp-aaa"), // project
+      buildProviderConfigIdentity("proj-1", "gemini-2.0-flash", "sa@x.iam", "fp-aaa"), // model
+      buildProviderConfigIdentity("proj-1", "gemini-flash-latest", "sa2@x.iam", "fp-aaa"), // client email
+      buildProviderConfigIdentity("proj-1", "gemini-flash-latest", "sa@x.iam", "fp-bbb"), // rotated key
+    ];
+    for (const id of changed) {
+      expect(id).not.toBe(base);
+      expect(isCachedResponseUsable(cache, id, within, 120_000)).toBe(false);
+    }
+  });
+
+  it("the response identity never contains raw PEM material (only a fingerprint)", () => {
+    const id = buildProviderConfigIdentity("proj-1", "gemini-flash-latest", "sa@x.iam", "fp-aaa");
+    expect(id).not.toMatch(/BEGIN PRIVATE KEY/);
+    expect(id).toContain("fp-aaa");
   });
 });

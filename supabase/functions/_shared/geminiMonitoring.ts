@@ -18,9 +18,11 @@
 //   - A missing metric is NEVER invented as zero (used/limit stay null).
 //   - `remaining` is computed ONLY when both used and limit are known AND the
 //     measurement window is reliably inferable; otherwise it is null.
-//   - Daily usage sums DELTA points over the Pacific-day interval; MINUTE usage
-//     is the value of the newest COMPLETE 60-second bucket (never a multi-minute
-//     sum), or null when no complete bucket exists.
+//   - Daily usage sums DELTA points over the Pacific-day interval (unaligned).
+//     MINUTE usage sums each series' newest COMPLETE 60-second bucket (requested
+//     upstream with ALIGN_SUM, never ALIGN_DELTA) but ONLY across a bucket-end
+//     timestamp every contributing series shares — different minutes are never
+//     cross-summed; null when the series share no common complete bucket.
 //   - If several usage series with different `method` labels aggregate into one
 //     dimension, `method` is set to null (aggregated) — never one arbitrary value.
 
@@ -177,15 +179,14 @@ function sumPoints(points: RawPoint[] | undefined): number | null {
 }
 
 /**
- * Value of the newest COMPLETE 60-second bucket. A point qualifies only when it
- * has a ~60s interval (50–70s tolerance) whose endTime is at/earlier than `now`
- * (i.e. not still forming). Returns null when no bucket qualifies — never a
- * multi-minute sum and never a fabricated zero.
+ * Map of `endMs → value` for each COMPLETE ~60-second bucket in one series. A
+ * point qualifies only when it has a ~60s interval (50–70s tolerance) whose
+ * endTime is at/earlier than `now` (i.e. not still forming). A still-forming or
+ * non-60s point is omitted — never coerced to zero.
  */
-export function newestCompleteMinutePoint(points: RawPoint[] | undefined, nowMs: number): number | null {
-  if (!Array.isArray(points)) return null;
-  let best: number | null = null;
-  let bestEnd = -Infinity;
+function completeBucketMap(points: RawPoint[] | undefined, nowMs: number): Map<number, number> {
+  const map = new Map<number, number>();
+  if (!Array.isArray(points)) return map;
   for (const p of points) {
     const val = numericPoint(p);
     if (val === null) continue;
@@ -195,19 +196,48 @@ export function newestCompleteMinutePoint(points: RawPoint[] | undefined, nowMs:
     const dur = endMs - startMs;
     if (dur < 50_000 || dur > 70_000) continue; // ~60s bucket only
     if (endMs > nowMs) continue; // still forming → not complete
-    if (endMs > bestEnd) {
-      bestEnd = endMs;
-      best = val;
-    }
+    map.set(endMs, val);
   }
-  return best;
+  return map;
 }
 
-function aggregateUsage(points: RawPoint[] | undefined, config: NormalizeConfig): number | null {
-  if (config.usageMode === "newest-minute") {
-    return newestCompleteMinutePoint(points, config.nowMs ?? Number.MAX_SAFE_INTEGER);
+/**
+ * Value of the newest COMPLETE 60-second bucket in a SINGLE series (or null when
+ * none qualifies). Retained as a focused, directly-tested helper; the dimension
+ * aggregation uses the synchronized total below so multiple series never mix
+ * different minutes.
+ */
+export function newestCompleteMinutePoint(points: RawPoint[] | undefined, nowMs: number): number | null {
+  const map = completeBucketMap(points, nowMs);
+  if (map.size === 0) return null;
+  return map.get(Math.max(...map.keys())) ?? null;
+}
+
+/**
+ * Synchronized minute total across the series contributing to ONE dimension: sum
+ * values only from the newest bucket-end timestamp that EVERY contributing
+ * series reports a complete bucket for. Returns null when the series share no
+ * common complete bucket — so a 12:03–12:04 value is never added to a 12:04–12:05
+ * value, and an absent/forming series is never treated as zero. A single
+ * contributing series reduces to its own newest complete bucket.
+ */
+function synchronizedMinuteTotal(seriesBuckets: Array<Map<number, number>>): number | null {
+  if (seriesBuckets.length === 0) return null;
+  let common: Set<number> | null = null;
+  for (const m of seriesBuckets) {
+    if (m.size === 0) return null; // a contributing series with no complete bucket
+    if (common === null) {
+      common = new Set(m.keys());
+    } else {
+      for (const k of [...common]) if (!m.has(k)) common.delete(k);
+    }
+    if (common.size === 0) return null; // no shared bucket → cannot synchronize
   }
-  return sumPoints(points);
+  if (!common || common.size === 0) return null;
+  const newest = Math.max(...common);
+  let total = 0;
+  for (const m of seriesBuckets) total += m.get(newest)!;
+  return total;
 }
 
 /** Most recent numeric point (GAUGE limit). Monitoring returns points newest-first. */
@@ -242,9 +272,14 @@ interface DimAccumulator {
   limitName: string;
   methods: Set<string>;
   window: GeminiQuotaWindow;
-  used: number | null;
   limit: number | null;
-  exceeded: number | null;
+  // Daily "sum" mode: running totals across all contributing series.
+  usedSum: number | null;
+  exceededSum: number | null;
+  // Minute "newest-minute" mode: one complete-bucket map per contributing series,
+  // synchronized to a common bucket at finalization (never cross-summed).
+  usageSeries: Array<Map<number, number>>;
+  exceededSeries: Array<Map<number, number>>;
 }
 
 function addValue(current: number | null, next: number | null): number | null {
@@ -293,9 +328,11 @@ export function normalizeMonitoringTimeSeries(
         limitName,
         methods: new Set<string>(),
         window: inferWindow(limitName),
-        used: null,
         limit: null,
-        exceeded: null,
+        usedSum: null,
+        exceededSum: null,
+        usageSeries: [],
+        exceededSeries: [],
       };
       dims.set(key, dim);
     }
@@ -304,27 +341,41 @@ export function normalizeMonitoringTimeSeries(
     if (parsed.measure === "limit") {
       const v = latestPoint(ts.points);
       if (v !== null) dim.limit = dim.limit === null ? v : Math.max(dim.limit, v);
+    } else if (config.usageMode === "newest-minute") {
+      // Defer aggregation: keep each series' complete buckets so usage/exceeded
+      // combine only across a shared bucket (never a cross-minute sum).
+      const buckets = completeBucketMap(ts.points, config.nowMs ?? Number.MAX_SAFE_INTEGER);
+      if (parsed.measure === "usage") dim.usageSeries.push(buckets);
+      else dim.exceededSeries.push(buckets);
     } else if (parsed.measure === "usage") {
-      dim.used = addValue(dim.used, aggregateUsage(ts.points, config));
+      dim.usedSum = addValue(dim.usedSum, sumPoints(ts.points));
     } else {
-      dim.exceeded = addValue(dim.exceeded, aggregateUsage(ts.points, config));
+      dim.exceededSum = addValue(dim.exceededSum, sumPoints(ts.points));
     }
   }
 
   const dimensions: GeminiQuotaDimension[] = [...dims.values()]
-    .map((d) => ({
-      category: d.category,
-      model: d.model,
-      limitName: d.limitName,
-      // One contributing method → show it; zero or several → null (aggregated),
-      // never one arbitrary method as though it represented the whole aggregate.
-      method: d.methods.size === 1 ? [...d.methods][0] : null,
-      window: d.window,
-      used: d.used,
-      limit: d.limit,
-      remaining: computeRemaining(d.limit, d.used, d.window),
-      exceededAttempts: d.exceeded,
-    }))
+    .map((d) => {
+      const used =
+        config.usageMode === "newest-minute" ? synchronizedMinuteTotal(d.usageSeries) : d.usedSum;
+      const exceeded =
+        config.usageMode === "newest-minute"
+          ? synchronizedMinuteTotal(d.exceededSeries)
+          : d.exceededSum;
+      return {
+        category: d.category,
+        model: d.model,
+        limitName: d.limitName,
+        // One contributing method → show it; zero or several → null (aggregated),
+        // never one arbitrary method as though it represented the whole aggregate.
+        method: d.methods.size === 1 ? [...d.methods][0] : null,
+        window: d.window,
+        used,
+        limit: d.limit,
+        remaining: computeRemaining(d.limit, used, d.window),
+        exceededAttempts: exceeded,
+      };
+    })
     .sort(compareDimensions);
 
   const hasData = dimensions.length > 0;
@@ -393,13 +444,51 @@ export function unavailableProviderQuota(
 
 // ── Request plan (dependency-injected; no Deno / no network here) ────────
 
+/**
+ * Aligners this plan may request. `ALIGN_SUM` totals DELTA counts within an
+ * alignment period — correct for summing per-minute usage/exceeded. `ALIGN_NEXT_OLDER`
+ * is the only GAUGE-safe aligner we'd consider for a limit. `ALIGN_DELTA` is
+ * deliberately NOT offered: it computes differences between samples and is wrong
+ * for totalling a count inside a minute bucket.
+ */
+export type MonitoringAligner = "ALIGN_SUM" | "ALIGN_NEXT_OLDER";
+
 export interface TimeSeriesRequest {
   metricType: string;
   startTimeIso: string;
   endTimeIso: string;
   pageToken?: string;
-  /** When set, the caller should request DELTA data aligned to this period (s). */
+  /** Alignment period (seconds). Only meaningful together with perSeriesAligner. */
   alignmentPeriodSeconds?: number;
+  /** Explicit aligner chosen by the request plan (never defaulted to ALIGN_DELTA). */
+  perSeriesAligner?: MonitoringAligner;
+}
+
+// A large, valid page size so a single metric/window rarely needs pagination
+// (Monitoring caps the effective size at 100,000).
+const TIME_SERIES_PAGE_SIZE = 10_000;
+
+/**
+ * The EXACT Monitoring `timeSeries.list` query parameters for one request. Pure,
+ * so Vitest asserts precisely which filter + interval + aggregation reach Google.
+ * The aligner is serialized verbatim from the request plan — this builder never
+ * injects ALIGN_DELTA (or any aligner the plan did not choose), and it omits the
+ * aggregation parameters entirely for an unaligned (daily / GAUGE-limit) request.
+ */
+export function buildTimeSeriesQueryParams(req: TimeSeriesRequest): Record<string, string> {
+  const params: Record<string, string> = {
+    filter: buildTimeSeriesFilter(req.metricType),
+    "interval.startTime": req.startTimeIso,
+    "interval.endTime": req.endTimeIso,
+    view: "FULL",
+    pageSize: String(TIME_SERIES_PAGE_SIZE),
+  };
+  if (req.alignmentPeriodSeconds && req.perSeriesAligner) {
+    params["aggregation.alignmentPeriod"] = `${req.alignmentPeriodSeconds}s`;
+    params["aggregation.perSeriesAligner"] = req.perSeriesAligner;
+  }
+  if (req.pageToken) params.pageToken = req.pageToken;
+  return params;
 }
 
 /** One page of a Monitoring timeSeries.list response. */
@@ -413,7 +502,12 @@ export type TimeSeriesFetcher = (req: TimeSeriesRequest) => Promise<TimeSeriesPa
 
 const MAX_PAGES = 20;
 
-/** Follow nextPageToken until exhausted (bounded) and concatenate all series. */
+/**
+ * Follow nextPageToken until exhausted and concatenate all series. Bounded to
+ * MAX_PAGES for safety; if a nextPageToken STILL remains at that bound we THROW
+ * rather than return truncated data as though complete — the collector converts
+ * that into the safe `unavailable` result. Never exposes the token or raw body.
+ */
 export async function fetchAllPagesForMetric(
   fetcher: TimeSeriesFetcher,
   base: Omit<TimeSeriesRequest, "pageToken">,
@@ -424,10 +518,12 @@ export async function fetchAllPagesForMetric(
     const res = await fetcher({ ...base, pageToken });
     if (Array.isArray(res?.timeSeries)) all.push(...res.timeSeries);
     const next = res?.nextPageToken;
-    if (!next) break;
+    if (!next) return all;
     pageToken = next;
   }
-  return all;
+  // Bound reached with a token still pending: presenting `all` would be partial
+  // data masquerading as complete. Fail so the outer collector goes unavailable.
+  throw new Error("monitoring_pagination_overflow");
 }
 
 export interface CollectOptions {
@@ -445,10 +541,12 @@ export interface CollectOptions {
 /**
  * Run the full request plan with the injected fetcher: one request per metric
  * type per window, each single-metric and page-followed; then normalize the
- * daily pass (sum) and the minute pass (newest complete 60s bucket) and merge.
- * DELTA usage/exceeded in the minute pass are requested with 60s alignment;
- * GAUGE limit series are fetched unaligned (aligning a gauge as DELTA is invalid).
- * Any failure yields the bounded unavailable result — no raw Google body leaks.
+ * daily pass (sum) and the minute pass (synchronized newest 60s bucket) and merge.
+ * DELTA usage/exceeded in the minute pass are requested with 60s ALIGN_SUM (never
+ * ALIGN_DELTA); GAUGE limit series are fetched unaligned (aligning a gauge as
+ * DELTA/SUM is invalid — its newest point is selected instead). Any failure —
+ * including pagination overflow — yields the bounded unavailable result, so
+ * partial data is never presented as complete and no raw Google body leaks.
  */
 export async function collectProviderQuota(
   fetcher: TimeSeriesFetcher,
@@ -475,15 +573,19 @@ export async function collectProviderQuota(
 
     const minuteSeries = (
       await Promise.all(
-        metricTypes.map((metricType) =>
-          fetchAllPagesForMetric(fetcher, {
+        metricTypes.map((metricType) => {
+          const isLimit = metricType.endsWith("/limit");
+          return fetchAllPagesForMetric(fetcher, {
             metricType,
             startTimeIso: opts.minuteStartIso,
             endTimeIso: opts.endIso,
-            // Align DELTA usage/exceeded to 60s; leave GAUGE limits unaligned.
-            alignmentPeriodSeconds: metricType.endsWith("/limit") ? undefined : 60,
-          }),
-        ),
+            // DELTA usage/exceeded: total within each 60s bucket (ALIGN_SUM, never
+            // ALIGN_DELTA). GAUGE limit: unaligned — its newest point is selected.
+            ...(isLimit
+              ? {}
+              : { alignmentPeriodSeconds: 60, perSeriesAligner: "ALIGN_SUM" as const }),
+          });
+        }),
       )
     ).flat();
 

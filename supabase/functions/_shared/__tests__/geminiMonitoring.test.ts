@@ -8,12 +8,14 @@ import {
   unavailableProviderQuota,
   buildMetricTypes,
   buildTimeSeriesFilter,
+  buildTimeSeriesQueryParams,
   fetchAllPagesForMetric,
   collectProviderQuota,
   type RawTimeSeries,
   type RawPoint,
   type TimeSeriesFetcher,
   type TimeSeriesPage,
+  type TimeSeriesRequest,
 } from "../geminiMonitoring.ts";
 
 const BASE = "generativelanguage.googleapis.com/quota";
@@ -198,6 +200,101 @@ describe("normalizeMonitoringTimeSeries — minute mode (newest complete 60s buc
   });
 });
 
+describe("minute mode — synchronized bucket aggregation across contributing series", () => {
+  const model = "m";
+  const limitName = "GenerateContentRequestsPerMinutePerProjectPerModel-FreeTier";
+  const minuteCfg = { usageMode: "newest-minute" as const, nowMs: NOW_MS };
+
+  it("sums two methods that share the same latest complete bucket", () => {
+    const res = normalizeMonitoringTimeSeries(
+      [
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "GenerateContent" }, [mpt(3, 120, 60)]),
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "StreamGenerateContent" }, [mpt(5, 120, 60)]),
+      ],
+      OPTS,
+      minuteCfg,
+    );
+    expect(res.dimensions).toHaveLength(1);
+    expect(res.dimensions[0].used).toBe(8); // both at bucket ending NOW-60
+    expect(res.dimensions[0].method).toBeNull(); // aggregated across methods
+  });
+
+  it("does NOT cross-sum methods whose newest points end in different minutes", () => {
+    const res = normalizeMonitoringTimeSeries(
+      [
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "A" }, [mpt(3, 120, 60)]), // ends NOW-60
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "B" }, [mpt(5, 180, 120)]), // ends NOW-120
+      ],
+      OPTS,
+      minuteCfg,
+    );
+    // No common bucket end → cannot synchronize → null (never 8 from mixed minutes).
+    expect(res.dimensions[0].used).toBeNull();
+    expect(res.dimensions[0].remaining).toBeNull();
+  });
+
+  it("uses the newest COMMON older bucket when the freshest bucket is not shared", () => {
+    const res = normalizeMonitoringTimeSeries(
+      [
+        // A has both NOW-120 and NOW-60; B only has NOW-120.
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "A" }, [mpt(3, 180, 120), mpt(4, 120, 60)]),
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "B" }, [mpt(5, 180, 120)]),
+      ],
+      OPTS,
+      minuteCfg,
+    );
+    // Newest bucket present in BOTH is NOW-120 → 3 + 5 (never A's fresher 4).
+    expect(res.dimensions[0].used).toBe(8);
+  });
+
+  it("returns null when a contributing series has no complete bucket at all", () => {
+    const res = normalizeMonitoringTimeSeries(
+      [
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "A" }, [mpt(4, 120, 60)]), // complete
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "B" }, [mpt(9, 0, -60)]), // still forming
+      ],
+      OPTS,
+      minuteCfg,
+    );
+    expect(res.dimensions[0].used).toBeNull(); // B absent for every complete bucket
+  });
+
+  it("applies the same synchronized rule to exceeded attempts", () => {
+    const shared = normalizeMonitoringTimeSeries(
+      [
+        series(`${REQ}/exceeded`, { model, limit_name: limitName, method: "A" }, [mpt(1, 120, 60)]),
+        series(`${REQ}/exceeded`, { model, limit_name: limitName, method: "B" }, [mpt(2, 120, 60)]),
+      ],
+      OPTS,
+      minuteCfg,
+    );
+    expect(shared.dimensions[0].exceededAttempts).toBe(3); // shared bucket → summed
+
+    const mixed = normalizeMonitoringTimeSeries(
+      [
+        series(`${REQ}/exceeded`, { model, limit_name: limitName, method: "A" }, [mpt(1, 120, 60)]),
+        series(`${REQ}/exceeded`, { model, limit_name: limitName, method: "B" }, [mpt(2, 180, 120)]),
+      ],
+      OPTS,
+      minuteCfg,
+    );
+    expect(mixed.dimensions[0].exceededAttempts).toBeNull(); // different minutes → null
+  });
+
+  it("a single contributing series still reduces to its own newest complete bucket", () => {
+    const res = normalizeMonitoringTimeSeries(
+      [
+        series(`${REQ}/limit`, { model, limit_name: limitName }, [pt(15)]),
+        series(`${REQ}/usage`, { model, limit_name: limitName, method: "A" }, [mpt(5, 180, 120), mpt(8, 120, 60)]),
+      ],
+      OPTS,
+      minuteCfg,
+    );
+    expect(res.dimensions[0].used).toBe(8);
+    expect(res.dimensions[0].remaining).toBe(7);
+  });
+});
+
 describe("newestCompleteMinutePoint", () => {
   it("returns the value of the newest complete 60s bucket", () => {
     expect(newestCompleteMinutePoint([mpt(5, 180, 120), mpt(8, 120, 60)], NOW_MS)).toBe(8);
@@ -357,6 +454,159 @@ describe("request plan — one metric type per request", () => {
     expect(res.dimensions).toEqual([]);
     expect(res.message).toBe("Gemini provider quota is temporarily unavailable.");
     expect(JSON.stringify(res)).not.toMatch(/status=403|google|monitoring_error/i);
+  });
+});
+
+describe("buildTimeSeriesQueryParams — exact query parameters", () => {
+  it("serializes 60s ALIGN_SUM aggregation when the plan chose it", () => {
+    const p = buildTimeSeriesQueryParams({
+      metricType: `${REQ}/usage`,
+      startTimeIso: "2026-07-25T11:55:00Z",
+      endTimeIso: "2026-07-25T12:00:00Z",
+      alignmentPeriodSeconds: 60,
+      perSeriesAligner: "ALIGN_SUM",
+    });
+    expect(p.filter).toBe(`metric.type = "${REQ}/usage"`);
+    expect(p["interval.startTime"]).toBe("2026-07-25T11:55:00Z");
+    expect(p["interval.endTime"]).toBe("2026-07-25T12:00:00Z");
+    expect(p["aggregation.perSeriesAligner"]).toBe("ALIGN_SUM");
+    expect(p["aggregation.alignmentPeriod"]).toBe("60s");
+  });
+
+  it("omits aggregation entirely for an unaligned request (daily / GAUGE limit)", () => {
+    const p = buildTimeSeriesQueryParams({
+      metricType: `${REQ}/limit`,
+      startTimeIso: "s",
+      endTimeIso: "e",
+    });
+    expect(p["aggregation.perSeriesAligner"]).toBeUndefined();
+    expect(p["aggregation.alignmentPeriod"]).toBeUndefined();
+  });
+
+  it("never serializes ALIGN_DELTA", () => {
+    const p = buildTimeSeriesQueryParams({
+      metricType: `${REQ}/usage`,
+      startTimeIso: "s",
+      endTimeIso: "e",
+      alignmentPeriodSeconds: 60,
+      perSeriesAligner: "ALIGN_SUM",
+    });
+    expect(Object.values(p)).not.toContain("ALIGN_DELTA");
+  });
+
+  it("includes a bounded positive pageSize and threads a pageToken when present", () => {
+    const p = buildTimeSeriesQueryParams({
+      metricType: `${REQ}/usage`,
+      startTimeIso: "s",
+      endTimeIso: "e",
+      pageToken: "tok-2",
+    });
+    expect(Number(p.pageSize)).toBeGreaterThan(0);
+    expect(p.pageToken).toBe("tok-2");
+  });
+});
+
+describe("collectProviderQuota — aligner per window/metric", () => {
+  const dayStartIso = new Date(NOW_MS - 3600_000).toISOString();
+  const minuteStartIso = new Date(NOW_MS - 300_000).toISOString();
+
+  async function captureRequests(): Promise<TimeSeriesRequest[]> {
+    const seen: TimeSeriesRequest[] = [];
+    const fetcher: TimeSeriesFetcher = async (req): Promise<TimeSeriesPage> => {
+      seen.push(req);
+      return { timeSeries: [], nextPageToken: null };
+    };
+    await collectProviderQuota(fetcher, {
+      configuredModel: "gemini-flash-latest",
+      collectedAtIso: OPTS.collectedAt,
+      nowMs: NOW_MS,
+      dayStartIso,
+      minuteStartIso,
+      endIso: OPTS.collectedAt,
+      metricsMayLagSeconds: 240,
+    });
+    return seen;
+  }
+
+  it("uses 60s ALIGN_SUM for minute usage/exceeded, and no alignment for minute limits", async () => {
+    const seen = await captureRequests();
+    const minuteReqs = seen.filter((r) => r.startTimeIso === minuteStartIso);
+    expect(minuteReqs).toHaveLength(6);
+    for (const r of minuteReqs) {
+      if (r.metricType.endsWith("/limit")) {
+        expect(r.perSeriesAligner).toBeUndefined();
+        expect(r.alignmentPeriodSeconds).toBeUndefined();
+      } else {
+        expect(r.perSeriesAligner).toBe("ALIGN_SUM");
+        expect(r.alignmentPeriodSeconds).toBe(60);
+      }
+    }
+  });
+
+  it("leaves ALL daily requests unaligned (raw DELTA sum)", async () => {
+    const seen = await captureRequests();
+    const dayReqs = seen.filter((r) => r.startTimeIso === dayStartIso);
+    expect(dayReqs).toHaveLength(6);
+    for (const r of dayReqs) {
+      expect(r.perSeriesAligner).toBeUndefined();
+      expect(r.alignmentPeriodSeconds).toBeUndefined();
+    }
+  });
+
+  it("never requests ALIGN_DELTA anywhere and still queries the six types per window", async () => {
+    const seen = await captureRequests();
+    // Nothing anywhere uses ALIGN_DELTA (the type doesn't even permit it).
+    for (const r of seen) expect(r.perSeriesAligner).not.toBe("ALIGN_DELTA");
+    // Six metric types, each independent, in both windows.
+    expect(seen).toHaveLength(12);
+    expect([...new Set(seen.map((r) => r.metricType))].sort()).toEqual(buildMetricTypes().slice().sort());
+  });
+});
+
+describe("fetchAllPagesForMetric — pagination integrity", () => {
+  const base = { metricType: `${REQ}/usage`, startTimeIso: "s", endTimeIso: "e" };
+  const page = (v: number, token: string | null): TimeSeriesPage => ({
+    timeSeries: [series(`${REQ}/usage`, { model: "m", limit_name: "XPerDay" }, [pt(v)])],
+    nextPageToken: token,
+  });
+
+  it("completes normally on a single page", async () => {
+    const fetcher: TimeSeriesFetcher = async () => page(1, null);
+    expect(await fetchAllPagesForMetric(fetcher, base)).toHaveLength(1);
+  });
+
+  it("completes normally across multiple pages", async () => {
+    let calls = 0;
+    const fetcher: TimeSeriesFetcher = async () => {
+      calls++;
+      return page(calls, calls < 3 ? `p${calls}` : null);
+    };
+    expect(await fetchAllPagesForMetric(fetcher, base)).toHaveLength(3);
+  });
+
+  it("THROWS (→ unavailable upstream) when a nextPageToken remains at the page bound", async () => {
+    // Always returns a token → never terminates within MAX_PAGES.
+    const fetcher: TimeSeriesFetcher = async () => page(1, "always-more");
+    await expect(fetchAllPagesForMetric(fetcher, base)).rejects.toThrow();
+  });
+
+  it("collectProviderQuota converts a pagination overflow into a bounded unavailable result", async () => {
+    const fetcher: TimeSeriesFetcher = async () => ({
+      timeSeries: [series(`${REQ}/usage`, { model: "m", limit_name: "ReqPerDay" }, [pt(1)])],
+      nextPageToken: "more", // never terminates
+    });
+    const res = await collectProviderQuota(fetcher, {
+      configuredModel: "gemini-flash-latest",
+      collectedAtIso: OPTS.collectedAt,
+      nowMs: NOW_MS,
+      dayStartIso: "s",
+      minuteStartIso: "s",
+      endIso: "e",
+      metricsMayLagSeconds: 240,
+      unavailableMessage: "Gemini provider quota is temporarily unavailable.",
+    });
+    expect(res.status).toBe("unavailable");
+    expect(res.dimensions).toEqual([]);
   });
 });
 

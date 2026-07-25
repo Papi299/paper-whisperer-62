@@ -23,7 +23,7 @@ import { requireEdgeEnv } from "../_shared/env.ts";
 import { resolveGeminiModel } from "../_shared/geminiModel.ts";
 import { pacificDayStartIso } from "../_shared/pacificTime.ts";
 import {
-  buildTimeSeriesFilter,
+  buildTimeSeriesQueryParams,
   collectProviderQuota,
   unavailableProviderQuota,
   type GeminiProviderQuotaResponse,
@@ -89,10 +89,11 @@ async function getMonitoringToken(
   clientEmail: string,
   projectId: string,
   privateKeyPem: string,
+  privateKeyFingerprint: string,
 ): Promise<string> {
-  // Fingerprint the key (never store/log the raw key as a cache key).
-  const fingerprint = await sha256Hex(privateKeyPem);
-  const identity = buildCredentialIdentity(clientEmail, projectId, fingerprint);
+  // Identity is keyed by the fingerprint the caller already computed (the raw key
+  // is never a cache key and is never logged).
+  const identity = buildCredentialIdentity(clientEmail, projectId, privateKeyFingerprint);
   const nowSec = Math.floor(Date.now() / 1000);
   if (isCachedTokenUsable(tokenCache, identity, nowSec)) {
     return tokenCache!.token;
@@ -137,16 +138,12 @@ async function getMonitoringToken(
 function makeFetcher(projectId: string, token: string): TimeSeriesFetcher {
   return async (req): Promise<TimeSeriesPage> => {
     const url = new URL(`https://monitoring.googleapis.com/v3/projects/${projectId}/timeSeries`);
-    // EXACTLY ONE metric type per request (Monitoring rejects OR-ed types).
-    url.searchParams.set("filter", buildTimeSeriesFilter(req.metricType));
-    url.searchParams.set("interval.startTime", req.startTimeIso);
-    url.searchParams.set("interval.endTime", req.endTimeIso);
-    url.searchParams.set("view", "FULL");
-    if (req.alignmentPeriodSeconds) {
-      url.searchParams.set("aggregation.alignmentPeriod", `${req.alignmentPeriodSeconds}s`);
-      url.searchParams.set("aggregation.perSeriesAligner", "ALIGN_DELTA");
+    // Serialize EXACTLY the pure request plan: one metric type per request, and
+    // the aligner it chose (ALIGN_SUM for minute usage/exceeded, none for GAUGE
+    // limits) — never a hard-coded ALIGN_DELTA.
+    for (const [k, v] of Object.entries(buildTimeSeriesQueryParams(req))) {
+      url.searchParams.set(k, v);
     }
-    if (req.pageToken) url.searchParams.set("pageToken", req.pageToken);
 
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
@@ -165,13 +162,14 @@ async function buildProviderQuota(
   projectId: string,
   clientEmail: string,
   privateKey: string,
+  privateKeyFingerprint: string,
   configuredModel: string,
 ): Promise<GeminiProviderQuotaResponse> {
   const now = new Date();
   const nowIso = now.toISOString();
   let token: string;
   try {
-    token = await getMonitoringToken(clientEmail, projectId, privateKey);
+    token = await getMonitoringToken(clientEmail, projectId, privateKey, privateKeyFingerprint);
   } catch (err) {
     console.error("get-gemini-provider-quota token mint failed:", err instanceof Error ? err.message : "unknown");
     return unavailableProviderQuota(configuredModel, nowIso, UNAVAILABLE_MESSAGE);
@@ -243,13 +241,18 @@ Deno.serve(async (req) => {
       );
     }
 
-    // ── Short server cache (post-authorization), keyed by project + model ──
-    const configIdentity = buildProviderConfigIdentity(projectId, configuredModel);
+    // ── Short server cache (post-authorization) ──
+    // Fingerprint the private key (never the raw key) BEFORE the cache check, so a
+    // rotated credential / changed service account misses the cache and is
+    // exercised on this invocation rather than served a stale prior-credential
+    // response. The response identity therefore includes the full credential.
+    const fingerprint = await sha256Hex(privateKey);
+    const configIdentity = buildProviderConfigIdentity(projectId, configuredModel, clientEmail, fingerprint);
     if (isCachedResponseUsable(responseCache, configIdentity, Date.now(), SERVER_CACHE_TTL_MS)) {
       return new Response(JSON.stringify(responseCache!.body), { status: 200, headers: jsonHeaders });
     }
 
-    const body = await buildProviderQuota(projectId, clientEmail, privateKey, configuredModel);
+    const body = await buildProviderQuota(projectId, clientEmail, privateKey, fingerprint, configuredModel);
     if (body.status === "ok") {
       responseCache = { identity: configIdentity, atMs: Date.now(), body };
     }
