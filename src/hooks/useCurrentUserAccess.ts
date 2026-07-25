@@ -68,7 +68,10 @@ function normalize(row: CurrentUserAccessRow): CurrentUserAccess {
     role,
     isInternal,
     canViewProviderQuota: isInternal && !!row.can_view_provider_quota,
-    aiQuotaExempt: !!row.ai_quota_exempt,
+    // Clamp behind isInternal too: an ordinary `user` can never hold an
+    // exemption (it requires an internal_user_access row), so a malformed RPC
+    // row must not over-grant one client-side. The server stays authoritative.
+    aiQuotaExempt: isInternal && !!row.ai_quota_exempt,
     plan: row.plan ?? null,
     planStatus: row.plan_status ?? null,
     premiumTaxonomyEnabled: !!row.premium_taxonomy_enabled,

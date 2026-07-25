@@ -53,8 +53,11 @@ function DimensionRow({ dim }: { dim: GeminiQuotaDimension }) {
       <td className="py-1.5 pl-2 text-right tabular-nums" aria-label={remainingLabel} title={remainingLabel}>
         {remainingKnown ? fmtNum(dim.remaining) : "—"}
       </td>
-      <td className="py-1.5 pl-2 text-right tabular-nums">
-        {dim.exceededAttempts && dim.exceededAttempts > 0 ? fmtNum(dim.exceededAttempts) : "0"}
+      <td
+        className="py-1.5 pl-2 text-right tabular-nums"
+        title={dim.exceededAttempts === null ? "blocked attempts not reported" : undefined}
+      >
+        {fmtNum(dim.exceededAttempts)}
       </td>
     </tr>
   );

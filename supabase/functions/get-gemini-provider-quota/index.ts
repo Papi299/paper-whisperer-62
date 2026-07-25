@@ -1,34 +1,43 @@
 /// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 //
 // get-gemini-provider-quota — manager-only view of the SHARED Google Gemini
-// provider quota (Part C). This is OBSERVATIONAL ONLY and must never become the
-// enforcement boundary for user analyses.
+// provider quota (Part C). OBSERVATIONAL ONLY — never the enforcement boundary.
 //
-// Authorization (server-side, never trusts client role claims):
+// Authorization (server-side, never trusts a client role claim):
 //   1. require an Authorization header;
 //   2. authenticate with auth.getUser() using the caller's JWT;
 //   3. call the SECURITY DEFINER get_current_user_access() RPC AS THE CALLER;
 //   4. allow only role owner|manager (can_view_provider_quota); else 403.
 //
 // Google auth uses backend-only Monitoring credentials (service account) via
-// Edge secrets, the narrow monitoring.read scope, and reads projects.timeSeries.
-// It NEVER returns service-account credentials, tokens, private keys, or raw
-// Google error bodies, and NEVER logs key material / assertions / tokens.
+// Edge secrets and the narrow monitoring.read scope. It NEVER returns/logs
+// service-account credentials, tokens, private keys, or raw Google bodies.
 //
-// Fails soft: missing creds, disabled API, 403, no metrics, or timeout all
-// yield a bounded { status: "unavailable" } response (HTTP 200), not a 500.
+// All request-planning + normalization live in the pure, Node-tested
+// _shared/geminiMonitoring.ts (one metric type per request, page-followed,
+// day-sum vs newest-complete-minute). This file supplies only the Deno glue:
+// OAuth, the HTTP fetcher, the DST-safe day boundary, and identity-keyed caches.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import { resolveGeminiModel } from "../_shared/geminiModel.ts";
+import { pacificDayStartIso } from "../_shared/pacificTime.ts";
 import {
-  GEMINI_QUOTA_METRIC_FAMILIES,
-  normalizeMonitoringTimeSeries,
-  mergeWindowedProviderQuota,
+  buildTimeSeriesFilter,
+  collectProviderQuota,
   unavailableProviderQuota,
   type GeminiProviderQuotaResponse,
-  type RawTimeSeries,
+  type TimeSeriesFetcher,
+  type TimeSeriesPage,
 } from "../_shared/geminiMonitoring.ts";
+import {
+  buildCredentialIdentity,
+  buildProviderConfigIdentity,
+  isCachedResponseUsable,
+  isCachedTokenUsable,
+  type CachedResponse,
+  type CachedToken,
+} from "../_shared/providerCache.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,17 +46,16 @@ const corsHeaders = {
 };
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 
-// Observational metadata: Google Monitoring quota metrics lag; surface it.
 const METRICS_MAY_LAG_SECONDS = 240;
 const MONITORING_SCOPE = "https://www.googleapis.com/auth/monitoring.read";
-
-// Short best-effort in-memory caches. The provider quota is a shared,
-// project-level metric, so one cache is correct for all managers. Only
-// successful ("ok") results are cached; "unavailable" is not, so a fixed
-// misconfiguration recovers on the next request.
+const MINUTE_LOOKBACK_MS = 300_000; // 5-min lookback so a complete 60s bucket exists
 const SERVER_CACHE_TTL_MS = 120_000;
-let responseCache: { at: number; body: GeminiProviderQuotaResponse } | null = null;
-let tokenCache: { token: string; expiresAtEpoch: number } | null = null;
+const UNAVAILABLE_MESSAGE = "Gemini provider quota is temporarily unavailable.";
+
+// In-memory caches, both keyed by a non-sensitive identity so a credential /
+// project / model change is never silently served from a stale entry.
+let tokenCache: CachedToken | null = null;
+let responseCache: CachedResponse<GeminiProviderQuotaResponse> | null = null;
 
 function base64url(input: Uint8Array | string): string {
   let bin = "";
@@ -60,8 +68,6 @@ function base64url(input: Uint8Array | string): string {
 }
 
 function pemToPkcs8(pem: string): ArrayBuffer {
-  // Normalize escaped newlines that survive env-var round-trips, then strip the
-  // PEM armor and whitespace to recover the base64 DER body.
   const normalized = pem.replace(/\\n/g, "\n");
   const body = normalized
     .replace(/-----BEGIN PRIVATE KEY-----/g, "")
@@ -73,11 +79,23 @@ function pemToPkcs8(pem: string): ArrayBuffer {
   return buf.buffer;
 }
 
-/** Mint (and cache) a Monitoring access token via a signed service-account JWT. */
-async function getMonitoringToken(clientEmail: string, privateKeyPem: string): Promise<string> {
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Mint (and cache, keyed by credential identity) a Monitoring access token. */
+async function getMonitoringToken(
+  clientEmail: string,
+  projectId: string,
+  privateKeyPem: string,
+): Promise<string> {
+  // Fingerprint the key (never store/log the raw key as a cache key).
+  const fingerprint = await sha256Hex(privateKeyPem);
+  const identity = buildCredentialIdentity(clientEmail, projectId, fingerprint);
   const nowSec = Math.floor(Date.now() / 1000);
-  if (tokenCache && tokenCache.expiresAtEpoch - 60 > nowSec) {
-    return tokenCache.token;
+  if (isCachedTokenUsable(tokenCache, identity, nowSec)) {
+    return tokenCache!.token;
   }
 
   const header = { alg: "RS256", typ: "JWT" };
@@ -104,112 +122,70 @@ async function getMonitoringToken(clientEmail: string, privateKeyPem: string): P
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion,
-    }),
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) {
-    // Do not surface the raw Google body.
-    throw new Error(`oauth_token_error status=${res.status}`);
-  }
+  if (!res.ok) throw new Error(`oauth_token_error status=${res.status}`);
   const data = await res.json();
   const token = data?.access_token;
-  if (typeof token !== "string" || token.length === 0) {
-    throw new Error("oauth_token_missing");
-  }
-  tokenCache = { token, expiresAtEpoch: nowSec + (Number(data?.expires_in) || 3600) };
+  if (typeof token !== "string" || token.length === 0) throw new Error("oauth_token_missing");
+  tokenCache = { identity, token, expiresAtEpochSec: nowSec + (Number(data?.expires_in) || 3600) };
   return token;
 }
 
-/** OR-filter across all metric families × {limit,usage,exceeded}. */
-function monitoringFilter(): string {
-  const measures = ["limit", "usage", "exceeded"];
-  const types = GEMINI_QUOTA_METRIC_FAMILIES.flatMap((f) => measures.map((m) => `${f}/${m}`));
-  return types.map((t) => `metric.type = "${t}"`).join(" OR ");
+/** Build a single-metric, page-aware Monitoring fetcher bound to a bearer token. */
+function makeFetcher(projectId: string, token: string): TimeSeriesFetcher {
+  return async (req): Promise<TimeSeriesPage> => {
+    const url = new URL(`https://monitoring.googleapis.com/v3/projects/${projectId}/timeSeries`);
+    // EXACTLY ONE metric type per request (Monitoring rejects OR-ed types).
+    url.searchParams.set("filter", buildTimeSeriesFilter(req.metricType));
+    url.searchParams.set("interval.startTime", req.startTimeIso);
+    url.searchParams.set("interval.endTime", req.endTimeIso);
+    url.searchParams.set("view", "FULL");
+    if (req.alignmentPeriodSeconds) {
+      url.searchParams.set("aggregation.alignmentPeriod", `${req.alignmentPeriodSeconds}s`);
+      url.searchParams.set("aggregation.perSeriesAligner", "ALIGN_DELTA");
+    }
+    if (req.pageToken) url.searchParams.set("pageToken", req.pageToken);
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`monitoring_error status=${res.status}`); // no raw body
+    const data = await res.json();
+    return {
+      timeSeries: Array.isArray(data?.timeSeries) ? data.timeSeries : [],
+      nextPageToken: typeof data?.nextPageToken === "string" && data.nextPageToken ? data.nextPageToken : null,
+    };
+  };
 }
 
-async function fetchTimeSeries(
+async function buildProviderQuota(
   projectId: string,
-  token: string,
-  startTimeIso: string,
-  endTimeIso: string,
-): Promise<RawTimeSeries[]> {
-  const url = new URL(`https://monitoring.googleapis.com/v3/projects/${projectId}/timeSeries`);
-  url.searchParams.set("filter", monitoringFilter());
-  url.searchParams.set("interval.startTime", startTimeIso);
-  url.searchParams.set("interval.endTime", endTimeIso);
-  url.searchParams.set("view", "FULL");
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) {
-    throw new Error(`monitoring_error status=${res.status}`);
-  }
-  const data = await res.json();
-  return Array.isArray(data?.timeSeries) ? (data.timeSeries as RawTimeSeries[]) : [];
-}
-
-/** UTC instant of the start of the current Pacific day (DST-correct). */
-function pacificDayStartIso(now: Date): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    hourCycle: "h23",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(now);
-  const num = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? "0");
-  const elapsedSec = num("hour") * 3600 + num("minute") * 60 + num("second");
-  return new Date(now.getTime() - elapsedSec * 1000).toISOString();
-}
-
-async function collectProviderQuota(configuredModel: string): Promise<GeminiProviderQuotaResponse> {
-  const nowIso = new Date().toISOString();
-
-  // Credentials are optional at the code level — absent → fail soft.
-  const projectId = Deno.env.get("GOOGLE_CLOUD_PROJECT_ID");
-  const clientEmail = Deno.env.get("GOOGLE_MONITORING_CLIENT_EMAIL");
-  const privateKey = Deno.env.get("GOOGLE_MONITORING_PRIVATE_KEY");
-  if (!projectId || !clientEmail || !privateKey) {
-    return unavailableProviderQuota(
-      configuredModel,
-      nowIso,
-      "Gemini provider quota is not configured (Monitoring credentials absent).",
-    );
-  }
-
+  clientEmail: string,
+  privateKey: string,
+  configuredModel: string,
+): Promise<GeminiProviderQuotaResponse> {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  let token: string;
   try {
-    const token = await getMonitoringToken(clientEmail, privateKey);
-    const now = new Date();
-    // Daily window: start of the current Pacific day → now.
-    const dayStart = pacificDayStartIso(now);
-    // Minute window: a bounded recent interval (approximate; metrics lag).
-    const minuteStart = new Date(now.getTime() - 120_000).toISOString();
-    const endIso = now.toISOString();
-
-    const [daySeries, minuteSeries] = await Promise.all([
-      fetchTimeSeries(projectId, token, dayStart, endIso),
-      fetchTimeSeries(projectId, token, minuteStart, endIso),
-    ]);
-
-    const opts = { configuredModel, collectedAt: endIso, metricsMayLagSeconds: METRICS_MAY_LAG_SECONDS };
-    return mergeWindowedProviderQuota(
-      normalizeMonitoringTimeSeries(daySeries, opts),
-      normalizeMonitoringTimeSeries(minuteSeries, opts),
-    );
+    token = await getMonitoringToken(clientEmail, projectId, privateKey);
   } catch (err) {
-    // Bounded, non-sensitive reason only — never the raw Google body.
-    const reason = err instanceof Error ? err.message : "unknown";
-    console.error("get-gemini-provider-quota collect failed:", reason);
-    return unavailableProviderQuota(
-      configuredModel,
-      nowIso,
-      "Gemini provider quota is temporarily unavailable.",
-    );
+    console.error("get-gemini-provider-quota token mint failed:", err instanceof Error ? err.message : "unknown");
+    return unavailableProviderQuota(configuredModel, nowIso, UNAVAILABLE_MESSAGE);
   }
+  return collectProviderQuota(makeFetcher(projectId, token), {
+    configuredModel,
+    collectedAtIso: nowIso,
+    nowMs: now.getTime(),
+    dayStartIso: pacificDayStartIso(now),
+    minuteStartIso: new Date(now.getTime() - MINUTE_LOOKBACK_MS).toISOString(),
+    endIso: nowIso,
+    metricsMayLagSeconds: METRICS_MAY_LAG_SECONDS,
+    unavailableMessage: UNAVAILABLE_MESSAGE,
+  });
 }
 
 Deno.serve(async (req) => {
@@ -246,21 +222,36 @@ Deno.serve(async (req) => {
     }
     const access = Array.isArray(accessData) ? accessData[0] : accessData;
     if (!access || access.can_view_provider_quota !== true) {
-      // Ordinary users: 403. Do not reveal whether the feature exists beyond this.
       return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: jsonHeaders });
     }
 
     const configuredModel = resolveGeminiModel(Deno.env.get("GEMINI_MODEL"));
+    const projectId = Deno.env.get("GOOGLE_CLOUD_PROJECT_ID");
+    const clientEmail = Deno.env.get("GOOGLE_MONITORING_CLIENT_EMAIL");
+    const privateKey = Deno.env.get("GOOGLE_MONITORING_PRIVATE_KEY");
 
-    // ── Serve short server cache (post-authorization) ──
-    if (responseCache && Date.now() - responseCache.at < SERVER_CACHE_TTL_MS) {
-      return new Response(JSON.stringify(responseCache.body), { status: 200, headers: jsonHeaders });
+    if (!projectId || !clientEmail || !privateKey) {
+      return new Response(
+        JSON.stringify(
+          unavailableProviderQuota(
+            configuredModel,
+            new Date().toISOString(),
+            "Gemini provider quota is not configured (Monitoring credentials absent).",
+          ),
+        ),
+        { status: 200, headers: jsonHeaders },
+      );
     }
 
-    const body = await collectProviderQuota(configuredModel);
-    // Cache only successful reads so a transient/config failure retries next time.
+    // ── Short server cache (post-authorization), keyed by project + model ──
+    const configIdentity = buildProviderConfigIdentity(projectId, configuredModel);
+    if (isCachedResponseUsable(responseCache, configIdentity, Date.now(), SERVER_CACHE_TTL_MS)) {
+      return new Response(JSON.stringify(responseCache!.body), { status: 200, headers: jsonHeaders });
+    }
+
+    const body = await buildProviderQuota(projectId, clientEmail, privateKey, configuredModel);
     if (body.status === "ok") {
-      responseCache = { at: Date.now(), body };
+      responseCache = { identity: configIdentity, atMs: Date.now(), body };
     }
 
     return new Response(JSON.stringify(body), { status: 200, headers: jsonHeaders });

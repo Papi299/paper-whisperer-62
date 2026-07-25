@@ -96,6 +96,16 @@ describe("useCurrentUserAccess", () => {
     expect(result.current.access.canViewProviderQuota).toBe(false);
   });
 
+  it("never over-grants exemption: role 'user' with ai_quota_exempt true is clamped to false", async () => {
+    // A malformed row that pairs the ordinary-user role with an exemption flag
+    // must not surface a client-side exemption (the server stays authoritative).
+    mockRpc.mockResolvedValue({ data: [row({ role: "user", ai_quota_exempt: true })], error: null });
+    const { result } = renderHook(() => useCurrentUserAccess("u-1"), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.access.role).toBe("user");
+    expect(result.current.access.aiQuotaExempt).toBe(false);
+  });
+
   it("returns the safe default when the RPC yields an empty result set", async () => {
     mockRpc.mockResolvedValue({ data: [], error: null });
     const { result } = renderHook(() => useCurrentUserAccess("u-1"), { wrapper: wrapper() });

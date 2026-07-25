@@ -161,6 +161,52 @@ describe("parseAnalyzeError", () => {
   });
 });
 
+describe("parseAnalyzeError — structured provider failure (HTTP 500)", () => {
+  const codes = ["provider_rate_limit", "provider_unavailable", "malformed_response", "unknown"] as const;
+
+  for (const code of codes) {
+    it(`parses a 500 analysis_unavailable with code '${code}'`, async () => {
+      const body = JSON.stringify({ error: "analysis_unavailable", code, message: "AI analysis is temporarily unavailable. Please try again later." });
+      const result = await parseAnalyzeError(httpError(500, body));
+      expect(result.kind).toBe("provider_failure");
+      if (result.kind !== "provider_failure") throw new Error("unreachable");
+      expect(result.code).toBe(code);
+      expect(result.message).toMatch(/temporarily unavailable/i);
+      // Never leaks provider/Google detail.
+      expect(result.message).not.toMatch(/google|gemini|quota|project|429/i);
+    });
+  }
+
+  it("falls back to 'other' for a 500 with an unrecognized code", async () => {
+    const body = JSON.stringify({ error: "analysis_unavailable", code: "meltdown", message: "x" });
+    const result = await parseAnalyzeError(httpError(500, body));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for a 500 with a missing/empty message", async () => {
+    expect((await parseAnalyzeError(httpError(500, JSON.stringify({ error: "analysis_unavailable", code: "unknown" })))).kind).toBe("other");
+    expect((await parseAnalyzeError(httpError(500, JSON.stringify({ error: "analysis_unavailable", code: "unknown", message: "" })))).kind).toBe("other");
+  });
+
+  it("falls back to 'other' for a 500 whose error field is not analysis_unavailable", async () => {
+    const result = await parseAnalyzeError(httpError(500, JSON.stringify({ error: "boom", code: "unknown", message: "x" })));
+    expect(result.kind).toBe("other");
+  });
+
+  it("falls back to 'other' for a malformed 500 body", async () => {
+    const result = await parseAnalyzeError(httpError(500, "not-json{{"));
+    expect(result).toEqual({ kind: "other", message: "Edge Function returned a non-2xx status code" });
+  });
+
+  it("keeps the 402 quota path separate from the 500 provider path", async () => {
+    const quota = await parseAnalyzeError(httpError(402, validQuotaBody));
+    expect(quota.kind).toBe("quota_exceeded");
+    // A provider 500 is NEVER a quota_exceeded.
+    const provider = await parseAnalyzeError(httpError(500, JSON.stringify({ error: "analysis_unavailable", code: "provider_rate_limit", message: "unavailable" })));
+    expect(provider.kind).toBe("provider_failure");
+  });
+});
+
 describe("formatQuotaExceededMessage", () => {
   it("describes a lifetime allowance without a reset date", () => {
     const msg = formatQuotaExceededMessage({ periodType: "lifetime", used: 15, quota: 15, resetAt: null });

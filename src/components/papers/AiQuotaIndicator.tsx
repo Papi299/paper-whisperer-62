@@ -32,12 +32,15 @@ export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicato
   // Fail soft: nothing to show on error or before the status resolves.
   if (isError || !status) return null;
 
-  // Internal AI-quota exemption (owner / granted manager). Show "Unlimited" —
-  // never a fabricated number — with an accessible explanation. No Labs/Teams
-  // wording, no checkout/upgrade CTA.
-  if (status.isExempt) {
+  // Internal AI-quota exemption. Show "Unlimited" ONLY when the server is
+  // authoritatively an ACTIVE exemption (isExempt + allowed + reason). An
+  // inactive/missing entitlement with a stray isExempt must fall through to the
+  // unavailable state, not read as Unlimited. Role-neutral wording (an explicit
+  // exemption may also be granted to a manager). No fabricated number, no
+  // Labs/Teams or checkout/upgrade copy.
+  if (status.isExempt && status.allowed && status.reason === "quota_exempt") {
     const supporting =
-      "Unlimited AI analyses — internal owner access. Paperlume's commercial quota is not enforced for your account; analyses are still recorded for operational usage.";
+      "Unlimited AI analyses — internal AI quota exemption. Paperlume's commercial quota is not enforced for your account; analyses are still recorded for operational usage.";
     return (
       <div
         className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm text-muted-foreground"

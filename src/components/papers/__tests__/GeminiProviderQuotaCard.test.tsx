@@ -80,6 +80,31 @@ describe("GeminiProviderQuotaCard", () => {
     expect(within(row).getAllByText("—").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("renders blocked attempts as unknown (—) when null, '0' when zero, and the value when positive", () => {
+    // null → unknown marker with an explanatory title (never fabricated as 0).
+    const { unmount } = render(
+      <GeminiProviderQuotaCard data={resp({ dimensions: [dim({ exceededAttempts: null })] })} isLoading={false} isError={false} isFetching={false} onRefresh={noop} />,
+    );
+    let row = screen.getByRole("row", { name: /Requests/ });
+    expect(within(row).getByTitle(/blocked attempts not reported/i)).toHaveTextContent("—");
+    unmount();
+
+    // 0 → shows "0" (a real reported zero).
+    const { unmount: unmount2 } = render(
+      <GeminiProviderQuotaCard data={resp({ dimensions: [dim({ exceededAttempts: 0 })] })} isLoading={false} isError={false} isFetching={false} onRefresh={noop} />,
+    );
+    row = screen.getByRole("row", { name: /Requests/ });
+    expect(within(row).getByText("0")).toBeInTheDocument();
+    unmount2();
+
+    // positive → shows the value.
+    render(
+      <GeminiProviderQuotaCard data={resp({ dimensions: [dim({ exceededAttempts: 7 })] })} isLoading={false} isError={false} isFetching={false} onRefresh={noop} />,
+    );
+    row = screen.getByRole("row", { name: /Requests/ });
+    expect(within(row).getByText("7")).toBeInTheDocument();
+  });
+
   it("renders the unavailable state on isError", () => {
     render(<GeminiProviderQuotaCard data={null} isLoading={false} isError={true} isFetching={false} onRefresh={noop} />);
     expect(screen.getByText(/temporarily unavailable/i)).toBeInTheDocument();

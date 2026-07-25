@@ -43,11 +43,12 @@ describe("AiQuotaIndicator", () => {
     expect(el.getAttribute("aria-label")).toContain(aug1);
   });
 
-  it("renders 'Unlimited' (never a fabricated number) for an exempt internal user", () => {
-    // Exempt owner past the nominal cap: used > quota, remaining 0.
+  it("renders 'Unlimited' (never a fabricated number) for an active exempt owner", () => {
+    // Exempt owner past the nominal cap: used > quota, remaining 0 — but the
+    // server is authoritatively an active exemption.
     render(
       <AiQuotaIndicator
-        status={status({ isExempt: true, reason: "quota_exempt", plan: "pro", periodType: "monthly", used: 412, quota: 350, remaining: 0 })}
+        status={status({ isExempt: true, allowed: true, reason: "quota_exempt", plan: "pro", periodType: "monthly", used: 412, quota: 350, remaining: 0 })}
         isLoading={false}
         isError={false}
       />,
@@ -58,9 +59,48 @@ describe("AiQuotaIndicator", () => {
     expect(el).not.toHaveTextContent("350");
     expect(el).not.toHaveTextContent("412");
     expect(el.textContent).not.toMatch(/upgrade|pay|billing|labs|team/i);
-    // Accessible description explains internal access + still-recorded usage.
-    expect(el.getAttribute("aria-label")).toMatch(/internal owner access/i);
+    // Role-neutral wording + still-recorded usage note.
+    expect(el.getAttribute("aria-label")).toMatch(/internal AI quota exemption/i);
+    expect(el.getAttribute("aria-label")).not.toMatch(/owner/i);
     expect(el.getAttribute("aria-label")).toMatch(/recorded/i);
+  });
+
+  it("renders 'Unlimited' for an active explicitly-exempt manager (role-neutral)", () => {
+    render(
+      <AiQuotaIndicator
+        status={status({ isExempt: true, allowed: true, reason: "quota_exempt", plan: "pro", periodType: "monthly", used: 10, quota: 350, remaining: 340 })}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Unlimited");
+  });
+
+  it("does NOT show Unlimited for an inactive entitlement even when isExempt is true", () => {
+    // Server authority wins: inactive → not an active exemption → unavailable.
+    render(
+      <AiQuotaIndicator
+        status={status({ isExempt: true, allowed: false, reason: "inactive_entitlement", periodType: null, quota: 0, remaining: 0 })}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    const el = screen.getByRole("status");
+    expect(el).not.toHaveTextContent("Unlimited");
+    expect(el).toHaveTextContent("unavailable");
+  });
+
+  it("does NOT show Unlimited for a missing entitlement (isExempt false)", () => {
+    render(
+      <AiQuotaIndicator
+        status={status({ isExempt: false, allowed: false, reason: "missing_entitlement", periodType: null, quota: 0, remaining: 0 })}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    const el = screen.getByRole("status");
+    expect(el).not.toHaveTextContent("Unlimited");
+    expect(el).toHaveTextContent("unavailable");
   });
 
   it("renders an unavailable state when there is no active AI bucket", () => {

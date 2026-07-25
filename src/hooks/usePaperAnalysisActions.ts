@@ -212,6 +212,15 @@ export function usePaperAnalysisActions({
       const parsed = await parseAnalyzeError(err);
       if (parsed.kind === "quota_exceeded") {
         toastQuotaExhausted(parsed.info);
+      } else if (parsed.kind === "provider_failure") {
+        // Upstream provider failure (rate limit / unavailable / malformed) — NOT
+        // a plan wall. Show the neutral, non-operational server message; no
+        // Google/project detail reaches the user.
+        toast({
+          title: "AI analysis unavailable",
+          description: parsed.message,
+          variant: "destructive",
+        });
       } else {
         toast({
           title: "AI Analysis failed",
