@@ -49,6 +49,10 @@ For local dev, the same two values go in a local `.env.local` (or the existing `
 | Variable | Used by | Notes |
 |---|---|---|
 | `GEMINI_API_KEY` | `analyze-paper` | Required for the Gemini analysis call. Without it, `analyze-paper` fails fast with a clear in-source throw (preserved by PR #139). |
+| `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota` | **Optional.** Overrides the Gemini model alias. Both functions resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never silently disagree. Unset = fallback (current behavior). |
+| `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated.** Google Cloud project that owns the Gemini API usage. Absent → the provider-quota panel fails soft ("not configured"); ordinary analysis is unaffected. |
+| `GOOGLE_MONITORING_CLIENT_EMAIL` | `get-gemini-provider-quota` | Service-account email for the Monitoring reader (below). |
+| `GOOGLE_MONITORING_PRIVATE_KEY` | `get-gemini-provider-quota` | Service-account private key (PEM). Escaped `\n` newlines are normalized in-code. **Never** exposed to the browser, logged, or committed. |
 
 Set or rotate:
 
@@ -438,3 +442,85 @@ No code redeploy needed; the next function invocation picks up the new secret.
 - [docs/migration-history.md](migration-history.md) — every prior deploy / migration / hotfix entry, including the PR #131 / #132 reconciliation pattern.
 - [docs/decisions-and-triggers.md](decisions-and-triggers.md) — S1 / S2 ownership-scoping rules and re-evaluation triggers.
 - [docs/documentation-policy.md](documentation-policy.md) — the "every meaningful change updates docs" rule that gates every PR.
+
+---
+
+## 13. Owner/Manager access + Gemini provider quota (OWNER-MANAGER-ACCESS-AND-GEMINI-QUOTA-001)
+
+> **Status: implementation PR only — nothing below has been executed against Production.** The migration is local-only, no owner grant exists remotely, no Google secret is set, and no Edge Function is deployed. Every Production mutation in this section requires its **own explicit owner authorization**. See decision **C28** in [decisions-and-triggers.md](decisions-and-triggers.md).
+
+This feature adds internal `owner`/`manager` roles (separate from the commercial plan), an owner AI-quota exemption, and a manager-only view of the **shared** Google Gemini provider quota. It is a **Mixed PR** (migration + Edge Functions + frontend), so it follows the §2 order: **migration → Edge Function deploy → frontend (Vercel) last** — with the extra Google-side and owner-bootstrap steps below inserted at the right points.
+
+### 13.1 Google Cloud prerequisites (owner-side; not repo actions)
+
+Required before the provider-quota panel can return data. Absent, the panel fails soft ("not configured") and ordinary analysis is unaffected.
+
+1. **Identify the Google Cloud project** that owns the Gemini (`generativelanguage.googleapis.com`) usage → its ID becomes `GOOGLE_CLOUD_PROJECT_ID`.
+2. **Enable the Cloud Monitoring API** (`monitoring.googleapis.com`) on that project.
+3. **Create a narrowly-privileged service account** dedicated to Monitoring reads.
+4. **Grant it exactly `roles/monitoring.viewer`** — nothing broader. It needs no Gemini, billing, or write permissions.
+5. **Create a JSON key** for that service account and capture `client_email` and `private_key`. Store securely (password manager); **never commit it, paste it into a PR, or expose it to the browser.**
+
+The **implementation PR does not** create the service account, enable APIs, create a key, or alter IAM — those are owner-side actions performed at deploy time.
+
+### 13.2 Supabase Edge secrets
+
+Set on the linked project (names only shown by `secrets list`; values never displayed):
+
+```sh
+supabase secrets set GOOGLE_CLOUD_PROJECT_ID=<project-id> --project-ref <project-ref>
+supabase secrets set GOOGLE_MONITORING_CLIENT_EMAIL=<sa-email> --project-ref <project-ref>
+supabase secrets set GOOGLE_MONITORING_PRIVATE_KEY="<pem-with-\n-newlines>" --project-ref <project-ref>
+# Optional, only to override the model alias (defaults to gemini-flash-latest):
+# supabase secrets set GEMINI_MODEL=<model> --project-ref <project-ref>
+```
+
+These are **backend-only** Edge secrets. They are **never** `VITE_`-prefixed and **never** reach the client bundle (see §3.1's service-role warning — the same rule applies to Monitoring credentials). The private key's escaped `\n` newlines are normalized in the function; either literal or escaped newlines are accepted.
+
+### 13.3 Owner bootstrap runbook (bounded, deployment-time; separately authorized)
+
+The Production owner grant is **not** in the schema migration (an environment-specific email must not run in every environment). It is a bounded, one-time transaction performed **after** the migration applies, under its own explicit authorization. Target account: `maor29994ps5@gmail.com`.
+
+The transaction must:
+
+1. **Resolve exactly one** `auth.users.id` for `maor29994ps5@gmail.com`; **abort unless exactly one** row matches.
+2. **Upsert `internal_user_access`** for that UUID: `role = 'owner'`, `ai_quota_exempt = true` (record a bounded metadata reason such as an internal-owner grant if compatible).
+3. **Update the owner's `user_entitlements`** to the current Pro baseline (see [quotas-and-pricing.md](quotas-and-pricing.md) §2): `plan = 'pro'`, `plan_status = 'active'`, current Pro `paper_limit` (10,000), Pro `storage_quota_bytes` (2 GB), `ai_lifetime_quota` appropriate to Pro (0 — Pro uses the monthly bucket), current Pro `ai_monthly_quota` (350), `premium_taxonomy_enabled = true`, `labs_team_enabled = false`.
+4. **Preserve prior usage history** (do not reset `usage_counters`).
+5. **Create no subscription** and **set no billing-provider identifiers** — the owner is not a Paddle customer.
+6. **Verify afterward via read-only RPCs** (`get_current_user_access`, `get_ai_quota_status`) that the owner resolves to role `owner`, `is_internal = true`, `can_view_provider_quota = true`, `ai_quota_exempt = true`, plan `pro`/active, and `is_exempt = true` with `reason = quota_exempt`.
+
+A manager is granted the same way but with `role = 'manager'` and **without** `ai_quota_exempt` (managers are not auto-exempt).
+
+### 13.4 Deployment order (each Production mutation separately authorized)
+
+1. Independently approve the exact PR head.
+2. Owner configures/confirms the Google Cloud Monitoring project (§13.1 steps 1–2).
+3. Create the narrowly-privileged service account; grant `roles/monitoring.viewer`; create + securely provide the key (§13.1 steps 3–5).
+4. **Apply the approved migration:** `supabase db push` (§6 sequence) — applies `20260725090000` only.
+5. **Owner bootstrap** (§13.3) — bounded UUID/role/entitlement transaction.
+6. **Set the Google Edge secrets** (§13.2).
+7. **Deploy the Edge Functions:** `supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>` and, because it changed, `supabase functions deploy analyze-paper --project-ref <project-ref>`.
+8. **Verify role security + provider data** (§13.5).
+9. **Merge the exact approved frontend head**; verify merged-main CI + the automatic Vercel Production deploy.
+10. Owner-account runtime smoke test (§13.5).
+
+### 13.5 Verification checklist (post-deploy)
+
+- [ ] Ordinary user: `get_current_user_access` returns role `user`; the provider-quota panel is **not rendered** and the Edge Function returns **403** if called directly.
+- [ ] Owner: panel renders; AI indicator shows **"Unlimited"**; an analysis succeeds even past the nominal Pro cap and is still counted.
+- [ ] Manager (if granted): panel renders; a manager who is not exempt still enforces the normal quota.
+- [ ] Provider panel shows shared/project-level quota with the approximate/lag/Pacific-reset caveats; or a bounded "temporarily unavailable" if Monitoring is not yet returning data.
+- [ ] No credential/token/private-key material appears in Edge logs or any response body.
+- [ ] `usage_counters` is still `FORCE RLS` with no client SELECT policy; `internal_user_access` is not readable by the client.
+
+### 13.6 Secret rotation
+
+Rotate a Monitoring credential by creating a new service-account key in Google Cloud, then:
+
+```sh
+supabase secrets set GOOGLE_MONITORING_CLIENT_EMAIL=<sa-email> --project-ref <project-ref>
+supabase secrets set GOOGLE_MONITORING_PRIVATE_KEY="<new-pem>" --project-ref <project-ref>
+```
+
+Rotation takes effect on the next function invocation (the in-memory OAuth token cache is per-instance and short-lived); no code redeploy is needed. **Delete the old key in Google Cloud** after confirming the panel still returns data. Never place Monitoring credentials in any `VITE_`-prefixed variable, the client bundle, a PR description, or a commit.
