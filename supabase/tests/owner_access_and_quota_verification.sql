@@ -15,13 +15,16 @@
 -- as PostgREST does at runtime. SECURITY DEFINER RPCs still execute as their
 -- owner internally; the S1 guard compares p_user_id against auth.uid().
 --
--- Covers the 17 required cases (numbered inline):
+-- Covers the 17 original cases + case 18 (grant hardening, added 001L):
 --   1 user role · 2 owner role · 3 manager role · 4 no direct table read ·
 --   5 no client insert/update · 6 anon cannot execute RPC · 7 null-auth reject ·
 --   8 no arbitrary-user inspection · 9 Free 15 lifetime · 10 Pro monthly cap ·
 --   11 exempt allowed beyond cap · 12 exempt usage increments ·
 --   13 exempt refund decrements same bucket · 14 missing/inactive safe ·
---   15 is_exempt reported · 16 usage never negative · 17 no email-based role check.
+--   15 is_exempt reported · 16 usage never negative · 17 no email-based role check ·
+--   18 internal_user_access direct client table/column privileges revoked
+--     (PUBLIC/anon/authenticated), service_role CRUD retained, RPC EXECUTE
+--     boundary intact — verifies migration 20260726120000.
 
 BEGIN;
 
@@ -323,6 +326,57 @@ BEGIN
   ASSERT v_email_cols = 0, 'case17: internal_user_access must have no email column (role is UUID-based)';
 END $$;
 
-DO $$ BEGIN RAISE NOTICE 'ALL 17 VERIFICATION CASES PASSED'; END $$;
+
+-- ── Case 18 (001L): internal_user_access direct client grants revoked ────
+-- Defense in depth on top of FORCE RLS + no policy: the object-permission
+-- layer must itself deny PUBLIC/anon/authenticated direct table access, while
+-- service_role keeps CRUD and authenticated keeps ONLY the RPC EXECUTE path.
+RESET ROLE;
+DO $$
+DECLARE
+  v_rls BOOLEAN; v_force BOOLEAN; v_policies INTEGER;
+  v_role TEXT; v_priv TEXT; v_colpriv INTEGER;
+BEGIN
+  -- Table posture: exists + RLS enabled + FORCE RLS + zero policies.
+  SELECT c.relrowsecurity, c.relforcerowsecurity INTO v_rls, v_force
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname='public' AND c.relname='internal_user_access';
+  ASSERT v_rls IS TRUE, 'case18: RLS must be enabled on internal_user_access';
+  ASSERT v_force IS TRUE, 'case18: FORCE RLS must be enabled on internal_user_access';
+  SELECT count(*) INTO v_policies FROM pg_policies
+   WHERE schemaname='public' AND tablename='internal_user_access';
+  ASSERT v_policies = 0, 'case18: internal_user_access must have zero RLS policies';
+
+  -- No direct table privileges for anon or authenticated (every privilege type).
+  FOREACH v_role IN ARRAY ARRAY['anon','authenticated'] LOOP
+    FOREACH v_priv IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+      ASSERT has_table_privilege(v_role, 'public.internal_user_access', v_priv) = false,
+        format('case18: %s must NOT have %s on internal_user_access', v_role, v_priv);
+    END LOOP;
+    -- No column-level privileges either.
+    SELECT count(*) INTO v_colpriv FROM information_schema.column_privileges
+     WHERE table_schema='public' AND table_name='internal_user_access' AND grantee = v_role;
+    ASSERT v_colpriv = 0, format('case18: %s must have no column privileges on internal_user_access', v_role);
+  END LOOP;
+
+  -- Explicit server path: service_role retains CRUD.
+  FOREACH v_priv IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE'] LOOP
+    ASSERT has_table_privilege('service_role', 'public.internal_user_access', v_priv) = true,
+      format('case18: service_role must retain %s on internal_user_access', v_priv);
+  END LOOP;
+
+  -- RPC boundary preserved: authenticated keeps EXECUTE; anon and PUBLIC do not.
+  ASSERT has_function_privilege('authenticated', 'public.get_current_user_access()', 'EXECUTE') = true,
+    'case18: authenticated must retain EXECUTE on get_current_user_access()';
+  ASSERT has_function_privilege('anon', 'public.get_current_user_access()', 'EXECUTE') = false,
+    'case18: anon must NOT execute get_current_user_access()';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
+     WHERE p.proname='get_current_user_access' AND p.pronamespace='public'::regnamespace
+       AND a.grantee = 0 /* PUBLIC */ AND a.privilege_type='EXECUTE'
+  ), 'case18: PUBLIC must NOT have EXECUTE on get_current_user_access()';
+END $$;
+
+DO $$ BEGIN RAISE NOTICE 'ALL 18 VERIFICATION CASES PASSED'; END $$;
 
 ROLLBACK;

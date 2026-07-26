@@ -2915,3 +2915,20 @@ A single correction commit `fix: correct Gemini Monitoring alignment` on the sam
 - **Pagination integrity** — page-following now throws when a `nextPageToken` still remains at the safety bound (converted to the bounded `unavailable` result upstream), so partial data is never presented as complete; a large valid `pageSize` reduces unnecessary pagination.
 - **Incidental fix** — removed stray NUL bytes that had been embedded (as identity separators) in `providerCache.ts`; the separators are now plain spaces. Behavior is equivalent (identities remained distinct) but the source is now clean text.
 - `deployment.md §13.6/§13.7` updated to match (ALIGN_SUM, synchronized buckets, full-credential response-cache identity, pagination-overflow fail-soft). New test totals: `npm test` 635 passed / 41 files.
+
+### 2026-07-26 — Staged Production deployment of OWNER-MANAGER-ACCESS-AND-GEMINI-QUOTA-001 (through migration + owner bootstrap)
+
+Under individually-authorized steps, the following were executed against Production project `lioxtgiputfniqbktcsz` / the Gemini Google Cloud project:
+
+- **Google Cloud:** enabled `monitoring.googleapis.com` and `iam.googleapis.com` (Google auto-enabled the `telemetry`/`iamcredentials` dependencies); created a narrowly-privileged Monitoring service account; granted it **only** `roles/monitoring.viewer` (unconditional); created one JSON key.
+- **Supabase Edge secrets:** set `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_MONITORING_CLIENT_EMAIL`, `GOOGLE_MONITORING_PRIVATE_KEY` from that key (local key copy securely deleted). `GEMINI_MODEL` intentionally left unset. Setting secrets re-provisioned existing functions (secret propagation only): `fetch-paper-metadata` v9→**v10**, `analyze-paper` v13→**v14**, **code bundles unchanged** (pre-PR code still deployed).
+- **Migration `20260725090000` applied to Production** (`supabase db push --linked`); ledger aligned; live schema exposes `internal_user_access`, `get_current_user_access`, and the additive `is_exempt` on `get_ai_quota_status`. Generated types in the repo are unchanged (privilege/DDL matched the local blob).
+- **Owner bootstrap completed and verified** (bounded serializable transaction): owner internal role (`ai_quota_exempt = true`, `created_by = NULL`) + Pro-baseline entitlement; usage history preserved; no subscription/billing identity; the read-only RPCs return the expected owner projection.
+
+**Not deployed:** `get-gemini-provider-quota` and the PR version of `analyze-paper` remain undeployed; PR #168 is unmerged.
+
+### 2026-07-26 — OWNER-MANAGER-ACCESS-AND-GEMINI-QUOTA-001L: internal-access grant hardening (same PR #168, local-only)
+
+Additive **privilege-only** migration `20260726120000_harden_internal_user_access_grants.sql` — **local-only, not yet applied to Production; awaiting independent approval.** The already-applied migration `20260725090000` is **unchanged** (blob `7f5a3222d0c5a60d004e943c4e4af5c65ffaa73e`).
+
+`public.internal_user_access` was already default-deny (ENABLE + FORCE RLS, zero policies) — no roster exposure was demonstrated — but it still carried Supabase's default client table grants at the object-permission layer (identical to `usage_counters`). This migration, as **defense in depth**, `REVOKE`s all direct privileges from `PUBLIC`, `anon`, and `authenticated`, and re-affirms `service_role` CRUD. No schema shape, function body, RLS policy, owner row, entitlement, default-privilege, or `usage_counters` change; `get_current_user_access()` keeps its `authenticated` `EXECUTE` grant. Local `supabase db reset` replays cleanly and the SQL verification suite now covers **18** cases (added case 18: direct client table/column privileges revoked for PUBLIC/anon/authenticated, `service_role` CRUD retained, RPC EXECUTE boundary intact). Generated types unchanged (privileges do not affect type shape). Deployment order: apply `20260726120000` (`supabase db push`) alongside the remaining function deploys — see `deployment.md §13`.
