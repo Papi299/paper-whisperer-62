@@ -26,8 +26,11 @@ import {
   buildTimeSeriesQueryParams,
   classifyFetchFailure,
   collectProviderQuota,
+  formatProviderQuotaFailureLog,
   MonitoringCollectionError,
+  parseGoogleErrorReason,
   parseTimeSeriesPage,
+  UNAVAILABLE_REASON,
   unavailableProviderQuota,
   type GeminiProviderQuotaResponse,
   type ProviderQuotaFailure,
@@ -160,8 +163,18 @@ function makeFetcher(projectId: string, token: string): TimeSeriesFetcher {
       // structurally into a bounded code; no URL, header, or exception text kept.
       throw classifyFetchFailure(err);
     }
-    // Non-2xx: bounded code + numeric status only, never the response body.
-    if (!res.ok) throw new MonitoringCollectionError("monitoring_http", res.status);
+    // Non-2xx: read the body ONLY to recover a bounded, strictly-validated
+    // google.rpc.ErrorInfo reason, then discard it. Status and reason are the only
+    // things kept — never the raw body, headers, URL, or Google error message.
+    if (!res.ok) {
+      let reason = UNAVAILABLE_REASON;
+      try {
+        reason = parseGoogleErrorReason(await res.text());
+      } catch {
+        reason = UNAVAILABLE_REASON; // body read interrupted — stay bounded
+      }
+      throw new MonitoringCollectionError("monitoring_http", res.status, reason);
+    }
     let rawBody: string;
     try {
       rawBody = await res.text();
@@ -177,15 +190,15 @@ function makeFetcher(projectId: string, token: string): TimeSeriesFetcher {
 /**
  * Emit exactly ONE bounded diagnostic line for a failed Monitoring collection.
  * A single string argument to console.error so Supabase Logs shows one event.
- * Contains only the fixed failure code and, for an HTTP failure, the numeric
- * status — never a URL, token, body, credential, or exception message.
+ * Contains only the fixed failure code, for an HTTP failure the numeric status,
+ * and (HTTP failure only) the already-validated ErrorInfo reason token — never a
+ * URL, token, body, Google message/domain/metadata, credential, or exception
+ * message.
  */
 function logProviderQuotaFailure(failure: ProviderQuotaFailure): void {
-  const line =
-    failure.code === "monitoring_http" && typeof failure.status === "number"
-      ? `provider_quota_collection_failed code=monitoring_http status=${failure.status}`
-      : `provider_quota_collection_failed code=${failure.code}`;
-  console.error(line);
+  // Single bounded string; the exact wire format lives in the pure, unit-tested
+  // formatter, so the Deno entrypoint only performs the one console.error call.
+  console.error(formatProviderQuotaFailureLog(failure));
 }
 
 async function buildProviderQuota(

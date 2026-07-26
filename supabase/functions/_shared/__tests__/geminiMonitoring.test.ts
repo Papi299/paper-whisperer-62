@@ -15,6 +15,11 @@ import {
   normalizeCollectionFailure,
   parseTimeSeriesPage,
   MonitoringCollectionError,
+  extractGoogleErrorInfoReason,
+  parseGoogleErrorReason,
+  isValidReason,
+  formatProviderQuotaFailureLog,
+  UNAVAILABLE_REASON,
   type RawTimeSeries,
   type RawPoint,
   type TimeSeriesFetcher,
@@ -670,14 +675,14 @@ describe("normalizeCollectionFailure — bounded taxonomy", () => {
   it("classifies a non-2xx Monitoring HTTP failure and preserves the exact numeric status", () => {
     for (const status of [400, 401, 403, 404, 429, 500, 503]) {
       const f = normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", status));
-      expect(f).toEqual({ code: "monitoring_http", status });
+      expect(f).toEqual({ code: "monitoring_http", status, reason: "UNAVAILABLE" });
     }
   });
 
   it("omits status for monitoring_http when it is missing or out of the 100–599 integer range", () => {
     for (const bad of [undefined, 0, 99, 600, 700, 200.5, Number.NaN]) {
       const f = normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", bad as number | undefined));
-      expect(f).toEqual({ code: "monitoring_http" });
+      expect(f).toEqual({ code: "monitoring_http", reason: "UNAVAILABLE" });
       expect("status" in f).toBe(false);
     }
   });
@@ -715,9 +720,9 @@ describe("normalizeCollectionFailure — bounded taxonomy", () => {
     expect(normalizeCollectionFailure(httpish)).toEqual({ code: "unknown" });
   });
 
-  it("produces only the bounded keys {code[, status]}", () => {
+  it("produces only the bounded keys {code[, status][, reason]}", () => {
     expect(Object.keys(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_timeout"))).sort()).toEqual(["code"]);
-    expect(Object.keys(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", 500))).sort()).toEqual(["code", "status"]);
+    expect(Object.keys(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", 500))).sort()).toEqual(["code", "reason", "status"]);
   });
 });
 
@@ -778,16 +783,16 @@ describe("collectProviderQuota — bounded failure callback + preserved fail-sof
     const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 403); };
     const res = await collectProviderQuota(fetcher, COLLECT_OPTS, onFailure);
     expect(onFailure).toHaveBeenCalledTimes(1);
-    expect(onFailure).toHaveBeenCalledWith({ code: "monitoring_http", status: 403 });
+    expect(onFailure).toHaveBeenCalledWith({ code: "monitoring_http", status: 403, reason: "UNAVAILABLE" });
     expect(res).toEqual(EXPECTED_FAILSOFT);
   });
 
-  it("passes the callback only bounded fields (keys ⊆ {code,status})", async () => {
+  it("passes the callback only bounded fields (keys ⊆ {code,status,reason})", async () => {
     const seen: ProviderQuotaFailure[] = [];
     const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 500); };
     await collectProviderQuota(fetcher, COLLECT_OPTS, (f) => seen.push(f));
     expect(seen).toHaveLength(1);
-    for (const key of Object.keys(seen[0])) expect(["code", "status"]).toContain(key);
+    for (const key of Object.keys(seen[0])) expect(["code", "status", "reason"]).toContain(key);
   });
 
   it("classifies timeout, network, pagination overflow, and invalid payload through the callback", async () => {
@@ -847,5 +852,204 @@ describe("collectProviderQuota — bounded failure callback + preserved fail-sof
     const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 403); };
     const res = await collectProviderQuota(fetcher, COLLECT_OPTS);
     expect(res).toEqual(EXPECTED_FAILSOFT);
+  });
+});
+
+// ── Bounded google.rpc.ErrorInfo reason (001U) ──────────────────────────
+// Adversarial fixtures. The sentinel secrets exist ONLY to prove they can never
+// survive extraction, normalization, formatting, or the client response.
+const ERROR_INFO = "type.googleapis.com/google.rpc.ErrorInfo";
+
+/** A Google error body carrying the given detail entries (message never read). */
+function googleError(details: unknown[], message = "denied"): string {
+  return JSON.stringify({ error: { code: 403, message, status: "PERMISSION_DENIED", details } });
+}
+function errorInfo(reason: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { "@type": ERROR_INFO, reason, ...extra };
+}
+
+describe("extractGoogleErrorInfoReason — bounded ErrorInfo.reason extraction", () => {
+  it("extracts a single valid reason from an exact ErrorInfo detail", () => {
+    for (const reason of [
+      "IAM_PERMISSION_DENIED", "SERVICE_DISABLED", "USER_PROJECT_DENIED",
+      "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "CONSUMER_INVALID", "google.api.example-reason",
+    ]) {
+      expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo(reason)])))).toBe(reason);
+    }
+  });
+
+  it("ignores unrelated detail entries and reads ONLY the exact ErrorInfo.reason", () => {
+    const body = JSON.parse(googleError([
+      { "@type": "type.googleapis.com/google.rpc.Help", links: [{ url: "https://x" }] },
+      { "@type": "type.googleapis.com/google.rpc.LocalizedMessage", message: "no" },
+      errorInfo("IAM_PERMISSION_DENIED", { domain: "googleapis.com", metadata: { service: "monitoring.googleapis.com" } }),
+    ]));
+    expect(extractGoogleErrorInfoReason(body)).toBe("IAM_PERMISSION_DENIED");
+  });
+
+  it("returns UNAVAILABLE for null / array / non-object top level", () => {
+    for (const v of [null, [], [errorInfo("X")], 3, "x", true, undefined]) {
+      expect(extractGoogleErrorInfoReason(v)).toBe(UNAVAILABLE_REASON);
+    }
+  });
+
+  it("returns UNAVAILABLE when error / details are missing or malformed", () => {
+    expect(extractGoogleErrorInfoReason({})).toBe(UNAVAILABLE_REASON);                       // missing error
+    expect(extractGoogleErrorInfoReason({ error: null })).toBe(UNAVAILABLE_REASON);
+    expect(extractGoogleErrorInfoReason({ error: 42 })).toBe(UNAVAILABLE_REASON);            // non-object error
+    expect(extractGoogleErrorInfoReason({ error: [] })).toBe(UNAVAILABLE_REASON);            // array error
+    expect(extractGoogleErrorInfoReason({ error: {} })).toBe(UNAVAILABLE_REASON);            // missing details
+    expect(extractGoogleErrorInfoReason({ error: { details: {} } })).toBe(UNAVAILABLE_REASON); // non-array details
+    expect(extractGoogleErrorInfoReason({ error: { details: [] } })).toBe(UNAVAILABLE_REASON); // empty details
+  });
+
+  it("returns UNAVAILABLE when the ErrorInfo entry has a missing or non-string reason", () => {
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo(undefined)])))).toBe(UNAVAILABLE_REASON);
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([{ "@type": ERROR_INFO }])))).toBe(UNAVAILABLE_REASON);
+    for (const bad of [42, true, null, { r: "x" }, ["X"]]) {
+      expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo(bad)])))).toBe(UNAVAILABLE_REASON);
+    }
+  });
+
+  it("enforces the EXACT @type and never reads a reason from another type or location", () => {
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", reason: "IAM_PERMISSION_DENIED" }])))).toBe(UNAVAILABLE_REASON);
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([{ reason: "IAM_PERMISSION_DENIED" }])))).toBe(UNAVAILABLE_REASON); // missing @type
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([{ "@type": "type.googleapis.com/google.rpc.ErrorInfoX", reason: "IAM_PERMISSION_DENIED" }])))).toBe(UNAVAILABLE_REASON); // near-miss type
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([{ "@type": "google.rpc.ErrorInfo", reason: "IAM_PERMISSION_DENIED" }])))).toBe(UNAVAILABLE_REASON); // truncated type
+    expect(extractGoogleErrorInfoReason({ error: { reason: "IAM_PERMISSION_DENIED", details: [] } })).toBe(UNAVAILABLE_REASON); // reason outside details
+  });
+
+  it("rejects unsafe / free-form reasons rather than sanitizing them", () => {
+    for (const reason of [
+      "", "a".repeat(65), "IAM PERMISSION DENIED", "reason=value", "Bearer abc",
+      "project/123", "user@example.com", "a:b", "line\nbreak",
+      "-----BEGIN PRIVATE KEY-----", "access_token secret",
+    ]) {
+      expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo(reason)])))).toBe(UNAVAILABLE_REASON);
+    }
+  });
+
+  it("accepts a reason at exactly 64 chars and rejects at 65", () => {
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo("a".repeat(64))])))).toBe("a".repeat(64));
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo("a".repeat(65))])))).toBe(UNAVAILABLE_REASON);
+  });
+
+  it("resolves multiple ErrorInfo entries deterministically", () => {
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo("SERVICE_DISABLED"), errorInfo("IAM_PERMISSION_DENIED")])))).toBe(UNAVAILABLE_REASON); // distinct → UNAVAILABLE
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo("SERVICE_DISABLED"), errorInfo("SERVICE_DISABLED")])))).toBe("SERVICE_DISABLED"); // identical → that reason
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo("bad reason"), errorInfo("SERVICE_DISABLED")])))).toBe("SERVICE_DISABLED"); // one valid + invalid → valid
+    expect(extractGoogleErrorInfoReason(JSON.parse(googleError([errorInfo("bad one"), errorInfo("bad=two")])))).toBe(UNAVAILABLE_REASON); // all invalid → UNAVAILABLE
+  });
+
+  it("never lets sentinel secrets survive extraction", () => {
+    const body = JSON.parse(googleError(
+      [errorInfo(SENSITIVE_BLOB), errorInfo("ok", { metadata: { blob: SENSITIVE_BLOB } })],
+      SENSITIVE_BLOB,
+    ));
+    const out = extractGoogleErrorInfoReason(body); // 1st reason rejected (spaces); 2nd "ok" valid → "ok"
+    expect(out).toBe("ok");
+    assertNoSensitive(out);
+  });
+});
+
+describe("parseGoogleErrorReason — raw body → bounded reason", () => {
+  it("returns UNAVAILABLE for invalid or empty JSON", () => {
+    expect(parseGoogleErrorReason("{not json")).toBe(UNAVAILABLE_REASON);
+    expect(parseGoogleErrorReason("")).toBe(UNAVAILABLE_REASON);
+  });
+  it("extracts a valid reason from a real-shaped 403 body", () => {
+    expect(parseGoogleErrorReason(googleError([errorInfo("IAM_PERMISSION_DENIED")]))).toBe("IAM_PERMISSION_DENIED");
+  });
+  it("never surfaces the raw body or sentinel secrets", () => {
+    const out = parseGoogleErrorReason(googleError([errorInfo("bad reason with spaces")], SENSITIVE_BLOB));
+    expect(out).toBe(UNAVAILABLE_REASON);
+    assertNoSensitive(out);
+  });
+});
+
+describe("isValidReason — strict token validator", () => {
+  it("accepts only 1–64 chars of [A-Za-z0-9_.-] and rejects everything else", () => {
+    for (const ok of ["A", "IAM_PERMISSION_DENIED", "google.api.reason-1", "a".repeat(64), "UNAVAILABLE"]) {
+      expect(isValidReason(ok)).toBe(true);
+    }
+    for (const no of ["", "a".repeat(65), "has space", "eq=x", "sl/ash", "at@x", "c:d", "new\nline", 42, null, undefined, {}, ["X"]]) {
+      expect(isValidReason(no)).toBe(false);
+    }
+  });
+});
+
+describe("normalizeCollectionFailure — reason propagation (monitoring_http only)", () => {
+  it("keeps a valid reason alongside a valid status", () => {
+    expect(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", 403, "IAM_PERMISSION_DENIED")))
+      .toEqual({ code: "monitoring_http", status: 403, reason: "IAM_PERMISSION_DENIED" });
+  });
+  it("falls back to UNAVAILABLE for a missing or invalid reason", () => {
+    expect(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", 403)))
+      .toEqual({ code: "monitoring_http", status: 403, reason: "UNAVAILABLE" });
+    expect(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", 403, "bad reason")))
+      .toEqual({ code: "monitoring_http", status: 403, reason: "UNAVAILABLE" });
+  });
+  it("keeps the reason but drops an invalid status (stays bounded)", () => {
+    const f = normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", 999, "SERVICE_DISABLED"));
+    expect(f).toEqual({ code: "monitoring_http", reason: "SERVICE_DISABLED" });
+    expect("status" in f).toBe(false);
+  });
+  it("never attaches a reason to a non-HTTP code even if the error carries one", () => {
+    for (const code of ["monitoring_timeout", "monitoring_network", "pagination_overflow", "invalid_monitoring_payload", "unknown"] as const) {
+      const f = normalizeCollectionFailure(new MonitoringCollectionError(code, 403, "IAM_PERMISSION_DENIED"));
+      expect(f).toEqual({ code });
+      expect("reason" in f).toBe(false);
+    }
+  });
+});
+
+describe("formatProviderQuotaFailureLog — exact bounded wire format", () => {
+  it("formats monitoring_http with status and a valid reason", () => {
+    expect(formatProviderQuotaFailureLog({ code: "monitoring_http", status: 403, reason: "IAM_PERMISSION_DENIED" }))
+      .toBe("provider_quota_collection_failed code=monitoring_http status=403 reason=IAM_PERMISSION_DENIED");
+  });
+  it("formats monitoring_http with the UNAVAILABLE placeholder", () => {
+    expect(formatProviderQuotaFailureLog({ code: "monitoring_http", status: 403, reason: "UNAVAILABLE" }))
+      .toBe("provider_quota_collection_failed code=monitoring_http status=403 reason=UNAVAILABLE");
+  });
+  it("stays bounded when status is absent", () => {
+    expect(formatProviderQuotaFailureLog({ code: "monitoring_http", reason: "SERVICE_DISABLED" }))
+      .toBe("provider_quota_collection_failed code=monitoring_http reason=SERVICE_DISABLED");
+  });
+  it("re-validates the reason and never emits unsafe text", () => {
+    const unsafe = formatProviderQuotaFailureLog({ code: "monitoring_http", status: 403, reason: `Bearer abc ${SENSITIVE_BLOB}` });
+    expect(unsafe).toBe("provider_quota_collection_failed code=monitoring_http status=403 reason=UNAVAILABLE");
+    assertNoSensitive(unsafe);
+    expect(formatProviderQuotaFailureLog({ code: "monitoring_http", status: 403 }))
+      .toBe("provider_quota_collection_failed code=monitoring_http status=403 reason=UNAVAILABLE");
+  });
+  it("returns a single string and never a reason/status for non-HTTP codes", () => {
+    for (const code of ["monitoring_timeout", "monitoring_network", "pagination_overflow", "invalid_monitoring_payload", "unknown"] as const) {
+      const line = formatProviderQuotaFailureLog({ code });
+      expect(typeof line).toBe("string");
+      expect(line).toBe(`provider_quota_collection_failed code=${code}`);
+      expect(line).not.toContain("reason=");
+      expect(line).not.toContain("status=");
+    }
+  });
+});
+
+describe("collectProviderQuota — reason reaches the callback, never the client", () => {
+  it("delivers {code,status,reason} to the callback while the client response stays generic", async () => {
+    let captured: ProviderQuotaFailure | undefined;
+    const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 403, "IAM_PERMISSION_DENIED"); };
+    const res = await collectProviderQuota(fetcher, COLLECT_OPTS, (f) => { captured = f; });
+    expect(captured).toEqual({ code: "monitoring_http", status: 403, reason: "IAM_PERMISSION_DENIED" });
+    expect(res).toEqual(EXPECTED_FAILSOFT);
+    const serialized = JSON.stringify(res);
+    expect(serialized).not.toContain("IAM_PERMISSION_DENIED");
+    expect(serialized).not.toContain("reason");
+    expect(serialized).not.toContain("403");
+  });
+  it("yields exactly one deterministic bounded log line for a failed collection", async () => {
+    const lines: string[] = [];
+    const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 403, "SERVICE_DISABLED"); };
+    await collectProviderQuota(fetcher, COLLECT_OPTS, (f) => { lines.push(formatProviderQuotaFailureLog(f)); });
+    expect(lines).toEqual(["provider_quota_collection_failed code=monitoring_http status=403 reason=SERVICE_DISABLED"]);
   });
 });

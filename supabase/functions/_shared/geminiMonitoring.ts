@@ -506,10 +506,12 @@ export type TimeSeriesFetcher = (req: TimeSeriesRequest) => Promise<TimeSeriesPa
 // log line identifying the failure class (and, for an HTTP failure, the numeric
 // status). It is NEVER added to the client response, and it carries no URL,
 // query, project ID, metric type, model, service-account email, request/response
-// body, Google error text, OAuth/token material, pagination token, stack trace,
-// or arbitrary exception message — only a fixed code and an optional numeric
-// status. Classification is STRUCTURAL (a typed error / value shape), never
-// message-substring parsing, so no sensitive text can influence the result.
+// body, Google error message/domain/metadata, OAuth/token material, pagination
+// token, stack trace, or arbitrary exception message — only a fixed code, an
+// optional numeric status, and (for an HTTP failure only) a strictly-validated
+// google.rpc.ErrorInfo.reason token. Classification is STRUCTURAL (a typed error
+// / value shape), never message-substring parsing, so no sensitive text can
+// influence the result.
 
 /** The only externally logged provider-quota collection failure codes. */
 export type ProviderQuotaFailureCode =
@@ -520,10 +522,16 @@ export type ProviderQuotaFailureCode =
   | "invalid_monitoring_payload"
   | "unknown";
 
-/** Bounded diagnostic value. `status` is present ONLY for `monitoring_http`. */
+/**
+ * Bounded diagnostic value. `status` and `reason` are present ONLY for
+ * `monitoring_http`. `reason` is a strictly-validated google.rpc.ErrorInfo.reason
+ * token (or the fixed "UNAVAILABLE" placeholder) — never a Google message,
+ * domain, metadata, or any free-form text.
+ */
 export interface ProviderQuotaFailure {
   code: ProviderQuotaFailureCode;
   status?: number;
+  reason?: string;
 }
 
 /** Listener the collector invokes AT MOST ONCE per failed collection. */
@@ -538,17 +546,87 @@ export class MonitoringCollectionError extends Error {
   readonly code: ProviderQuotaFailureCode;
   /** Raw HTTP status for `monitoring_http`; validated at normalization time. */
   readonly httpStatus?: number;
-  constructor(code: ProviderQuotaFailureCode, httpStatus?: number) {
+  /**
+   * Pre-validated ErrorInfo reason for `monitoring_http` (or "UNAVAILABLE").
+   * Re-validated at normalization time so an unexpected value can never leak.
+   */
+  readonly reason?: string;
+  constructor(code: ProviderQuotaFailureCode, httpStatus?: number, reason?: string) {
     super(code);
     this.name = "MonitoringCollectionError";
     this.code = code;
     if (typeof httpStatus === "number") this.httpStatus = httpStatus;
+    if (typeof reason === "string") this.reason = reason;
   }
 }
 
 /** An integer HTTP status in the valid 100–599 range. */
 function isValidHttpStatus(status: number | undefined): status is number {
   return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599;
+}
+
+/**
+ * The fixed placeholder emitted whenever a bounded, structured ErrorInfo reason
+ * cannot be safely identified. It is itself a valid reason token.
+ */
+export const UNAVAILABLE_REASON = "UNAVAILABLE";
+
+/** The EXACT google.rpc.ErrorInfo detail @type; no other detail type is read. */
+const ERROR_INFO_TYPE = "type.googleapis.com/google.rpc.ErrorInfo";
+
+/**
+ * Accept a reason ONLY when it is a string of 1–64 characters drawn from
+ * [A-Za-z0-9_.-]. The WHOLE value is matched — content is never stripped or
+ * truncated into validity — so credential-like or free-form text (spaces, `=`,
+ * `@`, `:`, `/`, newlines, `Bearer …`, key material) is rejected outright.
+ */
+const REASON_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+export function isValidReason(value: unknown): value is string {
+  return typeof value === "string" && REASON_PATTERN.test(value);
+}
+
+/**
+ * Extract at most ONE bounded reason from an ALREADY-PARSED Google error value.
+ * Reads ONLY `error.details[]` entries whose `@type` is EXACTLY the ErrorInfo
+ * type, and from those ONLY the `reason` field. `error.message`/`error.code` and
+ * ErrorInfo `domain`/`metadata`/`permission`/`resource`/`consumer`/`service` are
+ * never read. Returns the sole distinct valid reason, or "UNAVAILABLE" for zero,
+ * conflicting, invalid, or malformed input. Never throws; no arbitrary nested
+ * traversal.
+ */
+export function extractGoogleErrorInfoReason(value: unknown): string {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return UNAVAILABLE_REASON;
+  const error = (value as Record<string, unknown>).error;
+  if (error === null || typeof error !== "object" || Array.isArray(error)) return UNAVAILABLE_REASON;
+  const details = (error as Record<string, unknown>).details;
+  if (!Array.isArray(details)) return UNAVAILABLE_REASON;
+  const reasons = new Set<string>();
+  for (const entry of details) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const detail = entry as Record<string, unknown>;
+    if (detail["@type"] !== ERROR_INFO_TYPE) continue;
+    const reason = detail.reason;
+    if (isValidReason(reason)) reasons.add(reason);
+  }
+  if (reasons.size === 1) {
+    for (const only of reasons) return only;
+  }
+  return UNAVAILABLE_REASON;
+}
+
+/**
+ * Parse a raw non-2xx Monitoring body ONLY far enough to recover the bounded
+ * ErrorInfo reason. Invalid JSON or any unexpected shape yields "UNAVAILABLE".
+ * The raw body is not retained and this never throws.
+ */
+export function parseGoogleErrorReason(rawBody: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return UNAVAILABLE_REASON;
+  }
+  return extractGoogleErrorInfoReason(parsed);
 }
 
 /**
@@ -574,18 +652,43 @@ export function classifyFetchFailure(err: unknown): MonitoringCollectionError {
 
 /**
  * Pure normalizer: map ANY thrown value into the bounded taxonomy. A typed
- * MonitoringCollectionError passes through (HTTP status kept ONLY when the code
- * is `monitoring_http` AND the status is a valid 100–599 integer, else omitted);
- * everything else is classified structurally. The returned object contains ONLY
- * `code` and the optional numeric `status` — never an exception message, stack,
- * or provider data.
+ * MonitoringCollectionError passes through; everything else is classified
+ * structurally. For `monitoring_http` the HTTP status is kept ONLY when it is a
+ * valid 100–599 integer, and the reason is re-validated here (a valid token is
+ * kept; anything else — including a missing reason — becomes "UNAVAILABLE").
+ * A reason is attached to NO other code. The returned object contains ONLY
+ * `code`, the optional numeric `status`, and the bounded `reason` — never an
+ * exception message, stack, or provider data.
  */
 export function normalizeCollectionFailure(err: unknown): ProviderQuotaFailure {
   const typed = err instanceof MonitoringCollectionError ? err : classifyFetchFailure(err);
-  if (typed.code === "monitoring_http" && isValidHttpStatus(typed.httpStatus)) {
-    return { code: "monitoring_http", status: typed.httpStatus };
+  if (typed.code === "monitoring_http") {
+    const failure: ProviderQuotaFailure = {
+      code: "monitoring_http",
+      reason: isValidReason(typed.reason) ? typed.reason : UNAVAILABLE_REASON,
+    };
+    if (isValidHttpStatus(typed.httpStatus)) failure.status = typed.httpStatus;
+    return failure;
   }
   return { code: typed.code };
+}
+
+/**
+ * Build the SINGLE bounded diagnostic string for a normalized failure. Kept pure
+ * (and unit-tested) so the exact wire format is verified without the Deno entry;
+ * the entrypoint's logger only performs one `console.error` with this string.
+ * `monitoring_http` → `provider_quota_collection_failed code=monitoring_http
+ * status=<S> reason=<R>` (status omitted only when absent; reason re-validated
+ * here, defaulting to "UNAVAILABLE"). Every other code →
+ * `provider_quota_collection_failed code=<code>` with no status and no reason.
+ */
+export function formatProviderQuotaFailureLog(failure: ProviderQuotaFailure): string {
+  if (failure.code === "monitoring_http") {
+    const statusPart = typeof failure.status === "number" ? ` status=${failure.status}` : "";
+    const reason = isValidReason(failure.reason) ? failure.reason : UNAVAILABLE_REASON;
+    return `provider_quota_collection_failed code=monitoring_http${statusPart} reason=${reason}`;
+  }
+  return `provider_quota_collection_failed code=${failure.code}`;
 }
 
 /**
