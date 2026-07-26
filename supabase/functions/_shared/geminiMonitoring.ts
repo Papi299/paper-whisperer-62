@@ -500,6 +500,137 @@ export interface TimeSeriesPage {
 /** Injected fetcher — the Deno function supplies the real HTTP implementation. */
 export type TimeSeriesFetcher = (req: TimeSeriesRequest) => Promise<TimeSeriesPage>;
 
+// ── Bounded collection-failure diagnostics (Part C) ─────────────────────
+// A NARROW, non-sensitive classification of why ONE Monitoring collection
+// attempt failed. It exists only so the server can emit a single diagnostic
+// log line identifying the failure class (and, for an HTTP failure, the numeric
+// status). It is NEVER added to the client response, and it carries no URL,
+// query, project ID, metric type, model, service-account email, request/response
+// body, Google error text, OAuth/token material, pagination token, stack trace,
+// or arbitrary exception message — only a fixed code and an optional numeric
+// status. Classification is STRUCTURAL (a typed error / value shape), never
+// message-substring parsing, so no sensitive text can influence the result.
+
+/** The only externally logged provider-quota collection failure codes. */
+export type ProviderQuotaFailureCode =
+  | "monitoring_http"
+  | "monitoring_timeout"
+  | "monitoring_network"
+  | "pagination_overflow"
+  | "invalid_monitoring_payload"
+  | "unknown";
+
+/** Bounded diagnostic value. `status` is present ONLY for `monitoring_http`. */
+export interface ProviderQuotaFailure {
+  code: ProviderQuotaFailureCode;
+  status?: number;
+}
+
+/** Listener the collector invokes AT MOST ONCE per failed collection. */
+export type ProviderQuotaFailureListener = (failure: ProviderQuotaFailure) => void;
+
+/**
+ * Typed collection failure. The Deno fetcher (and the pagination guard below)
+ * construct these so classification is a discriminated `code`, not message
+ * parsing. Its `message` is only the bounded code — never sensitive text.
+ */
+export class MonitoringCollectionError extends Error {
+  readonly code: ProviderQuotaFailureCode;
+  /** Raw HTTP status for `monitoring_http`; validated at normalization time. */
+  readonly httpStatus?: number;
+  constructor(code: ProviderQuotaFailureCode, httpStatus?: number) {
+    super(code);
+    this.name = "MonitoringCollectionError";
+    this.code = code;
+    if (typeof httpStatus === "number") this.httpStatus = httpStatus;
+  }
+}
+
+/** An integer HTTP status in the valid 100–599 range. */
+function isValidHttpStatus(status: number | undefined): status is number {
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599;
+}
+
+/**
+ * Classify a value thrown by the fetch layer (not already typed) using STRUCTURAL
+ * signals only: `AbortSignal.timeout` rejects with a DOMException named
+ * "TimeoutError" (a manual abort → "AbortError") → `monitoring_timeout`; a fetch
+ * network failure surfaces as a `TypeError` → `monitoring_network`; anything else
+ * → `unknown`. No message text is inspected, so no sensitive substring can steer
+ * the code. An already-typed error is returned unchanged.
+ */
+export function classifyFetchFailure(err: unknown): MonitoringCollectionError {
+  if (err instanceof MonitoringCollectionError) return err;
+  const name =
+    typeof err === "object" && err !== null ? (err as { name?: unknown }).name : undefined;
+  if (name === "TimeoutError" || name === "AbortError") {
+    return new MonitoringCollectionError("monitoring_timeout");
+  }
+  if (err instanceof TypeError) {
+    return new MonitoringCollectionError("monitoring_network");
+  }
+  return new MonitoringCollectionError("unknown");
+}
+
+/**
+ * Pure normalizer: map ANY thrown value into the bounded taxonomy. A typed
+ * MonitoringCollectionError passes through (HTTP status kept ONLY when the code
+ * is `monitoring_http` AND the status is a valid 100–599 integer, else omitted);
+ * everything else is classified structurally. The returned object contains ONLY
+ * `code` and the optional numeric `status` — never an exception message, stack,
+ * or provider data.
+ */
+export function normalizeCollectionFailure(err: unknown): ProviderQuotaFailure {
+  const typed = err instanceof MonitoringCollectionError ? err : classifyFetchFailure(err);
+  if (typed.code === "monitoring_http" && isValidHttpStatus(typed.httpStatus)) {
+    return { code: "monitoring_http", status: typed.httpStatus };
+  }
+  return { code: typed.code };
+}
+
+/**
+ * Parse ONE Monitoring page from its raw response body and validate its minimum
+ * structure, or throw `invalid_monitoring_payload`. Bad JSON, a non-object (or
+ * array) top level, a non-array `timeSeries`, or a non-string `nextPageToken` are
+ * all rejected. A missing `timeSeries` is treated as empty ONLY when the rest of
+ * the page is valid; an absent/empty `nextPageToken` becomes null. No raw payload
+ * is retained on failure — only the bounded code is thrown.
+ */
+export function parseTimeSeriesPage(raw: string): TimeSeriesPage {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new MonitoringCollectionError("invalid_monitoring_payload");
+  }
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    throw new MonitoringCollectionError("invalid_monitoring_payload");
+  }
+  const obj = data as Record<string, unknown>;
+
+  const rawSeries = obj.timeSeries;
+  let timeSeries: RawTimeSeries[];
+  if (rawSeries === undefined) {
+    timeSeries = [];
+  } else if (Array.isArray(rawSeries)) {
+    timeSeries = rawSeries as RawTimeSeries[];
+  } else {
+    throw new MonitoringCollectionError("invalid_monitoring_payload");
+  }
+
+  const rawToken = obj.nextPageToken;
+  let nextPageToken: string | null;
+  if (rawToken === undefined || rawToken === null) {
+    nextPageToken = null;
+  } else if (typeof rawToken === "string") {
+    nextPageToken = rawToken.length > 0 ? rawToken : null;
+  } else {
+    throw new MonitoringCollectionError("invalid_monitoring_payload");
+  }
+
+  return { timeSeries, nextPageToken };
+}
+
 const MAX_PAGES = 20;
 
 /**
@@ -522,8 +653,9 @@ export async function fetchAllPagesForMetric(
     pageToken = next;
   }
   // Bound reached with a token still pending: presenting `all` would be partial
-  // data masquerading as complete. Fail so the outer collector goes unavailable.
-  throw new Error("monitoring_pagination_overflow");
+  // data masquerading as complete. Fail (typed, no token) so the outer collector
+  // goes unavailable and emits a bounded `pagination_overflow` diagnostic.
+  throw new MonitoringCollectionError("pagination_overflow");
 }
 
 export interface CollectOptions {
@@ -551,6 +683,7 @@ export interface CollectOptions {
 export async function collectProviderQuota(
   fetcher: TimeSeriesFetcher,
   opts: CollectOptions,
+  onFailure?: ProviderQuotaFailureListener,
 ): Promise<GeminiProviderQuotaResponse> {
   const metricTypes = buildMetricTypes();
   const normOpts: NormalizeOptions = {
@@ -595,7 +728,16 @@ export async function collectProviderQuota(
       nowMs: opts.nowMs,
     });
     return mergeWindowedProviderQuota(dayResp, minuteResp);
-  } catch {
+  } catch (err) {
+    // Emit at most ONE bounded diagnostic per failed collection. A listener that
+    // itself throws must NEVER break the fail-soft client response, so swallow it.
+    if (onFailure) {
+      try {
+        onFailure(normalizeCollectionFailure(err));
+      } catch {
+        /* diagnostic emission must not affect the returned response */
+      }
+    }
     return unavailableProviderQuota(
       opts.configuredModel,
       opts.collectedAtIso,

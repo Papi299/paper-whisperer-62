@@ -11,11 +11,16 @@ import {
   buildTimeSeriesQueryParams,
   fetchAllPagesForMetric,
   collectProviderQuota,
+  classifyFetchFailure,
+  normalizeCollectionFailure,
+  parseTimeSeriesPage,
+  MonitoringCollectionError,
   type RawTimeSeries,
   type RawPoint,
   type TimeSeriesFetcher,
   type TimeSeriesPage,
   type TimeSeriesRequest,
+  type ProviderQuotaFailure,
 } from "../geminiMonitoring.ts";
 
 const BASE = "generativelanguage.googleapis.com/quota";
@@ -617,5 +622,230 @@ describe("unavailableProviderQuota", () => {
     expect(res.dimensions).toEqual([]);
     expect(res.message).toBe("credentials not configured");
     expect(res.sharedScope).toBe(true);
+  });
+});
+
+// ── Bounded collection-failure diagnostics (Part C) ─────────────────────
+// Sensitive-looking material a failure/response must NEVER carry.
+const SENSITIVE_STRINGS = [
+  "-----BEGIN PRIVATE KEY-----",
+  "Bearer abc",
+  "access_token",
+  "client_email",
+  "nextPageToken-secret-value",
+  "raw-google-body",
+  "gen-lang-client-0227754673",
+] as const;
+const SENSITIVE_BLOB = SENSITIVE_STRINGS.join(" ");
+
+function assertNoSensitive(serialized: string) {
+  for (const s of SENSITIVE_STRINGS) expect(serialized).not.toContain(s);
+}
+
+const COLLECT_OPTS = {
+  configuredModel: "gemini-flash-latest",
+  collectedAtIso: OPTS.collectedAt,
+  nowMs: NOW_MS,
+  dayStartIso: "s",
+  minuteStartIso: "s",
+  endIso: "e",
+  metricsMayLagSeconds: 240,
+  unavailableMessage: "Gemini provider quota is temporarily unavailable.",
+};
+
+// The exact fail-soft client response the collector returns on ANY failure.
+const EXPECTED_FAILSOFT = {
+  status: "unavailable",
+  configuredModel: "gemini-flash-latest",
+  observedModels: [],
+  providerTier: "unknown",
+  sharedScope: true,
+  collectedAt: OPTS.collectedAt,
+  metricsMayLagSeconds: 0,
+  dimensions: [],
+  message: "Gemini provider quota is temporarily unavailable.",
+};
+
+describe("normalizeCollectionFailure — bounded taxonomy", () => {
+  it("classifies a non-2xx Monitoring HTTP failure and preserves the exact numeric status", () => {
+    for (const status of [400, 401, 403, 404, 429, 500, 503]) {
+      const f = normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", status));
+      expect(f).toEqual({ code: "monitoring_http", status });
+    }
+  });
+
+  it("omits status for monitoring_http when it is missing or out of the 100–599 integer range", () => {
+    for (const bad of [undefined, 0, 99, 600, 700, 200.5, Number.NaN]) {
+      const f = normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", bad as number | undefined));
+      expect(f).toEqual({ code: "monitoring_http" });
+      expect("status" in f).toBe(false);
+    }
+  });
+
+  it("classifies timeouts structurally (TimeoutError / AbortError), never by message text", () => {
+    expect(normalizeCollectionFailure(new DOMException("timed out", "TimeoutError"))).toEqual({ code: "monitoring_timeout" });
+    const aborted = new Error("whatever"); aborted.name = "AbortError";
+    expect(normalizeCollectionFailure(aborted)).toEqual({ code: "monitoring_timeout" });
+    expect(classifyFetchFailure({ name: "TimeoutError" }).code).toBe("monitoring_timeout");
+  });
+
+  it("classifies a fetch network failure (TypeError) as monitoring_network", () => {
+    expect(normalizeCollectionFailure(new TypeError("Failed to fetch"))).toEqual({ code: "monitoring_network" });
+    expect(classifyFetchFailure(new TypeError("network down")).code).toBe("monitoring_network");
+  });
+
+  it("passes through typed pagination_overflow and invalid_monitoring_payload codes", () => {
+    expect(normalizeCollectionFailure(new MonitoringCollectionError("pagination_overflow"))).toEqual({ code: "pagination_overflow" });
+    expect(normalizeCollectionFailure(new MonitoringCollectionError("invalid_monitoring_payload"))).toEqual({ code: "invalid_monitoring_payload" });
+  });
+
+  it("maps any other thrown value to unknown", () => {
+    expect(normalizeCollectionFailure(new Error("boom"))).toEqual({ code: "unknown" });
+    expect(normalizeCollectionFailure("a string")).toEqual({ code: "unknown" });
+    expect(normalizeCollectionFailure({ nope: true })).toEqual({ code: "unknown" });
+    expect(normalizeCollectionFailure(null)).toEqual({ code: "unknown" });
+  });
+
+  it("never lets an arbitrary/sensitive exception message enter the bounded failure object", () => {
+    const f = normalizeCollectionFailure(new Error(SENSITIVE_BLOB));
+    expect(f).toEqual({ code: "unknown" });
+    assertNoSensitive(JSON.stringify(f));
+    // A sensitive-looking message must not be reinterpreted as a richer code.
+    const httpish = new Error(`monitoring_error status=403 ${SENSITIVE_BLOB}`);
+    expect(normalizeCollectionFailure(httpish)).toEqual({ code: "unknown" });
+  });
+
+  it("produces only the bounded keys {code[, status]}", () => {
+    expect(Object.keys(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_timeout"))).sort()).toEqual(["code"]);
+    expect(Object.keys(normalizeCollectionFailure(new MonitoringCollectionError("monitoring_http", 500))).sort()).toEqual(["code", "status"]);
+  });
+});
+
+describe("parseTimeSeriesPage — structural validation", () => {
+  it("parses a valid page (timeSeries array + string nextPageToken)", () => {
+    const page = parseTimeSeriesPage(JSON.stringify({
+      timeSeries: [series(`${REQ}/usage`, { model: "m", limit_name: "XPerDay" }, [pt(1)])],
+      nextPageToken: "tok",
+    }));
+    expect(page.timeSeries).toHaveLength(1);
+    expect(page.nextPageToken).toBe("tok");
+  });
+
+  it("treats a missing timeSeries as [] and an absent/empty nextPageToken as null when the rest is valid", () => {
+    expect(parseTimeSeriesPage(JSON.stringify({}))).toEqual({ timeSeries: [], nextPageToken: null });
+    expect(parseTimeSeriesPage(JSON.stringify({ nextPageToken: "" }))).toEqual({ timeSeries: [], nextPageToken: null });
+    expect(parseTimeSeriesPage(JSON.stringify({ timeSeries: [], nextPageToken: null }))).toEqual({ timeSeries: [], nextPageToken: null });
+  });
+
+  it("rejects invalid JSON as invalid_monitoring_payload", () => {
+    expect(() => parseTimeSeriesPage("{not json")).toThrow(MonitoringCollectionError);
+    try { parseTimeSeriesPage("{not json"); } catch (e) {
+      expect((e as MonitoringCollectionError).code).toBe("invalid_monitoring_payload");
+    }
+  });
+
+  it("rejects a non-object top level (array / number / string / null)", () => {
+    for (const raw of ["[]", "3", '"x"', "null"]) {
+      expect(() => parseTimeSeriesPage(raw)).toThrow(MonitoringCollectionError);
+      try { parseTimeSeriesPage(raw); } catch (e) {
+        expect((e as MonitoringCollectionError).code).toBe("invalid_monitoring_payload");
+      }
+    }
+  });
+
+  it("rejects a non-array timeSeries or non-string nextPageToken", () => {
+    expect(() => parseTimeSeriesPage(JSON.stringify({ timeSeries: "nope" }))).toThrow(/invalid_monitoring_payload/);
+    expect(() => parseTimeSeriesPage(JSON.stringify({ timeSeries: {} }))).toThrow(/invalid_monitoring_payload/);
+    expect(() => parseTimeSeriesPage(JSON.stringify({ nextPageToken: 42 }))).toThrow(/invalid_monitoring_payload/);
+    expect(() => parseTimeSeriesPage(JSON.stringify({ timeSeries: [], nextPageToken: {} }))).toThrow(/invalid_monitoring_payload/);
+  });
+
+  it("never retains the malformed payload in the thrown error", () => {
+    try {
+      parseTimeSeriesPage(JSON.stringify({ timeSeries: "nope", secret: SENSITIVE_BLOB }));
+    } catch (e) {
+      const err = e as MonitoringCollectionError;
+      expect(err.code).toBe("invalid_monitoring_payload");
+      assertNoSensitive(err.message);
+      assertNoSensitive(JSON.stringify(normalizeCollectionFailure(err)));
+    }
+  });
+});
+
+describe("collectProviderQuota — bounded failure callback + preserved fail-soft response", () => {
+  it("invokes the callback exactly once with {code:monitoring_http,status} on an HTTP failure and preserves the fail-soft response", async () => {
+    const onFailure = vi.fn();
+    const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 403); };
+    const res = await collectProviderQuota(fetcher, COLLECT_OPTS, onFailure);
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledWith({ code: "monitoring_http", status: 403 });
+    expect(res).toEqual(EXPECTED_FAILSOFT);
+  });
+
+  it("passes the callback only bounded fields (keys ⊆ {code,status})", async () => {
+    const seen: ProviderQuotaFailure[] = [];
+    const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 500); };
+    await collectProviderQuota(fetcher, COLLECT_OPTS, (f) => seen.push(f));
+    expect(seen).toHaveLength(1);
+    for (const key of Object.keys(seen[0])) expect(["code", "status"]).toContain(key);
+  });
+
+  it("classifies timeout, network, pagination overflow, and invalid payload through the callback", async () => {
+    const cases: Array<{ thrown: unknown; code: string }> = [
+      { thrown: new DOMException("t", "TimeoutError"), code: "monitoring_timeout" },
+      { thrown: new TypeError("Failed to fetch"), code: "monitoring_network" },
+      { thrown: new MonitoringCollectionError("invalid_monitoring_payload"), code: "invalid_monitoring_payload" },
+    ];
+    for (const c of cases) {
+      const onFailure = vi.fn();
+      const fetcher: TimeSeriesFetcher = async () => { throw c.thrown; };
+      const res = await collectProviderQuota(fetcher, COLLECT_OPTS, onFailure);
+      expect(onFailure).toHaveBeenCalledTimes(1);
+      expect(onFailure.mock.calls[0][0].code).toBe(c.code);
+      expect(res).toEqual(EXPECTED_FAILSOFT);
+    }
+  });
+
+  it("reports pagination_overflow when a nextPageToken never terminates", async () => {
+    const onFailure = vi.fn();
+    const fetcher: TimeSeriesFetcher = async () => ({
+      timeSeries: [series(`${REQ}/usage`, { model: "m", limit_name: "ReqPerDay" }, [pt(1)])],
+      nextPageToken: "always-more",
+    });
+    const res = await collectProviderQuota(fetcher, COLLECT_OPTS, onFailure);
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledWith({ code: "pagination_overflow" });
+    expect(res).toEqual(EXPECTED_FAILSOFT);
+  });
+
+  it("does NOT invoke the callback for a valid empty-metrics result", async () => {
+    const onFailure = vi.fn();
+    const fetcher: TimeSeriesFetcher = async () => ({ timeSeries: [], nextPageToken: null });
+    const res = await collectProviderQuota(fetcher, COLLECT_OPTS, onFailure);
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(res.status).toBe("unavailable");
+    expect(res.message).toBe("No Gemini provider-quota metrics were returned.");
+  });
+
+  it("swallows a throwing callback and still returns the fail-soft response", async () => {
+    const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 503); };
+    const res = await collectProviderQuota(fetcher, COLLECT_OPTS, () => { throw new Error("logger blew up"); });
+    expect(res).toEqual(EXPECTED_FAILSOFT);
+  });
+
+  it("keeps arbitrary/sensitive exception text out of BOTH the failure object and the client response", async () => {
+    let captured: ProviderQuotaFailure | undefined;
+    const fetcher: TimeSeriesFetcher = async () => { throw new Error(SENSITIVE_BLOB); };
+    const res = await collectProviderQuota(fetcher, COLLECT_OPTS, (f) => { captured = f; });
+    expect(captured).toEqual({ code: "unknown" });
+    assertNoSensitive(JSON.stringify(captured));
+    assertNoSensitive(JSON.stringify(res));
+    expect(res).toEqual(EXPECTED_FAILSOFT);
+  });
+
+  it("still returns the fail-soft response when no callback is supplied (no regression)", async () => {
+    const fetcher: TimeSeriesFetcher = async () => { throw new MonitoringCollectionError("monitoring_http", 403); };
+    const res = await collectProviderQuota(fetcher, COLLECT_OPTS);
+    expect(res).toEqual(EXPECTED_FAILSOFT);
   });
 });

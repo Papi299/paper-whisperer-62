@@ -24,9 +24,13 @@ import { resolveGeminiModel } from "../_shared/geminiModel.ts";
 import { pacificDayStartIso } from "../_shared/pacificTime.ts";
 import {
   buildTimeSeriesQueryParams,
+  classifyFetchFailure,
   collectProviderQuota,
+  MonitoringCollectionError,
+  parseTimeSeriesPage,
   unavailableProviderQuota,
   type GeminiProviderQuotaResponse,
+  type ProviderQuotaFailure,
   type TimeSeriesFetcher,
   type TimeSeriesPage,
 } from "../_shared/geminiMonitoring.ts";
@@ -145,17 +149,43 @@ function makeFetcher(projectId: string, token: string): TimeSeriesFetcher {
       url.searchParams.set(k, v);
     }
 
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) throw new Error(`monitoring_error status=${res.status}`); // no raw body
-    const data = await res.json();
-    return {
-      timeSeries: Array.isArray(data?.timeSeries) ? data.timeSeries : [],
-      nextPageToken: typeof data?.nextPageToken === "string" && data.nextPageToken ? data.nextPageToken : null,
-    };
+    let res: Response;
+    try {
+      res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (err) {
+      // Timeout (AbortSignal.timeout) vs other network failure — classified
+      // structurally into a bounded code; no URL, header, or exception text kept.
+      throw classifyFetchFailure(err);
+    }
+    // Non-2xx: bounded code + numeric status only, never the response body.
+    if (!res.ok) throw new MonitoringCollectionError("monitoring_http", res.status);
+    let rawBody: string;
+    try {
+      rawBody = await res.text();
+    } catch (err) {
+      throw classifyFetchFailure(err); // body read interrupted mid-stream
+    }
+    // Parse + validate structure in the pure module (bad JSON / shape →
+    // invalid_monitoring_payload); the raw body is never retained on failure.
+    return parseTimeSeriesPage(rawBody);
   };
+}
+
+/**
+ * Emit exactly ONE bounded diagnostic line for a failed Monitoring collection.
+ * A single string argument to console.error so Supabase Logs shows one event.
+ * Contains only the fixed failure code and, for an HTTP failure, the numeric
+ * status — never a URL, token, body, credential, or exception message.
+ */
+function logProviderQuotaFailure(failure: ProviderQuotaFailure): void {
+  const line =
+    failure.code === "monitoring_http" && typeof failure.status === "number"
+      ? `provider_quota_collection_failed code=monitoring_http status=${failure.status}`
+      : `provider_quota_collection_failed code=${failure.code}`;
+  console.error(line);
 }
 
 async function buildProviderQuota(
@@ -174,16 +204,20 @@ async function buildProviderQuota(
     console.error("get-gemini-provider-quota token mint failed:", err instanceof Error ? err.message : "unknown");
     return unavailableProviderQuota(configuredModel, nowIso, UNAVAILABLE_MESSAGE);
   }
-  return collectProviderQuota(makeFetcher(projectId, token), {
-    configuredModel,
-    collectedAtIso: nowIso,
-    nowMs: now.getTime(),
-    dayStartIso: pacificDayStartIso(now),
-    minuteStartIso: new Date(now.getTime() - MINUTE_LOOKBACK_MS).toISOString(),
-    endIso: nowIso,
-    metricsMayLagSeconds: METRICS_MAY_LAG_SECONDS,
-    unavailableMessage: UNAVAILABLE_MESSAGE,
-  });
+  return collectProviderQuota(
+    makeFetcher(projectId, token),
+    {
+      configuredModel,
+      collectedAtIso: nowIso,
+      nowMs: now.getTime(),
+      dayStartIso: pacificDayStartIso(now),
+      minuteStartIso: new Date(now.getTime() - MINUTE_LOOKBACK_MS).toISOString(),
+      endIso: nowIso,
+      metricsMayLagSeconds: METRICS_MAY_LAG_SECONDS,
+      unavailableMessage: UNAVAILABLE_MESSAGE,
+    },
+    logProviderQuotaFailure,
+  );
 }
 
 Deno.serve(async (req) => {
