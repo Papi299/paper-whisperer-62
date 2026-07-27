@@ -447,17 +447,24 @@ No code redeploy needed; the next function invocation picks up the new secret.
 
 ## 13. Owner/Manager access + Gemini provider quota (OWNER-MANAGER-ACCESS-AND-GEMINI-QUOTA-001)
 
-> **Status (updated 2026-07-26): partially deployed under staged, individually-authorized steps — NOT complete. Do not merge PR #168 or deploy any Edge Function until the grant-hardening correction below is reviewed and applied.**
+> **Status (updated 2026-07-26): backend deployed and verified; the provider-quota dashboard is DEFERRED under decision C29. PR #168 is unmerged and awaits final review + merge.**
 >
-> **Done so far (each its own explicit authorization):** enabled `monitoring.googleapis.com` and `iam.googleapis.com` on the Gemini project (`gen-lang-client-…`; Google auto-enabled the `telemetry`/`iamcredentials` dependencies); created a narrowly-privileged Monitoring service account and granted it **only** `roles/monitoring.viewer` (unconditional); created one JSON key and stored its values as the three Google Edge secrets `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_MONITORING_CLIENT_EMAIL`, `GOOGLE_MONITORING_PRIVATE_KEY` (the local key copy was securely deleted; `GEMINI_MODEL` intentionally left unset); applied migration `20260725090000` to Production; completed and verified the **owner bootstrap** (owner internal role + AI-quota exemption + Pro-baseline entitlement, confirmed via the read-only RPCs; usage history preserved; no subscription/billing identity created).
+> **Current Production state (all under staged, individually-authorized steps):**
+> - **Migrations applied:** `20260725090000` **and** the grant-hardening `20260726120000` (which `REVOKE`s direct `internal_user_access` privileges from `PUBLIC`/`anon`/`authenticated` as defense in depth atop FORCE RLS + no policy). Ledger aligned through `20260726120000` (68 rows).
+> - **Owner bootstrap complete and verified** (owner internal role + AI-quota exemption + Pro-baseline entitlement, confirmed via the read-only RPCs; usage history preserved; no subscription/billing identity created).
+> - **Google Monitoring configured:** `monitoring.googleapis.com` + `iam.googleapis.com` enabled on the Gemini project; a narrowly-privileged Monitoring service account holds **only** `roles/monitoring.viewer`; the three Google Edge secrets `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_MONITORING_CLIENT_EMAIL`, `GOOGLE_MONITORING_PRIVATE_KEY` are set (`GEMINI_MODEL` intentionally unset).
+> - **Deployed functions:** `fetch-paper-metadata` **v10**, `analyze-paper` **v15**, `get-gemini-provider-quota` **v3**.
+> - **Billing intentionally DISABLED** on the Gemini project; **provider monitoring is unavailable** (the deployed v3 function's Cloud Monitoring call returns HTTP 403 — see the read-only evidence in decision **C29**). Read-only investigation confirmed: billing disabled, **no** project-level IAM deny policy, **no** parent org/folder.
+> - **Frontend no longer calls or renders provider monitoring.** Under **C29** (scope normalization task 001Y) the frontend provider-quota card, fetch hook, client library, their tests, and the orphaned query key were removed. The deployed v3 function is **retained but intentionally unused** — deferred infrastructure, not active product functionality.
+> - **No Production rollback or deletion occurred in 001Y.** No migration, secret, Edge deploy/invocation, Google/billing/IAM, Vercel, or merge mutation was performed by the scope-normalization task.
 >
-> **Side effect:** setting the Edge secrets caused Supabase to re-provision the already-deployed functions — `fetch-paper-metadata` is now **v10** and `analyze-paper` is now **v14** — **both still running their pre-PR code bundles** (code hashes unchanged; secret-propagation only).
->
-> **Still pending (NOT done, each separately authorized):** `get-gemini-provider-quota` is **undeployed**; the **PR version of `analyze-paper` is undeployed**; the additive grant-hardening migration `20260726120000_harden_internal_user_access_grants.sql` is **local-only, awaiting independent approval**; PR #168 is **unmerged**. The post-bootstrap grant assertion was over-strict about *current* exposure (`internal_user_access` was already default-deny via FORCE RLS + no policy), but `20260726120000` explicitly revokes direct table privileges from `PUBLIC`/`anon`/`authenticated` as defense in depth. Every remaining Production mutation requires its **own explicit owner authorization**. See decision **C28** in [decisions-and-triggers.md](decisions-and-triggers.md).
+> **Do NOT enable Google Cloud billing during development.** Under C27 (commercialization paused) + C29 (Free Tier), the correct posture is the working Gemini Free Tier with billing off; Gemini usage/limits are checked **manually via Google AI Studio**. Reactivating the dashboard (and any billing change) requires a new explicit commercialization decision. See decisions **C28** and **C29** in [decisions-and-triggers.md](decisions-and-triggers.md).
 
-This feature adds internal `owner`/`manager` roles (separate from the commercial plan), an owner AI-quota exemption, and a manager-only view of the **shared** Google Gemini provider quota. It is a **Mixed PR** (migration + Edge Functions + frontend), so it follows the §2 order: **migration → Edge Function deploy → frontend (Vercel) last** — with the extra Google-side and owner-bootstrap steps below inserted at the right points.
+This feature adds internal `owner`/`manager` roles (separate from the commercial plan) and an owner AI-quota exemption — **both active in Production**. It also included a manager-only view of the **shared** Google Gemini provider quota, which is **deferred under C29**; the runbook below (§13.1–§13.5) is retained as the **deferred reactivation sequence for commercialization** and is **not** a development-phase task.
 
-### 13.1 Google Cloud prerequisites (owner-side; not repo actions)
+### 13.1 Google Cloud prerequisites (owner-side; not repo actions) — DEFERRED (reactivation only)
+
+> **Deferred under C29.** §13.1–§13.5 are the **reactivation runbook for when commercialization resumes** — they are **not** development-phase steps. The Google Monitoring API, service account, `roles/monitoring.viewer`, and Edge secrets already exist from the C28 staged deployment; the deployed v3 function is retained but unused. During development, do **not** run these steps, and do **not** enable billing.
 
 Required before the provider-quota panel can return data. Absent, the panel fails soft ("not configured") and ordinary analysis is unaffected.
 
@@ -498,7 +505,9 @@ The transaction must:
 
 A manager is granted the same way but with `role = 'manager'` and **without** `ai_quota_exempt` (managers are not auto-exempt).
 
-### 13.4 Deployment order (each Production mutation separately authorized)
+### 13.4 Deployment order (each Production mutation separately authorized) — DEFERRED (reactivation only)
+
+> **Deferred under C29.** The backend steps (migrations, owner bootstrap, secrets, function deploys → `analyze-paper` v15 / `get-gemini-provider-quota` v3) are **already complete**. This ordered sequence is retained for a future commercialization reactivation of the dashboard; step 9's "frontend head" no longer includes a provider-quota surface (removed under C29). Do not enable billing as part of development.
 
 1. Independently approve the exact PR head.
 2. Owner configures/confirms the Google Cloud Monitoring project (§13.1 steps 1–2).
@@ -513,10 +522,12 @@ A manager is granted the same way but with `role = 'manager'` and **without** `a
 
 ### 13.5 Verification checklist (post-deploy)
 
-- [ ] Ordinary user: `get_current_user_access` returns role `user`; the provider-quota panel is **not rendered** and the Edge Function returns **403** if called directly.
-- [ ] Owner: panel renders; AI indicator shows **"Unlimited"**; an analysis succeeds even past the nominal Pro cap and is still counted.
-- [ ] Manager (if granted): panel renders; a manager who is not exempt still enforces the normal quota.
-- [ ] Provider panel shows shared/project-level quota with the approximate/lag/Pacific-reset caveats; or a bounded "temporarily unavailable" if Monitoring is not yet returning data.
+> **Under C29 there is no provider-quota panel in any build** (the frontend surface was removed). The panel-rendering bullets below apply **only to a future commercialization reactivation**. The owner AI-exemption and role checks (below) remain active and verifiable today.
+
+- [ ] Ordinary user: `get_current_user_access` returns role `user`. (Deferred reactivation: the provider-quota panel would be **not rendered**, and the deployed Edge Function still returns **403** if called directly — currently it is never called from the client.)
+- [ ] Owner: AI indicator shows **"Unlimited"**; an analysis succeeds even past the nominal Pro cap and is still counted. (Deferred reactivation: the panel would render.)
+- [ ] Manager (if granted): a manager who is not exempt still enforces the normal quota. (Deferred reactivation: the panel would render.)
+- [ ] Deferred reactivation only: the provider panel shows shared/project-level quota with the approximate/lag/Pacific-reset caveats, or a bounded "temporarily unavailable" if Monitoring is not returning data.
 - [ ] No credential/token/private-key material appears in Edge logs or any response body.
 - [ ] `usage_counters` is still `FORCE RLS` with no client SELECT policy; `internal_user_access` is not readable by the client.
 

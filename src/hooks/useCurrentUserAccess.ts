@@ -9,9 +9,14 @@ import { queryKeys } from "@/lib/queryKeys";
  * (migration `20260725090000`), which derives the caller from `auth.uid()`
  * (no arbitrary-user lookup) and returns a safe `user` default for anyone with
  * no internal-access row. This is the client's advisory view of internal
- * capability; the **server** remains the authorization boundary — the
- * `get-gemini-provider-quota` Edge Function re-checks the role itself and never
- * trusts a client-supplied role claim.
+ * capability; the **server** remains the authorization boundary — the deferred
+ * provider-quota Edge Function re-checks the role itself and never trusts a
+ * client-supplied role claim.
+ *
+ * `canViewProviderQuota` mirrors the `can_view_provider_quota` column returned
+ * by the RPC. It is retained as part of the approved server role contract and
+ * the deferred provider-quota backend authorization design (owner decision
+ * C29); no active frontend surface consumes it during the Free Tier phase.
  */
 export type InternalRole = "owner" | "manager" | "user";
 
