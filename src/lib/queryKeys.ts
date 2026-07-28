@@ -68,4 +68,12 @@ export const queryKeys = {
     /** Per-user AI-analysis quota status (read-only get_ai_quota_status RPC). */
     status: (userId: string) => ["aiQuota", userId, "status"] as const,
   },
+  access: {
+    /** Per-user effective internal role + capabilities (get_current_user_access RPC). */
+    current: (userId: string) => ["access", userId, "current"] as const,
+  },
+  // NOTE: the manager-only Gemini provider-quota key group was removed under
+  // owner decision C29 (provider-quota monitoring deferred until
+  // commercialization). No frontend query path remains; the deployed Edge
+  // Function stays as deferred infrastructure. Re-add here when reactivated.
 } as const;

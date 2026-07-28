@@ -1,0 +1,70 @@
+// Pure cache-identity helpers for the provider-quota Edge Function — Part C /
+// correction 7. No Deno APIs, no remote imports, no secrets stored here.
+//
+// The OAuth access-token cache and the provider-response cache must not silently
+// reuse an entry produced by a DIFFERENT credential / project / model
+// configuration. These helpers build a NON-SENSITIVE identity string and decide
+// reuse. The raw private key is NEVER an input here — the caller passes a hashed
+// fingerprint (e.g. SHA-256 hex), so the key is never stored or logged.
+
+/** Identity for the OAuth token cache: who + which project + which key (by fingerprint). */
+export function buildCredentialIdentity(
+  clientEmail: string,
+  projectId: string,
+  privateKeyFingerprint: string,
+): string {
+  return `${clientEmail} ${projectId} ${privateKeyFingerprint}`;
+}
+
+export interface CachedToken {
+  identity: string;
+  token: string;
+  expiresAtEpochSec: number;
+}
+
+/** True only when the cached token matches the current identity and isn't near expiry. */
+export function isCachedTokenUsable(
+  cache: CachedToken | null,
+  identity: string,
+  nowEpochSec: number,
+  skewSec = 60,
+): boolean {
+  if (!cache) return false;
+  if (cache.identity !== identity) return false; // different credential config
+  return cache.expiresAtEpochSec - skewSec > nowEpochSec;
+}
+
+/**
+ * Identity for the response cache. Beyond the config that shapes the data
+ * (project + configured model) it includes the FULL credential identity
+ * (service-account email + private-key fingerprint), so a rotated key or changed
+ * service account misses the cache and is exercised on the next invocation —
+ * never served a response produced under the previous credential. The raw key is
+ * never an input (only its fingerprint).
+ */
+export function buildProviderConfigIdentity(
+  projectId: string,
+  configuredModel: string,
+  clientEmail: string,
+  privateKeyFingerprint: string,
+): string {
+  return `${projectId} ${configuredModel} ${clientEmail} ${privateKeyFingerprint}`;
+}
+
+export interface CachedResponse<T> {
+  identity: string;
+  atMs: number;
+  body: T;
+}
+
+/** True only when the cached response matches the current config and is within TTL. */
+export function isCachedResponseUsable<T>(
+  cache: CachedResponse<T> | null,
+  identity: string,
+  nowMs: number,
+  ttlMs: number,
+): boolean {
+  if (!cache) return false;
+  if (cache.identity !== identity) return false; // project/model changed
+  return nowMs - cache.atMs < ttlMs;
+}

@@ -36,6 +36,33 @@ export type Database = {
         }
         Relationships: []
       }
+      internal_user_access: {
+        Row: {
+          ai_quota_exempt: boolean
+          created_at: string
+          created_by: string | null
+          role: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          ai_quota_exempt?: boolean
+          created_at?: string
+          created_by?: string | null
+          role: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          ai_quota_exempt?: boolean
+          created_at?: string
+          created_by?: string | null
+          role?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       keyword_exclusion_pool: {
         Row: {
           created_at: string
@@ -738,6 +765,7 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: {
           allowed: boolean
+          is_exempt: boolean
           period_type: string
           plan: string
           plan_status: string
@@ -746,6 +774,19 @@ export type Database = {
           remaining: number
           reset_at: string
           used: number
+        }[]
+      }
+      get_current_user_access: {
+        Args: never
+        Returns: {
+          ai_quota_exempt: boolean
+          can_view_provider_quota: boolean
+          is_internal: boolean
+          labs_team_enabled: boolean
+          plan: string
+          plan_status: string
+          premium_taxonomy_enabled: boolean
+          role: string
         }[]
       }
       get_duplicate_papers: { Args: never; Returns: Json }

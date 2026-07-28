@@ -121,8 +121,14 @@ export function usePaperAnalysisActions({
   const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
   const [bulkAnalyzeProgress, setBulkAnalyzeProgress] = useState({ current: 0, total: 0 });
 
-  /** true only when we positively know the user has zero remaining analyses. */
-  const isKnownZeroQuota = !!quotaStatus && quotaStatus.remaining <= 0;
+  /**
+   * true only when we positively know the user has zero remaining analyses.
+   * An AI-quota-exempt internal user is NEVER known-zero: their commercial
+   * `remaining` can read 0 (usage past the nominal cap) while the server still
+   * allows every analysis, so exempt users must skip the intercept and let the
+   * server respond.
+   */
+  const isKnownZeroQuota = !!quotaStatus && !quotaStatus.isExempt && quotaStatus.remaining <= 0;
 
   /** Refresh the quota indicator after any server attempt (consume/refund). */
   const invalidateQuota = useCallback(() => {
@@ -206,6 +212,15 @@ export function usePaperAnalysisActions({
       const parsed = await parseAnalyzeError(err);
       if (parsed.kind === "quota_exceeded") {
         toastQuotaExhausted(parsed.info);
+      } else if (parsed.kind === "provider_failure") {
+        // Upstream provider failure (rate limit / unavailable / malformed) — NOT
+        // a plan wall. Show the neutral, non-operational server message; no
+        // Google/project detail reaches the user.
+        toast({
+          title: "AI analysis unavailable",
+          description: parsed.message,
+          variant: "destructive",
+        });
       } else {
         toast({
           title: "AI Analysis failed",

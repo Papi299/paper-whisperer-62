@@ -8,7 +8,15 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // src/** — the application suite.
+    // supabase/functions/**/__tests__ — pure Edge helpers (no Deno APIs / no
+    // remote imports) are Node-importable, so their logic (Monitoring
+    // normalization, provider-error classification, model resolution) is covered
+    // by Vitest WITHOUT adding a Deno runtime to CI.
+    include: [
+      "src/**/*.{test,spec}.{ts,tsx}",
+      "supabase/functions/**/__tests__/**/*.{test,spec}.ts",
+    ],
   },
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },

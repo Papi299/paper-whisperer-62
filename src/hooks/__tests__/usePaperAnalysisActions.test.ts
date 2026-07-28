@@ -61,9 +61,16 @@ function quota402(overrides: Partial<{ used: number; quota: number; remaining: n
   });
 }
 
+/** Build a FunctionsHttpError-like value carrying a structured 500 provider-failure body. */
+function provider500(code = "provider_rate_limit", message = "AI analysis is temporarily unavailable. Please try again later.") {
+  return Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+    context: new Response(JSON.stringify({ error: "analysis_unavailable", code, message }), { status: 500 }),
+  });
+}
+
 /** Minimal AiQuotaStatus fixture. */
 function makeQuota(overrides: Partial<AiQuotaStatus> = {}): AiQuotaStatus {
-  return { allowed: true, reason: "ok", plan: "free", planStatus: "active", periodType: "lifetime", used: 3, quota: 15, remaining: 12, resetAt: null, ...overrides };
+  return { allowed: true, reason: "ok", plan: "free", planStatus: "active", periodType: "lifetime", used: 3, quota: 15, remaining: 12, resetAt: null, isExempt: false, ...overrides };
 }
 
 // ── Test fixtures ────────────────────────────────────────────────────
@@ -599,6 +606,40 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "AI analyses used up", variant: "destructive" }));
   });
 
+  it("single: does NOT intercept an exempt user whose remaining reads 0 — proceeds to invoke", async () => {
+    // An AI-quota-exempt owner past the nominal cap has remaining 0 but is still
+    // allowed by the server. The known-zero convenience intercept must be
+    // skipped for exempt users so the analysis proceeds.
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const paper = makePaper({ id: "p-exempt" });
+    mockFetchAbstract.mockResolvedValue("abstract text");
+    mockInvoke.mockResolvedValue({ data: { tldr: "t", studyType: "RCT", statisticalMethods: "ANOVA" }, error: null });
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({
+        papers: [paper],
+        selectedPaperIds: new Set<string>(),
+        userId: "owner-1",
+        updatePaper,
+        sleep,
+        quotaStatus: makeQuota({ isExempt: true, reason: "quota_exempt", plan: "pro", periodType: "monthly", used: 412, quota: 350, remaining: 0 }),
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleAnalyzePaper(paper);
+    });
+
+    // Not intercepted: the abstract is fetched and the Edge Function is invoked.
+    expect(mockFetchAbstract).toHaveBeenCalledTimes(1);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(updatePaper).toHaveBeenCalledTimes(1);
+    // No "used up" toast for an exempt user.
+    const titles = mockToast.mock.calls.map((c) => (c[0] as { title?: string }).title);
+    expect(titles).not.toContain("AI analyses used up");
+  });
+
   it("single: does NOT block when quotaStatus is unknown (undefined) — server stays authoritative", async () => {
     const updatePaper = vi.fn().mockResolvedValue(true);
     const sleep = vi.fn().mockResolvedValue(undefined);
@@ -711,6 +752,72 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     expect(analyzed + failed + notAttempted).toBe(3);
     expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.aiQuota.status("user-1") });
     await waitFor(() => expect(result.current.bulkAnalyzing).toBe(false));
+  });
+
+  it("single: a provider 500 shows the neutral provider message, no update, and is NOT a quota wall", async () => {
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const paper = makePaper({ id: "p-prov" });
+    mockFetchAbstract.mockResolvedValue("abstract text");
+    mockInvoke.mockResolvedValue({ data: null, error: provider500("provider_rate_limit") });
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({ papers: [paper], selectedPaperIds: new Set<string>(), userId: "user-1", updatePaper, sleep }),
+    );
+
+    await act(async () => {
+      await result.current.handleAnalyzePaper(paper);
+    });
+
+    expect(updatePaper).not.toHaveBeenCalled();
+    const titles = mockToast.mock.calls.map((c) => (c[0] as { title?: string }).title);
+    // Neutral provider message, NOT a quota-wall toast.
+    expect(titles).toContain("AI analysis unavailable");
+    expect(titles).not.toContain("AI analyses used up");
+    const call = mockToast.mock.calls.find((c) => (c[0] as { title?: string }).title === "AI analysis unavailable");
+    const desc = (call![0] as { description: string }).description;
+    expect(desc).toMatch(/temporarily unavailable/i);
+    expect(desc).not.toMatch(/google|gemini|quota|project/i);
+    // A server attempt occurred → quota query invalidated.
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.aiQuota.status("user-1") });
+  });
+
+  it("bulk: a provider 500 on one paper is a NON-terminal failure — the run continues", async () => {
+    const updatePaper = vi.fn().mockResolvedValue(true);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const p1 = makePaper({ id: "p1", title: "One", study_type: null });
+    const p2 = makePaper({ id: "p2", title: "Two", study_type: null });
+    mockFetchAbstractsBatch.mockResolvedValue(new Map<string, string | null>([["p1", "a1"], ["p2", "a2"]]));
+
+    mockInvoke.mockImplementation(async (_fn: string, opts: { body: { title: string } }) => {
+      if (opts.body.title === "One") return { data: null, error: provider500("provider_unavailable") };
+      return { data: { tldr: "t2", studyType: "Cohort", statisticalMethods: "regression" }, error: null };
+    });
+
+    const { result } = renderHook(() =>
+      usePaperAnalysisActions({ papers: [p1, p2], selectedPaperIds: new Set(["p1", "p2"]), userId: "user-1", updatePaper, sleep }),
+    );
+
+    await act(async () => {
+      await result.current.handleBulkAnalyze();
+    });
+
+    // Both papers attempted (provider failure is non-terminal); p2 succeeds.
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(updatePaper).toHaveBeenCalledTimes(1);
+    expect(updatePaper).toHaveBeenCalledWith("p2", expect.objectContaining({ tldr: "t2" }));
+    // Cooldown runs after the non-terminal failure AND the success.
+    expect(sleep).toHaveBeenCalledTimes(2);
+    // Exactly one per-item neutral failure toast; NO quota-wall toast.
+    const failToasts = mockToast.mock.calls.filter((c) => String((c[0] as { title?: string }).title).startsWith("Failed:"));
+    expect(failToasts).toHaveLength(1);
+    const titles = mockToast.mock.calls.map((c) => (c[0] as { title?: string }).title);
+    expect(titles).not.toContain("AI analyses used up");
+    // Ends with the normal completion summary (1 succeeded, 1 failed).
+    expect(mockToast).toHaveBeenLastCalledWith({
+      title: "Bulk analysis complete",
+      description: "1 succeeded, 1 failed out of 2 papers.",
+    });
   });
 
   it("bulk: intercepts before batch-fetch when quotaStatus is known-zero", async () => {

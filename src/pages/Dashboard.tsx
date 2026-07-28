@@ -489,6 +489,13 @@ function DashboardContent() {
     isError: aiQuotaError,
   } = useAiQuota(userId);
 
+  // The manager-facing Gemini provider-quota panel is deferred under owner
+  // decision C29 (Gemini Free Tier during development; automatic provider-quota
+  // monitoring paused until commercialization). The Dashboard therefore neither
+  // renders the card nor invokes the provider-quota Edge Function. That deployed
+  // function and the `useCurrentUserAccess` role model remain as deferred
+  // infrastructure for reactivation. See docs/decisions-and-triggers.md (C29).
+
   const {
     analyzingPaperId,
     bulkAnalyzing,
@@ -656,6 +663,8 @@ function DashboardContent() {
             isOpen={isAnalyticsOpen}
             onOpenChange={setIsAnalyticsOpen}
           />
+          {/* Manager-facing Gemini provider-quota panel deferred under C29 —
+              intentionally not rendered during the Free Tier development phase. */}
         </div>
 
         <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">

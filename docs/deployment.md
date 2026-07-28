@@ -49,6 +49,10 @@ For local dev, the same two values go in a local `.env.local` (or the existing `
 | Variable | Used by | Notes |
 |---|---|---|
 | `GEMINI_API_KEY` | `analyze-paper` | Required for the Gemini analysis call. Without it, `analyze-paper` fails fast with a clear in-source throw (preserved by PR #139). |
+| `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota` | **Optional.** Overrides the Gemini model alias. Both functions resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never silently disagree. Unset = fallback (current behavior). |
+| `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated.** Google Cloud project that owns the Gemini API usage. Absent → the provider-quota panel fails soft ("not configured"); ordinary analysis is unaffected. |
+| `GOOGLE_MONITORING_CLIENT_EMAIL` | `get-gemini-provider-quota` | Service-account email for the Monitoring reader (below). |
+| `GOOGLE_MONITORING_PRIVATE_KEY` | `get-gemini-provider-quota` | Service-account private key (PEM). Escaped `\n` newlines are normalized in-code. **Never** exposed to the browser, logged, or committed. |
 
 Set or rotate:
 
@@ -438,3 +442,111 @@ No code redeploy needed; the next function invocation picks up the new secret.
 - [docs/migration-history.md](migration-history.md) — every prior deploy / migration / hotfix entry, including the PR #131 / #132 reconciliation pattern.
 - [docs/decisions-and-triggers.md](decisions-and-triggers.md) — S1 / S2 ownership-scoping rules and re-evaluation triggers.
 - [docs/documentation-policy.md](documentation-policy.md) — the "every meaningful change updates docs" rule that gates every PR.
+
+---
+
+## 13. Owner/Manager access + Gemini provider quota (OWNER-MANAGER-ACCESS-AND-GEMINI-QUOTA-001)
+
+> **Status (updated 2026-07-26): backend deployed and verified; the provider-quota dashboard is DEFERRED under decision C29. PR #168 is unmerged and awaits final review + merge.**
+>
+> **Current Production state (all under staged, individually-authorized steps):**
+> - **Migrations applied:** `20260725090000` **and** the grant-hardening `20260726120000` (which `REVOKE`s direct `internal_user_access` privileges from `PUBLIC`/`anon`/`authenticated` as defense in depth atop FORCE RLS + no policy). Ledger aligned through `20260726120000` (68 rows).
+> - **Owner bootstrap complete and verified** (owner internal role + AI-quota exemption + Pro-baseline entitlement, confirmed via the read-only RPCs; usage history preserved; no subscription/billing identity created).
+> - **Google Monitoring configured:** `monitoring.googleapis.com` + `iam.googleapis.com` enabled on the Gemini project; a narrowly-privileged Monitoring service account holds **only** `roles/monitoring.viewer`; the three Google Edge secrets `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_MONITORING_CLIENT_EMAIL`, `GOOGLE_MONITORING_PRIVATE_KEY` are set (`GEMINI_MODEL` intentionally unset).
+> - **Deployed functions:** `fetch-paper-metadata` **v10**, `analyze-paper` **v15**, `get-gemini-provider-quota` **v3**.
+> - **Billing intentionally DISABLED** on the Gemini project; **provider monitoring is unavailable** (the deployed v3 function's Cloud Monitoring call returns HTTP 403 — see the read-only evidence in decision **C29**). Read-only investigation confirmed: billing disabled, **no** project-level IAM deny policy, **no** parent org/folder.
+> - **Frontend no longer calls or renders provider monitoring.** Under **C29** (scope normalization task 001Y) the frontend provider-quota card, fetch hook, client library, their tests, and the orphaned query key were removed. The deployed v3 function is **retained but intentionally unused** — deferred infrastructure, not active product functionality.
+> - **No Production rollback or deletion occurred in 001Y.** No migration, secret, Edge deploy/invocation, Google/billing/IAM, Vercel, or merge mutation was performed by the scope-normalization task.
+>
+> **Do NOT enable Google Cloud billing during development.** Under C27 (commercialization paused) + C29 (Free Tier), the correct posture is the working Gemini Free Tier with billing off; Gemini usage/limits are checked **manually via Google AI Studio**. Reactivating the dashboard (and any billing change) requires a new explicit commercialization decision. See decisions **C28** and **C29** in [decisions-and-triggers.md](decisions-and-triggers.md).
+
+This feature adds internal `owner`/`manager` roles (separate from the commercial plan) and an owner AI-quota exemption — **both active in Production**. It also included a manager-only view of the **shared** Google Gemini provider quota, which is **deferred under C29**; the runbook below (§13.1–§13.5) is retained as the **deferred reactivation sequence for commercialization** and is **not** a development-phase task.
+
+### 13.1 Google Cloud prerequisites (owner-side; not repo actions) — DEFERRED (reactivation only)
+
+> **Deferred under C29.** §13.1–§13.5 are the **reactivation runbook for when commercialization resumes** — they are **not** development-phase steps. The Google Monitoring API, service account, `roles/monitoring.viewer`, and Edge secrets already exist from the C28 staged deployment; the deployed v3 function is retained but unused. During development, do **not** run these steps, and do **not** enable billing.
+
+Required before the provider-quota panel can return data. Absent, the panel fails soft ("not configured") and ordinary analysis is unaffected.
+
+1. **Identify the Google Cloud project** that owns the Gemini (`generativelanguage.googleapis.com`) usage → its ID becomes `GOOGLE_CLOUD_PROJECT_ID`.
+2. **Enable the Cloud Monitoring API** (`monitoring.googleapis.com`) on that project.
+3. **Create a narrowly-privileged service account** dedicated to Monitoring reads.
+4. **Grant it exactly `roles/monitoring.viewer`** — nothing broader. It needs no Gemini, billing, or write permissions.
+5. **Create a JSON key** for that service account and capture `client_email` and `private_key`. Store securely (password manager); **never commit it, paste it into a PR, or expose it to the browser.**
+
+The **implementation PR does not** create the service account, enable APIs, create a key, or alter IAM — those are owner-side actions performed at deploy time.
+
+### 13.2 Supabase Edge secrets
+
+Set on the linked project (names only shown by `secrets list`; values never displayed):
+
+```sh
+supabase secrets set GOOGLE_CLOUD_PROJECT_ID=<project-id> --project-ref <project-ref>
+supabase secrets set GOOGLE_MONITORING_CLIENT_EMAIL=<sa-email> --project-ref <project-ref>
+supabase secrets set GOOGLE_MONITORING_PRIVATE_KEY="<pem-with-\n-newlines>" --project-ref <project-ref>
+# Optional, only to override the model alias (defaults to gemini-flash-latest):
+# supabase secrets set GEMINI_MODEL=<model> --project-ref <project-ref>
+```
+
+These are **backend-only** Edge secrets. They are **never** `VITE_`-prefixed and **never** reach the client bundle (see §3.1's service-role warning — the same rule applies to Monitoring credentials). The private key's escaped `\n` newlines are normalized in the function; either literal or escaped newlines are accepted.
+
+### 13.3 Owner bootstrap runbook (bounded, deployment-time; separately authorized)
+
+The Production owner grant is **not** in the schema migration (an environment-specific email must not run in every environment). It is a bounded, one-time transaction performed **after** the migration applies, under its own explicit authorization. Target account: `maor29994ps5@gmail.com`.
+
+The transaction must:
+
+1. **Resolve exactly one** `auth.users.id` for `maor29994ps5@gmail.com`; **abort unless exactly one** row matches.
+2. **Upsert `internal_user_access`** for that UUID: `role = 'owner'`, `ai_quota_exempt = true` (record a bounded metadata reason such as an internal-owner grant if compatible).
+3. **Update the owner's `user_entitlements`** to the current Pro baseline (see [quotas-and-pricing.md](quotas-and-pricing.md) §2): `plan = 'pro'`, `plan_status = 'active'`, current Pro `paper_limit` (10,000), Pro `storage_quota_bytes` (2 GB), `ai_lifetime_quota` appropriate to Pro (0 — Pro uses the monthly bucket), current Pro `ai_monthly_quota` (350), `premium_taxonomy_enabled = true`, `labs_team_enabled = false`.
+4. **Preserve prior usage history** (do not reset `usage_counters`).
+5. **Create no subscription** and **set no billing-provider identifiers** — the owner is not a Paddle customer.
+6. **Verify afterward via read-only RPCs** (`get_current_user_access`, `get_ai_quota_status`) that the owner resolves to role `owner`, `is_internal = true`, `can_view_provider_quota = true`, `ai_quota_exempt = true`, plan `pro`/active, and `is_exempt = true` with `reason = quota_exempt`.
+
+A manager is granted the same way but with `role = 'manager'` and **without** `ai_quota_exempt` (managers are not auto-exempt).
+
+### 13.4 Deployment order (each Production mutation separately authorized) — DEFERRED (reactivation only)
+
+> **Deferred under C29.** The backend steps (migrations, owner bootstrap, secrets, function deploys → `analyze-paper` v15 / `get-gemini-provider-quota` v3) are **already complete**. This ordered sequence is retained for a future commercialization reactivation of the dashboard; step 9's "frontend head" no longer includes a provider-quota surface (removed under C29). Do not enable billing as part of development.
+
+1. Independently approve the exact PR head.
+2. Owner configures/confirms the Google Cloud Monitoring project (§13.1 steps 1–2).
+3. Create the narrowly-privileged service account; grant `roles/monitoring.viewer`; create + securely provide the key (§13.1 steps 3–5).
+4. **Apply the approved migration:** `supabase db push` (§6 sequence) — applies `20260725090000` only.
+5. **Owner bootstrap** (§13.3) — bounded UUID/role/entitlement transaction.
+6. **Set the Google Edge secrets** (§13.2).
+7. **Deploy the Edge Functions:** `supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>` and, because it changed, `supabase functions deploy analyze-paper --project-ref <project-ref>`.
+8. **Verify role security + provider data** (§13.5).
+9. **Merge the exact approved frontend head**; verify merged-main CI + the automatic Vercel Production deploy.
+10. Owner-account runtime smoke test (§13.5).
+
+### 13.5 Verification checklist (post-deploy)
+
+> **Under C29 there is no provider-quota panel in any build** (the frontend surface was removed). The panel-rendering bullets below apply **only to a future commercialization reactivation**. The owner AI-exemption and role checks (below) remain active and verifiable today.
+
+- [ ] Ordinary user: `get_current_user_access` returns role `user`. (Deferred reactivation: the provider-quota panel would be **not rendered**, and the deployed Edge Function still returns **403** if called directly — currently it is never called from the client.)
+- [ ] Owner: AI indicator shows **"Unlimited"**; an analysis succeeds even past the nominal Pro cap and is still counted. (Deferred reactivation: the panel would render.)
+- [ ] Manager (if granted): a manager who is not exempt still enforces the normal quota. (Deferred reactivation: the panel would render.)
+- [ ] Deferred reactivation only: the provider panel shows shared/project-level quota with the approximate/lag/Pacific-reset caveats, or a bounded "temporarily unavailable" if Monitoring is not returning data.
+- [ ] No credential/token/private-key material appears in Edge logs or any response body.
+- [ ] `usage_counters` is still `FORCE RLS` with no client SELECT policy; `internal_user_access` is not readable by the client.
+
+### 13.6 Secret rotation
+
+Rotate a Monitoring credential by creating a new service-account key in Google Cloud, then:
+
+```sh
+supabase secrets set GOOGLE_MONITORING_CLIENT_EMAIL=<sa-email> --project-ref <project-ref>
+supabase secrets set GOOGLE_MONITORING_PRIVATE_KEY="<new-pem>" --project-ref <project-ref>
+```
+
+Rotation takes effect on the next function invocation **because both in-memory caches are keyed by a non-sensitive credential identity**. The OAuth token cache is keyed by the service-account email, the project id, and a SHA-256 fingerprint of the private key. The provider-response cache is keyed by that **full credential identity plus the configured model** (project, model, service-account email, private-key fingerprint) — the fingerprint is computed *before* the response-cache lookup. So when any of email, project, model, or key changes, the identity changes, neither cache is reused, and the new credential is exercised on the next call rather than returning a response produced under the previous credential. (The raw private key is never used, stored, or logged as a cache key — only its fingerprint.) No code redeploy is needed. **Delete the old key in Google Cloud** after confirming the panel still returns data. Never place Monitoring credentials in any `VITE_`-prefixed variable, the client bundle, a PR description, or a commit.
+
+### 13.7 Monitoring query behavior (implementation notes)
+
+- **One metric type per request.** Google Cloud Monitoring rejects a `timeSeries.list` filter that ORs several metric types, so the function issues **one request per metric type** (`filter = metric.type = "<one>"`) — the six supported types (request + input-token, each limit/usage/exceeded), across a daily and a minute window (12 requests), each following `nextPageToken` to completion. Results are combined only after all responses are parsed. `*_internal` metrics are never queried.
+- **Minute DELTA aggregation uses `ALIGN_SUM`, not `ALIGN_DELTA`.** To total a count inside a 60-second quota bucket the minute-window usage/exceeded requests use `aggregation.perSeriesAligner = ALIGN_SUM` with `aggregation.alignmentPeriod = 60s`. `ALIGN_DELTA` (which computes differences between samples) is never requested for any metric. GAUGE **limit** metrics are fetched **unaligned** and their newest reported point is selected (aligning a gauge as DELTA/SUM would be invalid).
+- **Daily usage** sums raw (unaligned) DELTA points from the current **Pacific-day** boundary (DST-safe; resolved via the wall-time→UTC fixpoint, not by subtracting wall-clock elapsed time).
+- **Minute usage combines only synchronized buckets.** Each contributing series' newest complete 60-second bucket is grouped by its `interval.endTime`; the value shown sums **only the newest bucket-end timestamp that every contributing series shares**. Data from different minute intervals is never combined (a 12:03–12:04 value is never added to a 12:04–12:05 value), and an absent/forming series is never treated as zero. When the series share no common complete bucket, usage/exceeded is null (never fabricated), and `remaining` stays null unless both usage and limit are known for a reliable window.
+- **Pagination never silently truncates.** Each metric's pages are followed to completion. If the safety page bound is reached while a `nextPageToken` still remains, the collector fails that collection rather than presenting partial data as complete — it becomes the bounded `unavailable` result below (the token and raw body are never exposed).
+- **Fail-soft:** missing credentials, a disabled API, an HTTP failure, a timeout, or pagination overflow yield a bounded `status: "unavailable"` result (HTTP 200) with no raw Google body — the panel is observational only and never blocks user analysis. Values are approximate and may lag; do not present them as real-time or guaranteed.

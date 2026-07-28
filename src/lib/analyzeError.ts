@@ -32,9 +32,31 @@ export interface QuotaExceededInfo {
   message: string;
 }
 
+/**
+ * Machine class of an upstream provider failure, mirrored from the Edge
+ * `_shared/providerError.ts`. A provider rate-limit/quota event is a PROVIDER
+ * failure, never a Paperlume user-plan (402) exhaustion.
+ */
+export type ProviderErrorClass =
+  | "provider_rate_limit"
+  | "provider_unavailable"
+  | "malformed_response"
+  | "unknown";
+
 export type ParsedAnalyzeError =
   | { kind: "quota_exceeded"; info: QuotaExceededInfo }
+  | { kind: "provider_failure"; code: ProviderErrorClass; message: string }
   | { kind: "other"; message: string };
+
+/** True for a recognized provider-error class. */
+function isProviderErrorClass(value: unknown): value is ProviderErrorClass {
+  return (
+    value === "provider_rate_limit" ||
+    value === "provider_unavailable" ||
+    value === "malformed_response" ||
+    value === "unknown"
+  );
+}
 
 /** True only for an actual finite, non-negative JS number (not a numeric string). */
 function isNonNegativeFiniteNumber(value: unknown): value is number {
@@ -73,9 +95,13 @@ function getContext(error: unknown): ResponseLike | null {
 /**
  * Parse an `analyze-paper` invoke error.
  *
- * Returns `{ kind: "quota_exceeded", info }` only for a well-formed HTTP 402
- * `quota_exceeded` payload; otherwise `{ kind: "other", message }` with the
- * best available generic message (identical to the previous behavior).
+ * Returns:
+ *   - `{ kind: "quota_exceeded", info }` for a well-formed HTTP **402**
+ *     `quota_exceeded` payload (the Paperlume plan wall);
+ *   - `{ kind: "provider_failure", code, message }` for a well-formed HTTP
+ *     **500** `analysis_unavailable` payload (an upstream provider failure —
+ *     never a plan wall);
+ *   - otherwise `{ kind: "other", message }` with the best generic message.
  */
 export async function parseAnalyzeError(error: unknown): Promise<ParsedAnalyzeError> {
   const fallback: ParsedAnalyzeError = {
@@ -84,8 +110,9 @@ export async function parseAnalyzeError(error: unknown): Promise<ParsedAnalyzeEr
   };
 
   const ctx = getContext(error);
-  // Only an HTTP 402 is the quota wall; anything else is a generic failure.
-  if (!ctx || ctx.status !== 402 || typeof ctx.json !== "function") {
+  // Only 402 (quota wall) and 500 (structured provider failure) carry a body we
+  // interpret; everything else is a generic failure.
+  if (!ctx || (ctx.status !== 402 && ctx.status !== 500) || typeof ctx.json !== "function") {
     return fallback;
   }
 
@@ -103,7 +130,17 @@ export async function parseAnalyzeError(error: unknown): Promise<ParsedAnalyzeEr
 
   if (!body || typeof body !== "object") return fallback;
   const record = body as Record<string, unknown>;
-  // Validate the machine field, not English prose.
+
+  // ── HTTP 500: structured provider failure ──
+  if (ctx.status === 500) {
+    if (record.error !== "analysis_unavailable") return fallback;
+    if (!isProviderErrorClass(record.code)) return fallback;
+    const message = toStringOrNull(record.message);
+    if (!message) return fallback;
+    return { kind: "provider_failure", code: record.code, message };
+  }
+
+  // ── HTTP 402: quota wall. Validate the machine field, not English prose. ──
   if (record.error !== "quota_exceeded") return fallback;
 
   // Strict `details` validation. A missing or malformed `details` object must
