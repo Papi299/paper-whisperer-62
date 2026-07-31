@@ -73,8 +73,8 @@ supabase secrets list --project-ref <project-ref>
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `SUPABASE_URL` | both Edge Functions | Auto-injected by the runtime. No manual setup. |
-| `SUPABASE_ANON_KEY` | both Edge Functions | Auto-injected by the runtime. No manual setup. |
+| `SUPABASE_URL` | Edge Functions | Auto-injected by the runtime. No manual setup. |
+| `SUPABASE_ANON_KEY` | Edge Functions | Auto-injected by the runtime. No manual setup. |
 
 Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either, the function surfaces an actionable error instead of crashing with an empty-string client.
 
@@ -447,7 +447,7 @@ No code redeploy needed; the next function invocation picks up the new secret.
 
 ## 13. Owner/Manager access + Gemini provider quota (OWNER-MANAGER-ACCESS-AND-GEMINI-QUOTA-001)
 
-> **Status (updated 2026-07-26): backend deployed and verified; the provider-quota dashboard is DEFERRED under decision C29. PR #168 is unmerged and awaits final review + merge.**
+> **Status (updated 2026-07-28): backend deployed and verified; the provider-quota dashboard is DEFERRED under decision C29. PR #168 is MERGED** — regular exact-head merge commit `a1fc2cea53e33c8b34c557c7087236a939bb783c` (2026-07-28); merged-main `Validate` run `30357049945` succeeded and the Vercel **Production** deployment `dpl_Bx1GyYog6KCDUjHtcHTFVWqySwoV` is **READY** on `app.paperlume.app`. The GitHub merge applied **no** migration and deployed **no** Edge Function — Supabase migrations and functions were deployed separately (under the earlier staged steps) and are unchanged. No development-phase deployment action is currently required.
 >
 > **Current Production state (all under staged, individually-authorized steps):**
 > - **Migrations applied:** `20260725090000` **and** the grant-hardening `20260726120000` (which `REVOKE`s direct `internal_user_access` privileges from `PUBLIC`/`anon`/`authenticated` as defense in depth atop FORCE RLS + no policy). Ledger aligned through `20260726120000` (68 rows).
