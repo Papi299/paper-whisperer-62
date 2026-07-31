@@ -8,7 +8,9 @@
 >
 > **Model naming (read this first).** The 2026-07-24 audit called its *two-phase structure* "Model A" (Phase A = test backend + non-required Playwright CI; Phase B = DB-security tests). **This contract keeps that two-phase structure but reuses the names "Model A / Model B" for the *test-backend* decision**, which is the substantive architecture choice:
 > - **Model A — local-first (recommended default):** an **ephemeral local Supabase stack** started inside CI; no cloud project, region, plan, cloud account, or cloud reset credential.
-> - **Model B — optional persistent cloud staging:** a separate Supabase **cloud** project, only if a later wave has a demonstrated need Model A cannot cover, or the owner deliberately wants cloud parity.
+> - **Model B — persistent cloud staging:** a separate Supabase **cloud** project — chosen either as a deliberate **cloud-first** architecture (decision D2), or added **later for parity** when a wave demonstrates a need Model A cannot cover.
+>
+> Local-first is the **recommendation, not a mandate**; cloud-first is a genuine D2 option (§7.3, §12). Which Phase A phases are *required* depends on that D2 choice (§10).
 >
 > Where the audit's two-phase structure is meant, this document says **"Phase A / Phase B"**, never "Model A", to avoid collision.
 
@@ -168,7 +170,7 @@ If the observed host is Production or unexpected, throw before authentication so
 
 ## 6. Recommended test-backend resource contract
 
-`[REC]` unless marked `[OWNER]`/`[DECISION]`. **Model A is the default; Model B is optional.**
+`[REC]` unless marked `[OWNER]`/`[DECISION]`. **Model A is the recommended default; Model B is the backend for a cloud-first D2 selection or for later cloud parity.**
 
 ### 6.1 Model A — local-first (recommended default)
 
@@ -177,9 +179,9 @@ If the observed host is Production or unexpected, throw before authentication so
 - Model A serves: the initial read-only Playwright subset; the deterministic mutating waves (`filter-presets`, `file-import-order`, `mutations`, `notes`, `search-attribution`); **attachments** (local Supabase includes **Storage** and **Auth**); and all of **Phase B**. `[REC]`
 - **Do not claim Storage or ordinary Auth alone requires cloud** — local Supabase provides both. Concrete capabilities that genuinely need cloud (Model B) are narrow: **real outbound email delivery** (password-reset/confirmation via Resend/SMTP), **production-parity edge/CDN or signed-URL behavior** if a spec depends on it, and **cloud-only quota/limit behavior**. None of the 13 current specs require these except optionally `import-order` (external metadata egress, which local `supabase functions serve` + network can also cover). `[REC]`
 
-### 6.2 Model B — optional persistent cloud staging
+### 6.2 Model B — persistent cloud staging (cloud-first, or optional parity)
 
-Only if a later wave has a **demonstrated** requirement Model A cannot cover, or the owner deliberately selects cloud parity:
+Chosen either as a deliberate **cloud-first** architecture (D2 option B), or added **later for parity** when a wave has a **demonstrated** requirement Model A cannot cover:
 
 - A **separate** Supabase **cloud** project (distinct ref/URL/keys), name `paperlume-staging`; never a prefix inside Production; never re-link the repo away from Production (`supabase/config.toml`'s `project_id` stays Production; staging commands pass `--project-ref` or use a separate context). `[REC]` `[OWNER]`
 - **Dedicated cloud staging accounts** (never the Production `ps4` account). `[FACT]`/`[REC]`
@@ -243,9 +245,9 @@ Choose one: **local-first** (Model A only, recommended); **cloud-first** (Model 
 
 ## 8. Recommended initial non-required Playwright CI contract
 
-`[FUTURE]` — specified, not implemented. **Single coherent backend architecture: Model A (local ephemeral stack) for the initial path.**
+`[FUTURE]` — specified, not implemented. **One coherent backend per run.** The shape below is shown for the **recommended local-first default (Model A, local ephemeral stack)**; under a **cloud-first** D2 selection the equivalent job targets cloud staging (Model B) via `E2E (staging)`. The two are never mixed in one run and neither is ever merged into `Validate`.
 
-- **Workflow name:** `E2E (local)` (Model A) — a distinct workflow. If Model B is later selected, a separate `E2E (staging)` workflow is added; the two never merge into `Validate`. **Job/check name:** `e2e-local` (resp. `e2e-staging`). `[REC]`
+- **Workflow name:** `E2E (local)` (Model A) or `E2E (staging)` (Model B) — a distinct workflow per backend. Under cloud-first the job is `E2E (staging)` from the start; under local-first it is `E2E (local)` (and `E2E (staging)` is added only if cloud parity is later chosen). Neither is ever merged into `Validate`. **Job/check name:** `e2e-local` / `e2e-staging`. `[REC]`
 - **Triggers:** `workflow_dispatch` (always) + same-repo `push`/`pull_request` only; **no** fork-PR secret exposure. Optional nightly `schedule`. `[REC]`
 - **Non-required by design:** not added to `main` branch protection's required checks initially; `Validate / validate` remains the **only** required merge gate and is unchanged. `[REC]`/`[FACT]`
 - **Steps (Model A shape):** checkout → setup Node 22 + npm cache → `npm ci` → `npx playwright install --with-deps chromium` → start local Supabase stack → replay migrations → seed → **Layer 1 guard** (materialize `VITE_` for the local host; reject blanks/Production/remote) → run the **initial subset** with **Layer 2 guard** active in `global-setup.ts` → upload artifacts → tear down the stack. `[REC]`
@@ -310,20 +312,27 @@ Phase B runs in a **separate, non-required** workflow/check — proposed `db-tes
 
 ## 10. Phased implementation roadmap
 
-`[REC]` — bounded PRs; **not** one epic. Each phase is separately authorized; none is started by this task. **Local-first (Model A) is the mandatory path; cloud (Model B) phases are optional and only taken if D2 selects cloud or a wave demonstrably needs it.**
+`[REC]` — bounded PRs; **not** one epic. Each phase is separately authorized; none is started by this task. **The required Phase A path is chosen by D2 (§7.3); local-first is the recommended default, not a mandate:**
+
+- **D2 = local-first (recommended):** Phase A = `C03A1-L → C03A2-L`. The cloud phases are **not** required (add them later only if separately justified and authorized).
+- **D2 = cloud-first:** Phase A = `C03A1-C → C03A2-C`. The local Phase A phases (`C03A1-L` / `C03A2-L`) are **not** prerequisites and are taken only if independently chosen for extra coverage.
+- **D2 = local-first + optional cloud parity:** Phase A begins `C03A1-L → C03A2-L`, then adds `C03A1-C → C03A2-C` **only after** a concrete unmet requirement is identified and separately authorized.
+- **Phase B is shared under every D2 option:** `C03B1 → C03B2` (local, deterministic), regardless of the Phase A branch — unless a later owner decision changes it.
+
+In the table below each phase is tagged **(shared)**, **(local-first)**, or **(cloud-first / optional-hybrid)** to show where it is required.
 
 | Phase | Purpose | Repo mutations | External mutations | Owner actions | Sensitive secrets (names only) | Acceptance | Prod access | Separate deploy auth? |
 |---|---|---|---|---|---|---|---|---|
-| **C03A0** (this) | Contract + readiness audit | 2 docs | none | none | none | Contract complete; §14 DoD-ready; `Validate` green | Prohibited | No |
-| **C03A1-L** | Local-stack seed/reset + env + guard contract (repo) | `playwright.config.ts`/`e2e/*` env wiring + guards + seed/reset scripts | none (local only) | none (local path needs no cloud action) | none for the local path (`TEST_USER_*` seeded locally) | local stack replays + seeds; both guard layers reject Production/remote | Prohibited | No |
-| **C03A2-L** | Non-required **local** Playwright CI (`E2E (local)`) | new `E2E (local)` workflow | CI only (ephemeral local stack) | approve running the workflow | none cloud (local anon key + seeded `TEST_USER_*`) | initial read-only subset green ≥ 3 runs; guards proven; `Validate` unchanged & required | Prohibited | No |
-| **C03A1-C** *(optional)* | Cloud staging provisioning + read-only verification | none (or docs note) | **owner** creates cloud project + accounts + secrets | provision cloud project, dedicated accounts, GitHub Environment + secrets, confirm **plan/region (D1)** | staging ref (public) + reset credential (`STAGING_SUPABASE_DB_PASSWORD`/`STAGING_SUPABASE_ACCESS_TOKEN`), `TEST_USER_PASSWORD` | staging reachable; migrations replay clean; guards reject Production | Prohibited (Production) | Yes (cloud setup owner-authorized) |
-| **C03A2-C** *(optional)* | Non-required **cloud** Playwright CI (`E2E (staging)`) | new `E2E (staging)` workflow | CI runs against cloud staging | approve secrets/Environment | as C03A1-C | subset green vs staging; secrets fork-protected; `Validate` unchanged | Prohibited (Production) | Uses C03A1-C |
-| **C03B1** | DB-test framework + representative **local** coverage | new `supabase/tests/*.sql` (RLS, S1 caller-mismatch, storage quota, broadened grants) | none | none | none | new suites pass on clean local replay; existing 18-case file still passes | Prohibited | No |
-| **C03B2** | **Separate** non-required `db-tests` CI + expected-failure negative-control | new `db-tests` workflow (ephemeral local stack) | CI only | none | none | `db-tests` green on `main` state; negative control **fails-then-reverts** (verified via fresh connection); separate workflow, still non-required | Prohibited | No |
-| **finalization** | Docs reconciliation + acceptance | docs | none | owner accepts PFA-C03 done | none | §14 DoD met; both phases shipped | Prohibited | No |
+| **C03A0** (this) *(shared)* | Contract + readiness audit | 2 docs | none | none | none | Contract complete; §14 DoD-ready; `Validate` green | Prohibited | No |
+| **C03A1-L** *(local-first / hybrid)* | Local-stack seed/reset + env + guard contract (repo) | `playwright.config.ts`/`e2e/*` env wiring + guards + seed/reset scripts | none (local only) | none (local path needs no cloud action) | none for the local path (`TEST_USER_*` seeded locally) | local stack replays + seeds; both guard layers reject Production/remote | Prohibited | No |
+| **C03A2-L** *(local-first / hybrid)* | Non-required **local** Playwright CI (`E2E (local)`) | new `E2E (local)` workflow | CI only (ephemeral local stack) | approve running the workflow | none cloud (local anon key + seeded `TEST_USER_*`) | initial read-only subset green ≥ 3 runs; guards proven; `Validate` unchanged & required | Prohibited | No |
+| **C03A1-C** *(cloud-first; optional under hybrid)* | Cloud staging provisioning + read-only verification | none (or docs note) | **owner** creates cloud project + accounts + secrets | provision cloud project, dedicated accounts, GitHub Environment + secrets, confirm **plan/region (D1)** | staging ref (public) + reset credential (`STAGING_SUPABASE_DB_PASSWORD`/`STAGING_SUPABASE_ACCESS_TOKEN`), `TEST_USER_PASSWORD` | staging reachable; migrations replay clean; guards reject Production | Prohibited (Production) | Yes (cloud setup owner-authorized) |
+| **C03A2-C** *(cloud-first; optional under hybrid)* | Non-required **cloud** Playwright CI (`E2E (staging)`) | new `E2E (staging)` workflow | CI runs against cloud staging | approve secrets/Environment | as C03A1-C | subset green vs staging; secrets fork-protected; `Validate` unchanged | Prohibited (Production) | Uses C03A1-C |
+| **C03B1** *(shared)* | DB-test framework + representative **local** coverage | new `supabase/tests/*.sql` (RLS, S1 caller-mismatch, storage quota, broadened grants) | none | none | none | new suites pass on clean local replay; existing 18-case file still passes | Prohibited | No |
+| **C03B2** *(shared)* | **Separate** non-required `db-tests` CI + expected-failure negative-control | new `db-tests` workflow (ephemeral local stack) | CI only | none | none | `db-tests` green on `main` state; negative control **fails-then-reverts** (verified via fresh connection); separate workflow, still non-required | Prohibited | No |
+| **finalization** *(shared)* | Docs reconciliation + acceptance | docs | none | owner accepts PFA-C03 done | none | §14 DoD met; both phases shipped | Prohibited | No |
 
-**D1 (cloud plan/region) blocks only the optional C03…-C phases, never the local path.** E2E subset expansion waves (§8) run within C03A2-L (and C03A2-C if taken); `import-order` (external) is gated last.
+**D1 (cloud plan/region) blocks only the cloud phases (`C03A1-C` / `C03A2-C`), never the local phases.** E2E subset expansion waves (§8) run within whichever Phase A branch is chosen (`C03A2-L` under local-first, `C03A2-C` under cloud-first); `import-order` (external) is gated last.
 
 ---
 
@@ -341,7 +350,7 @@ Phase B runs in a **separate, non-required** workflow/check — proposed `db-tes
 - [ ] Approve running the non-required `E2E (local)` and `db-tests` workflows. `[OWNER]`
 - [ ] Confirm seeded local `TEST_USER_EMAIL` / `TEST_USER_PASSWORD` handling (sensitive operational config; the anon key + local URL are public client config). `[OWNER]`
 
-**Optional cloud (Model B) — only if D2 selects cloud:**
+**Cloud (Model B) — required for a cloud-first D2 selection; optional for later hybrid parity:**
 
 - [ ] Create the **cloud** Supabase project (`paperlume-staging`); confirm **plan** and **region** (D1). `[OWNER]`
 - [ ] Create **dedicated cloud staging accounts** (never `ps4`; secondary account for cross-user tests). `[OWNER]`
@@ -357,7 +366,7 @@ Phase B runs in a **separate, non-required** workflow/check — proposed `db-tes
 `[DECISION]` — only genuinely open items. (Not reopened: PFA-C03 selection, C27–C29, no Production-backed Playwright, no real-Gemini Playwright, the required `Validate` gate, staged cloud/Production authorization.)
 
 - **D1 — Cloud staging plan/region.** *Why:* cost/latency of the **optional** cloud project. *Recommended default:* **not needed** under local-first; if cloud is selected, lowest tier supporting the full migration chain + Auth + Storage, same region as Production. *Trade-off:* cost/realism. *Blocks:* **only** C03A1-C/C03A2-C (never the local path).
-- **D2 — Test-backend architecture (local-first / cloud-first / local-first + optional cloud).** *Why:* the substantive architecture choice; drives determinism, cost, secret surface, and which specs run first. *Recommended default:* **local-first**, adding cloud only when a wave demonstrably needs it. *Alternatives:* cloud-first; local-first + optional cloud. *Trade-off:* realism vs cost/complexity/secret surface. *Blocks:* the whole roadmap's shape (but local-first unblocks C03A1-L/C03A2-L immediately).
+- **D2 — Test-backend architecture (local-first / cloud-first / local-first + optional cloud).** *Why:* the substantive architecture choice; it selects the required Phase A branch (§10) and drives determinism, cost, secret surface, and which specs run first. *Recommended default:* **local-first**, adding cloud only when a wave demonstrably needs it. *Alternatives:* cloud-first; local-first + optional cloud. *Trade-off:* realism vs cost/complexity/secret surface. *Selects the Phase A branch:* local-first → `C03A1-L → C03A2-L`; cloud-first → `C03A1-C → C03A2-C`; hybrid → `C03A1-L → C03A2-L` first, optional `C03A1-C → C03A2-C` later. *Blocks:* the Phase A branch shape (local-first unblocks `C03A1-L` immediately without any cloud decision; cloud-first additionally needs D1). Phase B (`C03B1 → C03B2`) is shared and unaffected.
 - **D3 — DB-test framework (framework-free hybrid vs pgTAP).** *Why:* maintenance/reporting. *Recommended default:* framework-free hybrid. *Trade-off:* zero-dep vs standardized TAP. *Blocks:* C03B1.
 - **D4 — External-metadata E2E (`import-order`).** *Why:* PubMed/Crossref are nondeterministic and need served Edge Functions + egress. *Recommended default:* defer to Wave 4; assert on stable identifiers/counts (not exact remote titles), or use a deterministic stand-in. *Trade-off:* coverage vs flakiness/cost. *Blocks:* the final E2E wave only.
 - **D5 — Promotion of `e2e-*` or `db-tests` to a required check.** *Why:* changes the merge gate. *Recommended default:* keep **non-required** until proven stable; revisit later (deterministic `db-tests` could be promoted sooner). *Trade-off:* stronger gate vs flakiness. *Blocks:* nothing now.
