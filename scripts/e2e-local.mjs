@@ -183,8 +183,19 @@ async function readLocalStatus() {
 
 async function startStack() {
   log("starting local Supabase stack…");
-  const code = await runInherit("supabase", ["start"]);
-  if (code !== 0) throw new Error("`supabase start` failed.");
+  // `supabase start` prints a key-bearing status banner (anon / service-role /
+  // JWT / database / S3 secrets) to stdout/stderr. CAPTURE and DISCARD that
+  // output so no credential ever reaches the terminal, a CI log, a file, or a
+  // thrown error — only the numeric exit status is used. The captured buffers
+  // are intentionally never logged nor included in the failure message.
+  const { code } = await runCapture("supabase", ["start"]);
+  if (code !== 0) {
+    throw new Error(
+      `\`supabase start\` failed with exit ${code}. Raw CLI output was ` +
+        `suppressed because it may contain local credentials.`,
+    );
+  }
+  log("local Supabase stack started.");
 }
 
 async function resetLocalDb() {
