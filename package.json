@@ -15,7 +15,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:local": "node scripts/e2e-local.mjs run",
+    "test:e2e:local:verify-guards": "node scripts/e2e-local.mjs verify-guards",
+    "test:e2e:local:stop": "node scripts/e2e-local.mjs stop"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
