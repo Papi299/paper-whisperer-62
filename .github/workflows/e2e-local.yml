@@ -1,0 +1,141 @@
+name: E2E (local)
+
+# Separate, NON-REQUIRED local Playwright end-to-end workflow for PFA-C03A2-L.
+#
+# This workflow reuses the merged PFA-C03A1-L local lifecycle end to end. It owns
+# no stack, seed, credential, guard, or teardown logic of its own — every one of
+# those concerns lives in `scripts/e2e-local.mjs` and is invoked only through the
+# package scripts (`test:e2e:local:verify-guards`, `test:e2e:local`,
+# `test:e2e:local:stop`). It runs exclusively against an ephemeral local Supabase
+# stack, never touches Production or any cloud/linked project, requires no GitHub
+# secret / variable / Environment, and uses only the read-only default token.
+#
+# It is intentionally independent of `Validate` (.github/workflows/validate.yml),
+# which remains the sole required merge gate for `main`.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+# Read-only token: the job never mutates GitHub state.
+permissions:
+  contents: read
+
+# One E2E run per PR (or branch); superseded runs are cancelled. This group is
+# deliberately distinct from the `Validate` concurrency group so the two gates
+# never cancel or serialise one another.
+concurrency:
+  group: e2e-local-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-local:
+    name: e2e-local
+    # Same-repository restriction: the job executes for pushes and dispatches,
+    # and for pull requests ONLY when the head repository is this repository.
+    # A fork-origin pull request is skipped entirely (before any dependency
+    # installation, Docker/Supabase use, browser installation, or application
+    # execution). `pull_request_target` is intentionally NOT used.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      CI: true
+
+    steps:
+      - name: Checkout
+        # Pinned to the exact SHA used by the required `Validate` workflow.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        # Pinned to the exact SHA used by the required `Validate` workflow.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Supabase CLI
+        # Official Supabase CLI setup action, pinned to a full commit SHA.
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
+        with:
+          # Exact release matching the locally validated CLI; never `latest`.
+          version: 2.111.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Report tool versions
+        # Safe version information only. Never prints Supabase status JSON, Docker
+        # environment, credentials, keys, or connection strings. Playwright is
+        # resolved from the project install (no network) via `npx --no-install`.
+        run: |
+          node --version
+          npm --version
+          docker version --format '{{.Server.Version}}'
+          supabase --version
+          npx --no-install playwright --version
+
+      - name: Install Playwright Chromium
+        # Project-local Playwright browser install, Chromium only, with Linux
+        # system dependencies. Firefox and WebKit are intentionally excluded.
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Verify backend guards
+        # Proves the two-layer fail-closed guard (32 guard tests): Layer 1 rejects
+        # a Production/remote target before Vite starts, and Layer 2 precedes every
+        # credential read and fill. Guard logic lives in the merged lifecycle; it
+        # is never duplicated here.
+        run: npm run test:e2e:local:verify-guards
+
+      - name: Run local E2E lifecycle
+        # The merged lifecycle is the sole owner of local stack startup, migration
+        # replay, status parsing, local credentials, deterministic seed, Playwright
+        # environment injection, ordinary teardown, and signal cleanup. It runs the
+        # default six read-only specs; no broader spec list is passed.
+        run: npm run test:e2e:local
+
+      - name: Enforce local stack teardown
+        # Authoritative post-lifecycle cleanup. Runs even on failure/cancellation.
+        # No `continue-on-error`: a cleanup failure fails the job. The command's
+        # exit code is never suppressed and it prints no raw Supabase status.
+        if: always()
+        run: npm run test:e2e:local:stop
+
+      - name: Assert clean local state
+        # Runs even on failure/cancellation. Fails the job if generated auth state
+        # remains or a local stack is still running. `supabase status` output is
+        # redirected to /dev/null so key-bearing JSON can never reach the logs; the
+        # command succeeds (exit 0) only while a stack is up, so success here means
+        # a leftover stack and is treated as a failure.
+        if: always()
+        run: |
+          if [ -e e2e/.auth/user.json ]; then
+            echo "::error::Generated auth state e2e/.auth/user.json still present after cleanup." >&2
+            exit 1
+          fi
+          echo "Confirmed: no generated auth state (e2e/.auth/user.json absent)."
+          if supabase status -o json >/dev/null 2>&1; then
+            echo "::error::A local Supabase stack is still running after cleanup." >&2
+            exit 1
+          fi
+          echo "Confirmed: no running local Supabase stack."
+
+      - name: Upload failure screenshots
+        # Uploads ONLY failure PNG screenshots, and only when the job has failed.
+        # Traces, HAR files, raw logs, Supabase output, .env*, e2e/.auth, storage
+        # state, test-result JSON, and any repository-wide archive are excluded by
+        # the narrow path. Missing files are ignored rather than failing the job.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-failure-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7
