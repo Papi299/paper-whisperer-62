@@ -66,7 +66,7 @@ All items independently reconfirmed on this branch (`docs/pfa-c03-staging-contra
 - **Baseline commit advanced** `5a92229f` → `5b78b08d` (PRs #165–#169 merged). `[FACT]`
 - **Three Edge Functions are deployed** (`fetch-paper-metadata` v10, `analyze-paper` v15, `get-gemini-provider-quota` v3), the third deployed-but-unused under C29. `[FACT]`
 - **C29 exists** (2026-07-26): Gemini Free Tier; Google Cloud billing disabled; provider-quota dashboard deferred. No test backend replicates Google Monitoring or the provider-quota path (§6). `[FACT]`
-- **Unchanged since the audit:** Playwright still runs the local dev server against the **Production** Supabase project and is excluded from required CI; there are still no pgTAP tests and no CI execution of the database or Edge-Function layers; required CI is still lint + typecheck + Vitest + build only. `[FACT]`
+- **Audit-time baseline — superseded:** At the time of the 2026-07-24 audit, Playwright drove the local dev server against the **Production** Supabase project and was excluded from CI. That state is **no longer current**: C03A1-L now **fails closed** on Production or remote targets, and C03A2-L runs the six-spec subset in the separate **non-required `E2E (local)`** workflow. Still true since the audit: there are no pgTAP tests and no CI execution of the database or Edge-Function layers; required `Validate` remains lint + typecheck + Vitest + build only (it never runs Playwright). `[FACT]`
 
 ---
 
@@ -116,18 +116,18 @@ All items independently reconfirmed on this branch (`docs/pfa-c03-staging-contra
 
 ## 5. Environment-resolution analysis and the executable two-layer Production guard
 
-### 5.1 How values resolve today `[FACT]`
+### 5.1 How values resolved at audit time (pre-C03A1-L) `[FACT]`
 
 Two **independent** environment surfaces exist during a Playwright run; conflating them is the root risk:
 
 1. **The Playwright runner process (Node)** — `playwright.config.ts` reads `.env.test` and sets `TEST_USER_EMAIL`, `TEST_USER_PASSWORD`, and (if present) `BASE_URL` into `process.env` (non-overwriting). `global-setup.ts` consumes the two credentials; `baseURL` defaults to `http://localhost:8080`.
 2. **The Vite dev server (browser bundle)** — `webServer.command: "npm run dev"` (= `vite`, development mode). The frontend's `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` resolve through **Vite's own dotenv loading**, which reads `.env` / `.env.local` — **not** `.env.test`. On this machine the untracked `.env` defines both `VITE_` variables and references the Production ref `lioxtgiputfniqbktcsz` exactly once (confirmed by name/count only; values not printed).
 
-**Distinctions that matter:** the *frontend URL under test* = `baseURL` (`localhost:8080`); the *Supabase project the frontend talks to* = whatever `import.meta.env.VITE_SUPABASE_URL` resolves to (**today, Production**); the *authenticated account* = `.env.test` credentials (the Production-backed `ps4` account); the *Edge Functions reached* = the resolved project's.
+**Distinctions that matter:** the *frontend URL under test* = `baseURL` (`localhost:8080`); the *Supabase project the frontend talked to* = whatever `import.meta.env.VITE_SUPABASE_URL` resolved to (**at audit time, Production**); the *authenticated account* = `.env.test` credentials (the Production-backed `ps4` account); the *Edge Functions reached* = the resolved project's.
 
 ### 5.2 The finding `[FACT]`
 
-**Playwright today drives a Production-backed frontend as a real Production account.** `.env.test` supplies only the runner's credentials and base URL; it does **not** repoint the frontend's Supabase project. There is currently **no** mechanism that redirects the tested frontend to a non-Production backend.
+**At the time of the audit (pre-C03A1-L), Playwright drove a Production-backed frontend as a real Production account.** `.env.test` supplied only the runner's credentials and base URL; it did **not** repoint the frontend's Supabase project, and at that time there was **no** mechanism that redirected the tested frontend to a non-Production backend. That finding motivated the two-layer guard below; it is **no longer current** (C03A1-L's local lifecycle now supplies an ephemeral local backend behind a fail-closed Production/remote guard).
 
 ### 5.3 Why one guard is not enough `[FACT]`/`[REC]`
 

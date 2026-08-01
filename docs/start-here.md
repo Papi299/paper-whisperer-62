@@ -82,7 +82,7 @@
 ## Testing and merge-safety baseline
 
 - **GitHub Actions CI is the required merge gate.** The **`Validate`** workflow (`.github/workflows/validate.yml`) runs `npm ci`, lint, `npm run typecheck`, Vitest and the production build on Node 22 for every pull request to `main` (and every push to `main`); `main` is protected to require the `validate` check — strict/up-to-date, administrators included, zero required human approvals, force-push and branch deletion disabled, regular merge commits allowed, Vercel **not** a required check. Because merges to `main` auto-deploy the frontend, the local commands below remain useful pre-push evidence but are no longer the sole gate.
-- Local pre-push baseline (lint / typecheck / Vitest / build are also the required CI gate; Playwright is local-only):
+- Local pre-push baseline (lint / typecheck / Vitest / build are also the required CI gate; local Playwright runs use the safe lifecycle below, while the separate `E2E (local)` workflow provides non-required Playwright CI):
   - `npm run lint` — passes (0 errors).
   - `npm run typecheck` — passes (0 diagnostics, both projects).
   - `npm test` (Vitest) — passes.
