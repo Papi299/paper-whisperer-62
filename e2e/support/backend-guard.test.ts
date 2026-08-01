@@ -195,3 +195,55 @@ describe("error messages never echo secrets", () => {
     expect(message.length).toBeGreaterThan(0);
   });
 });
+
+describe("malformed-input errors are fully redacted", () => {
+  // Each value is itself secret-looking AND malformed as a URL, so it hits
+  // parseUrl's catch branch. None contains a ":" so none is mistaken for a URL
+  // scheme (which would route to a protocol error instead). The guard must
+  // never echo the supplied value — not even a truncated prefix.
+  const MALFORMED_SECRETS: ReadonlyArray<{ name: string; value: string }> = [
+    { name: "fake supabase secret key", value: "sb_secret_THIS_IS_A_FAKE_KEY_not_a_url_deadbeefdeadbeef" },
+    { name: "fake publishable key", value: "sb_publishable_FAKE_not_a_url_0123456789abcdef0123456789" },
+    { name: "fake password", value: "P@ssw0rd-super-secret-must-never-be-logged-1234" },
+    {
+      name: "JWT-like string",
+      value:
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyIn0.s3cr3t_signature_deadbeef",
+    },
+    { name: "overlong malformed value", value: `not-a-url_${"S3CRET".repeat(120)}` },
+  ];
+
+  // Substrings that would reveal a leaked secret if any survived into the error.
+  const SECRET_MARKERS = /sb_secret_|sb_publishable_|eyJ|P@ssw0rd|S3CRET|s3cr3t/;
+
+  for (const { name, value } of MALFORMED_SECRETS) {
+    it(`parseUrl never echoes the supplied ${name}`, () => {
+      expect(() => parseUrl(value, "Backend URL")).toThrow(BackendGuardError);
+      let message = "";
+      try {
+        parseUrl(value, "Backend URL");
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      // The exact supplied value and every recognizable secret marker are absent…
+      expect(message).not.toContain(value);
+      expect(message).not.toMatch(SECRET_MARKERS);
+      // …but the message stays useful and identifies the label.
+      expect(message).toContain("Backend URL");
+      expect(message).toMatch(/not a valid absolute URL/i);
+    });
+
+    it(`assertLocalSupabaseUrl never echoes the supplied ${name}`, () => {
+      let message = "";
+      try {
+        assertLocalSupabaseUrl(value, "Supabase URL");
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).not.toContain(value);
+      expect(message).not.toMatch(SECRET_MARKERS);
+      expect(message).toContain("Supabase URL");
+      expect(message.length).toBeGreaterThan(0);
+    });
+  }
+});

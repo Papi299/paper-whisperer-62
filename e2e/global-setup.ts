@@ -14,22 +14,20 @@ const CLIENT_MODULE_PATH = "/src/integrations/supabase/client.ts";
  * tests reuse the session.
  *
  * Layer 2 — browser-runtime guard. AFTER navigating to the Auth page but
- * BEFORE any credential is filled or submitted, we read the Supabase origin the
- * Vite-served client actually loaded and validate it (loopback + exact match to
- * the expected local origin). No credential is entered until the guard passes.
- * Only the public origin ever leaves the browser — never a key, password, or
- * token.
+ * BEFORE any credential is read, filled, or submitted, we read the Supabase
+ * origin the Vite-served client actually loaded and validate it (loopback +
+ * exact match to the expected local origin). The test credentials
+ * (TEST_USER_EMAIL / TEST_USER_PASSWORD) are not read from the environment until
+ * the guard (and the Auth-UI check) have passed. Only the public origin ever
+ * leaves the browser — never a key, password, or token.
  */
 setup("authenticate", async ({ page }) => {
-  const email = process.env.TEST_USER_EMAIL;
-  const password = process.env.TEST_USER_PASSWORD;
+  // Only the expected backend origin is needed for the Layer 2 guard. The test
+  // credentials (TEST_USER_EMAIL / TEST_USER_PASSWORD) are NOT read here — they
+  // are read further below, strictly AFTER the browser-observed backend guard
+  // (and the Auth-UI check) have passed, and are never copied into a variable
+  // before that point.
   const expectedOrigin = process.env.E2E_EXPECTED_SUPABASE_URL;
-
-  if (!email || !password) {
-    throw new Error(
-      "Missing TEST_USER_EMAIL or TEST_USER_PASSWORD. Run `npm run test:e2e:local`.",
-    );
-  }
   if (!expectedOrigin) {
     throw new Error(
       "Missing E2E_EXPECTED_SUPABASE_URL. Run `npm run test:e2e:local`.",
@@ -73,10 +71,21 @@ setup("authenticate", async ({ page }) => {
     label: "Supabase origin (expected vs browser-loaded)",
   });
 
-  // Only now verify the Auth page UI and enter credentials.
+  // Verify the Auth page UI — still before any credential access.
   await expect(
     page.getByText("Manage your scientific paper collections"),
   ).toBeVisible({ timeout: 15_000 });
+
+  // Only NOW read the test credentials — strictly AFTER the Layer 2 backend
+  // guard and the Auth-UI check have passed. They are never read or copied into
+  // a variable before the browser-observed guard succeeds.
+  const email = process.env.TEST_USER_EMAIL;
+  const password = process.env.TEST_USER_PASSWORD;
+  if (!email || !password) {
+    throw new Error(
+      "Missing TEST_USER_EMAIL or TEST_USER_PASSWORD. Run `npm run test:e2e:local`.",
+    );
+  }
 
   await page.getByPlaceholder("you@example.com").fill(email);
   await page.getByPlaceholder("••••••••").fill(password);

@@ -193,14 +193,23 @@ async function resetLocalDb() {
   if (code !== 0) throw new Error("`supabase db reset --local` failed (migration replay).");
 }
 
-async function stopStack() {
-  if (process.env.E2E_KEEP_LOCAL_STACK === "1") {
+/**
+ * Stop and delete the local stack. Authoritative: a nonzero `supabase stop` is
+ * NOT swallowed — it throws so the caller fails the lifecycle. `allowKeep` (used
+ * only by the automatic run teardown) honors the E2E_KEEP_LOCAL_STACK debug
+ * escape hatch; the explicit `stop` command passes allowKeep=false so the debug
+ * variable can never disable it.
+ */
+async function stopStack({ allowKeep = false } = {}) {
+  if (allowKeep && process.env.E2E_KEEP_LOCAL_STACK === "1") {
     log("E2E_KEEP_LOCAL_STACK=1 — leaving the local stack running (debug mode).");
     return;
   }
   log("stopping local stack and deleting ephemeral volumes…");
   const code = await runInherit("supabase", ["stop", "--no-backup"]);
-  if (code !== 0) fail("`supabase stop --no-backup` returned nonzero during teardown.");
+  if (code !== 0) {
+    throw new Error(`\`supabase stop --no-backup\` failed with exit ${code}.`);
+  }
 }
 
 function removeAuthState() {
@@ -212,12 +221,59 @@ function removeAuthState() {
   }
 }
 
+// ── Idempotent lifecycle teardown shared by finally + SIGINT + SIGTERM ──
+let cleanupPromise = null;
+let signalHandlersInstalled = false;
+
+/**
+ * Run the lifecycle teardown at most once. `finally`, SIGINT, and SIGTERM all
+ * await the SAME promise, so destructive teardown can never run twice or
+ * concurrently. Rejects if the underlying stop fails; callers decide the exit
+ * code. Never logs a key, password, token, or raw status output.
+ */
+function cleanupLifecycleOnce() {
+  if (!cleanupPromise) {
+    cleanupPromise = (async () => {
+      removeAuthState();
+      await stopStack({ allowKeep: true });
+    })();
+  }
+  return cleanupPromise;
+}
+
+/**
+ * Install bounded SIGINT/SIGTERM handlers for a lifecycle that may own a local
+ * stack. On a signal we attempt cleanup exactly once (the shared promise) and
+ * exit with the conventional signal-derived status — 130 (SIGINT) / 143
+ * (SIGTERM) — staying nonzero even if cleanup itself fails. Installed only by
+ * `run`; never by verify-guards or the explicit stop.
+ */
+function installSignalCleanup() {
+  if (signalHandlersInstalled) return;
+  signalHandlersInstalled = true;
+  const onSignal = (signal, code) => {
+    process.once(signal, () => {
+      log(`received ${signal} — attempting one-time local-stack cleanup…`);
+      cleanupLifecycleOnce()
+        .then(() => process.exit(code))
+        .catch((err) => {
+          fail(`cleanup after ${signal} failed: ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(code);
+        });
+    });
+  };
+  onSignal("SIGINT", 130);
+  onSignal("SIGTERM", 143);
+}
+
 async function cmdRun(specArgs) {
   assertRepoRoot();
   await assertToolingAvailable();
   await assertSupportedFlags();
+  installSignalCleanup();
 
   const specs = specArgs.length > 0 ? specArgs : DEFAULT_SPECS;
+  let primaryError = null;
   try {
     await startStack();
     await resetLocalDb();
@@ -240,18 +296,39 @@ async function cmdRun(specArgs) {
 
     log(`running Playwright specs: ${specs.join(", ")}`);
     const code = await runInherit("npx", ["--no-install", "playwright", "test", ...specs], childEnv);
-    removeAuthState();
     if (code !== 0) throw new Error(`Playwright run failed (exit ${code}).`);
     log("Playwright run succeeded against the isolated local backend.");
-  } finally {
-    removeAuthState();
-    await stopStack();
+  } catch (err) {
+    primaryError = err;
   }
+
+  // Authoritative teardown: a failed teardown fails the command. When the
+  // lifecycle already failed, BOTH failures are preserved (the original
+  // reset/seed/Playwright failure is never replaced by an opaque teardown-only
+  // message). cleanupLifecycleOnce() shares its promise with the signal handlers
+  // so it can neither run twice nor concurrently.
+  let cleanupError = null;
+  try {
+    await cleanupLifecycleOnce();
+  } catch (err) {
+    cleanupError = err;
+  }
+
+  if (primaryError && cleanupError) {
+    throw new AggregateError(
+      [primaryError, cleanupError],
+      "Local E2E lifecycle failed AND teardown failed:",
+    );
+  }
+  if (primaryError) throw primaryError;
+  if (cleanupError) throw cleanupError;
 }
 
 async function cmdStop() {
   assertRepoRoot();
-  await stopStack();
+  // Explicit stop always stops (allowKeep=false), so E2E_KEEP_LOCAL_STACK cannot
+  // disable it. A nonzero `supabase stop` throws → the command exits nonzero.
+  await stopStack({ allowKeep: false });
 }
 
 /**
@@ -304,20 +381,34 @@ async function cmdVerifyGuards() {
   }
   log(`Layer 1 negative control failed closed as expected (exit ${neg.code}); no secret leaked; Vite not started.`);
 
-  // 3. Static Layer 2 ordering check: the browser guard must run before any
-  //    credential is filled or submitted in global-setup.
+  // 3. Static Layer 2 ordering check: the browser guard must run before EVERY
+  //    credential ACCESS and credential ENTRY in global-setup. It locates the
+  //    first guard CALL site (not the import), both env credential reads, the
+  //    credential fill, and the sign-in submission, and fails if the guard is
+  //    not strictly before all of them — or if any position is missing (a
+  //    missing credential-access match is treated as a failure, never success).
   log("checking Layer 2 ordering in e2e/global-setup.ts…");
   const setupSrc = readFileSync(resolve(ROOT, "e2e/global-setup.ts"), "utf-8");
-  // Match the guard CALL sites (with `(`), not the import statement.
-  const guardIdx = setupSrc.search(/assert(?:LocalSupabaseUrl|OriginsMatch)\s*\(/);
-  const fillIdx = setupSrc.search(/\.fill\(|signInWithPassword|getByRole\("button", \{ name: \/sign in/i);
-  if (guardIdx === -1) {
-    throw new Error("Layer 2 guard call not found in e2e/global-setup.ts.");
+  const positions = {
+    "Layer 2 guard call": setupSrc.search(/assert(?:LocalSupabaseUrl|OriginsMatch)\s*\(/),
+    "process.env.TEST_USER_EMAIL access": setupSrc.indexOf("process.env.TEST_USER_EMAIL"),
+    "process.env.TEST_USER_PASSWORD access": setupSrc.indexOf("process.env.TEST_USER_PASSWORD"),
+    "credential .fill()": setupSrc.search(/\.fill\(/),
+    "sign-in submission": setupSrc.search(/getByRole\(\s*["']button["'],\s*\{\s*name:\s*\/sign in/i),
+  };
+  for (const [name, idx] of Object.entries(positions)) {
+    if (idx === -1) {
+      throw new Error(`Layer 2 ordering check could not locate ${name} in e2e/global-setup.ts.`);
+    }
   }
-  if (fillIdx !== -1 && guardIdx > fillIdx) {
-    throw new Error("Layer 2 guard runs AFTER credential entry in global-setup.ts.");
+  const guardIdx = positions["Layer 2 guard call"];
+  for (const [name, idx] of Object.entries(positions)) {
+    if (name === "Layer 2 guard call") continue;
+    if (guardIdx > idx) {
+      throw new Error(`Layer 2 guard runs AFTER ${name} in e2e/global-setup.ts.`);
+    }
   }
-  log("Layer 2 ordering OK: browser backend guard precedes any credential entry.");
+  log("Layer 2 ordering OK: browser backend guard precedes both credential reads, the fill, and sign-in.");
 
   log("verify-guards: all controls passed.");
 }
@@ -341,6 +432,17 @@ async function main() {
 }
 
 main().catch((e) => {
-  fail(e instanceof Error ? e.message : String(e));
+  // Preserve evidence of every failure. For an AggregateError (lifecycle +
+  // teardown both failed) print the summary and each underlying error, so the
+  // original reset/seed/Playwright failure is never hidden behind the teardown
+  // one. None of these messages contains a key, password, token, or raw status.
+  if (e instanceof AggregateError) {
+    fail(e.message);
+    for (const sub of e.errors) {
+      fail(`  · ${sub instanceof Error ? sub.message : String(sub)}`);
+    }
+  } else {
+    fail(e instanceof Error ? e.message : String(e));
+  }
   process.exit(1);
 });

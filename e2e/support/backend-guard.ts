@@ -50,11 +50,10 @@ export function parseUrl(raw: unknown, label = "URL"): URL {
   try {
     return new URL(trimmed);
   } catch {
-    // Echo only a bounded prefix. The guard only ever receives URLs, never a
-    // key/password, but truncating keeps any accidental long value out of logs.
-    throw new BackendGuardError(
-      `${label} is not a valid absolute URL: "${trimmed.slice(0, 80)}".`,
-    );
+    // Never echo the supplied value (not even a truncated prefix). A malformed
+    // value handed to the guard could itself contain a secret-looking token
+    // (key/password/JWT/query string); the message reports only the label.
+    throw new BackendGuardError(`${label} is not a valid absolute URL.`);
   }
 }
 
