@@ -10,10 +10,17 @@
  *                  negative control (a Production/remote target must fail
  *                  during Playwright config, before Vite starts and before any
  *                  credential is entered), plus a static Layer 2 ordering check.
+ *   db-tests       Start local stack → reset+replay migrations → run every
+ *                  pgTAP suite under supabase/tests/database (isolated, extension
+ *                  state restored) → run the framework-free 18-case verification
+ *                  → prove true concurrent AI-quota consumption at the cap →
+ *                  verify no residue → stop the stack and delete its volumes.
+ *                  Cleanup is MANDATORY and never honors E2E_KEEP_LOCAL_STACK.
  *   stop           Stop and delete the local stack's ephemeral state.
  *
- * The default is ephemeral: the stack is always stopped and its volumes deleted
- * unless E2E_KEEP_LOCAL_STACK=1 is set (a local debugging escape hatch).
+ * The `run` default is ephemeral: its stack is always stopped and its volumes
+ * deleted unless E2E_KEEP_LOCAL_STACK=1 is set (a local debugging escape hatch).
+ * `db-tests` ignores that escape hatch entirely — it always tears down.
  *
  * Safety:
  *   - Only ever targets a validated loopback Supabase API URL.
@@ -252,6 +259,19 @@ function cleanupLifecycleOnce() {
   return cleanupPromise;
 }
 
+// Mandatory db-tests teardown. Unlike the run lifecycle it NEVER honors
+// E2E_KEEP_LOCAL_STACK — the stack and its volumes are always deleted. Shared by
+// finally + SIGINT + SIGTERM via a single promise so it runs at most once.
+let dbCleanupPromise = null;
+function cleanupDbTestsOnce() {
+  if (!dbCleanupPromise) {
+    dbCleanupPromise = (async () => {
+      await stopStack({ allowKeep: false });
+    })();
+  }
+  return dbCleanupPromise;
+}
+
 /**
  * Install bounded SIGINT/SIGTERM handlers for a lifecycle that may own a local
  * stack. On a signal we attempt cleanup exactly once (the shared promise) and
@@ -259,13 +279,13 @@ function cleanupLifecycleOnce() {
  * (SIGTERM) — staying nonzero even if cleanup itself fails. Installed only by
  * `run`; never by verify-guards or the explicit stop.
  */
-function installSignalCleanup() {
+function installSignalCleanup(cleanupFn = cleanupLifecycleOnce) {
   if (signalHandlersInstalled) return;
   signalHandlersInstalled = true;
   const onSignal = (signal, code) => {
     process.once(signal, () => {
       log(`received ${signal} — attempting one-time local-stack cleanup…`);
-      cleanupLifecycleOnce()
+      cleanupFn()
         .then(() => process.exit(code))
         .catch((err) => {
           fail(`cleanup after ${signal} failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -424,6 +444,326 @@ async function cmdVerifyGuards() {
   log("verify-guards: all controls passed.");
 }
 
+// ── db-tests: local pgTAP + framework-free + true-concurrency lifecycle ───────
+
+const DB_TESTS_DIR = "supabase/tests/database";
+const LEGACY_VERIFICATION = "supabase/tests/owner_access_and_quota_verification.sql";
+// Deterministic, disposable local-only concurrency fixture.
+const PROBE_USER = "cc000000-0000-0000-0000-0000000000cc";
+const PROBE_CAP = 2; // monthly AI cap; counter is preloaded to cap-1.
+const BARRIER_KEY = 918273645; // session advisory-lock key for the start barrier.
+
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Poll an (optionally async) condition until true or timeout. */
+async function waitUntil(cond, timeoutMs, message) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await cond()) return;
+    await delay(150);
+  }
+  throw new Error(message);
+}
+
+/** The local project ref, read from supabase/config.toml. */
+function readProjectId() {
+  const cfg = readFileSync(resolve(ROOT, "supabase/config.toml"), "utf-8");
+  const m = cfg.match(/^\s*project_id\s*=\s*"([^"]+)"/m);
+  if (!m) throw new Error("Could not read project_id from supabase/config.toml.");
+  return m[1];
+}
+
+/** Confirm the installed CLI's `supabase test db` supports --local and paths. */
+async function assertDbTestFlags() {
+  const help = await runCapture("supabase", ["test", "db", "--help"]);
+  if (help.code !== 0 || !/--local\b/.test(help.out) || !/<path\.\.\.>|path\.\.\./.test(help.out)) {
+    throw new Error("`supabase test db` does not support the required --local flag and test paths.");
+  }
+}
+
+/**
+ * Resolve and validate the local Postgres container. Uses the config project ref
+ * to build the expected `supabase_db_<ref>` name and confirms it is a running,
+ * local supabase container — never a remote/linked connection.
+ */
+async function resolveLocalDbContainer() {
+  const name = `supabase_db_${readProjectId()}`;
+  if (!name.startsWith("supabase_db_")) {
+    throw new Error(`Refusing non-local database container name "${name}".`);
+  }
+  const ps = await runCapture("docker", ["ps", "--format", "{{.Names}}"]);
+  if (ps.code !== 0) throw new Error("`docker ps` failed while resolving the local DB container.");
+  const running = ps.out.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!running.includes(name)) {
+    throw new Error(`Local Postgres container "${name}" is not running.`);
+  }
+  return name;
+}
+
+/**
+ * Run SQL inside the local Postgres container as the postgres superuser over the
+ * container's local socket (no password, no connection URL — nothing credential-
+ * bearing ever appears in output). Unaligned, tuples-only, ON_ERROR_STOP=1.
+ */
+function dockerPsql(container, sql) {
+  return new Promise((resolvePromise) => {
+    const child = spawn(
+      "docker",
+      ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres",
+       "-v", "ON_ERROR_STOP=1", "-X", "-q", "-A", "-t"],
+      { cwd: ROOT },
+    );
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stderr.on("data", (d) => (err += d.toString()));
+    child.on("close", (code) => resolvePromise({ code: code ?? 1, out, err }));
+    child.on("error", (e) => resolvePromise({ code: 1, out, err: err + String(e) }));
+    child.stdin.write(sql);
+    child.stdin.end();
+  });
+}
+
+/** A single scalar from the local DB (throws on error). */
+async function dbScalar(container, sql) {
+  const r = await dockerPsql(container, sql);
+  if (r.code !== 0) throw new Error(`local query failed: ${r.err.trim() || "(no stderr)"}`);
+  return r.out.trim();
+}
+
+/** pgTAP extension state as "schema version" or "absent". */
+async function pgtapState(container) {
+  return dbScalar(
+    container,
+    "SELECT coalesce((SELECT extnamespace::regnamespace::text || ' ' || extversion " +
+      "FROM pg_extension WHERE extname='pgtap'), 'absent');",
+  );
+}
+
+/** Run every pgTAP file under supabase/tests/database on the local database. */
+async function runPgTapDirectory() {
+  log(`running pgTAP suites under ${DB_TESTS_DIR} (local)…`);
+  const code = await runInherit("supabase", ["test", "db", DB_TESTS_DIR, "--local"]);
+  if (code !== 0) throw new Error("pgTAP suite run failed.");
+}
+
+/** Run the immutable framework-free 18-case verification via psql. */
+async function runLegacyVerification(container) {
+  log("running framework-free owner/access/quota verification (18 cases)…");
+  const sql = readFileSync(resolve(ROOT, LEGACY_VERIFICATION), "utf-8");
+  const r = await dockerPsql(container, sql);
+  const combined = `${r.out}\n${r.err}`;
+  if (r.code !== 0 || !/ALL 18 VERIFICATION CASES PASSED/.test(combined)) {
+    throw new Error("framework-free 18-case verification failed.");
+  }
+  log("framework-free verification passed (18/18).");
+}
+
+/** Count ungranted advisory-lock waiters on the barrier key. */
+async function countBarrierWaiters(container) {
+  const objid = BARRIER_KEY & 0xffffffff;
+  const classid = Math.floor(BARRIER_KEY / 2 ** 32);
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${classid} ` +
+      `AND objid=${objid} AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** One concurrent worker: block on the shared barrier, then consume once. */
+function runProbeWorker(container) {
+  const sql =
+    `SELECT set_config('request.jwt.claims','{"sub":"${PROBE_USER}","role":"authenticated"}', false);\n` +
+    "SET ROLE authenticated;\n" +
+    `SELECT pg_advisory_lock_shared(${BARRIER_KEY});\n` +
+    `SELECT allowed::text || '|' || reason FROM public.consume_ai_quota('${PROBE_USER}');\n`;
+  return dockerPsql(container, sql);
+}
+
+/** Parse the last "allowed|reason" line from a worker's output. */
+function parseProbeOutcome(res) {
+  const lines = `${res.out}`.split("\n").map((s) => s.trim()).filter(Boolean);
+  return lines[lines.length - 1] || "";
+}
+
+/**
+ * True-concurrency AI-quota probe. A committed fixture user sits one unit below a
+ * cap of PROBE_CAP. A coordinator session holds an EXCLUSIVE advisory lock; two
+ * worker sessions block requesting the SHARED lock; once both are confirmed
+ * waiting, the coordinator releases, so both workers call consume_ai_quota
+ * concurrently. Exactly one must be allowed and one quota_exceeded; final usage
+ * must equal the cap with exactly one unit consumed and no duplicate counter row.
+ * Every committed fixture is removed afterward and advisory locks released.
+ */
+async function runConcurrencyProbe(container) {
+  log("running true-concurrency AI-quota probe…");
+  const periodStart = "date_trunc('month', timezone('UTC', now())) AT TIME ZONE 'UTC'";
+
+  // Committed fixture (visible to independent sessions): Pro, monthly cap, used=cap-1.
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO auth.users (id, email) VALUES ('${PROBE_USER}','concurrency@paperlume.test') ON CONFLICT DO NOTHING;\n` +
+      `UPDATE public.user_entitlements SET plan='pro', plan_status='active', ai_monthly_quota=${PROBE_CAP}, ai_lifetime_quota=0 WHERE user_id='${PROBE_USER}';\n` +
+      `INSERT INTO public.usage_counters (user_id, feature, period_type, period_start, period_end, used) ` +
+      `VALUES ('${PROBE_USER}','ai_analysis','monthly', ${periodStart}, ${periodStart} + INTERVAL '1 month', ${PROBE_CAP - 1}) ` +
+      `ON CONFLICT (user_id, feature, period_type, period_start) DO UPDATE SET used=${PROBE_CAP - 1};\n`,
+  );
+  if (setup.code !== 0) throw new Error(`concurrency fixture setup failed: ${setup.err.trim()}`);
+
+  // Coordinator holds the EXCLUSIVE barrier lock in a persistent session.
+  const coord = spawn(
+    "docker",
+    ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-X", "-q", "-A", "-t"],
+    { cwd: ROOT },
+  );
+  let coordOut = "";
+  coord.stdout.on("data", (d) => (coordOut += d.toString()));
+  coord.stderr.on("data", () => {});
+  let workers;
+  try {
+    coord.stdin.write(`SELECT pg_advisory_lock(${BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
+    await waitUntil(() => /COORD_LOCKED/.test(coordOut), 15000, "coordinator failed to acquire the barrier lock.");
+
+    // Both workers request the SHARED lock and block behind the coordinator.
+    workers = Promise.all([runProbeWorker(container), runProbeWorker(container)]);
+    await waitUntil(async () => (await countBarrierWaiters(container)) >= 2, 30000,
+      "both concurrency workers did not reach the barrier.");
+
+    // Release: both shared requests are granted together → concurrent consume.
+    coord.stdin.write(`SELECT pg_advisory_unlock(${BARRIER_KEY});\n`);
+    coord.stdin.end();
+  } catch (err) {
+    try { coord.stdin.end(); } catch { /* noop */ }
+    throw err;
+  }
+
+  const [r1, r2] = await workers;
+  const outcomes = [parseProbeOutcome(r1), parseProbeOutcome(r2)].sort();
+  const allowed = outcomes.filter((o) => o === "true|ok").length;
+  const exceeded = outcomes.filter((o) => o === "false|quota_exceeded").length;
+  if (allowed !== 1 || exceeded !== 1) {
+    throw new Error(`concurrency probe expected exactly one allowed + one quota_exceeded, got: ${outcomes.join(", ")}`);
+  }
+
+  // Fresh-connection invariants.
+  const finalUsed = parseInt(await dbScalar(container,
+    `SELECT used FROM public.usage_counters WHERE user_id='${PROBE_USER}' AND feature='ai_analysis' AND period_type='monthly';`), 10);
+  const rowCount = parseInt(await dbScalar(container,
+    `SELECT count(*) FROM public.usage_counters WHERE user_id='${PROBE_USER}' AND feature='ai_analysis' AND period_type='monthly';`), 10);
+  if (finalUsed !== PROBE_CAP) throw new Error(`concurrency probe: final usage ${finalUsed} != cap ${PROBE_CAP}.`);
+  if (finalUsed > PROBE_CAP) throw new Error("concurrency probe: usage exceeded the cap.");
+  if (rowCount !== 1) throw new Error(`concurrency probe: expected exactly one counter row, found ${rowCount}.`);
+  log(`concurrency probe OK: one allowed + one quota_exceeded; usage=${finalUsed} (cap ${PROBE_CAP}); one counter row.`);
+
+  // Remove every committed fixture; release any lingering advisory lock.
+  const cleanup = await dockerPsql(container,
+    `SELECT pg_advisory_unlock_all();\n` +
+    `DELETE FROM public.usage_counters WHERE user_id='${PROBE_USER}';\n` +
+    `DELETE FROM public.user_storage_usage WHERE user_id='${PROBE_USER}';\n` +
+    `DELETE FROM public.internal_user_access WHERE user_id='${PROBE_USER}';\n` +
+    `DELETE FROM public.user_entitlements WHERE user_id='${PROBE_USER}';\n` +
+    `DELETE FROM auth.users WHERE id='${PROBE_USER}';\n`);
+  if (cleanup.code !== 0) throw new Error(`concurrency fixture cleanup failed: ${cleanup.err.trim()}`);
+  const leftover = parseInt(await dbScalar(container, `SELECT count(*) FROM auth.users WHERE id='${PROBE_USER}';`), 10);
+  if (leftover !== 0) throw new Error("concurrency fixture user still present after cleanup.");
+}
+
+/**
+ * Residue check on a fresh connection: after the transaction-isolated pgTAP
+ * suites, the framework-free file, and the concurrency probe (+ its cleanup),
+ * no test user, application row, entitlement/quota/storage/access row, advisory
+ * lock, or barrier object may remain, and pgTAP state must be unchanged.
+ */
+async function assertNoResidue(container, pgtapBefore) {
+  const counts = (await dbScalar(container,
+    "SELECT (SELECT count(*) FROM auth.users) || '|' || " +
+    "(SELECT count(*) FROM public.papers) || '|' || " +
+    "(SELECT count(*) FROM public.projects) || '|' || " +
+    "(SELECT count(*) FROM public.tags) || '|' || " +
+    "(SELECT count(*) FROM public.filter_presets) || '|' || " +
+    "(SELECT count(*) FROM public.paper_attachments) || '|' || " +
+    "(SELECT count(*) FROM public.user_entitlements) || '|' || " +
+    "(SELECT count(*) FROM public.usage_counters) || '|' || " +
+    "(SELECT count(*) FROM public.user_storage_usage) || '|' || " +
+    "(SELECT count(*) FROM public.internal_user_access) || '|' || " +
+    "(SELECT count(*) FROM pg_locks WHERE locktype='advisory');")).split("|").map((s) => parseInt(s, 10));
+  if (counts.some((c) => c !== 0)) {
+    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|advisory = ${counts.join("|")}).`);
+  }
+  const pgtapAfter = await pgtapState(container);
+  if (pgtapAfter !== pgtapBefore) {
+    throw new Error(`pgTAP extension state changed: before="${pgtapBefore}" after="${pgtapAfter}".`);
+  }
+  log(`residue check OK: no test rows remain; pgTAP state unchanged (${pgtapAfter}).`);
+}
+
+async function cmdDbTests() {
+  assertRepoRoot();
+  await assertToolingAvailable();
+  await assertSupportedFlags();
+  await assertDbTestFlags();
+  installSignalCleanup(cleanupDbTestsOnce);
+
+  let primaryError = null;
+  try {
+    await startStack();
+    await resetLocalDb();
+
+    // Validate the local API origin (loopback, no Production ref) before any
+    // privileged work; never log the raw status (it carries keys).
+    const { apiUrl } = await readLocalStatus();
+    log(`validated local API origin: ${apiUrl}`);
+
+    const container = await resolveLocalDbContainer();
+    log(`resolved local Postgres container: ${container}`);
+
+    const pgtapBefore = await pgtapState(container);
+    log(`pre-test pgTAP state: ${pgtapBefore}`);
+
+    await runPgTapDirectory();
+    // Extension isolation is asserted precisely in assertNoResidue below.
+
+    await runLegacyVerification(container);
+    await runConcurrencyProbe(container);
+    await assertNoResidue(container, pgtapBefore);
+
+    log("all local database-security tests passed.");
+  } catch (err) {
+    primaryError = err;
+  }
+
+  let cleanupError = null;
+  try {
+    await cleanupDbTestsOnce();
+  } catch (err) {
+    cleanupError = err;
+  }
+
+  // Prove no local stack remains (belt-and-suspenders after teardown).
+  if (!cleanupError) {
+    try {
+      const ps = await runCapture("docker", ["ps", "--format", "{{.Names}}"]);
+      const supa = ps.out.split("\n").map((s) => s.trim()).filter((n) => n.startsWith("supabase_"));
+      if (supa.length > 0) {
+        cleanupError = new Error(`local stack still running after teardown: ${supa.join(", ")}`);
+      } else {
+        log("confirmed: no local Supabase stack remains.");
+      }
+    } catch {
+      /* docker ps failure here is non-authoritative; teardown already succeeded */
+    }
+  }
+
+  if (primaryError && cleanupError) {
+    throw new AggregateError([primaryError, cleanupError], "Local db-tests lifecycle failed AND teardown failed:");
+  }
+  if (primaryError) throw primaryError;
+  if (cleanupError) throw cleanupError;
+}
+
 async function main() {
   const [subcommand, ...rest] = process.argv.slice(2);
   switch (subcommand) {
@@ -433,11 +773,14 @@ async function main() {
     case "verify-guards":
       await cmdVerifyGuards();
       break;
+    case "db-tests":
+      await cmdDbTests();
+      break;
     case "stop":
       await cmdStop();
       break;
     default:
-      fail(`Unknown subcommand "${subcommand ?? ""}". Use: run | verify-guards | stop`);
+      fail(`Unknown subcommand "${subcommand ?? ""}". Use: run | verify-guards | db-tests | stop`);
       process.exit(2);
   }
 }
