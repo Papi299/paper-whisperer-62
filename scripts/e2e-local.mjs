@@ -10,12 +10,17 @@
  *                  negative control (a Production/remote target must fail
  *                  during Playwright config, before Vite starts and before any
  *                  credential is entered), plus a static Layer 2 ordering check.
- *   db-tests       Start local stack → reset+replay migrations → run every
+ *   db-tests       Start local stack → reset+replay migrations → capture a
+ *                  pgTAP + catalog baseline → run an expected-failure negative
+ *                  control (inject a transaction-only papers-RLS regression the
+ *                  detector must catch, then prove it rolled back) → run every
  *                  pgTAP suite under supabase/tests/database (isolated, extension
  *                  state restored) → run the framework-free 18-case verification
- *                  → prove true concurrent AI-quota consumption at the cap →
- *                  verify no residue → stop the stack and delete its volumes.
- *                  Cleanup is MANDATORY and never honors E2E_KEEP_LOCAL_STACK.
+ *                  → prove true concurrent AI-quota consumption at the cap with
+ *                  bounded, fail-closed coordinator/worker processes → verify no
+ *                  row/catalog residue → stop the stack and delete its volumes.
+ *                  Cleanup is MANDATORY and never honors E2E_KEEP_LOCAL_STACK;
+ *                  the post-teardown check is scoped to this project's ref.
  *   stop           Stop and delete the local stack's ephemeral state.
  *
  * The `run` default is ephemeral: its stack is always stopped and its volumes
@@ -453,6 +458,21 @@ const PROBE_USER = "cc000000-0000-0000-0000-0000000000cc";
 const PROBE_CAP = 2; // monthly AI cap; counter is preloaded to cap-1.
 const BARRIER_KEY = 918273645; // session advisory-lock key for the start barrier.
 
+// Bounded, fail-closed timeouts for the concurrency probe (Section I). Every
+// coordinator/worker process must acquire, release, and terminate within these
+// windows or the probe fails and the stack is still torn down.
+const PROBE_COORD_ACQUIRE_MS = 15000; // coordinator must report the EXCLUSIVE lock.
+const PROBE_BARRIER_MS = 30000;       // both workers must reach the shared barrier.
+const PROBE_WORKER_MS = 30000;        // each worker must finish after release.
+const PROBE_COORD_EXIT_MS = 15000;    // coordinator must exit after unlocking.
+const PROBE_KILL_WAIT_MS = 10000;     // bounded wait for a killed child to die.
+
+// Deterministic local-only fixtures for the expected-failure negative control.
+const NC_USER_A = "a0000000-0000-0000-0000-0000000000fa";
+const NC_USER_B = "b0000000-0000-0000-0000-0000000000fb";
+const NC_PAPER = "d0000000-0000-0000-0000-0000000000fc";
+const NC_MARKER = "C03B1_NEGATIVE_CONTROL_LEAK_DETECTED"; // exact detector marker.
+
 function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -533,6 +553,52 @@ async function dbScalar(container, sql) {
   return r.out.trim();
 }
 
+/**
+ * Spawn a long-lived psql session inside the local container, keeping the child
+ * handle so callers can drive it, bound its lifetime, and require a clean exit.
+ * Returns { child, done, readOut, readErr }. `done` resolves with
+ * {code, signal, out, err}; stderr is captured but never printed. Used by the
+ * concurrency probe so every coordinator/worker process is tracked and
+ * fail-closed (Section I).
+ */
+function spawnDockerPsql(container) {
+  const child = spawn(
+    "docker",
+    ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres",
+     "-v", "ON_ERROR_STOP=1", "-X", "-q", "-A", "-t"],
+    { cwd: ROOT },
+  );
+  let out = "";
+  let err = "";
+  child.stdout.on("data", (d) => (out += d.toString()));
+  child.stderr.on("data", (d) => (err += d.toString()));
+  const done = new Promise((resolvePromise) => {
+    child.on("close", (code, signal) =>
+      resolvePromise({ code: code ?? 1, signal: signal ?? null, out, err }));
+    child.on("error", (e) =>
+      resolvePromise({ code: 1, signal: null, out, err: err + String(e) }));
+  });
+  return { child, done, readOut: () => out, readErr: () => err };
+}
+
+/** Reject if `promise` does not settle within `ms` (bounded, fail-closed). */
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} did not complete within ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Force-terminate a psql child and await its exit within a bounded window. */
+async function killPsql(handle) {
+  if (!handle) return;
+  try { handle.child.stdin.end(); } catch { /* noop */ }
+  try { handle.child.kill("SIGKILL"); } catch { /* noop */ }
+  try { await withTimeout(handle.done, PROBE_KILL_WAIT_MS, "child termination"); }
+  catch { /* bounded; teardown still proceeds */ }
+}
+
 /** pgTAP extension state as "schema version" or "absent". */
 async function pgtapState(container) {
   return dbScalar(
@@ -540,6 +606,109 @@ async function pgtapState(container) {
     "SELECT coalesce((SELECT extnamespace::regnamespace::text || ' ' || extversion " +
       "FROM pg_extension WHERE extname='pgtap'), 'absent');",
   );
+}
+
+/**
+ * Deterministic catalog fingerprint over the security-relevant surface
+ * (Section H): per-category md5 hashes of stably-ordered rows for
+ *   - public functions (identity args, owner, SECURITY DEFINER, proconfig, ACL);
+ *   - public policies (schema, table, name, command, roles, USING, WITH CHECK);
+ *   - public-table RLS flags (relrowsecurity, relforcerowsecurity);
+ *   - non-internal triggers on public tables (table, trigger name);
+ *   - persistent relations in the tested schemas (schema, name, kind).
+ * Contains only md5 hashes — no credentials — so it is safe to log and compare
+ * before/after. Compared for exact equality on a fresh connection to prove no
+ * persistent schema/catalog object changed.
+ */
+async function captureCatalog(container) {
+  const sql =
+    "WITH " +
+    "funcs AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+    "  SELECT p.oid::regprocedure::text || '|' || p.proowner::regrole::text || '|' || " +
+    "         p.prosecdef::text || '|' || coalesce(array_to_string(p.proconfig, ','), '') || '|' || " +
+    "         coalesce(p.proacl::text, '') AS line " +
+    "  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public') s), " +
+    "pols AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+    "  SELECT schemaname || '|' || tablename || '|' || policyname || '|' || cmd || '|' || " +
+    "         coalesce(array_to_string(roles, ','), '') || '|' || coalesce(qual, '') || '|' || " +
+    "         coalesce(with_check, '') AS line FROM pg_policies WHERE schemaname = 'public') s), " +
+    "rls AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+    "  SELECT c.relname || '|' || c.relrowsecurity::text || '|' || c.relforcerowsecurity::text AS line " +
+    "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
+    "  WHERE n.nspname = 'public' AND c.relkind = 'r') s), " +
+    "trg AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+    "  SELECT c.relname || '|' || t.tgname AS line FROM pg_trigger t " +
+    "  JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace " +
+    "  WHERE n.nspname = 'public' AND NOT t.tgisinternal) s), " +
+    "rels AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+    "  SELECT n.nspname || '|' || c.relname || '|' || c.relkind::text AS line " +
+    "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
+    "  WHERE n.nspname IN ('public','extensions') AND c.relkind IN ('r','v','m','S','p')) s) " +
+    "SELECT 'func:' || funcs.h || '|pol:' || pols.h || '|rls:' || rls.h || '|trg:' || trg.h || " +
+    "       '|rel:' || rels.h FROM funcs, pols, rls, trg, rels;";
+  return dbScalar(container, sql);
+}
+
+/**
+ * Expected-failure database negative control (Section E). In ONE transaction on a
+ * fresh connection: create local-only users A and B, one paper owned by A,
+ * transactionally DISABLE row-level security on papers (the injected regression),
+ * become authenticated caller B, then run the same detector the green suite runs —
+ * "caller B sees zero of A's rows". Because RLS is disabled, B sees A's row, so the
+ * detector RAISES with a fixed marker and psql exits nonzero. The transaction is
+ * never committed and is rolled back on abort/close. The outer harness treats the
+ * control as SUCCESSFUL only when the inner process exits nonzero AND the exact
+ * marker is present; an inner exit of zero (isolation appeared to hold despite the
+ * injected leak) fails the C03B1 runner. The generated SQL is never printed.
+ */
+async function runNegativeControl(container) {
+  log("running expected-failure database negative control (papers cross-user RLS)…");
+  const sql =
+    "BEGIN;\n" +
+    `INSERT INTO auth.users (id, email) VALUES ('${NC_USER_A}','nc-a@paperlume.test'),('${NC_USER_B}','nc-b@paperlume.test');\n` +
+    `INSERT INTO public.papers (id, user_id, title, insert_order) VALUES ('${NC_PAPER}','${NC_USER_A}','NC Paper A',1);\n` +
+    // Injected, transaction-only regression: weaken papers isolation.
+    "ALTER TABLE public.papers DISABLE ROW LEVEL SECURITY;\n" +
+    // Become authenticated caller B (no BYPASSRLS), then run the detector.
+    `SELECT set_config('request.jwt.claims','{\"sub\":\"${NC_USER_B}\",\"role\":\"authenticated\"}', true);\n` +
+    "SET LOCAL ROLE authenticated;\n" +
+    "DO $$ DECLARE n int; BEGIN\n" +
+    `  SELECT count(*) INTO n FROM public.papers WHERE user_id = '${NC_USER_A}';\n` +
+    `  IF n > 0 THEN RAISE EXCEPTION '${NC_MARKER}: authenticated caller B observed % papers owned by A', n; END IF;\n` +
+    "END $$;\n" +
+    "ROLLBACK;\n";
+  const r = await dockerPsql(container, sql);
+  const combined = `${r.out}\n${r.err}`;
+  if (r.code === 0) {
+    throw new Error(
+      "negative control did not fail: the injected papers-RLS regression was not detected " +
+        "(inner psql exited 0). The C03B1 detector is not fail-closed.",
+    );
+  }
+  if (!combined.includes(NC_MARKER)) {
+    throw new Error("negative control failed for the wrong reason: expected detector marker was absent.");
+  }
+  log("database negative control detected the intentional papers-RLS regression.");
+}
+
+/**
+ * Prove, on a fresh connection, that the negative control left no trace
+ * (Section E step 4): the catalog fingerprint equals the pre-control baseline
+ * (so papers RLS and every policy/function are restored) and no negative-control
+ * fixture row remains.
+ */
+async function assertNegativeControlRestored(container, catalogBefore) {
+  const catalogAfter = await captureCatalog(container);
+  if (catalogAfter !== catalogBefore) {
+    throw new Error("negative control did not fully roll back: catalog fingerprint changed.");
+  }
+  const rls = await dbScalar(container,
+    "SELECT relrowsecurity FROM pg_class WHERE oid = 'public.papers'::regclass;");
+  if (rls !== "t") throw new Error("negative control left papers RLS disabled.");
+  const leftover = parseInt(await dbScalar(container,
+    `SELECT count(*) FROM auth.users WHERE id IN ('${NC_USER_A}','${NC_USER_B}');`), 10);
+  if (leftover !== 0) throw new Error("negative control left fixture users behind.");
+  log("database negative-control rollback verified.");
 }
 
 /** Run every pgTAP file under supabase/tests/database on the local database. */
@@ -561,42 +730,60 @@ async function runLegacyVerification(container) {
   log("framework-free verification passed (18/18).");
 }
 
+// classid/objid split of the 64-bit barrier key for pg_locks lookups.
+const BARRIER_OBJID = BARRIER_KEY & 0xffffffff;
+const BARRIER_CLASSID = Math.floor(BARRIER_KEY / 2 ** 32);
+
 /** Count ungranted advisory-lock waiters on the barrier key. */
 async function countBarrierWaiters(container) {
-  const objid = BARRIER_KEY & 0xffffffff;
-  const classid = Math.floor(BARRIER_KEY / 2 ** 32);
   const n = await dbScalar(
     container,
-    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${classid} ` +
-      `AND objid=${objid} AND NOT granted;`,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${BARRIER_CLASSID} ` +
+      `AND objid=${BARRIER_OBJID} AND NOT granted;`,
   );
   return parseInt(n || "0", 10);
 }
 
-/** One concurrent worker: block on the shared barrier, then consume once. */
-function runProbeWorker(container) {
-  const sql =
+/** Count all advisory locks (granted or not) on the barrier key. */
+async function countBarrierLocks(container) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${BARRIER_CLASSID} ` +
+      `AND objid=${BARRIER_OBJID};`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** One concurrent worker's SQL: block on the shared barrier, then consume once. */
+function workerSql() {
+  return (
     `SELECT set_config('request.jwt.claims','{"sub":"${PROBE_USER}","role":"authenticated"}', false);\n` +
     "SET ROLE authenticated;\n" +
     `SELECT pg_advisory_lock_shared(${BARRIER_KEY});\n` +
-    `SELECT allowed::text || '|' || reason FROM public.consume_ai_quota('${PROBE_USER}');\n`;
-  return dockerPsql(container, sql);
+    `SELECT 'OUTCOME=' || allowed::text || '|' || reason FROM public.consume_ai_quota('${PROBE_USER}');\n`
+  );
 }
 
-/** Parse the last "allowed|reason" line from a worker's output. */
+/** Parse the "allowed|reason" outcome from a worker that has already exited 0. */
 function parseProbeOutcome(res) {
-  const lines = `${res.out}`.split("\n").map((s) => s.trim()).filter(Boolean);
-  return lines[lines.length - 1] || "";
+  const line = `${res.out}`.split("\n").map((s) => s.trim())
+    .filter((l) => l.startsWith("OUTCOME=")).pop();
+  return line ? line.slice("OUTCOME=".length) : "";
 }
 
 /**
- * True-concurrency AI-quota probe. A committed fixture user sits one unit below a
- * cap of PROBE_CAP. A coordinator session holds an EXCLUSIVE advisory lock; two
- * worker sessions block requesting the SHARED lock; once both are confirmed
- * waiting, the coordinator releases, so both workers call consume_ai_quota
- * concurrently. Exactly one must be allowed and one quota_exceeded; final usage
- * must equal the cap with exactly one unit consumed and no duplicate counter row.
- * Every committed fixture is removed afterward and advisory locks released.
+ * True-concurrency AI-quota probe (Section I: bounded + fail-closed). A committed
+ * fixture user sits one unit below a cap of PROBE_CAP. A coordinator session holds
+ * an EXCLUSIVE advisory lock; two worker sessions block requesting the SHARED
+ * lock; once both are confirmed waiting, the coordinator releases so both call
+ * consume_ai_quota concurrently. Every coordinator/worker process is tracked,
+ * bounded by an explicit timeout, and must exit 0 without signal termination —
+ * output from a nonzero/killed process is never accepted. Exactly one call must be
+ * allowed and one quota_exceeded; after all three sessions terminate, a fresh
+ * connection must show the cap reached, one counter row, and no barrier locks/
+ * waiters BEFORE the fixture is removed; fixture absence is then re-proven. On any
+ * timeout/error the remaining processes are killed (bounded) and the error is
+ * re-thrown so the caller still runs the mandatory teardown.
  */
 async function runConcurrencyProbe(container) {
   log("running true-concurrency AI-quota probe…");
@@ -613,52 +800,74 @@ async function runConcurrencyProbe(container) {
   );
   if (setup.code !== 0) throw new Error(`concurrency fixture setup failed: ${setup.err.trim()}`);
 
-  // Coordinator holds the EXCLUSIVE barrier lock in a persistent session.
-  const coord = spawn(
-    "docker",
-    ["exec", "-i", container, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-X", "-q", "-A", "-t"],
-    { cwd: ROOT },
-  );
-  let coordOut = "";
-  coord.stdout.on("data", (d) => (coordOut += d.toString()));
-  coord.stderr.on("data", () => {});
-  let workers;
+  let coord = null;
+  let w1 = null;
+  let w2 = null;
+  let r1;
+  let r2;
   try {
-    coord.stdin.write(`SELECT pg_advisory_lock(${BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
-    await waitUntil(() => /COORD_LOCKED/.test(coordOut), 15000, "coordinator failed to acquire the barrier lock.");
+    // Coordinator acquires the EXCLUSIVE barrier in a tracked session.
+    coord = spawnDockerPsql(container);
+    coord.child.stdin.write(`SELECT pg_advisory_lock(${BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
+    await waitUntil(() => /COORD_LOCKED/.test(coord.readOut()), PROBE_COORD_ACQUIRE_MS,
+      "coordinator failed to acquire the barrier lock.");
 
     // Both workers request the SHARED lock and block behind the coordinator.
-    workers = Promise.all([runProbeWorker(container), runProbeWorker(container)]);
-    await waitUntil(async () => (await countBarrierWaiters(container)) >= 2, 30000,
+    w1 = spawnDockerPsql(container);
+    w2 = spawnDockerPsql(container);
+    w1.child.stdin.write(workerSql()); w1.child.stdin.end();
+    w2.child.stdin.write(workerSql()); w2.child.stdin.end();
+    await waitUntil(async () => (await countBarrierWaiters(container)) >= 2, PROBE_BARRIER_MS,
       "both concurrency workers did not reach the barrier.");
 
     // Release: both shared requests are granted together → concurrent consume.
-    coord.stdin.write(`SELECT pg_advisory_unlock(${BARRIER_KEY});\n`);
-    coord.stdin.end();
+    coord.child.stdin.write(
+      `SELECT 'UNLOCK=' || pg_advisory_unlock(${BARRIER_KEY})::text; SELECT 'COORD_UNLOCKED';\n`);
+    coord.child.stdin.end();
+
+    // Bounded completion of all three sessions.
+    const cr = await withTimeout(coord.done, PROBE_COORD_EXIT_MS, "coordinator exit");
+    r1 = await withTimeout(w1.done, PROBE_WORKER_MS, "worker 1 exit");
+    r2 = await withTimeout(w2.done, PROBE_WORKER_MS, "worker 2 exit");
+
+    // Fail closed: require clean acquisition, release, and exit for every process.
+    if (cr.code !== 0 || cr.signal !== null || !/UNLOCK=t/.test(cr.out) || !/COORD_UNLOCKED/.test(cr.out)) {
+      throw new Error(`coordinator did not acquire+release the barrier and exit cleanly (code=${cr.code}, signal=${cr.signal ?? "none"}).`);
+    }
+    for (const [nm, r] of [["worker 1", r1], ["worker 2", r2]]) {
+      if (r.code !== 0 || r.signal !== null) {
+        throw new Error(`concurrency ${nm} did not exit cleanly (code=${r.code}, signal=${r.signal ?? "none"}); output not accepted.`);
+      }
+    }
+
+    const outcomes = [parseProbeOutcome(r1), parseProbeOutcome(r2)].sort();
+    const allowed = outcomes.filter((o) => o === "true|ok").length;
+    const exceeded = outcomes.filter((o) => o === "false|quota_exceeded").length;
+    if (allowed !== 1 || exceeded !== 1) {
+      throw new Error(`concurrency probe expected exactly one allowed + one quota_exceeded, got: ${outcomes.join(", ")}`);
+    }
   } catch (err) {
-    try { coord.stdin.end(); } catch { /* noop */ }
+    await killPsql(w1);
+    await killPsql(w2);
+    await killPsql(coord);
     throw err;
   }
 
-  const [r1, r2] = await workers;
-  const outcomes = [parseProbeOutcome(r1), parseProbeOutcome(r2)].sort();
-  const allowed = outcomes.filter((o) => o === "true|ok").length;
-  const exceeded = outcomes.filter((o) => o === "false|quota_exceeded").length;
-  if (allowed !== 1 || exceeded !== 1) {
-    throw new Error(`concurrency probe expected exactly one allowed + one quota_exceeded, got: ${outcomes.join(", ")}`);
-  }
-
-  // Fresh-connection invariants.
+  // All three sessions have terminated. Prove lock + quota invariants on fresh
+  // connections BEFORE removing the committed fixture.
+  const barrierLocks = await countBarrierLocks(container);
+  const barrierWaiters = await countBarrierWaiters(container);
+  if (barrierLocks !== 0) throw new Error(`concurrency probe: ${barrierLocks} advisory lock(s) remain on the barrier key.`);
+  if (barrierWaiters !== 0) throw new Error(`concurrency probe: ${barrierWaiters} ungranted barrier waiter(s) remain.`);
   const finalUsed = parseInt(await dbScalar(container,
     `SELECT used FROM public.usage_counters WHERE user_id='${PROBE_USER}' AND feature='ai_analysis' AND period_type='monthly';`), 10);
   const rowCount = parseInt(await dbScalar(container,
     `SELECT count(*) FROM public.usage_counters WHERE user_id='${PROBE_USER}' AND feature='ai_analysis' AND period_type='monthly';`), 10);
   if (finalUsed !== PROBE_CAP) throw new Error(`concurrency probe: final usage ${finalUsed} != cap ${PROBE_CAP}.`);
-  if (finalUsed > PROBE_CAP) throw new Error("concurrency probe: usage exceeded the cap.");
   if (rowCount !== 1) throw new Error(`concurrency probe: expected exactly one counter row, found ${rowCount}.`);
-  log(`concurrency probe OK: one allowed + one quota_exceeded; usage=${finalUsed} (cap ${PROBE_CAP}); one counter row.`);
+  log(`concurrency probe OK: one allowed + one quota_exceeded; usage=${finalUsed} (cap ${PROBE_CAP}); one counter row; no barrier locks remain.`);
 
-  // Remove every committed fixture; release any lingering advisory lock.
+  // Only now remove every committed fixture; release any lingering advisory lock.
   const cleanup = await dockerPsql(container,
     `SELECT pg_advisory_unlock_all();\n` +
     `DELETE FROM public.usage_counters WHERE user_id='${PROBE_USER}';\n` +
@@ -667,17 +876,30 @@ async function runConcurrencyProbe(container) {
     `DELETE FROM public.user_entitlements WHERE user_id='${PROBE_USER}';\n` +
     `DELETE FROM auth.users WHERE id='${PROBE_USER}';\n`);
   if (cleanup.code !== 0) throw new Error(`concurrency fixture cleanup failed: ${cleanup.err.trim()}`);
-  const leftover = parseInt(await dbScalar(container, `SELECT count(*) FROM auth.users WHERE id='${PROBE_USER}';`), 10);
-  if (leftover !== 0) throw new Error("concurrency fixture user still present after cleanup.");
+  // Prove full fixture absence on a fresh connection.
+  const residual = (await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.user_entitlements WHERE user_id='${PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.usage_counters WHERE user_id='${PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.user_storage_usage WHERE user_id='${PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.internal_user_access WHERE user_id='${PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${BARRIER_CLASSID} AND objid=${BARRIER_OBJID});`))
+    .split("|").map((s) => parseInt(s, 10));
+  if (residual.some((c) => c !== 0)) {
+    throw new Error(`concurrency fixture not fully removed (user|entitlement|counter|storage|access|advisory = ${residual.join("|")}).`);
+  }
 }
 
 /**
- * Residue check on a fresh connection: after the transaction-isolated pgTAP
- * suites, the framework-free file, and the concurrency probe (+ its cleanup),
- * no test user, application row, entitlement/quota/storage/access row, advisory
- * lock, or barrier object may remain, and pgTAP state must be unchanged.
+ * Residue + catalog check on a fresh connection (Sections H): after the
+ * transaction-isolated pgTAP suites, the negative control, the framework-free
+ * file, and the concurrency probe (+ its cleanup), no test user, application row,
+ * entitlement/quota/storage/access row, or advisory lock may remain; pgTAP state
+ * must be unchanged; and the catalog fingerprint (functions, policies, RLS flags,
+ * triggers, relations) must exactly equal the pre-test baseline — proving no
+ * persistent function/policy/trigger/relation/RLS-flag/extension/helper changed.
  */
-async function assertNoResidue(container, pgtapBefore) {
+async function assertNoResidue(container, pgtapBefore, catalogBefore) {
   const counts = (await dbScalar(container,
     "SELECT (SELECT count(*) FROM auth.users) || '|' || " +
     "(SELECT count(*) FROM public.papers) || '|' || " +
@@ -697,7 +919,12 @@ async function assertNoResidue(container, pgtapBefore) {
   if (pgtapAfter !== pgtapBefore) {
     throw new Error(`pgTAP extension state changed: before="${pgtapBefore}" after="${pgtapAfter}".`);
   }
-  log(`residue check OK: no test rows remain; pgTAP state unchanged (${pgtapAfter}).`);
+  const catalogAfter = await captureCatalog(container);
+  if (catalogAfter !== catalogBefore) {
+    throw new Error(`catalog fingerprint changed: before="${catalogBefore}" after="${catalogAfter}".`);
+  }
+  log(`residue check OK: no test rows/locks remain; pgTAP state unchanged (${pgtapAfter}); catalog fingerprint unchanged.`);
+  log("no persistent function, policy, trigger, relation, RLS-flag, extension, helper, fixture, or advisory lock changed.");
 }
 
 async function cmdDbTests() {
@@ -720,15 +947,23 @@ async function cmdDbTests() {
     const container = await resolveLocalDbContainer();
     log(`resolved local Postgres container: ${container}`);
 
+    // Baselines: extension state + catalog fingerprint captured on a clean DB.
     const pgtapBefore = await pgtapState(container);
     log(`pre-test pgTAP state: ${pgtapBefore}`);
+    const catalogBefore = await captureCatalog(container);
+    log(`pre-test catalog fingerprint: ${catalogBefore}`);
+
+    // Expected-failure negative control BEFORE the green suite, then prove the
+    // injected regression fully rolled back (Section E).
+    await runNegativeControl(container);
+    await assertNegativeControlRestored(container, catalogBefore);
 
     await runPgTapDirectory();
     // Extension isolation is asserted precisely in assertNoResidue below.
 
     await runLegacyVerification(container);
     await runConcurrencyProbe(container);
-    await assertNoResidue(container, pgtapBefore);
+    await assertNoResidue(container, pgtapBefore, catalogBefore);
 
     log("all local database-security tests passed.");
   } catch (err) {
@@ -742,15 +977,24 @@ async function cmdDbTests() {
     cleanupError = err;
   }
 
-  // Prove no local stack remains (belt-and-suspenders after teardown).
+  // Prove no CURRENT-PROJECT stack remains (Section J). Supabase names every
+  // local container `supabase_<service>_<ref>`, so scope the check to this
+  // project's ref: an unrelated Supabase project that happened to be running is
+  // NOT this task's residue and must not be treated as a failure or stopped.
   if (!cleanupError) {
     try {
+      const ref = readProjectId();
       const ps = await runCapture("docker", ["ps", "--format", "{{.Names}}"]);
-      const supa = ps.out.split("\n").map((s) => s.trim()).filter((n) => n.startsWith("supabase_"));
-      if (supa.length > 0) {
-        cleanupError = new Error(`local stack still running after teardown: ${supa.join(", ")}`);
+      const running = ps.out.split("\n").map((s) => s.trim()).filter(Boolean);
+      const mine = running.filter((n) => n.startsWith("supabase_") && n.endsWith(`_${ref}`));
+      const others = running.filter((n) => n.startsWith("supabase_") && !n.endsWith(`_${ref}`));
+      if (mine.length > 0) {
+        cleanupError = new Error(`current-project local stack still running after teardown: ${mine.join(", ")}`);
       } else {
-        log("confirmed: no local Supabase stack remains.");
+        log(`confirmed: no current-project (${ref}) local Supabase stack remains.`);
+        if (others.length > 0) {
+          log(`note: ${others.length} unrelated Supabase container(s) left untouched (not this project).`);
+        }
       }
     } catch {
       /* docker ps failure here is non-authoritative; teardown already succeeded */

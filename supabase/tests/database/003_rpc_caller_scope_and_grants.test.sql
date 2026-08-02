@@ -98,13 +98,18 @@ $hlp$;
 INSERT INTO auth.users (id, email) VALUES
   ('aa000000-0000-0000-0000-000000000001','rpc-A@paperlume.test'),
   ('bb000000-0000-0000-0000-000000000002','rpc-B@paperlume.test');
--- Papers for A (a1, a5) and B (b1). Per-user unique partial indexes on pmid and
--- lower(doi) preclude same-user exact duplicates, so get_duplicate_papers is
--- necessarily empty per caller under the current schema; each pmid is distinct.
+-- Papers for A (a1, a5) and B (b1). A1 and B1 deliberately share the SAME non-null
+-- PMID ('PM_SHARED_C03B1'); this is valid because the unique pmid index is PER
+-- USER, so it never collides across owners. A correct caller-scoped
+-- get_duplicate_papers groups only within the caller's own papers, so this shared
+-- cross-user PMID must NOT form a duplicate group for either caller — an isolation
+-- detector: a globally-grouping implementation would surface the shared-PMID group
+-- and one caller would receive the other's paper. Exactly one PMID-bearing paper
+-- per user (a5 keeps pmid NULL).
 INSERT INTO public.papers (id, user_id, title, pmid, keywords, study_type, insert_order) VALUES
-  ('a0000000-0000-0000-0000-0000000000a1','aa000000-0000-0000-0000-000000000001','Paper A1','PMA1','[]'::jsonb,NULL,1),
+  ('a0000000-0000-0000-0000-0000000000a1','aa000000-0000-0000-0000-000000000001','Paper A1','PM_SHARED_C03B1','[]'::jsonb,NULL,1),
   ('a0000000-0000-0000-0000-0000000000a5','aa000000-0000-0000-0000-000000000001','Paper A2',NULL,'[]'::jsonb,NULL,2),
-  ('b0000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-000000000002','Paper B','PMB',' ["original"]'::jsonb,'orig',3);
+  ('b0000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-000000000002','Paper B','PM_SHARED_C03B1',' ["original"]'::jsonb,'orig',3);
 INSERT INTO public.projects (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a2','aa000000-0000-0000-0000-000000000001','Project A'),
   ('b0000000-0000-0000-0000-0000000000b2','bb000000-0000-0000-0000-000000000002','Project B');
@@ -112,7 +117,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(146);
+SELECT plan(164);
 
 -- ══ 1. Inventory: exactly 20 SECURITY DEFINER functions, none unexpected ═════
 SELECT is(
@@ -173,6 +178,16 @@ SELECT ok(has_function_privilege(
     (SELECT p.proowner::regrole::text FROM pg_proc p WHERE p.oid = sig::regprocedure),
     sig::regprocedure, 'EXECUTE'),
   'trigger-only owner execution preserved: ' || sig) FROM pg_temp.trigger_fns() sig;
+
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 17) ═══════════
+-- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
+-- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
+SELECT ok(
+  has_function_privilege(
+    (SELECT p.proowner::regrole::text FROM pg_proc p WHERE p.oid = sig::regprocedure),
+    sig::regprocedure, 'EXECUTE'),
+  'directly-callable owner execution preserved: ' || sig
+) FROM pg_temp.client_rpcs() sig;
 
 -- ══ 4. Caller identity: read RPCs (null-auth / mismatch reject, valid ok) ════
 -- null-auth
@@ -301,13 +316,21 @@ SELECT is(
   (SELECT study_type FROM public.papers WHERE id='b0000000-0000-0000-0000-0000000000b1'),
   'orig', 'bulk_update_study_types: A cannot change B''s paper study_type (unchanged)');
 
--- ══ 7. get_duplicate_papers (caller-scoped; empty under unique constraints) ══
+-- ══ 7. get_duplicate_papers (caller-scoped isolation under a shared PMID) ═════
+-- A1 and B1 share PMID 'PM_SHARED_C03B1' (see fixtures). A correct caller-scoped
+-- implementation groups only the caller's own papers, so each caller sees []; a
+-- globally-grouping implementation would surface the shared-PMID group and one
+-- caller would receive the other user's paper ID. The two exact-empty results are
+-- therefore sufficient to detect cross-user grouping.
 SELECT is(pg_temp.scalar_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$SELECT public.get_duplicate_papers()::text$q$),
-  '[]', 'get_duplicate_papers: A caller-scoped read succeeds (no same-user duplicates possible)');
+  '[]', 'get_duplicate_papers: caller A sees no duplicate group despite the shared cross-user PMID');
 SELECT is(pg_temp.scalar_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
   $q$SELECT public.get_duplicate_papers()::text$q$),
-  '[]', 'get_duplicate_papers: B caller-scoped read succeeds and returns only own scope');
+  '[]', 'get_duplicate_papers: caller B sees no duplicate group despite the shared cross-user PMID');
+SELECT is(pg_temp.scalar_as('authenticated','',
+  $q$SELECT public.get_duplicate_papers()::text$q$),
+  '[]', 'get_duplicate_papers: authenticated caller with missing claims receives no duplicate data');
 
 -- ══ 8. get_current_user_access (valid vs null-auth) ═════════════════════════
 SELECT is(pg_temp.scalar_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
