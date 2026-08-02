@@ -9,6 +9,8 @@
 -- Sections:
 --   1. RPC authentication guards (explicit NULL-auth rejection + bounded
 --      search_path for search_papers).
+--   1b. Setter RPC referenced-object ownership validation (set_paper_tags,
+--      set_paper_projects, bulk_set_paper_tags, bulk_set_paper_projects).
 --   2. Attachment quota trigger — defense-in-depth ownership validation.
 --   3. SECURITY DEFINER EXECUTE ACL hardening (complete surface).
 --   4. paper_projects relational ownership policies.
@@ -335,6 +337,181 @@ END;
 $function$;
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 1b. SETTER RPC REFERENCED-OBJECT OWNERSHIP VALIDATION
+--
+-- The four SECURITY DEFINER assignment RPCs validated only PAPER ownership
+-- (or, for the bulk variants, silently filtered to owned papers) and never
+-- checked that the referenced project/tag belonged to the caller. Because
+-- SECURITY DEFINER bypasses RLS, a caller could link their own paper to
+-- another user's project/tag (a cross-owner junction row). Add explicit
+-- NULL-auth rejection and all-or-nothing referenced-object ownership
+-- validation that runs BEFORE any DELETE/INSERT, so a rejected call performs
+-- no mutation and existing valid assignments are preserved. Signatures,
+-- return types, SECURITY DEFINER, bounded search_path, replace-all semantics,
+-- and empty-array clearing semantics are all preserved.
+-- ─────────────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.set_paper_tags(p_paper_id uuid, p_tag_ids uuid[])
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  -- Reject an unauthenticated caller explicitly (never rely on NULL
+  -- comparison behavior of auth.uid()).
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: no authenticated user';
+  END IF;
+
+  -- Ownership validation BEFORE any mutation.
+  IF NOT EXISTS (
+    SELECT 1 FROM papers WHERE id = p_paper_id AND user_id = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'Paper not found or access denied';
+  END IF;
+
+  -- Every non-null requested tag must belong to the caller. Unknown or
+  -- foreign tags reject the whole call (no delete, no insert).
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(p_tag_ids) AS tid
+    WHERE tid IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM tags t WHERE t.id = tid AND t.user_id = auth.uid())
+  ) THEN
+    RAISE EXCEPTION 'Unauthorized: one or more tags not found or not owned by the caller';
+  END IF;
+
+  DELETE FROM paper_tags WHERE paper_id = p_paper_id;
+  IF array_length(p_tag_ids, 1) > 0 THEN
+    INSERT INTO paper_tags (paper_id, tag_id)
+    SELECT p_paper_id, unnest(p_tag_ids);
+  END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.set_paper_projects(p_paper_id uuid, p_project_ids uuid[])
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: no authenticated user';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM papers WHERE id = p_paper_id AND user_id = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'Paper not found or access denied';
+  END IF;
+
+  -- Every non-null requested project must belong to the caller.
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(p_project_ids) AS pid
+    WHERE pid IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM projects pr WHERE pr.id = pid AND pr.user_id = auth.uid())
+  ) THEN
+    RAISE EXCEPTION 'Unauthorized: one or more projects not found or not owned by the caller';
+  END IF;
+
+  DELETE FROM paper_projects WHERE paper_id = p_paper_id;
+  IF array_length(p_project_ids, 1) > 0 THEN
+    INSERT INTO paper_projects (paper_id, project_id)
+    SELECT p_paper_id, unnest(p_project_ids);
+  END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.bulk_set_paper_tags(p_paper_ids uuid[], p_tag_ids uuid[])
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: no authenticated user';
+  END IF;
+
+  -- All-or-nothing ownership validation BEFORE any mutation: a single foreign
+  -- or unknown paper rejects the entire call (no silent filtering).
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(p_paper_ids) AS pid
+    WHERE pid IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM papers p WHERE p.id = pid AND p.user_id = auth.uid())
+  ) THEN
+    RAISE EXCEPTION 'Unauthorized: one or more papers not found or not owned by the caller';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(p_tag_ids) AS tid
+    WHERE tid IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM tags t WHERE t.id = tid AND t.user_id = auth.uid())
+  ) THEN
+    RAISE EXCEPTION 'Unauthorized: one or more tags not found or not owned by the caller';
+  END IF;
+
+  DELETE FROM paper_tags
+  WHERE paper_id = ANY(p_paper_ids)
+    AND paper_id IN (SELECT id FROM papers WHERE user_id = auth.uid());
+  IF array_length(p_tag_ids, 1) > 0 THEN
+    INSERT INTO paper_tags (paper_id, tag_id)
+    SELECT pid, tid
+    FROM unnest(p_paper_ids) AS pid
+    CROSS JOIN unnest(p_tag_ids) AS tid
+    WHERE pid IN (SELECT id FROM papers WHERE user_id = auth.uid());
+  END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.bulk_set_paper_projects(p_paper_ids uuid[], p_project_ids uuid[])
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: no authenticated user';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(p_paper_ids) AS pid
+    WHERE pid IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM papers p WHERE p.id = pid AND p.user_id = auth.uid())
+  ) THEN
+    RAISE EXCEPTION 'Unauthorized: one or more papers not found or not owned by the caller';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(p_project_ids) AS pid
+    WHERE pid IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM projects pr WHERE pr.id = pid AND pr.user_id = auth.uid())
+  ) THEN
+    RAISE EXCEPTION 'Unauthorized: one or more projects not found or not owned by the caller';
+  END IF;
+
+  DELETE FROM paper_projects
+  WHERE paper_id = ANY(p_paper_ids)
+    AND paper_id IN (SELECT id FROM papers WHERE user_id = auth.uid());
+  IF array_length(p_project_ids, 1) > 0 THEN
+    INSERT INTO paper_projects (paper_id, project_id)
+    SELECT pid, projid
+    FROM unnest(p_paper_ids) AS pid
+    CROSS JOIN unnest(p_project_ids) AS projid
+    WHERE pid IN (SELECT id FROM papers WHERE user_id = auth.uid());
+  END IF;
+END;
+$function$;
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 2. ATTACHMENT QUOTA TRIGGER — DEFENSE-IN-DEPTH OWNERSHIP VALIDATION
 --
 -- paper_attachments are inserted only through the caller-authenticated client
@@ -440,73 +617,79 @@ COMMENT ON FUNCTION public.check_and_consume_storage_quota() IS
 --
 -- Intended ACL matrix (verified from repository usage: every directly-callable
 -- RPC is invoked only from the caller-authenticated client or from Edge
--- Functions that forward the caller's JWT — none use service_role, and none
--- are called by anon):
+-- Functions that forward the caller's JWT as the `authenticated` role — no
+-- repository path invokes any of these functions with a service_role client,
+-- and none are called by anon):
 --   directly-callable RPCs  -> EXECUTE = {owner(postgres), authenticated}
 --   trigger-only functions  -> EXECUTE = {owner(postgres)} only
--- REVOKE from PUBLIC removes the implicit default grant; REVOKE from anon is
--- explicit/defensive. Statements are idempotent for functions already at the
--- intended ACL (consume_ai_quota, refund_ai_quota, get_ai_quota_status,
--- get_current_user_access).
+-- REVOKE from PUBLIC removes the implicit default grant; REVOKE from anon and
+-- service_role is explicit and closes real Production drift — Production
+-- currently carries explicit anon, authenticated, and service_role EXECUTE on
+-- (nearly) this entire surface (including anon EXECUTE on consume_ai_quota /
+-- refund_ai_quota and service_role EXECUTE on the trigger-only functions).
+-- A clean local replay does not reproduce every one of those historical
+-- grants, so these statements are idempotent where a grant is already absent
+-- and corrective where it is present; the post-migration ACL is identical on
+-- both local replay and Production.
 -- ─────────────────────────────────────────────────────────────────────────
 
 -- 3a. Directly-callable, signed-in-user-only RPCs → {owner, authenticated}
-REVOKE ALL ON FUNCTION public.bulk_set_paper_projects(uuid[], uuid[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.bulk_set_paper_projects(uuid[], uuid[]) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.bulk_set_paper_projects(uuid[], uuid[]) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.bulk_set_paper_tags(uuid[], uuid[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.bulk_set_paper_tags(uuid[], uuid[]) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.bulk_set_paper_tags(uuid[], uuid[]) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.bulk_update_keywords(jsonb) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.bulk_update_keywords(jsonb) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.bulk_update_keywords(jsonb) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.bulk_update_study_types(jsonb) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.bulk_update_study_types(jsonb) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.bulk_update_study_types(jsonb) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.consume_ai_quota(uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.consume_ai_quota(uuid) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.consume_ai_quota(uuid) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.filter_papers_by_keywords(uuid, text[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.filter_papers_by_keywords(uuid, text[]) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.filter_papers_by_keywords(uuid, text[]) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.get_ai_quota_status(uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.get_ai_quota_status(uuid) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.get_ai_quota_status(uuid) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.get_current_user_access() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.get_current_user_access() FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.get_current_user_access() TO authenticated;
 
-REVOKE ALL ON FUNCTION public.get_duplicate_papers() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.get_duplicate_papers() FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.get_duplicate_papers() TO authenticated;
 
-REVOKE ALL ON FUNCTION public.get_keyword_options(uuid, uuid[], integer, integer, text[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.get_keyword_options(uuid, uuid[], integer, integer, text[]) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.get_keyword_options(uuid, uuid[], integer, integer, text[]) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.merge_exact_duplicates(uuid, uuid[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.merge_exact_duplicates(uuid, uuid[]) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.merge_exact_duplicates(uuid, uuid[]) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.refund_ai_quota(uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.refund_ai_quota(uuid) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.refund_ai_quota(uuid) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.safe_bulk_insert_papers(uuid, jsonb) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.safe_bulk_insert_papers(uuid, jsonb) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.safe_bulk_insert_papers(uuid, jsonb) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.search_papers(uuid, text, integer, integer) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.search_papers(uuid, text, integer, integer) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.search_papers(uuid, text, integer, integer) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.search_papers_short(uuid, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.search_papers_short(uuid, text) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.search_papers_short(uuid, text) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.set_paper_projects(uuid, uuid[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.set_paper_projects(uuid, uuid[]) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.set_paper_projects(uuid, uuid[]) TO authenticated;
 
-REVOKE ALL ON FUNCTION public.set_paper_tags(uuid, uuid[]) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.set_paper_tags(uuid, uuid[]) FROM PUBLIC, anon, service_role;
 GRANT  EXECUTE ON FUNCTION public.set_paper_tags(uuid, uuid[]) TO authenticated;
 
 -- 3b. Trigger-only functions → {owner} only. Triggers fire via the trigger
 -- mechanism (owner context) and do not require EXECUTE grants to client roles.
-REVOKE ALL ON FUNCTION public.check_and_consume_storage_quota() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.refund_storage_quota() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.check_and_consume_storage_quota() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.refund_storage_quota() FROM PUBLIC, anon, authenticated, service_role;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 4. paper_projects RELATIONAL OWNERSHIP POLICIES

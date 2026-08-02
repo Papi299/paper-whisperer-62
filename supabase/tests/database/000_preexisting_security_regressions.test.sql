@@ -2,21 +2,33 @@
 -- remediation (migration 20260802025704_harden_rpc_and_relational_ownership).
 --
 -- Every assertion pins a defect that reproduced on the unmodified base:
---   * least-privilege EXECUTE across the full SECURITY DEFINER surface;
+--   * least-privilege EXECUTE across the full SECURITY DEFINER surface, with no
+--     PUBLIC / anon / service_role EXECUTE on the directly-callable RPCs and
+--     none of those (nor authenticated) on the trigger-only functions;
 --   * explicit NULL-auth rejection in the four read RPCs + safe_bulk_insert_papers;
+--   * referenced-object ownership validation in the four setter RPCs
+--     (set_paper_tags/_projects, bulk_set_paper_tags/_projects), all-or-nothing,
+--     validated before any mutation so a rejected call preserves assignments;
 --   * bounded search_path on search_papers;
 --   * both-owner relational integrity for paper_projects / paper_tags;
 --   * attachment↔paper ownership + quota defense.
 --
--- Transaction-wrapped; deterministic UUIDs; no TODO/SKIP; no remote calls; no
--- Production access; no real user data. Role-switched calls run inside helper
--- functions that return the exact SQLSTATE so each assertion checks a specific
--- error code (ACL denial 42501, guard/trigger raise P0001, RLS violation 42501),
--- never a blanket "some exception".
-
-CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA public;
+-- Deterministic UUIDs; no TODO/SKIP; no remote calls; no Production access; no
+-- real user data. Role-switched calls run inside helper functions that return
+-- the exact SQLSTATE so each assertion checks a specific error code (ACL denial
+-- 42501, guard/trigger raise P0001, RLS violation 42501), never a blanket "some
+-- exception".
 
 BEGIN;
+
+-- pgTAP is created INSIDE this transaction and rolled back with it, so a run
+-- leaves the database's extension state exactly as it found it (a fresh
+-- connection after ROLLBACK confirms pgtap is absent again). It is installed in
+-- the standard Supabase `extensions` schema; the SET LOCAL search_path lets the
+-- unqualified pgTAP functions resolve while every application object referenced
+-- below stays fully schema-qualified.
+CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
+SET LOCAL search_path TO extensions, public, pg_temp;
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 -- Run p_sql as p_role with the given JWT claims; return the resulting SQLSTATE
@@ -104,7 +116,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('30000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-00000000000a','Tag A'),
   ('30000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-00000000000b','Tag B');
 
-SELECT plan(93);
+SELECT plan(139);
 
 -- ── 1. EXECUTE ACL matrix over the full directly-callable RPC surface ───────
 SELECT ok(
@@ -125,6 +137,13 @@ SELECT ok(
   'authenticated can execute ' || sig
 ) FROM pg_temp.client_rpcs() sig;
 
+-- service_role has no EXECUTE on the directly-callable surface (closes the
+-- Production service_role drift; no repository path invokes these as service_role).
+SELECT ok(
+  NOT has_function_privilege('service_role', sig::regprocedure, 'EXECUTE'),
+  'service_role cannot execute ' || sig
+) FROM pg_temp.client_rpcs() sig;
+
 -- ── 2. Trigger-only functions are not directly client-executable ────────────
 SELECT ok(
   NOT has_function_privilege('authenticated', sig::regprocedure, 'EXECUTE')
@@ -134,6 +153,17 @@ SELECT ok(
     WHERE p.oid = sig::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'
   ),
   'trigger-only function not client-executable (PUBLIC/anon/authenticated): ' || sig
+) FROM unnest(ARRAY[
+  'public.check_and_consume_storage_quota()',
+  'public.handle_new_user()',
+  'public.refund_storage_quota()'
+]) sig;
+
+-- service_role has no EXECUTE on the trigger-only functions either (closes the
+-- Production service_role drift on this server-only surface).
+SELECT ok(
+  NOT has_function_privilege('service_role', sig::regprocedure, 'EXECUTE'),
+  'trigger-only function not service_role-executable: ' || sig
 ) FROM unnest(ARRAY[
   'public.check_and_consume_storage_quota()',
   'public.handle_new_user()',
@@ -290,6 +320,105 @@ SELECT is(
   '12345',
   'rejected attachment inserts did not consume storage quota'
 );
+
+-- ── 14. set_paper_tags referenced-object ownership (single) ─────────────────
+-- (a) own paper + own tag succeeds (establishes paperA -> {tagA}).
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_tags('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'set_paper_tags: own paper + own tag succeeds');
+-- (b) own paper + foreign tag rejected.
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_tags('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['30000000-0000-0000-0000-0000000000b1']::uuid[])$q$),
+  'P0001', 'set_paper_tags: own paper + foreign tag rejected');
+-- (c) foreign paper + own tag rejected.
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_tags('10000000-0000-0000-0000-0000000000b1'::uuid, ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'set_paper_tags: foreign paper + own tag rejected');
+-- (d) null-auth caller rejected.
+SELECT is(pg_temp.errcode_as('authenticated', '',
+  $q$SELECT public.set_paper_tags('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'set_paper_tags: null-auth caller rejected');
+-- (e) the pre-existing owned assignment survives every rejected call above.
+SELECT is((SELECT count(*)::int FROM public.paper_tags
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND tag_id='30000000-0000-0000-0000-0000000000a1'),
+  1, 'set_paper_tags: pre-existing own assignment survives rejected calls');
+-- (f) no cross-owner (foreign tag) row was created.
+SELECT is((SELECT count(*)::int FROM public.paper_tags
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND tag_id='30000000-0000-0000-0000-0000000000b1'),
+  0, 'set_paper_tags: no cross-owner (foreign tag) junction row exists');
+
+-- ── 15. set_paper_projects referenced-object ownership (single) ──────────────
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_projects('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'set_paper_projects: own paper + own project succeeds');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_projects('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['20000000-0000-0000-0000-0000000000b1']::uuid[])$q$),
+  'P0001', 'set_paper_projects: own paper + foreign project rejected');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_projects('10000000-0000-0000-0000-0000000000b1'::uuid, ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'set_paper_projects: foreign paper + own project rejected');
+SELECT is(pg_temp.errcode_as('authenticated', '',
+  $q$SELECT public.set_paper_projects('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'set_paper_projects: null-auth caller rejected');
+SELECT is((SELECT count(*)::int FROM public.paper_projects
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND project_id='20000000-0000-0000-0000-0000000000a1'),
+  1, 'set_paper_projects: pre-existing own assignment survives rejected calls');
+SELECT is((SELECT count(*)::int FROM public.paper_projects
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND project_id='20000000-0000-0000-0000-0000000000b1'),
+  0, 'set_paper_projects: no cross-owner (foreign project) junction row exists');
+
+-- ── 16. bulk_set_paper_tags all-or-nothing ownership ────────────────────────
+-- (a) all-own arrays succeed (paperA -> {tagA}).
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_tags(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'bulk_set_paper_tags: all-own arrays succeed');
+-- (b) a foreign paper anywhere in the paper array rejects the whole call.
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_tags(ARRAY['10000000-0000-0000-0000-0000000000a1','10000000-0000-0000-0000-0000000000b1']::uuid[], ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'bulk_set_paper_tags: foreign paper in mixed array rejects whole call');
+-- (c) a foreign tag anywhere in the tag array rejects the whole call.
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_tags(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['30000000-0000-0000-0000-0000000000a1','30000000-0000-0000-0000-0000000000b1']::uuid[])$q$),
+  'P0001', 'bulk_set_paper_tags: foreign tag in mixed array rejects whole call');
+-- (d) null-auth caller rejected.
+SELECT is(pg_temp.errcode_as('authenticated', '',
+  $q$SELECT public.bulk_set_paper_tags(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'bulk_set_paper_tags: null-auth caller rejected');
+-- (e) no partial delete: the owned assignment survives every rejected call.
+SELECT is((SELECT count(*)::int FROM public.paper_tags
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND tag_id='30000000-0000-0000-0000-0000000000a1'),
+  1, 'bulk_set_paper_tags: no partial delete (owned assignment survives rejection)');
+-- (f) no partial insert of the foreign tag.
+SELECT is((SELECT count(*)::int FROM public.paper_tags
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND tag_id='30000000-0000-0000-0000-0000000000b1'),
+  0, 'bulk_set_paper_tags: no partial insert of foreign tag');
+-- (g) no junction row was created for the foreign paper.
+SELECT is((SELECT count(*)::int FROM public.paper_tags
+   WHERE paper_id='10000000-0000-0000-0000-0000000000b1'),
+  0, 'bulk_set_paper_tags: no partial insert for foreign paper');
+
+-- ── 17. bulk_set_paper_projects all-or-nothing ownership ────────────────────
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_projects(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'bulk_set_paper_projects: all-own arrays succeed');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_projects(ARRAY['10000000-0000-0000-0000-0000000000a1','10000000-0000-0000-0000-0000000000b1']::uuid[], ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'bulk_set_paper_projects: foreign paper in mixed array rejects whole call');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_projects(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['20000000-0000-0000-0000-0000000000a1','20000000-0000-0000-0000-0000000000b1']::uuid[])$q$),
+  'P0001', 'bulk_set_paper_projects: foreign project in mixed array rejects whole call');
+SELECT is(pg_temp.errcode_as('authenticated', '',
+  $q$SELECT public.bulk_set_paper_projects(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'bulk_set_paper_projects: null-auth caller rejected');
+SELECT is((SELECT count(*)::int FROM public.paper_projects
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND project_id='20000000-0000-0000-0000-0000000000a1'),
+  1, 'bulk_set_paper_projects: no partial delete (owned assignment survives rejection)');
+SELECT is((SELECT count(*)::int FROM public.paper_projects
+   WHERE paper_id='10000000-0000-0000-0000-0000000000a1' AND project_id='20000000-0000-0000-0000-0000000000b1'),
+  0, 'bulk_set_paper_projects: no partial insert of foreign project');
+SELECT is((SELECT count(*)::int FROM public.paper_projects
+   WHERE paper_id='10000000-0000-0000-0000-0000000000b1'),
+  0, 'bulk_set_paper_projects: no partial insert for foreign paper');
 
 SELECT * FROM finish();
 ROLLBACK;
