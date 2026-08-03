@@ -11,16 +11,22 @@
  *                  during Playwright config, before Vite starts and before any
  *                  credential is entered), plus a static Layer 2 ordering check.
  *   db-tests       Start local stack → reset+replay migrations → capture a
- *                  pgTAP + catalog baseline → run an expected-failure negative
- *                  control (inject a transaction-only papers-RLS regression the
- *                  detector must catch, then prove it rolled back) → run every
- *                  pgTAP suite under supabase/tests/database (isolated, extension
- *                  state restored) → run the framework-free 18-case verification
- *                  → prove true concurrent AI-quota consumption at the cap with
- *                  bounded, fail-closed coordinator/worker processes → verify no
- *                  row/catalog residue → stop the stack and delete its volumes.
- *                  Cleanup is MANDATORY and never honors E2E_KEEP_LOCAL_STACK;
- *                  the post-teardown check is scoped to this project's ref.
+ *                  pgTAP + expanded catalog baseline → run a transaction-only
+ *                  catalog-fingerprint sensitivity probe (prove same-name
+ *                  definition changes are detected, then that it rolled back) →
+ *                  run an expected-failure negative control (inject a
+ *                  transaction-only papers-RLS regression the detector must
+ *                  catch, then prove it rolled back) → run every pgTAP suite
+ *                  under supabase/tests/database (isolated, extension state
+ *                  restored) → run the framework-free 18-case verification →
+ *                  prove true concurrent AI-quota consumption at the cap with
+ *                  bounded, fail-closed coordinator/worker processes whose
+ *                  deadlines all start at barrier release → verify no
+ *                  row/catalog residue → stop the stack and delete its volumes →
+ *                  authoritatively inspect that no current-project container
+ *                  remains. Cleanup is MANDATORY and never honors
+ *                  E2E_KEEP_LOCAL_STACK; the post-teardown inspection is
+ *                  fail-closed and scoped to this project's ref.
  *   stop           Stop and delete the local stack's ephemeral state.
  *
  * The `run` default is ephemeral: its stack is always stopped and its volumes
@@ -609,44 +615,147 @@ async function pgtapState(container) {
 }
 
 /**
- * Deterministic catalog fingerprint over the security-relevant surface
- * (Section H): per-category md5 hashes of stably-ordered rows for
- *   - public functions (identity args, owner, SECURITY DEFINER, proconfig, ACL);
- *   - public policies (schema, table, name, command, roles, USING, WITH CHECK);
- *   - public-table RLS flags (relrowsecurity, relforcerowsecurity);
- *   - non-internal triggers on public tables (table, trigger name);
- *   - persistent relations in the tested schemas (schema, name, kind).
- * Contains only md5 hashes — no credentials — so it is safe to log and compare
- * before/after. Compared for exact equality on a fresh connection to prove no
- * persistent schema/catalog object changed.
+ * Deterministic, security-relevant catalog fingerprint (Section G) as a single
+ * scalar expression (no trailing semicolon) so it can be run directly or nested
+ * as a scalar subquery. Per-category md5 over stably-ordered rows for:
+ *   - func: every persistent public function — schema, name, identity args, full
+ *     pg_get_functiondef (detects a same-signature body change), result type,
+ *     language, owner, kind, SECURITY DEFINER, volatility, strictness,
+ *     leakproofness, parallel-safety, proconfig, ACL;
+ *   - pol:  public policies — schema, table, name, command, permissive/restrictive
+ *     mode, roles, USING, WITH CHECK;
+ *   - rls:  public table RLS flags — schema, relation, relrowsecurity,
+ *     relforcerowsecurity;
+ *   - trg:  non-internal triggers on public tables — schema, table, name, full
+ *     pg_get_triggerdef (timing/event/condition/args/function), enabled state;
+ *   - rel:  persistent relations in public+extensions incl. indexes — schema,
+ *     name, kind, owner, ACL, persistence, partition status;
+ *   - col:  table columns in ordinal order — type, nullability, identity/generated
+ *     state, collation, default expression;
+ *   - con:  constraints via pg_get_constraintdef;
+ *   - idx:  indexes via pg_get_indexdef (detects a same-name index change).
+ * Excludes temp relations, internal schemas, unstable OIDs/relfilenodes, row
+ * counts, and statistics. Only md5 hashes leave the DB — safe to log.
  */
+const CATALOG_FP_SQL =
+  "WITH " +
+  "funcs AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT n.nspname || '|' || p.proname || '|' || pg_get_function_identity_arguments(p.oid) || '|' || " +
+  "         CASE WHEN p.prokind IN ('f','p') THEN pg_get_functiondef(p.oid) ELSE '' END || '|' || " +
+  "         coalesce(pg_get_function_result(p.oid), '') || '|' || l.lanname || '|' || " +
+  "         p.proowner::regrole::text || '|' || p.prokind::text || '|' || p.prosecdef::text || '|' || " +
+  "         p.provolatile::text || '|' || p.proisstrict::text || '|' || p.proleakproof::text || '|' || " +
+  "         p.proparallel::text || '|' || coalesce(array_to_string(p.proconfig, ','), '') || '|' || " +
+  "         coalesce(p.proacl::text, '') AS line " +
+  "  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace " +
+  "  JOIN pg_language l ON l.oid = p.prolang WHERE n.nspname = 'public') s), " +
+  "pols AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT schemaname || '|' || tablename || '|' || policyname || '|' || cmd || '|' || " +
+  "         permissive || '|' || coalesce(array_to_string(roles, ','), '') || '|' || " +
+  "         coalesce(qual, '') || '|' || coalesce(with_check, '') AS line " +
+  "  FROM pg_policies WHERE schemaname = 'public') s), " +
+  "rls AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT n.nspname || '|' || c.relname || '|' || c.relrowsecurity::text || '|' || c.relforcerowsecurity::text AS line " +
+  "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
+  "  WHERE n.nspname = 'public' AND c.relkind IN ('r','p')) s), " +
+  "trg AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT n.nspname || '|' || c.relname || '|' || t.tgname || '|' || " +
+  "         pg_get_triggerdef(t.oid, true) || '|' || t.tgenabled::text AS line " +
+  "  FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid " +
+  "  JOIN pg_namespace n ON n.oid = c.relnamespace " +
+  "  WHERE n.nspname = 'public' AND NOT t.tgisinternal) s), " +
+  "rels AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT n.nspname || '|' || c.relname || '|' || c.relkind::text || '|' || " +
+  "         c.relowner::regrole::text || '|' || coalesce(c.relacl::text, '') || '|' || " +
+  "         c.relpersistence::text || '|' || c.relispartition::text AS line " +
+  "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
+  "  WHERE n.nspname IN ('public','extensions') AND c.relkind IN ('r','v','m','S','p','i','I') " +
+  "    AND c.relpersistence <> 't') s), " +
+  "cols AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT n.nspname || '|' || c.relname || '|' || lpad(a.attnum::text, 4, '0') || '|' || a.attname || '|' || " +
+  "         format_type(a.atttypid, a.atttypmod) || '|' || a.attnotnull::text || '|' || " +
+  "         a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(col.collname, '') || '|' || " +
+  "         coalesce(pg_get_expr(ad.adbin, ad.adrelid), '') AS line " +
+  "  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " +
+  "  JOIN pg_namespace n ON n.oid = c.relnamespace " +
+  "  LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum " +
+  "  LEFT JOIN pg_collation col ON col.oid = a.attcollation " +
+  "  WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m') AND a.attnum > 0 AND NOT a.attisdropped) s), " +
+  "cons AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT n.nspname || '|' || c.relname || '|' || con.conname || '|' || pg_get_constraintdef(con.oid) AS line " +
+  "  FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid " +
+  "  JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public') s), " +
+  "idx AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
+  "  SELECT n.nspname || '|' || c.relname || '|' || pg_get_indexdef(i.indexrelid) AS line " +
+  "  FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid " +
+  "  JOIN pg_namespace n ON n.oid = c.relnamespace " +
+  "  WHERE n.nspname IN ('public','extensions') AND c.relpersistence <> 't') s) " +
+  "SELECT 'func:' || funcs.h || '|pol:' || pols.h || '|rls:' || rls.h || '|trg:' || trg.h || " +
+  "       '|rel:' || rels.h || '|col:' || cols.h || '|con:' || cons.h || '|idx:' || idx.h " +
+  "FROM funcs, pols, rls, trg, rels, cols, cons, idx";
+
 async function captureCatalog(container) {
+  return dbScalar(container, CATALOG_FP_SQL + ";");
+}
+
+/** Parse a `cat:hash|cat:hash|…` fingerprint into a { cat: hash } map. */
+function parseCatalog(fp) {
+  const m = {};
+  for (const part of fp.split("|")) {
+    const i = part.indexOf(":");
+    if (i > 0) m[part.slice(0, i)] = part.slice(i + 1);
+  }
+  return m;
+}
+
+/**
+ * Catalog-fingerprint sensitivity probe (Section H). In ONE transaction on a
+ * fresh connection, create deterministically-named probe objects, capture
+ * fingerprint A, then REPLACE each under the SAME primary name with a different
+ * definition (function body 1→2; trigger BEFORE INSERT → AFTER UPDATE; index
+ * (val) → (val,id)), capture fingerprint B, and ROLLBACK. The probe passes only
+ * if A≠B AND each mutated category (func, trg, idx) individually changed —
+ * proving the fingerprint would catch a same-name definition change. Nothing is
+ * committed; the generated SQL is never printed. The caller then re-captures the
+ * real baseline on a fresh connection to prove the probe left no trace.
+ */
+async function runCatalogSensitivityProbe(container) {
+  log("running catalog-fingerprint sensitivity probe…");
+  const fp = "(" + CATALOG_FP_SQL + ")";
   const sql =
-    "WITH " +
-    "funcs AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
-    "  SELECT p.oid::regprocedure::text || '|' || p.proowner::regrole::text || '|' || " +
-    "         p.prosecdef::text || '|' || coalesce(array_to_string(p.proconfig, ','), '') || '|' || " +
-    "         coalesce(p.proacl::text, '') AS line " +
-    "  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public') s), " +
-    "pols AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
-    "  SELECT schemaname || '|' || tablename || '|' || policyname || '|' || cmd || '|' || " +
-    "         coalesce(array_to_string(roles, ','), '') || '|' || coalesce(qual, '') || '|' || " +
-    "         coalesce(with_check, '') AS line FROM pg_policies WHERE schemaname = 'public') s), " +
-    "rls AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
-    "  SELECT c.relname || '|' || c.relrowsecurity::text || '|' || c.relforcerowsecurity::text AS line " +
-    "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
-    "  WHERE n.nspname = 'public' AND c.relkind = 'r') s), " +
-    "trg AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
-    "  SELECT c.relname || '|' || t.tgname AS line FROM pg_trigger t " +
-    "  JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace " +
-    "  WHERE n.nspname = 'public' AND NOT t.tgisinternal) s), " +
-    "rels AS (SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) h FROM (" +
-    "  SELECT n.nspname || '|' || c.relname || '|' || c.relkind::text AS line " +
-    "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
-    "  WHERE n.nspname IN ('public','extensions') AND c.relkind IN ('r','v','m','S','p')) s) " +
-    "SELECT 'func:' || funcs.h || '|pol:' || pols.h || '|rls:' || rls.h || '|trg:' || trg.h || " +
-    "       '|rel:' || rels.h FROM funcs, pols, rls, trg, rels;";
-  return dbScalar(container, sql);
+    "BEGIN;\n" +
+    "CREATE TABLE public._c03b1_probe_t (id int PRIMARY KEY, val text);\n" +
+    "CREATE FUNCTION public._c03b1_probe_f() RETURNS int LANGUAGE sql AS 'SELECT 1';\n" +
+    "CREATE FUNCTION public._c03b1_probe_trgfn() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';\n" +
+    "CREATE TRIGGER _c03b1_probe_trg BEFORE INSERT ON public._c03b1_probe_t FOR EACH ROW EXECUTE FUNCTION public._c03b1_probe_trgfn();\n" +
+    "CREATE INDEX _c03b1_probe_idx ON public._c03b1_probe_t (val);\n" +
+    "SELECT 'FP_A=' || " + fp + ";\n" +
+    "CREATE OR REPLACE FUNCTION public._c03b1_probe_f() RETURNS int LANGUAGE sql AS 'SELECT 2';\n" +
+    "DROP TRIGGER _c03b1_probe_trg ON public._c03b1_probe_t;\n" +
+    "CREATE TRIGGER _c03b1_probe_trg AFTER UPDATE ON public._c03b1_probe_t FOR EACH ROW EXECUTE FUNCTION public._c03b1_probe_trgfn();\n" +
+    "DROP INDEX public._c03b1_probe_idx;\n" +
+    "CREATE INDEX _c03b1_probe_idx ON public._c03b1_probe_t (val, id);\n" +
+    "SELECT 'FP_B=' || " + fp + ";\n" +
+    "ROLLBACK;\n";
+  const r = await dockerPsql(container, sql);
+  if (r.code !== 0) {
+    throw new Error(`catalog sensitivity probe failed to run: ${r.err.trim() || "(no stderr)"}`);
+  }
+  const lines = r.out.split("\n").map((s) => s.trim());
+  const a = (lines.find((l) => l.startsWith("FP_A=")) || "").slice(5);
+  const b = (lines.find((l) => l.startsWith("FP_B=")) || "").slice(5);
+  if (!a || !b) throw new Error("catalog sensitivity probe produced no fingerprints.");
+  if (a === b) {
+    throw new Error("catalog fingerprint is insensitive: unchanged across same-name definition changes.");
+  }
+  const pa = parseCatalog(a);
+  const pb = parseCatalog(b);
+  for (const cat of ["func", "trg", "idx"]) {
+    if (!pa[cat] || pa[cat] === pb[cat]) {
+      throw new Error(`catalog fingerprint did not detect the same-name ${cat} definition change.`);
+    }
+  }
+  log("catalog fingerprint detected same-name definition changes.");
 }
 
 /**
@@ -821,14 +930,30 @@ async function runConcurrencyProbe(container) {
       "both concurrency workers did not reach the barrier.");
 
     // Release: both shared requests are granted together → concurrent consume.
+    const releaseAt = Date.now();
     coord.child.stdin.write(
       `SELECT 'UNLOCK=' || pg_advisory_unlock(${BARRIER_KEY})::text; SELECT 'COORD_UNLOCKED';\n`);
     coord.child.stdin.end();
 
-    // Bounded completion of all three sessions.
-    const cr = await withTimeout(coord.done, PROBE_COORD_EXIT_MS, "coordinator exit");
-    r1 = await withTimeout(w1.done, PROBE_WORKER_MS, "worker 1 exit");
-    r2 = await withTimeout(w2.done, PROBE_WORKER_MS, "worker 2 exit");
+    // Bounded completion — ALL three deadlines start NOW, at barrier release, so
+    // no process is granted extra time merely because another was awaited first
+    // (Section E). Each wrapped promise records its own elapsed ms from release.
+    const timed = (p) => p.then((v) => ({ v, ms: Date.now() - releaseAt }));
+    const [crT, r1T, r2T] = await Promise.all([
+      timed(withTimeout(coord.done, PROBE_COORD_EXIT_MS, "coordinator exit")),
+      timed(withTimeout(w1.done, PROBE_WORKER_MS, "worker 1 exit")),
+      timed(withTimeout(w2.done, PROBE_WORKER_MS, "worker 2 exit")),
+    ]);
+    const cr = crT.v;
+    r1 = r1T.v;
+    r2 = r2T.v;
+
+    // Sanitized elapsed evidence (no SQL / stderr / PIDs / connection details).
+    log(`concurrency exits from barrier release (ms): coordinator=${crT.ms} (<= ${PROBE_COORD_EXIT_MS}); ` +
+      `worker1=${r1T.ms} (<= ${PROBE_WORKER_MS}); worker2=${r2T.ms} (<= ${PROBE_WORKER_MS}).`);
+    if (crT.ms > PROBE_COORD_EXIT_MS || r1T.ms > PROBE_WORKER_MS || r2T.ms > PROBE_WORKER_MS) {
+      throw new Error("concurrency probe: a process exited outside its deadline from barrier release.");
+    }
 
     // Fail closed: require clean acquisition, release, and exit for every process.
     if (cr.code !== 0 || cr.signal !== null || !/UNLOCK=t/.test(cr.out) || !/COORD_UNLOCKED/.test(cr.out)) {
@@ -927,6 +1052,48 @@ async function assertNoResidue(container, pgtapBefore, catalogBefore) {
   log("no persistent function, policy, trigger, relation, RLS-flag, extension, helper, fixture, or advisory lock changed.");
 }
 
+/**
+ * Post-teardown inspection command. A local-only, non-credential test hook
+ * (E2E_DBTESTS_FORCE_INSPECT_FAIL=1) forces the inspection to fail with a
+ * nonzero exit (an invalid docker flag) so the fail-closed path can be proven;
+ * it is inactive during normal execution, affects only this verification step
+ * (never the actual teardown), and cannot redirect anything to a remote target.
+ */
+function dockerInspectArgs() {
+  return process.env.E2E_DBTESTS_FORCE_INSPECT_FAIL === "1"
+    ? ["ps", "--__force_inspect_failure__"] // invalid flag → nonzero exit (test hook only)
+    : ["ps", "--format", "{{.Names}}"];
+}
+
+/**
+ * Authoritative post-teardown inspection (Sections F/J). After a successful
+ * mandatory teardown, prove NO current-project container (`supabase_*_<ref>`)
+ * remains. FAIL-CLOSED: project-ref resolution failure, a docker spawn failure,
+ * a nonzero `docker ps`, unparseable output, or a residual current-project
+ * container all throw (the caller records cleanupError). Unrelated Supabase
+ * projects are left untouched and never treated as this task's residue.
+ */
+async function assertCurrentProjectTornDown() {
+  const ref = readProjectId(); // throws if config unreadable → fails the lifecycle
+  const ps = await runCapture("docker", dockerInspectArgs());
+  if (ps.code !== 0) {
+    throw new Error(`post-teardown \`docker ps\` failed (exit ${ps.code}); cannot confirm current-project teardown.`);
+  }
+  if (typeof ps.out !== "string") {
+    throw new Error("post-teardown `docker ps` produced no parseable output.");
+  }
+  const running = ps.out.split("\n").map((s) => s.trim()).filter(Boolean);
+  const mine = running.filter((n) => n.startsWith("supabase_") && n.endsWith(`_${ref}`));
+  const others = running.filter((n) => n.startsWith("supabase_") && !n.endsWith(`_${ref}`));
+  if (mine.length > 0) {
+    throw new Error(`current-project local stack still running after teardown: ${mine.join(", ")}`);
+  }
+  log(`confirmed (authoritative): no current-project (${ref}) local Supabase stack remains.`);
+  if (others.length > 0) {
+    log(`note: ${others.length} unrelated Supabase container(s) left untouched (not this project).`);
+  }
+}
+
 async function cmdDbTests() {
   assertRepoRoot();
   await assertToolingAvailable();
@@ -953,6 +1120,15 @@ async function cmdDbTests() {
     const catalogBefore = await captureCatalog(container);
     log(`pre-test catalog fingerprint: ${catalogBefore}`);
 
+    // Catalog-fingerprint sensitivity probe (transaction-only), then prove it
+    // left no trace on a fresh connection (Section H / lifecycle steps 8–9).
+    await runCatalogSensitivityProbe(container);
+    const catalogAfterProbe = await captureCatalog(container);
+    if (catalogAfterProbe !== catalogBefore) {
+      throw new Error("catalog sensitivity probe did not fully roll back: baseline fingerprint changed.");
+    }
+    log("catalog fingerprint sensitivity rollback verified.");
+
     // Expected-failure negative control BEFORE the green suite, then prove the
     // injected regression fully rolled back (Section E).
     await runNegativeControl(container);
@@ -977,27 +1153,17 @@ async function cmdDbTests() {
     cleanupError = err;
   }
 
-  // Prove no CURRENT-PROJECT stack remains (Section J). Supabase names every
-  // local container `supabase_<service>_<ref>`, so scope the check to this
-  // project's ref: an unrelated Supabase project that happened to be running is
-  // NOT this task's residue and must not be treated as a failure or stopped.
+  // Authoritative post-teardown inspection (Sections F/J). Any inspection
+  // failure — project-ref resolution, docker spawn, nonzero `docker ps`,
+  // unparseable output, or a residual current-project container — fails the
+  // lifecycle; there is no empty catch. Runs only when teardown itself
+  // succeeded; a prior cleanupError is preserved. Both a primary lifecycle
+  // failure and an inspection failure surface together via AggregateError below.
   if (!cleanupError) {
     try {
-      const ref = readProjectId();
-      const ps = await runCapture("docker", ["ps", "--format", "{{.Names}}"]);
-      const running = ps.out.split("\n").map((s) => s.trim()).filter(Boolean);
-      const mine = running.filter((n) => n.startsWith("supabase_") && n.endsWith(`_${ref}`));
-      const others = running.filter((n) => n.startsWith("supabase_") && !n.endsWith(`_${ref}`));
-      if (mine.length > 0) {
-        cleanupError = new Error(`current-project local stack still running after teardown: ${mine.join(", ")}`);
-      } else {
-        log(`confirmed: no current-project (${ref}) local Supabase stack remains.`);
-        if (others.length > 0) {
-          log(`note: ${others.length} unrelated Supabase container(s) left untouched (not this project).`);
-        }
-      }
-    } catch {
-      /* docker ps failure here is non-authoritative; teardown already succeeded */
+      await assertCurrentProjectTornDown();
+    } catch (err) {
+      cleanupError = err;
     }
   }
 
