@@ -1055,9 +1055,11 @@ async function assertNoResidue(container, pgtapBefore, catalogBefore) {
 /**
  * Post-teardown inspection command. A local-only, non-credential test hook
  * (E2E_DBTESTS_FORCE_INSPECT_FAIL=1) forces the inspection to fail with a
- * nonzero exit (an invalid docker flag) so the fail-closed path can be proven;
- * it is inactive during normal execution, affects only this verification step
- * (never the actual teardown), and cannot redirect anything to a remote target.
+ * nonzero exit (an invalid docker flag) so the nonzero-exit fail-closed path can
+ * be proven; it is inactive during normal execution, affects only this
+ * verification step (never the actual teardown), and cannot redirect anything to
+ * a remote target. (A second hook, E2E_DBTESTS_FORCE_INSPECT_GARBAGE, injects a
+ * malformed record AFTER a normal zero-exit `docker ps` — see below.)
  */
 function dockerInspectArgs() {
   return process.env.E2E_DBTESTS_FORCE_INSPECT_FAIL === "1"
@@ -1066,12 +1068,48 @@ function dockerInspectArgs() {
 }
 
 /**
- * Authoritative post-teardown inspection (Sections F/J). After a successful
+ * Strict parser for `docker ps --format {{.Names}}` output (Section E). Returns
+ * the list of container names, or throws on any malformed record — it does NOT
+ * trim, so leading/trailing whitespace can never be laundered into a valid name.
+ * Accepts empty output (no containers) and a single trailing newline; rejects
+ * NUL/carriage-return, embedded blank records, names with spaces/tabs/other
+ * control or disallowed characters, and duplicates. Docker container names match
+ * /^[A-Za-z0-9][A-Za-z0-9_.-]*$/. Error messages never contain the raw output.
+ */
+function parseDockerContainerNames(raw) {
+  if (typeof raw !== "string") {
+    throw new Error("post-teardown `docker ps` output is not a string.");
+  }
+  if (/[\0\r]/.test(raw)) {
+    throw new Error("post-teardown `docker ps` produced malformed output.");
+  }
+  const normalized = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+  if (normalized === "") return [];
+  const lines = normalized.split("\n");
+  if (lines.some((line) => line.length === 0)) {
+    throw new Error("post-teardown `docker ps` produced malformed blank lines.");
+  }
+  const validDockerName = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+  for (const line of lines) {
+    if (!validDockerName.test(line)) {
+      throw new Error("post-teardown `docker ps` produced an invalid container-name record.");
+    }
+  }
+  if (new Set(lines).size !== lines.length) {
+    throw new Error("post-teardown `docker ps` produced duplicate container-name records.");
+  }
+  return lines;
+}
+
+/**
+ * Authoritative post-teardown inspection (Sections E/F). After a successful
  * mandatory teardown, prove NO current-project container (`supabase_*_<ref>`)
  * remains. FAIL-CLOSED: project-ref resolution failure, a docker spawn failure,
- * a nonzero `docker ps`, unparseable output, or a residual current-project
- * container all throw (the caller records cleanupError). Unrelated Supabase
- * projects are left untouched and never treated as this task's residue.
+ * a nonzero `docker ps`, malformed/unparseable output, or a residual
+ * current-project container all throw (the caller records cleanupError).
+ * Container-name classification runs only AFTER strict parsing succeeds.
+ * Unrelated (valid) Supabase projects are left untouched, and valid non-Supabase
+ * names are ignored. The malformed raw output is never echoed.
  */
 async function assertCurrentProjectTornDown() {
   const ref = readProjectId(); // throws if config unreadable → fails the lifecycle
@@ -1079,10 +1117,19 @@ async function assertCurrentProjectTornDown() {
   if (ps.code !== 0) {
     throw new Error(`post-teardown \`docker ps\` failed (exit ${ps.code}); cannot confirm current-project teardown.`);
   }
-  if (typeof ps.out !== "string") {
-    throw new Error("post-teardown `docker ps` produced no parseable output.");
+  // Local-only malformed-output hook: only AFTER the real command's zero-exit
+  // check, substitute one fixed malformed record so the strict parser's
+  // rejection path is provable. Inactive normally; never touches Docker state.
+  const raw = process.env.E2E_DBTESTS_FORCE_INSPECT_GARBAGE === "1"
+    ? "malformed docker record with spaces\n"
+    : ps.out;
+  let running;
+  try {
+    running = parseDockerContainerNames(raw);
+  } catch {
+    // Fixed classification; never reproduce the malformed raw record in logs.
+    throw new Error("post-teardown Docker output rejected as malformed.");
   }
-  const running = ps.out.split("\n").map((s) => s.trim()).filter(Boolean);
   const mine = running.filter((n) => n.startsWith("supabase_") && n.endsWith(`_${ref}`));
   const others = running.filter((n) => n.startsWith("supabase_") && !n.endsWith(`_${ref}`));
   if (mine.length > 0) {
