@@ -26,7 +26,7 @@
 
 - Papers CRUD, bulk actions (select-all across the full filtered set), and column/layout customization.
 - Import by PMID/DOI identifiers and from BibTeX / RIS / CSV files, with atomic server-side bulk insert.
-- Duplicate detection and merge — **PMID/DOI-only by decision**.
+- Duplicate detection — **PMID/DOI-only by decision**. The duplicate-merge surface/RPC exists, but **successful merging is currently broken** by the known `MERGE-EXACT-DUPLICATES-JSONB-REPAIR-001` defect (`unnest()` on `jsonb` columns); **no successful duplicate merge is claimed**.
 - Projects, tags, and four curation pools: keywords, synonyms, study types, exclusions.
 - Per-paper notes (indexed into search) and saved searches / filter presets (server-side per user, RLS-isolated).
 - Exports to CSV / RIS / BibTeX (chunked pipeline for large libraries).

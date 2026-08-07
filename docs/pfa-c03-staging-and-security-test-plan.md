@@ -28,7 +28,7 @@
 
 ## 2. Verified current baseline
 
-All items independently reconfirmed on this branch (`docs/pfa-c03-staging-contract`, cut from `origin/main` `5b78b08d`).
+The C03A0 audit reconfirmed all items on branch `docs/pfa-c03-staging-contract` (cut from `origin/main` `5b78b08d`); the migration ledger (§2.4) and the database-test inventory (§2.5) below are **updated to current `main` (post-PR #179)** where they have since advanced beyond that audit point.
 
 ### 2.1 Required CI
 
@@ -50,13 +50,14 @@ All items independently reconfirmed on this branch (`docs/pfa-c03-staging-contra
 ### 2.4 Supabase backend
 
 - `supabase/config.toml`: `project_id = "lioxtgiputfniqbktcsz"` (Production ref); `verify_jwt = false` for all three functions (in-body `auth.getUser()` is authoritative). `[FACT]`
-- Migrations: **69** tracked files, chain `20260203072053_… → 20260731162729_reconcile_data_api_grants.sql`; storage/quota-relevant migrations include `20260318010000_add_paper_attachments`, `20260318020000_add_attachments_storage_policies`, `20260327100000_private_attachments_bucket`, `20260521030000_harden_attachment_privacy_and_storage_quota`, plus the entitlement/quota schema `20260521010000` and AI-quota RPCs `20260521020000` / `20260724120000` / `20260725090000`. `[FACT]`
+- Migrations: **70** tracked files, chain `20260203072053_… → 20260802025704_harden_rpc_and_relational_ownership.sql` (Local = Remote; the C03A0 audit reconfirmed a **69**-migration chain ending `20260731162729`, and the §9.6 security remediation subsequently added `20260802025704`, applied to Production — ledger 70); storage/quota-relevant migrations include `20260318010000_add_paper_attachments`, `20260318020000_add_attachments_storage_policies`, `20260327100000_private_attachments_bucket`, `20260521030000_harden_attachment_privacy_and_storage_quota`, plus the entitlement/quota schema `20260521010000` and AI-quota RPCs `20260521020000` / `20260724120000` / `20260725090000`. `[FACT]`
 - Edge Functions (source in `supabase/functions/`): `fetch-paper-metadata`, `analyze-paper`, `get-gemini-provider-quota`, plus shared helpers. Secret names referenced: `GEMINI_API_KEY`, `GEMINI_MODEL` (optional override), `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_MONITORING_CLIENT_EMAIL`, `GOOGLE_MONITORING_PRIVATE_KEY`. External hosts referenced: PubMed (`eutils.ncbi.nlm.nih.gov`, `pubmed.ncbi.nlm.nih.gov`), Crossref (`api.crossref.org`, `doi.org`), Google (`generativelanguage.googleapis.com`, `monitoring.googleapis.com`, `oauth2.googleapis.com`, `www.googleapis.com`), `esm.sh`. `[FACT]`
 
 ### 2.5 Existing database verification
 
 - `supabase/tests/owner_access_and_quota_verification.sql` exists: local-only, framework-free, single transaction wrapped in `BEGIN … ROLLBACK`, run manually via `psql -v ON_ERROR_STOP=1` against a local stack. It simulates callers with `SET LOCAL ROLE authenticated` + a `request.jwt.claims` GUC and covers **18 cases**: role resolution (user/owner/manager) and `is_exempt` via `get_current_user_access()`; ordinary user cannot read/insert/update `internal_user_access`; anon cannot execute the access RPC; null-auth rejection; no arbitrary-user inspection (0-arg RPC); Free 15-lifetime cap; Pro 350-monthly cap; exempt owner allowed beyond cap with usage still incrementing; exempt refund decrements the same bucket; refund floor at 0; missing/inactive entitlement safety; `is_exempt` reporting; no email-based role column; grant hardening (FORCE RLS, zero policies, revoked direct grants for anon/authenticated, retained `service_role` CRUD, RPC EXECUTE boundary). `[FACT]`
-- **This is the reusable Phase B seed.** It is not absent and must not be duplicated or ignored. §9 evolves it. `[FACT]`
+- **This was the reusable Phase B seed, and it is preserved byte-identical** — the merged C03B1 suites run it **alongside** the pgTAP suites, never duplicating or ignoring it (§9.6–§9.7). `[FACT]`
+- **The C03B1 database-security layers now exist on `main`** (PR #179, §9.7): the focused `supabase/tests/database/000_preexisting_security_regressions.test.sql` (139 assertions), the four comprehensive pgTAP suites `001_core_rls_isolation` / `002_relational_rls_isolation` / `003_rpc_caller_scope_and_grants` / `004_storage_and_quota` (255 assertions), the preserved framework-free 18-case `owner_access_and_quota_verification.sql`, and the **`npm run test:db:local`** local runner and its integrated lifecycle. **Local database-security execution exists; hosted database-security CI does not** — no workflow runs any of them (the C03B2 `db-tests` workflow is unstarted). `[FACT]`
 
 ---
 
@@ -66,7 +67,7 @@ All items independently reconfirmed on this branch (`docs/pfa-c03-staging-contra
 - **Baseline commit advanced** `5a92229f` → `5b78b08d` (PRs #165–#169 merged). `[FACT]`
 - **Three Edge Functions are deployed** (`fetch-paper-metadata` v10, `analyze-paper` v15, `get-gemini-provider-quota` v3), the third deployed-but-unused under C29. `[FACT]`
 - **C29 exists** (2026-07-26): Gemini Free Tier; Google Cloud billing disabled; provider-quota dashboard deferred. No test backend replicates Google Monitoring or the provider-quota path (§6). `[FACT]`
-- **Audit-time baseline — superseded:** At the time of the 2026-07-24 audit, Playwright drove the local dev server against the **Production** Supabase project and was excluded from CI. That state is **no longer current**: C03A1-L now **fails closed** on Production or remote targets, and C03A2-L runs the six-spec subset in the separate **non-required `E2E (local)`** workflow. Still true since the audit: there is **no full C03B1 pgTAP suite, no local DB-test runner, and no CI execution of the database or Edge-Function layers** — one **focused** pgTAP regression file is now merged (§9.6), but no workflow runs it; required `Validate` remains lint + typecheck + Vitest + build only (it never runs Playwright). `[FACT]`
+- **Audit-time baseline — superseded:** At the time of the 2026-07-24 audit, Playwright drove the local dev server against the **Production** Supabase project and was excluded from CI. That state is **no longer current**: C03A1-L now **fails closed** on Production or remote targets, and C03A2-L runs the six-spec subset in the separate **non-required `E2E (local)`** workflow. **Updated since the audit:** the **full C03B1 pgTAP architecture** (four suites `001`–`004` + the focused `000` file) and the local **`npm run test:db:local`** runner now **exist on `main`** (PR #179, §9.7); **no hosted database-security workflow exists** (the C03B2 `db-tests` workflow is unstarted) and **no Edge Function automated-test workflow exists**; required `Validate` still does **not** run Playwright or any database-security test (it remains lint + typecheck + Vitest + build only); and `E2E (local)` remains a separate **non-required** Playwright workflow. `[FACT]`
 
 ---
 
@@ -136,7 +137,7 @@ Two **independent** environment surfaces exist during a Playwright run; conflati
 
 Both layers are required: Layer 1 prevents a wrong server from ever starting; Layer 2 proves the running frontend actually points where intended, **before** any credential is entered or any mutation occurs.
 
-### 5.4 Layer 1 — pre-server Node/CI guard `[REC]` / `[FUTURE]`
+### 5.4 Layer 1 — pre-server Node/CI guard `[FACT — merged in C03A1-L]`
 
 A CI/Node preflight step, before `vite` starts, that:
 
@@ -148,7 +149,7 @@ A CI/Node preflight step, before `vite` starts, that:
    - **Model B:** requires the **exact approved staging ref/host** and rejects anything else (including Production).
 4. **Never prints key/password values** (mask; assert on host/ref substrings only).
 
-### 5.5 Layer 2 — browser-observed runtime guard `[REC]` / `[FUTURE]`
+### 5.5 Layer 2 — browser-observed runtime guard `[FACT — merged in C03A1-L]`
 
 Inside Playwright, **before** entering credentials or mutating anything (i.e. at the very start of `global-setup.ts`, after the first navigation), verify the backend the loaded frontend actually uses, via **one** implementation-ready mechanism:
 
@@ -174,7 +175,7 @@ If the observed host is Production or unexpected, throw before authentication so
 
 ### 6.1 Model A — local-first (recommended default)
 
-- CI starts an **ephemeral local Supabase stack** (`supabase start`) in the job; the full **69-migration chain is replayed** locally; deterministic Auth users + seed data are created locally; Vite and Playwright point **only** at the local stack; the stack is destroyed after the run. `[REC]`
+- CI starts an **ephemeral local Supabase stack** (`supabase start`) in the job; the full **tracked migration chain (currently 70 migrations) is replayed** locally; deterministic Auth users + seed data are created locally; Vite and Playwright point **only** at the local stack; the stack is destroyed after the run. `[REC]`
 - **No cloud Supabase project, region, plan, cloud account, or cloud reset credential is required. No sensitive cloud secret is needed for the local path.** `[REC]`
 - Model A serves: the initial read-only Playwright subset; the deterministic mutating waves (`filter-presets`, `file-import-order`, `mutations`, `notes`, `search-attribution`); **attachments** (local Supabase includes **Storage** and **Auth**); and all of **Phase B**. `[REC]`
 - **Do not claim Storage or ordinary Auth alone requires cloud** — local Supabase provides both. Concrete capabilities that genuinely need cloud (Model B) are narrow: **real outbound email delivery** (password-reset/confirmation via Resend/SMTP), **production-parity edge/CDN or signed-URL behavior** if a spec depends on it, and **cloud-only quota/limit behavior**. None of the 13 current specs require these except optionally `import-order` (external metadata egress, which local `supabase functions serve` + network can also cover). `[REC]`
@@ -249,7 +250,7 @@ Choose one: **local-first** (Model A only, recommended); **cloud-first** (Model 
 
 ## 8. Recommended initial non-required Playwright CI contract
 
-`[FUTURE]` — specified, not implemented. **One coherent backend per run.** The shape below is shown for the **recommended local-first default (Model A, local ephemeral stack)**; under a **cloud-first** D2 selection the equivalent job targets cloud staging (Model B) via `E2E (staging)`. The two are never mixed in one run and neither is ever merged into `Validate`.
+`[FACT]`/`[REC]` — this section records the original design contract. **For the selected local-first path the design was implemented and accepted by C03A2-L (see §8.1);** the optional cloud-staging variant (`E2E (staging)`, Model B) remains **future/unselected**. **One coherent backend per run.** The shape below is shown for the **recommended local-first default (Model A, local ephemeral stack)**; under a **cloud-first** D2 selection the equivalent job targets cloud staging (Model B) via `E2E (staging)`. The two are never mixed in one run and neither is ever merged into `Validate`.
 
 - **Workflow name:** `E2E (local)` (Model A) or `E2E (staging)` (Model B) — a distinct workflow per backend. Under cloud-first the job is `E2E (staging)` from the start; under local-first it is `E2E (local)` (and `E2E (staging)` is added only if cloud parity is later chosen). Neither is ever merged into `Validate`. **Job/check name:** `e2e-local` / `e2e-staging`. `[REC]`
 - **Triggers:** `workflow_dispatch` (always) + same-repo `push`/`pull_request` only; **no** fork-PR secret exposure. Optional nightly `schedule`. `[REC]`
@@ -283,7 +284,7 @@ Choose one: **local-first** (Model A only, recommended); **cloud-first** (Model 
 
 ## 9. Recommended Phase B database-security-test contract
 
-`[FUTURE]` — reuses and evolves `supabase/tests/owner_access_and_quota_verification.sql`.
+`[FACT]`/`[REC]` — the Phase B contract. **C03B1 (the local database-security suites + `test:db:local` runner) is implemented, merged, and accepted** (PR #179, merge `0f786dac…`; §9.7); **C03B2 (the hosted `db-tests` workflow) is future/unstarted.** The merged suites **reuse and preserve** `supabase/tests/owner_access_and_quota_verification.sql` byte-identical and run it alongside the pgTAP suites. The design subsections §9.1–§9.5 record the **original** contract; §9.6–§9.7 record what was **implemented and merged**.
 
 ### 9.1 Framework choice `[DECISION]` → recommendation
 
@@ -293,11 +294,11 @@ Choose one: **local-first** (Model A only, recommended); **cloud-first** (Model 
 | Adopt **pgTAP** | Standard TAP output, rich assertions | New extension/dependency; rewrite/relearn |
 | **Hybrid (recommended)** | Keep the proven file; add new framework-free siblings for uncovered areas; adopt pgTAP later only if TAP reporting is needed | Two idioms briefly coexist |
 
-**Recommendation:** framework-free hybrid (transaction-wrapped, `ROLLBACK`, `ON_ERROR_STOP=1`), adding new sibling scripts per area. `[REC]`
+**Recommendation (historical — superseded by D3):** framework-free hybrid (transaction-wrapped, `ROLLBACK`, `ON_ERROR_STOP=1`), adding new sibling scripts per area. **D3 was resolved on 2026-08-02 to pgTAP, so this earlier hybrid recommendation is *not* the selected framework** — the merged C03B1 suites use **pgTAP** while preserving the framework-free 18-case file byte-identical and running it alongside them (§9.6–§9.7). `[REC]`
 
 ### 9.2 Execution model `[REC]`
 
-- **Local ephemeral stack (Model A):** `supabase start`, replay all 69 migrations, run each `supabase/tests/*.sql` with `psql -v ON_ERROR_STOP=1`. Deterministic, no cloud secret, mirrors the existing run instructions and matches the E2E Model A. Fixture isolation is per-transaction `ROLLBACK` (as today).
+- **Local ephemeral stack (Model A) — as implemented and merged (§9.7):** `supabase start`, replay all **70** migrations, then run the focused + four comprehensive pgTAP suites via `supabase test db supabase/tests/database --local` and the framework-free 18-case file separately via `psql -v ON_ERROR_STOP=1`. Deterministic, no cloud secret, matches the E2E Model A. Fixture isolation is per-transaction `ROLLBACK`. **C03B2 will host this existing local DB-test lifecycle in a separate non-required workflow.**
 
 ### 9.3 Required coverage (reuse + additions) `[REC]`
 
@@ -334,7 +335,7 @@ Phase B runs in a **separate, non-required** workflow/check — proposed `db-tes
 ### 9.6 C03B1 status — pre-existing security defects remediated, merged, and deployed; C03B1 blocker removed `[FACT]`
 
 - **D3 resolved (2026-08-02): pgTAP.** New C03B1 suites use **pgTAP**; the existing framework-free `supabase/tests/owner_access_and_quota_verification.sql` is **preserved byte-identical** (blob `ce45e4b…`) and executed **alongside** the pgTAP suites (via `psql -v ON_ERROR_STOP=1`), never fed to `pg_prove`. §9.1's earlier "framework-free hybrid" recommendation is superseded by this owner decision.
-- **C03B1 was attempted and stopped before implementation.** Authoring the C03B1 security invariants against the then-current, unmodified **69-migration base** proved that the **base schema permitted** the prohibited behaviors listed below, triggering the pre-existing-defect stop rule. **The current 70-migration schema includes migration `20260802025704` and closes those confirmed paths** (Local = Remote); it does **not** still permit them. C03B1's full four-suite architecture and local runner are **not** built; only a **focused** regression file was authored as part of the remediation below.
+- **C03B1 was attempted and stopped before implementation.** Authoring the C03B1 security invariants against the then-current, unmodified **69-migration base** proved that the **base schema permitted** the prohibited behaviors listed below, triggering the pre-existing-defect stop rule. **The current 70-migration schema includes migration `20260802025704` and closes those confirmed paths** (Local = Remote); it does **not** still permit them. **At that original stop point, the four-suite architecture and runner had not yet been built; only the focused remediation regression file (`000_preexisting_security_regressions.test.sql`) existed.** After the remediation lifecycle completed, **C03B1 resumed and was later implemented, review-corrected, merged, and accepted via PR #179 (§9.7)** — the four comprehensive pgTAP suites and the `test:db:local` runner now exist on `main`.
 - **Confirmed findings (reproduced on the unmodified 69-migration base; controls pass; re-confirmed on a second fresh reset):**
   1. **Unauthenticated cross-user read** through four `SECURITY DEFINER` read RPCs — `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` — each `PUBLIC`/`anon`-executable with an ownership guard missing the explicit `auth.uid() IS NULL` clause (NULL caller slips through three-valued logic).
   2. **Least-privilege EXECUTE not enforced** on those RPCs (PUBLIC + anon).
@@ -438,7 +439,8 @@ In the table below each phase is tagged **(shared)**, **(local-first)**, or **(c
 
 **Local-first (Model A) — no cloud provisioning required:**
 
-- [ ] Approve running the non-required `E2E (local)` and `db-tests` workflows. `[OWNER]`
+- [x] `E2E (local)` (non-required local Playwright CI) — **implemented, merged, and accepted** (PR #175). `[OWNER]`
+- [ ] `db-tests` (the C03B2 hosted DB-security workflow) — **unstarted; requires separate authorization** (not approved by this documentation task). `[OWNER]`
 - [ ] Confirm seeded local `TEST_USER_EMAIL` / `TEST_USER_PASSWORD` handling (sensitive operational config; the anon key + local URL are public client config). `[OWNER]`
 
 **Cloud (Model B) — required for a cloud-first D2 selection; optional for later hybrid parity:**
@@ -458,7 +460,7 @@ In the table below each phase is tagged **(shared)**, **(local-first)**, or **(c
 
 - **D1 — Cloud staging plan/region.** *Why:* cost/latency of the **optional** cloud project. *Recommended default:* **not needed** under local-first; if cloud is selected, lowest tier supporting the full migration chain + Auth + Storage, same region as Production. *Trade-off:* cost/realism. *Blocks:* **only** C03A1-C/C03A2-C (never the local path).
 - **D2 — Test-backend architecture (local-first / cloud-first / local-first + optional cloud). `[RESOLVED 2026-07-31 → local-first]`** *Why:* the substantive architecture choice; it selects the required Phase A branch (§10) and drives determinism, cost, secret surface, and which specs run first. *Recommended default:* **local-first**, adding cloud only when a wave demonstrably needs it. *Alternatives:* cloud-first; local-first + optional cloud. *Trade-off:* realism vs cost/complexity/secret surface. *Selects the Phase A branch:* local-first → `C03A1-L → C03A2-L`; cloud-first → `C03A1-C → C03A2-C`; hybrid → `C03A1-L → C03A2-L` first, optional `C03A1-C → C03A2-C` later. *Blocks:* the Phase A branch shape (local-first unblocks `C03A1-L` immediately without any cloud decision; cloud-first additionally needs D1). Phase B (`C03B1 → C03B2`) is shared and unaffected. **Owner outcome:** local-first selected; path `C03A1-L → C03A2-L`; cloud phases not selected; D1 still does not block the local path. The Data API grant-parity prerequisite (`PFA-C03A1-L-GRANT-PARITY-001`, §7.3) is **complete — merged and applied to Production 2026-07-31**, and **C03A1-L has now been implemented, merged, and independently accepted** (`…-MERGE-001`: PR #173, merge `299b19a…`; local stack replays all 69 migrations, deterministic 120/5 seed, two-layer fail-closed guards + negative controls, six read-only specs green (32), deterministic second reset/reseed (auth 6)). **C03A1-L is merged and accepted; C03A2-L is now merged and accepted (PR #175, merge `1d091e4…` — see §8.1, §10); Phase A is complete for the selected local-first path; PFA-C03 remains incomplete.**
-- **D3 — DB-test framework (framework-free hybrid vs pgTAP). `[RESOLVED 2026-08-02 → pgTAP]`** *Why:* maintenance/reporting. **Owner outcome:** new C03B1 suites use **pgTAP**; the framework-free `owner_access_and_quota_verification.sql` is preserved byte-identical and executed alongside them. *Trade-off:* zero-dep vs standardized TAP. *Formerly blocked:* C03B1 (now unblocked for framework choice; C03B1 itself is blocked by the pre-existing security defects in §9.6).
+- **D3 — DB-test framework (framework-free hybrid vs pgTAP). `[RESOLVED 2026-08-02 → pgTAP]`** *Why:* maintenance/reporting. **Owner outcome:** new C03B1 suites use **pgTAP**; the framework-free `owner_access_and_quota_verification.sql` is preserved byte-identical and executed alongside them. *Trade-off:* zero-dep vs standardized TAP. *Formerly blocked:* C03B1's framework choice. **The former pre-existing-security blocker (§9.6) was remediated and removed; C03B1 subsequently resumed, was implemented, and merged via PR #179 (§9.7). D3 remains resolved to pgTAP; C03B2 remains unstarted and separately authorized.**
 - **D4 — External-metadata E2E (`import-order`).** *Why:* PubMed/Crossref are nondeterministic and need served Edge Functions + egress. *Recommended default:* defer to Wave 4; assert on stable identifiers/counts (not exact remote titles), or use a deterministic stand-in. *Trade-off:* coverage vs flakiness/cost. *Blocks:* the final E2E wave only.
 - **D5 — Promotion of `e2e-*` or `db-tests` to a required check.** *Why:* changes the merge gate. *Recommended default:* keep **non-required** until proven stable; revisit later (deterministic `db-tests` could be promoted sooner). *Trade-off:* stronger gate vs flakiness. *Blocks:* nothing now.
 
@@ -468,10 +470,10 @@ In the table below each phase is tagged **(shared)**, **(local-first)**, or **(c
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| CI silently falls back to Production | Medium (today's default) | **High** (mutates real data) | **Two-layer guard** (§5): Layer 1 Node/CI (reject blanks/Production/remote before server start) **and** Layer 2 browser-observed (verify actual backend before credentials) |
+| Regression or bypass of the fail-closed Production guard | Low | **High** | **Two-layer guard** (§5) now merged (C03A1-L): Layer 1 Node/CI rejects blanks/Production/remote before server start **and** Layer 2 browser-observed verifies the actual backend before credentials; 32 guard tests; local-only lifecycle. Production-backed Playwright **fails closed** (no longer the default) |
 | Node check "proves" config but the loaded bundle differs | Medium | High | Layer 2 observes the frontend's real Supabase host at runtime, before auth |
 | Secrets exposed to fork PRs | Low under local-first (no cloud secret) / Medium under cloud | High | Local-first removes cloud secrets from the initial path; cloud path uses same-repo/`workflow_dispatch` + protected Environment + required reviewers |
-| Cleanup-crash leaves real data mutated (esp. `search-attribution`) | Medium | Medium-High | Reset-to-seed as the isolation boundary; disposable fixture paper for the six-field spec |
+| Cleanup-crash leaves **local fixture** residue (esp. `search-attribution`) | Medium | Low-Medium | Reset-to-seed as the isolation boundary on the **ephemeral local stack**; disposable fixture paper for the six-field spec. The supported Playwright lifecycle is **local-only** — no Production data is reachable (fail-closed guard), so residue is confined to a disposable local stack |
 | Count/order-sensitive specs collide under overlap | Medium | Medium | Concurrency guard (one run) + reseed + isolation lane for import specs |
 | External metadata drift (`import-order`) | Medium | Medium | Gate to last wave; assert stable fields; optional deterministic stand-in |
 | Secret values leak into logs/artifacts | Low | High | Mask; assert on host/ref substrings; never upload env files; publishable key is public but still not broadcast |
