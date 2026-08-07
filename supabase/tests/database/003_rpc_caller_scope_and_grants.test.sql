@@ -16,10 +16,11 @@
 --   * search_papers bounded search_path; exactly one overload of each hardened
 --     RPC (no bypass overload).
 --
--- merge_exact_duplicates is exercised ONLY for its authenticated posture,
--- null-auth rejection, caller/ownership rejection, and no-unauthorized-mutation.
--- Its known successful-path unnest(jsonb) defect (MERGE-EXACT-DUPLICATES-JSONB-
--- REPAIR-001) is separately tracked and deliberately NOT triggered here.
+-- merge_exact_duplicates is exercised here ONLY for its authenticated posture,
+-- null-auth rejection, caller/ownership rejection, and no-unauthorized-mutation,
+-- which is this suite's remit. Its successful merge path — data preservation,
+-- JSONB list union, attachment re-parenting and the full input-validation
+-- contract — is owned by 005_merge_exact_duplicates_success.test.sql.
 --
 -- Deterministic UUIDs; explicit fixtures; no TODO/SKIP; no remote calls; no
 -- Production data; no real credentials. pgTAP is created inside the transaction
@@ -340,7 +341,7 @@ SELECT is(pg_temp.errcode_as('authenticated','',
   $q$SELECT * FROM public.get_current_user_access()$q$),
   'P0001', 'get_current_user_access: null-auth rejected');
 
--- ══ 9. merge_exact_duplicates (guards only; success path NOT triggered) ══════
+-- ══ 9. merge_exact_duplicates (guards only; success path owned by suite 005) ═
 SELECT is(pg_temp.errcode_as('authenticated','',
   $q$SELECT public.merge_exact_duplicates('a0000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['a0000000-0000-0000-0000-0000000000a5']::uuid[])$q$),
   'P0001', 'merge_exact_duplicates: null-auth rejected');
