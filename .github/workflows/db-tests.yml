@@ -1,0 +1,118 @@
+name: DB Tests
+
+# Separate, NON-REQUIRED hosted database-security workflow for PFA-C03B2.
+#
+# This workflow is a thin hosted wrapper around the merged PFA-C03B1 local
+# database-security lifecycle. It owns no stack, migration, pgTAP, negative
+# control, concurrency, catalog-fingerprint, residue, or teardown logic of its
+# own — every one of those concerns lives in `scripts/e2e-local.mjs` and is
+# invoked only through the package scripts (`test:db:local`,
+# `test:e2e:local:stop`). No SQL and no lifecycle logic is duplicated here.
+#
+# It runs exclusively against an ephemeral local Supabase stack, never touches
+# Production or any cloud/linked project, requires no GitHub secret / variable /
+# Environment, and uses only the read-only default token.
+#
+# It is intentionally independent of `Validate` (.github/workflows/validate.yml),
+# which remains the sole required merge gate for `main`, and of `E2E (local)`
+# (.github/workflows/e2e-local.yml), which remains separately non-required.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+# Read-only token: the job never mutates GitHub state.
+permissions:
+  contents: read
+
+# One DB-security run per PR (or branch); superseded runs are cancelled. This
+# group is deliberately distinct from both the `Validate` group and the
+# `e2e-local-*` group so no workflow ever cancels or serialises another.
+concurrency:
+  group: db-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  db-tests:
+    name: db-tests
+    # Same-repository restriction: the job executes for pushes and dispatches,
+    # and for pull requests ONLY when the head repository is this repository.
+    # A fork-origin pull request is skipped entirely — before dependency
+    # installation, Docker access, Supabase CLI use, local stack startup, and
+    # any application/database execution. `pull_request_target` is intentionally
+    # NOT used.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      CI: true
+
+    steps:
+      - name: Checkout
+        # Pinned to the exact SHA used by `Validate` and `E2E (local)`.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        # Pinned to the exact SHA used by `Validate` and `E2E (local)`.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Supabase CLI
+        # Official Supabase CLI setup action, pinned to a full commit SHA.
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
+        with:
+          # Exact release matching the locally validated CLI; never `latest`.
+          version: 2.111.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Report tool versions
+        # Safe version information only. Never prints Supabase status JSON, Docker
+        # environment, credentials, keys, connection strings, or generated SQL.
+        run: |
+          node --version
+          npm --version
+          docker version --format '{{.Server.Version}}'
+          supabase --version
+          psql --version
+
+      - name: Run local database security lifecycle
+        # The merged C03B1 lifecycle is the sole owner of local stack startup,
+        # the 70-migration replay, the catalog-fingerprint sensitivity probe, the
+        # expected-failure papers-RLS negative control, the focused + four
+        # comprehensive pgTAP suites, the framework-free 18-case verification, the
+        # true concurrent AI-quota cap probe, the residue/catalog equality proof,
+        # and its own mandatory teardown. None of it is reimplemented here.
+        run: npm run test:db:local
+
+      - name: Enforce local stack teardown
+        # Defense-in-depth cleanup on top of the lifecycle's own mandatory
+        # teardown. Runs even on failure/cancellation. No `continue-on-error`: a
+        # cleanup failure fails the job. The command's exit code is never
+        # suppressed and it prints no raw Supabase status.
+        if: always()
+        run: npm run test:e2e:local:stop
+
+      - name: Assert clean local state
+        # Runs even on failure/cancellation. Fails the job if a local stack is
+        # still running. `supabase status` output is redirected to /dev/null so
+        # key-bearing JSON can never reach the logs; the command succeeds (exit 0)
+        # only while a stack is up, so success here means a leftover stack and is
+        # treated as a failure.
+        if: always()
+        run: |
+          if supabase status -o json >/dev/null 2>&1; then
+            echo "::error::A local Supabase stack is still running after cleanup." >&2
+            exit 1
+          fi
+          echo "Confirmed: no running local Supabase stack."
