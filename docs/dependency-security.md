@@ -21,7 +21,7 @@ Both current npm-audit findings are in the **React Router package family** (`rea
 
 ## Completed remediation boundaries
 
-Four bounded clusters are complete. Each was **lockfile-only**: `package-lock.json` was the sole changed file — no `package.json`, application-source, workflow, or migration file changed. Each was a dependency-security remediation rather than a product-feature change, and none carried an intended behavior change; the resolved implementations of the upgraded packages did change, so runtime behavior is verified by the CI suites, not assumed from the diff scope.
+Four bounded clusters are complete. In each, the **dependency implementation delta was confined to `package-lock.json`** — no `package.json`, application-source, workflow, test, migration, schema, or Supabase change. (Clusters 1–3 shipped as lockfile-only pull requests; Cluster 4's pull request additionally updates this current-state documentation, which is a documentation change rather than part of the dependency delta.) Each was a dependency-security remediation rather than a product-feature change, and none carried an intended behavior change; the resolved implementations of the upgraded packages did change, so runtime behavior is verified by the CI suites, not assumed from the diff scope.
 
 | Cluster | Scope | Result | Evidence |
 |---|---|---|---|
@@ -83,11 +83,11 @@ On that evidence, all three residual advisories are assessed **not currently rea
 
 This is the weakest of the three conclusions and should be re-checked whenever a navigation target stops being a hardcoded literal.
 
-### Cluster 5 — still necessary, still NOT STARTED
+### Cluster 5 — NOT STARTED
 
-Because every residual advisory is first fixed on the 7.x line (or has no v6 fix at all), **full audit clearance is impossible without crossing the major-version boundary**. Cluster 5 remains required and remains unstarted; **no Router major migration has been owner-approved**, and no target version is committed to here — the advisory database and available release lines must be re-measured when that work is selected. A major-version move is an application-code migration, not a lockfile change.
+Because every residual advisory is first fixed on the 7.x line (or has no v6 fix at all), **reaching audit zero is impossible without crossing the major-version boundary**. Cluster 5 is therefore what would be required **to eliminate the remaining npm-audit findings under the current advisory data** — that is the precise sense in which it is necessary. It is **not** thereby the next product-development task: it is **NOT STARTED**, **not owner-approved**, and **no React Router major migration is authorized**. No target version is committed to here — the advisory database and available release lines must both be re-measured when that work is selected. A major-version move is an application-code migration, not a lockfile change.
 
-These are the only remaining npm-audit findings in the **production dependency graph**. Presence in the production graph is not by itself proof of an exploitable path — but the applicability assessment above is a reason to schedule Cluster 5 deliberately, not a reason to skip it.
+These are the only remaining npm-audit findings in the **production dependency graph**. Presence in the production graph is not by itself proof of an exploitable path, and the applicability assessment above is **not** a declaration that the vulnerable packages are safe — it is a reason to schedule Cluster 5 deliberately rather than urgently, not a reason to skip it.
 
 ## Remediation policy
 
