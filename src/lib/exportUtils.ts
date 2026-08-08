@@ -44,6 +44,24 @@ function exportUrlFor(paper: PaperWithTags): string {
   return toImportableExternalUrl(paper.journal_url) ?? "";
 }
 
+/**
+ * The value to write into a field whose *semantics assert* that it is a PMID —
+ * the CSV `PMID` column, the BibTeX `pmid` field, the RIS compatibility `AN`.
+ *
+ * The same syntax rule that decides whether a stored `pmid` may generate a
+ * PubMed URL decides whether it may be published as a PMID at all. Emitting a
+ * value that failed that check would tell an external tool — one with no reason
+ * to re-validate — that an Embase or Web of Science accession is a PMID.
+ *
+ * Only provably invalid values are dropped. A digit-only historical value stays
+ * authoritative: if the old RIS `AN` rule fabricated it from a numeric
+ * accession, nothing in the row distinguishes it from a genuine PMID, and
+ * export is not the place to guess.
+ */
+function exportPmidFor(paper: PaperWithTags): string | null {
+  return normalizePmid(paper.pmid);
+}
+
 // ── CSV ──
 
 function escapeCSV(value: string): string {
@@ -65,7 +83,7 @@ export function exportToCSV(papers: PaperWithTags[]): void {
     p.authors.join("; "),
     p.year?.toString() || "",
     p.journal || "",
-    p.pmid || "",
+    exportPmidFor(p) ?? "",
     p.doi || "",
     p.study_type || "",
     p.keywords.join("; "),
@@ -99,8 +117,11 @@ export function exportToRIS(papers: PaperWithTags[]): void {
     if (p.journal) lines.push(`JO  - ${p.journal}`);
 
     // Identifiers. `AN` is retained for reference managers that read it, but it
-    // is no longer how a Paperlume RIS file conveys a PMID — `UR` below is.
-    if (p.pmid) lines.push(`AN  - ${p.pmid}`);
+    // is no longer how a Paperlume RIS file conveys a PMID — `UR` below is —
+    // and it is emitted only for a value that is syntactically a PMID. (This
+    // says nothing about import: an incoming `AN` is still never trusted.)
+    const pmid = exportPmidFor(p);
+    if (pmid) lines.push(`AN  - ${pmid}`);
     if (p.doi) lines.push(`DO  - ${p.doi}`);
 
     // URLs. `L2` is validated for the same reason `UR` is: a stored link is not
@@ -256,8 +277,9 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
     }
 
     // PMID (custom field, widely supported by BibTeX managers)
-    if (p.pmid) {
-      fields.push(`  pmid      = {${p.pmid}}`);
+    const pmid = exportPmidFor(p);
+    if (pmid) {
+      fields.push(`  pmid      = {${pmid}}`);
     }
 
     // URL

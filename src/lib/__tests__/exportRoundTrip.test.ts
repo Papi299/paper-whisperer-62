@@ -144,6 +144,7 @@ describe("a paper with a PMID survives its own export", () => {
     exportToBibTeX([withPmid()]);
     const bib = await exported();
 
+    expect(bib).toContain("pmid      = {12345678}");
     expect(bib).toContain("url       = {https://pubmed.ncbi.nlm.nih.gov/12345678/}");
 
     const reimported = parseBibTeX(bib).papers[0];
@@ -258,6 +259,87 @@ describe("a stored pubmed_url is re-checked before it is exported", () => {
         expect(text).not.toContain("pubmed.ncbi.nlm.nih.gov");
       });
     }
+  });
+});
+
+// ── Invalid stored PMIDs ──
+
+/**
+ * A field whose semantics assert "this is a PMID" must not carry a value that
+ * fails the PMID syntax rule. Paperlume's own importer would reject it, but an
+ * exported file is read by tools that have no reason to re-validate.
+ *
+ * Only provably invalid values are dropped — see the digit-only case at the end.
+ */
+describe("a syntactically invalid stored PMID is not exported as a PMID", () => {
+  const invalidPmids = ["L629384756", "WOS:000123456700001", "123abc"];
+
+  for (const invalid of invalidPmids) {
+    describe(`stored pmid = ${invalid}`, () => {
+      const paper = () => makePaper({ pmid: invalid, doi: "10.1000/example" });
+
+      for (const { name, run, reimport } of EXPORTERS) {
+        it(name, async () => {
+          run([paper()]);
+          const text = await exported();
+
+          // Absent from the file entirely, so no PMID-bearing field carries it.
+          expect(text).not.toContain(invalid);
+          expect(text).not.toContain("pubmed.ncbi.nlm.nih.gov");
+          expect(text).toContain("https://doi.org/10.1000/example");
+
+          const reimported = reimport(text).papers[0];
+          expect(reimported.pmid).toBeNull();
+          expect(reimported.doi).toBe("10.1000/example");
+          expect(reimported.pubmed_url).toBeNull();
+          expect(reimported.journal_url).toBe("https://doi.org/10.1000/example");
+        });
+      }
+    });
+  }
+
+  it("RIS omits the compatibility AN line entirely", async () => {
+    exportToRIS([makePaper({ pmid: "L629384756", doi: "10.1000/example" })]);
+    const ris = await exported();
+
+    expect(ris).not.toContain("AN  - ");
+    expect(ris).toContain("UR  - https://doi.org/10.1000/example");
+  });
+
+  it("BibTeX omits the pmid field entirely", async () => {
+    exportToBibTeX([makePaper({ pmid: "L629384756", doi: "10.1000/example" })]);
+    const bib = await exported();
+
+    expect(bib).not.toContain("pmid      = ");
+    expect(bib).toContain("url       = {https://doi.org/10.1000/example}");
+  });
+
+  it("CSV leaves the PMID column empty and keeps the rest of the row intact", async () => {
+    exportToCSV([makePaper({ pmid: "L629384756", doi: "10.1000/example" })]);
+    const csv = await exported();
+    const [header, row] = csv.split("\n");
+
+    expect(header.split(",")[4]).toBe("PMID");
+    expect(row).not.toContain("L629384756");
+
+    // Dropping the value must not shift the columns.
+    const reimported = parseCSV(csv).papers[0];
+    expect(reimported.pmid).toBeNull();
+    expect(reimported.doi).toBe("10.1000/example");
+    expect(reimported.title).toBe("Effect of Treatment on Outcomes");
+    expect(reimported.journal).toBe("Journal of Testing");
+  });
+
+  // The limit of what export can know. This value may have been fabricated by
+  // the old RIS `AN` rule from a numeric accession, but the row holds no
+  // evidence either way, so it stays authoritative. Repairing it would need a
+  // separate evidence-backed cleanup objective, not a guess at export time.
+  it("keeps a digit-only historical PMID, which the row cannot disprove", async () => {
+    exportToRIS([makePaper({ pmid: "2019345678", doi: "10.1000/example" })]);
+    const ris = await exported();
+
+    expect(ris).toContain("AN  - 2019345678");
+    expect(ris).toContain("UR  - https://pubmed.ncbi.nlm.nih.gov/2019345678/");
   });
 });
 
