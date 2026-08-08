@@ -88,7 +88,10 @@ const emptyManualData: ManualPaperData = {
   pubmedUrl: "",
 };
 
-const ACCEPTED_FILE_EXTENSIONS = [".bib", ".ris", ".csv", ".nbib", ".enw"];
+// The formats `parseFile` has a dedicated parser for. Single source for the
+// picker's filter and for the rejection message, so the copy cannot drift back
+// out of step with what the importer actually reads.
+const ACCEPTED_FILE_EXTENSIONS = [".bib", ".ris", ".nbib", ".enw", ".csv"];
 
 export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, projects = [], tags = [] }: AddPaperDialogProps) {
   const [activeTab, setActiveTab] = useState<"import" | "file" | "manual">("import");
@@ -218,7 +221,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const processImportFile = (file: File) => {
     const ext = "." + file.name.split(".").pop()?.toLowerCase();
     if (!ACCEPTED_FILE_EXTENSIONS.includes(ext)) {
-      setParsedFile({ papers: [], warnings: [`Unsupported format: ${ext}. Supported: .bib, .ris, .csv`] });
+      setParsedFile({ papers: [], warnings: [`Unsupported format: ${ext}. Supported: ${ACCEPTED_FILE_EXTENSIONS.join(", ")}`] });
       setFileName(file.name);
       return;
     }
@@ -686,12 +689,12 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
                   {isFileDragging ? "Drop your file here" : "Drop a file or click to browse"}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Supports .bib (BibTeX), .ris (RIS/NBIB), .csv
+                  Supports .bib (BibTeX), .ris (RIS), .nbib (PubMed), .enw (EndNote), .csv
                 </p>
                 <input
                   id="file-import-input"
                   type="file"
-                  accept=".bib,.ris,.csv,.nbib,.enw"
+                  accept={ACCEPTED_FILE_EXTENSIONS.join(",")}
                   className="hidden"
                   onChange={handleFileSelect}
                 />
