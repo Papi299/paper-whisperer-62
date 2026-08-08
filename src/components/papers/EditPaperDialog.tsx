@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/command";
 import { PaperWithTags, Project, Tag } from "@/types/database";
 import { isGenericStudyType } from "@/lib/studyTypeUtils";
+import { toSafeExternalHref } from "@/lib/externalUrl";
 import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags, Trash2, FileText, Upload, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -573,21 +574,31 @@ export function EditPaperDialog({
             {/* Thumbnail grid */}
             {attachments.length > 0 && (
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
-                {attachments.map((att) => (
+                {attachments.map((att) => {
+                  // `publicUrl` is a Supabase Storage signed URL, but it falls
+                  // back to "" when signing fails; run it through the same
+                  // allowlist so only a real http(s) URL becomes a link.
+                  const attachmentHref = toSafeExternalHref(att.publicUrl);
+                  const thumbnail = att.file_type.startsWith("image/") ? (
+                    <img
+                      src={att.publicUrl}
+                      alt={att.file_name}
+                      className="h-20 w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-20 w-full items-center justify-center">
+                      <FileText className="h-8 w-8 text-muted-foreground" />
+                    </div>
+                  );
+                  return (
                   <div key={att.id} className="group relative rounded-md border overflow-hidden bg-muted">
-                    <a href={att.publicUrl} target="_blank" rel="noopener noreferrer" className="block">
-                      {att.file_type.startsWith("image/") ? (
-                        <img
-                          src={att.publicUrl}
-                          alt={att.file_name}
-                          className="h-20 w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-20 w-full items-center justify-center">
-                          <FileText className="h-8 w-8 text-muted-foreground" />
-                        </div>
-                      )}
-                    </a>
+                    {attachmentHref ? (
+                      <a href={attachmentHref} target="_blank" rel="noopener noreferrer" className="block">
+                        {thumbnail}
+                      </a>
+                    ) : (
+                      <div className="block">{thumbnail}</div>
+                    )}
                     <p className="truncate px-1 py-0.5 text-[10px] text-muted-foreground">{att.file_name}</p>
                     <button
                       onClick={() => deleteAttachment(att)}
@@ -597,7 +608,8 @@ export function EditPaperDialog({
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

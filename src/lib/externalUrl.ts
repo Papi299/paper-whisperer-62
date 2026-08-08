@@ -1,0 +1,58 @@
+/**
+ * Scheme allowlisting for external navigation.
+ *
+ * Paper link fields (`pubmed_url`, `journal_url`, `drive_url`) are free-text:
+ * they are typed by users in the add/edit dialogs and read verbatim out of
+ * imported RIS/CSV files, so a stored value can be any string at all —
+ * including `javascript:`, `data:`, or a relative path. Rendering such a value
+ * straight into `<a href>` turns stored data into a navigation target.
+ *
+ * The application must therefore decide, itself, what is navigable. React 18
+ * only logs a warning for `javascript:` hrefs and still renders them, and
+ * `rel="noopener noreferrer"` addresses window-handle leakage rather than the
+ * scheme — neither is a scheme control.
+ *
+ * Parsing is delegated to the WHATWG `URL` parser instead of a regex because
+ * the parser applies the same normalization the browser does when it resolves
+ * an href: it strips tabs, newlines, and leading control characters anywhere in
+ * the input, so `"java\tscript:alert(1)"`, and a leading U+0000 (NUL) before
+ * `"javascript:alert(1)"`, both resolve to the `javascript:` protocol. A textual
+ * check on the raw string would miss those; comparing the parsed protocol does
+ * not.
+ */
+
+/** The only schemes this application will navigate to. Compared exactly. */
+const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+
+/**
+ * Resolve a stored/user-supplied value to a URL that is safe to put in an
+ * `href`, or `null` when it must not become navigable.
+ *
+ * Fails closed: anything that is not an absolute `http:`/`https:` URL — a
+ * different scheme, a relative or scheme-relative path, or unparseable text —
+ * yields `null`. The input is never repaired: no scheme is prepended, guessed,
+ * or substituted.
+ *
+ * @returns The normalized absolute URL, or `null` if it is not navigable.
+ */
+export function toSafeExternalHref(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  let parsed: URL;
+  try {
+    // No base URL: relative and scheme-relative inputs must not resolve
+    // against the app origin, they must fail.
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+
+  // `protocol` is normalized to lowercase by the parser, so this exact-match
+  // check also covers `HTTPS:` / `JaVaScRiPt:`.
+  if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) return null;
+
+  return parsed.href;
+}
