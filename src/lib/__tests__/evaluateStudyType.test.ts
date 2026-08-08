@@ -205,4 +205,26 @@ describe("evaluateStudyType — structured publication types", () => {
       evaluateStudyType("Fixture", null, null, commaPool, ["  ", "Clinical Trial, Phase II"])
     ).toBe("Clinical Trial, Phase II");
   });
+
+  it("wins a multi-comma official type whole against a shorter pool prefix", () => {
+    // "Research Support, N.I.H., Extramural" holds two internal commas. Split,
+    // it would offer the pool "Research Support", "N.I.H." and "Extramural" —
+    // and the first of those is a real pool entry, so the wrong value would win
+    // silently rather than fail visibly.
+    const supportPool: StudyTypePoolEntry[] = [
+      { study_type: "Research Support, N.I.H., Extramural", specificity_weight: 1, hierarchy_rank: 1 },
+      { study_type: "Research Support", specificity_weight: 1, hierarchy_rank: 2 },
+    ];
+    const joined = "Research Support, N.I.H., Extramural, Journal Article";
+
+    expect(
+      evaluateStudyType("Fixture", null, joined, supportPool, [
+        "Research Support, N.I.H., Extramural",
+        "Journal Article",
+      ])
+    ).toBe("Research Support, N.I.H., Extramural");
+
+    // The legacy string-only caller demonstrably lands on the shorter entry.
+    expect(evaluateStudyType("Fixture", null, joined, supportPool)).toBe("Research Support");
+  });
 });

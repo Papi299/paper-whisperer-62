@@ -197,4 +197,91 @@ describe("fetchPaperMetadataEdge", () => {
     expect(result).toHaveLength(1);
     expect(result[0].error).toBe("Unexpected edge function response");
   });
+
+  // ── Structured publication-type provenance ───────────────────────────
+  //
+  // The wrapper is a transport, not a re-shaper: whatever representation the
+  // deployed function returns has to reach the caller untouched, including a
+  // field the wrapper itself knows nothing about.
+
+  it("passes PubMed publication types through with their boundaries intact", async () => {
+    mockInvoke.mockResolvedValue(
+      successResponse([
+        {
+          identifier: "12345",
+          title: "Test Paper",
+          source: "pubmed",
+          study_type: "Clinical Trial, Phase II, Journal Article",
+          publication_types: ["Clinical Trial, Phase II", "Journal Article"],
+        },
+      ])
+    );
+
+    const result = await fetchPaperMetadata(["12345"]);
+
+    expect(result[0].publication_types).toEqual([
+      "Clinical Trial, Phase II",
+      "Journal Article",
+    ]);
+    // Two source values — not the three a comma split of study_type yields.
+    expect(result[0].publication_types).toHaveLength(2);
+    // The joined representation is still carried for existing consumers.
+    expect(result[0].study_type).toBe("Clinical Trial, Phase II, Journal Article");
+  });
+
+  it("leaves a Crossref-only result without publication types", async () => {
+    // Crossref's bibliographic `type` is not a publication-type list, so the
+    // field is absent rather than fabricated from study_type.
+    mockInvoke.mockResolvedValue(
+      successResponse([
+        {
+          identifier: "10.1000/xyz",
+          title: "Crossref Paper",
+          source: "crossref",
+          study_type: "Journal Article",
+        },
+      ])
+    );
+
+    const result = await fetchPaperMetadata(["10.1000/xyz"]);
+
+    expect(result[0].study_type).toBe("Journal Article");
+    expect(result[0].publication_types).toBeUndefined();
+  });
+
+  it("preserves the field across the batching boundary", async () => {
+    // Batches are concatenated by the wrapper; the additive field must survive
+    // that assembly for every batch, not just the first.
+    mockInvoke
+      .mockResolvedValueOnce(
+        successResponse(
+          Array.from({ length: 10 }, (_, i) => ({
+            identifier: `id-${i}`,
+            title: `Paper ${i}`,
+            source: "pubmed",
+            publication_types: ["Clinical Trial, Phase II"],
+          }))
+        )
+      )
+      .mockResolvedValueOnce(
+        successResponse([
+          {
+            identifier: "id-10",
+            title: "Paper 10",
+            source: "pubmed",
+            publication_types: ["Research Support, N.I.H., Extramural"],
+          },
+        ])
+      );
+
+    const result = await fetchPaperMetadata(
+      Array.from({ length: 11 }, (_, i) => `id-${i}`)
+    );
+
+    expect(result).toHaveLength(11);
+    expect(result[0].publication_types).toEqual(["Clinical Trial, Phase II"]);
+    expect(result[10].publication_types).toEqual([
+      "Research Support, N.I.H., Extramural",
+    ]);
+  });
 });

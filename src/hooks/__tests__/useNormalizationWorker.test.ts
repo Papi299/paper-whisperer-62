@@ -156,4 +156,63 @@ describe("useNormalizationWorker", () => {
 
     await expect(normalizePromise!).rejects.toThrow("Normalization worker error: unknown error");
   });
+
+  // ── Structured publication-type provenance across both paths ─────────
+  //
+  // Which path runs is a batch-size accident, so the structured publication
+  // types have to reach normalization identically either side of the threshold.
+  // Losing them above it would silently split an official comma-bearing type
+  // for large imports only.
+
+  const structuredPaper = {
+    ...makeRawPaper("Structured Paper"),
+    study_type: "Clinical Trial, Phase II, Multicenter Study",
+    publication_types: ["Clinical Trial, Phase II", "Multicenter Study"],
+  };
+
+  it("keeps publication_types on the main-thread path (<= threshold)", async () => {
+    const { result } = renderHook(() => useNormalizationWorker());
+
+    await act(async () => {
+      await result.current.normalize([structuredPaper], dummyConfig);
+    });
+
+    const [rawPaper] = mockNormalizePaperData.mock.calls[0] as [typeof structuredPaper];
+    expect(rawPaper.publication_types).toEqual([
+      "Clinical Trial, Phase II",
+      "Multicenter Study",
+    ]);
+  });
+
+  it("keeps publication_types in the worker message (> threshold)", async () => {
+    const { result } = renderHook(() => useNormalizationWorker());
+    const papers = Array.from({ length: 11 }, () => ({ ...structuredPaper }));
+
+    let normalizePromise: Promise<unknown>;
+    act(() => {
+      normalizePromise = result.current.normalize(papers, dummyConfig);
+    });
+
+    const posted = mockPostMessage.mock.calls[0][0];
+    expect(posted.papers).toHaveLength(11);
+    for (const paper of posted.papers) {
+      expect(paper.publication_types).toEqual([
+        "Clinical Trial, Phase II",
+        "Multicenter Study",
+      ]);
+    }
+
+    // The posted payload must also survive structured clone, which is what the
+    // real Worker boundary applies to it.
+    const cloned = structuredClone(posted);
+    expect(cloned.papers[0].publication_types).toEqual([
+      "Clinical Trial, Phase II",
+      "Multicenter Study",
+    ]);
+
+    act(() => {
+      capturedOnMessage!({ data: { id: posted.id, results: papers } } as MessageEvent);
+    });
+    await normalizePromise!;
+  });
 });
