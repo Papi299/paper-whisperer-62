@@ -1,8 +1,17 @@
 /**
- * File Import Parsers for BibTeX (.bib), RIS (.ris), and CSV (.csv)
+ * File Import Parsers for BibTeX (.bib), RIS (.ris), PubMed/NLM NBIB (.nbib),
+ * EndNote tagged (.enw), and CSV (.csv)
  *
  * All parsers output RawPaperData[] compatible with the normalization pipeline
  * and safe_bulk_insert_papers RPC.
+ *
+ * Each extension has its own grammar and its own parser. `.nbib` and `.enw` are
+ * *not* RIS: PubMed's Citation Manager export is the MEDLINE tagged format and
+ * EndNote's tagged import format is `%`-prefixed, so neither can be read by
+ * `parseRIS`. The file extension is the routing authority — content is never
+ * sniffed to guess a format, and a file whose contents do not match its
+ * extension fails visibly with that format's warnings rather than being
+ * reinterpreted as another format.
  */
 
 import Papa from "papaparse";
@@ -484,6 +493,412 @@ export function parseRIS(content: string): FileParseResult {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Tagged-record primitives — shared by the NBIB and EndNote parsers
+//
+// Both formats are line-oriented records of repeatable `tag → value` fields.
+// Only the tag grammar and the field *semantics* differ, so the accessors are
+// shared while tokenization and mapping stay per-format — a tag that means one
+// thing in PubMed must never be read as its EndNote namesake.
+// ══════════════════════════════════════════════════════════════
+
+interface TaggedField {
+  tag: string;
+  value: string;
+}
+
+/** One record: its fields in file order, repeats preserved. */
+type TaggedRecord = TaggedField[];
+
+function firstFieldValue(record: TaggedRecord, tag: string): string | null {
+  const found = record.find((field) => field.tag === tag);
+  return found ? found.value : null;
+}
+
+function allFieldValues(record: TaggedRecord, tag: string): string[] {
+  return record
+    .filter((field) => field.tag === tag)
+    .map((field) => field.value)
+    .filter(Boolean);
+}
+
+/** First four-digit run in a free-form date, as the other parsers read years. */
+function extractYear(value: string | null): number | null {
+  const match = value?.match(/(\d{4})/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+/** Append a wrapped physical line to the logical value it continues. */
+function appendContinuation(record: TaggedRecord, line: string): void {
+  const previous = record[record.length - 1];
+  const continuation = line.trim();
+  previous.value = previous.value ? `${previous.value} ${continuation}` : continuation;
+}
+
+// ══════════════════════════════════════════════════════════════
+// PubMed / NLM NBIB Parser — native MEDLINE tagged-record parser
+//
+// PubMed's "Send to → Citation manager" export (`.nbib`) is the MEDLINE tagged
+// format. A field line carries its tag left-justified in a four-character
+// column, then `-`, then the value from column seven; long values wrap onto
+// indented physical lines, and citations are separated by one blank line:
+//
+//     PMID- 39725180
+//     DP  - 2025 May
+//     JT  - Journal of renal nutrition : the official journal of the Council on
+//           Renal Nutrition of the National Kidney Foundation
+//     AID - 10.1053/j.jrn.2024.12.006 [doi]
+//
+// A *logical* field is therefore the tag line plus every indented line that
+// follows it — the shape RIS has no notion of, and the reason `parseRIS` could
+// never read this format.
+// ══════════════════════════════════════════════════════════════
+
+/** Width of the left-justified tag column; the `-` separator sits just after. */
+const NBIB_TAG_COLUMN_WIDTH = 4;
+
+/** A tag is a short uppercase token — `TI`, `FAU`, `PMID`, `EDAT`. */
+const NBIB_TAG_PATTERN = /^[A-Z][A-Z0-9]{0,3}$/;
+
+/**
+ * An `AID`/`LID` value whose identifier type is explicitly declared to be a
+ * DOI. The qualifier is the authority: it is the only thing distinguishing
+ * `10.1053/j.jrn.2024.12.006 [doi]` from the equally punctuated publisher item
+ * identifier `S1051-2276(24)00291-7 [pii]`.
+ */
+const NBIB_DOI_QUALIFIER = /^(.+?)\s*\[doi\]$/i;
+
+/**
+ * NLM marks a MeSH major topic with an asterisk on the heading or on one of its
+ * subheadings — `*Magnesium Deficiency/complications` — so the asterisk is a
+ * majorness marker rather than vocabulary text. PubMed's own API never emits it
+ * (`<DescriptorName>` holds the bare heading and majorness rides an attribute),
+ * so it is stripped in both positions to keep one representation of a MeSH term
+ * across the file-import and API paths.
+ */
+const MESH_MAJOR_TOPIC_MARKER = /(^|\/)\*/g;
+
+function stripMeshMajorTopicMarkers(term: string): string {
+  return term.replace(MESH_MAJOR_TOPIC_MARKER, "$1");
+}
+
+/**
+ * Recognize a PubMed field line from the tag *syntax*, not from a list of the
+ * tags Paperlume consumes, so an unfamiliar tag still ends the previous field
+ * instead of being swallowed as part of its wrapped value.
+ */
+function parseNbibTagLine(line: string): TaggedField | null {
+  if (line.length <= NBIB_TAG_COLUMN_WIDTH) return null;
+  if (line[NBIB_TAG_COLUMN_WIDTH] !== "-") return null;
+
+  const column = line.slice(0, NBIB_TAG_COLUMN_WIDTH);
+  const tag = column.trimEnd();
+  // The tag is left-justified, so padding is only ever on the right. This is
+  // what separates a field line from an indented continuation.
+  if (tag !== column.trim() || !NBIB_TAG_PATTERN.test(tag)) return null;
+
+  return { tag, value: line.slice(NBIB_TAG_COLUMN_WIDTH + 1).trim() };
+}
+
+function parseNbibRecords(content: string): TaggedRecord[] {
+  const records: TaggedRecord[] = [];
+  let current: TaggedRecord = [];
+
+  const flush = () => {
+    if (current.length > 0) {
+      records.push(current);
+      current = [];
+    }
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    // A blank line closes the record: PubMed separates citations with exactly
+    // one, and no field value contains one.
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+
+    const field = parseNbibTagLine(line);
+    if (field) {
+      // `PMID` opens every citation, so treating it as a boundary keeps
+      // adjacent records apart even in an export that lost its blank separator.
+      if (field.tag === "PMID") flush();
+      current.push(field);
+      continue;
+    }
+
+    // An indented line continues the field above it. Both sides were trimmed
+    // during tokenization, so re-joining with a single space restores the
+    // logical value exactly — PubMed wraps at word boundaries.
+    if (/^\s/.test(line) && current.length > 0) {
+      appendContinuation(current, line);
+    }
+    // Anything else is outside the record grammar and is ignored rather than
+    // guessed at.
+  }
+
+  flush();
+  return records;
+}
+
+/** First value in `values` that is explicitly qualified as a DOI. */
+function firstQualifiedDoi(values: string[]): string | null {
+  for (const value of values) {
+    const doi = value.match(NBIB_DOI_QUALIFIER)?.[1].trim();
+    if (doi) return doi;
+  }
+  return null;
+}
+
+function nbibRecordToRawPaper(record: TaggedRecord): RawPaperData | null {
+  const title = firstFieldValue(record, "TI")?.trim();
+  if (!title) return null;
+
+  // FAU and AU are two representations of the *same* personal authors, so
+  // reading both would duplicate every name. FAU carries the full form
+  // ("Jin, Youkai") and wins; AU ("Jin Y") is used only when FAU is absent.
+  const fullAuthors = allFieldValues(record, "FAU");
+  const authors = fullAuthors.length > 0 ? fullAuthors : allFieldValues(record, "AU");
+
+  // CN is a corporate author — real authorship that neither FAU nor AU carries
+  // — appended in file order, skipping a name already selected above.
+  const selected = new Set(authors);
+  for (const corporate of allFieldValues(record, "CN")) {
+    if (!selected.has(corporate)) {
+      selected.add(corporate);
+      authors.push(corporate);
+    }
+  }
+
+  // DP is the date of publication. EDAT / MHDA / CRDT are Entrez processing
+  // dates — when NLM handled the record, not when the work was published — and
+  // are deliberately never consulted for the year.
+  const year = extractYear(firstFieldValue(record, "DP"));
+
+  // JT is the full journal title; TA is its NLM abbreviation, used only when
+  // the export carries no JT. `SO` is a formatted citation string, not a
+  // journal field, and is not mined for one.
+  const journal = firstFieldValue(record, "JT") || firstFieldValue(record, "TA");
+
+  // `PMID` is PubMed's own identifier field, so unlike a generic accession it
+  // may establish the PMID. The declared value is still validated as bare
+  // decimal digits, and the stored link is always the canonical record URL
+  // derived from it — no other NBIB field can rescue an invalid one.
+  const pmid = normalizePmid(firstFieldValue(record, "PMID"));
+  const pubmed_url = pmid ? canonicalPubMedUrl(pmid) : null;
+
+  // AID and LID both hold identifiers of several kinds, each tagged with its
+  // type, so only an explicitly `[doi]`-qualified value is a DOI.
+  const doi =
+    firstQualifiedDoi(allFieldValues(record, "AID")) ??
+    firstQualifiedDoi(allFieldValues(record, "LID"));
+
+  // AB is the article's abstract. OAB ("Other Abstract") is a substitute
+  // supplied by another source; it stands in only when AB is absent, and the
+  // two are never appended to each other.
+  const abstracts = allFieldValues(record, "AB");
+  const abstract = (abstracts.length > 0 ? abstracts : allFieldValues(record, "OAB")).join(" ");
+
+  // Repeated PT values feed the existing comma-separated study-type input, so
+  // `evaluateStudyType()` picks the user-pool winner exactly as it already does
+  // for PubMed API results, which join `<PublicationType>` the same way.
+  const publicationTypes = allFieldValues(record, "PT");
+
+  return {
+    title,
+    authors,
+    year,
+    journal: journal?.trim() || null,
+    pmid,
+    doi,
+    abstract: abstract || null,
+    // OT carries author- and publisher-supplied keywords. MeSH headings are a
+    // separate controlled vocabulary with their own destination below, so they
+    // are not folded in here.
+    keywords: allFieldValues(record, "OT"),
+    mesh_terms: allFieldValues(record, "MH").map(stripMeshMajorTopicMarkers).filter(Boolean),
+    // NM is the Substance Name — a bare name, the same shape the API path takes
+    // from `<NameOfSubstance>`. RN is deliberately unread: it is a registry
+    // entry, displayed as `I38ZP9992A (Magnesium)`, so storing it verbatim
+    // would put a CAS/EC number into a list of substance names.
+    substances: allFieldValues(record, "NM"),
+    study_type: publicationTypes.length > 0 ? publicationTypes.join(", ") : null,
+    pubmed_url,
+    // A native NBIB record carries no article URL: the PubMed link is derived
+    // from the validated PMID above, and there is no generic source link to
+    // take without inventing one out of citation text.
+    journal_url: null,
+    drive_url: null,
+  };
+}
+
+export function parseNBIB(content: string): FileParseResult {
+  const papers: RawPaperData[] = [];
+  const warnings: string[] = [];
+
+  const records = parseNbibRecords(content);
+
+  for (let idx = 0; idx < records.length; idx++) {
+    const paper = nbibRecordToRawPaper(records[idx]);
+    if (paper) {
+      papers.push(paper);
+    } else {
+      warnings.push(`NBIB record ${idx + 1}: missing title, skipped`);
+    }
+  }
+
+  if (records.length === 0 && content.trim().length > 0) {
+    warnings.push("No valid PubMed/NBIB records found in file.");
+  }
+
+  return { papers, warnings };
+}
+
+// ══════════════════════════════════════════════════════════════
+// EndNote Tagged Parser — native `%`-tag parser
+//
+// EndNote's tagged import format (`.enw`) is not RIS either. Each field starts
+// with a percent sign and a single tag character — a capital letter, a digit or
+// a special character — followed by a space and the value; whole references are
+// separated by one blank line:
+//
+//     %0 Journal Article
+//     %A Smith, John
+//     %T A useful paper
+//     %R 10.1000/example
+//
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * `%` + exactly one tag character + separator. The tag is never case-folded:
+ * EndNote defines capitals, so `%a` is an unknown tag and is safely ignored
+ * rather than assumed to mean `%A`.
+ */
+const ENW_TAG_LINE = /^%(\S)(?:[ \t]+(.*))?$/;
+
+function parseEndNoteRecords(content: string): TaggedRecord[] {
+  const records: TaggedRecord[] = [];
+  let current: TaggedRecord = [];
+
+  const flush = () => {
+    if (current.length > 0) {
+      records.push(current);
+      current = [];
+    }
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    // One blank line separates whole references.
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+
+    const match = line.match(ENW_TAG_LINE);
+    if (match) {
+      current.push({ tag: match[1], value: (match[2] ?? "").trim() });
+      continue;
+    }
+
+    // A non-tag line inside a record continues the field above it. Because a
+    // blank line has already closed any previous reference, this can never
+    // merge two records; untagged prose with no field above it is discarded
+    // rather than invented into a reference of its own.
+    if (current.length > 0) {
+      appendContinuation(current, line);
+    }
+  }
+
+  flush();
+  return records;
+}
+
+function endNoteRecordToRawPaper(record: TaggedRecord): RawPaperData | null {
+  const title = firstFieldValue(record, "T")?.trim();
+  if (!title) return null;
+
+  // Each %A is one whole author. EndNote writes names as "Smith, John", so
+  // splitting the value on its comma would turn one person into two.
+  const authors = allFieldValues(record, "A");
+
+  // %D is the Year field; %8 is the Date field and supplies a year only when %D
+  // does not — the same fallback shape the RIS parser uses from PY to DA.
+  const year =
+    extractYear(firstFieldValue(record, "D")) ?? extractYear(firstFieldValue(record, "8"));
+
+  // %J is the journal name; %B (Secondary Title) carries the container title in
+  // exports that omit %J. One or the other, never both concatenated.
+  const journal = firstFieldValue(record, "J") || firstFieldValue(record, "B");
+
+  // %U is the URL field. The first structurally authenticated PubMed record URL
+  // establishes the PMID, and the first valid non-PubMed http(s) URL is kept as
+  // the generic source link; the two coexist. Recognition is reused wholesale
+  // from the shared PubMed identifier module — never a substring test.
+  //
+  // This is the *only* PMID authority for an EndNote record. %M is EndNote's
+  // Accession Number: whatever identifier the exporting database assigned — an
+  // Embase, Scopus or Web of Science accession as readily as a PMID — and
+  // numeric shape does not distinguish them, so it is never read as a PMID,
+  // exactly as RIS `AN` is not.
+  const urls = allFieldValues(record, "U");
+  const pmid = urls.reduce<string | null>(
+    (found, url) => found ?? extractPmidFromPubMedUrl(url),
+    null,
+  );
+  const pubmed_url = pmid ? canonicalPubMedUrl(pmid) : null;
+  const journal_url =
+    urls
+      .filter((url) => !isPubMedRecordUrl(url))
+      .map((url) => toImportableExternalUrl(url))
+      .find((url): url is string => url !== null) ?? null;
+
+  return {
+    title,
+    authors,
+    year,
+    journal: journal?.trim() || null,
+    pmid,
+    // %R is the DOI by EndNote's own definition and stands on its own: it needs
+    // no corroborating %U, and no other identifier field may supply it.
+    doi: firstFieldValue(record, "R")?.trim() || null,
+    abstract: firstFieldValue(record, "X")?.trim() || null,
+    keywords: allFieldValues(record, "K"),
+    // EndNote tagged records carry no MeSH or substance vocabulary.
+    mesh_terms: [],
+    substances: [],
+    // %0 is the bibliographic Reference Type ("Journal Article") and %9 the
+    // Type of Work. Both describe the *container*, not the research design, so
+    // neither is allowed to masquerade as a Paperlume study type.
+    study_type: null,
+    pubmed_url,
+    journal_url,
+    drive_url: null,
+  };
+}
+
+export function parseEndNoteTagged(content: string): FileParseResult {
+  const papers: RawPaperData[] = [];
+  const warnings: string[] = [];
+
+  const records = parseEndNoteRecords(content);
+
+  for (let idx = 0; idx < records.length; idx++) {
+    const paper = endNoteRecordToRawPaper(records[idx]);
+    if (paper) {
+      papers.push(paper);
+    } else {
+      warnings.push(`EndNote record ${idx + 1}: missing title, skipped`);
+    }
+  }
+
+  if (records.length === 0 && content.trim().length > 0) {
+    warnings.push("No valid EndNote tagged records found in file.");
+  }
+
+  return { papers, warnings };
+}
+
+// ══════════════════════════════════════════════════════════════
 // CSV Parser — Using PapaParse for robust field handling
 // ══════════════════════════════════════════════════════════════
 
@@ -613,13 +1028,22 @@ export function parseFile(content: string, filename: string): FileParseResult {
     case "bib":
       return parseBibTeX(content);
     case "ris":
-    case "enw":
-    case "nbib":
       return parseRIS(content);
+    // `.nbib` and `.enw` used to fall through to `parseRIS`, which claimed
+    // support for two formats it cannot read. Each now routes to its own
+    // grammar, and content that does not match its extension fails with that
+    // format's warnings instead of being reinterpreted as RIS.
+    case "nbib":
+      return parseNBIB(content);
+    case "enw":
+      return parseEndNoteTagged(content);
     case "csv":
     case "tsv":
       return parseCSV(content);
     default:
-      return { papers: [], warnings: [`Unsupported file format: .${ext}. Supported: .bib, .ris, .csv`] };
+      return {
+        papers: [],
+        warnings: [`Unsupported file format: .${ext}. Supported: .bib, .ris, .nbib, .enw, .csv`],
+      };
   }
 }
