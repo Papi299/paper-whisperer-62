@@ -8,6 +8,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { NormalizationConfig, RawPaperData, computeEnrichedKeywords } from "@/lib/normalizePaperData";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
+import { normalizePublicationTypes, toEvaluatorPublicationTypes } from "@/lib/publicationTypes";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
 import { processChunkedInsert } from "@/lib/chunkedInsert";
@@ -81,6 +82,12 @@ export function useBulkMutations(
         mesh_terms: meta.mesh_terms || [],
         substances: meta.substances || [],
         study_type: meta.study_type || null,
+        // PubMed states publication types discretely; the joined `study_type`
+        // above cannot be split back apart without breaking an official type
+        // that contains a comma. Forwarding the structured values lets
+        // normalization evaluate them as whole values — the same path native
+        // NBIB already takes.
+        publication_types: meta.publication_types,
         pubmed_url: meta.pubmed_url ?? null,
         journal_url: meta.journal_url ?? null,
         drive_url: null,
@@ -116,6 +123,13 @@ export function useBulkMutations(
         abstract: normalized.abstract ?? null,
         study_type: normalized.study_type ?? null,
         raw_study_type: successfulResults[i].meta.study_type || null,
+        // Structured provenance alongside the legacy joined string — null
+        // whenever the source stated no boundaries (an older deployed Edge
+        // version, or a Crossref-only result), never reconstructed by
+        // splitting `raw_study_type`.
+        raw_publication_types: normalizePublicationTypes(
+          successfulResults[i].meta.publication_types,
+        ),
         raw_keywords: successfulResults[i].meta.keywords || [],
         statistical_methods: null,
         keywords: normalized.keywords || [],
@@ -269,6 +283,11 @@ export function useBulkMutations(
         abstract: normalized.abstract ?? null,
         study_type: normalized.study_type ?? null,
         raw_study_type: parsedPapers[i].study_type || null,
+        // Native NBIB states one publication type per `PT` field, so those
+        // boundaries are now persisted rather than surviving only in memory
+        // for the import-time evaluation. Formats that state no boundaries
+        // (RIS, BibTeX, CSV, EndNote) keep `raw_study_type` alone.
+        raw_publication_types: normalizePublicationTypes(parsedPapers[i].publication_types),
         raw_keywords: parsedPapers[i].keywords || [],
         statistical_methods: null,
         keywords: normalized.keywords || [],
@@ -487,10 +506,12 @@ export function useBulkMutations(
     async (pool: StudyTypePoolEntry[]) => {
       if (!userId || papers.length === 0) return;
 
-      // Fetch own data including abstract — the list cache no longer carries abstract
+      // Fetch own data including abstract — the list cache no longer carries
+      // abstract, and `raw_publication_types` is deliberately not in the list
+      // query either: it is provenance needed only here, not by the paper list.
       const { data: freshPapers, error: fetchError } = await supabase
         .from("papers")
-        .select("id, title, abstract, study_type, raw_study_type")
+        .select("id, title, abstract, study_type, raw_study_type, raw_publication_types")
         .eq("user_id", userId);
       if (fetchError) throw fetchError;
 
@@ -499,7 +520,18 @@ export function useBulkMutations(
 
       for (const paper of (freshPapers || [])) {
         const rawFallback = paper.raw_study_type ?? paper.study_type;
-        const newType = evaluateStudyType(paper.title, paper.abstract, rawFallback, pool);
+        // Rows imported from a structured source re-evaluate against the
+        // boundaries that source stated. A row with NULL / absent / unusable
+        // provenance — every row predating this column — yields undefined and
+        // keeps the existing joined-string behavior exactly.
+        const structuredTypes = toEvaluatorPublicationTypes(paper.raw_publication_types);
+        const newType = evaluateStudyType(
+          paper.title,
+          paper.abstract,
+          rawFallback,
+          pool,
+          structuredTypes,
+        );
         const current = (paper.study_type || "").trim();
         const evaluated = (newType || "").trim();
         if (current !== evaluated) {

@@ -18,6 +18,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import { detectIdentifier } from "../_shared/identifierDetection.ts";
+import {
+  extractPublicationTypes,
+  joinPublicationTypes,
+  pubmedStudyTypeOverride,
+} from "../_shared/publicationTypes.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -42,6 +47,13 @@ interface PaperMetadata {
   mesh_terms?: string[];
   substances?: string[];
   study_type?: string | null;
+  /**
+   * The same publication types as `study_type`, with the boundaries PubMed
+   * stated still intact. Present only when PubMed supplied them: a Crossref
+   * record's bibliographic `type` is not a publication-type list, so a
+   * Crossref-only result omits this field rather than inventing one.
+   */
+  publication_types?: string[];
   pubmed_url?: string | null;
   journal_url?: string | null;
   source?: "pubmed" | "crossref";
@@ -258,11 +270,7 @@ async function fetchFromPubMed(
     for (const match of substanceMatches) substances.push(match[1]);
     const tSubsMs = performance.now() - tSubsStart;
 
-    const pubTypeMatches = xml.matchAll(
-      /<PublicationType[^>]*>([^<]+)<\/PublicationType>/g
-    );
-    const publicationTypes: string[] = [];
-    for (const match of pubTypeMatches) publicationTypes.push(match[1]);
+    const publicationTypes = extractPublicationTypes(xml);
 
     const tParseMs = performance.now() - tParseStart;
     // One structured log per PMID — keys are sizes / timings only, no
@@ -289,8 +297,12 @@ async function fetchFromPubMed(
       keywords,
       mesh_terms: meshTerms,
       substances,
-      study_type:
-        publicationTypes.length > 0 ? publicationTypes.join(", ") : null,
+      // Both representations of the same provenance: the joined string every
+      // existing consumer already reads, and the discrete values it was built
+      // from, so a comma inside one official type is never mistaken later for
+      // a separator between two.
+      study_type: joinPublicationTypes(publicationTypes),
+      publication_types: publicationTypes,
       pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
       journal_url: doi ? `https://doi.org/${doi}` : null,
       source: "pubmed",
@@ -480,8 +492,15 @@ async function fetchByDoi(doi: string, apiKey?: string): Promise<PaperMetadata |
         crossrefResult.keywords = pubmedData.keywords || [];
         crossrefResult.mesh_terms = pubmedData.mesh_terms || [];
         crossrefResult.substances = pubmedData.substances || [];
-        crossrefResult.study_type =
-          pubmedData.study_type || crossrefResult.study_type;
+        // Study-type provenance transfers as a pair: when the PubMed value is
+        // adopted its publication-type boundaries come with it, and when it is
+        // not, the Crossref record keeps its own `study_type` and gains no
+        // PubMed structure it cannot account for.
+        const studyTypeOverride = pubmedStudyTypeOverride(pubmedData);
+        if (studyTypeOverride) {
+          crossrefResult.study_type = studyTypeOverride.study_type;
+          crossrefResult.publication_types = studyTypeOverride.publication_types;
+        }
         crossrefResult.pubmed_url = pubmedData.pubmed_url;
       }
     }

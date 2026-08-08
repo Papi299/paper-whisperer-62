@@ -135,13 +135,17 @@ export interface RawPaperData {
   study_type: string | null;
   /**
    * Publication types with their original boundaries intact, for sources that
-   * supply them as discrete values (a native NBIB file's repeated `PT` fields).
-   * Preferred over splitting `study_type`, because an official PubMed
-   * publication type may contain a comma ("Clinical Trial, Phase II").
+   * supply them as discrete values (a native NBIB file's repeated `PT` fields,
+   * the PubMed API's discrete `<PublicationType>` elements). Preferred over
+   * splitting `study_type`, because an official PubMed publication type may
+   * contain a comma ("Clinical Trial, Phase II").
    *
-   * In-memory only: deliberately absent from `NormalizedPaperData`, so it never
-   * reaches a database payload and needs no schema change. Sources without it
-   * keep their existing `study_type`-only behavior.
+   * Source provenance, not a normalization result: deliberately absent from
+   * `NormalizedPaperData`, because normalization derives the winning
+   * `study_type` from it rather than transforming it. Import payloads persist
+   * it into `papers.raw_publication_types` straight from the source object, so
+   * a later study-type pool re-evaluation still has the boundaries. Sources
+   * without it keep their existing `study_type`-only behavior.
    */
   publication_types?: string[];
   pubmed_url: string | null;
