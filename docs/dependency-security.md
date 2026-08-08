@@ -17,11 +17,11 @@
 | Full (incl. dev) | 3 | 0 | **3** | 0 | 0 |
 | Production only | 3 | 0 | **3** | 0 | 0 |
 
-All three findings are the **same React Router advisories** described below. The audit is **not** at zero, and reaching zero is not currently a goal — see [Remaining React Router findings](#remaining-react-router-findings).
+All three current npm-audit findings are in the **React Router package family**. The audit is **not yet at zero**; remaining clearance is deferred to the separately bounded Router work below — see [Remaining React Router findings](#remaining-react-router-findings).
 
 ## Completed remediation boundaries
 
-Three bounded clusters are complete. Each was **lockfile-only** (`package-lock.json` was the sole changed file — no `package.json`, no source, no workflow, no migration), so none of them changed application behavior.
+Three bounded clusters are complete. Each was **lockfile-only**: `package-lock.json` was the sole changed file — no `package.json`, application-source, workflow, or migration file changed. Each was a dependency-security remediation rather than a product-feature change, and none carried an intended behavior change; the resolved implementations of the upgraded packages did change, so runtime behavior is verified by the CI suites, not assumed from the diff scope.
 
 | Cluster | Scope | Result | Evidence |
 |---|---|---|---|
@@ -55,9 +55,26 @@ react-router-dom  6.30.3
 @remix-run/router 1.23.2
 ```
 
-**These packages are still vulnerable and are intentionally not patched.** They were separated from Clusters 1–3 because the advisories are not fixable within the installed v6 range — remediation requires a major-version move to React Router v7, which is an application-code migration (route definitions, data APIs, guards), not a lockfile change. That work is tracked as future **Cluster 4 / Cluster 5** and is **NOT STARTED**; no upgrade strategy has been audited or approved yet.
+**These packages are still vulnerable and are intentionally not patched.** They were separated from Clusters 1–3 because clearing them is not a single bounded lockfile step: the current advisories differ in whether a fix exists on the installed v6-era lines.
 
-Because these findings appear in the production graph, they are the only dependency advisories that currently affect shipped code.
+Current advisories behind the three findings, as reported by `npm audit` at the time of writing:
+
+| Advisory | Package | Affected range | Fixed on a v6-era line? |
+|---|---|---|---|
+| [GHSA-2j2x-hqr9-3h42](https://github.com/advisories/GHSA-2j2x-hqr9-3h42) | `@remix-run/router` | `>=1.3.0 <1.23.3` | **Yes** — 1.23.3 exists |
+| [GHSA-2j2x-hqr9-3h42](https://github.com/advisories/GHSA-2j2x-hqr9-3h42) | `react-router` | `>=6.7.0 <6.30.4` | **Yes** — 6.30.4 exists |
+| [GHSA-jjmj-jmhj-qwj2](https://github.com/advisories/GHSA-jjmj-jmhj-qwj2) | `react-router-dom` | `>=6.30.2 <=6.30.4` | **No** — the range includes 6.30.4, the highest v6 release |
+| [GHSA-wrjc-x8rr-h8h6](https://github.com/advisories/GHSA-wrjc-x8rr-h8h6) | `react-router` | `>=6.0.0 <7.18.0` | **No** — first patched release is on the 7.x line |
+| [GHSA-337j-9hxr-rhxg](https://github.com/advisories/GHSA-337j-9hxr-rhxg) | `react-router` | `>=6.4.0 <7.18.0` | **No** — first patched release is on the 7.x line |
+
+The remaining work is therefore intentionally split, and **both halves are NOT STARTED**:
+
+- **Cluster 4 — bounded v6 Router audit / partial remediation.** Some current advisories do have patched releases on the existing v6-era package lines, so an in-line remediation path may exist without a major upgrade. Its exact safe delta — and what it would and would not clear — **must be re-audited against a fresh `npm audit` when the work is selected**. No specific version bump is prescribed here, and no claim is made about the finding count it would produce.
+- **Cluster 5 — major-version Router migration** for findings that cannot be cleared on v6. At least one current `react-router-dom` advisory (GHSA-jjmj-jmhj-qwj2) has **no patched v6 release**, and two `react-router` advisories are first fixed on the 7.x line, so **full audit clearance cannot be achieved by a v6 patch update alone**. A major-version move is an application-code migration (route definitions, data APIs, guards), not a lockfile change.
+
+**No Router implementation strategy has been owner-approved**, and no target major version is fixed here — the advisory database and the available release lines must both be re-measured when this work is selected.
+
+These are the only remaining npm-audit findings in the **production dependency graph**. Actual applicability and exploitability in PaperLume must be assessed during the bounded Router audit, against the app's Router mode and data flows; presence in the production graph is not by itself proof of an exploitable path.
 
 ## Remediation policy
 
@@ -90,7 +107,7 @@ Revisit this document when any of the following occurs:
 
 - a **new high or critical** advisory appears in either graph;
 - a **new advisory reaches the production graph** (today only React Router does);
-- React Router v7 migration is owner-selected, or an advisory fix becomes available **within** the installed v6 range;
+- Cluster 4 or Cluster 5 is owner-selected, or the set of Router advisories with a v6-era fix changes (either a currently v6-fixable advisory gains a new unpatched sibling, or a currently v7-only advisory is backported);
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
 - any baseline version in [Current resolved security baseline](#current-resolved-security-baseline) regresses;
 - the toolchain moves to a new major (Vite, Vitest, or Node engine), which can re-open transitive ranges.
