@@ -446,6 +446,14 @@ describe("parseNBIB — continuation lines", () => {
     expect(p.abstract).toBe("abstract text");
     expect(p.journal).toBe("Journal of Testing");
   });
+
+  it("folds wrapped values identically in a CRLF export", () => {
+    // The record separator is not the only thing CRLF affects: every wrapped
+    // physical line carries the carriage return too.
+    const crlf = parseNBIB(NBIB_REAL_RECORD.replace(/\n/g, "\r\n"));
+    expect(crlf.warnings).toEqual([]);
+    expect(crlf.papers).toEqual(parseNBIB(NBIB_REAL_RECORD).papers);
+  });
 });
 
 describe("parseNBIB — multiple records", () => {
@@ -879,6 +887,16 @@ describe("parseEndNoteTagged — record structure", () => {
   it("continues a wrapped value onto the untagged line below it", () => {
     const p = enwPaper("%X An abstract that runs on\nacross a second physical line.\n");
     expect(p.abstract).toBe("An abstract that runs on across a second physical line.");
+  });
+
+  it("folds a wrapped value identically in a CRLF export", () => {
+    const wrapped = "%0 Journal Article\n%T Fixture\n%X An abstract that runs on\nacross a second physical line.\n";
+    expect(parseEndNoteTagged(wrapped.replace(/\n/g, "\r\n")).papers).toEqual(
+      parseEndNoteTagged(wrapped).papers,
+    );
+    expect(parseEndNoteTagged(wrapped.replace(/\n/g, "\r\n")).papers[0].abstract).toBe(
+      "An abstract that runs on across a second physical line.",
+    );
   });
 
   it("never lets a continuation cross a record boundary", () => {
