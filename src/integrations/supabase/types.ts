@@ -224,6 +224,7 @@ export type Database = {
           pmid: string | null
           pubmed_url: string | null
           raw_keywords: Json | null
+          raw_publication_types: Json | null
           raw_study_type: string | null
           search_vector: unknown
           statistical_methods: Json | null
@@ -252,6 +253,7 @@ export type Database = {
           pmid?: string | null
           pubmed_url?: string | null
           raw_keywords?: Json | null
+          raw_publication_types?: Json | null
           raw_study_type?: string | null
           search_vector?: unknown
           statistical_methods?: Json | null
@@ -280,6 +282,7 @@ export type Database = {
           pmid?: string | null
           pubmed_url?: string | null
           raw_keywords?: Json | null
+          raw_publication_types?: Json | null
           raw_study_type?: string | null
           search_vector?: unknown
           statistical_methods?: Json | null
