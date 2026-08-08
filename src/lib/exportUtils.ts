@@ -1,4 +1,66 @@
 import { PaperWithTags } from "@/types/database";
+import {
+  canonicalPubMedUrl,
+  extractPmidFromPubMedUrl,
+  normalizePmid,
+  toImportableExternalUrl,
+} from "./pubmedIdentifiers";
+
+/**
+ * The external URL to publish for a paper, in descending order of authority.
+ *
+ * Nothing here trusts a stored value because of the column it sits in. Rows
+ * written before import provenance was hardened may hold anything at all in
+ * `pubmed_url` — a lookalike host, a non-PubMed link, a `javascript:` string —
+ * so `pubmed_url` is re-checked with the same structural recognition the
+ * importers use rather than being echoed back out as a PubMed link.
+ *
+ * The order is:
+ *
+ *   1. a stored `pmid` that is syntactically a PMID → canonical record URL;
+ *   2. a stored `pubmed_url` that structurally *is* a PubMed record URL → the
+ *      canonical form of the record it names, not the stored representation;
+ *   3. the DOI resolver;
+ *   4. a stored `journal_url` that is a usable http(s) link — the corrected
+ *      importers deliberately route generic source links here, so dropping it
+ *      would lose the only link some records have;
+ *   5. no URL.
+ *
+ * A PMID at step 1 or 2 is what makes an exported record round-trip with its
+ * identifier intact, since the importers recover a PMID only from an
+ * authenticated PubMed record URL and never from a generic accession field.
+ * Nothing is fabricated when no step applies.
+ *
+ * This is not historical-data repair. A stored `pmid` that is syntactically
+ * valid stays authoritative, and a row whose numeric `pmid` was fabricated by
+ * the old RIS `AN` rule carries no evidence that would let the exporter tell.
+ */
+function exportUrlFor(paper: PaperWithTags): string {
+  const pmid = normalizePmid(paper.pmid) ?? extractPmidFromPubMedUrl(paper.pubmed_url);
+  if (pmid) return canonicalPubMedUrl(pmid);
+
+  if (paper.doi) return `https://doi.org/${paper.doi}`;
+
+  return toImportableExternalUrl(paper.journal_url) ?? "";
+}
+
+/**
+ * The value to write into a field whose *semantics assert* that it is a PMID —
+ * the CSV `PMID` column, the BibTeX `pmid` field, the RIS compatibility `AN`.
+ *
+ * The same syntax rule that decides whether a stored `pmid` may generate a
+ * PubMed URL decides whether it may be published as a PMID at all. Emitting a
+ * value that failed that check would tell an external tool — one with no reason
+ * to re-validate — that an Embase or Web of Science accession is a PMID.
+ *
+ * Only provably invalid values are dropped. A digit-only historical value stays
+ * authoritative: if the old RIS `AN` rule fabricated it from a numeric
+ * accession, nothing in the row distinguishes it from a genuine PMID, and
+ * export is not the place to guess.
+ */
+function exportPmidFor(paper: PaperWithTags): string | null {
+  return normalizePmid(paper.pmid);
+}
 
 // ── CSV ──
 
@@ -21,7 +83,7 @@ export function exportToCSV(papers: PaperWithTags[]): void {
     p.authors.join("; "),
     p.year?.toString() || "",
     p.journal || "",
-    p.pmid || "",
+    exportPmidFor(p) ?? "",
     p.doi || "",
     p.study_type || "",
     p.keywords.join("; "),
@@ -29,7 +91,7 @@ export function exportToCSV(papers: PaperWithTags[]): void {
     (p.substances || []).join("; "),
     p.tags.map((t) => t.name).join("; "),
     p.projects.map((pr) => pr.name).join("; "),
-    p.pubmed_url || (p.doi ? `https://doi.org/${p.doi}` : ""),
+    exportUrlFor(p),
     p.abstract || "",
   ]);
 
@@ -54,14 +116,20 @@ export function exportToRIS(papers: PaperWithTags[]): void {
     if (p.year) lines.push(`PY  - ${p.year}`);
     if (p.journal) lines.push(`JO  - ${p.journal}`);
 
-    // Identifiers
-    if (p.pmid) lines.push(`AN  - ${p.pmid}`);
+    // Identifiers. `AN` is retained for reference managers that read it, but it
+    // is no longer how a Paperlume RIS file conveys a PMID — `UR` below is —
+    // and it is emitted only for a value that is syntactically a PMID. (This
+    // says nothing about import: an incoming `AN` is still never trusted.)
+    const pmid = exportPmidFor(p);
+    if (pmid) lines.push(`AN  - ${pmid}`);
     if (p.doi) lines.push(`DO  - ${p.doi}`);
 
-    // URLs
-    const url = p.pubmed_url || (p.doi ? `https://doi.org/${p.doi}` : "");
+    // URLs. `L2` is validated for the same reason `UR` is: a stored link is not
+    // trusted to be a usable http(s) link merely because it was stored.
+    const url = exportUrlFor(p);
     if (url) lines.push(`UR  - ${url}`);
-    if (p.journal_url) lines.push(`L2  - ${p.journal_url}`);
+    const journalUrl = toImportableExternalUrl(p.journal_url);
+    if (journalUrl) lines.push(`L2  - ${journalUrl}`);
     if (p.drive_url) lines.push(`L1  - ${p.drive_url}`);
 
     // Abstract
@@ -209,12 +277,13 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
     }
 
     // PMID (custom field, widely supported by BibTeX managers)
-    if (p.pmid) {
-      fields.push(`  pmid      = {${p.pmid}}`);
+    const pmid = exportPmidFor(p);
+    if (pmid) {
+      fields.push(`  pmid      = {${pmid}}`);
     }
 
     // URL
-    const url = p.pubmed_url || (p.doi ? `https://doi.org/${p.doi}` : "");
+    const url = exportUrlFor(p);
     if (url) {
       fields.push(`  url       = {${url}}`);
     }

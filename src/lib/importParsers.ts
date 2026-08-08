@@ -7,6 +7,14 @@
 
 import Papa from "papaparse";
 import type { RawPaperData } from "./normalizePaperData";
+import {
+  canonicalPubMedUrl,
+  extractPmidFromPubMedUrl,
+  extractPmidFromText,
+  isPubMedRecordUrl,
+  normalizePmid,
+  toImportableExternalUrl,
+} from "./pubmedIdentifiers";
 
 export interface FileParseResult {
   papers: RawPaperData[];
@@ -262,27 +270,27 @@ function bibtexEntryToRawPaper(entry: BibTeXEntry): RawPaperData | null {
   // DOI
   const doi = f.doi ? stripOuterBraces(f.doi).trim() : null;
 
-  // PMID — check explicit field, then extract from url/note fields
-  let pmid = f.pmid ? stripOuterBraces(f.pmid).trim() : null;
   const url = f.url ? stripOuterBraces(f.url).trim() : null;
 
-  // Extract PMID from URL if not found via explicit field
-  if (!pmid && url) {
-    const urlPmidMatch = url.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/);
-    if (urlPmidMatch) pmid = urlPmidMatch[1];
-  }
+  // PMID, in descending order of authority. Every source is checked
+  // structurally, so a URL that merely mentions PubMed contributes nothing:
+  //   1. the explicit `pmid` field, validated as a bare decimal PMID;
+  //   2. a PubMed record URL in `url`;
+  //   3. a PubMed record URL embedded in the free-text `note`.
+  const pmid =
+    normalizePmid(f.pmid ? stripOuterBraces(f.pmid) : null) ??
+    extractPmidFromPubMedUrl(url) ??
+    extractPmidFromText(noteVal);
 
-  // Extract PMID from note field if it contains a PubMed link
-  if (!pmid && noteVal) {
-    const notePmidMatch = noteVal.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/);
-    if (notePmidMatch) pmid = notePmidMatch[1];
-  }
+  // A PubMed link is stored only once a PMID has been authenticated, and always
+  // in canonical form — imported path syntax, query strings and fragments are
+  // not provenance and are not preserved.
+  const pubmed_url = pmid ? canonicalPubMedUrl(pmid) : null;
 
-  // Generate pubmed_url from PMID, or use existing PubMed URL
-  const pubmed_url = pmid
-    ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`
-    : (url && url.includes("pubmed") ? url : null);
-  const journal_url = url && !url.includes("pubmed") && !url.includes("doi.org") ? url : null;
+  // Any other valid http(s) `url` is a generic source link. A DOI resolver URL
+  // belongs here too: it is a real link to the work, so it is kept rather than
+  // discarded for containing "doi.org".
+  const journal_url = isPubMedRecordUrl(url) ? null : toImportableExternalUrl(url);
 
   return {
     title,
@@ -390,8 +398,17 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
   // Journal: JO, JF, JA, T2 (for journal articles)
   const journal = getFirst("JO") || getFirst("JF") || getFirst("JA");
 
-  // Identifiers
-  const pmid = getFirst("AN");
+  // DOI — `DO` is unambiguously the DOI tag.
+  //
+  // There is deliberately no PMID tag read here. `AN` is the generic RIS
+  // Accession Number: it carries whatever identifier the exporting database
+  // assigns, which is a PMID for Ovid MEDLINE but an Embase, Scopus or Web of
+  // Science accession elsewhere. Nothing in the tag itself distinguishes those,
+  // and numeric shape does not either — a numeric Embase accession looks
+  // exactly like a PMID. Trusting `AN` therefore writes foreign identifiers
+  // into `papers.pmid`, which is a deduplication key. The PMID is instead
+  // recovered below from an authenticated PubMed record URL, which proves what
+  // `AN` only asserts.
   const doi = getFirst("DO");
 
   // Abstract
@@ -400,10 +417,25 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
   // Keywords
   const keywords = getAll("KW");
 
-  // URLs
+  // URLs. The PMID comes from the first `UR` that is structurally a PubMed
+  // record URL, and the stored PubMed link is that record's canonical form.
   const urls = getAll("UR");
-  const pubmed_url = urls.find((u) => u.includes("pubmed")) || (pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : null);
-  const journal_url = getFirst("L2");
+  const pmid = urls.reduce<string | null>(
+    (found, u) => found ?? extractPmidFromPubMedUrl(u),
+    null,
+  );
+  const pubmed_url = pmid ? canonicalPubMedUrl(pmid) : null;
+
+  // Journal link: the explicit `L2` tag wins, and is never overwritten just
+  // because a generic `UR` also exists. Otherwise the first valid non-PubMed
+  // `UR` is preserved rather than dropped.
+  const firstGenericUrl =
+    urls
+      .filter((u) => !isPubMedRecordUrl(u))
+      .map((u) => toImportableExternalUrl(u))
+      .find((u): u is string => u !== null) ?? null;
+  const journal_url = toImportableExternalUrl(getFirst("L2")) ?? firstGenericUrl;
+
   const drive_url = getFirst("L1");
 
   // Study type from N1 (notes)
@@ -416,15 +448,15 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
     authors,
     year,
     journal: journal?.trim() || null,
-    pmid: pmid?.trim() || null,
+    pmid,
     doi: doi?.trim() || null,
     abstract: abstract?.trim() || null,
     keywords,
     mesh_terms: [],
     substances: [],
     study_type,
-    pubmed_url: typeof pubmed_url === "string" ? pubmed_url : null,
-    journal_url: journal_url?.trim() || null,
+    pubmed_url,
+    journal_url,
     drive_url: drive_url?.trim() || null,
   };
 }
@@ -461,7 +493,9 @@ const CSV_HEADER_ALIASES: Record<string, string[]> = {
   authors: ["authors", "author", "author(s)", "creator"],
   year: ["year", "publication_year", "pub_year", "date", "publication_date"],
   journal: ["journal", "journal_title", "source", "publication", "journal/book"],
-  pmid: ["pmid", "pubmed_id", "pubmed id", "an"],
+  // `an` is deliberately absent: a column headed "AN" is a generic accession
+  // number whose meaning depends on the exporting database, not a PMID.
+  pmid: ["pmid", "pubmed_id", "pubmed id"],
   doi: ["doi", "digital_object_identifier"],
   study_type: ["study types", "study_type", "study type", "type", "document_type"],
   keywords: ["keywords", "keyword", "author_keywords", "author keywords"],
@@ -535,12 +569,18 @@ export function parseCSV(content: string): FileParseResult {
     const yearMatch = yearStr.match(/(\d{4})/);
     const year = yearMatch ? parseInt(yearMatch[1], 10) : null;
 
-    const pmid = getVal(row, "pmid") || null;
     const doi = getVal(row, "doi") || null;
     const urlVal = getVal(row, "url");
-    const pubmed_url = urlVal && urlVal.includes("pubmed")
-      ? urlVal
-      : (pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : (urlVal || null));
+
+    // An explicit PMID column outranks the URL column, but both are validated
+    // structurally before they can establish a PubMed identity.
+    const pmid = normalizePmid(getVal(row, "pmid")) ?? extractPmidFromPubMedUrl(urlVal);
+    const pubmed_url = pmid ? canonicalPubMedUrl(pmid) : null;
+
+    // A generic URL column is a generic source link. It previously fell through
+    // into `pubmed_url` with no test at all; it now goes to the journal slot,
+    // which CSV used to leave permanently null.
+    const journal_url = isPubMedRecordUrl(urlVal) ? null : toImportableExternalUrl(urlVal);
 
     papers.push({
       title,
@@ -554,8 +594,8 @@ export function parseCSV(content: string): FileParseResult {
       mesh_terms: splitSemicolon(getVal(row, "mesh_terms")),
       substances: splitSemicolon(getVal(row, "substances")),
       study_type: getVal(row, "study_type") || null,
-      pubmed_url: pubmed_url || null,
-      journal_url: null,
+      pubmed_url,
+      journal_url,
       drive_url: null,
     });
   }

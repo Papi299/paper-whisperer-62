@@ -163,6 +163,8 @@ describe("parseBibTeX", () => {
 // ══════════════════════════════════════════════════════════════
 
 describe("parseRIS", () => {
+  // The PMID is carried by the authenticated `UR` record link, not by `AN` —
+  // see the "RIS AN is not a PMID" block below.
   it("parses a single standard RIS entry", () => {
     const ris = `TY  - JOUR
 T1  - Effect of Treatment on Outcomes
@@ -171,6 +173,7 @@ AU  - Doe, Jane
 PY  - 2024
 JO  - Journal of Testing
 AN  - 12345678
+UR  - https://pubmed.ncbi.nlm.nih.gov/12345678/
 DO  - 10.1000/test123
 AB  - This is the abstract.
 KW  - treatment
@@ -369,5 +372,352 @@ describe("parseFile", () => {
   it("supports .nbib extension as RIS", () => {
     const result = parseFile("TY  - JOUR\nT1  - Title\nER  - ", "refs.nbib");
     expect(result.papers).toHaveLength(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
+// PubMed identifier & source-link integrity
+//
+// Provenance must be established structurally (protocol + hostname + path),
+// never by substring presence. Each case asserts `pmid`, `pubmed_url` and
+// `journal_url` independently so a failure names the guarantee that broke.
+// ══════════════════════════════════════════════════════════════
+
+const CANONICAL_URL = "https://pubmed.ncbi.nlm.nih.gov/12345678/";
+
+/** The same URL, delivered through each format's dedicated source-URL field. */
+const URL_FORMATS = [
+  {
+    name: "BibTeX",
+    parse: (url: string) =>
+      parseBibTeX(`@article{key,\n  title = {Fixture},\n  url = {${url}}\n}`).papers[0],
+  },
+  {
+    name: "RIS",
+    parse: (url: string) => parseRIS(`TY  - JOUR\nT1  - Fixture\nUR  - ${url}\nER  - `).papers[0],
+  },
+  {
+    name: "CSV",
+    parse: (url: string) => parseCSV(`Title,URL\nFixture,"${url}"`).papers[0],
+  },
+] as const;
+
+describe("PubMed record URLs are accepted and canonicalised", () => {
+  const accepted = [
+    "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+    "https://pubmed.ncbi.nlm.nih.gov/12345678",
+    "http://pubmed.ncbi.nlm.nih.gov/12345678/",
+    // Hostnames are case-insensitive; the URL parser folds them for us.
+    "https://PUBMED.NCBI.NLM.NIH.GOV/12345678/",
+    "https://PubMed.ncbi.nlm.nih.gov/12345678/",
+    // The default port is not a different host.
+    "https://pubmed.ncbi.nlm.nih.gov:443/12345678/",
+    // Query and fragment are noise around the record, not part of it.
+    "https://pubmed.ncbi.nlm.nih.gov/12345678/?foo=bar",
+    "https://pubmed.ncbi.nlm.nih.gov/12345678/#details",
+    // A sub-resource still names the record it hangs off.
+    "https://pubmed.ncbi.nlm.nih.gov/12345678/citedby/",
+  ];
+
+  for (const { name, parse } of URL_FORMATS) {
+    for (const url of accepted) {
+      it(`${name}: ${url}`, () => {
+        const p = parse(url);
+        expect(p.pmid).toBe("12345678");
+        expect(p.pubmed_url).toBe(CANONICAL_URL);
+        expect(p.journal_url).toBeNull();
+      });
+    }
+  }
+});
+
+describe("legacy www.ncbi.nlm.nih.gov/pubmed/<PMID> URLs are accepted", () => {
+  const accepted = [
+    "https://www.ncbi.nlm.nih.gov/pubmed/12345678",
+    "http://www.ncbi.nlm.nih.gov/pubmed/12345678",
+    "https://www.ncbi.nlm.nih.gov/pubmed/12345678/",
+  ];
+
+  for (const { name, parse } of URL_FORMATS) {
+    for (const url of accepted) {
+      it(`${name}: ${url}`, () => {
+        const p = parse(url);
+        expect(p.pmid).toBe("12345678");
+        expect(p.pubmed_url).toBe(CANONICAL_URL);
+        expect(p.journal_url).toBeNull();
+      });
+    }
+  }
+});
+
+describe("lookalike URLs never establish PubMed identity", () => {
+  // Every one of these contains the substring the old classifier trusted.
+  const lookalikes = [
+    "https://example.com/pubmed/12345678",
+    "https://example.com/articles/pubmed-reference",
+    "https://example.com/?source=pubmed",
+    // A nested URL lives in the query string, which can never supply a PMID.
+    "https://example.com/?url=https://pubmed.ncbi.nlm.nih.gov/123",
+    "https://pubmed.example.com/123",
+    "https://pubmed.ncbi.nlm.nih.gov.example.com/123",
+    "https://notpubmed.ncbi.nlm.nih.gov/123",
+    "https://evil-pubmed.example/123",
+    // User-info is not the host: the authority here is evil.example.
+    "https://pubmed.ncbi.nlm.nih.gov@evil.example/123",
+    "https://user@evil.example/pubmed.ncbi.nlm.nih.gov/999",
+    // A sibling NCBI service on the legacy host is not PubMed.
+    "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1234567/",
+  ];
+
+  for (const { name, parse } of URL_FORMATS) {
+    for (const url of lookalikes) {
+      it(`${name}: ${url}`, () => {
+        const p = parse(url);
+        expect(p.pmid).toBeNull();
+        expect(p.pubmed_url).toBeNull();
+        // Still a usable link — it is just not a PubMed one.
+        expect(p.journal_url).toBe(url);
+      });
+    }
+  }
+});
+
+describe("non-http(s) and malformed values are not links at all", () => {
+  const rejected = [
+    "pubmed",
+    "not a url pubmed",
+    // Scheme-less: never repaired by guessing a scheme.
+    "pubmed.ncbi.nlm.nih.gov/123",
+    "javascript:alert('pubmed')",
+    "data:text/html,pubmed",
+    "ftp://pubmed.ncbi.nlm.nih.gov/123",
+  ];
+
+  for (const { name, parse } of URL_FORMATS) {
+    for (const url of rejected) {
+      it(`${name}: ${url}`, () => {
+        const p = parse(url);
+        expect(p.pmid).toBeNull();
+        expect(p.pubmed_url).toBeNull();
+        expect(p.journal_url).toBeNull();
+      });
+    }
+  }
+});
+
+describe("generic scholarly URLs are kept as journal links", () => {
+  const generic = [
+    "https://doi.org/10.1000/example",
+    "https://dx.doi.org/10.1000/example",
+    "https://www.nejm.org/doi/full/10.1056/example",
+    "https://europepmc.org/article/MED/12345678",
+  ];
+
+  for (const { name, parse } of URL_FORMATS) {
+    for (const url of generic) {
+      it(`${name}: ${url}`, () => {
+        const p = parse(url);
+        expect(p.pubmed_url).toBeNull();
+        expect(p.pmid).toBeNull();
+        // A DOI resolver URL is a real link to the work, not something to drop.
+        expect(p.journal_url).toBe(url);
+      });
+    }
+  }
+});
+
+describe("explicit PMID fields are validated as PMIDs", () => {
+  const valid = ["123", "12345678", " 12345678 "];
+  const invalid = ["L629384756", "WOS:000123456700001", "not-a-pmid", "123abc", "-123", "12.3"];
+
+  const explicitFormats = [
+    {
+      name: "BibTeX pmid field",
+      parse: (v: string) => parseBibTeX(`@article{k,\n  title = {Fixture},\n  pmid = {${v}}\n}`).papers[0],
+    },
+    {
+      name: "CSV PMID column",
+      parse: (v: string) => parseCSV(`Title,PMID\nFixture,"${v}"`).papers[0],
+    },
+    {
+      name: "CSV pubmed_id column",
+      parse: (v: string) => parseCSV(`Title,pubmed_id\nFixture,"${v}"`).papers[0],
+    },
+    {
+      name: "CSV 'pubmed id' column",
+      parse: (v: string) => parseCSV(`Title,pubmed id\nFixture,"${v}"`).papers[0],
+    },
+  ] as const;
+
+  for (const { name, parse } of explicitFormats) {
+    for (const value of valid) {
+      it(`${name} accepts ${JSON.stringify(value)}`, () => {
+        const p = parse(value);
+        expect(p.pmid).toBe(value.trim());
+        expect(p.pubmed_url).toBe(`https://pubmed.ncbi.nlm.nih.gov/${value.trim()}/`);
+      });
+    }
+
+    for (const value of invalid) {
+      it(`${name} rejects ${JSON.stringify(value)}`, () => {
+        const p = parse(value);
+        expect(p.pmid).toBeNull();
+        expect(p.pubmed_url).toBeNull();
+      });
+    }
+  }
+});
+
+describe("RIS AN is a generic accession number, not a PMID", () => {
+  const risWithAn = (an: string, extra = "") =>
+    parseRIS(`TY  - JOUR\nT1  - Fixture\nAN  - ${an}\n${extra}ER  - `).papers[0];
+
+  // Numeric shape is not evidence: an Embase accession can look exactly
+  // like a PMID, so a shape guard would not distinguish them.
+  for (const an of ["12345678", "2019345678", "L629384756", "WOS:000123456700001", "not-a-pmid"]) {
+    it(`AN alone does not establish a PMID: ${an}`, () => {
+      const p = risWithAn(an);
+      expect(p.pmid).toBeNull();
+      expect(p.pubmed_url).toBeNull();
+    });
+  }
+
+  it("recovers the PMID from an authenticated UR alongside an unrelated AN", () => {
+    const p = risWithAn("L629384756", "UR  - https://pubmed.ncbi.nlm.nih.gov/12345678/\n");
+    expect(p.pmid).toBe("12345678");
+    expect(p.pubmed_url).toBe(CANONICAL_URL);
+  });
+
+  it("does not let AN override the authenticated UR", () => {
+    const p = risWithAn("99999999", "UR  - https://pubmed.ncbi.nlm.nih.gov/12345678/\n");
+    expect(p.pmid).toBe("12345678");
+    expect(p.pubmed_url).toBe(CANONICAL_URL);
+  });
+
+  it("does not let AN rescue a lookalike UR", () => {
+    const p = risWithAn("12345678", "UR  - https://pubmed.example.com/12345678\n");
+    expect(p.pmid).toBeNull();
+    expect(p.pubmed_url).toBeNull();
+    expect(p.journal_url).toBe("https://pubmed.example.com/12345678");
+  });
+});
+
+describe("CSV AN column is not a PMID alias", () => {
+  it("ignores an AN column", () => {
+    const p = parseCSV(`Title,AN\nFixture,12345678`).papers[0];
+    expect(p.pmid).toBeNull();
+    expect(p.pubmed_url).toBeNull();
+  });
+
+  it("ignores a lowercase an column", () => {
+    const p = parseCSV(`Title,an\nFixture,L629384756`).papers[0];
+    expect(p.pmid).toBeNull();
+    expect(p.pubmed_url).toBeNull();
+  });
+
+  it("still reads an explicit PMID column when both are present", () => {
+    const p = parseCSV(`Title,AN,PMID\nFixture,L629384756,12345678`).papers[0];
+    expect(p.pmid).toBe("12345678");
+    expect(p.pubmed_url).toBe(CANONICAL_URL);
+  });
+});
+
+describe("BibTeX note-field PMID extraction is structural", () => {
+  const bibWithNote = (note: string) =>
+    parseBibTeX(`@article{k,\n  title = {Fixture},\n  note = {${note}}\n}`).papers[0];
+
+  it("still extracts a PMID from a PubMed link in prose", () => {
+    const p = bibWithNote("Available at https://pubmed.ncbi.nlm.nih.gov/55443322/");
+    expect(p.pmid).toBe("55443322");
+    expect(p.pubmed_url).toBe("https://pubmed.ncbi.nlm.nih.gov/55443322/");
+  });
+
+  it("tolerates trailing sentence punctuation", () => {
+    const p = bibWithNote("See https://pubmed.ncbi.nlm.nih.gov/55443322/.");
+    expect(p.pmid).toBe("55443322");
+  });
+
+  for (const note of [
+    "https://example.com/?url=https://pubmed.ncbi.nlm.nih.gov/123",
+    "https://evil.example/pubmed.ncbi.nlm.nih.gov/123",
+    "pubmed.ncbi.nlm.nih.gov/123",
+    "Indexed in pubmed, see record 12345678",
+  ]) {
+    it(`does not extract a PMID from: ${note}`, () => {
+      const p = bibWithNote(note);
+      expect(p.pmid).toBeNull();
+      expect(p.pubmed_url).toBeNull();
+    });
+  }
+});
+
+describe("BibTeX url routing", () => {
+  it("keeps a DOI resolver URL as the journal link instead of dropping it", () => {
+    const p = parseBibTeX(
+      `@article{k,\n  title = {Fixture},\n  doi = {10.1000/example},\n  url = {https://doi.org/10.1000/example}\n}`,
+    ).papers[0];
+    expect(p.doi).toBe("10.1000/example");
+    expect(p.pubmed_url).toBeNull();
+    expect(p.journal_url).toBe("https://doi.org/10.1000/example");
+  });
+
+  it("keeps a publisher URL when an explicit PMID is also present", () => {
+    const p = parseBibTeX(
+      `@article{k,\n  title = {Fixture},\n  pmid = {12345678},\n  url = {https://www.nejm.org/doi/full/10.1056/example}\n}`,
+    ).papers[0];
+    expect(p.pmid).toBe("12345678");
+    expect(p.pubmed_url).toBe(CANONICAL_URL);
+    expect(p.journal_url).toBe("https://www.nejm.org/doi/full/10.1056/example");
+  });
+});
+
+describe("RIS URL routing across multiple tags", () => {
+  const parseUrls = (body: string) => parseRIS(`TY  - JOUR\nT1  - Fixture\n${body}ER  - `).papers[0];
+
+  it("generic UR before an authenticated PubMed UR", () => {
+    const p = parseUrls(
+      "UR  - https://www.nejm.org/doi/full/10.1056/example\nUR  - https://pubmed.ncbi.nlm.nih.gov/12345678/\n",
+    );
+    expect(p.pmid).toBe("12345678");
+    expect(p.pubmed_url).toBe(CANONICAL_URL);
+    expect(p.journal_url).toBe("https://www.nejm.org/doi/full/10.1056/example");
+  });
+
+  it("authenticated PubMed UR before a generic UR", () => {
+    const p = parseUrls(
+      "UR  - https://pubmed.ncbi.nlm.nih.gov/12345678/\nUR  - https://www.nejm.org/doi/full/10.1056/example\n",
+    );
+    expect(p.pmid).toBe("12345678");
+    expect(p.pubmed_url).toBe(CANONICAL_URL);
+    expect(p.journal_url).toBe("https://www.nejm.org/doi/full/10.1056/example");
+  });
+
+  it("generic UR only", () => {
+    const p = parseUrls("UR  - https://doi.org/10.1000/example\n");
+    expect(p.pmid).toBeNull();
+    expect(p.pubmed_url).toBeNull();
+    expect(p.journal_url).toBe("https://doi.org/10.1000/example");
+  });
+
+  it("explicit L2 wins over a generic UR", () => {
+    const p = parseUrls(
+      "UR  - https://doi.org/10.1000/example\nL2  - https://journal.example.com/article\n",
+    );
+    expect(p.pubmed_url).toBeNull();
+    expect(p.journal_url).toBe("https://journal.example.com/article");
+  });
+
+  it("explicit L2 coexists with an authenticated PubMed UR", () => {
+    const p = parseUrls(
+      "UR  - https://pubmed.ncbi.nlm.nih.gov/12345678/\nL2  - https://journal.example.com/article\n",
+    );
+    expect(p.pmid).toBe("12345678");
+    expect(p.pubmed_url).toBe(CANONICAL_URL);
+    expect(p.journal_url).toBe("https://journal.example.com/article");
+  });
+
+  it("ignores an unusable L2 rather than storing it", () => {
+    const p = parseUrls("L2  - javascript:alert('pubmed')\n");
+    expect(p.journal_url).toBeNull();
   });
 });
