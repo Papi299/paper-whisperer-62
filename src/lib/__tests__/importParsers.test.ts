@@ -283,11 +283,13 @@ ER  - `;
 // PubMed / NLM NBIB Parser Tests
 //
 // Fixtures are native MEDLINE tagged syntax, never RIS wearing an `.nbib`
-// name. `NBIB_REAL_RECORD` is a field-for-field reduction of the genuine
-// PubMed export for PMID 39725180 (J Ren Nutr, 2025 May) — retrieved once
-// during development and pinned here as a static string; nothing in the suite
-// touches the network. Only the abstract and the author list are truncated;
-// every tag line below is in the shape PubMed emitted it.
+// name. `NBIB_REAL_RECORD` is a reduction of the genuine PubMed export for
+// PMID 39725180 (J Ren Nutr, 2025 May) — retrieved once during development and
+// pinned here as a static string; nothing in the suite touches the network.
+// Fields these assertions do not need are dropped (DCOM, LR, CI, DEP, PHST,
+// most AD) and the repeated author, MeSH and OT lists and the abstract are
+// truncated, but every tag line kept is in the shape PubMed emitted it,
+// wrapped values and identifier qualifiers included.
 // ══════════════════════════════════════════════════════════════
 
 const NBIB_REAL_RECORD = `
