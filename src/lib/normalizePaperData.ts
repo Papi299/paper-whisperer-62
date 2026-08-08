@@ -133,6 +133,17 @@ export interface RawPaperData {
   mesh_terms?: string[];
   substances?: string[];
   study_type: string | null;
+  /**
+   * Publication types with their original boundaries intact, for sources that
+   * supply them as discrete values (a native NBIB file's repeated `PT` fields).
+   * Preferred over splitting `study_type`, because an official PubMed
+   * publication type may contain a comma ("Clinical Trial, Phase II").
+   *
+   * In-memory only: deliberately absent from `NormalizedPaperData`, so it never
+   * reaches a database payload and needs no schema change. Sources without it
+   * keep their existing `study_type`-only behavior.
+   */
+  publication_types?: string[];
   pubmed_url: string | null;
   journal_url: string | null;
   drive_url: string | null;
@@ -204,6 +215,7 @@ export function normalizePaperData(
   const decodedMeshTerms = (raw.mesh_terms || []).map(m => decodeHTMLEntities(m) || m);
   const decodedSubstances = (raw.substances || []).map(s => decodeHTMLEntities(s) || s);
   const decodedStudyType = raw.study_type ? (decodeHTMLEntities(raw.study_type) || raw.study_type) : null;
+  const decodedPublicationTypes = raw.publication_types?.map(t => decodeHTMLEntities(t) || t);
 
   // Compute enriched keywords from raw keywords + title + abstract + config
   const enrichedKeywords = computeEnrichedKeywords(decodedKeywords, decodedTitle, decodedAbstract, config);
@@ -213,7 +225,8 @@ export function normalizePaperData(
     decodedTitle,
     decodedAbstract,
     decodedStudyType,
-    config.poolStudyTypes
+    config.poolStudyTypes,
+    decodedPublicationTypes
   );
 
   return {

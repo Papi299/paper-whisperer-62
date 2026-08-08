@@ -129,3 +129,80 @@ describe("evaluateStudyType", () => {
     expect(result).toBe("Case Report");
   });
 });
+
+describe("evaluateStudyType — structured publication types", () => {
+  // Official PubMed publication types. "Clinical Trial" is present so that a
+  // value split on its own comma visibly wins the wrong, less specific entry.
+  const commaPool: StudyTypePoolEntry[] = [
+    { study_type: "Clinical Trial, Phase II", specificity_weight: 1, hierarchy_rank: 1 },
+    { study_type: "Multicenter Study", specificity_weight: 1, hierarchy_rank: 2 },
+    { study_type: "Clinical Trial", specificity_weight: 1, hierarchy_rank: 3 },
+  ];
+
+  it("matches a comma-bearing publication type as a single value", () => {
+    const result = evaluateStudyType(
+      "Fixture",
+      null,
+      "Clinical Trial, Phase II",
+      commaPool,
+      ["Clinical Trial, Phase II"]
+    );
+    expect(result).toBe("Clinical Trial, Phase II");
+  });
+
+  it("uses the supplied values in preference to the joined string", () => {
+    const joined = "Journal Article, Clinical Trial, Phase II, Multicenter Study";
+    // Legacy callers can only split, which loses the Phase II value entirely.
+    expect(evaluateStudyType("Fixture", null, joined, commaPool)).toBe("Multicenter Study");
+    // The same citation, with the boundaries its source actually stated.
+    expect(
+      evaluateStudyType("Fixture", null, joined, commaPool, [
+        "Journal Article",
+        "Clinical Trial, Phase II",
+        "Multicenter Study",
+      ])
+    ).toBe("Clinical Trial, Phase II");
+  });
+
+  it("strips generic types from the supplied values without splitting them", () => {
+    const result = evaluateStudyType(
+      "Fixture",
+      null,
+      "Journal Article, Clinical Trial, Phase II",
+      [],
+      ["Journal Article", "Clinical Trial, Phase II"]
+    );
+    expect(result).toBe("Clinical Trial, Phase II");
+  });
+
+  it("joins several surviving types in the existing display convention", () => {
+    const result = evaluateStudyType(
+      "Fixture",
+      null,
+      null,
+      [],
+      ["Research Support, N.I.H., Extramural", "Multicenter Study"]
+    );
+    expect(result).toBe("Research Support, N.I.H., Extramural, Multicenter Study");
+  });
+
+  it("keeps legacy raw-string callers behaving exactly as before", () => {
+    const raw = "Randomized Controlled Trial, Multicenter Study";
+    expect(evaluateStudyType("Some paper", null, raw, pool)).toBe("Randomized Controlled Trial");
+    expect(evaluateStudyType("Some paper", null, raw, pool, undefined)).toBe(
+      "Randomized Controlled Trial"
+    );
+  });
+
+  it("falls back to the raw string when the supplied list is empty", () => {
+    expect(
+      evaluateStudyType("Some paper", null, "Journal Article, Case Report", pool, [])
+    ).toBe("Case Report");
+  });
+
+  it("ignores blank entries in the supplied list", () => {
+    expect(
+      evaluateStudyType("Fixture", null, null, commaPool, ["  ", "Clinical Trial, Phase II"])
+    ).toBe("Clinical Trial, Phase II");
+  });
+});

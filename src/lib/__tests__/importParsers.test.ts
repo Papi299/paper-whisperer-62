@@ -1144,6 +1144,108 @@ describe("native formats reuse the existing study-type evaluation", () => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// A comma inside one PubMed publication type is not a separator
+// ══════════════════════════════════════════════════════════════
+
+describe("NBIB publication types keep their own boundaries", () => {
+  // Every entry below is a current official PubMed publication type. Several
+  // contain a comma of their own, which is exactly what a joined string cannot
+  // survive. "Clinical Trial" is in the pool so that a value split on its own
+  // comma would visibly win the wrong, less specific entry.
+  const config: NormalizationConfig = {
+    synonymLookup: {},
+    poolKeywords: [],
+    synonymGroups: [],
+    poolStudyTypes: [
+      { study_type: "Clinical Trial, Phase II", specificity_weight: 1, hierarchy_rank: 1 },
+      { study_type: "Randomized Controlled Trial, Veterinary", specificity_weight: 1, hierarchy_rank: 1 },
+      { study_type: "Multicenter Study", specificity_weight: 1, hierarchy_rank: 2 },
+      { study_type: "Clinical Trial", specificity_weight: 1, hierarchy_rank: 3 },
+    ],
+  };
+
+  const noPool: NormalizationConfig = { ...config, poolStudyTypes: [] };
+
+  it("keeps a comma-bearing publication type as one value", () => {
+    const raw = parseNBIB(
+      "\nPMID- 11111111\nTI  - Phase II trial\nPT  - Clinical Trial, Phase II\n",
+    ).papers[0];
+    expect(raw.publication_types).toEqual(["Clinical Trial, Phase II"]);
+    // Never the two fragments a comma split would leave behind.
+    expect(raw.publication_types).not.toContain("Clinical Trial");
+    expect(raw.publication_types).not.toContain("Phase II");
+    expect(normalizePaperData(raw, config).study_type).toBe("Clinical Trial, Phase II");
+  });
+
+  it("picks the pool winner for the whole publication type, not a fragment of it", () => {
+    const raw = parseNBIB(
+      "\nPMID- 11111111\nTI  - Fixture\n" +
+        "PT  - Journal Article\nPT  - Clinical Trial, Phase II\nPT  - Multicenter Study\n",
+    ).papers[0];
+    expect(raw.publication_types).toEqual([
+      "Journal Article",
+      "Clinical Trial, Phase II",
+      "Multicenter Study",
+    ]);
+    // The lower-ranked Multicenter Study would win if the comma split the
+    // Phase II value into fragments that match nothing in the pool.
+    expect(normalizePaperData(raw, config).study_type).toBe("Clinical Trial, Phase II");
+  });
+
+  it("still removes the generic 'Journal Article' when nothing matches the pool", () => {
+    const raw = parseNBIB(
+      "\nPMID- 11111111\nTI  - Fixture\nPT  - Journal Article\nPT  - Clinical Trial, Phase II\n",
+    ).papers[0];
+    expect(normalizePaperData(raw, noPool).study_type).toBe("Clinical Trial, Phase II");
+  });
+
+  it("keeps each of several comma-bearing official values intact", () => {
+    const raw = parseNBIB(
+      "\nPMID- 11111111\nTI  - Fixture\n" +
+        "PT  - Research Support, N.I.H., Extramural\nPT  - Randomized Controlled Trial, Veterinary\n",
+    ).papers[0];
+    expect(raw.publication_types).toEqual([
+      "Research Support, N.I.H., Extramural",
+      "Randomized Controlled Trial, Veterinary",
+    ]);
+    expect(normalizePaperData(raw, config).study_type).toBe("Randomized Controlled Trial, Veterinary");
+    // Unmatched, the whole values survive into the fallback string as well.
+    expect(normalizePaperData(raw, noPool).study_type).toBe(
+      "Research Support, N.I.H., Extramural, Randomized Controlled Trial, Veterinary",
+    );
+  });
+
+  it("keeps study_type as the joined string the stored raw column expects", () => {
+    const raw = parseNBIB(
+      "\nPMID- 11111111\nTI  - Fixture\nPT  - Journal Article\nPT  - Clinical Trial, Phase II\n",
+    ).papers[0];
+    expect(raw.study_type).toBe("Journal Article, Clinical Trial, Phase II");
+  });
+
+  it("leaves structured publication types out of the normalized record", () => {
+    const raw = parseNBIB(
+      "\nPMID- 11111111\nTI  - Fixture\nPT  - Clinical Trial, Phase II\n",
+    ).papers[0];
+    expect("publication_types" in normalizePaperData(raw, config)).toBe(false);
+  });
+
+  it("carries no structured publication types for a record without PT", () => {
+    expect(nbibPaper("AB  - No publication type here\n").publication_types).toBeUndefined();
+  });
+
+  it("carries no structured publication types for the other formats", () => {
+    expect(
+      parseRIS("TY  - JOUR\nT1  - Fixture\nN1  - Study type: Clinical Trial, Phase II\nER  - ")
+        .papers[0].publication_types,
+    ).toBeUndefined();
+    expect(parseCSV("Title,Study Types\nFixture,\"Clinical Trial, Phase II\"").papers[0].publication_types)
+      .toBeUndefined();
+    expect(parseEndNoteTagged("%0 Journal Article\n%T Fixture\n").papers[0].publication_types)
+      .toBeUndefined();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
 // CSV Parser Tests
 // ══════════════════════════════════════════════════════════════
 

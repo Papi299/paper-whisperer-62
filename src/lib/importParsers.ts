@@ -699,9 +699,13 @@ function nbibRecordToRawPaper(record: TaggedRecord): RawPaperData | null {
   const abstracts = allFieldValues(record, "AB");
   const abstract = (abstracts.length > 0 ? abstracts : allFieldValues(record, "OAB")).join(" ");
 
-  // Repeated PT values feed the existing comma-separated study-type input, so
-  // `evaluateStudyType()` picks the user-pool winner exactly as it already does
-  // for PubMed API results, which join `<PublicationType>` the same way.
+  // Each PT field is one publication type, and the file states those boundaries
+  // outright. They are carried through as discrete values, because an official
+  // PubMed type may contain a comma of its own ("Clinical Trial, Phase II") and
+  // a joined string cannot be split back apart without destroying it.
+  // `evaluateStudyType()` still picks the user-pool winner; the parser ranks
+  // nothing. `study_type` keeps the existing joined string for the callers and
+  // stored `raw_study_type` column that expect one.
   const publicationTypes = allFieldValues(record, "PT");
 
   return {
@@ -723,6 +727,7 @@ function nbibRecordToRawPaper(record: TaggedRecord): RawPaperData | null {
     // would put a CAS/EC number into a list of substance names.
     substances: allFieldValues(record, "NM"),
     study_type: publicationTypes.length > 0 ? publicationTypes.join(", ") : null,
+    publication_types: publicationTypes.length > 0 ? publicationTypes : undefined,
     pubmed_url,
     // A native NBIB record carries no article URL: the PubMed link is derived
     // from the validated PMID above, and there is no generic source link to
