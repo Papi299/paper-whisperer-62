@@ -1,4 +1,24 @@
 import { PaperWithTags } from "@/types/database";
+import { canonicalPubMedUrl, normalizePmid } from "./pubmedIdentifiers";
+
+/**
+ * The external URL to publish for a paper, in descending order of authority.
+ *
+ * A valid PMID generates the canonical PubMed record link rather than reusing
+ * whatever is stored in `pubmed_url`. The importers now recover a PMID only
+ * from a structurally authenticated PubMed record URL — never from a generic
+ * accession field — so this link is what makes an exported record round-trip
+ * with its PMID intact. It also means a stored link that predates that rule
+ * cannot carry a wrong or non-PubMed URL back out of the application.
+ *
+ * With no valid PMID nothing is fabricated: the stored link is used if there is
+ * one, otherwise the DOI resolver, otherwise no URL at all.
+ */
+function exportUrlFor(paper: PaperWithTags): string {
+  const pmid = normalizePmid(paper.pmid);
+  if (pmid) return canonicalPubMedUrl(pmid);
+  return paper.pubmed_url || (paper.doi ? `https://doi.org/${paper.doi}` : "");
+}
 
 // ── CSV ──
 
@@ -29,7 +49,7 @@ export function exportToCSV(papers: PaperWithTags[]): void {
     (p.substances || []).join("; "),
     p.tags.map((t) => t.name).join("; "),
     p.projects.map((pr) => pr.name).join("; "),
-    p.pubmed_url || (p.doi ? `https://doi.org/${p.doi}` : ""),
+    exportUrlFor(p),
     p.abstract || "",
   ]);
 
@@ -54,12 +74,13 @@ export function exportToRIS(papers: PaperWithTags[]): void {
     if (p.year) lines.push(`PY  - ${p.year}`);
     if (p.journal) lines.push(`JO  - ${p.journal}`);
 
-    // Identifiers
+    // Identifiers. `AN` is retained for reference managers that read it, but it
+    // is no longer how a Paperlume RIS file conveys a PMID — `UR` below is.
     if (p.pmid) lines.push(`AN  - ${p.pmid}`);
     if (p.doi) lines.push(`DO  - ${p.doi}`);
 
     // URLs
-    const url = p.pubmed_url || (p.doi ? `https://doi.org/${p.doi}` : "");
+    const url = exportUrlFor(p);
     if (url) lines.push(`UR  - ${url}`);
     if (p.journal_url) lines.push(`L2  - ${p.journal_url}`);
     if (p.drive_url) lines.push(`L1  - ${p.drive_url}`);
@@ -214,7 +235,7 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
     }
 
     // URL
-    const url = p.pubmed_url || (p.doi ? `https://doi.org/${p.doi}` : "");
+    const url = exportUrlFor(p);
     if (url) {
       fields.push(`  url       = {${url}}`);
     }
