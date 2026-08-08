@@ -17,6 +17,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
+import { detectIdentifier } from "../_shared/identifierDetection.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -133,22 +134,13 @@ async function fetchWithRetry(
 }
 
 // ── Identifier Detection ──
-
-function detectIdentifierType(
-  identifier: string
-): "pmid" | "doi" | "pubmed_url" | "title" {
-  const trimmed = identifier.trim();
-  if (/^\d+$/.test(trimmed)) return "pmid";
-  if (trimmed.startsWith("10.") || trimmed.toLowerCase().startsWith("doi:"))
-    return "doi";
-  if (trimmed.includes("pubmed.ncbi.nlm.nih.gov")) return "pubmed_url";
-  return "title";
-}
-
-function extractPmidFromUrl(url: string): string | null {
-  const match = url.match(/pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/);
-  return match ? match[1] : null;
-}
+//
+// Lives in `../_shared/identifierDetection.ts`: it is a pure structural
+// classifier (WHATWG `URL` only — exact hostname, path position, bare decimal
+// PMID), so it is unit-tested directly by Vitest instead of being an
+// untestable local function here. It returns the authenticated PMID with the
+// classification, so this file never re-derives one by running a second
+// pattern over the same untrusted text.
 
 function cleanDoi(doi: string): string {
   return doi.replace(/^doi:/i, "").trim();
@@ -524,7 +516,8 @@ async function fetchPaperMetadata(
 
   for (let i = 0; i < identifiers.length; i++) {
     const identifier = identifiers[i];
-    const type = detectIdentifierType(identifier);
+    const detected = detectIdentifier(identifier);
+    const type = detected.type;
     let result: PaperMetadata | null = null;
 
     // Rate-limit: pause between requests to stay under API limits
@@ -536,15 +529,15 @@ async function fetchPaperMetadata(
       `Processing identifier ${i + 1}/${identifiers.length} (type: ${type})`
     );
 
-    switch (type) {
+    switch (detected.type) {
       case "pmid":
-        result = await fetchFromPubMed(identifier, apiKey);
+        result = await fetchFromPubMed(detected.pmid, apiKey);
         break;
-      case "pubmed_url": {
-        const pmid = extractPmidFromUrl(identifier);
-        if (pmid) result = await fetchFromPubMed(pmid, apiKey);
+      case "pubmed_url":
+        // The PMID comes from the record position of a structurally
+        // authenticated PubMed URL — it is not re-extracted from the raw text.
+        result = await fetchFromPubMed(detected.pmid, apiKey);
         break;
-      }
       case "doi":
         result = await fetchByDoi(identifier, apiKey);
         break;
