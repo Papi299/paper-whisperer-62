@@ -8,13 +8,37 @@ import { queryKeys } from "@/lib/queryKeys";
 import { NormalizationConfig, RawPaperData, computeEnrichedKeywords } from "@/lib/normalizePaperData";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
-import { normalizePublicationTypes, toEvaluatorPublicationTypes } from "@/lib/publicationTypes";
+import {
+  isMissingRawPublicationTypesColumn,
+  normalizePublicationTypes,
+  toEvaluatorPublicationTypes,
+} from "@/lib/publicationTypes";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
 import { processChunkedInsert } from "@/lib/chunkedInsert";
 import { ServerFilterParams, ServerSortParams } from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
+
+/**
+ * Study-type re-evaluation reads exactly the columns it evaluates on — never
+ * `*`. The two variants differ only by the structured provenance column, so a
+ * database that predates it can serve the same work from the legacy list.
+ */
+const STRUCTURED_REEVALUATION_SELECT =
+  "id, title, abstract, study_type, raw_study_type, raw_publication_types";
+const LEGACY_REEVALUATION_SELECT =
+  "id, title, abstract, study_type, raw_study_type";
+
+/** A row from either select; the structured column is simply absent from the legacy one. */
+type ReevaluationRow = {
+  id: string;
+  title: string;
+  abstract: string | null;
+  study_type: string | null;
+  raw_study_type: string | null;
+  raw_publication_types?: Json | null;
+};
 
 export function useBulkMutations(
   userId: string | undefined,
@@ -509,11 +533,35 @@ export function useBulkMutations(
       // Fetch own data including abstract — the list cache no longer carries
       // abstract, and `raw_publication_types` is deliberately not in the list
       // query either: it is provenance needed only here, not by the paper list.
-      const { data: freshPapers, error: fetchError } = await supabase
+      //
+      // Version skew: merging auto-deploys this frontend, while applying the
+      // migration that adds `raw_publication_types` is a separate later
+      // decision, so for that interval this runs against a schema without the
+      // column. PostgREST resolves the select list before permissions or RLS,
+      // so the structured read fails outright — and only that one specific
+      // failure earns a single retry with the exact pre-existing select. Any
+      // other error keeps its current behavior and is rethrown untouched.
+      let freshPapers: ReevaluationRow[] | null = null;
+
+      const structuredRead = await supabase
         .from("papers")
-        .select("id, title, abstract, study_type, raw_study_type, raw_publication_types")
+        .select(STRUCTURED_REEVALUATION_SELECT)
         .eq("user_id", userId);
-      if (fetchError) throw fetchError;
+
+      if (structuredRead.error) {
+        if (!isMissingRawPublicationTypesColumn(structuredRead.error)) {
+          throw structuredRead.error;
+        }
+        const legacyRead = await supabase
+          .from("papers")
+          .select(LEGACY_REEVALUATION_SELECT)
+          .eq("user_id", userId);
+        // A failure of the fallback itself is a real failure: surface it.
+        if (legacyRead.error) throw legacyRead.error;
+        freshPapers = legacyRead.data;
+      } else {
+        freshPapers = structuredRead.data;
+      }
 
       // Compute updates first — early return if nothing changed
       const updates: { id: string; newType: string }[] = [];

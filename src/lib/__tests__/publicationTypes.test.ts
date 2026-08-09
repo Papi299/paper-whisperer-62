@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isMissingRawPublicationTypesColumn,
   normalizePublicationTypes,
   toEvaluatorPublicationTypes,
 } from "../publicationTypes";
@@ -56,5 +57,53 @@ describe("toEvaluatorPublicationTypes", () => {
     expect(toEvaluatorPublicationTypes(["Clinical Trial, Phase II"])).toEqual([
       "Clinical Trial, Phase II",
     ]);
+  });
+});
+
+describe("isMissingRawPublicationTypesColumn", () => {
+  it("recognizes the exact error a pre-migration database returns", () => {
+    // Captured verbatim from a local stack with the column dropped:
+    //   HTTP 400 + this body.
+    expect(
+      isMissingRawPublicationTypesColumn({
+        code: "42703",
+        details: null,
+        hint: null,
+        message: "column papers.raw_publication_types does not exist",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects the same SQLSTATE for a different column", () => {
+    // The sharp case. 42703 alone would make an unrelated schema problem look
+    // like the compatibility condition, and the retry would hide it rather
+    // than fix it.
+    expect(
+      isMissingRawPublicationTypesColumn({
+        code: "42703",
+        message: "column papers.some_other_column does not exist",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects the right column name under a different SQLSTATE", () => {
+    expect(
+      isMissingRawPublicationTypesColumn({
+        code: "42501",
+        message: "permission denied for column raw_publication_types",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects every unrelated failure shape", () => {
+    expect(isMissingRawPublicationTypesColumn({ code: "42501", message: "permission denied for table papers" })).toBe(false);
+    expect(isMissingRawPublicationTypesColumn({ code: "PGRST301", message: "JWT expired" })).toBe(false);
+    expect(isMissingRawPublicationTypesColumn({ code: "57014", message: "canceling statement due to statement timeout" })).toBe(false);
+    expect(isMissingRawPublicationTypesColumn({ message: "TypeError: Failed to fetch" })).toBe(false);
+    expect(isMissingRawPublicationTypesColumn(new Error("column papers.raw_publication_types does not exist"))).toBe(false);
+    expect(isMissingRawPublicationTypesColumn(null)).toBe(false);
+    expect(isMissingRawPublicationTypesColumn(undefined)).toBe(false);
+    expect(isMissingRawPublicationTypesColumn("42703")).toBe(false);
+    expect(isMissingRawPublicationTypesColumn({})).toBe(false);
   });
 });

@@ -12,18 +12,45 @@ import { renderHook, act } from "@testing-library/react";
  */
 
 // ── Supabase mock (hoisted) ───────────────────────────────────────────
-const { mockRpc, mockFrom, mockPapersSelectEq } = vi.hoisted(() => {
+//
+// reevaluateStudyTypes reads its own rows via
+// `.from("papers").select(<columns>).eq("user_id", …)`. The response is keyed
+// on the *select string* so a test can make the structured read fail while the
+// legacy read succeeds — which is exactly the pre-migration schema.
+type SelectResult = { data: unknown; error: unknown };
+
+const { mockRpc, mockFrom, mockPapersSelect, papersSelectResponder } = vi.hoisted(() => {
   const mockRpc = vi.fn();
-  // reevaluateStudyTypes reads its own rows: .from("papers").select(...).eq(...)
-  const mockPapersSelectEq = vi.fn().mockResolvedValue({ data: [], error: null });
-  const mockPapersSelect = vi.fn(() => ({ eq: mockPapersSelectEq }));
+  const papersSelectResponder: { respond: (select: string) => SelectResult } = {
+    respond: () => ({ data: [], error: null }),
+  };
+  const mockPapersSelect = vi.fn((select: string) => ({
+    eq: vi.fn(async () => papersSelectResponder.respond(select)),
+  }));
   const mockFrom = vi.fn(() => ({
     select: mockPapersSelect,
     insert: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn() })) })),
     delete: vi.fn(() => ({ in: vi.fn(() => ({ eq: vi.fn() })) })),
   }));
-  return { mockRpc, mockFrom, mockPapersSelectEq, mockPapersSelect };
+  return { mockRpc, mockFrom, mockPapersSelect, papersSelectResponder };
 });
+
+/** The two selects the re-evaluation path may issue. */
+const STRUCTURED_SELECT =
+  "id, title, abstract, study_type, raw_study_type, raw_publication_types";
+const LEGACY_SELECT = "id, title, abstract, study_type, raw_study_type";
+
+/**
+ * The exact PostgREST error a pre-migration database returns for the structured
+ * select, captured from a local stack with the column dropped:
+ *   HTTP 400 {"code":"42703", …,"message":"column papers.raw_publication_types does not exist"}
+ */
+const MISSING_COLUMN_ERROR = {
+  code: "42703",
+  details: null,
+  hint: null,
+  message: "column papers.raw_publication_types does not exist",
+};
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
@@ -179,9 +206,14 @@ beforeEach(() => {
     lastError: null,
   });
   mockRpc.mockResolvedValue({ data: null, error: null });
-  mockPapersSelectEq.mockResolvedValue({ data: [], error: null });
+  papersSelectResponder.respond = () => ({ data: [], error: null });
   mockEvaluateStudyType.mockReturnValue("Clinical Trial, Phase II");
 });
+
+/** Every select returns the same rows — the normal, post-migration case. */
+function respondWithRows(rows: unknown[]) {
+  papersSelectResponder.respond = () => ({ data: rows, error: null });
+}
 
 // ── Identifier / API import ───────────────────────────────────────────
 
@@ -356,15 +388,11 @@ describe("reevaluateStudyTypes — persisted structured provenance", () => {
       await result.current.reevaluateStudyTypes(pool);
     });
 
-    const select = mockFrom.mock.results[0].value.select as ReturnType<typeof vi.fn>;
-    expect(select).toHaveBeenCalledWith(
-      "id, title, abstract, study_type, raw_study_type, raw_publication_types",
-    );
+    expect(mockPapersSelect).toHaveBeenCalledWith(STRUCTURED_SELECT);
   });
 
   it("passes the stored boundaries as the evaluator's structured argument", async () => {
-    mockPapersSelectEq.mockResolvedValue({
-      data: [
+    respondWithRows([
         {
           id: "p1",
           title: "Stored paper",
@@ -373,9 +401,7 @@ describe("reevaluateStudyTypes — persisted structured provenance", () => {
           raw_study_type: "Clinical Trial, Phase II, Journal Article",
           raw_publication_types: ["Clinical Trial, Phase II", "Journal Article"],
         },
-      ],
-      error: null,
-    });
+    ]);
 
     const { result } = renderBulkHook([cachedPaper]);
     await act(async () => {
@@ -393,8 +419,7 @@ describe("reevaluateStudyTypes — persisted structured provenance", () => {
   });
 
   it("falls back to the legacy string for a row predating the column", async () => {
-    mockPapersSelectEq.mockResolvedValue({
-      data: [
+    respondWithRows([
         {
           id: "legacy",
           title: "Legacy paper",
@@ -403,9 +428,7 @@ describe("reevaluateStudyTypes — persisted structured provenance", () => {
           raw_study_type: "Randomized Controlled Trial, Journal Article",
           raw_publication_types: null,
         },
-      ],
-      error: null,
-    });
+    ]);
 
     const { result } = renderBulkHook([cachedPaper]);
     await act(async () => {
@@ -421,14 +444,11 @@ describe("reevaluateStudyTypes — persisted structured provenance", () => {
   });
 
   it("falls back when the stored value is empty or unusable", async () => {
-    mockPapersSelectEq.mockResolvedValue({
-      data: [
-        { id: "a", title: "A", abstract: null, study_type: null, raw_study_type: "Case Report", raw_publication_types: [] },
-        { id: "b", title: "B", abstract: null, study_type: null, raw_study_type: "Case Report", raw_publication_types: {} },
-        { id: "c", title: "C", abstract: null, study_type: null, raw_study_type: "Case Report", raw_publication_types: [123] },
-      ],
-      error: null,
-    });
+    respondWithRows([
+      { id: "a", title: "A", abstract: null, study_type: null, raw_study_type: "Case Report", raw_publication_types: [] },
+      { id: "b", title: "B", abstract: null, study_type: null, raw_study_type: "Case Report", raw_publication_types: {} },
+      { id: "c", title: "C", abstract: null, study_type: null, raw_study_type: "Case Report", raw_publication_types: [123] },
+    ]);
 
     const { result } = renderBulkHook([cachedPaper]);
     await act(async () => {
@@ -443,5 +463,126 @@ describe("reevaluateStudyTypes — persisted structured provenance", () => {
     for (const call of mockEvaluateStudyType.mock.calls) {
       expect(call[2]).toBe("Case Report");
     }
+  });
+});
+
+// ── Read-path version skew: new frontend against a pre-migration database ──
+//
+// Merging auto-deploys this frontend through Vercel, while applying the
+// migration is a separate later owner decision. For that interval the
+// structured column does not exist, and re-evaluation must keep working
+// rather than take the whole study-type pool feature down.
+
+describe("reevaluateStudyTypes — pre-migration schema compatibility", () => {
+  const pool = [{ study_type: "Clinical Trial, Phase II", specificity_weight: 1, hierarchy_rank: 1 }];
+
+  const legacyRow = {
+    id: "legacy-1",
+    title: "Legacy paper",
+    abstract: null,
+    study_type: "Journal Article",
+    raw_study_type: "Randomized Controlled Trial, Journal Article",
+  };
+
+  /** Structured select fails as a pre-migration database does; legacy succeeds. */
+  function respondAsPreMigrationSchema(legacyResult?: SelectResult) {
+    papersSelectResponder.respond = (select) =>
+      select === STRUCTURED_SELECT
+        ? { data: null, error: MISSING_COLUMN_ERROR }
+        : (legacyResult ?? { data: [legacyRow], error: null });
+  }
+
+  it("issues exactly one query when the structured column exists", async () => {
+    respondWithRows([{ ...legacyRow, raw_publication_types: ["Clinical Trial, Phase II"] }]);
+
+    const { result } = renderBulkHook([cachedPaper]);
+    await act(async () => {
+      await result.current.reevaluateStudyTypes(pool);
+    });
+
+    // No speculative retry on the happy path.
+    expect(mockPapersSelect).toHaveBeenCalledTimes(1);
+    expect(mockPapersSelect).toHaveBeenCalledWith(STRUCTURED_SELECT);
+    expect(mockEvaluateStudyType.mock.calls[0][4]).toEqual(["Clinical Trial, Phase II"]);
+  });
+
+  it("retries once with the legacy select when the column is absent", async () => {
+    respondAsPreMigrationSchema();
+
+    const { result } = renderBulkHook([cachedPaper]);
+    await act(async () => {
+      await result.current.reevaluateStudyTypes(pool);
+    });
+
+    // Exactly two queries: the structured attempt, then the legacy one.
+    expect(mockPapersSelect).toHaveBeenCalledTimes(2);
+    expect(mockPapersSelect).toHaveBeenNthCalledWith(1, STRUCTURED_SELECT);
+    expect(mockPapersSelect).toHaveBeenNthCalledWith(2, LEGACY_SELECT);
+    // The bounded query survives the fallback — never widened to "*".
+    expect(mockPapersSelect).not.toHaveBeenCalledWith("*");
+
+    // Evaluation proceeds: no structured values invented, legacy fallback intact.
+    expect(mockEvaluateStudyType).toHaveBeenCalledTimes(1);
+    expect(mockEvaluateStudyType.mock.calls[0][4]).toBeUndefined();
+    expect(mockEvaluateStudyType.mock.calls[0][2]).toBe(
+      "Randomized Controlled Trial, Journal Article",
+    );
+  });
+
+  it("persists the re-evaluated types through the legacy path", async () => {
+    // The whole point of the fallback: the feature still completes its work.
+    respondAsPreMigrationSchema();
+    mockEvaluateStudyType.mockReturnValue("Randomized Controlled Trial");
+
+    const { result } = renderBulkHook([cachedPaper]);
+    await act(async () => {
+      await result.current.reevaluateStudyTypes(pool);
+    });
+
+    expect(mockRpc).toHaveBeenCalledWith("bulk_update_study_types", {
+      updates: [{ id: "legacy-1", study_type: "Randomized Controlled Trial" }],
+    });
+  });
+
+  // Nothing here is evidence that the column is absent, so none of it may
+  // trigger the compatibility retry — a second query would not fix any of them,
+  // it would only hide the real failure. The first case is the sharp one: the
+  // same SQLSTATE as the compatibility condition, naming a different column.
+  it.each([
+    ["an unrelated missing column", { code: "42703", message: "column papers.some_other_column does not exist" }],
+    ["a permission/RLS error", { code: "42501", message: "permission denied for table papers" }],
+    ["an expired JWT", { code: "PGRST301", message: "JWT expired" }],
+    ["a network failure", { message: "TypeError: Failed to fetch" }],
+    ["a statement timeout", { code: "57014", message: "canceling statement due to statement timeout" }],
+  ])("does not retry or swallow %s", async (_label, error) => {
+    papersSelectResponder.respond = () => ({ data: null, error });
+
+    const { result } = renderBulkHook([cachedPaper]);
+    await expect(
+      act(async () => {
+        await result.current.reevaluateStudyTypes(pool);
+      }),
+    ).rejects.toMatchObject(error);
+
+    // One attempt only, and nothing was evaluated or written.
+    expect(mockPapersSelect).toHaveBeenCalledTimes(1);
+    expect(mockEvaluateStudyType).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failure of the legacy retry itself", async () => {
+    const legacyFailure = { code: "42501", message: "permission denied for table papers" };
+    respondAsPreMigrationSchema({ data: null, error: legacyFailure });
+
+    const { result } = renderBulkHook([cachedPaper]);
+    await expect(
+      act(async () => {
+        await result.current.reevaluateStudyTypes(pool);
+      }),
+    ).rejects.toMatchObject(legacyFailure);
+
+    // Two attempts, then it stops — the retry is not itself retried.
+    expect(mockPapersSelect).toHaveBeenCalledTimes(2);
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });
