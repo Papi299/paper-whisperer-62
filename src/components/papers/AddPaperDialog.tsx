@@ -555,7 +555,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
 38237512
 37654321, 36543210
 10.1000/xyz123
-10.1016/j.example.2024.01.001`}
+https://doi.org/10.1016/j.example.2024.01.001`}
                   value={bulkInput}
                   onChange={(e) => setBulkInput(e.target.value)}
                   rows={6}
