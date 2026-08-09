@@ -255,6 +255,140 @@ export function extractDoiFromDoiUrl(value: string): string | null {
 }
 
 /**
+ * The canonical DOI proxy, as an origin with trailing separator.
+ *
+ * `https://doi.org/` is the form the DOI Foundation specifies for the HTTP
+ * proxy form and the one Crossref's display guidelines require. `dx.doi.org`
+ * still resolves and stays *accepted* as input above, but the Handbook marks it
+ * deprecated, so nothing here emits it.
+ */
+const DOI_RESOLVER_PREFIX = "https://doi.org/";
+
+/**
+ * The bytes the DOI percent-encoding algorithm leaves unescaped, besides ALPHA
+ * and DIGIT.
+ *
+ * This is RFC 3986's `unreserved` set plus `sub-delims` plus `:` and `@` —
+ * that is, `pchar` minus `%` (which must be escaped for percent-encoding to be
+ * unambiguous) and minus `,`. The comma is excluded by the Handbook so that an
+ * encoded DOI name can be passed through the "Which RA?" service, whose request
+ * syntax gives the comma a separator meaning.
+ *
+ * Taken verbatim from the Handbook rather than derived, because the difference
+ * between this set and `encodeURIComponent`'s is exactly the kind of detail
+ * that is wrong when it is reasoned out from memory.
+ */
+const DOI_UNESCAPED_PUNCTUATION = "-._~!$&'()*+;=:@";
+
+/** Byte-value lookup for the unescaped set. Built once. */
+const DOI_UNESCAPED_BYTES: ReadonlySet<number> = new Set(
+  [
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
+    "0123456789",
+    DOI_UNESCAPED_PUNCTUATION,
+  ]
+    .join("")
+    .split("")
+    .map((character) => character.charCodeAt(0)),
+);
+
+/**
+ * Percent-encode one DOI component — a prefix or a suffix — per DOI Handbook
+ * 4.7.
+ *
+ * The component is serialized to UTF-8 first and the rule is then applied to
+ * each *byte*, which is what makes non-ASCII correct: a code point outside
+ * Basic Latin becomes the percent-encoding of each of its two-to-four UTF-8
+ * bytes (`é` → `%C3%A9`), never a single escape of the code point.
+ *
+ * Every byte outside the unescaped set is encoded, `%` included. Nothing about
+ * the input is interpreted — this function has no notion of an escape sequence
+ * in its input, only bytes.
+ */
+function percentEncodeDoiComponent(component: string): string {
+  const bytes = new TextEncoder().encode(component);
+
+  let encoded = "";
+  for (const byte of bytes) {
+    encoded += DOI_UNESCAPED_BYTES.has(byte)
+      ? String.fromCharCode(byte)
+      : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+
+  return encoded;
+}
+
+/**
+ * Build the canonical DOI resolver URL for a DOI name.
+ *
+ * The exact inverse of `extractDoiFromDoiUrl`, and deliberately its neighbour:
+ * that function authenticates a resolver URL and answers with a DOI *name*,
+ * this one turns a DOI name back into the single resolver representation the
+ * DOI Foundation and Crossref both specify. Neither direction guesses at the
+ * other's job — the input here is a DOI name, never a URL.
+ *
+ * `journal_url` was previously built as `https://doi.org/${doi}`, which names a
+ * different DOI whenever the suffix contains a character that means something
+ * inside a URL. For `10.1000/456#789` a browser treats `#789` as a fragment and
+ * asks the proxy to resolve `10.1000/456`; a suffix `/` silently became another
+ * path segment; a space made the link unusable.
+ *
+ * The algorithm is the Handbook's, not a general-purpose escape.
+ * `encodeURIComponent` is wrong in both directions: it escapes the prefix/suffix
+ * separator, which must stay a literal `/`, and it escapes `$ & + ; = : @`,
+ * which the DOI algorithm keeps. Prefix and suffix are encoded separately and
+ * rejoined with `/`, so a `/` *inside* the suffix is data and is encoded.
+ *
+ * Nothing here inspects the input to decide whether it "looks already encoded".
+ * A `%` in a DOI name is data, so `10.1000/foo%23bar` — a name whose suffix
+ * contains a literal percent sign — canonicalizes to `…/foo%2523bar`. That is
+ * correct rather than double encoding: treating `%23` as pre-encoded would make
+ * the output depend on a guess about the caller and would collapse two distinct
+ * DOI names onto one URL.
+ *
+ * Validation is the weakest rule that rejects a value no resolver URL could be
+ * built from — empty/whitespace-only, no `/` separator, an empty prefix, an
+ * empty suffix, or a `:` in the prefix. That last check is the wrong-direction
+ * guard: Handbook 3.2 makes the prefix dot-separated segments, so a colon there
+ * always means a *presentation form* carrying a scheme (`https://…`, `doi:…`),
+ * and the failure is otherwise silent — the first `/` of
+ * `https://doi.org/10.1000/example` falls inside `https://`, yielding a
+ * plausible-looking `https://doi.org/https:/%2Fdoi.org%2F10.1000%2Fexample`.
+ * The suffix keeps its `:` and stays opaque; this is not a grammar validator.
+ * The `10.` indicator is deliberately not required, because the `doi:` form
+ * above is accepted without re-checking its shape.
+ *
+ * @param doiName A DOI name, unencoded.
+ * @returns The canonical `https://doi.org/…` URL, or `null` when `doiName` is
+ *   not usable as a DOI name.
+ *
+ * @see DOI Handbook (2025), 4.7 "Percent-encoding", 4.4.4 "HTTP proxy form",
+ *   3.2 "DOI name syntax"; Crossref DOI display guidelines.
+ */
+export function canonicalDoiUrl(doiName: string | null | undefined): string | null {
+  if (typeof doiName !== "string") return null;
+
+  const trimmed = doiName.trim();
+  if (!trimmed) return null;
+
+  // DOI Handbook 3.2: prefix and suffix are separated by `/`, and the prefix is
+  // dot-separated segments — so the separator is the *first* `/`. Any later one
+  // is part of the opaque suffix and is therefore data.
+  const separatorIndex = trimmed.indexOf("/");
+  if (separatorIndex <= 0) return null;
+
+  const prefix = trimmed.slice(0, separatorIndex);
+  const suffix = trimmed.slice(separatorIndex + 1);
+  if (!suffix) return null;
+
+  // A scheme-carrying presentation form, not a DOI name. See the note above.
+  if (prefix.includes(":")) return null;
+
+  return `${DOI_RESOLVER_PREFIX}${percentEncodeDoiComponent(prefix)}/${percentEncodeDoiComponent(suffix)}`;
+}
+
+/**
  * Classify one pasted identifier and return the PMID or DOI the classification
  * is based on.
  *
