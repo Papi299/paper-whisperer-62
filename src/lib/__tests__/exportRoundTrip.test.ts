@@ -380,6 +380,127 @@ describe("a DOI-only paper does not come back as PubMed", () => {
   });
 });
 
+// ── DOI resolver link encoding ──
+
+/**
+ * A DOI suffix is opaque, so it may contain characters that mean something else
+ * inside a URL. The URL fields therefore carry the *canonical percent-encoded
+ * resolver URL*, while the DOI fields carry the DOI *name* — two different
+ * things that used to be the same string.
+ *
+ * `10.1000/456#789` is the DOI Handbook's own example of why: interpolated into
+ * a path, a browser reads `#789` as a fragment and asks the proxy to resolve
+ * `10.1000/456`, a different DOI.
+ */
+describe("a DOI with URL-significant characters exports a usable link", () => {
+  const DOI_NAME = "10.1000/456#789";
+  const CANONICAL_URL = "https://doi.org/10.1000/456%23789";
+  const specialDoi = () => makePaper({ doi: DOI_NAME });
+
+  it("CSV URL column carries the canonical resolver URL", async () => {
+    exportToCSV([specialDoi()]);
+    const reimported = parseCSV(await exported()).papers[0];
+
+    expect(reimported.journal_url).toBe(CANONICAL_URL);
+  });
+
+  it("RIS UR carries the canonical resolver URL", async () => {
+    exportToRIS([specialDoi()]);
+    expect(await exported()).toContain(`UR  - ${CANONICAL_URL}`);
+  });
+
+  it("BibTeX url carries the canonical resolver URL", async () => {
+    exportToBibTeX([specialDoi()]);
+    expect(await exported()).toContain(`url       = {${CANONICAL_URL}}`);
+  });
+
+  it("no format emits the truncating raw interpolation", async () => {
+    for (const { run } of EXPORTERS) {
+      run([specialDoi()]);
+      expect(await exported()).not.toContain("https://doi.org/10.1000/456#789");
+    }
+  });
+
+  describe("identifier fields keep the DOI name, not the URL representation", () => {
+    // A DOI field asserts "this is a DOI". Percent-encoding it because the
+    // neighbouring URL field is encoded would publish a DOI that is not the
+    // paper's DOI, and a reference manager reading it would not re-decode.
+    it("CSV DOI column", async () => {
+      exportToCSV([specialDoi()]);
+      const reimported = parseCSV(await exported()).papers[0];
+
+      expect(reimported.doi).toBe(DOI_NAME);
+    });
+
+    it("RIS DO", async () => {
+      exportToRIS([specialDoi()]);
+      expect(await exported()).toContain(`DO  - ${DOI_NAME}`);
+    });
+
+    it("BibTeX doi", async () => {
+      exportToBibTeX([specialDoi()]);
+      expect(await exported()).toContain(`doi       = {${DOI_NAME}}`);
+    });
+
+    it("never percent-encodes the identifier field", async () => {
+      for (const { run } of EXPORTERS) {
+        run([specialDoi()]);
+        const output = await exported();
+        expect(output).not.toContain("10.1000%2F456");
+        expect(output).toContain(DOI_NAME);
+      }
+    });
+  });
+
+  it("a suffix slash stays inside the DOI rather than becoming a path segment", async () => {
+    // Only the first `/` separates prefix from suffix; the rest is DOI data.
+    exportToRIS([makePaper({ doi: "10.1000/foo/bar" })]);
+    const ris = await exported();
+
+    expect(ris).toContain("UR  - https://doi.org/10.1000/foo%2Fbar");
+    expect(ris).toContain("DO  - 10.1000/foo/bar");
+  });
+
+  it("an ordinary DOI is byte-for-byte unchanged by the encoder", async () => {
+    // The regression risk of introducing an encoder at all: the common case
+    // must look exactly as it did before.
+    exportToRIS([makePaper({ doi: "10.1056/NEJMoa2107934" })]);
+    const ris = await exported();
+
+    expect(ris).toContain("UR  - https://doi.org/10.1056/NEJMoa2107934");
+    expect(ris).toContain("DO  - 10.1056/NEJMoa2107934");
+  });
+});
+
+describe("PMID precedence over the DOI resolver is unchanged", () => {
+  it("exports the PubMed record URL even when a special-character DOI exists", async () => {
+    exportToRIS([makePaper({ pmid: "12345678", doi: "10.1000/456#789" })]);
+    const ris = await exported();
+
+    expect(ris).toContain("UR  - https://pubmed.ncbi.nlm.nih.gov/12345678/");
+    expect(ris).not.toContain("UR  - https://doi.org/");
+    // The DOI is still published as an identifier, just not as the URL.
+    expect(ris).toContain("DO  - 10.1000/456#789");
+  });
+});
+
+describe("a stored DOI that cannot form a resolver URL falls through", () => {
+  it("uses the journal link rather than exporting an unusable DOI link", async () => {
+    // No prefix/suffix separator, so no resolver URL exists for it. Previously
+    // this exported `https://doi.org/10.1000`, which the proxy cannot answer.
+    exportToRIS([
+      makePaper({ doi: "10.1000", journal_url: "https://example.com/article" }),
+    ]);
+    const ris = await exported();
+
+    expect(ris).toContain("UR  - https://example.com/article");
+    expect(ris).not.toContain("https://doi.org/");
+    // The stored value is still published as the DOI it claims to be; export is
+    // not the place to repair it.
+    expect(ris).toContain("DO  - 10.1000");
+  });
+});
+
 // ── Journal-link-only round trips ──
 
 /**

@@ -22,11 +22,17 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  canonicalDoiUrl,
   detectIdentifier,
   extractDoiFromDoiUrl,
   extractPmidFromPubMedUrl,
 } from "../identifierDetection.ts";
 import { extractPmidFromPubMedUrl as frontendExtractPmid } from "@/lib/pubmedIdentifiers";
+import { canonicalDoiUrl as frontendCanonicalDoiUrl } from "@/lib/doiIdentifiers";
+import {
+  DOI_CANONICAL_URL_VECTORS,
+  DOI_UNUSABLE_NAMES,
+} from "@/lib/__tests__/fixtures/doiEncodingVectors";
 
 /** Values that must never establish PubMed authority, with why they are unsafe. */
 const NON_PUBMED_URLS: ReadonlyArray<readonly [label: string, value: string]> = [
@@ -347,5 +353,164 @@ describe("parity with the frontend file-import helper", () => {
 
   it.each(corpus)("Edge and frontend agree on %s", (value) => {
     expect(extractPmidFromPubMedUrl(value)).toBe(frontendExtractPmid(value));
+  });
+});
+
+describe("canonicalDoiUrl — DOI name to canonical resolver URL", () => {
+  // The inverse of `extractDoiFromDoiUrl`. Pure encoding: nothing here contacts
+  // doi.org, because the property under test is what the URL *says*, not
+  // whether the DOI is registered.
+  it.each(DOI_CANONICAL_URL_VECTORS)("%s", (_label, doiName, expected) => {
+    expect(canonicalDoiUrl(doiName)).toBe(expected);
+  });
+
+  it.each(DOI_UNUSABLE_NAMES)("yields null for %s", (_label, value) => {
+    expect(canonicalDoiUrl(value)).toBeNull();
+  });
+
+  it("emits only the canonical authority, never the deprecated dx host", () => {
+    for (const [, doiName] of DOI_CANONICAL_URL_VECTORS) {
+      const url = canonicalDoiUrl(doiName)!;
+      expect(url.startsWith("https://doi.org/")).toBe(true);
+      expect(url).not.toContain("dx.doi.org");
+    }
+  });
+
+  it("does not accept a resolver URL, which is the other direction's input", () => {
+    expect(canonicalDoiUrl("https://doi.org/10.1000/example")).toBeNull();
+  });
+});
+
+describe("resolver URL ↔ DOI name round-trip", () => {
+  // The two directions have to compose, or the pair is not a pair: a canonical
+  // URL must classify back to the DOI name it was built from, and that name
+  // must rebuild the identical URL. The special characters are the point —
+  // these are exactly the cases raw interpolation used to corrupt.
+  it.each(DOI_CANONICAL_URL_VECTORS)(
+    "%s survives name → URL → name → URL",
+    (_label, doiName, expected) => {
+      const url = canonicalDoiUrl(doiName);
+      expect(url).toBe(expected);
+
+      const recovered = extractDoiFromDoiUrl(url!);
+      // `extractDoiFromDoiUrl` requires the `10.` indicator, so vectors that do
+      // not start with one are not resolver-recognizable DOIs; the URL half
+      // still holds for them.
+      if (recovered === null) {
+        expect(doiName.startsWith("10.")).toBe(false);
+        return;
+      }
+
+      // Exactly the name that went in, code point for code point — including
+      // any leading or trailing space, which the builder encodes rather than
+      // trims. Comparing against `doiName.trim()` here would have let a
+      // normalizing builder pass.
+      expect(recovered).toBe(doiName);
+      expect(canonicalDoiUrl(recovered)).toBe(expected);
+    },
+  );
+
+  it("reconstructs the canonical URL from a classified resolver URL", () => {
+    // The composition the metadata path actually performs: a pasted resolver
+    // URL is authenticated to a DOI name, and the name later becomes a link.
+    const detected = detectIdentifier("https://doi.org/10.1000/456%23789");
+    expect(detected).toEqual({ type: "doi", doi: "10.1000/456#789" });
+
+    expect(canonicalDoiUrl(detected.type === "doi" ? detected.doi : "")).toBe(
+      "https://doi.org/10.1000/456%23789",
+    );
+  });
+
+  it("canonicalizes an under-encoded resolver URL rather than echoing it", () => {
+    // Documented asymmetry: `https://doi.org/10.1000/a/b/c` is a *legal input*
+    // the proxy reads as the single name `10.1000/a/b/c`, but it is not the
+    // canonical representation of that name — the suffix slashes are data and
+    // canonically escape to `%2F`. Round-tripping is therefore an invariant on
+    // the DOI *name*, not byte-identity of the input URL. Both URLs resolve to
+    // the same name, which is what makes the rewrite safe.
+    const name = extractDoiFromDoiUrl("https://doi.org/10.1000/a/b/c");
+    expect(name).toBe("10.1000/a/b/c");
+
+    const canonical = canonicalDoiUrl(name);
+    expect(canonical).toBe("https://doi.org/10.1000/a%2Fb%2Fc");
+    expect(extractDoiFromDoiUrl(canonical!)).toBe(name);
+  });
+
+  it("carries a suffix space through the whole loop", () => {
+    // Whitespace is the case a normalizing builder loses silently, and the loop
+    // is where the loss becomes provable: the space has to survive encoding to
+    // `%20`, survive `pathname` extraction, survive decoding back to a space,
+    // and rebuild the identical URL. A builder that trimmed would emit
+    // `…/example` here, and the recovered name would be a different DOI.
+    const url = canonicalDoiUrl("10.1000/example ");
+    expect(url).toBe("https://doi.org/10.1000/example%20");
+
+    const recovered = extractDoiFromDoiUrl(url!);
+    expect(recovered).toBe("10.1000/example ");
+    expect(canonicalDoiUrl(recovered)).toBe(url);
+
+    // And it stays distinct from the name without the space.
+    expect(canonicalDoiUrl("10.1000/example")).not.toBe(url);
+  });
+
+  it("carries a whitespace-only suffix through the whole loop", () => {
+    const url = canonicalDoiUrl("10.1000/  ");
+    expect(url).toBe("https://doi.org/10.1000/%20%20");
+    expect(extractDoiFromDoiUrl(url!)).toBe("10.1000/  ");
+  });
+
+  it("keeps two DOI names that differ only by a literal percent distinct", () => {
+    // The failure mode a "looks already encoded" heuristic would introduce.
+    const hashName = extractDoiFromDoiUrl("https://doi.org/10.1000/a%23b");
+    const percentName = extractDoiFromDoiUrl("https://doi.org/10.1000/a%2523b");
+
+    expect(hashName).toBe("10.1000/a#b");
+    expect(percentName).toBe("10.1000/a%23b");
+
+    expect(canonicalDoiUrl(hashName)).toBe("https://doi.org/10.1000/a%23b");
+    expect(canonicalDoiUrl(percentName)).toBe("https://doi.org/10.1000/a%2523b");
+    expect(canonicalDoiUrl(hashName)).not.toBe(canonicalDoiUrl(percentName));
+  });
+});
+
+describe("parity with the frontend canonical DOI builder", () => {
+  // Same rationale as the PubMed parity block: `canonicalDoiUrl` is duplicated
+  // because the browser bundle and the Edge bundle are separate module domains,
+  // and this test is what keeps the duplication from drifting. Every vector is
+  // run through both implementations and required to agree.
+  it.each(DOI_CANONICAL_URL_VECTORS)("Edge and frontend agree on %s", (_label, doiName) => {
+    expect(canonicalDoiUrl(doiName)).toBe(frontendCanonicalDoiUrl(doiName));
+  });
+
+  it.each(DOI_UNUSABLE_NAMES)("Edge and frontend both reject %s", (_label, value) => {
+    expect(canonicalDoiUrl(value)).toBe(frontendCanonicalDoiUrl(value));
+  });
+});
+
+describe("provider API encoding is a different concern from resolver construction", () => {
+  // Regression guard for the distinction the fix must not blur. A DOI reaches
+  // three different URL syntaxes, each with its own rule:
+  //
+  //   resolver path      → DOI Handbook 3.7 (prefix/suffix, `/` kept literal)
+  //   Crossref path      → encodeURIComponent (whole name is ONE path segment)
+  //   PubMed query value → encodeURIComponent (a query parameter value)
+  //
+  // Routing the provider calls through `canonicalDoiUrl` would break both.
+  const doi = "10.1000/a#b";
+
+  it("Crossref escapes the separator, because the DOI is one path segment", () => {
+    expect(encodeURIComponent(doi)).toBe("10.1000%2Fa%23b");
+    expect(`https://api.crossref.org/works/${encodeURIComponent(doi)}`).toBe(
+      "https://api.crossref.org/works/10.1000%2Fa%23b",
+    );
+  });
+
+  it("PubMed escapes the separator inside the [doi] term", () => {
+    expect(`${encodeURIComponent(doi)}[doi]`).toBe("10.1000%2Fa%23b[doi]");
+  });
+
+  it("the resolver keeps the separator literal, so the two must stay distinct", () => {
+    expect(canonicalDoiUrl(doi)).toBe("https://doi.org/10.1000/a%23b");
+    expect(canonicalDoiUrl(doi)).not.toContain(encodeURIComponent(doi));
   });
 });

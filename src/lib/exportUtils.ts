@@ -1,4 +1,5 @@
 import { PaperWithTags } from "@/types/database";
+import { canonicalDoiUrl } from "./doiIdentifiers";
 import {
   canonicalPubMedUrl,
   extractPmidFromPubMedUrl,
@@ -20,7 +21,11 @@ import {
  *   1. a stored `pmid` that is syntactically a PMID → canonical record URL;
  *   2. a stored `pubmed_url` that structurally *is* a PubMed record URL → the
  *      canonical form of the record it names, not the stored representation;
- *   3. the DOI resolver;
+ *   3. the DOI resolver, as the canonical percent-encoded resolver URL — the
+ *      stored DOI is a DOI *name*, and interpolating one into a URL path
+ *      truncates any suffix containing `#` or `?`. A stored value that cannot
+ *      form a resolver URL at all (no prefix/suffix separator) falls through to
+ *      step 4 rather than exporting a link the proxy cannot answer;
  *   4. a stored `journal_url` that is a usable http(s) link — the corrected
  *      importers deliberately route generic source links here, so dropping it
  *      would lose the only link some records have;
@@ -39,7 +44,8 @@ function exportUrlFor(paper: PaperWithTags): string {
   const pmid = normalizePmid(paper.pmid) ?? extractPmidFromPubMedUrl(paper.pubmed_url);
   if (pmid) return canonicalPubMedUrl(pmid);
 
-  if (paper.doi) return `https://doi.org/${paper.doi}`;
+  const doiUrl = canonicalDoiUrl(paper.doi);
+  if (doiUrl) return doiUrl;
 
   return toImportableExternalUrl(paper.journal_url) ?? "";
 }

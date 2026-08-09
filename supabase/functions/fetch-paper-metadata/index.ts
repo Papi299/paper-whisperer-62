@@ -17,7 +17,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
-import { detectIdentifier } from "../_shared/identifierDetection.ts";
+import { canonicalDoiUrl, detectIdentifier } from "../_shared/identifierDetection.ts";
 import {
   extractPublicationTypes,
   joinPublicationTypes,
@@ -301,7 +301,10 @@ async function fetchFromPubMed(
       study_type: joinPublicationTypes(publicationTypes),
       publication_types: publicationTypes,
       pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
-      journal_url: doi ? `https://doi.org/${doi}` : null,
+      // `doi` here is PubMed's own `ELocationID`/ArticleId value — a DOI *name*
+      // — so it is encoded on the way into the resolver URL rather than
+      // interpolated, which would truncate any suffix containing `#` or `?`.
+      journal_url: canonicalDoiUrl(doi),
       source: "pubmed",
     };
   } catch (error) {
@@ -405,7 +408,10 @@ function mapCrossrefToSchema(
     substances: [], // Not available from Crossref
     study_type: studyType,
     pubmed_url: null,
-    journal_url: doi ? `https://doi.org/${doi}` : null,
+    // `doi` is Crossref's `DOI` field, a DOI *name*. Encoded per the DOI
+    // Handbook rather than interpolated; `null` when it is unusable, exactly as
+    // the previous truthiness guard produced.
+    journal_url: canonicalDoiUrl(doi),
     source: "crossref",
   };
 }
@@ -472,8 +478,9 @@ async function fetchByDoi(doi: string, apiKey?: string): Promise<PaperMetadata |
     const pubmedResult = await fetchFromPubMed(pmid, apiKey);
     if (pubmedResult) {
       pubmedResult.doi = pubmedResult.doi || doi;
-      pubmedResult.journal_url =
-        pubmedResult.journal_url || `https://doi.org/${doi}`;
+      // The searched-for DOI backfills the link only when PubMed supplied no
+      // DOI of its own. Same precedence as before, canonically encoded.
+      pubmedResult.journal_url = pubmedResult.journal_url || canonicalDoiUrl(doi);
       return pubmedResult;
     }
   }
