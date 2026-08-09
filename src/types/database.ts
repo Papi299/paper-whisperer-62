@@ -139,6 +139,17 @@ export interface PaperMetadata {
   mesh_terms?: string[];
   substances?: string[];
   study_type?: string | null;
+  /**
+   * The same publication types as `study_type`, with the boundaries PubMed
+   * stated still intact — an official type may contain a comma of its own
+   * ("Clinical Trial, Phase II"), which the joined string cannot be split
+   * back apart on.
+   *
+   * Optional, and must stay optional: the deployed Edge Function version may
+   * predate the field, and a Crossref-only result has no publication types to
+   * report. Absence means "no structured provenance", never "none exist".
+   */
+  publication_types?: string[];
   pubmed_url?: string | null;
   journal_url?: string | null;
   source?: "pubmed" | "crossref";
