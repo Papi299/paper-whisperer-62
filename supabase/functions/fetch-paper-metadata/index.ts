@@ -149,14 +149,11 @@ async function fetchWithRetry(
 //
 // Lives in `../_shared/identifierDetection.ts`: it is a pure structural
 // classifier (WHATWG `URL` only — exact hostname, path position, bare decimal
-// PMID), so it is unit-tested directly by Vitest instead of being an
-// untestable local function here. It returns the authenticated PMID with the
-// classification, so this file never re-derives one by running a second
-// pattern over the same untrusted text.
-
-function cleanDoi(doi: string): string {
-  return doi.replace(/^doi:/i, "").trim();
-}
+// PMID, DOI resolver path), so it is unit-tested directly by Vitest instead of
+// being an untestable local function here. It returns the authenticated PMID
+// or DOI with the classification, so this file never re-derives one by running
+// a second pattern over the same untrusted text — and it is the single place a
+// DOI is normalized, so no second, disagreeing normalization lives down here.
 
 // ── PubMed API ──
 
@@ -419,8 +416,9 @@ async function fetchFromCrossrefByDoi(
   doi: string
 ): Promise<PaperMetadata | null> {
   try {
-    const cleanedDoi = cleanDoi(doi);
-    const url = `https://api.crossref.org/works/${encodeURIComponent(cleanedDoi)}`;
+    // `doi` is the DOI name proven by `detectIdentifier`, so it is encoded
+    // exactly once here — it arrives unencoded, never as a resolver URL.
+    const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
     const response = await fetchWithRetry(url, {
       headers: {
         "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)",
@@ -461,25 +459,28 @@ async function searchCrossrefByTitle(
 /**
  * For DOIs: PubMed first (via DOI search → PMID → full fetch), Crossref fallback.
  * Crossref results are enriched with PubMed data if a PMID cross-reference is found.
+ *
+ * `doi` is the DOI name `detectIdentifier` proved — from a bare DOI, a `doi:`
+ * prefixed one, or the path of an authenticated resolver URL. It is used as
+ * given: re-deriving or re-cleaning it here would be a second normalization
+ * authority that could disagree with the one that classified the input.
  */
 async function fetchByDoi(doi: string, apiKey?: string): Promise<PaperMetadata | null> {
-  const cleanedDoi = cleanDoi(doi);
-
   // Try PubMed first
-  const pmid = await searchPubMedByDoi(cleanedDoi, apiKey);
+  const pmid = await searchPubMedByDoi(doi, apiKey);
   if (pmid) {
     const pubmedResult = await fetchFromPubMed(pmid, apiKey);
     if (pubmedResult) {
-      pubmedResult.doi = pubmedResult.doi || cleanedDoi;
+      pubmedResult.doi = pubmedResult.doi || doi;
       pubmedResult.journal_url =
-        pubmedResult.journal_url || `https://doi.org/${cleanedDoi}`;
+        pubmedResult.journal_url || `https://doi.org/${doi}`;
       return pubmedResult;
     }
   }
 
   // Fallback to Crossref
   console.log("PubMed unavailable for DOI, falling back to Crossref");
-  const crossrefResult = await fetchFromCrossrefByDoi(cleanedDoi);
+  const crossrefResult = await fetchFromCrossrefByDoi(doi);
   if (!crossrefResult) return null;
 
   // Try to cross-reference with PubMed for enrichment
@@ -558,7 +559,11 @@ async function fetchPaperMetadata(
         result = await fetchFromPubMed(detected.pmid, apiKey);
         break;
       case "doi":
-        result = await fetchByDoi(identifier, apiKey);
+        // The DOI comes from the classification — a direct DOI, or the path of
+        // a structurally authenticated resolver URL. It is never re-extracted
+        // from the raw text, and a resolver URL never reaches a provider that
+        // expects a DOI name.
+        result = await fetchByDoi(detected.doi, apiKey);
         break;
       case "title":
         result = await fetchByTitle(identifier, apiKey);
