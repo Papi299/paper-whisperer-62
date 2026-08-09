@@ -393,14 +393,19 @@ describe("resolver URL ↔ DOI name round-trip", () => {
       expect(url).toBe(expected);
 
       const recovered = extractDoiFromDoiUrl(url!);
-      // `extractDoiFromDoiUrl` requires the `10.` indicator, so the one vector
-      // without it is not a resolver-recognizable DOI; the URL half still holds.
+      // `extractDoiFromDoiUrl` requires the `10.` indicator, so vectors that do
+      // not start with one are not resolver-recognizable DOIs; the URL half
+      // still holds for them.
       if (recovered === null) {
         expect(doiName.startsWith("10.")).toBe(false);
         return;
       }
 
-      expect(recovered).toBe(doiName.trim());
+      // Exactly the name that went in, code point for code point — including
+      // any leading or trailing space, which the builder encodes rather than
+      // trims. Comparing against `doiName.trim()` here would have let a
+      // normalizing builder pass.
+      expect(recovered).toBe(doiName);
       expect(canonicalDoiUrl(recovered)).toBe(expected);
     },
   );
@@ -429,6 +434,29 @@ describe("resolver URL ↔ DOI name round-trip", () => {
     const canonical = canonicalDoiUrl(name);
     expect(canonical).toBe("https://doi.org/10.1000/a%2Fb%2Fc");
     expect(extractDoiFromDoiUrl(canonical!)).toBe(name);
+  });
+
+  it("carries a suffix space through the whole loop", () => {
+    // Whitespace is the case a normalizing builder loses silently, and the loop
+    // is where the loss becomes provable: the space has to survive encoding to
+    // `%20`, survive `pathname` extraction, survive decoding back to a space,
+    // and rebuild the identical URL. A builder that trimmed would emit
+    // `…/example` here, and the recovered name would be a different DOI.
+    const url = canonicalDoiUrl("10.1000/example ");
+    expect(url).toBe("https://doi.org/10.1000/example%20");
+
+    const recovered = extractDoiFromDoiUrl(url!);
+    expect(recovered).toBe("10.1000/example ");
+    expect(canonicalDoiUrl(recovered)).toBe(url);
+
+    // And it stays distinct from the name without the space.
+    expect(canonicalDoiUrl("10.1000/example")).not.toBe(url);
+  });
+
+  it("carries a whitespace-only suffix through the whole loop", () => {
+    const url = canonicalDoiUrl("10.1000/  ");
+    expect(url).toBe("https://doi.org/10.1000/%20%20");
+    expect(extractDoiFromDoiUrl(url!)).toBe("10.1000/  ");
   });
 
   it("keeps two DOI names that differ only by a literal percent distinct", () => {
@@ -463,7 +491,7 @@ describe("provider API encoding is a different concern from resolver constructio
   // Regression guard for the distinction the fix must not blur. A DOI reaches
   // three different URL syntaxes, each with its own rule:
   //
-  //   resolver path      → DOI Handbook 4.7 (prefix/suffix, `/` kept literal)
+  //   resolver path      → DOI Handbook 3.7 (prefix/suffix, `/` kept literal)
   //   Crossref path      → encodeURIComponent (whole name is ONE path segment)
   //   PubMed query value → encodeURIComponent (a query parameter value)
   //

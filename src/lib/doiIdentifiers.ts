@@ -43,18 +43,34 @@
  * make the function's output depend on a guess about its caller's intent and
  * would collapse two distinct DOI names onto one URL.
  *
+ * It also never alters the DOI name it was given. The Handbook's algorithm
+ * serializes the prefix and suffix "without any normalization", and DOI names
+ * are equivalent only when their code point sequences are identical, so
+ * trimming, collapsing, lower-casing or decoding any part of the input would
+ * emit a link for a *different* DOI. A space is ordinary DOI data — the Graphic
+ * type the syntax is drawn from includes spaces — so `10.1000/example ` encodes
+ * to `…/example%20` rather than losing its final code point.
+ *
  * It also performs no network resolution and does not check that the DOI is
  * registered. Whether a DOI exists is the resolver's answer to give.
  *
- * @see DOI Handbook (2025), 4.7 "Percent-encoding" — the encoding algorithm,
- *   including the byte set that stays unescaped and the rule that prefix and
- *   suffix are encoded separately and rejoined with `/`.
- * @see DOI Handbook (2025), 4.4.4 "HTTP proxy form" — a DOI name is expressed
+ * @see DOI Handbook (2025), §3.7 "Percent-Encoding" — the encoding algorithm,
+ *   including the byte set that stays unescaped, the "without any
+ *   normalization" requirement, and the rule that prefix and suffix are encoded
+ *   separately and rejoined with `/`.
+ * @see DOI Handbook (2025), §3.4.4 "HTTP Proxy Form" — a DOI name is expressed
  *   as a URL by concatenating `https://doi.org/` with the percent-encoded DOI
  *   name; proxy forms starting `https://dx.doi.org` are deprecated.
- * @see DOI Handbook (2025), 3.2 "DOI name syntax" — a DOI name is a prefix and
- *   a suffix separated by `/`; the prefix is dot-separated segments, so the
+ * @see DOI Handbook (2025), §3.3 "Syntax of the DOI Name" — a DOI name is an
+ *   ordered sequence of code points of the Graphic type (letters, marks,
+ *   numbers, punctuation, symbols *and spaces*), arranged as a prefix and a
+ *   suffix separated by U+002F SOLIDUS. The prefix is a numeric directory
+ *   indicator optionally followed by a dot-separated registrant code, so the
  *   separator is the *first* `/` and any later one belongs to the suffix.
+ * @see DOI Handbook (2025), §3.6 "UTF-8 Serialization" — one escape per UTF-8
+ *   byte, never one per code point.
+ * @see DOI Handbook (2025), §5.3.1 "DOI Proxy" — `https://doi.org` is the proxy
+ *   an HTTP GET resolves the name against.
  * @see Crossref DOI display guidelines — display as a full URL in the form
  *   `https://doi.org/10.xxxx/xxxxx`, without a `doi:` prefix and without `dx`.
  */
@@ -76,8 +92,8 @@ const DOI_RESOLVER_PREFIX = "https://doi.org/";
  * This is RFC 3986's `unreserved` set plus `sub-delims` plus `:` and `@` —
  * that is, `pchar` minus `%` (which must be escaped for percent-encoding to be
  * unambiguous) and minus `,`. The comma is excluded by the Handbook so that an
- * encoded DOI name can be passed through the "Which RA?" service, whose request
- * syntax gives the comma a separator meaning.
+ * encoded DOI name can be passed through the "Which RA?" service (§5.6), whose
+ * request syntax gives the comma a separator meaning.
  *
  * Taken verbatim from the Handbook rather than derived, because the difference
  * between this set and `encodeURIComponent`'s is exactly the kind of detail
@@ -100,16 +116,17 @@ const DOI_UNESCAPED_BYTES: ReadonlySet<number> = new Set(
 
 /**
  * Percent-encode one DOI component — a prefix or a suffix — per DOI Handbook
- * 4.7.
+ * §3.7.
  *
- * The component is serialized to UTF-8 first and the rule is then applied to
- * each *byte*, which is what makes non-ASCII correct: a code point outside
- * Basic Latin becomes the percent-encoding of each of its two-to-four UTF-8
- * bytes (`é` → `%C3%A9`), never a single escape of the code point.
+ * The component is serialized to UTF-8 first, with no byte order mark and no
+ * normalization, and the rule is then applied to each *byte*, which is what
+ * makes non-ASCII correct: a code point outside Basic Latin becomes the
+ * percent-encoding of each of its two-to-four UTF-8 bytes (`é` → `%C3%A9`),
+ * never a single escape of the code point.
  *
- * Every byte outside the unescaped set is encoded, `%` included. Nothing about
- * the input is interpreted — this function has no notion of an escape sequence
- * in its input, only bytes.
+ * Every byte outside the unescaped set is encoded, `%` and the space included.
+ * Nothing about the input is interpreted — this function has no notion of an
+ * escape sequence in its input, only bytes.
  */
 function percentEncodeDoiComponent(component: string): string {
   const bytes = new TextEncoder().encode(component);
@@ -140,24 +157,36 @@ function percentEncodeDoiComponent(component: string): string {
  * resolver URL could usefully be built from, matching the existing classifier's
  * stance that this layer is not a DOI grammar validator:
  *
- *   • not a string, or empty/whitespace-only;
+ *   • not a string, or an empty string;
  *   • no `/`, so there is no prefix/suffix separator to preserve;
- *   • an empty prefix or an empty suffix;
- *   • a `:` in the prefix. Handbook 3.2 makes the prefix dot-separated
- *     segments, so a colon there never occurs in a DOI name and always means
- *     the value is a *presentation form* carrying a scheme — `https://…`,
- *     `doi:…`, `urn:doi:…`. The suffix keeps its `:` and stays fully opaque;
- *     this is one check against the wrong direction, not a grammar.
+ *   • a literally empty prefix or a literally empty suffix;
+ *   • a `:` in the prefix. Handbook §3.3.1 makes the prefix a numeric directory
+ *     indicator and a dot-separated registrant code, so a colon there never
+ *     occurs in a DOI name and always means the value is a *presentation form*
+ *     carrying a scheme — `https://…`, `doi:…`, `urn:doi:…`. The suffix keeps
+ *     its `:` and stays fully opaque; this is one check against the wrong
+ *     direction, not a grammar.
  *
  * The `10.` directory indicator is deliberately *not* required. The classifier
  * accepts `doi:` forms without re-checking their shape, so a DOI name that
  * reached this point may legitimately not begin with `10.`, and rejecting it
  * here would drop a link the previous code would have produced.
  *
- * Surrounding whitespace is trimmed. Unlike input authentication — where
- * repairing a value would invent authority — this is formatting a value whose
- * authority is already established, and encoding the spaces instead would emit
- * a link with `%20` at its edges that no resolver can answer.
+ * ## Whitespace is DOI data, and is preserved
+ *
+ * The name is **not** trimmed. Handbook §3.3 draws DOI names from the Unicode
+ * Graphic type, which explicitly includes spaces, and §3.7 step 1 serializes
+ * the components "without any normalization" — so a leading or trailing space
+ * belongs to the name and encodes to `%20` like any other reserved byte.
+ * Trimming would quietly emit the canonical URL of a *different* DOI, which is
+ * exactly the class of bug this module exists to remove; a link that resolves
+ * to the wrong record is worse than one that 404s. A suffix of nothing but
+ * spaces is likewise not an empty suffix, so only a literally empty one is
+ * rejected. Normalizing an identifier belongs at the input boundary, where the
+ * value is first taken in, not in the encoder that formats it.
+ *
+ * An all-whitespace string still yields `null`, without a special case: it has
+ * no `/`, so there is no separator to build a URL around.
  *
  * @param doiName A DOI name, unencoded.
  * @returns The canonical `https://doi.org/…` URL, or `null` when `doiName` is
@@ -166,22 +195,22 @@ function percentEncodeDoiComponent(component: string): string {
  * @example
  * canonicalDoiUrl("10.1000/456#789"); // "https://doi.org/10.1000/456%23789"
  * canonicalDoiUrl("10.1000/foo/bar");  // "https://doi.org/10.1000/foo%2Fbar"
+ * canonicalDoiUrl("10.1000/example "); // "https://doi.org/10.1000/example%20"
  */
 export function canonicalDoiUrl(doiName: string | null | undefined): string | null {
   if (typeof doiName !== "string") return null;
+  if (!doiName) return null;
 
-  const trimmed = doiName.trim();
-  if (!trimmed) return null;
-
-  // DOI Handbook 3.2: prefix and suffix are separated by `/`, and the prefix is
-  // dot-separated segments — so the separator is the *first* `/`. Any later one
-  // is part of the opaque suffix and is therefore data, encoded below rather
-  // than emitted as another path separator.
-  const separatorIndex = trimmed.indexOf("/");
+  // DOI Handbook §3.3: prefix and suffix are separated by U+002F SOLIDUS, and
+  // the prefix is a directory indicator plus a dot-separated registrant code —
+  // so the separator is the *first* `/`. Any later one is part of the opaque
+  // suffix and is therefore data, encoded below rather than emitted as another
+  // path separator.
+  const separatorIndex = doiName.indexOf("/");
   if (separatorIndex <= 0) return null;
 
-  const prefix = trimmed.slice(0, separatorIndex);
-  const suffix = trimmed.slice(separatorIndex + 1);
+  const prefix = doiName.slice(0, separatorIndex);
+  const suffix = doiName.slice(separatorIndex + 1);
   if (!suffix) return null;
 
   // A scheme-carrying presentation form, not a DOI name. See the note above.

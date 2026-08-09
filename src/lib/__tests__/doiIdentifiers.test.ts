@@ -12,8 +12,9 @@
 // written out literally instead of being computed, which would just re-assert
 // the implementation against itself.
 //
-// @see DOI Handbook (2025) 4.7 "Percent-encoding", 4.4.4 "HTTP proxy form",
-//   3.2 "DOI name syntax"; Crossref DOI display guidelines.
+// @see DOI Handbook (2025) §3.7 "Percent-Encoding", §3.4.4 "HTTP Proxy Form",
+//   §3.3 "Syntax of the DOI Name", §3.6 "UTF-8 Serialization"; Crossref DOI
+//   display guidelines.
 
 import { describe, it, expect } from "vitest";
 import { canonicalDoiUrl } from "@/lib/doiIdentifiers";
@@ -85,7 +86,7 @@ describe("a literal percent sign in a DOI name is data, not an escape", () => {
 });
 
 describe("the unescaped byte set is the DOI Handbook's, not encodeURIComponent's", () => {
-  // DOI Handbook 4.7 step 2a: ALPHA, DIGIT, "-", ".", "_", "~", "!", "$", "&",
+  // DOI Handbook 3.7 step 2a: ALPHA, DIGIT, "-", ".", "_", "~", "!", "$", "&",
   // "'", "(", ")", "*", "+", ";", "=", ":", "@" are output unmodified.
   const HANDBOOK_UNESCAPED = "-._~!$&'()*+;=:@";
 
@@ -141,7 +142,12 @@ describe("non-ASCII is encoded as UTF-8 bytes", () => {
     expect(canonicalDoiUrl("10.1000/\u{1D400}")).toBe("https://doi.org/10.1000/%F0%9D%90%80");
   });
 
-  it("encodes non-ASCII in the prefix too", () => {
+  it("encodes non-ASCII alongside other escaped bytes in one suffix", () => {
+    // Prefix `10.26321`, suffix `á.x/y` — the first `/` is the separator, so
+    // everything after it is suffix data: `á` becomes two bytes, the `.` stays
+    // unescaped, and the suffix-internal `/` escapes. The prefix stays ASCII
+    // because Handbook 3.3.1 defines it as a numeric directory indicator and
+    // registrant code, so there is no non-ASCII prefix to test.
     expect(canonicalDoiUrl("10.26321/á.x/y")).toBe("https://doi.org/10.26321/%C3%A1.x%2Fy");
   });
 });
@@ -166,13 +172,51 @@ describe("values that cannot form a resolver URL yield null", () => {
   });
 });
 
-describe("surrounding whitespace is trimmed rather than encoded", () => {
-  it("trims, because %20 at the edges is a link no resolver can answer", () => {
-    expect(canonicalDoiUrl("  10.1000/example  ")).toBe("https://doi.org/10.1000/example");
+describe("whitespace is DOI data and is preserved, never trimmed", () => {
+  // Handbook 3.3 draws DOI names from the Unicode Graphic type, which includes
+  // spaces, and 3.7 step 1 serializes each component "without any
+  // normalization". So a space is an ordinary code point of the name, and
+  // dropping one produces the canonical URL of a *different* DOI — a link that
+  // resolves to the wrong record, which is worse than one that 404s.
+
+  it("encodes whitespace inside the name", () => {
+    expect(canonicalDoiUrl("10.1000/a b")).toBe("https://doi.org/10.1000/a%20b");
   });
 
-  it("still encodes whitespace inside the name", () => {
-    expect(canonicalDoiUrl("10.1000/a b")).toBe("https://doi.org/10.1000/a%20b");
+  it("encodes a trailing space rather than dropping it", () => {
+    expect(canonicalDoiUrl("10.1000/example ")).toBe("https://doi.org/10.1000/example%20");
+  });
+
+  it("encodes a leading space in the suffix rather than dropping it", () => {
+    expect(canonicalDoiUrl("10.1000/ example")).toBe("https://doi.org/10.1000/%20example");
+  });
+
+  it("treats a whitespace-only suffix as a suffix, not as an empty one", () => {
+    // The precise regression `.trim()` caused: `10.1000/  ` would collapse to
+    // `10.1000/`, be rejected as empty-suffixed, and lose the link entirely.
+    expect(canonicalDoiUrl("10.1000/  ")).toBe("https://doi.org/10.1000/%20%20");
+    expect(canonicalDoiUrl("10.1000/")).toBeNull();
+  });
+
+  it("preserves whitespace on either side of the whole name", () => {
+    expect(canonicalDoiUrl("  10.1000/example  ")).toBe(
+      "https://doi.org/%20%2010.1000/example%20%20",
+    );
+  });
+
+  it("keeps names that differ only by whitespace distinct", () => {
+    // The identity property the encoder owes its callers: distinct code point
+    // sequences must map to distinct URLs. Normalizing any of them here would
+    // merge two DOI names, exactly as a `%23` "already encoded" guess would.
+    const urls = ["10.1000/example", "10.1000/example ", "10.1000/ example"].map(canonicalDoiUrl);
+    expect(new Set(urls).size).toBe(3);
+  });
+
+  it("still rejects an all-whitespace value, for want of a separator", () => {
+    // Not a whitespace special case — `"   "` has no `/`, so there is no
+    // prefix/suffix boundary to build a URL around.
+    expect(canonicalDoiUrl("   ")).toBeNull();
+    expect(canonicalDoiUrl(" 10.1000 ")).toBeNull();
   });
 });
 

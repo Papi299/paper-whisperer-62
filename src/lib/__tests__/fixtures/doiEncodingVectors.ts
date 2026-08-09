@@ -19,8 +19,8 @@
  * states the DOI Handbook's algorithm rather than re-deriving whichever
  * implementation is being tested.
  *
- * @see DOI Handbook (2025) 4.7 "Percent-encoding", 4.4.4 "HTTP proxy form",
- *   3.2 "DOI name syntax".
+ * @see DOI Handbook (2025) §3.7 "Percent-Encoding", §3.4.4 "HTTP Proxy Form",
+ *   §3.3 "Syntax of the DOI Name", §3.6 "UTF-8 Serialization".
  */
 
 /** DOI name → canonical resolver URL. `[label, doiName, expectedUrl]`. */
@@ -53,14 +53,27 @@ export const DOI_CANONICAL_URL_VECTORS: ReadonlyArray<
   ["several internal suffix slashes", "10.1000/a/b/c", "https://doi.org/10.1000/a%2Fb%2Fc"],
   ["trailing slash is a different name", "10.1000/example/", "https://doi.org/10.1000/example%2F"],
 
-  // Everything DOI Handbook 4.7 step 2a keeps unmodified, in one suffix.
+  // Whitespace is DOI data, not noise to be tidied away. Handbook 3.3 draws DOI
+  // names from the Unicode Graphic type, which includes spaces, and 3.7 step 1
+  // serializes each component "without any normalization" — so a space encodes
+  // to %20 and the name keeps every code point it arrived with. Trimming would
+  // emit the canonical URL of a *different* DOI, silently.
+  ["trailing space in the suffix", "10.1000/example ", "https://doi.org/10.1000/example%20"],
+  ["leading space in the suffix", "10.1000/ example", "https://doi.org/10.1000/%20example"],
+  ["whitespace-only suffix is not an empty suffix", "10.1000/  ", "https://doi.org/10.1000/%20%20"],
+  ["space either side of the whole name", "  10.1000/example  ", "https://doi.org/%20%2010.1000/example%20%20"],
+
+  // Everything DOI Handbook 3.7 step 2a keeps unmodified, in one suffix.
   ["allowed punctuation set", "10.1000/-._~!$&'()*+;=:@", "https://doi.org/10.1000/-._~!$&'()*+;=:@"],
 
   // Non-ASCII is encoded per UTF-8 byte, not per code point.
   ["Latin-1 supplement", "10.1000/café", "https://doi.org/10.1000/caf%C3%A9"],
   ["CJK", "10.1000/日本語", "https://doi.org/10.1000/%E6%97%A5%E6%9C%AC%E8%AA%9E"],
   ["astral plane (surrogate pair)", "10.1000/\u{1D400}", "https://doi.org/10.1000/%F0%9D%90%80"],
-  ["non-ASCII in the prefix", "10.26321/á/y", "https://doi.org/10.26321/%C3%A1%2Fy"],
+  // Prefix `10.26321`, suffix `á/y`: a Unicode code point and a suffix-internal
+  // slash in one vector. The prefix stays ASCII because Handbook 3.3.1 defines
+  // it as a numeric directory indicator and registrant code.
+  ["Unicode suffix with internal slash", "10.26321/á/y", "https://doi.org/10.26321/%C3%A1%2Fy"],
 
   // A `doi:` input yields a name the classifier does not reshape, so a name
   // without the `10.` indicator can legitimately reach the builder.
@@ -70,14 +83,18 @@ export const DOI_CANONICAL_URL_VECTORS: ReadonlyArray<
 /** Values no resolver URL can be built from. `[label, value]`. */
 export const DOI_UNUSABLE_NAMES: ReadonlyArray<readonly [label: string, value: string | null | undefined]> = [
   ["empty string", ""],
-  ["whitespace only", "   "],
   ["null", null],
   ["undefined", undefined],
   ["no prefix/suffix separator", "10.1000"],
   ["empty suffix", "10.1000/"],
   ["empty prefix", "/example"],
   ["separator only", "/"],
-  ["whitespace around an empty suffix", "  10.1000/  "],
+
+  // Whitespace-only values are unusable for a structural reason, not because
+  // they are whitespace: there is no `/` to separate a prefix from a suffix.
+  // `"10.1000/  "` above, which *does* have one, is a usable DOI name.
+  ["whitespace only", "   "],
+  ["whitespace with no separator", " 10.1000 "],
 
   // Wrong direction: presentation forms, which the classifier turns into names.
   // Without the colon check these produce plausible-looking nonsense, because
