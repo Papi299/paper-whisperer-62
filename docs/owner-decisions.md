@@ -65,6 +65,12 @@ Full text and rationale: [decisions-and-triggers.md](decisions-and-triggers.md) 
 
 Pending decisions and validation tasks — currently all commercial/launch items; future non-commercial owner decisions (schema, security, operational) belong here too. Each must be resolved (or scheduled) before the listed implementation phase can begin. Items are ordered by approximate gating order.
 
+### 2.0 Security and operational (not paused by C27)
+
+| Decision / task | Why blocking | Status |
+|---|---|---|
+| **Supabase Auth leaked-password protection requires a paid plan.** Enabling it (`password_hibp_enabled = true`, Auth → Providers → Email) makes Supabase Auth check new passwords against the HaveIBeenPwned Pwned Passwords API at sign-up and password change. Current official Supabase documentation states the feature is **available on the Pro Plan and above**. Read-only inspection on 2026-08-10 confirmed organization `nejejqymvrswipedaeei` is on the **`free`** plan, so the setting **cannot be enabled today**. | This is the **last open item of PFA-C08** and the only one that is not repository-side. The database half of PFA-C08 is implemented in migration `20260810152125` (see [migration-history.md](migration-history.md)); this Auth setting is what keeps PFA-C08 from being complete. | **Pending owner decision — has a cost.** Enabling it requires upgrading the organization to Pro, which is a **billing decision no engineering task may take**. No plan change, subscription, add-on, or billing detail was entered. If the owner upgrades, the follow-up is a single Auth setting change plus a re-run of the Security Advisor to confirm `auth_leaked_password_protection` clears. **Client-side compatibility is already in place** — both `src/pages/Auth.tsx` (sign-up) and `src/pages/ResetPassword.tsx` (password update) surface the Supabase error message verbatim in a destructive toast, so a `weak_password` rejection would display an actionable reason with no code change. |
+
 > **Paused (C27, 2026-07-24).** Every §2.1–§2.3 commercial/launch item below is **paused and off the active critical path**. They remain accurate future-facing gates but are **not** the next engineering task; none should be started as active work without a new explicit owner decision. The active priority is feature and workflow development — see C27.
 
 ### 2.1 Required before Paddle integration begins (paused — C27)
