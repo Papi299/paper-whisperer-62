@@ -174,10 +174,10 @@ supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 
 The Supabase CLI runs Deno bundling at deploy time and surfaces compile errors before publishing. Treat a successful deploy as the formal Deno-side typecheck (the project doesn't run `deno check` locally — `deno` isn't part of the standard contributor toolchain).
 
-**Verifying what is actually deployed.** A read-back of the live function (`supabase functions download <name>`, or the equivalent inspection API) returns the **bundled/transpiled** form, not the repository TypeScript: type annotations are stripped and formatting is normalized. Do **not** treat a diff against the source files as evidence of drift, and do not claim byte identity with the repository source on that basis — it is not obtainable this way. Instead:
+**Verifying what is actually deployed.** Read-back representation is **tool-dependent**. The `supabase functions download` path used in prior rollout verification has been observed to return normalized/transpiled output (type annotations stripped, formatting normalized), so do not assume its files are byte-identical to repository TypeScript. Other inspection mechanisms may expose a different representation, including source closer to what was uploaded. Before using byte identity as evidence, establish what transformation, if any, the mechanism you chose applies.
 
 - Prove provenance **before** deploying: confirm the deploying worktree's function closure (entrypoint plus every `_shared/*` module it imports, recursively) is byte-identical to the accepted commit, and deploy from that worktree.
-- Verify **semantically or differentially** afterwards: read the live bundle back and check the specific changed behavior, or diff the new read-back against a read-back of the previous version captured before the deploy — both sides then pass through the same transpile pipeline, so the diff shows only the real change.
+- Afterwards, use the strongest comparison the chosen mechanism actually supports: **byte** comparison when it demonstrably returns the uploaded source representation; otherwise **semantic** comparison of the changed behavior, or a **differential** comparison of the old and new read-backs taken through the same mechanism (capture the previous version before deploying).
 - Record the resulting version and `ezbr_sha256` in the rollout entry in [`migration-history.md`](migration-history.md); do not treat any particular version or hash as a fixed baseline here.
 
 ---
