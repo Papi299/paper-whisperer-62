@@ -352,6 +352,7 @@ export function Sidebar({
       <SettingsDialog
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
+        userId={user?.id}
       />
     </aside>
   );
