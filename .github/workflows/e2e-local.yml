@@ -98,7 +98,7 @@ jobs:
         # The merged lifecycle is the sole owner of local stack startup, migration
         # replay, status parsing, local credentials, deterministic seed, Playwright
         # environment injection, ordinary teardown, and signal cleanup. It runs the
-        # default six read-only specs; no broader spec list is passed.
+        # default read-only spec set; no broader spec list is passed.
         run: npm run test:e2e:local
 
       - name: Enforce local stack teardown

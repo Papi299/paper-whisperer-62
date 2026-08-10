@@ -72,6 +72,10 @@ export const queryKeys = {
     /** Per-user effective internal role + capabilities (get_current_user_access RPC). */
     current: (userId: string) => ["access", userId, "current"] as const,
   },
+  storageUsage: {
+    /** Per-user attachment storage used/quota (read-only SELECT-own projection). */
+    status: (userId: string) => ["storageUsage", userId, "status"] as const,
+  },
   // NOTE: the manager-only Gemini provider-quota key group was removed under
   // owner decision C29 (provider-quota monitoring deferred until
   // commercialization). No frontend query path remains; the deployed Edge

@@ -13,15 +13,26 @@ import { Label } from "@/components/ui/label";
 import { Trash2, Save, Key, Loader2 } from "lucide-react";
 import { useSettings } from "@/hooks/useSettings";
 import { useToast } from "@/hooks/use-toast";
+import { useStorageUsage } from "@/hooks/useStorageUsage";
+import { StorageUsageSection } from "@/components/settings/StorageUsageSection";
 
 interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Authenticated user id, threaded from the Sidebar rather than resolved from
+   * a second independent auth source. Nullable-safe: while absent the storage
+   * query stays disabled and the gauge reports unavailable.
+   */
+  userId?: string | null;
 }
 
-export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
+export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogProps) {
   const { settings, loading, setPubmedApiKey, clearPubmedApiKey } = useSettings();
   const { toast } = useToast();
+  // Only queried while the dialog is open; refetched on reopen so the gauge
+  // reflects attachment activity since the last visit.
+  const storage = useStorageUsage(userId, { enabled: open });
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -73,12 +84,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : (
-          <div className="space-y-4 py-2">
+        <div className="space-y-4 py-2">
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
             <div className="space-y-2">
               <Label htmlFor="pubmed-api-key">PubMed API Key (NCBI)</Label>
               <Input
@@ -105,8 +116,14 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 </a>.
               </p>
             </div>
-          </div>
-        )}
+          )}
+
+          <StorageUsageSection
+            status={storage.status}
+            isLoading={storage.isLoading}
+            isError={storage.isError}
+          />
+        </div>
 
         <DialogFooter className="flex gap-2 sm:justify-between">
           {hasKey && (

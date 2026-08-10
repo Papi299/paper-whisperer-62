@@ -57,7 +57,7 @@ const ROOT = resolve(__dirname, "..");
 const PRODUCTION_SUPABASE_REF = "lioxtgiputfniqbktcsz";
 const AUTH_STATE_FILE = resolve(ROOT, "e2e/.auth/user.json");
 
-/** The six authorized read-only specs — the safe default subset for `run`. */
+/** The authorized read-only specs — the safe default subset for `run`. */
 const DEFAULT_SPECS = [
   "e2e/auth.spec.ts",
   "e2e/bulk-actions.spec.ts",
@@ -65,6 +65,8 @@ const DEFAULT_SPECS = [
   "e2e/filters.spec.ts",
   "e2e/paper-import.spec.ts",
   "e2e/pools.spec.ts",
+  // Opens Settings and reads the storage gauge; mutates nothing.
+  "e2e/settings-storage.spec.ts",
 ];
 
 function log(msg) {
