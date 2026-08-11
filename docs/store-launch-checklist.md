@@ -52,10 +52,10 @@ Each section below is a category of readiness. Items use plain Markdown checkbox
 
 ## 3. Account and data management
 
-- [ ] **In-app account deletion path.** Triggers an Edge Function that deletes user data across all tables, removes storage objects, and finally calls the Supabase admin API to delete the auth user. Required by recent Apple and Google policy — verify exact current requirements at submission time.
+- [x] **In-app account deletion path — implemented (PFA-C04).** Settings → **Danger zone** → Delete account invokes the `delete-account` Edge Function, which authenticates the caller, re-checks the typed confirmation phrase server-side, removes every Storage object under the account's bucket prefix through the Storage API, and then hard-deletes the Auth user (`auth.admin.deleteUser(userId, false)`); the user's database rows go with it through the existing `ON DELETE CASCADE` foreign keys. Required by recent Apple and Google policy — re-verify their exact current requirements at submission time (this checklist item records that the capability exists, not that any specific store's wording has been re-checked).
 - [x] **Data export — implemented (PFA-C02).** Settings → Account data downloads one versioned ZIP holding the signed-in user's whole dataset: JSON for papers (notes included), projects, tags, both relationship tables, presets and all four pools, attachment metadata, and a non-secret profile, plus the attachment **binaries**. Credentials are excluded by construction. Citation-format export (CSV/RIS/BibTeX) remains available separately for the current selection. See [start-here.md](start-here.md) §Implemented capabilities.
-- [ ] Confirmation flow on account deletion (typed confirmation, optional cooldown period).
-- [ ] Documented retention policy for billing receipts and audit logs after account deletion (as legally required).
+- [x] **Confirmation flow on account deletion — implemented (PFA-C04).** A dedicated destructive dialog states exactly what is removed, that it cannot be undone, and that exporting first is the way to keep a copy; the final button stays disabled until the user types `DELETE MY ACCOUNT` exactly, and the phrase is re-validated on the server. No cooldown / grace period was implemented — deletion is immediate and permanent by design.
+- [ ] Documented retention policy for billing receipts and audit logs after account deletion (as legally required). **Still open, and now concrete:** `subscriptions.user_id` and `subscription_events.user_id` are `ON DELETE SET NULL`, so those rows survive a deletion unlinked rather than being removed. Nothing populates them today (C27 pauses billing), but this must be re-evaluated against legal/privacy requirements before commercial launch. See [commercial-architecture.md §6](commercial-architecture.md).
 - [ ] Email-change flow tested.
 - [ ] Password-reset flow tested (already wired via `/reset-password`; smoke-test before launch).
 
@@ -133,7 +133,7 @@ Each section below is a category of readiness. Items use plain Markdown checkbox
 - [ ] Beta tester recruitment plan (researchers, students, clinicians from the target audience).
 - [ ] Beta feedback channel (email / form / Discord / GitHub issues — whatever is consistent with the published Support URL).
 - [ ] Subscription flows tested end-to-end with sandbox accounts on each platform.
-- [ ] Account deletion flow tested end-to-end with a real (not seed) account.
+- [ ] Account deletion flow tested end-to-end on the target mobile platform. **The web flow is already covered automatically** by `e2e/account-deletion.spec.ts`, which drives the real UI and the real `delete-account` Edge Function against an ephemeral **local** Supabase stack using a disposable per-run account, then proves the Auth user, the owned rows and the Storage binaries are gone. That deliberately does **not** run against Production: no real account is ever deleted to test this.
 - [ ] Quota exhaustion paths tested (AI used = quota; storage used = quota).
 - [ ] Period rollover tested (artificially advance period_end and confirm counters reset).
 - [ ] Crash-free session rate baseline collected before submitting for review.

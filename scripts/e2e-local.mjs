@@ -50,6 +50,11 @@ import { readFileSync, existsSync, rmSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { seedLocalStack } from "./e2e-local-seed.mjs";
+import {
+  assertDisposableAccountRemoved,
+  cleanupDisposableAccount,
+  provisionDisposableAccount,
+} from "./e2e-local-delete-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -69,6 +74,11 @@ const DEFAULT_SPECS = [
   "e2e/settings-storage.spec.ts",
   // Opens Settings and downloads the account export; reads only, mutates nothing.
   "e2e/account-export.spec.ts",
+  // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
+  // deterministic primary/secondary fixtures) through the real UI and the real
+  // local delete-account Edge Function. The lifecycle proves afterwards that the
+  // Auth user, its rows and its Storage objects are gone.
+  "e2e/account-deletion.spec.ts",
 ];
 
 function log(msg) {
@@ -320,6 +330,9 @@ async function cmdRun(specArgs) {
 
   const specs = specArgs.length > 0 ? specArgs : DEFAULT_SPECS;
   let primaryError = null;
+  // Set once the disposable PFA-C04 account exists; cleared once it is proven
+  // deleted, so the failure path only ever cleans up an account that survived.
+  let disposable = null;
   try {
     await startStack();
     await resetLocalDb();
@@ -328,6 +341,15 @@ async function cmdRun(specArgs) {
     log(`validated local API origin: ${apiUrl}`);
 
     const creds = await seedLocalStack({ apiUrl, anonKey, serviceRoleKey, log });
+
+    // PFA-C04 destructive fixture: a disposable account this run owns outright.
+    // Provisioned only when the destructive spec is actually scheduled, so a
+    // targeted read-only spec run creates no extra identity. The elevated key
+    // stays in THIS process and is never added to the Playwright environment.
+    const runsDeletionSpec = specs.some((spec) => spec.includes("account-deletion"));
+    disposable = runsDeletionSpec
+      ? await provisionDisposableAccount({ apiUrl, anonKey, serviceRoleKey, log })
+      : null;
 
     // Explicit, in-memory backend contract for the guarded Playwright run.
     const childEnv = {
@@ -338,14 +360,44 @@ async function cmdRun(specArgs) {
       VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
       TEST_USER_EMAIL: creds.primary.email,
       TEST_USER_PASSWORD: creds.primary.password,
+      ...(disposable
+        ? {
+            E2E_DELETE_USER_EMAIL: disposable.email,
+            E2E_DELETE_USER_PASSWORD: disposable.password,
+          }
+        : {}),
     };
 
     log(`running Playwright specs: ${specs.join(", ")}`);
     const code = await runInherit("npx", ["--no-install", "playwright", "test", ...specs], childEnv);
     if (code !== 0) throw new Error(`Playwright run failed (exit ${code}).`);
     log("Playwright run succeeded against the isolated local backend.");
+
+    // Authoritative destructive proof. The spec asserts what the browser can
+    // see; this asserts what only an elevated local client can: the Auth user,
+    // every owned row, and every Storage object in the account's namespace are
+    // gone. A survivor fails the lifecycle even though Playwright was green.
+    if (disposable) {
+      await assertDisposableAccountRemoved({ apiUrl, serviceRoleKey, account: disposable, log });
+      disposable = null; // proven gone; nothing left to clean up
+      log("account-deletion E2E verified: disposable account fully removed.");
+    }
   } catch (err) {
     primaryError = err;
+    // A failed run may have left the disposable account behind. Remove it
+    // best-effort so a debugging session with E2E_KEEP_LOCAL_STACK=1 does not
+    // accumulate residue; the deterministic fixtures are never touched.
+    if (disposable) {
+      const target = await readLocalStatus().catch(() => null);
+      if (target) {
+        await cleanupDisposableAccount({
+          apiUrl: target.apiUrl,
+          serviceRoleKey: target.serviceRoleKey,
+          account: disposable,
+          log,
+        });
+      }
+    }
   }
 
   // Authoritative teardown: a failed teardown fails the command. When the

@@ -15,8 +15,10 @@ import { useSettings } from "@/hooks/useSettings";
 import { useToast } from "@/hooks/use-toast";
 import { useStorageUsage } from "@/hooks/useStorageUsage";
 import { useAccountExport } from "@/hooks/useAccountExport";
+import { useAccountDeletion } from "@/hooks/useAccountDeletion";
 import { StorageUsageSection } from "@/components/settings/StorageUsageSection";
 import { AccountDataSection } from "@/components/settings/AccountDataSection";
+import { DeleteAccountSection } from "@/components/settings/DeleteAccountSection";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -38,6 +40,10 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
   // Independent of the PubMed and Storage sections: an export in progress
   // never blocks them, and neither of them gates an export.
   const accountExport = useAccountExport(userId);
+  // PFA-C04. `userId` is used only for local UI/auth-state sanity — the hook
+  // never sends it, and the Edge Function derives the deleted account solely
+  // from the authenticated bearer token.
+  const accountDeletion = useAccountDeletion(userId);
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -89,7 +95,13 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        {/*
+          Scroll container: Settings now carries four sections plus the Danger
+          zone, which can exceed a short viewport. Bounding the height here keeps
+          the header and footer fixed and every section reachable, without
+          changing the dialog width or any existing section's layout.
+        */}
+        <div className="max-h-[60vh] space-y-4 overflow-y-auto py-2 pr-1">
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -134,6 +146,12 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
             isExporting={accountExport.isExporting}
             progress={accountExport.progress}
             canExport={accountExport.canExport}
+          />
+
+          <DeleteAccountSection
+            onDelete={accountDeletion.deleteAccount}
+            isDeleting={accountDeletion.isDeleting}
+            canDelete={accountDeletion.canDelete}
           />
         </div>
 

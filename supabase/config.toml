@@ -18,3 +18,16 @@ verify_jwt = false
 # verification disabled so the in-code auth + role check are authoritative.
 [functions.get-gemini-provider-quota]
 verify_jwt = false
+
+# delete-account verifies auth inside the function body — it reads the bearer
+# token from the Authorization header and validates it with an authoritative
+# auth.getUser(token) network call, then derives the deletion target solely from
+# the authenticated user. Same in-body auth model as the three functions above,
+# so the gateway JWT check stays disabled and the in-code auth plus the exact
+# typed-confirmation check are authoritative. This is the only function that
+# additionally uses the Edge runtime's auto-provided server-only elevated key
+# (SUPABASE_SECRET_KEYS, falling back to SUPABASE_SERVICE_ROLE_KEY) — required
+# for Storage administration and auth.admin.deleteUser, and never exposed to the
+# client.
+[functions.delete-account]
+verify_jwt = false

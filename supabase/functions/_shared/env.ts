@@ -1,4 +1,17 @@
-/// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
+// NOTE (PFA-C04): this module deliberately carries **no**
+// `/// <reference types=".../@supabase/functions-js/src/edge-runtime.d.ts" />`
+// directive. The copy esm.sh currently serves declares
+// `import('https://esm.sh/openai@7.4.0/index.d.mts')`, and that package's type
+// graph has an unresolvable link (`undici-types`). Deno builds the module graph
+// including type-only references, so any function importing a module with that
+// directive fails to boot on the local Supabase Edge runtime with
+// `BOOT_ERROR … Module not found "https://esm.sh/openai@7.4.0/…"`.
+// `delete-account` must actually run under the local E2E lifecycle, so the
+// directive is omitted here. Nothing is lost at runtime: this file only uses
+// `Deno.env`, which is ambient in the Deno runtime, and the directive supplied
+// editor typings only. The three older functions still carry the directive in
+// their own `index.ts`; that is unchanged, and their deployed behaviour is
+// unaffected (bundling happens at deploy time).
 
 /**
  * Tiny fail-fast validator for required Supabase Edge Function environment
