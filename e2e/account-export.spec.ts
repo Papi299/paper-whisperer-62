@@ -155,7 +155,11 @@ test.describe("Account data export", () => {
     await expect(dialog.getByLabel("PubMed API Key (NCBI)")).toBeEnabled();
     await expect(dialog.getByRole("heading", { name: "Storage" })).toBeVisible();
 
-    await page.keyboard.press("Escape");
+    // Closed via the dialog's own Close control rather than Escape: triggering
+    // a browser download moves keyboard focus out of the page, so a synthetic
+    // Escape is not reliably delivered afterwards. Clicking the real affordance
+    // is both robust and closer to what a user does.
+    await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5_000 });
   });
 });
