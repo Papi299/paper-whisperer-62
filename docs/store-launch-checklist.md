@@ -53,7 +53,7 @@ Each section below is a category of readiness. Items use plain Markdown checkbox
 ## 3. Account and data management
 
 - [ ] **In-app account deletion path.** Triggers an Edge Function that deletes user data across all tables, removes storage objects, and finally calls the Supabase admin API to delete the auth user. Required by recent Apple and Google policy — verify exact current requirements at submission time.
-- [ ] **Data export.** User can download their own data as a structured archive (CSV/RIS/BibTeX for papers, JSON for projects/tags/pools/presets/notes, plus attachments).
+- [x] **Data export — implemented (PFA-C02).** Settings → Account data downloads one versioned ZIP holding the signed-in user's whole dataset: JSON for papers (notes included), projects, tags, both relationship tables, presets and all four pools, attachment metadata, and a non-secret profile, plus the attachment **binaries**. Credentials are excluded by construction. Citation-format export (CSV/RIS/BibTeX) remains available separately for the current selection. See [start-here.md](start-here.md) §Implemented capabilities.
 - [ ] Confirmation flow on account deletion (typed confirmation, optional cooldown period).
 - [ ] Documented retention policy for billing receipts and audit logs after account deletion (as legally required).
 - [ ] Email-change flow tested.

@@ -14,7 +14,9 @@ import { Trash2, Save, Key, Loader2 } from "lucide-react";
 import { useSettings } from "@/hooks/useSettings";
 import { useToast } from "@/hooks/use-toast";
 import { useStorageUsage } from "@/hooks/useStorageUsage";
+import { useAccountExport } from "@/hooks/useAccountExport";
 import { StorageUsageSection } from "@/components/settings/StorageUsageSection";
+import { AccountDataSection } from "@/components/settings/AccountDataSection";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -33,6 +35,9 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
   // Only queried while the dialog is open; refetched on reopen so the gauge
   // reflects attachment activity since the last visit.
   const storage = useStorageUsage(userId, { enabled: open });
+  // Independent of the PubMed and Storage sections: an export in progress
+  // never blocks them, and neither of them gates an export.
+  const accountExport = useAccountExport(userId);
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -122,6 +127,13 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
             status={storage.status}
             isLoading={storage.isLoading}
             isError={storage.isError}
+          />
+
+          <AccountDataSection
+            onExport={accountExport.exportAccountData}
+            isExporting={accountExport.isExporting}
+            progress={accountExport.progress}
+            canExport={accountExport.canExport}
           />
         </div>
 

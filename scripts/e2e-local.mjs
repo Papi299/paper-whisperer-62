@@ -67,6 +67,8 @@ const DEFAULT_SPECS = [
   "e2e/pools.spec.ts",
   // Opens Settings and reads the storage gauge; mutates nothing.
   "e2e/settings-storage.spec.ts",
+  // Opens Settings and downloads the account export; reads only, mutates nothing.
+  "e2e/account-export.spec.ts",
 ];
 
 function log(msg) {

@@ -207,7 +207,7 @@ Every action in the table below is enforced **server-side**. Client-side checks 
 | **Bulk import** | Refuse to start a batch larger than `import_batch_limit`; refuse if final count would exceed `paper_limit`. | Same RPC enforces atomically. | **Partial.** |
 | **Identifier metadata fetch (PubMed / Crossref)** | None for MVP. | Function already caps each request at 50 identifiers. No per-month metering for MVP. | Sufficient. |
 | **Synonyms / Exclusions feature access (Pro-only)** | Hide / disable feature surface for Free. | Server-side check at the relevant RPC / hook; Free users get a clear "upgrade to Pro" error. | **Not implemented.** Required at paid beta if the feature stays user-visible. |
-| **Export (CSV / RIS / BibTeX)** | None. | None for MVP — exporting one's own data is a baseline expectation. | Sufficient. |
+| **Export (CSV / RIS / BibTeX, and the PFA-C02 full account ZIP export)** | None. | None for MVP — exporting one's own data is a baseline expectation, and data portability must not sit behind a plan. | Sufficient. Both export paths are implemented and deliberately ungated. |
 
 ### 5.2 The AI quota RPC pattern
 
