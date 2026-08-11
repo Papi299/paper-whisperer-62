@@ -19,6 +19,7 @@ The core application is **stable, hardened, and feature-complete at current scal
 - Imports (PMID / DOI / BibTeX / RIS / CSV), duplicate detection and merge (PMID/DOI-only), exports (CSV / RIS / BibTeX).
 - Projects, tags, curation pools (keywords / synonyms / study types / exclusions), notes, saved searches / filter presets.
 - Private per-user attachments; AI analysis via Gemini (`analyze-paper` Edge Function).
+- **Full account export** (Settings → Account data): one ZIP holding every category of the signed-in user's own data — papers and notes, projects, tags and their relationships, saved searches, all four pools, attachment metadata **and** attachment binaries, plus a non-secret profile projection. API keys, tokens, and session material are excluded by construction.
 - Security layer: RLS on all user tables, `auth.uid()`-guarded SECURITY DEFINER RPCs, explicit client-side `user_id` scoping, fail-fast env validation.
 
 **Implemented commercial enforcement foundations** (schema and enforcement are live; billing is not):
@@ -30,7 +31,8 @@ The core application is **stable, hardened, and feature-complete at current scal
 **Not implemented** (planned; see the commercial docs below):
 
 - Paddle billing integration (checkout, webhook ingestion, customer portal, subscription sync) — Paddle is the selected Merchant-of-Record provider, gated on owner-side setup.
-- Paywall / upgrade UX, Free-tier feature gating, legal pages, account deletion, account-level data export, marketing site.
+- Paywall / upgrade UX, Free-tier feature gating, legal pages, marketing site.
+- Self-serve **account deletion** (tracked separately as PFA-C04). Account *export* now exists; deletion does not.
 - The product is **not commercially launched**.
 
 For the full current-state handoff, see [docs/start-here.md](docs/start-here.md).

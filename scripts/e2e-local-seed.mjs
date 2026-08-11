@@ -4,8 +4,10 @@
  *
  * Invoked by scripts/e2e-local.mjs after the local stack is up and the tracked
  * migration chain has replayed. It creates local-only Auth identities and a
- * deterministic fixture library sufficient for the six initial read-only
- * Playwright specs and the later mutating/attribution waves.
+ * deterministic fixture library sufficient for the default read-only Playwright
+ * spec set (see `DEFAULT_SPECS` in scripts/e2e-local.mjs — the authoritative
+ * list; do not restate its length here) and the later mutating/attribution
+ * waves.
  *
  * Hard safety rules (enforced by the caller and re-asserted here):
  *   - Only ever runs against a validated loopback Supabase API URL.

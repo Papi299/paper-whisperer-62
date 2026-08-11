@@ -3,7 +3,7 @@
  *  string, which erases PostgREST's row inference; the caller supplies the
  *  runtime row shape via the `T` type parameter. `error` is `Error | null`,
  *  which the PostgREST `PostgrestError` (a subclass of `Error`) satisfies. */
-type RangeableQuery = {
+export type RangeableQuery = {
   range: (
     from: number,
     to: number,
