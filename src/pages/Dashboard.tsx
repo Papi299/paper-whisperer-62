@@ -699,6 +699,10 @@ function DashboardContent() {
             isFetchingNextPage={isFetchingNextPage}
             onLoadMore={fetchNextPage}
             searchMatchFlags={searchMatchFlags}
+            totalCount={totalCount}
+            hasActiveFilters={hasActiveFilters}
+            onAddPapers={() => setAddPaperOpen(true)}
+            onClearFilters={handleClearFilters}
           />
 
           <BulkActionsToolbar

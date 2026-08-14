@@ -100,6 +100,10 @@ function renderList(paper: PaperWithTags) {
         selectedPaperIds={new Set()}
         onToggleSelect={vi.fn()}
         onToggleSelectAll={vi.fn()}
+        totalCount={1}
+        hasActiveFilters={false}
+        onAddPapers={vi.fn()}
+        onClearFilters={vi.fn()}
       />
     </QueryClientProvider>,
   );
