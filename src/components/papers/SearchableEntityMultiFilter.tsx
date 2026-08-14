@@ -229,6 +229,7 @@ export function SearchableEntityMultiFilter({
         <Command shouldFilter={false}>
           <CommandInput
             placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder.replace(/\.\.\.$/, "")}
             value={search}
             onValueChange={setSearch}
           />

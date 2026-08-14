@@ -75,7 +75,7 @@ const STORAGE_STATE = "e2e/.auth/user.json";
 /** Open Edit on the first row and wait for the dialog to be ready. */
 async function openEditOnFirstRow(page: Page): Promise<Locator> {
   const firstRow = page.locator("tbody tr").first();
-  await firstRow.getByRole("button", { name: /^edit$/i }).click();
+  await firstRow.getByRole("button", { name: /^edit\s/i }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 5_000 });
   // The Abstract textarea is disabled while `useAbstract` is fetching; wait
@@ -208,7 +208,7 @@ test.describe("Search attribution — Matched in: badges", () => {
       await searchInput.fill(TOKENS.title);
       const row = seededRow(page);
       if (await row.isVisible({ timeout: 10_000 }).catch(() => false)) {
-        await row.getByRole("button", { name: /^edit$/i }).click();
+        await row.getByRole("button", { name: /^edit\s/i }).click();
         const dialog = page.getByRole("dialog");
         await expect(dialog).toBeVisible({ timeout: 5_000 });
         await expect(dialog.getByLabel(/^abstract$/i)).toBeEnabled({ timeout: 15_000 });

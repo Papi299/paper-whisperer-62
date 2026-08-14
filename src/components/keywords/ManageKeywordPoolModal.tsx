@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Badge, badgeVariants } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Plus, Trash2, Upload, X } from "lucide-react";
 import { PoolKeyword } from "@/hooks/useKeywordPool";
@@ -99,15 +100,25 @@ export function ManageKeywordPoolModal({
           <div className="space-y-3">
             {/* Add single keyword */}
             <div className="flex gap-1">
+              <Label htmlFor="pool-keyword-input" className="sr-only">
+                Keyword to add to pool
+              </Label>
               <Input
+                id="pool-keyword-input"
                 placeholder="Add a keyword…"
                 value={newKeyword}
                 onChange={(e) => setNewKeyword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAddKeyword()}
                 className="h-8 text-sm"
               />
-              <Button size="sm" className="h-8" onClick={handleAddKeyword} disabled={!newKeyword.trim()}>
-                <Plus className="h-4 w-4" />
+              <Button
+                size="sm"
+                className="h-8"
+                aria-label="Add keyword to pool"
+                onClick={handleAddKeyword}
+                disabled={!newKeyword.trim()}
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
               </Button>
             </div>
 
@@ -151,10 +162,12 @@ export function ManageKeywordPoolModal({
                     <Badge key={pk.id} variant="outline" className="text-xs group cursor-default pr-1">
                       {pk.keyword}
                       <button
-                        className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                        type="button"
+                        className="ml-1 rounded-sm transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        aria-label={`Remove keyword ${pk.keyword} from pool`}
                         onClick={() => onDeleteKeyword(pk.id)}
                       >
-                        <X className="h-3 w-3" />
+                        <X className="h-3 w-3" aria-hidden="true" />
                       </button>
                     </Badge>
                   ))
@@ -183,16 +196,30 @@ export function ManageKeywordPoolModal({
                 </div>
                 <ScrollArea className="h-[200px] border rounded-md p-2">
                   <div className="flex flex-wrap gap-1">
-                    {importableKeywords.map((keyword) => (
-                      <Badge
-                        key={keyword}
-                        variant={selectedForImport.has(keyword) ? "default" : "outline"}
-                        className={cn("cursor-pointer text-xs", selectedForImport.has(keyword) && "bg-primary text-primary-foreground")}
-                        onClick={() => toggleImportKeyword(keyword)}
-                      >
-                        {keyword}
-                      </Badge>
-                    ))}
+                    {importableKeywords.map((keyword) => {
+                      const selected = selectedForImport.has(keyword);
+                      return (
+                        // A real toggle button, not a styled <div>: `Badge`
+                        // renders a div, so these choices used to be pointer-
+                        // only with no way to announce that they were selected.
+                        // Space/Enter come free with <button>; `aria-pressed`
+                        // carries the state. Toggling stays in local state —
+                        // nothing is written until "Import" is activated.
+                        <button
+                          key={keyword}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => toggleImportKeyword(keyword)}
+                          className={cn(
+                            badgeVariants({ variant: selected ? "default" : "outline" }),
+                            "cursor-pointer text-xs",
+                            selected && "bg-primary text-primary-foreground",
+                          )}
+                        >
+                          {keyword}
+                        </button>
+                      );
+                    })}
                   </div>
                 </ScrollArea>
               </>
@@ -214,7 +241,11 @@ export function ManageKeywordPoolModal({
             <DialogTitle>Add Multiple Keywords</DialogTitle>
             <DialogDescription>Enter keywords separated by commas or new lines.</DialogDescription>
           </DialogHeader>
+          <Label htmlFor="bulk-keywords" className="sr-only">
+            Keywords, separated by commas or new lines
+          </Label>
           <Textarea
+            id="bulk-keywords"
             placeholder="e.g., machine learning, randomized trial, cohort study"
             value={bulkKeywords}
             onChange={(e) => setBulkKeywords(e.target.value)}

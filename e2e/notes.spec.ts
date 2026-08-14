@@ -80,7 +80,7 @@ function rowByTitle(page: Page, title: string): Locator {
 
 /** Open the Edit dialog for the paper in the given row. */
 async function openEditDialogForRow(page: Page, row: Locator) {
-  await row.getByRole("button", { name: /^edit$/i }).click();
+  await row.getByRole("button", { name: /^edit\s/i }).click();
   await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
 }
 

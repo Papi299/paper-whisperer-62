@@ -68,6 +68,11 @@ const DEFAULT_SPECS = [
   // Reads the product name on the unauthenticated Auth card, the authenticated
   // sidebar, and the document title; mutates nothing.
   "e2e/branding.spec.ts",
+  // PFA-C09 responsive/accessibility regression coverage. Read-only: resizes
+  // the viewport, opens and closes dialogs, sorts, resizes a column and scrolls
+  // the table. It never activates the badge "exclude" action (the one real
+  // mutation on that surface) and writes nothing to the database.
+  "e2e/responsive-accessibility.spec.ts",
   "e2e/bulk-actions.spec.ts",
   "e2e/eager-load.spec.ts",
   "e2e/filters.spec.ts",

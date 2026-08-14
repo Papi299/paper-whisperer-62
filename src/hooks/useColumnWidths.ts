@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { ColumnId } from "./useColumnVisibility";
+import {
+  DEFAULT_COLUMN_WIDTHS,
+  clampColumnWidth,
+  getDefaultColumnWidth,
+} from "@/lib/columnWidths";
 
 export interface ColumnWidths {
   [key: string]: number;
@@ -7,53 +12,39 @@ export interface ColumnWidths {
 
 const STORAGE_KEY = "paper-index-column-widths";
 
-const DEFAULT_WIDTHS: ColumnWidths = {
-  checkbox: 40,
-  title: 300,
-  authors: 150,
-  year: 80,
-  journal: 120,
-  studyType: 120,
-  tags: 150,
-  keywords: 200,
-  links: 120,
-};
-
-const MIN_WIDTH = 60;
-const MAX_WIDTH = 600;
-
 export function useColumnWidths() {
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       try {
-        return { ...DEFAULT_WIDTHS, ...JSON.parse(stored) };
+        return { ...DEFAULT_COLUMN_WIDTHS, ...JSON.parse(stored) };
       } catch {
-        return DEFAULT_WIDTHS;
+        return DEFAULT_COLUMN_WIDTHS;
       }
     }
-    return DEFAULT_WIDTHS;
+    return DEFAULT_COLUMN_WIDTHS;
   });
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(columnWidths));
   }, [columnWidths]);
 
+  // Clamped per column, using the same bounds the resize separators advertise
+  // via aria-valuemin / aria-valuemax. See src/lib/columnWidths.ts.
   const setColumnWidth = useCallback((columnId: ColumnId, width: number) => {
-    const clampedWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, width));
     setColumnWidths((prev) => ({
       ...prev,
-      [columnId]: clampedWidth,
+      [columnId]: clampColumnWidth(columnId, width),
     }));
   }, []);
 
   const getColumnWidth = useCallback(
-    (columnId: ColumnId) => columnWidths[columnId] || DEFAULT_WIDTHS[columnId] || 150,
+    (columnId: ColumnId) => columnWidths[columnId] || getDefaultColumnWidth(columnId),
     [columnWidths]
   );
 
   const resetWidths = useCallback(() => {
-    setColumnWidths(DEFAULT_WIDTHS);
+    setColumnWidths(DEFAULT_COLUMN_WIDTHS);
   }, []);
 
   return {

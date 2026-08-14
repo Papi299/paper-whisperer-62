@@ -112,15 +112,24 @@ export function ManageExclusionsModal({
               </div>
 
               <div className="flex gap-1">
+                <Label htmlFor="exclude-keyword-input" className="sr-only">
+                  Keyword to exclude
+                </Label>
                 <Input
+                  id="exclude-keyword-input"
                   placeholder="Add keyword to exclude..."
                   value={newKeyword}
                   onChange={(e) => setNewKeyword(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleAddKeyword()}
                   className="h-8 text-sm"
                 />
-                <Button size="sm" className="h-8 px-2" onClick={handleAddKeyword}>
-                  <Plus className="h-4 w-4" />
+                <Button
+                  size="sm"
+                  className="h-8 px-2"
+                  aria-label="Add excluded keyword"
+                  onClick={handleAddKeyword}
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </div>
 
@@ -135,10 +144,12 @@ export function ManageExclusionsModal({
                       >
                         <span className="break-all">{ek.keyword}</span>
                         <button
+                          type="button"
+                          aria-label={`Remove excluded keyword ${ek.keyword}`}
                           onClick={() => onDeleteExcludedKeyword(ek.id)}
-                          className="hover:bg-destructive-foreground/20 rounded p-0.5 shrink-0"
+                          className="hover:bg-destructive-foreground/20 rounded p-0.5 shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         >
-                          <X className="h-3 w-3" />
+                          <X className="h-3 w-3" aria-hidden="true" />
                         </button>
                       </Badge>
                     ))}
@@ -180,15 +191,24 @@ export function ManageExclusionsModal({
               </div>
 
               <div className="flex gap-1">
+                <Label htmlFor="exclude-study-type-input" className="sr-only">
+                  Study type to exclude
+                </Label>
                 <Input
+                  id="exclude-study-type-input"
                   placeholder="Type study type to exclude..."
                   value={newStudyType}
                   onChange={(e) => setNewStudyType(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleAddStudyType()}
                   className="h-8 text-sm"
                 />
-                <Button size="sm" className="h-8 px-2" onClick={handleAddStudyType}>
-                  <Plus className="h-4 w-4" />
+                <Button
+                  size="sm"
+                  className="h-8 px-2"
+                  aria-label="Add excluded study type"
+                  onClick={handleAddStudyType}
+                >
+                  <Plus className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </div>
 
@@ -203,10 +223,12 @@ export function ManageExclusionsModal({
                       >
                         <span className="break-all">{est.study_type}</span>
                         <button
+                          type="button"
+                          aria-label={`Remove excluded study type ${est.study_type}`}
                           onClick={() => onDeleteExcludedStudyType(est.id)}
-                          className="hover:bg-destructive-foreground/20 rounded p-0.5 shrink-0"
+                          className="hover:bg-destructive-foreground/20 rounded p-0.5 shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         >
-                          <X className="h-3 w-3" />
+                          <X className="h-3 w-3" aria-hidden="true" />
                         </button>
                       </Badge>
                     ))}

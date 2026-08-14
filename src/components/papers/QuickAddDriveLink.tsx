@@ -9,9 +9,15 @@ interface QuickAddDriveLinkProps {
   paperId: string;
   driveUrl: string | null;
   onSave: (paperId: string, driveUrl: string) => Promise<void>;
+  /**
+   * Title of the owning paper, used only to disambiguate the accessible names
+   * of these controls — a table of rows whose every cloud button is called
+   * "Add cloud link" gives a screen-reader user nothing to steer by.
+   */
+  paperTitle?: string;
 }
 
-export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLinkProps) {
+export function QuickAddDriveLink({ paperId, driveUrl, onSave, paperTitle }: QuickAddDriveLinkProps) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
@@ -50,12 +56,20 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
   // Only a value that passes the scheme allowlist becomes a real link. An
   // unsafe historical value falls through to the add/replace popover below, so
   // the row stays usable and the user can correct it.
+  const forPaper = paperTitle ? ` for ${paperTitle}` : "";
+
   const safeDriveHref = toSafeExternalHref(driveUrl);
   if (safeDriveHref) {
     return (
       <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" asChild>
-        <a href={safeDriveHref} target="_blank" rel="noopener noreferrer" title="Open cloud link">
-          <Cloud className="h-4 w-4" />
+        <a
+          href={safeDriveHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open cloud link${forPaper}`}
+          title="Open cloud link"
+        >
+          <Cloud className="h-4 w-4" aria-hidden="true" />
         </a>
       </Button>
     );
@@ -67,16 +81,18 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 opacity-40 hover:opacity-100 group-hover:text-white group-hover:hover:bg-white/20 transition-opacity"
+          className="h-8 w-8 opacity-40 hover:opacity-100 focus-visible:opacity-100 group-hover:text-white group-hover:hover:bg-white/20 transition-opacity"
+          aria-label={`${driveUrl ? "Replace unsafe cloud link" : "Add cloud link"}${forPaper}`}
           title={driveUrl ? "Replace unsafe cloud link" : "Add cloud link"}
         >
-          <Cloud className="h-4 w-4" />
+          <Cloud className="h-4 w-4" aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-3" align="start" side="bottom">
         <div className="flex gap-2">
           <Input
             ref={inputRef}
+            aria-label="Cloud link URL"
             placeholder="Paste cloud link..."
             value={value}
             onChange={(e) => {
@@ -97,16 +113,23 @@ export function QuickAddDriveLink({ paperId, driveUrl, onSave }: QuickAddDriveLi
             className="h-8 w-8 shrink-0"
             onClick={handleSave}
             disabled={!value.trim() || saving}
+            aria-label="Save cloud link"
+            aria-busy={saving || undefined}
           >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Check className="h-4 w-4" aria-hidden="true" />
+            )}
           </Button>
           <Button
             size="icon"
             variant="ghost"
             className="h-8 w-8 shrink-0"
             onClick={() => setOpen(false)}
+            aria-label="Cancel cloud link"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4" aria-hidden="true" />
           </Button>
         </div>
         {error && (

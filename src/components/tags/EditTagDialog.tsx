@@ -97,6 +97,8 @@ export function EditTagDialog({
                   }`}
                   style={{ backgroundColor: presetColor }}
                   onClick={() => setColor(presetColor)}
+                  aria-label={`Use color ${presetColor}`}
+                  aria-pressed={color === presetColor}
                 />
               ))}
             </div>
@@ -111,10 +113,13 @@ export function EditTagDialog({
                 onChange={(e) => setColor(e.target.value)}
                 className="w-12 h-8 p-1 cursor-pointer"
               />
+              {/* The visible "Custom:" label belongs to the colour picker
+                  above; this hex field needs a name of its own. */}
               <Input
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
                 className="w-24 h-8 text-xs"
+                aria-label="Custom tag colour hex value"
                 placeholder="#000000"
               />
             </div>

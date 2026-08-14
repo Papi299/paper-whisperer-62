@@ -29,6 +29,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { PaperListEmptyState } from "./PaperListEmptyState";
 import { ColumnId } from "@/hooks/useColumnVisibility";
+import { getDefaultColumnWidth } from "@/lib/columnWidths";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { escapeRegExp } from "@/lib/textUtils";
 import { toSafeExternalHref } from "@/lib/externalUrl";
@@ -91,6 +92,20 @@ function HighlightedAbstract({ text, keywords }: { text: string; keywords: strin
 
   return <>{parts}</>;
 }
+
+/**
+ * Badge "exclude" affordance. It stays hidden until hover on pointer-sized
+ * screens so the dense table keeps its compact look, but it is *always* visible
+ * below `md` (touch devices have no hover at all) and always visible while it
+ * holds keyboard focus — a focusable control that is invisible when focused is
+ * the defect this replaces. The `md:` prefixes on the reveal rules are load-
+ * bearing: an unprefixed `focus-visible:opacity-100` would be emitted before
+ * the `md` media query and so lose to `md:opacity-0`.
+ */
+const EXCLUDE_BUTTON_CLASS =
+  "ml-1 rounded-sm transition-opacity hover:text-destructive " +
+  "opacity-100 md:opacity-0 md:group-hover/badge:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 " +
+  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 const SIGNED_URL_EXPIRY = 3600; // 1 hour
 
@@ -320,7 +335,7 @@ export function PaperList({
   };
 
   const isVisible = (columnId: ColumnId) => visibleColumns?.includes(columnId) ?? true;
-  const getWidth = (columnId: ColumnId) => columnWidths?.[columnId] || 150;
+  const getWidth = (columnId: ColumnId) => columnWidths?.[columnId] || getDefaultColumnWidth(columnId);
 
   // Count visible columns for the abstract row colspan
   const visibleColumnCount = useMemo(() => {
@@ -617,6 +632,9 @@ function PaperRow({
   const journalHref = toSafeExternalHref(paper.journal_url);
   const scholarHref = toSafeExternalHref(generateGoogleScholarUrl(paper.title));
 
+  /** Stable id for the expanded-abstract region, wired to `aria-controls`. */
+  const abstractRegionId = `paper-abstract-${paper.id}`;
+
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
       <TableRow className={isSelected ? "bg-orange-100/50" : "group hover:bg-orange-600 hover:text-white transition-colors cursor-default"}>
@@ -637,12 +655,16 @@ function PaperRow({
               size="icon"
               className="h-7 w-7 group-hover:text-white group-hover:hover:bg-white/20"
               onClick={() => onToggleExpand(paper.id)}
+              aria-expanded={isExpanded}
+              // Only referenced while the region exists, so the IDREF never dangles.
+              aria-controls={isExpanded ? abstractRegionId : undefined}
+              aria-label={`${isExpanded ? "Collapse" : "Expand"} abstract for ${paper.title}`}
               title={isExpanded ? "Collapse abstract" : "Expand abstract"}
             >
               {isExpanded ? (
-                <ChevronDown className="h-4 w-4" />
+                <ChevronDown className="h-4 w-4" aria-hidden="true" />
               ) : (
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
               )}
             </Button>
           ) : (
@@ -733,14 +755,16 @@ function PaperRow({
                   <Badge variant="outline" className="text-xs group/badge whitespace-normal break-words text-center leading-tight group-hover:!border-white group-hover:!text-white">
                     <span>{studyTypeValue}</span>
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         onExcludeStudyType(studyTypeValue);
                       }}
-                      className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                      className={EXCLUDE_BUTTON_CLASS}
+                      aria-label={`Exclude study type ${studyTypeValue}`}
                       title={`Exclude "${studyTypeValue}"`}
                     >
-                      <X className="h-3 w-3" />
+                      <X className="h-3 w-3" aria-hidden="true" />
                     </button>
                   </Badge>
                 </div>
@@ -801,14 +825,16 @@ function PaperRow({
                 >
                   {displayName}
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       onExcludeKeyword(keyword);
                     }}
-                    className="ml-1 opacity-0 group-hover/badge:opacity-100 transition-opacity hover:text-destructive"
+                    className={EXCLUDE_BUTTON_CLASS}
+                    aria-label={`Exclude keyword ${displayName}`}
                     title={`Exclude "${keyword}"`}
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3 w-3" aria-hidden="true" />
                   </button>
                 </Badge>
               ))}
@@ -822,18 +848,33 @@ function PaperRow({
                 paperId={paper.id}
                 driveUrl={paper.drive_url}
                 onSave={onUpdateDriveUrl}
+                paperTitle={paper.title}
               />
               {pubmedHref && (
                 <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" asChild>
-                  <a href={pubmedHref} target="_blank" rel="noopener noreferrer" title="PubMed">
-                    <ExternalLink className="h-4 w-4" />
+                  {/* `aria-label` wins over the visible "J"/"GS" glyphs below,
+                      which on their own were the whole accessible name. */}
+                  <a
+                    href={pubmedHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Open PubMed for ${paper.title}`}
+                    title="PubMed"
+                  >
+                    <ExternalLink className="h-4 w-4" aria-hidden="true" />
                   </a>
                 </Button>
               )}
               {journalHref && (
                 <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" asChild>
-                  <a href={journalHref} target="_blank" rel="noopener noreferrer" title="Journal">
-                    <span className="text-xs font-bold">J</span>
+                  <a
+                    href={journalHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Open journal link for ${paper.title}`}
+                    title="Journal"
+                  >
+                    <span className="text-xs font-bold" aria-hidden="true">J</span>
                   </a>
                 </Button>
               )}
@@ -843,17 +884,24 @@ function PaperRow({
                     href={scholarHref}
                     target="_blank"
                     rel="noopener noreferrer"
+                    aria-label={`Search ${paper.title} on Google Scholar`}
                     title="Search on Google Scholar"
                   >
-                    <span className="text-xs font-bold">GS</span>
+                    <span className="text-xs font-bold" aria-hidden="true">GS</span>
                   </a>
                 </Button>
               )}
               {(paper.paper_attachments?.length ?? 0) > 0 && (
                 <Popover modal={true}>
                   <PopoverTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 relative group-hover:text-white group-hover:hover:bg-white/20" title="Attachments">
-                      <Paperclip className="h-4 w-4" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 relative group-hover:text-white group-hover:hover:bg-white/20"
+                      aria-label={`View ${paper.paper_attachments!.length} attachment${paper.paper_attachments!.length === 1 ? "" : "s"} for ${paper.title}`}
+                      title="Attachments"
+                    >
+                      <Paperclip className="h-4 w-4" aria-hidden="true" />
                       <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
                         {paper.paper_attachments!.length}
                       </span>
@@ -876,12 +924,18 @@ function PaperRow({
                 className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20"
                 onClick={() => onAnalyzePaper(paper)}
                 disabled={isAnalyzing || !paper.has_abstract}
+                aria-label={
+                  paper.has_abstract
+                    ? `Analyze ${paper.title} with AI`
+                    : `No abstract to analyze for ${paper.title}`
+                }
+                aria-busy={isAnalyzing || undefined}
                 title={paper.has_abstract ? "AI Analyze" : "No abstract to analyze"}
               >
                 {isAnalyzing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 ) : (
-                  <Sparkles className="h-4 w-4" />
+                  <Sparkles className="h-4 w-4" aria-hidden="true" />
                 )}
               </Button>
             )}
@@ -892,9 +946,10 @@ function PaperRow({
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20"
+                    aria-label={`View notes for ${paper.title}`}
                     title="View notes"
                   >
-                    <StickyNote className="h-4 w-4" />
+                    <StickyNote className="h-4 w-4" aria-hidden="true" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-72 p-3" side="bottom" align="start" style={{ pointerEvents: 'auto' }}>
@@ -907,17 +962,25 @@ function PaperRow({
                 </PopoverContent>
               </Popover>
             )}
-            <Button variant="ghost" size="icon" className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20" onClick={() => onEdit(paper)} title="Edit">
-              <Pencil className="h-4 w-4" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 group-hover:text-white group-hover:hover:bg-white/20"
+              onClick={() => onEdit(paper)}
+              aria-label={`Edit ${paper.title}`}
+              title="Edit"
+            >
+              <Pencil className="h-4 w-4" aria-hidden="true" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8 text-destructive group-hover:text-red-200 hover:!text-red-100 group-hover:hover:bg-white/20 transition-colors"
               onClick={() => onRequestDelete(paper.id)}
+              aria-label={`Delete ${paper.title}`}
               title="Delete"
             >
-              <Trash2 className="h-4 w-4" />
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
             </Button>
           </div>
         </TableCell>
@@ -926,7 +989,7 @@ function PaperRow({
       {isExpanded && (
         <tr>
           <td colSpan={visibleColumnCount}>
-            <div className="px-6 py-4 bg-muted/50 border-t border-border">
+            <div id={abstractRegionId} className="px-6 py-4 bg-muted/50 border-t border-border">
               <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">Abstract</p>
               {abstractLoading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">

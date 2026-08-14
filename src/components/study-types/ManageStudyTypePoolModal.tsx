@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -213,8 +214,9 @@ export function ManageStudyTypePoolModal({
               {/* Add group — groups are implicit, created when a subtype uses them */}
               <div className="flex gap-1 items-end">
                 <div className="flex-1">
-                  <label className="text-xs text-muted-foreground">Group Name</label>
+                  <label htmlFor="new-group-name" className="text-xs text-muted-foreground">Group Name</label>
                   <Input
+                    id="new-group-name"
                     placeholder="e.g. Consensus Statement"
                     value={newGroupName}
                     onChange={e => setNewGroupName(e.target.value)}
@@ -222,8 +224,9 @@ export function ManageStudyTypePoolModal({
                   />
                 </div>
                 <div className="w-16">
-                  <label className="text-xs text-muted-foreground">Rank</label>
+                  <label htmlFor="new-group-rank" className="text-xs text-muted-foreground">Rank</label>
                   <Input
+                    id="new-group-rank"
                     type="number"
                     min={1}
                     max={99}
@@ -248,8 +251,9 @@ export function ManageStudyTypePoolModal({
                       setNewGroupRank("1");
                     }
                   }}
+                  aria-label="Add group"
                 >
-                  <Plus className="h-4 w-4" />
+                  <Plus className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </div>
 
@@ -268,6 +272,7 @@ export function ManageStudyTypePoolModal({
                               value={editGroupName}
                               onChange={e => setEditGroupName(e.target.value)}
                               className="h-6 text-sm flex-1"
+                              aria-label={`Name for group ${group.name}`}
                               autoFocus
                             />
                             <Input
@@ -277,19 +282,20 @@ export function ManageStudyTypePoolModal({
                               value={editGroupRank}
                               onChange={e => setEditGroupRank(e.target.value)}
                               className="h-6 w-14 text-sm text-center"
+                              aria-label={`Hierarchy rank for group ${group.name}`}
                             />
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleSaveGroupEdit(group.name)}>
-                              <Check className="h-3 w-3" />
+                            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Save group ${group.name}`} onClick={() => handleSaveGroupEdit(group.name)}>
+                              <Check className="h-3 w-3" aria-hidden="true" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingGroup(null)}>
-                              <X className="h-3 w-3" />
+                            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Cancel editing group ${group.name}`} onClick={() => setEditingGroup(null)}>
+                              <X className="h-3 w-3" aria-hidden="true" />
                             </Button>
                           </>
                         ) : confirmDeleteGroup === group.name ? (
                           <>
                             <span className="flex-1 text-xs text-destructive">Delete "{group.name}"? Types become standalone.</span>
-                            <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => handleDeleteGroup(group.name)}>Yes</Button>
-                            <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setConfirmDeleteGroup(null)}>No</Button>
+                            <Button variant="ghost" size="sm" className="h-6 text-xs" aria-label={`Confirm deleting group ${group.name}`} onClick={() => handleDeleteGroup(group.name)}>Yes</Button>
+                            <Button variant="ghost" size="sm" className="h-6 text-xs" aria-label={`Keep group ${group.name}`} onClick={() => setConfirmDeleteGroup(null)}>No</Button>
                           </>
                         ) : (
                           <>
@@ -298,15 +304,15 @@ export function ManageStudyTypePoolModal({
                             <span className="text-xs text-muted-foreground mr-1">
                               {poolStudyTypes.filter(st => st.group_name === group.name).length} subtypes
                             </span>
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => {
+                            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Edit group ${group.name}`} onClick={() => {
                               setEditingGroup(group.name);
                               setEditGroupName(group.name);
                               setEditGroupRank(String(group.rank));
                             }}>
-                              <Pencil className="h-3 w-3" />
+                              <Pencil className="h-3 w-3" aria-hidden="true" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => setConfirmDeleteGroup(group.name)}>
-                              <Trash2 className="h-3 w-3" />
+                            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" aria-label={`Delete group ${group.name}`} onClick={() => setConfirmDeleteGroup(group.name)}>
+                              <Trash2 className="h-3 w-3" aria-hidden="true" />
                             </Button>
                           </>
                         )}
@@ -322,7 +328,11 @@ export function ManageStudyTypePoolModal({
               {/* Add subtype */}
               <div className="flex gap-1 items-end">
                 <div className="flex-1">
+                  <Label htmlFor="new-subtype-name" className="sr-only">
+                    Subtype name
+                  </Label>
                   <Input
+                    id="new-subtype-name"
                     placeholder="Subtype name…"
                     value={newSubtype}
                     onChange={e => setNewSubtype(e.target.value)}
@@ -331,7 +341,7 @@ export function ManageStudyTypePoolModal({
                   />
                 </div>
                 <Select value={newSubtypeGroup} onValueChange={setNewSubtypeGroup}>
-                  <SelectTrigger className="h-8 w-[140px] text-sm">
+                  <SelectTrigger className="h-8 w-[140px] text-sm" aria-label="Group for new subtype">
                     <SelectValue placeholder="No group" />
                   </SelectTrigger>
                   <SelectContent>
@@ -343,8 +353,8 @@ export function ManageStudyTypePoolModal({
                     ))}
                   </SelectContent>
                 </Select>
-                <Button size="sm" className="h-8" onClick={handleAddSubtype} disabled={!newSubtype.trim()}>
-                  <Plus className="h-4 w-4" />
+                <Button size="sm" className="h-8" aria-label="Add subtype" onClick={handleAddSubtype} disabled={!newSubtype.trim()}>
+                  <Plus className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </div>
 
@@ -380,10 +390,11 @@ export function ManageStudyTypePoolModal({
                               value={editSubtypeName}
                               onChange={e => setEditSubtypeName(e.target.value)}
                               className="h-6 text-sm flex-1"
+                              aria-label={`Name for subtype ${st.study_type}`}
                               autoFocus
                             />
                             <Select value={editSubtypeGroup} onValueChange={setEditSubtypeGroup}>
-                              <SelectTrigger className="h-6 w-[110px] text-xs">
+                              <SelectTrigger className="h-6 w-[110px] text-xs" aria-label={`Group for subtype ${st.study_type}`}>
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -393,11 +404,11 @@ export function ManageStudyTypePoolModal({
                                 ))}
                               </SelectContent>
                             </Select>
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleSaveSubtypeEdit(st.id)}>
-                              <Check className="h-3 w-3" />
+                            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Save subtype ${st.study_type}`} onClick={() => handleSaveSubtypeEdit(st.id)}>
+                              <Check className="h-3 w-3" aria-hidden="true" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingSubtype(null)}>
-                              <X className="h-3 w-3" />
+                            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Cancel editing subtype ${st.study_type}`} onClick={() => setEditingSubtype(null)}>
+                              <X className="h-3 w-3" aria-hidden="true" />
                             </Button>
                           </>
                         ) : (
@@ -413,15 +424,15 @@ export function ManageStudyTypePoolModal({
                               </Badge>
                             )}
                             <span className="flex-1 min-w-0 whitespace-normal break-words">{st.study_type}</span>
-                            <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => {
+                            <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" aria-label={`Edit subtype ${st.study_type}`} onClick={() => {
                               setEditingSubtype(st.id);
                               setEditSubtypeName(st.study_type);
                               setEditSubtypeGroup(st.group_name || "__none__");
                             }}>
-                              <Pencil className="h-3 w-3" />
+                              <Pencil className="h-3 w-3" aria-hidden="true" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive shrink-0" onClick={() => onDeleteStudyType(st.id)}>
-                              <Trash2 className="h-3 w-3" />
+                            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive shrink-0" aria-label={`Delete subtype ${st.study_type}`} onClick={() => onDeleteStudyType(st.id)}>
+                              <Trash2 className="h-3 w-3" aria-hidden="true" />
                             </Button>
                           </>
                         )}
@@ -446,7 +457,10 @@ export function ManageStudyTypePoolModal({
             <DialogTitle>Bulk Add Subtypes</DialogTitle>
             <DialogDescription>Enter subtypes separated by commas or new lines. They will be added without a group (rank 99).</DialogDescription>
           </DialogHeader>
-          <Textarea placeholder="Systematic Review&#10;Meta-Analysis&#10;RCT" value={bulkStudyTypes} onChange={e => setBulkStudyTypes(e.target.value)} rows={5} />
+          <Label htmlFor="bulk-study-types" className="sr-only">
+            Study types, one per line
+          </Label>
+          <Textarea id="bulk-study-types" placeholder="Systematic Review&#10;Meta-Analysis&#10;RCT" value={bulkStudyTypes} onChange={e => setBulkStudyTypes(e.target.value)} rows={5} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setBulkDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleBulkAdd} disabled={!bulkStudyTypes.trim()}>Add</Button>

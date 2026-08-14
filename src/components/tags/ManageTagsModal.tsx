@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Tag } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -54,7 +55,11 @@ export function ManageTagsModal({
         </DialogHeader>
 
         <div className="flex gap-2">
+          <Label htmlFor="new-tag-name" className="sr-only">
+            New tag name
+          </Label>
           <Input
+            id="new-tag-name"
             placeholder="New tag name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -62,7 +67,7 @@ export function ManageTagsModal({
             className="flex-1"
           />
           <Button size="sm" onClick={handleCreate} disabled={!newName.trim()}>
-            <Plus className="mr-1 h-4 w-4" />
+            <Plus className="mr-1 h-4 w-4" aria-hidden="true" />
             Add
           </Button>
         </div>
@@ -85,17 +90,19 @@ export function ManageTagsModal({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 shrink-0"
+                aria-label={`Edit tag ${tag.name}`}
                 onClick={() => onEditTag(tag)}
               >
-                <Pencil className="h-3.5 w-3.5" />
+                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                aria-label={`Delete tag ${tag.name}`}
                 onClick={() => onDeleteTag(tag.id)}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </div>
           ))}

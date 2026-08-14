@@ -32,7 +32,7 @@ import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDr
 import { DeduplicationDialog } from "@/components/papers/DeduplicationDialog";
 import { Button } from "@/components/ui/button";
 import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
-import { Plus, Loader2, Layers, Sparkles } from "lucide-react";
+import { Plus, Loader2, Layers, Sparkles, Menu } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { usePaperAnalysisActions } from "@/hooks/usePaperAnalysisActions";
 import { useAiQuota } from "@/hooks/useAiQuota";
@@ -473,6 +473,12 @@ function DashboardContent() {
   // Dialog state
   const [addPaperOpen, setAddPaperOpen] = useState(false);
   const [dedupOpen, setDedupOpen] = useState(false);
+  /**
+   * Narrow-screen navigation drawer. Owned here rather than inside `Sidebar`
+   * because the trigger has to live in this header — below `md` the rail is
+   * `display:none` and cannot host a control of its own.
+   */
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [editingPaper, setEditingPaper] = useState<PaperWithTags | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
@@ -591,19 +597,36 @@ function DashboardContent() {
         onStudyTypePoolModalClose={handleStudyTypePoolModalClose}
         onKeywordPoolChange={markKeywordPoolDirty}
         onKeywordPoolModalClose={handleKeywordPoolModalClose}
+        mobileNavOpen={mobileNavOpen}
+        onMobileNavOpenChange={setMobileNavOpen}
       />
-      <main className="flex-1 flex flex-col overflow-hidden relative">
-        <div className="flex flex-col gap-4 bg-background border-b px-6 py-4 shadow-sm shrink-0 z-10">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">Papers</h1>
-              <p className="text-muted-foreground">
-                {hasActiveFilters
-                  ? `${filteredCount} of ${totalCount} papers`
-                  : `${totalCount} paper${totalCount !== 1 ? "s" : ""}`}
-              </p>
+      <main className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
+        <div className="flex flex-col gap-4 bg-background border-b px-4 py-3 sm:px-6 sm:py-4 shadow-sm shrink-0 z-10">
+          {/* Wraps rather than overflowing: below `md` the actions drop onto
+              their own line instead of being pushed past the viewport edge. */}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <Button
+                variant="outline"
+                size="icon"
+                className="md:hidden shrink-0"
+                aria-label="Open navigation menu"
+                aria-haspopup="dialog"
+                aria-expanded={mobileNavOpen}
+                onClick={() => setMobileNavOpen(true)}
+              >
+                <Menu className="h-4 w-4" aria-hidden="true" />
+              </Button>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold">Papers</h1>
+                <p className="text-muted-foreground">
+                  {hasActiveFilters
+                    ? `${filteredCount} of ${totalCount} papers`
+                    : `${totalCount} paper${totalCount !== 1 ? "s" : ""}`}
+                </p>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <AiQuotaIndicator
                 status={aiQuotaStatus}
                 isLoading={aiQuotaLoading}
@@ -615,11 +638,11 @@ function DashboardContent() {
                 onToggleColumn={toggleColumn}
               />
               <Button variant="outline" onClick={() => setDedupOpen(true)}>
-                <Layers className="mr-2 h-4 w-4" />
+                <Layers className="mr-2 h-4 w-4" aria-hidden="true" />
                 Find Duplicates
               </Button>
               <Button onClick={() => setAddPaperOpen(true)}>
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
                 Add Papers
               </Button>
             </div>
@@ -668,7 +691,7 @@ function DashboardContent() {
               intentionally not rendered during the Free Tier development phase. */}
         </div>
 
-        <div className="flex-1 flex flex-col p-6 min-h-0 overflow-hidden">
+        <div className="flex-1 flex flex-col p-3 sm:p-6 min-h-0 min-w-0 overflow-hidden">
           <PaperList
             papers={papers}
             userId={userId}
