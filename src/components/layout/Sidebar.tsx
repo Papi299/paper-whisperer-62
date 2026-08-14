@@ -116,7 +116,7 @@ export function Sidebar({
     <aside className="w-64 border-r bg-muted/30 flex flex-col">
       <div className="flex items-center gap-2 px-4 py-4">
         <BookOpen className="h-6 w-6 text-primary" />
-        <span className="font-bold text-lg">Paper Whisperer</span>
+        <span className="font-bold text-lg">PaperLume</span>
       </div>
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4">
