@@ -277,6 +277,23 @@ export function usePapers(
   // (`papers.length > 0`) is not blocked by the gate either.
   const loading = papersLoading || projectsLoading || tagsLoading || totalCountLoading;
 
+  // The unfiltered count is authoritative exactly when the query has produced a
+  // real result — i.e. exactly when the `?? papers.length` fallback below is
+  // *not* in play. Both a pending count and a definitively **failed** one leave
+  // `data` undefined, and neither of them means "zero": once retries are
+  // exhausted React Query clears `isLoading`, so `loading` above goes false and
+  // the fallback would hand the consumer a fabricated `0` for a library whose
+  // size is simply unknown. Publishing that distinction lets the empty-state
+  // consumer require positive proof of emptiness before showing first-run
+  // guidance, instead of inferring it from an absent answer.
+  //
+  // Keying this off data presence rather than `isSuccess` is deliberate: if a
+  // *background* refetch fails after an earlier success, React Query keeps the
+  // last known count, and a slightly stale real count is still authority — an
+  // already-classified library must not flip to an unknown state because a
+  // revalidation failed.
+  const isTotalCountAuthoritative = totalCount !== undefined;
+
   // Stable references
   const projects = useMemo(() => projectsData ?? [], [projectsData]);
   const tags = useMemo(() => tagsData ?? [], [tagsData]);
@@ -371,6 +388,7 @@ export function usePapers(
     allKeywords: allKeywords ?? [],
     allStudyTypes: allStudyTypes ?? [],
     totalCount: totalCount ?? papers.length,
+    isTotalCountAuthoritative,
     filteredCount: filteredCount ?? papers.length,
     allFilteredIds,
     serverKeywordOptions,

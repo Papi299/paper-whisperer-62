@@ -30,6 +30,11 @@ import type { ServerFilterParams, ServerSortParams } from "../papers/types";
  * without touching Supabase, leaving the unfiltered count as the one thing still
  * in flight.
  *
+ * The same fabricated zero is reachable when the count query *fails* rather than
+ * stays pending, so the suite covers both endings of the unknown state: still in
+ * flight, and definitively errored. Neither may be classified as an empty
+ * library.
+ *
  * The assertions deliberately do **not** gate on `papers.length === 0` — that is
  * true both before and after the list resolves, so gating on it would assert
  * `loading === true` for the trivial reason that nothing had loaded yet and
@@ -51,10 +56,15 @@ const SORT: ServerSortParams = { sortColumn: null, sortAscending: null };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  // Inert handler so the error-path tests' rejection is never reported as an
+  // unhandled rejection when the query under test is the only real awaiter.
+  promise.catch(() => {});
+  return { promise, resolve, reject };
 }
 
 /** Controls when the unfiltered count query settles. */
@@ -183,7 +193,11 @@ describe("usePapers — unfiltered count readiness", () => {
  * `PaperList` empty branch — same wiring, driven by the same live query states.
  */
 function Harness() {
-  const { papers, loading, totalCount } = usePapers(USER_ID, FILTERS_MATCHING_NOTHING, SORT);
+  const { papers, loading, totalCount, isTotalCountAuthoritative } = usePapers(
+    USER_ID,
+    FILTERS_MATCHING_NOTHING,
+    SORT,
+  );
   const [addOpen, setAddOpen] = useState(false);
 
   if (loading && papers.length === 0) return <div>loading-spinner</div>;
@@ -210,6 +224,7 @@ function Harness() {
         onToggleSelect={vi.fn()}
         onToggleSelectAll={vi.fn()}
         totalCount={totalCount}
+        isTotalCountAuthoritative={isTotalCountAuthoritative}
         hasActiveFilters={true}
         onAddPapers={() => setAddOpen(true)}
         onClearFilters={vi.fn()}
@@ -261,6 +276,67 @@ describe("count readiness through Dashboard's gate", () => {
       await screen.findByRole("heading", { name: /build your research library/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add your first papers/i })).toBeInTheDocument();
+    expect(screen.queryByText(/no papers match your current filters/i)).toBeNull();
+  });
+});
+
+/**
+ * The count query can also *fail*, which the pending-race fix alone does not
+ * cover: on a definitive error React Query clears `isLoading`, so `loading` goes
+ * false with `data` still undefined and the `totalCount ?? papers.length`
+ * fallback yields a fabricated `0`. A failed authoritative query means the
+ * library size is unknown, never that the library is empty.
+ *
+ * The failure is driven through the real query — the deferred count promise is
+ * rejected — so this is a genuine React Query error state rather than a
+ * hand-written prop.
+ */
+describe("a failed unfiltered count is never treated as an empty library", () => {
+  it("releases the loading gate but reports the count as non-authoritative", async () => {
+    const { result } = renderHook(() => usePapers(USER_ID, FILTERS_MATCHING_NOTHING, SORT), {
+      wrapper,
+    });
+
+    await waitForListResolvedCountPending();
+
+    await act(async () => {
+      countGate.reject(new Error("count request failed"));
+    });
+
+    // Definitive failure, not an unresolved state: the hook must let go of the
+    // loading boundary rather than spin forever behind a question that now has
+    // no answer coming.
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(statusOf(COUNT_KEY)).toBe("error");
+
+    // ...and must not let the `?? papers.length` fallback pass itself off as the
+    // answer. This is the assertion that fails on the pre-correction head, where
+    // no authority signal existed at all.
+    expect(result.current.isTotalCountAuthoritative).toBe(false);
+  });
+
+  it("renders the neutral fallback rather than first-run onboarding", async () => {
+    render(<Harness />, { wrapper });
+    await waitForListResolvedCountPending();
+
+    await act(async () => {
+      countGate.reject(new Error("count request failed"));
+    });
+
+    // Something must render — hanging on the initial spinner forever is not an
+    // acceptable answer to a definitively failed query either.
+    expect(
+      await screen.findByRole("heading", { name: /no papers to display/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("loading-spinner")).toBeNull();
+
+    // The defect: the failed count fell through to a fabricated `0` and told a
+    // user who owns papers to start building their library.
+    expect(screen.queryByText(/build your research library/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /add your first papers/i })).toBeNull();
+
+    // Nor may it blame the filters — that asserts the library is non-empty,
+    // which is precisely what is unknown here.
     expect(screen.queryByText(/no papers match your current filters/i)).toBeNull();
   });
 });
@@ -358,6 +434,29 @@ describe("a populated library is not blocked by a pending count", () => {
     // The row is on screen even though the count has never resolved.
     expect(await screen.findByText("rows:1")).toBeInTheDocument();
     expect(statusOf(COUNT_KEY)).toBe("pending");
+    expect(screen.queryByText("loading-spinner")).toBeNull();
+  });
+
+  it("keeps the loaded rows after the unfiltered count has failed", async () => {
+    const noIdFilter: ServerFilterParams = { ...FILTERS_MATCHING_NOTHING, filterPaperIds: null };
+
+    function PopulatedHarness() {
+      const { papers, loading } = usePapers(USER_ID, noIdFilter, SORT);
+      if (loading && papers.length === 0) return <div>loading-spinner</div>;
+      return <div>rows:{papers.length}</div>;
+    }
+
+    render(<PopulatedHarness />, { wrapper });
+    expect(await screen.findByText("rows:1")).toBeInTheDocument();
+
+    await act(async () => {
+      countGate.reject(new Error("count request failed"));
+    });
+
+    // An unknown library size is only ever used to classify the *empty* view.
+    // Rows that already arrived stay on screen.
+    await waitFor(() => expect(statusOf(COUNT_KEY)).toBe("error"));
+    expect(screen.getByText("rows:1")).toBeInTheDocument();
     expect(screen.queryByText("loading-spinner")).toBeNull();
   });
 });

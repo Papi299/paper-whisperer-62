@@ -47,6 +47,13 @@ export interface PaperListEmptyStateProps {
    * empty account from a filter that happens to match nothing.
    */
   totalCount: number;
+  /**
+   * Whether `totalCount` is a real answer from the unfiltered count query rather
+   * than a fallback standing in for one. Required (not defaulted) so a caller
+   * cannot accidentally present an unknown library size as an authoritative
+   * zero — the only thing that may trigger first-run onboarding.
+   */
+  isTotalCountAuthoritative: boolean;
   /** Whether any search/filter is currently narrowing the list. */
   hasActiveFilters: boolean;
   /** Opens the existing AddPaperDialog. No second import path is introduced. */
@@ -58,18 +65,24 @@ export interface PaperListEmptyStateProps {
 /**
  * What `PaperList` renders instead of the table when nothing is visible.
  *
- * Three distinct states, because "no rows on screen" has three different
- * meanings and the old single `No papers yet` message was wrong for two of them:
+ * Four distinct states, because "no rows on screen" has four different meanings
+ * and the old single `No papers yet` message was wrong for three of them:
  *
- *  - `totalCount === 0` — a genuinely empty library. This is the PFA-C06
- *    first-run surface: what to do first, which import methods exist, and where
- *    the organization tools live.
- *  - `totalCount > 0 && hasActiveFilters` — the user owns papers but the current
- *    search/filters match none of them. Offers the existing clear-filters action
- *    and deliberately shows no first-run coaching.
- *  - `totalCount > 0 && !hasActiveFilters` — defensive fallback. Should not
- *    normally happen; renders a neutral message rather than claiming the library
- *    is empty when it is not.
+ *  - authoritative `totalCount === 0` — a genuinely empty library. This is the
+ *    PFA-C06 first-run surface: what to do first, which import methods exist,
+ *    and where the organization tools live.
+ *  - authoritative `totalCount > 0 && hasActiveFilters` — the user owns papers
+ *    but the current search/filters match none of them. Offers the existing
+ *    clear-filters action and deliberately shows no first-run coaching.
+ *  - authoritative `totalCount > 0 && !hasActiveFilters` — defensive fallback.
+ *    Should not normally happen; renders a neutral message rather than claiming
+ *    the library is empty when it is not.
+ *  - `!isTotalCountAuthoritative` — the library size is *unknown*, because the
+ *    unfiltered count query has not produced an answer (it failed, or has not
+ *    resolved). Unknown is not zero, so this renders the same neutral message
+ *    with copy that claims nothing in either direction. This branch is what
+ *    keeps a transient count failure from being reported to an established user
+ *    as an empty account.
  *
  * Onboarding is derived entirely from live library state, so it disappears on
  * the first import and reappears if the library is later emptied. There is no
@@ -77,25 +90,40 @@ export interface PaperListEmptyStateProps {
  */
 export function PaperListEmptyState({
   totalCount,
+  isTotalCountAuthoritative,
   hasActiveFilters,
   onAddPapers,
   onClearFilters,
 }: PaperListEmptyStateProps) {
-  // ── States B and C: the library is not empty, this view just has no rows ──
-  if (totalCount > 0) {
+  // First-run guidance requires positive proof that the library is empty. An
+  // unresolved or failed count is "unknown", and unknown must never read as zero.
+  const isKnownEmpty = isTotalCountAuthoritative && totalCount === 0;
+
+  // ── Not a first run: either the library has papers, or we cannot tell ──
+  if (!isKnownEmpty) {
+    const { heading, body } = !isTotalCountAuthoritative
+      ? {
+          heading: "No papers to display",
+          body: "We couldn't confirm what's in your library right now. Try refreshing the page.",
+        }
+      : hasActiveFilters
+        ? {
+            heading: "No papers match your current filters",
+            body: "Try adjusting your search or filters.",
+          }
+        : {
+            heading: "No papers to display",
+            body: "Your library has papers, but none are being shown right now.",
+          };
+
     return (
       <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
         <SearchX className="mb-3 h-8 w-8 text-muted-foreground" aria-hidden="true" />
-        <h2 className="text-lg font-semibold">
-          {hasActiveFilters
-            ? "No papers match your current filters"
-            : "No papers to display"}
-        </h2>
-        <p className="mt-1 max-w-md text-sm text-muted-foreground">
-          {hasActiveFilters
-            ? "Try adjusting your search or filters."
-            : "Your library has papers, but none are being shown right now."}
-        </p>
+        <h2 className="text-lg font-semibold">{heading}</h2>
+        <p className="mt-1 max-w-md text-sm text-muted-foreground">{body}</p>
+        {/* Offered whenever filters are narrowing the view — it is an action on
+            state the user created, so it stays truthful even when the library
+            size is unknown. */}
         {hasActiveFilters && (
           <Button variant="outline" className="mt-4" onClick={onClearFilters}>
             Clear filters

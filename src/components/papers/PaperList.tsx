@@ -212,6 +212,11 @@ interface PaperListProps {
    * a filter that matched nothing — `papers.length === 0` alone cannot.
    */
   totalCount: number;
+  /**
+   * Whether `totalCount` is a real answer from the unfiltered count query rather
+   * than a fallback. Only an authoritative zero may select first-run onboarding.
+   */
+  isTotalCountAuthoritative: boolean;
   /** Whether any search/filter is currently narrowing the list. */
   hasActiveFilters: boolean;
   /** Opens the existing AddPaperDialog from the first-run empty state. */
@@ -257,6 +262,7 @@ export function PaperList({
   onLoadMore,
   searchMatchFlags,
   totalCount,
+  isTotalCountAuthoritative,
   hasActiveFilters,
   onAddPapers,
   onClearFilters,
@@ -376,12 +382,14 @@ export function PaperList({
     return result;
   }, [excludedKeywords, normalizeKeyword]);
 
-  // Early render path before the virtualized table: which of the three empty
-  // states applies is decided inside PaperListEmptyState from `totalCount`.
+  // Early render path before the virtualized table: which empty state applies is
+  // decided inside PaperListEmptyState from `totalCount` and whether that count
+  // is authoritative.
   if (papers.length === 0) {
     return (
       <PaperListEmptyState
         totalCount={totalCount}
+        isTotalCountAuthoritative={isTotalCountAuthoritative}
         hasActiveFilters={hasActiveFilters}
         onAddPapers={onAddPapers}
         onClearFilters={onClearFilters}

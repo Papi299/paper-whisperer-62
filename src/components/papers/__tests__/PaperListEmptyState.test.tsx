@@ -27,6 +27,7 @@ function renderEmptyState(
   const { container } = render(
     <PaperListEmptyState
       totalCount={0}
+      isTotalCountAuthoritative={true}
       hasActiveFilters={false}
       onAddPapers={onAddPapers}
       onClearFilters={onClearFilters}
@@ -159,5 +160,61 @@ describe("PaperListEmptyState — defensive fallback (totalCount > 0, no active 
   it("offers no clear-filters action when nothing is filtering", () => {
     const { ui } = renderEmptyState({ totalCount: 120, hasActiveFilters: false });
     expect(ui.queryByRole("button", { name: /clear filters/i })).toBeNull();
+  });
+});
+
+/**
+ * The count query can fail. When it does, `usePapers` still has to return a
+ * number for display, so the component is handed the `papers.length` fallback —
+ * which is `0` precisely when this component renders. `isTotalCountAuthoritative`
+ * is what stops that fabricated zero from selecting first-run onboarding.
+ */
+describe("PaperListEmptyState — unknown library size (count not authoritative)", () => {
+  it("shows no first-run coaching even though totalCount reads as zero", () => {
+    const { ui, text } = renderEmptyState({
+      totalCount: 0,
+      isTotalCountAuthoritative: false,
+    });
+
+    expect(text()).not.toMatch(/build your research library/);
+    expect(text()).not.toMatch(/add your first papers/);
+    expect(ui.queryByRole("button", { name: /add your first papers/i })).toBeNull();
+    expect(ui.queryAllByRole("listitem")).toHaveLength(0);
+  });
+
+  it("renders the neutral message and claims nothing about library size", () => {
+    const { ui, text } = renderEmptyState({
+      totalCount: 0,
+      isTotalCountAuthoritative: false,
+    });
+
+    expect(ui.getByRole("heading", { name: /no papers to display/i })).toBeInTheDocument();
+    // Not "you have papers" and not "you have none".
+    expect(text()).not.toMatch(/your library has papers/);
+    expect(text()).not.toMatch(/no papers yet/);
+  });
+
+  it("does not blame the filters for the empty view", () => {
+    const { ui } = renderEmptyState({
+      totalCount: 0,
+      isTotalCountAuthoritative: false,
+      hasActiveFilters: true,
+    });
+
+    // Saying the filters matched nothing asserts the library is non-empty, which
+    // is exactly what is unknown here.
+    expect(ui.queryByRole("heading", { name: /no papers match your current filters/i })).toBeNull();
+    expect(ui.getByRole("heading", { name: /no papers to display/i })).toBeInTheDocument();
+  });
+
+  it("still offers Clear filters while filters are narrowing the view", () => {
+    const { ui, onClearFilters } = renderEmptyState({
+      totalCount: 0,
+      isTotalCountAuthoritative: false,
+      hasActiveFilters: true,
+    });
+
+    fireEvent.click(ui.getByRole("button", { name: /clear filters/i }));
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 });

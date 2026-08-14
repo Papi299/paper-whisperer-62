@@ -24,7 +24,12 @@ import { PaperList } from "../PaperList";
  */
 function renderList(
   papers: PaperWithTags[],
-  opts: { totalCount: number; hasActiveFilters: boolean },
+  opts: {
+    totalCount: number;
+    hasActiveFilters: boolean;
+    /** Defaults to a resolved count; set false to model an unknown library size. */
+    isTotalCountAuthoritative?: boolean;
+  },
 ) {
   const onAddPapers = vi.fn();
   const onClearFilters = vi.fn();
@@ -51,6 +56,7 @@ function renderList(
         onToggleSelect={vi.fn()}
         onToggleSelectAll={vi.fn()}
         totalCount={opts.totalCount}
+        isTotalCountAuthoritative={opts.isTotalCountAuthoritative ?? true}
         hasActiveFilters={opts.hasActiveFilters}
         onAddPapers={onAddPapers}
         onClearFilters={onClearFilters}
@@ -91,11 +97,25 @@ describe("PaperList empty branch", () => {
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards count authority, so an unknown library size never renders onboarding", () => {
+    const { ui } = renderList([], {
+      totalCount: 0,
+      isTotalCountAuthoritative: false,
+      hasActiveFilters: false,
+    });
+
+    // Same `totalCount: 0` as the first-run case above — only the authority flag
+    // differs, so this fails if PaperList drops the prop on the way through.
+    expect(ui.queryByRole("heading", { name: /build your research library/i })).toBeNull();
+    expect(ui.getByRole("heading", { name: /no papers to display/i })).toBeInTheDocument();
+  });
+
   it("never renders the retired 'No papers yet' copy in any empty state", () => {
     for (const opts of [
       { totalCount: 0, hasActiveFilters: false },
       { totalCount: 120, hasActiveFilters: true },
       { totalCount: 120, hasActiveFilters: false },
+      { totalCount: 0, isTotalCountAuthoritative: false, hasActiveFilters: true },
     ]) {
       const { ui } = renderList([], opts);
       expect(ui.queryByText(/no papers yet/i)).toBeNull();
