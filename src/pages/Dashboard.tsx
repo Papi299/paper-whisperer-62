@@ -170,6 +170,7 @@ function DashboardContent() {
     allKeywords,
     allStudyTypes,
     totalCount,
+    isTotalCountAuthoritative,
     filteredCount,
     allFilteredIds,
     serverKeywordOptions,
@@ -699,6 +700,11 @@ function DashboardContent() {
             isFetchingNextPage={isFetchingNextPage}
             onLoadMore={fetchNextPage}
             searchMatchFlags={searchMatchFlags}
+            totalCount={totalCount}
+            isTotalCountAuthoritative={isTotalCountAuthoritative}
+            hasActiveFilters={hasActiveFilters}
+            onAddPapers={() => setAddPaperOpen(true)}
+            onClearFilters={handleClearFilters}
           />
 
           <BulkActionsToolbar

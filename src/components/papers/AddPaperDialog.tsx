@@ -91,7 +91,14 @@ const emptyManualData: ManualPaperData = {
 // The formats `parseFile` has a dedicated parser for. Single source for the
 // picker's filter and for the rejection message, so the copy cannot drift back
 // out of step with what the importer actually reads.
-const ACCEPTED_FILE_EXTENSIONS = [".bib", ".ris", ".nbib", ".enw", ".csv"];
+//
+// Exported (and `as const`) so the first-run onboarding copy in
+// `PaperListEmptyState` is keyed off this exact list: adding a parser here
+// without naming the format for new users is a `typecheck` failure, not a
+// silently stale empty state.
+export const ACCEPTED_FILE_EXTENSIONS = [".bib", ".ris", ".nbib", ".enw", ".csv"] as const;
+
+export type AcceptedFileExtension = (typeof ACCEPTED_FILE_EXTENSIONS)[number];
 
 export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, projects = [], tags = [] }: AddPaperDialogProps) {
   const [activeTab, setActiveTab] = useState<"import" | "file" | "manual">("import");
@@ -220,7 +227,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
 
   const processImportFile = (file: File) => {
     const ext = "." + file.name.split(".").pop()?.toLowerCase();
-    if (!ACCEPTED_FILE_EXTENSIONS.includes(ext)) {
+    if (!(ACCEPTED_FILE_EXTENSIONS as readonly string[]).includes(ext)) {
       setParsedFile({ papers: [], warnings: [`Unsupported format: ${ext}. Supported: ${ACCEPTED_FILE_EXTENSIONS.join(", ")}`] });
       setFileName(file.name);
       return;

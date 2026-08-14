@@ -27,6 +27,7 @@ import { ExternalLink, Pencil, Trash2, X, ChevronRight, ChevronDown, Loader2, Pa
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { supabase } from "@/integrations/supabase/client";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
+import { PaperListEmptyState } from "./PaperListEmptyState";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { escapeRegExp } from "@/lib/textUtils";
@@ -205,6 +206,23 @@ interface PaperListProps {
    * line in its title cell from the flags for its own id.
    */
   searchMatchFlags?: Map<string, MatchFlags> | null;
+  /**
+   * Papers the user owns, independent of the active filters. Required so the
+   * empty branch can tell a genuinely empty library (first-run onboarding) from
+   * a filter that matched nothing — `papers.length === 0` alone cannot.
+   */
+  totalCount: number;
+  /**
+   * Whether `totalCount` is a real answer from the unfiltered count query rather
+   * than a fallback. Only an authoritative zero may select first-run onboarding.
+   */
+  isTotalCountAuthoritative: boolean;
+  /** Whether any search/filter is currently narrowing the list. */
+  hasActiveFilters: boolean;
+  /** Opens the existing AddPaperDialog from the first-run empty state. */
+  onAddPapers: () => void;
+  /** Dashboard's `handleClearFilters`, offered from the no-results state. */
+  onClearFilters: () => void;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -243,6 +261,11 @@ export function PaperList({
   isFetchingNextPage,
   onLoadMore,
   searchMatchFlags,
+  totalCount,
+  isTotalCountAuthoritative,
+  hasActiveFilters,
+  onAddPapers,
+  onClearFilters,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -359,14 +382,18 @@ export function PaperList({
     return result;
   }, [excludedKeywords, normalizeKeyword]);
 
+  // Early render path before the virtualized table: which empty state applies is
+  // decided inside PaperListEmptyState from `totalCount` and whether that count
+  // is authoritative.
   if (papers.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-center">
-        <p className="text-muted-foreground mb-2">No papers yet</p>
-        <p className="text-sm text-muted-foreground">
-          Add papers using PMIDs, DOIs, or titles
-        </p>
-      </div>
+      <PaperListEmptyState
+        totalCount={totalCount}
+        isTotalCountAuthoritative={isTotalCountAuthoritative}
+        hasActiveFilters={hasActiveFilters}
+        onAddPapers={onAddPapers}
+        onClearFilters={onClearFilters}
+      />
     );
   }
 
