@@ -65,6 +65,9 @@ const AUTH_STATE_FILE = resolve(ROOT, "e2e/.auth/user.json");
 /** The authorized read-only specs — the safe default subset for `run`. */
 const DEFAULT_SPECS = [
   "e2e/auth.spec.ts",
+  // Reads the product name on the unauthenticated Auth card, the authenticated
+  // sidebar, and the document title; mutates nothing.
+  "e2e/branding.spec.ts",
   "e2e/bulk-actions.spec.ts",
   "e2e/eager-load.spec.ts",
   "e2e/filters.spec.ts",
