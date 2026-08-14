@@ -121,12 +121,31 @@ export function usePaperCacheHelpers(
     [userId, queryClient],
   );
 
+  /**
+   * Adjust the unfiltered total count by a known mutation delta (e.g. -1 on
+   * delete).
+   *
+   * An undefined cache means the total-count query has never produced an
+   * answer — the library size is *unknown*, not zero. A delta is only ever a
+   * relative fact ("one fewer than before"), so applying it to an unknown base
+   * cannot yield a real total. Seeding from zero would invent one: consumers
+   * read a cached number as proof of a successful count (see `usePapers`'
+   * `isTotalCountAuthoritative`), so a manufactured `0` reads as an
+   * authoritative empty library and can show first-run onboarding to a user
+   * whose papers simply sit outside the active filter. Leaving it undefined
+   * keeps provenance intact — unknown ± delta is still unknown — and the next
+   * real count query fills it in.
+   *
+   * Returning `undefined` from a `setQueryData` updater is React Query's no-op:
+   * the entry is left exactly as it was rather than created empty. Same shape
+   * as `adjustFilteredCount` below, which already preserved this distinction.
+   */
   const adjustCount = useCallback(
     (delta: number) => {
       if (!userId) return;
       queryClient.setQueryData(
         queryKeys.papers.count(userId),
-        (old: number | undefined) => Math.max(0, (old ?? 0) + delta),
+        (old: number | undefined) => (old !== undefined ? Math.max(0, old + delta) : undefined),
       );
     },
     [userId, queryClient],

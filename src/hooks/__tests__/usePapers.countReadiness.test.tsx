@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, render, waitFor, screen, act } from "@testing-library/react";
+import { renderHook, render, waitFor, screen, act, fireEvent } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider, type QueryKey } from "@tanstack/react-query";
 
@@ -341,6 +341,103 @@ describe("a failed unfiltered count is never treated as an empty library", () =>
   });
 });
 
+const ROW = {
+  id: "p1",
+  user_id: USER_ID,
+  title: "An already-loaded paper",
+  authors: null,
+  year: 2020,
+  journal: null,
+  pmid: null,
+  doi: null,
+  has_abstract: false,
+  study_type: null,
+  raw_study_type: null,
+  statistical_methods: null,
+  keywords: null,
+  raw_keywords: null,
+  mesh_terms: null,
+  substances: null,
+  pubmed_url: null,
+  journal_url: null,
+  drive_url: null,
+  tldr: null,
+  notes: null,
+  insert_order: 1,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  paper_attachments: [],
+};
+
+/** Filter params under which the list query really runs (no zero-match short-circuit). */
+const NO_ID_FILTER: ServerFilterParams = { ...FILTERS_MATCHING_NOTHING, filterPaperIds: null };
+
+/**
+ * Supabase stubs for "the list resolves with one row while the count stays
+ * gated". One `papers` stub serves every reader and branches on the `head: true`
+ * count option: the count is awaited off the builder (so it hangs on
+ * `countGate`), while `.range()` resolves immediately with the row. `.delete()`
+ * returns its own chain so the real delete mutation is not gated on the count.
+ */
+function installPopulatedStubs() {
+  const papersStub: Record<string, unknown> = {
+    select: vi.fn((_cols: string, opts?: { head?: boolean }) => {
+      (papersStub as { _head?: boolean })._head = !!opts?.head;
+      return papersStub;
+    }),
+    eq: vi.fn(() => papersStub),
+    in: vi.fn(() => papersStub),
+    gte: vi.fn(() => papersStub),
+    lte: vi.fn(() => papersStub),
+    not: vi.fn(() => papersStub),
+    filter: vi.fn(() => papersStub),
+    or: vi.fn(() => papersStub),
+    order: vi.fn(() => papersStub),
+    range: vi.fn(async () => ({ data: [ROW], error: null })),
+    delete: vi.fn(() => {
+      const chain: Record<string, unknown> = {
+        eq: vi.fn(() => chain),
+        then: (onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) =>
+          Promise.resolve({ error: null }).then(onOk, onErr),
+      };
+      return chain;
+    }),
+    then: (onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) =>
+      countGate.promise.then(onOk, onErr),
+  };
+  const junctionStub = () => {
+    const stub = {
+      select: vi.fn(() => stub),
+      in: vi.fn(async () => ({ data: [], error: null })),
+    };
+    return stub;
+  };
+  const listStub = () => {
+    const stub = {
+      select: vi.fn(() => stub),
+      eq: vi.fn(() => stub),
+      order: vi.fn(async () => ({ data: [], error: null })),
+    };
+    return stub;
+  };
+  // `deletePaper` reads attachment paths before deleting; none here, so the
+  // storage cleanup branch is never entered.
+  const attachmentsStub = () => {
+    const stub: Record<string, unknown> = {
+      select: vi.fn(() => stub),
+      eq: vi.fn(async () => ({ data: [], error: null })),
+    };
+    return stub;
+  };
+  mockFrom.mockImplementation((table: string) => {
+    if (table === "papers") return papersStub;
+    if (table === "paper_tags" || table === "paper_projects") return junctionStub();
+    if (table === "projects" || table === "tags") return listStub();
+    if (table === "paper_attachments") return attachmentsStub();
+    throw new Error(`unexpected table read: ${table}`);
+  });
+}
+
 /**
  * Guards the other side of the fix: folding the count into `loading` must not
  * make a *populated* library wait on it. Dashboard's gate also requires
@@ -348,80 +445,10 @@ describe("a failed unfiltered count is never treated as an empty library", () =>
  * while the count is still in flight.
  */
 describe("a populated library is not blocked by a pending count", () => {
-  const ROW = {
-    id: "p1",
-    user_id: USER_ID,
-    title: "An already-loaded paper",
-    authors: null,
-    year: 2020,
-    journal: null,
-    pmid: null,
-    doi: null,
-    has_abstract: false,
-    study_type: null,
-    raw_study_type: null,
-    statistical_methods: null,
-    keywords: null,
-    raw_keywords: null,
-    mesh_terms: null,
-    substances: null,
-    pubmed_url: null,
-    journal_url: null,
-    drive_url: null,
-    tldr: null,
-    notes: null,
-    insert_order: 1,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-    paper_attachments: [],
-  };
-
-  beforeEach(() => {
-    // No ID filter this time, so the list query really runs. One `papers` stub
-    // serves both callers and branches on the `head: true` count option: the
-    // count stays gated, the row query resolves immediately.
-    const papersStub: Record<string, unknown> = {
-      select: vi.fn((_cols: string, opts?: { head?: boolean }) => {
-        (papersStub as { _head?: boolean })._head = !!opts?.head;
-        return papersStub;
-      }),
-      eq: vi.fn(() => papersStub),
-      in: vi.fn(() => papersStub),
-      gte: vi.fn(() => papersStub),
-      lte: vi.fn(() => papersStub),
-      not: vi.fn(() => papersStub),
-      filter: vi.fn(() => papersStub),
-      or: vi.fn(() => papersStub),
-      order: vi.fn(() => papersStub),
-      range: vi.fn(async () => ({ data: [ROW], error: null })),
-      then: (onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) =>
-        countGate.promise.then(onOk, onErr),
-    };
-    const junctionStub = () => {
-      const stub = {
-        select: vi.fn(() => stub),
-        in: vi.fn(async () => ({ data: [], error: null })),
-      };
-      return stub;
-    };
-    const listStub = () => {
-      const stub = {
-        select: vi.fn(() => stub),
-        eq: vi.fn(() => stub),
-        order: vi.fn(async () => ({ data: [], error: null })),
-      };
-      return stub;
-    };
-    mockFrom.mockImplementation((table: string) => {
-      if (table === "papers") return papersStub;
-      if (table === "paper_tags" || table === "paper_projects") return junctionStub();
-      if (table === "projects" || table === "tags") return listStub();
-      throw new Error(`unexpected table read: ${table}`);
-    });
-  });
+  beforeEach(installPopulatedStubs);
 
   it("renders the loaded rows while the unfiltered count is still pending", async () => {
-    const noIdFilter: ServerFilterParams = { ...FILTERS_MATCHING_NOTHING, filterPaperIds: null };
+    const noIdFilter = NO_ID_FILTER;
 
     function PopulatedHarness() {
       const { papers, loading } = usePapers(USER_ID, noIdFilter, SORT);
@@ -438,7 +465,7 @@ describe("a populated library is not blocked by a pending count", () => {
   });
 
   it("keeps the loaded rows after the unfiltered count has failed", async () => {
-    const noIdFilter: ServerFilterParams = { ...FILTERS_MATCHING_NOTHING, filterPaperIds: null };
+    const noIdFilter = NO_ID_FILTER;
 
     function PopulatedHarness() {
       const { papers, loading } = usePapers(USER_ID, noIdFilter, SORT);
@@ -458,5 +485,140 @@ describe("a populated library is not blocked by a pending count", () => {
     await waitFor(() => expect(statusOf(COUNT_KEY)).toBe("error"));
     expect(screen.getByText("rows:1")).toBeInTheDocument();
     expect(screen.queryByText("loading-spinner")).toBeNull();
+  });
+});
+
+/**
+ * The two states above compose into the remaining PFA-C06 hole: rows visible
+ * *and* the library size unknown is a reachable, deliberately-supported state,
+ * and deleting from it empties the view.
+ *
+ * `deletePaper` optimistically applies a `-1` delta to the total-count cache.
+ * While that cache is undefined the delta has no base to apply to — but the
+ * pre-correction helper seeded one from zero, writing a number into the cache
+ * where no count query had ever succeeded. `usePapers` reads a cached number as
+ * proof of a real answer, so `isTotalCountAuthoritative` flipped true against a
+ * fabricated `0` and the empty view rendered first-run onboarding to a user
+ * whose other papers simply sat outside the active filter.
+ *
+ * This drives the real `deletePaper` through the real cache helpers into the
+ * real `PaperList`, so the assertion is on what the user actually sees.
+ */
+describe("deleting the last visible paper while the library size is unknown", () => {
+  beforeEach(installPopulatedStubs);
+
+  function DeleteHarness() {
+    const { papers, loading, totalCount, isTotalCountAuthoritative, deletePaper } = usePapers(
+      USER_ID,
+      NO_ID_FILTER,
+      SORT,
+    );
+    const [addOpen, setAddOpen] = useState(false);
+
+    if (loading && papers.length === 0) return <div>loading-spinner</div>;
+
+    return (
+      <>
+        <span>dialog-open:{String(addOpen)}</span>
+        <button onClick={() => void deletePaper("p1")}>delete-the-row</button>
+        <PaperList
+          papers={papers}
+          userId={USER_ID}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+          findMatchingKeywords={() => []}
+          visibleColumns={["title"]}
+          columnWidths={{ title: 200 }}
+          onColumnResize={vi.fn()}
+          normalizeKeyword={(k) => k}
+          excludedKeywords={new Set()}
+          excludedStudyTypes={new Set()}
+          onExcludeStudyType={vi.fn(async () => true)}
+          onExcludeKeyword={vi.fn(async () => true)}
+          onUpdateDriveUrl={vi.fn(async () => {})}
+          selectedPaperIds={new Set()}
+          onToggleSelect={vi.fn()}
+          onToggleSelectAll={vi.fn()}
+          totalCount={totalCount}
+          isTotalCountAuthoritative={isTotalCountAuthoritative}
+          hasActiveFilters={true}
+          onAddPapers={() => setAddOpen(true)}
+          onClearFilters={vi.fn()}
+        />
+      </>
+    );
+  }
+
+  /** Render, wait for the row, then delete it through the real mutation. */
+  async function renderAndDeleteTheOnlyRow() {
+    render(<DeleteHarness />, { wrapper });
+    const deleteButton = await screen.findByRole("button", { name: "delete-the-row" });
+    await act(async () => {
+      fireEvent.click(deleteButton);
+    });
+  }
+
+  it("does not fabricate an empty library after a failed count", async () => {
+    render(<DeleteHarness />, { wrapper });
+    await screen.findByRole("button", { name: "delete-the-row" });
+
+    await act(async () => {
+      countGate.reject(new Error("count request failed"));
+    });
+    await waitFor(() => expect(statusOf(COUNT_KEY)).toBe("error"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "delete-the-row" }));
+    });
+
+    // The view is empty and the library size is still genuinely unknown, so the
+    // neutral state is the only honest answer.
+    expect(
+      await screen.findByRole("heading", { name: /no papers to display/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/build your research library/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /add your first papers/i })).toBeNull();
+    expect(screen.queryByText(/no papers match your current filters/i)).toBeNull();
+  });
+
+  it("leaves the count cache unwritten, so no later reader inherits a fake zero", async () => {
+    await renderAndDeleteTheOnlyRow();
+
+    // The count query is still legitimately pending — the optimistic delete must
+    // not have answered it on the query's behalf.
+    expect(statusOf(COUNT_KEY)).toBe("pending");
+    expect(client.getQueryData(COUNT_KEY)).toBeUndefined();
+  });
+
+  it("keeps the loading boundary rather than onboarding while the count is pending", async () => {
+    await renderAndDeleteTheOnlyRow();
+
+    // Unknown count + empty view while the answer is still coming: the existing
+    // boundary, exactly as in the round-1 pending case. Never onboarding.
+    expect(await screen.findByText("loading-spinner")).toBeInTheDocument();
+    expect(screen.queryByText(/build your research library/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /add your first papers/i })).toBeNull();
+  });
+
+  it("still shows genuine onboarding when the count really did resolve to zero", async () => {
+    render(<DeleteHarness />, { wrapper });
+    await screen.findByRole("button", { name: "delete-the-row" });
+
+    // A real count of 1 — the row on screen is genuinely the whole library.
+    await act(async () => {
+      countGate.resolve({ count: 1, error: null });
+    });
+    await waitFor(() => expect(statusOf(COUNT_KEY)).toBe("success"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "delete-the-row" }));
+    });
+
+    // Deleting it leaves a known-empty library, so first-run guidance is correct
+    // here. The correction suppresses invented zeros, not derived ones.
+    expect(
+      await screen.findByRole("heading", { name: /build your research library/i }),
+    ).toBeInTheDocument();
+    expect(client.getQueryData(COUNT_KEY)).toBe(0);
   });
 });
