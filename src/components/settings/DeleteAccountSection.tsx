@@ -27,7 +27,10 @@ export function DeleteAccountSection({
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
-    <div className="space-y-2 border-t border-destructive/40 pt-4">
+    // A <section> so "what the Danger zone contains" is an answerable question
+    // in the DOM rather than a visual impression — nothing that is not account
+    // deletion may live inside this element.
+    <section className="space-y-2 border-t border-destructive/40 pt-4">
       <div className="flex items-center gap-2">
         <TriangleAlert className="h-4 w-4 text-destructive" aria-hidden="true" />
         <h3 className="text-sm font-medium text-destructive">Danger zone</h3>
@@ -56,6 +59,6 @@ export function DeleteAccountSection({
         onConfirm={onDelete}
         isDeleting={isDeleting}
       />
-    </div>
+    </section>
   );
 }

@@ -5,7 +5,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -107,7 +106,15 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <div className="space-y-2">
+            /*
+              A real <section> rather than a <div>: Save and Remove Key act on
+              this field and nothing else, so they have to be contained by the
+              same element the field is. It is deliberately left unnamed —
+              naming it would give the region the input's own accessible name
+              twice over, so the section stays generic and the Label remains the
+              input's single accessible name.
+            */
+            <section className="space-y-2">
               <Label htmlFor="pubmed-api-key">PubMed API Key (NCBI)</Label>
               <Input
                 id="pubmed-api-key"
@@ -132,7 +139,28 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
                   ncbi.nlm.nih.gov/account/settings
                 </a>.
               </p>
-            </div>
+
+              {/*
+                Both actions are PubMed-only: handleSave writes just the PubMed
+                key and handleRemove clears just the PubMed key. They previously
+                sat in the dialog-level DialogFooter, which rendered after the
+                Danger zone and made Remove Key read as an account-deletion
+                control. Wrapping instead of a footer, so the row degrades by
+                stacking at narrow widths rather than overflowing.
+              */}
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                {hasKey && (
+                  <Button variant="destructive" size="sm" onClick={handleRemove} disabled={saving}>
+                    {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
+                    Remove Key
+                  </Button>
+                )}
+                <Button size="sm" onClick={handleSave} disabled={!keyInput.trim() || saving || loading}>
+                  {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}
+                  Save
+                </Button>
+              </div>
+            </section>
           )}
 
           <StorageUsageSection
@@ -154,19 +182,6 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
             canDelete={accountDeletion.canDelete}
           />
         </div>
-
-        <DialogFooter className="flex gap-2 sm:justify-between">
-          {hasKey && (
-            <Button variant="destructive" size="sm" onClick={handleRemove} disabled={saving}>
-              {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
-              Remove Key
-            </Button>
-          )}
-          <Button onClick={handleSave} disabled={!keyInput.trim() || saving || loading}>
-            {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}
-            Save
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
