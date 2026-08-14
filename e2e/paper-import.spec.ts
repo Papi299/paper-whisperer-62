@@ -20,7 +20,10 @@ test.describe("Paper Import", () => {
     // Tab is labeled "Manual" in the UI
     await page.getByRole("tab", { name: /manual/i }).click();
 
-    await expect(page.getByLabel(/title/i)).toBeVisible();
+    // Scoped to the dialog: the table's column-resize separators are now
+    // properly named too ("Resize Title column"), so a page-wide /title/i
+    // label lookup is ambiguous.
+    await expect(page.getByRole("dialog").getByLabel(/title/i)).toBeVisible();
   });
 
   test("should show bulk import tab", async ({ page }) => {

@@ -111,6 +111,8 @@ export function EditProjectDialog({
                   }`}
                   style={{ backgroundColor: presetColor }}
                   onClick={() => setColor(presetColor)}
+                  aria-label={`Use color ${presetColor}`}
+                  aria-pressed={color === presetColor}
                 />
               ))}
             </div>

@@ -19,8 +19,17 @@ const DEFAULT_WIDTHS: ColumnWidths = {
   links: 120,
 };
 
-const MIN_WIDTH = 60;
-const MAX_WIDTH = 600;
+/**
+ * Clamp bounds for a column width, in px. Exported so the resize control can
+ * advertise the same `aria-valuemin` / `aria-valuemax` that `setColumnWidth`
+ * actually enforces — the keyboard and pointer paths must not disagree about
+ * where a column stops shrinking or growing.
+ */
+export const MIN_COLUMN_WIDTH = 60;
+export const MAX_COLUMN_WIDTH = 600;
+
+const MIN_WIDTH = MIN_COLUMN_WIDTH;
+const MAX_WIDTH = MAX_COLUMN_WIDTH;
 
 export function useColumnWidths() {
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>(() => {

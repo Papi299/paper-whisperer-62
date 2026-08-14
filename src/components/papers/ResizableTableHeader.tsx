@@ -1,6 +1,8 @@
 import { useRef, useCallback, ReactNode } from "react";
 import { TableHead } from "@/components/ui/table";
 import { ColumnId } from "@/hooks/useColumnVisibility";
+import { MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH } from "@/hooks/useColumnWidths";
+import { nextWidthForResizeKey } from "@/lib/columnResize";
 import { cn } from "@/lib/utils";
 import { ArrowUp, ArrowDown } from "lucide-react";
 
@@ -56,28 +58,71 @@ export function ResizableTableHeader({
     [columnId, onResize, width]
   );
 
-  const handleClick = useCallback(() => {
+  const handleResizeKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const next = nextWidthForResizeKey(e.key, e.shiftKey, width);
+      if (next === null) return;
+      // Claim the key so it neither scrolls the table's horizontal scroll
+      // container nor reaches the sort control in this same header.
+      e.preventDefault();
+      e.stopPropagation();
+      onResize(columnId, next);
+    },
+    [columnId, onResize, width]
+  );
+
+  const handleSort = useCallback(() => {
     if (sortable && onSort) {
       onSort(columnId);
     }
   }, [sortable, onSort, columnId]);
 
+  // `aria-sort` belongs on the column header itself; the arrow glyph is left
+  // decorative so the direction is announced once, not twice.
+  const ariaSort = sortable
+    ? sortDirection === "asc"
+      ? "ascending"
+      : sortDirection === "desc"
+        ? "descending"
+        : "none"
+    : undefined;
+
   return (
     <TableHead
       ref={headerRef}
-      className={cn("relative select-none border-r border-border", sortable && "cursor-pointer hover:bg-muted/50", className)}
+      aria-sort={ariaSort}
+      className={cn("relative select-none border-r border-border", className)}
       style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
-      onClick={handleClick}
     >
-      {children || (
-        <div className="flex items-center gap-1 pr-3">
-          <span className="truncate">{label}</span>
-          {sortable && sortDirection === "asc" && <ArrowUp className="h-3 w-3 shrink-0" />}
-          {sortable && sortDirection === "desc" && <ArrowDown className="h-3 w-3 shrink-0" />}
-        </div>
-      )}
+      {children ??
+        (sortable ? (
+          // A real button, so sorting is reachable by Tab + Enter/Space rather
+          // than only by a pointer click on the `<th>`.
+          <button
+            type="button"
+            onClick={handleSort}
+            className="flex w-full items-center gap-1 pr-3 text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+          >
+            <span className="truncate">{label}</span>
+            {sortDirection === "asc" && <ArrowUp className="h-3 w-3 shrink-0" aria-hidden="true" />}
+            {sortDirection === "desc" && <ArrowDown className="h-3 w-3 shrink-0" aria-hidden="true" />}
+          </button>
+        ) : (
+          <div className="flex items-center gap-1 pr-3">
+            <span className="truncate">{label}</span>
+          </div>
+        ))}
       <div
-        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-border hover:bg-primary/70 active:bg-primary transition-colors"
+        role="separator"
+        aria-orientation="vertical"
+        // `label` is empty for the selection column, which still resizes.
+        aria-label={`Resize ${label || columnId} column`}
+        aria-valuenow={width}
+        aria-valuemin={MIN_COLUMN_WIDTH}
+        aria-valuemax={MAX_COLUMN_WIDTH}
+        tabIndex={0}
+        onKeyDown={handleResizeKeyDown}
+        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-border hover:bg-primary/70 active:bg-primary transition-colors focus-visible:outline-none focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring"
         onMouseDown={(e) => {
           e.stopPropagation();
           handleMouseDown(e);

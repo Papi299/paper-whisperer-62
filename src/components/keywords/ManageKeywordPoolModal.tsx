@@ -151,10 +151,12 @@ export function ManageKeywordPoolModal({
                     <Badge key={pk.id} variant="outline" className="text-xs group cursor-default pr-1">
                       {pk.keyword}
                       <button
-                        className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                        type="button"
+                        className="ml-1 rounded-sm transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        aria-label={`Remove keyword ${pk.keyword} from pool`}
                         onClick={() => onDeleteKeyword(pk.id)}
                       >
-                        <X className="h-3 w-3" />
+                        <X className="h-3 w-3" aria-hidden="true" />
                       </button>
                     </Badge>
                   ))

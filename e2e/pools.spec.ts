@@ -46,8 +46,12 @@ test.describe("Pools & Sidebar", () => {
 
     if (await addProjectBtn.first().isVisible()) {
       await addProjectBtn.first().click();
+      // Both branches of the `.or()` match once the modal is open (the input
+      // lives inside the dialog), so pick the outermost match explicitly.
+      // Until the sidebar manage buttons gained accessible names this guard
+      // never matched and the body never ran.
       await expect(
-        page.getByRole("dialog").or(page.getByPlaceholder(/project name/i)),
+        page.getByRole("dialog").or(page.getByPlaceholder(/project name/i)).first(),
       ).toBeVisible();
     }
   });

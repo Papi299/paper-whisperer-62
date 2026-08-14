@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -103,10 +104,16 @@ export function SearchFilters({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-4 items-center">
-        {/* Search */}
+        {/* Search. The visible design is deliberately label-less, so the name is
+            carried by an `sr-only` <label> rather than by the placeholder — a
+            placeholder disappears the moment the user types. */}
         <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Label htmlFor="paper-search" className="sr-only">
+            Search papers
+          </Label>
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <Input
+            id="paper-search"
             placeholder={'Search titles, authors, notes, keywords... Use "..." for exact phrase'}
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
@@ -116,15 +123,23 @@ export function SearchFilters({
 
         {/* Year range */}
         <div className="flex items-center gap-2">
+          <Label htmlFor="year-from" className="sr-only">
+            Published from year
+          </Label>
           <Input
+            id="year-from"
             type="number"
             placeholder="From"
             value={yearFrom}
             onChange={(e) => onYearFromChange(e.target.value)}
             className="w-24"
           />
-          <span className="text-muted-foreground">-</span>
+          <span className="text-muted-foreground" aria-hidden="true">-</span>
+          <Label htmlFor="year-to" className="sr-only">
+            Published to year
+          </Label>
           <Input
+            id="year-to"
             type="number"
             placeholder="To"
             value={yearTo}
@@ -133,9 +148,10 @@ export function SearchFilters({
           />
         </div>
 
-        {/* Study Type */}
+        {/* Study Type. A Radix select trigger takes its name from the selected
+            value ("All Types"), which says nothing about what it filters. */}
         <Select value={studyType} onValueChange={onStudyTypeChange}>
-          <SelectTrigger className="w-[180px]">
+          <SelectTrigger className="w-[180px]" aria-label="Filter by study type">
             <SelectValue placeholder="Study Type" />
           </SelectTrigger>
           <SelectContent className="bg-popover">
@@ -150,7 +166,7 @@ export function SearchFilters({
 
         {/* Notes presence */}
         <Select value={notesPresence} onValueChange={(v) => onNotesPresenceChange(v as NotesPresence)}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-[160px]" aria-label="Filter by notes presence">
             <SelectValue placeholder="Notes" />
           </SelectTrigger>
           <SelectContent className="bg-popover">
