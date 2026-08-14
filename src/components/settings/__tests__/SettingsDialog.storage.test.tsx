@@ -8,6 +8,12 @@ const { mockUseSettings, mockUseStorageUsage } = vi.hoisted(() => ({
 
 vi.mock("@/hooks/useSettings", () => ({ useSettings: mockUseSettings }));
 vi.mock("@/hooks/useStorageUsage", () => ({ useStorageUsage: mockUseStorageUsage }));
+// The Danger zone's hook reaches for the React Query client; this suite renders
+// Settings without a provider, so it is stubbed out. Its own behaviour is
+// covered by SettingsDialog.accountDeletion.test.tsx.
+vi.mock("@/hooks/useAccountDeletion", () => ({
+  useAccountDeletion: () => ({ deleteAccount: vi.fn(), isDeleting: false, canDelete: true }),
+}));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
 import { SettingsDialog } from "../SettingsDialog";

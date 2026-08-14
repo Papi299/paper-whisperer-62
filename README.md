@@ -32,8 +32,9 @@ The core application is **stable, hardened, and feature-complete at current scal
 
 - Paddle billing integration (checkout, webhook ingestion, customer portal, subscription sync) — Paddle is the selected Merchant-of-Record provider, gated on owner-side setup.
 - Paywall / upgrade UX, Free-tier feature gating, legal pages, marketing site.
-- Self-serve **account deletion** (tracked separately as PFA-C04). Account *export* now exists; deletion does not.
 - The product is **not commercially launched**.
+
+Self-serve **account deletion** now exists (PFA-C04): **Settings → Danger zone** permanently deletes the signed-in account after the user types `DELETE MY ACCOUNT`. It runs through the privileged `delete-account` Edge Function, which derives the target user from the authenticated bearer token, deletes the account's private attachment binaries through the Storage API, and then hard-deletes the Auth user; the user's database rows are removed by the existing `ON DELETE CASCADE` foreign keys. Account *export* (PFA-C02) is the separate export-before-delete path.
 
 For the full current-state handoff, see [docs/start-here.md](docs/start-here.md).
 
@@ -119,19 +120,21 @@ Requires Node.js 20.19+ or 22.12+. Supabase project config is in `supabase/confi
 
 ## Supabase Edge Functions
 
-Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`). **Edge Function deploys are separate from frontend / Vercel deploys** — a GitHub merge alone does not update the deployed function. After any change under `supabase/functions/<name>/`, deploy explicitly:
+Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`). **Edge Function deploys are separate from frontend / Vercel deploys** — a GitHub merge alone does not update the deployed function. After any change under `supabase/functions/<name>/`, deploy explicitly:
 
 ```sh
 supabase functions deploy analyze-paper --project-ref <project-ref>
 supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
+supabase functions deploy delete-account --project-ref <project-ref>
 ```
 
 ### Required Edge Function secrets
 
 | Variable | Used by | Source |
 |---|---|---|
-| `SUPABASE_URL` | both | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
-| `SUPABASE_ANON_KEY` | both | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
+| `SUPABASE_URL` | all | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
+| `SUPABASE_ANON_KEY` | all | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
+| `SUPABASE_SECRET_KEYS` / `SUPABASE_SERVICE_ROLE_KEY` | `delete-account` only | **Auto-injected** by the Supabase Edge runtime — no manual setup. Server-only; see below. |
 | `GEMINI_API_KEY` | `analyze-paper` | **Must be set manually** via `supabase secrets set`. Used for the Gemini analysis call; without it, `analyze-paper` fails fast with a clear error. |
 
 Set the Gemini key once per project (placeholder shown — substitute your real key, never commit it):
@@ -140,9 +143,13 @@ Set the Gemini key once per project (placeholder shown — substitute your real 
 supabase secrets set GEMINI_API_KEY=<your-gemini-api-key> --project-ref <project-ref>
 ```
 
-Both functions now **fail fast with an actionable error** if any required Edge env var is missing or empty — `supabase/functions/_shared/env.ts` validates each at the call site. No `SUPABASE_SERVICE_ROLE_KEY` is needed; the functions construct their Supabase client with the **caller's** auth header and rely on RLS plus in-function `auth.getUser()` for ownership enforcement.
+Every function **fails fast with an actionable error** if a required Edge env var is missing or empty — `supabase/functions/_shared/env.ts` validates each at the call site.
 
-`supabase/config.toml` sets `verify_jwt = false` on both functions — intentional, so the in-function `auth.getUser()` check handles stale / refreshing tokens gracefully without a 401 at the gateway.
+**Caller-authenticated functions.** `fetch-paper-metadata`, `analyze-paper` and `get-gemini-provider-quota` need **no** elevated key: each constructs its Supabase client with the **caller's** auth header and relies on RLS plus an in-function `auth.getUser()` check for ownership enforcement.
+
+**`delete-account` is different.** Deleting an Auth user is an administrative operation, and the account's private attachment binaries have to be removed through the Storage API, so this function additionally builds a **server-only elevated client**. It prefers the current secret-key mechanism (`SUPABASE_SECRET_KEYS`, a JSON dictionary keyed by key name, reading `default`) and falls back to the legacy `SUPABASE_SERVICE_ROLE_KEY`. **Both are supplied automatically by the Supabase Edge runtime, so no manual secret needs to be added.** That key is used only inside the function: it is never sent to the browser, never placed in a response body, never logged, and never exposed through any `VITE_*` variable. The function still authenticates the *caller* exactly like the others — the elevated client is used only after `auth.getUser(token)` has established who is asking, and the deleted user id comes from that result and nowhere else.
+
+`supabase/config.toml` sets `verify_jwt = false` on all four functions — intentional, so the in-function `auth.getUser()` check handles stale / refreshing tokens gracefully without a 401 at the gateway.
 
 Notable manual smoke case: PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors Collaborators") for `fetch-paper-metadata` — it exercises bounded `<Author>...</Author>` parsing and `<CollectiveName>` consortium author support.
 

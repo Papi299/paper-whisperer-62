@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const { mockUseSettings, mockUseStorageUsage, mockUseAccountExport } = vi.hoisted(() => ({
-  mockUseSettings: vi.fn(),
-  mockUseStorageUsage: vi.fn(),
-  mockUseAccountExport: vi.fn(),
-}));
+const { mockUseSettings, mockUseStorageUsage, mockUseAccountExport, mockUseAccountDeletion } =
+  vi.hoisted(() => ({
+    mockUseSettings: vi.fn(),
+    mockUseStorageUsage: vi.fn(),
+    mockUseAccountExport: vi.fn(),
+    mockUseAccountDeletion: vi.fn(),
+  }));
 
 vi.mock("@/hooks/useSettings", () => ({ useSettings: mockUseSettings }));
 vi.mock("@/hooks/useStorageUsage", () => ({ useStorageUsage: mockUseStorageUsage }));
 vi.mock("@/hooks/useAccountExport", () => ({ useAccountExport: mockUseAccountExport }));
+vi.mock("@/hooks/useAccountDeletion", () => ({ useAccountDeletion: mockUseAccountDeletion }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
 import { SettingsDialog } from "../SettingsDialog";
@@ -53,6 +56,11 @@ beforeEach(() => {
     refetch: vi.fn(),
   });
   mockUseAccountExport.mockReturnValue(exportState());
+  mockUseAccountDeletion.mockReturnValue({
+    deleteAccount: vi.fn(),
+    isDeleting: false,
+    canDelete: true,
+  });
 });
 
 describe("SettingsDialog — Account data section (PFA-C02)", () => {
@@ -199,12 +207,20 @@ describe("SettingsDialog — PFA-C02 scope boundaries", () => {
     expect(screen.queryByText(/upgrade|pro plan|paywall|billing/i)).toBeNull();
   });
 
-  it("offers no account deletion and no destructive confirmation", () => {
+  it("keeps export itself non-destructive and separate from deletion", () => {
+    // PFA-C04 added account deletion, but it lives in its own Danger zone with
+    // its own typed confirmation — the export action must never acquire
+    // destructive semantics or a destructive confirmation of its own.
     render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
-    expect(
-      screen.queryByRole("button", { name: /delete account|close account|erase/i }),
-    ).toBeNull();
+    const exportButton = screen.getByRole("button", { name: /export account data/i });
+    expect(exportButton).toBeEnabled();
+    expect(exportButton).not.toHaveAccessibleName(/delete|remove|erase/i);
+
+    // The destructive action is a separate control in a separate section, and
+    // no confirmation dialog is open merely because Settings is open.
+    const deleteButton = screen.getByRole("button", { name: "Delete account" });
+    expect(deleteButton).not.toBe(exportButton);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

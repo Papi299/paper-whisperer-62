@@ -75,8 +75,12 @@ supabase secrets list --project-ref <project-ref>
 |---|---|---|
 | `SUPABASE_URL` | Edge Functions | Auto-injected by the runtime. No manual setup. |
 | `SUPABASE_ANON_KEY` | Edge Functions | Auto-injected by the runtime. No manual setup. |
+| `SUPABASE_SECRET_KEYS` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, JSON dictionary keyed by key name; the function reads `default`. Preferred over the legacy key below. |
+| `SUPABASE_SERVICE_ROLE_KEY` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, legacy plain string; used only as a compatibility fallback when the project has not created the newer secret keys. |
 
-Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either, the function surfaces an actionable error instead of crashing with an empty-string client.
+Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function surfaces an actionable error instead of crashing with an empty-string client.
+
+**About the elevated key (PFA-C04).** `delete-account` is the only function that needs one: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. The other three functions remain caller-authenticated and use no elevated key.
 
 ---
 
@@ -165,9 +169,11 @@ Edge Function code does **not** ship via a GitHub merge or a Vercel build. Each 
 ```sh
 supabase functions deploy analyze-paper --project-ref <project-ref>
 supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
+supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>
+supabase functions deploy delete-account --project-ref <project-ref>
 ```
 
-- Run one command per changed function. If a PR touches both, run both.
+- Run one command per changed function. If a PR touches several, run each.
 - If a PR touches `supabase/functions/_shared/*` (e.g. `env.ts` from PR #139), every function that imports the shared module must be redeployed — the shared file is bundled into each function's deploy artifact.
 - `supabase db push` is **not** needed for Edge-only PRs.
 - After deploy, smoke each changed function — see §8.
@@ -179,6 +185,33 @@ The Supabase CLI runs Deno bundling at deploy time and surfaces compile errors b
 - Prove provenance **before** deploying: confirm the deploying worktree's function closure (entrypoint plus every `_shared/*` module it imports, recursively) is byte-identical to the accepted commit, and deploy from that worktree.
 - Afterwards, use the strongest comparison the chosen mechanism actually supports: **byte** comparison when it demonstrably returns the uploaded source representation; otherwise **semantic** comparison of the changed behavior, or a **differential** comparison of the old and new read-backs taken through the same mechanism (capture the previous version before deploying).
 - Record the resulting version and `ezbr_sha256` in the rollout entry in [`migration-history.md`](migration-history.md); do not treat any particular version or hash as a fixed baseline here.
+
+### 7a. `delete-account` — deploy BEFORE merging (PFA-C04)
+
+`delete-account` is the first Edge Function whose **absence is user-visible**. Merging to `main` auto-deploys the frontend (§8), which means the Settings → Danger zone button goes live the moment the PR lands. Edge Functions do **not** ship with that merge. Merging first would therefore put a working destructive button in front of users while the endpoint it calls does not exist — every attempt would fail with the generic error.
+
+The required order is:
+
+```text
+1. independent review approves the exact PR head
+2. obtain explicit owner authorization for the Production Edge deployment
+3. deploy that exact reviewed function:
+     supabase functions deploy delete-account --project-ref <project-ref>
+4. verify it NON-DESTRUCTIVELY only (see below)
+5. merge the exact reviewed PR head
+6. verify merged-main CI + the automatic Vercel Production deployment
+```
+
+**Non-destructive Production verification only.** Never "smoke test" this function by deleting a real account — not the owner's, and not a throwaway account created for the purpose. The safe checks are:
+
+- `OPTIONS` returns 200 with the CORS headers (preflight, mutates nothing);
+- `GET` returns `405 method_not_allowed`;
+- `POST` with no Authorization header returns `401 unauthenticated`;
+- `POST` with a valid token and a *wrong* confirmation phrase returns `400 invalid_confirmation`.
+
+Each of those is refused before any privileged client is constructed, so none can delete anything. Correctness of the destructive path itself is established before rollout by the Vitest suites, the pgTAP cascade suite (`008_account_deletion_cascade`), and the local destructive Playwright spec running against an ephemeral local stack — not by a Production deletion.
+
+If the function ever has to be rolled back, redeploy the previous version **before** reverting the frontend, for the same reason: the button must never outlive the endpoint.
 
 ---
 
