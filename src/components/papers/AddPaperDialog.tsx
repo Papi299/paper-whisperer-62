@@ -409,7 +409,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
             </PopoverTrigger>
             <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
               <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
-                <CommandInput placeholder="Search projects..." />
+                <CommandInput placeholder="Search projects..." aria-label="Search projects" />
                 <CommandList>
                   <CommandEmpty>No projects found.</CommandEmpty>
                   <CommandGroup>
@@ -442,7 +442,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
             </PopoverTrigger>
             <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
               <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
-                <CommandInput placeholder="Search tags..." />
+                <CommandInput placeholder="Search tags..." aria-label="Search tags" />
                 <CommandList>
                   <CommandEmpty>No tags found.</CommandEmpty>
                   <CommandGroup>

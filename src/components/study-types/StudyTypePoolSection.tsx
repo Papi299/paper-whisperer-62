@@ -226,12 +226,10 @@ export function StudyTypePoolSection({
                   {st.group_name && <span className="text-[9px] mr-1 opacity-60">R{st.hierarchy_rank}</span>}
                   {st.study_type}
                   <button
-                    type="button"
-                    className="ml-1 rounded-sm transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    aria-label={`Remove study type ${st.study_type} from pool`}
+                    className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
                     onClick={() => onDeleteStudyType(st.id)}
                   >
-                    <X className="h-3 w-3" aria-hidden="true" />
+                    <X className="h-3 w-3" />
                   </button>
                 </Badge>
               ))}

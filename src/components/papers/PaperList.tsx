@@ -29,6 +29,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { QuickAddDriveLink } from "./QuickAddDriveLink";
 import { PaperListEmptyState } from "./PaperListEmptyState";
 import { ColumnId } from "@/hooks/useColumnVisibility";
+import { getDefaultColumnWidth } from "@/lib/columnWidths";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { escapeRegExp } from "@/lib/textUtils";
 import { toSafeExternalHref } from "@/lib/externalUrl";
@@ -334,7 +335,7 @@ export function PaperList({
   };
 
   const isVisible = (columnId: ColumnId) => visibleColumns?.includes(columnId) ?? true;
-  const getWidth = (columnId: ColumnId) => columnWidths?.[columnId] || 150;
+  const getWidth = (columnId: ColumnId) => columnWidths?.[columnId] || getDefaultColumnWidth(columnId);
 
   // Count visible columns for the abstract row colspan
   const visibleColumnCount = useMemo(() => {

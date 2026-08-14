@@ -122,6 +122,79 @@ test.describe("PFA-C09 responsive shell", () => {
     await expectNoHorizontalOverflow(page, "dashboard @390");
   });
 
+  test("drawer hands focus to a child dialog and gets it back on a stable control", async ({
+    page,
+  }) => {
+    await page.setViewportSize(NARROW);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const trigger = page.getByRole("button", { name: "Open navigation menu" });
+
+    // 1–2. Open the drawer from the keyboard.
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    const drawer = page.getByRole("dialog", { name: /PaperLume navigation/i });
+    await expect(drawer).toBeVisible();
+
+    // 3–4. Activate a taxonomy action from inside the drawer, by keyboard.
+    const manage = drawer.getByRole("button", { name: "Manage projects", exact: true });
+    await manage.focus();
+    await expect(manage).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    // 5–6. The drawer closes and the Projects dialog opens in its place.
+    await expect(drawer).toBeHidden();
+    const projects = page.getByRole("dialog", { name: /Manage Projects/i });
+    await expect(projects).toBeVisible();
+
+    // 7. Focus is inside the Projects dialog.
+    const focusInside = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]');
+      return !!d && !!document.activeElement && d.contains(document.activeElement);
+    });
+    expect(focusInside, "focus should move into the Projects dialog").toBe(true);
+
+    // 8–9. Escape returns focus to a visible, connected, predictable control —
+    //      not <body> and not the detached button inside the closed drawer.
+    await page.keyboard.press("Escape");
+    await expect(projects).toBeHidden();
+
+    const landing = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return {
+        isBody: el === document.body,
+        connected: !!el?.isConnected,
+        label: el?.getAttribute("aria-label") ?? null,
+      };
+    });
+    expect(landing.isBody, "focus must not fall back to <body>").toBe(false);
+    expect(landing.connected, "focus must not land on a detached element").toBe(true);
+    expect(landing.label).toBe("Open navigation menu");
+    await expect(trigger).toBeFocused();
+
+    // 10. And the drawer can be reopened immediately from there.
+    await page.keyboard.press("Enter");
+    await expect(drawer).toBeVisible();
+
+    // Wait for focus to actually enter the drawer before dismissing it: the
+    // element is in the DOM as soon as it opens, but Radix attaches its
+    // Escape handler in an effect, so a keypress in that same frame can be
+    // missed. This is a real synchronization point, not a sleep.
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const d = document.querySelector('[role="dialog"]');
+          return !!d && !!document.activeElement && d.contains(document.activeElement);
+        }),
+      )
+      .toBe(true);
+
+    await page.keyboard.press("Escape");
+    await expect(drawer).toBeHidden();
+    await expect(trigger).toBeFocused();
+  });
+
   test("no body-level horizontal overflow on Auth or Dashboard", async ({ page, browser }) => {
     // Authenticated dashboard, at both required viewports.
     for (const vp of [NARROW, DESKTOP]) {
@@ -272,6 +345,56 @@ test.describe("PFA-C09 table overflow and keyboard operation", () => {
     await expect(separator).not.toBeFocused();
   });
 
+  test("every resize separator advertises bounds that contain its own value", async ({
+    page,
+  }) => {
+    // The selection column defaults to 40px; a single global 60px minimum made
+    // it advertise aria-valuenow below its own aria-valuemin.
+    const readings = await page.locator('[role="separator"][aria-valuenow]').evaluateAll((els) =>
+      els.map((el) => ({
+        name: el.getAttribute("aria-label"),
+        min: Number(el.getAttribute("aria-valuemin")),
+        now: Number(el.getAttribute("aria-valuenow")),
+        max: Number(el.getAttribute("aria-valuemax")),
+      })),
+    );
+
+    expect(readings.length, "expected resize separators to be present").toBeGreaterThan(0);
+    expect(
+      readings.some((r) => /checkbox/i.test(r.name ?? "")),
+      "the selection column must be among the separators checked",
+    ).toBe(true);
+
+    for (const r of readings) {
+      expect(Number.isFinite(r.min) && Number.isFinite(r.now) && Number.isFinite(r.max)).toBe(true);
+      expect(r.min, `${r.name}: min <= now`).toBeLessThanOrEqual(r.now);
+      expect(r.now, `${r.name}: now <= max`).toBeLessThanOrEqual(r.max);
+    }
+  });
+
+  test("a column with a lower floor resizes down past the data-column minimum", async ({
+    page,
+  }) => {
+    // Proves the keyboard path uses per-column bounds, not one global floor.
+    const separator = page.getByRole("separator", { name: /Resize checkbox column/i });
+    await expect(separator).toBeVisible();
+
+    const min = Number(await separator.getAttribute("aria-valuemin"));
+    expect(min).toBeLessThan(60);
+
+    await separator.focus();
+    await page.keyboard.press("Home");
+    await expect
+      .poll(async () => Number(await separator.getAttribute("aria-valuenow")))
+      .toBe(min);
+
+    // Still clamped — it cannot go below its own floor.
+    await page.keyboard.press("ArrowLeft");
+    await expect
+      .poll(async () => Number(await separator.getAttribute("aria-valuenow")))
+      .toBe(min);
+  });
+
   test("paper-row icon controls have meaningful, row-specific accessible names", async ({
     page,
   }) => {
@@ -407,6 +530,103 @@ test.describe("PFA-C09 focus and labelling", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(trigger).toBeFocused();
+  });
+
+  test("management modals name their fields and their repeated row controls", async ({ page }) => {
+    const sidebar = page.getByRole("complementary");
+    const dialog = page.getByRole("dialog");
+
+    const open = async (name: string) => {
+      await sidebar.getByRole("button", { name, exact: true }).click();
+      await expect(dialog).toBeVisible();
+    };
+    const close = async () => {
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+    };
+
+    // Projects — the seeded fixture may have no rows, so row controls are
+    // asserted only when a row exists. Nothing is created to manufacture one.
+    await open("Manage projects");
+    await expect(dialog.getByRole("textbox", { name: "New project name" })).toBeVisible();
+    const projectEdit = dialog.getByRole("button", { name: /^Edit project / });
+    if (await projectEdit.count()) {
+      await expect(projectEdit.first()).toBeVisible();
+      await expect(dialog.getByRole("button", { name: /^Delete project / }).first()).toBeVisible();
+    }
+    await close();
+
+    await open("Manage tags");
+    await expect(dialog.getByRole("textbox", { name: "New tag name" })).toBeVisible();
+    const tagEdit = dialog.getByRole("button", { name: /^Edit tag / });
+    if (await tagEdit.count()) {
+      await expect(tagEdit.first()).toBeVisible();
+      await expect(dialog.getByRole("button", { name: /^Delete tag / }).first()).toBeVisible();
+    }
+    await close();
+
+    await open("Manage keyword pool");
+    await expect(dialog.getByRole("textbox", { name: "Keyword to add to pool" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Add keyword to pool" })).toBeVisible();
+    await close();
+
+    await open("Manage study type pool");
+    await expect(dialog.getByRole("textbox", { name: "Group Name" })).toBeVisible();
+    await expect(dialog.getByRole("spinbutton", { name: "Rank" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Add group" })).toBeVisible();
+    await close();
+
+    await open("Manage synonyms");
+    await expect(dialog.getByRole("textbox", { name: "Search synonym groups" })).toBeVisible();
+    await close();
+
+    await open("Manage exclusions");
+    await expect(dialog.getByRole("textbox", { name: "Keyword to exclude" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Add excluded keyword" })).toBeVisible();
+    await expect(dialog.getByRole("textbox", { name: "Study type to exclude" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Add excluded study type" })).toBeVisible();
+    await close();
+  });
+
+  test("keyword import choices are real toggle buttons, not clickable divs", async ({ page }) => {
+    await page
+      .getByRole("complementary")
+      .getByRole("button", { name: "Manage keyword pool", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    const importButton = page.getByRole("button", { name: /import from papers/i });
+    if (await importButton.isDisabled()) {
+      test.skip(true, "no importable keywords in the seeded fixture");
+    }
+    await importButton.click();
+
+    const importDialog = page.getByRole("dialog", { name: /Import Keywords from Papers/i });
+    await expect(importDialog).toBeVisible();
+
+    // Pre-fix these were <div> Badges: no role, no focus, no pressed state.
+    // Matched on the presence of `aria-pressed`, not its value: Playwright's
+    // `pressed: false` option also matches buttons carrying no `aria-pressed`
+    // at all (e.g. "Select all"), and a value-based selector would stop
+    // matching this element the moment the toggle succeeded — silently
+    // re-resolving to the next unpressed choice instead.
+    const choice = importDialog.locator("button[aria-pressed]").first();
+    await expect(choice).toBeVisible();
+    await expect(choice).toHaveAttribute("aria-pressed", "false");
+
+    await choice.focus();
+    await expect(choice).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(choice).toHaveAttribute("aria-pressed", "true");
+    await expect(importDialog.getByText(/^1 selected$/)).toBeVisible();
+
+    // Toggling off works too, and nothing is written until Import is activated.
+    await page.keyboard.press("Space");
+    await expect(choice).toHaveAttribute("aria-pressed", "false");
+    await expect(importDialog.getByText(/^0 selected$/)).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
   });
 
   test("nothing steals focus on dashboard load", async ({ page }) => {

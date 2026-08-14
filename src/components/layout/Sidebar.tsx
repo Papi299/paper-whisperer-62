@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -263,46 +263,72 @@ export function Sidebar({
     exclusions: totalExclusions,
   };
 
-  /**
-   * Opening a taxonomy modal always closes the narrow-screen drawer first —
-   * a Radix Dialog stacked on top of an open Sheet would leave two focus traps
-   * competing. On desktop the drawer is never open, so this is a no-op there.
-   */
-  const closeMobileNav = useCallback(() => {
-    onMobileNavOpenChange?.(false);
-  }, [onMobileNavOpenChange]);
+  const openModal = useCallback((key: ManageKey | "settings") => {
+    switch (key) {
+      case "projects":
+        setProjectsModalOpen(true);
+        break;
+      case "tags":
+        setTagsModalOpen(true);
+        break;
+      case "keywords":
+        setKeywordPoolModalOpen(true);
+        break;
+      case "studyTypes":
+        setStudyTypePoolModalOpen(true);
+        break;
+      case "synonyms":
+        setSynonymsModalOpen(true);
+        break;
+      case "exclusions":
+        setExclusionsModalOpen(true);
+        break;
+      case "settings":
+        setSettingsModalOpen(true);
+        break;
+    }
+  }, []);
 
-  const handleManage = useCallback(
-    (key: ManageKey) => {
-      closeMobileNav();
-      switch (key) {
-        case "projects":
-          setProjectsModalOpen(true);
-          break;
-        case "tags":
-          setTagsModalOpen(true);
-          break;
-        case "keywords":
-          setKeywordPoolModalOpen(true);
-          break;
-        case "studyTypes":
-          setStudyTypePoolModalOpen(true);
-          break;
-        case "synonyms":
-          setSynonymsModalOpen(true);
-          break;
-        case "exclusions":
-          setExclusionsModalOpen(true);
-          break;
+  /**
+   * A modal opened from the narrow-screen drawer is deferred until the drawer
+   * has actually finished closing.
+   *
+   * Opening it immediately would stack a Dialog focus trap on top of a Sheet
+   * focus trap, and — worse — the Dialog would capture its "opener" while that
+   * opener was a button inside the closing drawer. Once the drawer unmounted,
+   * that element was detached, so closing the Dialog had nowhere to return
+   * focus to and it fell to `<body>`.
+   *
+   * Instead the action is parked here and run from the Sheet's own
+   * `onCloseAutoFocus` — a public Radix event fired at unmount, not a guessed
+   * delay. Our `SheetContent` wrapper runs this consumer handler *before* it
+   * restores focus, and the state update it schedules is flushed after that
+   * restore, so by the time the Dialog mounts and records its opener the
+   * focused element is the Dashboard navigation trigger: visible, connected,
+   * and still mounted when the Dialog later closes.
+   */
+  const pendingModalRef = useRef<ManageKey | "settings" | null>(null);
+
+  const requestModal = useCallback(
+    (key: ManageKey | "settings") => {
+      if (isMobile && mobileNavOpen) {
+        pendingModalRef.current = key;
+        onMobileNavOpenChange?.(false);
+        return;
       }
+      openModal(key);
     },
-    [closeMobileNav],
+    [isMobile, mobileNavOpen, onMobileNavOpenChange, openModal],
   );
 
-  const handleOpenSettings = useCallback(() => {
-    closeMobileNav();
-    setSettingsModalOpen(true);
-  }, [closeMobileNav]);
+  const handleDrawerCloseAutoFocus = useCallback(() => {
+    const pending = pendingModalRef.current;
+    pendingModalRef.current = null;
+    if (pending) openModal(pending);
+  }, [openModal]);
+
+  const handleManage = useCallback((key: ManageKey) => requestModal(key), [requestModal]);
+  const handleOpenSettings = useCallback(() => requestModal("settings"), [requestModal]);
 
   const nav = <SidebarNav counts={counts} onManage={handleManage} onOpenSettings={handleOpenSettings} />;
 
@@ -321,6 +347,7 @@ export function Sidebar({
           <SheetContent
             side="left"
             className="flex w-[85vw] max-w-[20rem] flex-col gap-0 p-0 sm:max-w-[20rem]"
+            onCloseAutoFocus={handleDrawerCloseAutoFocus}
           >
             <SheetHeader className="sr-only">
               <SheetTitle>PaperLume navigation</SheetTitle>

@@ -127,10 +127,13 @@ export function EditProjectDialog({
                 onChange={(e) => setColor(e.target.value)}
                 className="w-12 h-8 p-1 cursor-pointer"
               />
+              {/* The visible "Custom:" label belongs to the colour picker
+                  above; this hex field needs a name of its own. */}
               <Input
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
                 className="w-24 h-8 text-xs"
+                aria-label="Custom project colour hex value"
                 placeholder="#000000"
               />
             </div>

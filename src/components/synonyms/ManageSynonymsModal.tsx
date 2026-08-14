@@ -126,8 +126,12 @@ export function ManageSynonymsModal({
 
             {/* Search filter */}
             <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Label htmlFor="synonym-search" className="sr-only">
+                Search synonym groups
+              </Label>
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
               <Input
+                id="synonym-search"
                 placeholder="Search synonym groups..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -157,17 +161,19 @@ export function ManageSynonymsModal({
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6"
+                          aria-label={`Edit synonym group ${group.canonical_term}`}
                           onClick={() => handleEdit(group)}
                         >
-                          <Pencil className="h-3 w-3" />
+                          <Pencil className="h-3 w-3" aria-hidden="true" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 text-destructive"
+                          aria-label={`Delete synonym group ${group.canonical_term}`}
                           onClick={() => onDelete(group.id)}
                         >
-                          <Trash2 className="h-3 w-3" />
+                          <Trash2 className="h-3 w-3" aria-hidden="true" />
                         </Button>
                       </div>
                     </div>

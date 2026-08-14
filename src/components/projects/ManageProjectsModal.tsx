@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Project } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -54,7 +55,11 @@ export function ManageProjectsModal({
         </DialogHeader>
 
         <div className="flex gap-2">
+          <Label htmlFor="new-project-name" className="sr-only">
+            New project name
+          </Label>
           <Input
+            id="new-project-name"
             placeholder="New project name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -62,7 +67,7 @@ export function ManageProjectsModal({
             className="flex-1"
           />
           <Button size="sm" onClick={handleCreate} disabled={!newName.trim()}>
-            <Plus className="mr-1 h-4 w-4" />
+            <Plus className="mr-1 h-4 w-4" aria-hidden="true" />
             Add
           </Button>
         </div>
@@ -85,17 +90,19 @@ export function ManageProjectsModal({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 shrink-0"
+                aria-label={`Edit project ${project.name}`}
                 onClick={() => onEditProject(project)}
               >
-                <Pencil className="h-3.5 w-3.5" />
+                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                aria-label={`Delete project ${project.name}`}
                 onClick={() => onDeleteProject(project.id)}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </div>
           ))}

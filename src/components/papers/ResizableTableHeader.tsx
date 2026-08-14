@@ -1,8 +1,7 @@
 import { useRef, useCallback, ReactNode } from "react";
 import { TableHead } from "@/components/ui/table";
 import { ColumnId } from "@/hooks/useColumnVisibility";
-import { MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH } from "@/hooks/useColumnWidths";
-import { nextWidthForResizeKey } from "@/lib/columnResize";
+import { getColumnBounds, nextWidthForResizeKey } from "@/lib/columnWidths";
 import { cn } from "@/lib/utils";
 import { ArrowUp, ArrowDown } from "lucide-react";
 
@@ -60,7 +59,7 @@ export function ResizableTableHeader({
 
   const handleResizeKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const next = nextWidthForResizeKey(e.key, e.shiftKey, width);
+      const next = nextWidthForResizeKey(e.key, e.shiftKey, width, columnId);
       if (next === null) return;
       // Claim the key so it neither scrolls the table's horizontal scroll
       // container nor reaches the sort control in this same header.
@@ -79,6 +78,10 @@ export function ResizableTableHeader({
 
   // `aria-sort` belongs on the column header itself; the arrow glyph is left
   // decorative so the direction is announced once, not twice.
+  // Advertised bounds are the bounds actually enforced, per column — the
+  // selection column's floor is lower than a text column's.
+  const bounds = getColumnBounds(columnId);
+
   const ariaSort = sortable
     ? sortDirection === "asc"
       ? "ascending"
@@ -118,8 +121,8 @@ export function ResizableTableHeader({
         // `label` is empty for the selection column, which still resizes.
         aria-label={`Resize ${label || columnId} column`}
         aria-valuenow={width}
-        aria-valuemin={MIN_COLUMN_WIDTH}
-        aria-valuemax={MAX_COLUMN_WIDTH}
+        aria-valuemin={bounds.min}
+        aria-valuemax={bounds.max}
         tabIndex={0}
         onKeyDown={handleResizeKeyDown}
         className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-border hover:bg-primary/70 active:bg-primary transition-colors focus-visible:outline-none focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring"
