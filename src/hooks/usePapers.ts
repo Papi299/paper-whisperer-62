@@ -182,7 +182,7 @@ export function usePapers(
   });
 
   // ── Total paper count (separate lightweight query — stays unfiltered) ──
-  const { data: totalCount } = useQuery({
+  const { data: totalCount, isLoading: totalCountLoading } = useQuery({
     queryKey: queryKeys.papers.count(userId!),
     queryFn: timedQueryFn("papers.totalCount", async () => {
       const { count, error } = await supabase
@@ -262,7 +262,20 @@ export function usePapers(
   // NOTE: auto-fetch-all useEffect removed — pages now load lazily via
   // IntersectionObserver sentinel in PaperList.
 
-  const loading = papersLoading || projectsLoading || tagsLoading;
+  // `totalCountLoading` is part of the aggregate on purpose. The unfiltered
+  // count is the authoritative "is this library empty?" signal, and it resolves
+  // independently of the filtered papers query — a filter that matches nothing
+  // makes `papers` resolve to `[]` immediately while the count is still in
+  // flight. Without it in `loading`, the `totalCount ?? papers.length` fallback
+  // below reads as an authoritative zero and the consumer briefly renders
+  // first-run onboarding to a user who owns papers. Dashboard's existing
+  // `loading && papers.length === 0` gate turns this into "wait" instead.
+  //
+  // This only ever gates the *initial* resolution: React Query's `isLoading` is
+  // false once the query holds data, so a background refetch after `staleTime`
+  // never replaces a rendered library with a spinner, and a populated page
+  // (`papers.length > 0`) is not blocked by the gate either.
+  const loading = papersLoading || projectsLoading || tagsLoading || totalCountLoading;
 
   // Stable references
   const projects = useMemo(() => projectsData ?? [], [projectsData]);
