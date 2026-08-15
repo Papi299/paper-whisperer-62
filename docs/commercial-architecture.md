@@ -64,12 +64,25 @@ For these reasons commercial state lives in **dedicated tables** described below
 
 ### 2.3 Server-side enforcement, client-side checks for UX only
 
-Every quota and entitlement gate is enforced **inside Postgres or inside an Edge Function**, never solely in the React client.
+Two separate things are stated here, and they must not be collapsed into one another: **the architectural rule** (which is absolute) and **how much of the planned commercial surface currently satisfies it** (which is partial).
 
-- Client-side checks exist to give immediate UX feedback ("you've used 13/15 lifetime AI calls — upgrade to keep analyzing"). They are not a security boundary.
-- Server-side checks are the truth: AI quota is decremented and verified inside the `analyze-paper` Edge Function before Gemini is called; the storage cap is enforced by a `BEFORE INSERT` trigger on `paper_attachments`; the paper cap is enforced by the `safe_bulk_insert_papers` RPC.
-- A user with a debugger and a valid JWT cannot bypass server-side checks. They can bypass client-side ones trivially.
-- **`analyze-paper` enforces the AI quota server-side today.** It calls the `consume_ai_quota` SECURITY DEFINER RPC **before** invoking Gemini; when the quota is unavailable it returns the structured **HTTP 402** without calling the provider, and it calls `refund_ai_quota` best-effort if the Gemini call or response parsing fails after a successful consume. This is live in Production, not planned.
+#### The rule
+
+**Any entitlement or quota gate the product actually relies upon must have an authoritative server-side enforcement boundary — inside Postgres or inside an Edge Function.** Client-side checks exist only to give immediate UX feedback ("you've used 13/15 lifetime AI calls"); they are **never** a security boundary. A user with a debugger and a valid JWT cannot bypass a server-side check, and can bypass a client-side one trivially.
+
+The corollary matters just as much: **a gate that has no server-side boundary is not a gate.** It must not be described, relied on, or marketed as one, and storing an entitlement value is not the same as enforcing it.
+
+#### What is enforced today
+
+| Gate | Server-side boundary | State |
+|---|---|---|
+| **AI quota** | `analyze-paper` calls the `consume_ai_quota` SECURITY DEFINER RPC **before** invoking Gemini; returns the structured **HTTP 402** without calling the provider when quota is unavailable; calls `refund_ai_quota` best-effort if the Gemini call or parsing fails after a successful consume. | ✅ **Live in Production.** |
+| **Storage quota** | `BEFORE INSERT` trigger on `paper_attachments` performs an atomic quota-gated check-and-consume; `AFTER DELETE` refunds, floored at zero. | ✅ **Live in Production.** |
+| **Attachment privacy** | Private bucket (`public = false`) with an owner-scoped path-prefix SELECT policy; signed URLs are the client read path. | ✅ **Live in Production.** |
+| **Paper limit** | **None.** `user_entitlements.paper_limit` is stored, but `safe_bulk_insert_papers` **does not read it** — the RPC performs the atomic ownership-scoped insert and applies no per-plan cap. | ❌ **Not enforced.** |
+| **Premium taxonomy (Synonyms / Exclusions)** | **None.** `user_entitlements.premium_taxonomy_enabled` is stored but **read by nothing**; both pools are fully usable by every account. | ❌ **Not enforced.** |
+
+The two unenforced rows are **gaps in implementation completeness, not exceptions to the rule** — they are exactly why the paper cap and premium-taxonomy gating appear as launch blockers in §6, and why §5.1 records them as unwired. Neither is authorized work today; C27 is unchanged and this section selects nothing.
 
 ### 2.4 Read model on the hot path, history off the hot path
 
@@ -182,7 +195,7 @@ Per-user running total of attachment bytes, one row per user, `used_bytes` as `B
 
 ## 5. Enforcement points
 
-Every action in the table below is enforced **server-side**. Client-side checks (where listed) exist purely to give the user fast feedback before the server roundtrip.
+The table below is the per-action record of **where enforcement lives and whether it exists yet**. Read the Status column as authoritative: rows marked ✅ are enforced server-side and live; rows marked **Partial** or **Not implemented** describe the *intended* boundary that has not been built. Per §2.3, an unbuilt gate is not a gate. Client-side checks (where listed) exist purely to give the user fast feedback before the server roundtrip and are never the boundary.
 
 ### 5.1 Enforcement matrix
 
