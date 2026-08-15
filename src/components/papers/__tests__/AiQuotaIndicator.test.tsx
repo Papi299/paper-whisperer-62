@@ -124,3 +124,69 @@ describe("AiQuotaIndicator", () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+/**
+ * The compact variant exists so the indicator costs a phone roughly a glyph and
+ * a ratio instead of a third of the line. It must shrink the VISIBLE text only:
+ * the accessible name, the live-region role and the quota numbers themselves
+ * stay exactly as the desktop presentation computes them.
+ */
+describe("AiQuotaIndicator (compact)", () => {
+  it("shows a bare ratio but keeps the full accessible name", () => {
+    render(<AiQuotaIndicator status={status()} isLoading={false} isError={false} variant="compact" />);
+    const el = screen.getByRole("status");
+    expect(el).toHaveTextContent("12/15");
+    expect(el).not.toHaveTextContent("AI analyses:");
+    expect(el.getAttribute("aria-label")).toMatch(/Lifetime AI analysis allowance: 12 of 15 remaining/);
+    expect(el.getAttribute("title")).toMatch(/12 of 15 remaining/);
+  });
+
+  it("advertises an exemption without inventing a number", () => {
+    render(
+      <AiQuotaIndicator
+        status={status({ isExempt: true, allowed: true, reason: "quota_exempt" })}
+        isLoading={false}
+        isError={false}
+        variant="compact"
+      />,
+    );
+    const el = screen.getByRole("status");
+    expect(el).toHaveTextContent("∞");
+    expect(el).not.toHaveTextContent("15");
+    expect(el.getAttribute("aria-label")).toMatch(/Unlimited AI analyses/);
+    expect(el.getAttribute("aria-label")).not.toMatch(/upgrade|pay|billing|checkout/i);
+  });
+
+  it("keeps the unavailable state legible", () => {
+    render(
+      <AiQuotaIndicator
+        status={status({ periodType: null, quota: 0, remaining: 0, allowed: false, reason: "inactive_entitlement" })}
+        isLoading={false}
+        isError={false}
+        variant="compact"
+      />,
+    );
+    const el = screen.getByRole("status");
+    expect(el).toHaveTextContent(/unavailable/i);
+    expect(el.getAttribute("aria-label")).toBe("AI analyses unavailable");
+  });
+
+  it("computes the same numbers as the full variant", () => {
+    const s = status({ used: 9, remaining: 6, quota: 15 });
+    const { unmount } = render(<AiQuotaIndicator status={s} isLoading={false} isError={false} />);
+    const fullLabel = screen.getByRole("status").getAttribute("aria-label");
+    unmount();
+    render(<AiQuotaIndicator status={s} isLoading={false} isError={false} variant="compact" />);
+    expect(screen.getByRole("status").getAttribute("aria-label")).toBe(fullLabel);
+  });
+
+  it("still fails soft and still reserves loading space", () => {
+    const { container, unmount } = render(
+      <AiQuotaIndicator status={null} isLoading={false} isError={true} variant="compact" />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    unmount();
+    render(<AiQuotaIndicator status={null} isLoading={true} isError={false} variant="compact" />);
+    expect(screen.getByLabelText("Loading AI analysis quota")).toBeInTheDocument();
+  });
+});

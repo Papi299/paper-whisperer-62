@@ -73,6 +73,11 @@ const DEFAULT_SPECS = [
   // the table. It never activates the badge "exclude" action (the one real
   // mutation on that surface) and writes nothing to the database.
   "e2e/responsive-accessibility.spec.ts",
+  // MOBILE-DASHBOARD-DENSITY-001 mobile information-density coverage. Read-only:
+  // measures layout geometry, opens and closes the Filters / More / Analytics
+  // sheets, and sets a year filter that is cleared again in the same test. It
+  // never exports, never merges duplicates and writes nothing to the database.
+  "e2e/mobile-dashboard-density.spec.ts",
   "e2e/bulk-actions.spec.ts",
   "e2e/eager-load.spec.ts",
   "e2e/filters.spec.ts",

@@ -64,6 +64,15 @@ interface SearchableEntityMultiFilterProps {
   matchAllDescription?: string;
   /** Optional extra classes for the trigger button. */
   className?: string;
+  /**
+   * `inline` — the fixed-width desktop toolbar trigger.
+   * `stacked` — full width inside the mobile Filters sheet, where the control
+   * owns a labelled section rather than sitting in a wrapping row.
+   *
+   * Presentation only: selection semantics, search matching and the accessible
+   * name are identical in both variants.
+   */
+  variant?: "inline" | "stacked";
 }
 
 /**
@@ -104,6 +113,7 @@ export function SearchableEntityMultiFilter({
   matchAnyDescription,
   matchAllDescription,
   className,
+  variant = "inline",
 }: SearchableEntityMultiFilterProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -178,7 +188,11 @@ export function SearchableEntityMultiFilter({
           role="combobox"
           aria-expanded={open}
           aria-label={accessibleName}
-          className={cn("w-[180px] justify-between font-normal min-w-0", className)}
+          className={cn(
+            "justify-between font-normal min-w-0",
+            variant === "stacked" ? "w-full" : "w-[180px]",
+            className,
+          )}
         >
           <span className="flex items-center gap-1.5 min-w-0 overflow-hidden">
             {triggerContent}
@@ -187,11 +201,23 @@ export function SearchableEntityMultiFilter({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[16rem] max-w-[calc(100vw-2rem)] p-0 bg-popover"
+        className={cn(
+          "max-w-[calc(100vw-2rem)] p-0 bg-popover",
+          variant === "stacked"
+            ? // In the mobile sheet the trigger spans the section, so a fixed
+              // 16rem panel would float detached from the control it belongs to
+              // — and a fixed *height* would be clipped once the software
+              // keyboard shrinks the viewport, whichever way Radix flips it.
+              // `--radix-popover-content-available-height` is Radix's own
+              // measurement of the space actually left.
+              "flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col"
+            : "w-[16rem]",
+        )}
         align="start"
+        collisionPadding={8}
       >
         {showModeSelector && (
-          <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
             <span className="text-xs font-medium text-muted-foreground">
               Match selected
             </span>
@@ -226,7 +252,7 @@ export function SearchableEntityMultiFilter({
             </ToggleGroup>
           </div>
         )}
-        <Command shouldFilter={false}>
+        <Command shouldFilter={false} className="min-h-0 flex-1">
           <CommandInput
             placeholder={searchPlaceholder}
             aria-label={searchPlaceholder.replace(/\.\.\.$/, "")}
@@ -270,7 +296,7 @@ export function SearchableEntityMultiFilter({
             )}
           </CommandList>
           {count > 0 && (
-            <div className="border-t p-1">
+            <div className="shrink-0 border-t p-1">
               <Button
                 variant="ghost"
                 size="sm"

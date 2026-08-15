@@ -18,6 +18,7 @@ import {
 } from "@/hooks/useFilterPresets";
 import { useExportPapers } from "@/hooks/useExportPapers";
 import { useAnalyticsData } from "@/hooks/useAnalyticsData";
+import { useAnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -32,12 +33,15 @@ import { ColumnVisibilityDropdown } from "@/components/papers/ColumnVisibilityDr
 import { DeduplicationDialog } from "@/components/papers/DeduplicationDialog";
 import { Button } from "@/components/ui/button";
 import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
-import { Plus, Loader2, Layers, Sparkles, Menu } from "lucide-react";
+import { Plus, Loader2, Layers } from "lucide-react";
 import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { usePaperAnalysisActions } from "@/hooks/usePaperAnalysisActions";
 import { useAiQuota } from "@/hooks/useAiQuota";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
 import { AiQuotaIndicator } from "@/components/papers/AiQuotaIndicator";
+import { MobileDashboardControls } from "@/components/papers/MobileDashboardControls";
+import { MobileAnalyticsSheet } from "@/components/papers/MobileAnalyticsSheet";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 
 /**
@@ -407,6 +411,13 @@ function DashboardContent() {
     serverSortParams,
     enabled: isAnalyticsOpen,
   });
+  /**
+   * Analytics target selections live here, alongside `isAnalyticsOpen`, for the
+   * same reason: analytics is rendered by two mutually exclusive shells chosen
+   * by viewport width, so anything either shell owned would be thrown away the
+   * moment the user crossed 768px. Both receive this one state.
+   */
+  const analyticsTargets = useAnalyticsTargets();
 
   // Study type re-evaluation on pool changes
   const {
@@ -432,6 +443,16 @@ function DashboardContent() {
   // Column visibility & widths
   const { visibleColumns, toggleColumn, availableColumns } = useColumnVisibility();
   const { columnWidths, setColumnWidth } = useColumnWidths();
+
+  /**
+   * Which control layout the Dashboard composes.
+   *
+   * Mobile and desktop are composed conditionally rather than both being
+   * rendered with one hidden by CSS: the two layouts contain the same search
+   * field, the same Add action and the same filter controls, so rendering both
+   * would put duplicate ids and duplicate controls in the DOM.
+   */
+  const isMobile = useIsMobile();
 
   // Filter available keywords: server-side keyword options + pool keywords, apply synonym mapping, exclude, deduplicate
   const filteredKeywords = useMemo(() => {
@@ -473,6 +494,22 @@ function DashboardContent() {
   // Dialog state
   const [addPaperOpen, setAddPaperOpen] = useState(false);
   const [dedupOpen, setDedupOpen] = useState(false);
+  /**
+   * Whether the deduplication dialog has ever been opened.
+   *
+   * It is mounted lazily (it auto-scans on open, so mounting it up front would
+   * be wasted work) but, once mounted, it STAYS mounted. Unmounting it the
+   * instant `open` flipped to false — which is what `{dedupOpen && …}` did —
+   * tore the Radix content out of the tree before its close lifecycle could
+   * run, so `onCloseAutoFocus` never fired, the focus-restore helper never got
+   * its turn, and focus fell to `<body>`. Keeping it mounted costs nothing: the
+   * scan effect is gated on `open`.
+   */
+  const [dedupMounted, setDedupMounted] = useState(false);
+  const openDedup = useCallback(() => {
+    setDedupMounted(true);
+    setDedupOpen(true);
+  }, []);
   /**
    * Narrow-screen navigation drawer. Owned here rather than inside `Sidebar`
    * because the trigger has to live in this header — below `md` the rail is
@@ -579,6 +616,41 @@ function DashboardContent() {
     onRename: renamePreset,
   };
 
+  // Every non-search filter control, in one bundle. The desktop toolbar and the
+  // mobile Filters sheet both render `<FilterControls>` from exactly this
+  // object, so neither presentation can offer a filter the other lacks or wire
+  // one to a different handler.
+  const filterControlProps = {
+    yearFrom,
+    yearTo,
+    onYearFromChange: setYearFrom,
+    onYearToChange: setYearTo,
+    studyType,
+    onStudyTypeChange: setStudyType,
+    studyTypeFilterOptions,
+    notesPresence,
+    onNotesPresenceChange: setNotesPresence,
+    selectedKeywords,
+    availableKeywords: filteredKeywords,
+    onKeywordToggle: handleKeywordToggle,
+    projects,
+    tags,
+    selectedProjectIds,
+    selectedTagIds,
+    onProjectToggle: handleProjectToggle,
+    onTagToggle: handleTagToggle,
+    onClearProjects: clearProjects,
+    onClearTags: clearTags,
+    projectMatchMode,
+    tagMatchMode,
+    onProjectMatchModeChange: setProjectMatchMode,
+    onTagMatchModeChange: setTagMatchMode,
+  };
+
+  const countLabel = hasActiveFilters
+    ? `${filteredCount} of ${totalCount} papers`
+    : `${totalCount} paper${totalCount !== 1 ? "s" : ""}`;
+
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
       <Sidebar
@@ -601,92 +673,86 @@ function DashboardContent() {
         onMobileNavOpenChange={setMobileNavOpen}
       />
       <main className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
-        <div className="flex flex-col gap-4 bg-background border-b px-4 py-3 sm:px-6 sm:py-4 shadow-sm shrink-0 z-10">
-          {/* Wraps rather than overflowing: below `md` the actions drop onto
-              their own line instead of being pushed past the viewport edge. */}
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <Button
-                variant="outline"
-                size="icon"
-                className="md:hidden shrink-0"
-                aria-label="Open navigation menu"
-                aria-haspopup="dialog"
-                aria-expanded={mobileNavOpen}
-                onClick={() => setMobileNavOpen(true)}
-              >
-                <Menu className="h-4 w-4" aria-hidden="true" />
-              </Button>
-              <div className="min-w-0">
-                <h1 className="text-2xl font-bold">Papers</h1>
-                <p className="text-muted-foreground">
-                  {hasActiveFilters
-                    ? `${filteredCount} of ${totalCount} papers`
-                    : `${totalCount} paper${totalCount !== 1 ? "s" : ""}`}
-                </p>
+        <div
+          data-testid="dashboard-controls"
+          className="flex flex-col gap-4 bg-background border-b px-4 py-3 sm:px-6 sm:py-4 shadow-sm shrink-0 z-10"
+        >
+          {isMobile ? (
+            /* Three compact levels. Everything else is one tap away behind
+               Filters / More, so the table keeps the viewport. */
+            <MobileDashboardControls
+              countLabel={countLabel}
+              onOpenNav={() => setMobileNavOpen(true)}
+              navOpen={mobileNavOpen}
+              onAddPapers={() => setAddPaperOpen(true)}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              aiQuotaStatus={aiQuotaStatus}
+              aiQuotaLoading={aiQuotaLoading}
+              aiQuotaError={aiQuotaError}
+              onClearFilters={handleClearFilters}
+              hasActiveFilters={hasActiveFilters}
+              filterPresets={filterPresets}
+              availableColumns={availableColumns}
+              visibleColumns={visibleColumns}
+              onToggleColumn={toggleColumn}
+              onFindDuplicates={openDedup}
+              onOpenAnalytics={() => setIsAnalyticsOpen(true)}
+              onExport={exportPapers}
+              isExportReady={isExportReady}
+              isExporting={isExporting}
+              {...filterControlProps}
+            />
+          ) : (
+            <>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="min-w-0">
+                    <h1 className="text-2xl font-bold">Papers</h1>
+                    <p className="text-muted-foreground">{countLabel}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <AiQuotaIndicator
+                    status={aiQuotaStatus}
+                    isLoading={aiQuotaLoading}
+                    isError={aiQuotaError}
+                  />
+                  <ColumnVisibilityDropdown
+                    availableColumns={availableColumns}
+                    visibleColumns={visibleColumns}
+                    onToggleColumn={toggleColumn}
+                  />
+                  <Button variant="outline" onClick={openDedup}>
+                    <Layers className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Find Duplicates
+                  </Button>
+                  <Button onClick={() => setAddPaperOpen(true)}>
+                    <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Add Papers
+                  </Button>
+                </div>
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <AiQuotaIndicator
-                status={aiQuotaStatus}
-                isLoading={aiQuotaLoading}
-                isError={aiQuotaError}
+              <SearchFilters
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                onClearFilters={handleClearFilters}
+                onExport={exportPapers}
+                hasActiveFilters={hasActiveFilters}
+                isExportReady={isExportReady}
+                isExporting={isExporting}
+                filterPresets={filterPresets}
+                {...filterControlProps}
               />
-              <ColumnVisibilityDropdown
-                availableColumns={availableColumns}
-                visibleColumns={visibleColumns}
-                onToggleColumn={toggleColumn}
+              <AnalyticsPanel
+                papers={analyticsPapers}
+                isLoading={isAnalyticsLoading}
+                isOpen={isAnalyticsOpen}
+                onOpenChange={setIsAnalyticsOpen}
+                targets={analyticsTargets}
               />
-              <Button variant="outline" onClick={() => setDedupOpen(true)}>
-                <Layers className="mr-2 h-4 w-4" aria-hidden="true" />
-                Find Duplicates
-              </Button>
-              <Button onClick={() => setAddPaperOpen(true)}>
-                <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
-                Add Papers
-              </Button>
-            </div>
-          </div>
-          <SearchFilters
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            yearFrom={yearFrom}
-            yearTo={yearTo}
-            onYearFromChange={setYearFrom}
-            onYearToChange={setYearTo}
-            studyType={studyType}
-            onStudyTypeChange={setStudyType}
-            studyTypeFilterOptions={studyTypeFilterOptions}
-            notesPresence={notesPresence}
-            onNotesPresenceChange={setNotesPresence}
-            selectedKeywords={selectedKeywords}
-            availableKeywords={filteredKeywords}
-            onKeywordToggle={handleKeywordToggle}
-            onClearFilters={handleClearFilters}
-            onExport={exportPapers}
-            hasActiveFilters={hasActiveFilters}
-            projects={projects}
-            tags={tags}
-            selectedProjectIds={selectedProjectIds}
-            selectedTagIds={selectedTagIds}
-            onProjectToggle={handleProjectToggle}
-            onTagToggle={handleTagToggle}
-            onClearProjects={clearProjects}
-            onClearTags={clearTags}
-            projectMatchMode={projectMatchMode}
-            tagMatchMode={tagMatchMode}
-            onProjectMatchModeChange={setProjectMatchMode}
-            onTagMatchModeChange={setTagMatchMode}
-            isExportReady={isExportReady}
-            isExporting={isExporting}
-            filterPresets={filterPresets}
-          />
-          <AnalyticsPanel
-            papers={analyticsPapers}
-            isLoading={isAnalyticsLoading}
-            isOpen={isAnalyticsOpen}
-            onOpenChange={setIsAnalyticsOpen}
-          />
+            </>
+          )}
           {/* Manager-facing Gemini provider-quota panel deferred under C29 —
               intentionally not rendered during the Free Tier development phase. */}
         </div>
@@ -780,11 +846,27 @@ function DashboardContent() {
         onSave={updateTag}
       />
 
-      {dedupOpen && userId && (
+      {dedupMounted && userId && (
         <DeduplicationDialog
           open={dedupOpen}
           onOpenChange={setDedupOpen}
           userId={userId}
+        />
+      )}
+
+      {/* Mobile analytics is an overlay, not an inline panel: expanding it must
+          not push the paper table out of the viewport. It shares the single
+          `isAnalyticsOpen` state (and therefore the same gated analytics query)
+          AND the single `analyticsTargets` selection state with the desktop
+          Collapsible, so crossing the breakpoint while open simply swaps the
+          shell rather than resetting what the user was looking at. */}
+      {isMobile && (
+        <MobileAnalyticsSheet
+          papers={analyticsPapers}
+          isLoading={isAnalyticsLoading}
+          open={isAnalyticsOpen}
+          onOpenChange={setIsAnalyticsOpen}
+          targets={analyticsTargets}
         />
       )}
     </div>

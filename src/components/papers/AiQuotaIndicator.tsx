@@ -7,6 +7,18 @@ interface AiQuotaIndicatorProps {
   status: AiQuotaStatus | null;
   isLoading: boolean;
   isError: boolean;
+  /**
+   * `full` — the desktop header presentation ("AI analyses: 7 of 15 · Lifetime").
+   * `compact` — the same information reduced to a glyph and a number
+   * ("✨ 7/15") for the mobile utility row, where the full sentence consumed
+   * roughly a third of a 390px line.
+   *
+   * Only the VISIBLE text differs. The `role="status"`, the full descriptive
+   * `aria-label` and the `title` are byte-identical across variants, so the
+   * compact form is never the only carrier of the state, and no quota number
+   * is computed differently.
+   */
+  variant?: "full" | "compact";
 }
 
 /**
@@ -23,10 +35,26 @@ interface AiQuotaIndicatorProps {
  * call to action — quota transparency only. The server remains the
  * enforcement boundary; this display can be momentarily stale.
  */
-export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicatorProps) {
+export function AiQuotaIndicator({
+  status,
+  isLoading,
+  isError,
+  variant = "full",
+}: AiQuotaIndicatorProps) {
+  const compact = variant === "compact";
+  const shellClass = compact
+    ? "flex items-center gap-1 rounded-md border px-2 py-1.5 text-sm"
+    : "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm";
+
   // Loading: fixed footprint to avoid layout shift.
   if (isLoading) {
-    return <Skeleton className="h-8 w-32" aria-busy="true" aria-label="Loading AI analysis quota" />;
+    return (
+      <Skeleton
+        className={compact ? "h-8 w-14" : "h-8 w-32"}
+        aria-busy="true"
+        aria-label="Loading AI analysis quota"
+      />
+    );
   }
 
   // Fail soft: nothing to show on error or before the status resolves.
@@ -43,14 +71,20 @@ export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicato
       "Unlimited AI analyses — internal AI quota exemption. Paperlume's commercial quota is not enforced for your account; analyses are still recorded for operational usage.";
     return (
       <div
-        className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm text-muted-foreground"
+        className={`${shellClass} text-muted-foreground`}
         role="status"
         aria-label={supporting}
         title={supporting}
       >
         <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span className="whitespace-nowrap">
-          AI analyses: <span className="font-medium">Unlimited</span>
+          {compact ? (
+            <span className="font-medium">∞</span>
+          ) : (
+            <>
+              AI analyses: <span className="font-medium">Unlimited</span>
+            </>
+          )}
         </span>
       </div>
     );
@@ -62,13 +96,13 @@ export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicato
   if (status.periodType === null) {
     return (
       <div
-        className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm text-muted-foreground"
+        className={`${shellClass} text-muted-foreground`}
         role="status"
         aria-label="AI analyses unavailable"
         title="AI analysis is not available on your current plan."
       >
         <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span>AI analyses: unavailable</span>
+        <span>{compact ? "Unavailable" : "AI analyses: unavailable"}</span>
       </div>
     );
   }
@@ -85,7 +119,7 @@ export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicato
 
   return (
     <div
-      className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm ${
+      className={`${shellClass} ${
         isEmpty ? "text-destructive border-destructive/40" : "text-muted-foreground"
       }`}
       role="status"
@@ -93,12 +127,20 @@ export function AiQuotaIndicator({ status, isLoading, isError }: AiQuotaIndicato
       title={supporting}
     >
       <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
-      <span className="whitespace-nowrap">
-        AI analyses: <span className="font-medium tabular-nums">{status.remaining}</span> of{" "}
-        <span className="tabular-nums">{status.quota}</span>
-        {isEmpty ? " — none left" : ""}
-      </span>
-      <span className="text-xs text-muted-foreground">· {periodLabel}</span>
+      {compact ? (
+        <span className="whitespace-nowrap tabular-nums">
+          {status.remaining}/{status.quota}
+        </span>
+      ) : (
+        <>
+          <span className="whitespace-nowrap">
+            AI analyses: <span className="font-medium tabular-nums">{status.remaining}</span> of{" "}
+            <span className="tabular-nums">{status.quota}</span>
+            {isEmpty ? " — none left" : ""}
+          </span>
+          <span className="text-xs text-muted-foreground">· {periodLabel}</span>
+        </>
+      )}
     </div>
   );
 }
