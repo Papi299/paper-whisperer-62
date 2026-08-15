@@ -30,6 +30,7 @@ import { Loader2, X, Link as LinkIcon, Check, ChevronsUpDown, FolderOpen, Tags, 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAttachments, OnAttachmentsChange } from "@/hooks/useAttachments";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -84,6 +85,22 @@ export function EditPaperDialog({
   const [tagOpen, setTagOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  // Edit Paper is opened to read a paper at least as often as to retitle it,
+  // and Title is the first tabbable element — so on a finger the keyboard
+  // covered the form the instant the dialog opened. The heading takes initial
+  // focus on a coarse pointer; a mouse still lands in Title.
+  const { focusRef: headingRef, onOpenAutoFocus: onDialogAutoFocus } =
+    useTouchSafeInitialFocus<HTMLHeadingElement>();
+  // Projects and Tags are two Popovers rendered at the same time, so they need
+  // two independent refs — one shared ref would point at whichever mounted
+  // last. Each focuses its own panel (already `tabIndex={-1}`) on a coarse
+  // pointer, leaving the option list readable, and falls through to Radix's
+  // CommandInput autofocus on a mouse.
+  const { focusRef: projectPopoverRef, onOpenAutoFocus: onProjectPopoverAutoFocus } =
+    useTouchSafeInitialFocus<HTMLDivElement>();
+  const { focusRef: tagPopoverRef, onOpenAutoFocus: onTagPopoverAutoFocus } =
+    useTouchSafeInitialFocus<HTMLDivElement>();
 
   const { toast } = useToast();
 
@@ -218,11 +235,43 @@ export function EditPaperDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+      {/*
+        Scroll ownership. Previously the shell itself was the scroll owner
+        (`max-h-[90vh] overflow-y-auto`), which is unreliable on a phone or
+        tablet: `vh` resolves against the *large* viewport, so with the browser
+        chrome on screen the shell could be taller than the visible area while
+        the element still believed its contents fitted — leaving the bottom of
+        the form under the toolbar with little or no scroll range to recover it.
+
+        Now the shell is bounded to the *dynamic* viewport and clips, and one
+        deliberate region inside it scrolls. `minmax(0, 1fr)` on the second grid
+        row is what lets that region shrink below its content instead of
+        overflowing the clip. `90vh` stays in the class as the fallback for
+        engines without `dvh`; the inline `90dvh` wins wherever it is supported
+        and is simply dropped where it is not.
+      */}
+      <DialogContent
+        className="sm:max-w-4xl max-h-[90vh] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        style={{ maxHeight: "90dvh" }}
+        onOpenAutoFocus={onDialogAutoFocus}
+      >
         <DialogHeader>
-          <DialogTitle>Edit Paper</DialogTitle>
+          <DialogTitle ref={headingRef} tabIndex={-1} className="outline-none">
+            Edit Paper
+          </DialogTitle>
         </DialogHeader>
 
+        {/*
+          The single vertical scroll owner: the whole long form, the attachments
+          and the actions, so no section can become unreachable and the page
+          behind the modal is never needed to scroll. `overscroll-contain` stops
+          a pan that runs past the end from chaining out to that locked page,
+          and `touch-pan-y` states the gesture the region accepts.
+        */}
+        <div
+          data-testid="edit-paper-scroll"
+          className="min-h-0 space-y-4 overflow-y-auto overscroll-contain touch-pan-y pr-1"
+        >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* ── Column 1: Metadata ── */}
           <div className="space-y-4">
@@ -416,7 +465,13 @@ export function EditPaperDialog({
                     <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
+                {/*
+                  Collision avoidance is on: measured at a 1024x768 landscape
+                  tablet, the Tags panel below opened at y=732..819 against a
+                  768px viewport — 51px of it off the bottom edge — because
+                  `avoidCollisions={false}` pinned it under its trigger.
+                */}
+                <PopoverContent ref={projectPopoverRef} onOpenAutoFocus={onProjectPopoverAutoFocus} className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} collisionPadding={8} style={{ pointerEvents: 'auto' }}>
                   <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                     <CommandInput placeholder="Search projects..." aria-label="Search projects" />
                     <CommandList>
@@ -476,7 +531,7 @@ export function EditPaperDialog({
                     <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
+                <PopoverContent ref={tagPopoverRef} onOpenAutoFocus={onTagPopoverAutoFocus} className="w-[--radix-popover-trigger-width] p-0" side="bottom" align="start" sideOffset={4} collisionPadding={8} style={{ pointerEvents: 'auto' }}>
                   <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
                     <CommandInput placeholder="Search tags..." aria-label="Search tags" />
                     <CommandList>
@@ -623,6 +678,7 @@ export function EditPaperDialog({
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save Changes
           </Button>
+        </div>
         </div>
       </DialogContent>
     </Dialog>

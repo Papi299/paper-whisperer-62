@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import { decodeHTMLEntities } from "@/lib/decodeHTMLEntities";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 import { Paper } from "@/types/database";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
@@ -89,6 +90,16 @@ function MultiSelectPopover({
   const [open, setOpen] = useState(false);
   const isMobile = useIsMobile();
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // A tablet keeps the anchored popover (>=768px is still the desktop
+  // composition) but is driven by a finger, so opening it must not autofocus
+  // the search box and raise the software keyboard over the option list — the
+  // author list in particular runs to hundreds of entries. Focus goes to the
+  // popover panel, which Radix already renders with `tabIndex={-1}`: inside the
+  // surface and dismissable, just not a text field. Each Target selector is its
+  // own `MultiSelectPopover` instance, so Keywords and Authors get independent
+  // refs without any extra plumbing. Mouse behaviour is unchanged.
+  const { focusRef: popoverRef, onOpenAutoFocus } =
+    useTouchSafeInitialFocus<HTMLDivElement>();
   const filtered = useMemo(
     () =>
       options.filter((o) => o.toLowerCase().includes(search.toLowerCase())),
@@ -180,7 +191,12 @@ function MultiSelectPopover({
               {triggerContent}
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-72 max-w-[calc(100vw-2rem)] p-2" align="start">
+          <PopoverContent
+            ref={popoverRef}
+            onOpenAutoFocus={onOpenAutoFocus}
+            className="w-72 max-w-[calc(100vw-2rem)] p-2"
+            align="start"
+          >
             <div className="relative mb-2">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input

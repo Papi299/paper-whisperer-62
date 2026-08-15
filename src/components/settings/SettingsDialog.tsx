@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Trash2, Save, Key, Loader2 } from "lucide-react";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { useSettings } from "@/hooks/useSettings";
 import { useToast } from "@/hooks/use-toast";
 import { useStorageUsage } from "@/hooks/useStorageUsage";
@@ -45,6 +46,12 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
   const accountDeletion = useAccountDeletion(userId);
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
+  // Settings is opened to read it — the storage gauge, the export and delete
+  // sections — far more often than to type an API key. The PubMed field is
+  // simply the first tabbable element, so Radix focused it and the software
+  // keyboard covered most of the dialog on a tablet. On a coarse pointer the
+  // heading takes initial focus instead; on a mouse the field still does.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   const hasKey = !!settings.pubmedApiKey;
 
@@ -83,9 +90,13 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onOpenAutoFocus={onOpenAutoFocus}>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle
+            ref={focusRef}
+            tabIndex={-1}
+            className="flex items-center gap-2 outline-none"
+          >
             <Key className="h-5 w-5" />
             Settings
           </DialogTitle>

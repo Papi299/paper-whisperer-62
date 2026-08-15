@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 
 interface EditTagDialogProps {
   tag: Tag | null;
@@ -41,6 +42,10 @@ export function EditTagDialog({
   const [name, setName] = useState("");
   const [color, setColor] = useState("#8b5cf6");
   const [saving, setSaving] = useState(false);
+  // Same rule as Edit Project: a finger opening the tag to inspect it should
+  // not summon the keyboard. The heading takes initial focus on a coarse
+  // pointer; a mouse still lands in Name.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   useEffect(() => {
     if (tag) {
@@ -66,9 +71,11 @@ export function EditTagDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent onOpenAutoFocus={onOpenAutoFocus}>
         <DialogHeader>
-          <DialogTitle>Edit Tag</DialogTitle>
+          <DialogTitle ref={focusRef} tabIndex={-1} className="outline-none">
+            Edit Tag
+          </DialogTitle>
           <DialogDescription>
             Update the tag name and color.
           </DialogDescription>
