@@ -124,10 +124,9 @@ Operational procedures, secrets, migration sequence, smoke checklists: [deployme
 Authoritative current state, remediation policy, and re-evaluation triggers: [dependency-security.md](dependency-security.md). `npm audit` (full and `--omit=dev`) on the current checkout is the live source — **do not treat a count written in any document as current**.
 
 - Dependency Clusters 1–4 are complete. In all four the implementation delta was confined to `package-lock.json`.
-- **`npm audit` is not at zero, in either the full or the production-only graph**, and the findings fall into **two independent groups**:
-  - **React Router (moderate)** — cannot be cleared on the v6 line; clearing them would require **Cluster 5**, a major-version migration that is **NOT STARTED** and **not owner-approved**. Paperlume uses declarative routing only (no data router, no SSR) with hardcoded navigation targets, so these are assessed **not currently reachable** under today's usage — which is not a declaration that the packages are safe.
-  - **A `nanoid` high advisory**, reached transitively through the PostCSS/Tailwind build toolchain. Its documented re-evaluation trigger has **fired** and it is **untriaged and not remediated**. Unlike the Router findings it does have an in-range patch available.
-- **Dependency remediation is NOT complete.** Do not describe the Router findings as the only remaining dependency work, and do not restate audit counts from memory — run `npm audit` and read [dependency-security.md](dependency-security.md).
+- The **`nanoid` high advisory has been remediated** by a name-scoped, lockfile-only update to a patched version already permitted by its parent's existing semver range — no `package.json`, source, or config change. It is no longer reported in either graph.
+- **`npm audit` is not at zero, in either the full or the production-only graph.** The remaining audit residue is the separately documented **React Router moderate family** — it cannot be cleared on the v6 line; clearing it would require **Cluster 5**, a major-version migration that is **NOT STARTED** and **not owner-approved**. Paperlume uses declarative routing only (no data router, no SSR) with hardcoded navigation targets, so these are assessed **not currently reachable** under today's usage — which is not a declaration that the packages are safe.
+- **Dependency remediation is NOT complete**, and remediating `nanoid` did not select Cluster 5 as a next task. Do not restate audit counts from memory — run `npm audit` and read [dependency-security.md](dependency-security.md).
 
 ## 9. Active decisions and constraints — do not casually reopen
 
@@ -164,7 +163,6 @@ Meaningful open items. This is a pointer list, not a backlog database — none o
 - **D5 — promotion of `E2E (local)` or `DB Tests` to a required check.** Unresolved and non-blocking; the recommended default is to keep both non-required until proven stable.
 - **Auth validation-error accessibility** (`role="alert"` on validation errors) — pre-existing, non-blocking.
 - **`AlertDialogContent` focus-restoration audit** — the central `DialogContent`/`SheetContent` restoration fix did not cover `AlertDialogContent`.
-- **`nanoid` high advisory — untriaged.** Its re-evaluation trigger has fired; an in-range patch exists but nothing has been decided or applied. Needs a bounded dependency-advisory triage task. See §8 and [dependency-security.md](dependency-security.md).
 - **React Router Cluster 5** — see §8.
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
 - **Orphaned management-component audit.** Two verified-orphaned components were removed; other components looked sparse under static search but were deliberately **not** removed without the same proof. A bounded audit is available work.
