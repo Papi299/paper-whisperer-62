@@ -10,14 +10,21 @@
 
 ## Current audit state
 
-`npm audit` on the current `main`:
+`npm audit` measured on a clean `npm ci` (which did not mutate `package-lock.json`):
 
 | Graph | Total | Low | Moderate | High | Critical |
 |---|---|---|---|---|---|
-| Full (incl. dev) | 2 | 0 | **2** | 0 | 0 |
-| Production only | 2 | 0 | **2** | 0 | 0 |
+| Full (incl. dev) | 3 | 0 | **2** | **1** | 0 |
+| Production only | 3 | 0 | **2** | **1** | 0 |
 
-Both current npm-audit findings are in the **React Router package family** (`react-router` and `react-router-dom`). The audit is **not yet at zero**, and **cannot be brought to zero on the React Router v6 line** — remaining clearance requires the major-version work below, see [Remaining React Router findings](#remaining-react-router-findings).
+The findings fall into **two independent groups**:
+
+- **`nanoid` — 1 high**, newly appeared, reached transitively through `postcss`. See [NanoID finding](#nanoid-finding--triage-pending).
+- **React Router family — 2 moderate** (`react-router`, `react-router-dom`). See [Remaining React Router findings](#remaining-react-router-findings).
+
+> **A documented re-evaluation trigger has fired.** "A **new high or critical** advisory appears in either graph" and "a **new advisory reaches the production graph**" are both now true because of the `nanoid` finding. This document records that state; it does **not** remediate it. A separate bounded dependency-advisory triage task is required — see the NanoID section for what is and is not yet established.
+
+The audit is **not at zero**. The two groups have different remediation shapes: the React Router residue **cannot** be cleared on the v6 line and needs the unstarted major-version Cluster 5, whereas the `nanoid` advisory does have an in-range patch available and has simply not been triaged or applied yet. **Do not describe the React Router findings as the only remaining dependency work.**
 
 ## Completed remediation boundaries
 
@@ -30,9 +37,9 @@ Four bounded clusters are complete. In each, the **dependency implementation del
 | 3 | `js-yaml` / `flatted` / `form-data` / `@tootallnate/once` / `esbuild` | Complete | PR #188, merge `8ca9ee7da34faa16804e3e8f8f0b52df83a3ac7c` |
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 then took it to the **2 moderate** above.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 then took it to **2 moderate** — the state at the time Cluster 4 landed, not the current total in [Current audit state](#current-audit-state).
 
-**Clusters 1–4 being complete does not mean dependency remediation is complete.** Cluster 4 was explicitly bounded to the v6 line and cleared only what v6 can clear; the residual findings below require the unstarted Cluster 5.
+**Clusters 1–4 being complete does not mean dependency remediation is complete.** Cluster 4 was explicitly bounded to the v6 line and cleared only what v6 can clear; the residual Router findings require the unstarted Cluster 5. The later `nanoid` advisory is outside all four clusters and is untriaged.
 
 ## Current resolved security baseline
 
@@ -48,6 +55,50 @@ These resolutions must not regress. A change that moves any of them backwards re
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
 The Cluster 4 versions are the **terminal releases of the v6 line** (`react-router-dom` dist-tag `version-6` = 6.30.4). They cannot move further without crossing to v7.
+
+## NanoID finding — TRIAGE PENDING
+
+**Status: NOT YET REMEDIATED. No owner decision covers it.** It postdates Clusters 1–4 and is not part of any of them.
+
+| Field | Value |
+|---|---|
+| Advisory | [GHSA-2v37-7h3g-55p8](https://github.com/advisories/GHSA-2v37-7h3g-55p8) — "custom generators can loop indefinitely when size is zero" (CWE-835) |
+| Package | `nanoid` |
+| Severity | **High** |
+| Affected range | `<3.3.18` |
+| Installed | `3.3.17` |
+| First patched | **`3.3.18`** — on the existing 3.x line, **not** a major-version move |
+| Graphs | Present in **both** the full and the production graph |
+
+### Introducing path
+
+`nanoid` is not a declared dependency and is not imported anywhere in `src/`, `e2e/`, `scripts/`, or `supabase/functions/`. It is reached only through the CSS build toolchain:
+
+```text
+postcss 8.5.26  →  nanoid ^3.3.17  →  nanoid 3.3.17
+```
+
+In the **production** graph the chain that pulls it in is:
+
+```text
+tailwindcss-animate (root "dependencies")  →  tailwindcss (peer)  →  postcss  →  nanoid
+```
+
+That production-graph presence is a **packaging artifact**, not evidence of shipped runtime code: `tailwindcss-animate` is a build-time Tailwind plugin consumed by `tailwind.config.ts`, but it is declared under `dependencies` rather than `devDependencies`, and it declares `tailwindcss` as a peer. In the full graph `postcss` is additionally reached as a root `devDependency` and via `vite`, `autoprefixer`, and `tailwindcss`.
+
+### Applicability — partially established
+
+- **Established:** no first-party code calls `nanoid`. The advisory's precondition is a *custom generator* invoked with `size` 0 (`customAlphabet`/`customRandom`), which requires calling the library. Paperlume never does.
+- **Established:** every path to it runs through PostCSS/Tailwind, which execute in Node at build time to process CSS.
+- **Not established:** whether any tooling in the chain itself invokes a custom generator with a zero size, and what a build-time infinite loop would mean in CI beyond a hung job. This has **not** been analysed.
+
+That is deliberately weaker than the Router assessment below. It is **not** a finding that the advisory is harmless, and it is **not** a finding that it is exploitable in Paperlume. It is untriaged.
+
+### Available remediation — not applied here
+
+`postcss@8.5.26` declares `nanoid: ^3.3.17`, and the patched `3.3.18` **satisfies that existing range**. A compatible, lockfile-only, non-major resolution therefore appears available without touching `package.json` — consistent with `npm audit` reporting a non-breaking fix.
+
+This has **not** been verified by executing it, and this documentation-only pull request deliberately does not apply it. Applying it is a separate bounded task that must follow the [Remediation policy](#remediation-policy) — re-measure first, name-scoped update only, verify `npm ci` reproducibility, and keep CI green on the exact head.
 
 ## Remaining React Router findings
 
@@ -77,7 +128,7 @@ Paperlume uses React Router in **declarative mode only**: a single `BrowserRoute
 
 On that evidence, all three residual advisories are assessed **not currently reachable** — which is a statement about today's usage, not a claim that the packages are safe:
 
-- **GHSA-wrjc-x8rr-h8h6** (open redirect via backslash in `<Link>`/`useNavigate`) requires an attacker-supplied path reaching a navigation target. All six `navigate()` call sites pass hardcoded literals (`/`, `/auth`, `/dashboard`), and the `src/components/NavLink.tsx` wrapper currently has **no consumers**, so no `<Link>`/`<NavLink>` is rendered at all.
+- **GHSA-wrjc-x8rr-h8h6** (open redirect via backslash in `<Link>`/`useNavigate`) requires an attacker-supplied path reaching a navigation target. All six `navigate()` call sites pass hardcoded literals (`/`, `/auth`, `/dashboard`), and **no `<Link>`/`<NavLink>` is rendered anywhere** — the former `src/components/NavLink.tsx` wrapper was deleted as a verified orphan, and it was never re-introduced.
 - **GHSA-337j-9hxr-rhxg** (constructor injection via `deserializeErrors()` during SSR hydration) needs the SSR hydration path. Paperlume has no `hydrateRoot`, `StaticRouter`, `createStaticHandler`, or `__staticRouterHydrationData`.
 - **GHSA-jjmj-jmhj-qwj2** (open redirect leading to XSS) is conditioned on the application already having an open-redirect surface. No navigation target in Paperlume is derived from URL parameters or user input. The published advisory text is thin on mechanism, so this classification rests on the absence of the precondition rather than on a reading of the patch.
 
@@ -87,7 +138,7 @@ This is the weakest of the three conclusions and should be re-checked whenever a
 
 Because every residual advisory is first fixed on the 7.x line (or has no v6 fix at all), **reaching audit zero is impossible without crossing the major-version boundary**. Cluster 5 is therefore what would be required **to eliminate the remaining npm-audit findings under the current advisory data** — that is the precise sense in which it is necessary. It is **not** thereby the next product-development task: it is **NOT STARTED**, **not owner-approved**, and **no React Router major migration is authorized**. No target version is committed to here — the advisory database and available release lines must both be re-measured when that work is selected. A major-version move is an application-code migration, not a lockfile change.
 
-These are the only remaining npm-audit findings in the **production dependency graph**. Presence in the production graph is not by itself proof of an exploitable path, and the applicability assessment above is **not** a declaration that the vulnerable packages are safe — it is a reason to schedule Cluster 5 deliberately rather than urgently, not a reason to skip it.
+These are **not** the only remaining npm-audit findings in the **production dependency graph** — the `nanoid` high above is also present there. Presence in the production graph is not by itself proof of an exploitable path, and the applicability assessment above is **not** a declaration that the vulnerable packages are safe — it is a reason to schedule Cluster 5 deliberately rather than urgently, not a reason to skip it.
 
 ## Remediation policy
 
@@ -112,14 +163,14 @@ npm ls <package> --all       # every installed occurrence
 npm explain <package>        # introduction path and parent semver range
 ```
 
-A nonzero `npm audit` exit code is the expected steady state while the React Router findings remain, and does not indicate a broken checkout.
+A nonzero `npm audit` exit code is the expected steady state while the findings above remain, and does not indicate a broken checkout.
 
 ## Re-evaluation triggers
 
 Revisit this document when any of the following occurs:
 
-- a **new high or critical** advisory appears in either graph;
-- a **new advisory reaches the production graph** (today only React Router does);
+- a **new high or critical** advisory appears in either graph — **currently fired and unresolved** by the `nanoid` high;
+- a **new advisory reaches the production graph** (today both the React Router family and `nanoid` are present there);
 - Cluster 5 is owner-selected, or a residual Router advisory gains a **backported v6 fix** (which would re-open bounded v6 remediation), or a new Router advisory appears;
 - Paperlume's Router usage changes in a way that affects the applicability assessment — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
