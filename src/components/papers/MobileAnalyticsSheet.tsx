@@ -7,12 +7,15 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { AnalyticsContent } from "./AnalyticsContent";
+import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 
 interface MobileAnalyticsSheetProps {
   papers: Paper[];
   isLoading: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Owned by the Dashboard and shared with `AnalyticsPanel`. */
+  targets: AnalyticsTargets;
 }
 
 /**
@@ -26,12 +29,18 @@ interface MobileAnalyticsSheetProps {
  *
  * The sheet owns the vertical scrolling and is capped below full height so it
  * always reads as an overlay rather than a new page.
+ *
+ * It renders only below 768px, so it and the desktop `AnalyticsPanel` are never
+ * mounted together — no duplicate analytics controls in the accessibility tree.
+ * The selection state they show is therefore held by the Dashboard, above the
+ * point where the two swap.
  */
 export function MobileAnalyticsSheet({
   papers,
   isLoading,
   open,
   onOpenChange,
+  targets,
 }: MobileAnalyticsSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -48,7 +57,12 @@ export function MobileAnalyticsSheet({
         {/* `overflow-x-hidden` keeps a wide chart inside the sheet instead of
             letting it push the document sideways. */}
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
-          <AnalyticsContent papers={papers} isLoading={isLoading} compact />
+          <AnalyticsContent
+            papers={papers}
+            isLoading={isLoading}
+            targets={targets}
+            compact
+          />
         </div>
       </SheetContent>
     </Sheet>

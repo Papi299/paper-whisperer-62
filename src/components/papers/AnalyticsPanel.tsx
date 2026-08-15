@@ -8,12 +8,15 @@ import {
 } from "@/components/ui/collapsible";
 import { BarChart3, ChevronDown, ChevronUp } from "lucide-react";
 import { AnalyticsContent } from "./AnalyticsContent";
+import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 
 interface AnalyticsPanelProps {
   papers: Paper[];
   isLoading: boolean;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Owned by the Dashboard and shared with `MobileAnalyticsSheet`. */
+  targets: AnalyticsTargets;
 }
 
 /**
@@ -23,11 +26,19 @@ interface AnalyticsPanelProps {
  * is exactly what it has always done. On a phone it is not — the table would be
  * driven off screen, defeating the whole point of the compact mobile layout — so
  * narrow viewports render `AnalyticsContent` in an overlay instead
- * (`MobileAnalyticsSheet`). Both shells share this one body and one
- * `isAnalyticsOpen` state, so the two presentations cannot disagree about
- * whether analytics is open or what it shows.
+ * (`MobileAnalyticsSheet`). Both shells share this one body, one
+ * `isAnalyticsOpen` state and one `AnalyticsTargets` selection state, so the
+ * two presentations cannot disagree about whether analytics is open, what it
+ * shows, or which targets the user picked — including across a resize, which
+ * swaps which of the two shells is mounted.
  */
-export function AnalyticsPanel({ papers, isLoading, isOpen, onOpenChange }: AnalyticsPanelProps) {
+export function AnalyticsPanel({
+  papers,
+  isLoading,
+  isOpen,
+  onOpenChange,
+  targets,
+}: AnalyticsPanelProps) {
   return (
     <Collapsible open={isOpen} onOpenChange={onOpenChange}>
       <CollapsibleTrigger asChild>
@@ -44,7 +55,7 @@ export function AnalyticsPanel({ papers, isLoading, isOpen, onOpenChange }: Anal
       <CollapsibleContent>
         <Card className="mb-4">
           <CardContent className="pt-4 pb-4">
-            <AnalyticsContent papers={papers} isLoading={isLoading} />
+            <AnalyticsContent papers={papers} isLoading={isLoading} targets={targets} />
           </CardContent>
         </Card>
       </CollapsibleContent>

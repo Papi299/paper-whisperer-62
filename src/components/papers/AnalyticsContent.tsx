@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { decodeHTMLEntities } from "@/lib/decodeHTMLEntities";
 import { Paper } from "@/types/database";
+import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -30,11 +31,24 @@ import {
  * mobile overlay render the SAME charts from the SAME computation. Nothing
  * statistical lives in the shells; every `useMemo` below is the original code,
  * moved rather than rewritten, so the numbers cannot diverge by presentation.
+ *
+ * The component is a pure function of `papers` and `targets`: it derives the
+ * charts but owns no selection state, because it is mounted twice across a
+ * session — once per responsive shell — and anything it owned would be
+ * discarded at the breakpoint.
  */
 
 interface AnalyticsContentProps {
   papers: Paper[];
   isLoading: boolean;
+  /**
+   * Selected target keywords/authors and their handlers.
+   *
+   * Controlled rather than internal: the desktop and mobile shells are separate
+   * component instances chosen by viewport width, so state owned here would be
+   * destroyed every time the user crossed 768px. See `useAnalyticsTargets`.
+   */
+  targets: AnalyticsTargets;
   /**
    * Narrow-viewport sizing. Purely dimensional: it shortens the category axis
    * (which is 320px wide on desktop and would leave almost no room for the bars
@@ -174,9 +188,20 @@ function PercentTooltip({ active, payload, total }: {
   );
 }
 
-export function AnalyticsContent({ papers, isLoading, compact = false }: AnalyticsContentProps) {
-  const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
-  const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
+export function AnalyticsContent({
+  papers,
+  isLoading,
+  targets,
+  compact = false,
+}: AnalyticsContentProps) {
+  const {
+    selectedKeywords,
+    selectedAuthors,
+    onToggleKeyword,
+    onToggleAuthor,
+    onClearKeywords,
+    onClearAuthors,
+  } = targets;
 
   // Summary stats
   const summaryStats = useMemo(() => {
@@ -273,18 +298,6 @@ export function AnalyticsContent({ papers, isLoading, compact = false }: Analyti
       return { name: author, count };
     }).sort((a, b) => b.count - a.count);
   }, [selectedAuthors, papers]);
-
-  const toggleKeyword = (kw: string) => {
-    setSelectedKeywords((prev) =>
-      prev.includes(kw) ? prev.filter((k) => k !== kw) : [...prev, kw]
-    );
-  };
-
-  const toggleAuthor = (a: string) => {
-    setSelectedAuthors((prev) =>
-      prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]
-    );
-  };
 
   const chartHeight = (dataLength: number) =>
     Math.max(150, Math.min(dataLength * 28 + 40, 400));
@@ -389,16 +402,16 @@ export function AnalyticsContent({ papers, isLoading, compact = false }: Analyti
             label="Target Keywords"
             options={availableKeywords}
             selected={selectedKeywords}
-            onToggle={toggleKeyword}
-            onClear={() => setSelectedKeywords([])}
+            onToggle={onToggleKeyword}
+            onClear={onClearKeywords}
             fullWidth={compact}
           />
           <MultiSelectPopover
             label="Target Authors"
             options={availableAuthors}
             selected={selectedAuthors}
-            onToggle={toggleAuthor}
-            onClear={() => setSelectedAuthors([])}
+            onToggle={onToggleAuthor}
+            onClear={onClearAuthors}
             fullWidth={compact}
           />
         </div>

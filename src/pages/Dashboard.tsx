@@ -18,6 +18,7 @@ import {
 } from "@/hooks/useFilterPresets";
 import { useExportPapers } from "@/hooks/useExportPapers";
 import { useAnalyticsData } from "@/hooks/useAnalyticsData";
+import { useAnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -410,6 +411,13 @@ function DashboardContent() {
     serverSortParams,
     enabled: isAnalyticsOpen,
   });
+  /**
+   * Analytics target selections live here, alongside `isAnalyticsOpen`, for the
+   * same reason: analytics is rendered by two mutually exclusive shells chosen
+   * by viewport width, so anything either shell owned would be thrown away the
+   * moment the user crossed 768px. Both receive this one state.
+   */
+  const analyticsTargets = useAnalyticsTargets();
 
   // Study type re-evaluation on pool changes
   const {
@@ -741,6 +749,7 @@ function DashboardContent() {
                 isLoading={isAnalyticsLoading}
                 isOpen={isAnalyticsOpen}
                 onOpenChange={setIsAnalyticsOpen}
+                targets={analyticsTargets}
               />
             </>
           )}
@@ -848,14 +857,16 @@ function DashboardContent() {
       {/* Mobile analytics is an overlay, not an inline panel: expanding it must
           not push the paper table out of the viewport. It shares the single
           `isAnalyticsOpen` state (and therefore the same gated analytics query)
-          with the desktop Collapsible, so crossing the breakpoint while open
-          simply swaps the shell rather than desynchronising two states. */}
+          AND the single `analyticsTargets` selection state with the desktop
+          Collapsible, so crossing the breakpoint while open simply swaps the
+          shell rather than resetting what the user was looking at. */}
       {isMobile && (
         <MobileAnalyticsSheet
           papers={analyticsPapers}
           isLoading={isAnalyticsLoading}
           open={isAnalyticsOpen}
           onOpenChange={setIsAnalyticsOpen}
+          targets={analyticsTargets}
         />
       )}
     </div>

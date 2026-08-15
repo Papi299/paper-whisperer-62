@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { waitForDashboard } from "./helpers";
 
 /**
@@ -135,6 +135,37 @@ async function expectNoHorizontalOverflow(page: Page, where: string) {
   expect(m.bodyScroll, `${where}: body scrollWidth vs clientWidth`).toBeLessThanOrEqual(
     m.bodyClient,
   );
+}
+
+/**
+ * Picks the first available option in one of the Analytics target selectors and
+ * returns its text, so the caller can follow that exact value across a
+ * breakpoint transition without depending on which papers the seed contains.
+ */
+async function selectFirstTarget(
+  page: Page,
+  label: "Target Keywords" | "Target Authors",
+  scope: Locator,
+): Promise<string> {
+  await scope.getByRole("button", { name: label }).click();
+
+  const search = page.getByRole("textbox", { name: `Search ${label.toLowerCase()}` });
+  await expect(search).toBeVisible();
+  const popover = page.getByRole("dialog").filter({ has: search });
+
+  const option = popover.locator("label").first();
+  await expect(option).toBeVisible();
+  const value = (await option.innerText()).trim();
+  expect(value, `the seed must offer at least one ${label}`).not.toBe("");
+
+  // Click the control itself rather than the wrapping <label>: Radix's checkbox
+  // is a button beside a hidden input, so a label click is not a reliable proxy.
+  await option.getByRole("checkbox").click();
+
+  // Escape dismisses only the topmost layer — the popover, not the sheet.
+  await page.keyboard.press("Escape");
+  await expect(search).toBeHidden();
+  return value;
 }
 
 async function gotoMobileDashboard(page: Page, viewport = NARROW) {
@@ -401,6 +432,88 @@ test.describe("MOBILE-DASHBOARD-DENSITY-001 — table is the primary mobile surf
 
     const after = await measureDensity(page);
     expect(after.listTop, "table geometry restored after closing analytics").toBe(before.listTop);
+  });
+
+  test("analytics target selections survive crossing the breakpoint", async ({ page }) => {
+    // Review found that the two Analytics shells shared `isAnalyticsOpen` but
+    // NOT the target selections, which were `useState` inside the shared body.
+    // Since the shells are mutually exclusive and chosen by viewport width,
+    // resizing (or rotating a phone) unmounted one instance and mounted a fresh
+    // one, silently discarding what the user had selected.
+    await gotoMobileDashboard(page);
+
+    const more = page.getByRole("button", { name: /^More/ });
+    await more.click();
+    await page
+      .getByRole("dialog", { name: "Library actions" })
+      .getByRole("button", { name: /Analytics & Insights/ })
+      .click();
+
+    const mobileAnalytics = page.getByRole("dialog", { name: /Analytics & Insights/ });
+    await expect(mobileAnalytics).toBeVisible();
+
+    // Purely client-side selection: nothing is written to the database.
+    const keyword = await selectFirstTarget(page, "Target Keywords", mobileAnalytics);
+    const author = await selectFirstTarget(page, "Target Authors", mobileAnalytics);
+    console.log(`[analytics-targets] keyword="${keyword}" author="${author}"`);
+    await expect(mobileAnalytics).toBeVisible();
+
+    // Selected, and actually driving the computed charts.
+    await expect(mobileAnalytics.getByRole("button", { name: `Remove ${keyword}` })).toBeVisible();
+    await expect(mobileAnalytics.getByRole("button", { name: `Remove ${author}` })).toBeVisible();
+    await expect(
+      mobileAnalytics.getByRole("heading", { name: "Keyword Distribution" }),
+    ).toBeVisible();
+    await expect(
+      mobileAnalytics.getByRole("heading", { name: "Author Distribution" }),
+    ).toBeVisible();
+
+    // ── Cross into the desktop presentation ──
+    await page.setViewportSize(DESKTOP_MIN);
+
+    // The mobile overlay is gone entirely — not merely hidden alongside the
+    // desktop one, which would duplicate these controls in the a11y tree.
+    await expect(mobileAnalytics).toHaveCount(0);
+
+    // Desktop analytics is still open…
+    const desktopTrigger = page.getByRole("button", { name: /Analytics & Insights/ });
+    await expect(desktopTrigger).toBeVisible();
+    await expect(desktopTrigger).toHaveAttribute("aria-expanded", "true");
+    const desktopAnalytics = page.locator("main");
+
+    // …and showing exactly the same selections, from the same one state.
+    await expect(desktopAnalytics.getByRole("button", { name: `Remove ${keyword}` })).toBeVisible();
+    await expect(desktopAnalytics.getByRole("button", { name: `Remove ${author}` })).toBeVisible();
+    await expect(
+      desktopAnalytics.getByRole("heading", { name: "Keyword Distribution" }),
+    ).toBeVisible();
+    await expect(
+      desktopAnalytics.getByRole("heading", { name: "Author Distribution" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "More library actions" })).toHaveCount(0);
+
+    // ── And back again ──
+    await page.setViewportSize(NARROW);
+
+    const mobileAgain = page.getByRole("dialog", { name: /Analytics & Insights/ });
+    await expect(mobileAgain).toBeVisible();
+    await expect(mobileAgain.getByRole("button", { name: `Remove ${keyword}` })).toBeVisible();
+    await expect(mobileAgain.getByRole("button", { name: `Remove ${author}` })).toBeVisible();
+
+    // Clearing still works through the shared state, and closing/reopening in
+    // the same session keeps what is left rather than resetting it.
+    await mobileAgain.getByRole("button", { name: `Remove ${author}` }).click();
+    await expect(mobileAgain.getByRole("button", { name: `Remove ${author}` })).toHaveCount(0);
+    await expect(mobileAgain.getByRole("button", { name: `Remove ${keyword}` })).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(mobileAgain).toBeHidden();
+    await more.click();
+    await page
+      .getByRole("dialog", { name: "Library actions" })
+      .getByRole("button", { name: /Analytics & Insights/ })
+      .click();
+    await expect(mobileAgain.getByRole("button", { name: `Remove ${keyword}` })).toBeVisible();
   });
 
   test("the compact AI status keeps its full accessible name", async ({ page }) => {
