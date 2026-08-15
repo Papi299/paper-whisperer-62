@@ -157,7 +157,6 @@ Owner-action blockers that gate the paused C27 work — Paddle Sandbox setup, ma
 
 Meaningful open items. This is a pointer list, not a backlog database — none of it is auto-selected.
 
-- **Manage Exclusions coarse-pointer initial focus.** Opening it on a coarse pointer focuses `#exclude-keyword-input`, the same defect class corrected on the other surfaces. Reported as a finding during the touch remediation and deliberately left unfixed as out of scope. Manage Study Type Pool and Manage Synonyms do **not** exhibit it.
 - **Desktop Paper Actions compression.** The Actions buttons compress to 16×32 on desktop as well; desktop density was explicitly accepted, so this stays low priority unless new evidence or an owner decision escalates it.
 - **D4 — external-metadata import-order E2E coverage.** Unresolved and non-blocking; PubMed/Crossref are nondeterministic and need served Edge Functions plus egress. No `import-order` automation exists.
 - **D5 — promotion of `E2E (local)` or `DB Tests` to a required check.** Unresolved and non-blocking; the recommended default is to keep both non-required until proven stable.
