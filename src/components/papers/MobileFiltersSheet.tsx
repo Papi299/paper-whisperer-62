@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -34,6 +35,12 @@ interface MobileFiltersSheetProps extends Omit<FilterControlsProps, "variant"> {
  * filter state to keep in sync.
  *
  * Search is not here on purpose — it stays permanently visible above the table.
+ *
+ * Opening focus is placed deliberately on the title. Radix's default is the
+ * first tabbable descendant, which here is the "Published from year" number
+ * input — so on a phone, tapping "Filters" raised the software keyboard before
+ * the user had asked to type anything. Radix still owns the focus trap; only the
+ * initial target is overridden, through the public `onOpenAutoFocus` lifecycle.
  */
 export function MobileFiltersSheet({
   open,
@@ -43,14 +50,24 @@ export function MobileFiltersSheet({
   filterPresets,
   ...filterControls
 }: MobileFiltersSheetProps) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
         className="flex w-[92vw] max-w-[26rem] flex-col gap-0 p-0 sm:max-w-[26rem]"
+        onOpenAutoFocus={(event) => {
+          // Focus lands inside the sheet, just not in a text field — so the
+          // trap, Escape and Tab order all behave exactly as before.
+          event.preventDefault();
+          titleRef.current?.focus();
+        }}
       >
         <SheetHeader className="space-y-1 border-b px-4 py-4 text-left">
-          <SheetTitle>Filters</SheetTitle>
+          <SheetTitle ref={titleRef} tabIndex={-1} className="outline-none">
+            Filters
+          </SheetTitle>
           <SheetDescription>Refine the papers shown in your library.</SheetDescription>
         </SheetHeader>
 
