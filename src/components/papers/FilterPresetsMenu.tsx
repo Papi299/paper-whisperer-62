@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { Bookmark, Pencil, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import {
   type FilterPreset,
   type PresetPayload,
@@ -200,25 +201,28 @@ export function FilterPresetsMenu({
   const inputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  // Autofocus the name input when the Save dialog opens.
-  useEffect(() => {
-    if (saveOpen) {
-      // Next tick — Radix hasn't mounted the input yet on the first effect run.
-      const t = setTimeout(() => inputRef.current?.focus(), 0);
-      return () => clearTimeout(t);
-    }
-  }, [saveOpen]);
-
-  // Autofocus the rename input + select-all when the Rename dialog opens.
-  useEffect(() => {
-    if (presetToRename) {
-      const t = setTimeout(() => {
-        renameInputRef.current?.focus();
-        renameInputRef.current?.select();
-      }, 0);
-      return () => clearTimeout(t);
-    }
-  }, [presetToRename]);
+  /**
+   * Initial focus for both name dialogs, on Radix's `onOpenAutoFocus` rather
+   * than the `setTimeout` these used to race against mount.
+   *
+   * Opening "Save current search…" on a tablet raised the software keyboard
+   * before the user had decided anything, covering the dialog they had just
+   * opened. Rename reproduced identically on the same touch context — same
+   * component, same explicit-focus root cause — so it gets the same treatment.
+   *
+   * Coarse pointer: focus the dialog heading (a deliberate non-text target
+   * inside the dialog); the field is one tap away and typing works normally.
+   * Fine pointer: unchanged — Save still opens with the empty name field
+   * focused, Rename still focuses *and* selects the existing name so typing
+   * replaces it.
+   */
+  const save = useTouchSafeInitialFocus<HTMLHeadingElement>();
+  const rename = useTouchSafeInitialFocus<HTMLHeadingElement>({
+    onFinePointerAutoFocus: () => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    },
+  });
 
   const openSaveDialog = useCallback(() => {
     setNameDraft("");
@@ -418,9 +422,11 @@ export function FilterPresetsMenu({
 
       {/* Save dialog */}
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
-        <DialogContent className="sm:max-w-[420px]">
+        <DialogContent className="sm:max-w-[420px]" onOpenAutoFocus={save.onOpenAutoFocus}>
           <DialogHeader>
-            <DialogTitle>Save current search</DialogTitle>
+            <DialogTitle ref={save.focusRef} tabIndex={-1} className="outline-none">
+              Save current search
+            </DialogTitle>
             <DialogDescription>
               Give this search and filter combination a name you can recognise later.
             </DialogDescription>
@@ -505,9 +511,11 @@ export function FilterPresetsMenu({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[420px]">
+        <DialogContent className="sm:max-w-[420px]" onOpenAutoFocus={rename.onOpenAutoFocus}>
           <DialogHeader>
-            <DialogTitle>Rename saved search</DialogTitle>
+            <DialogTitle ref={rename.focusRef} tabIndex={-1} className="outline-none">
+              Rename saved search
+            </DialogTitle>
             <DialogDescription>
               Give this saved search a new name. Filters and search query are not changed.
             </DialogDescription>

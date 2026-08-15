@@ -17,6 +17,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 import type { EntityMatchMode } from "@/lib/filterSets";
 
@@ -105,6 +106,14 @@ interface SearchableEntityMultiFilterProps {
  * list raised the software keyboard. Only the presentation differs — the same
  * `items`, the same `onToggle`/`onClear`, the same match mode, the same
  * accessible trigger name.
+ *
+ * At and above 768px the anchored popover stays — including on a tablet, whose
+ * width genuinely suits it — but the keyboard half of that story applies to any
+ * finger, not just a narrow one. So the popover declines Radix's initial
+ * autofocus on a coarse pointer (`useTouchSafeInitialFocus`) and focuses the
+ * panel instead: the list is readable and scrollable on open, and the keyboard
+ * appears only once the user taps Search. Mouse/trackpad behaviour is
+ * unchanged — the search box is still focused the instant the popover opens.
  */
 export function SearchableEntityMultiFilter({
   items,
@@ -129,6 +138,13 @@ export function SearchableEntityMultiFilter({
   const [search, setSearch] = useState("");
   const isMobile = useIsMobile();
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // A tablet keeps this anchored Popover (>=768px is still the desktop
+  // composition) but is driven by a finger, so opening it must not autofocus
+  // the CommandInput and raise the software keyboard over the option list.
+  // Focus goes to the popover panel itself, which Radix already renders with
+  // `tabIndex={-1}` — inside the surface, dismissable, just not a text field.
+  const { focusRef: popoverRef, onOpenAutoFocus } =
+    useTouchSafeInitialFocus<HTMLDivElement>();
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -297,6 +313,8 @@ export function SearchableEntityMultiFilter({
         </Button>
       </PopoverTrigger>
       <PopoverContent
+        ref={popoverRef}
+        onOpenAutoFocus={onOpenAutoFocus}
         className="w-[16rem] max-w-[calc(100vw-2rem)] p-0 bg-popover"
         align="start"
         collisionPadding={8}

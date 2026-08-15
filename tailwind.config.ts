@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import plugin from "tailwindcss/plugin";
 import tailwindcssAnimate from "tailwindcss-animate";
 
 export default {
@@ -88,5 +89,14 @@ export default {
       },
     },
   },
-  plugins: [tailwindcssAnimate],
+  plugins: [
+    tailwindcssAnimate,
+    // `coarse:` — the primary pointer is a finger. An *input modality*
+    // variant, not a width breakpoint: `md:` (768px) still decides layout, and
+    // a tablet keeps the desktop composition while sizing its hit targets for
+    // a thumb. Mirrors `useCoarsePointer()` so CSS and JS agree on the device.
+    plugin(({ addVariant }) => {
+      addVariant("coarse", "@media (pointer: coarse)");
+    }),
+  ],
 } satisfies Config;

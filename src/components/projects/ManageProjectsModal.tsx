@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Pencil, Trash2, Plus } from "lucide-react";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 
 interface ManageProjectsModalProps {
   open: boolean;
@@ -31,6 +32,11 @@ export function ManageProjectsModal({
   onDeleteProject,
 }: ManageProjectsModalProps) {
   const [newName, setNewName] = useState("");
+  // Opening "Manage Projects" is a request to *see* the projects, not to create
+  // one, so under a finger focus goes to the heading rather than the New
+  // project name field — the keyboard stays down and the list below can be
+  // panned on the first touch.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   const handleCreate = () => {
     if (newName.trim()) {
@@ -41,9 +47,9 @@ export function ManageProjectsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" onOpenAutoFocus={onOpenAutoFocus}>
         <DialogHeader>
-          <DialogTitle>
+          <DialogTitle ref={focusRef} tabIndex={-1} className="outline-none">
             Manage Projects
             {projects.length > 0 && (
               <Badge variant="secondary" className="ml-2 text-xs">{projects.length}</Badge>
