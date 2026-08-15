@@ -10,7 +10,11 @@
 >
 > **Provider selection (2026-05-21, C18).** **Paddle** is the selected MoR provider for the web MVP under C17. Lemon Squeezy is retained as a fallback only — to be reconsidered if Paddle onboarding fails, Paddle materially changes pricing/policy, or Paddle proves insufficient during the implementation spike. **Implementation of Paddle integration is blocked** until owner-side Paddle setup (Sandbox account, KYB, domain verification, Product + $15/mo Price, customer-portal config, API key, webhook secret) is complete. **The internal architecture stays provider-neutral**: `subscriptions.provider` records `'paddle'` rows in MVP, with `apple` / `google` / `revenuecat` / `manual` reserved; future providers add as additive ingestion paths without schema rework. References to `MOR_*` and `mor-webhook` in older planning text are now read as **Paddle-specific** (`PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_PRO_MONTHLY_PRICE_ID`, `paddle-webhook`).
 >
-> **Brand + domain (2026-05-21, C19).** Working commercial brand: **Paperlume**. Primary working domain: **`paperlume.app`**, secured via **Cloudflare Registrar** (Cloudflare = registrar + DNS). **Paperlume is not a registered trademark**; trademark registration was explored and deferred (Israeli filing ~1,900 ILS for Class 42 alone) until closer to paid public launch / B2B outreach. **This PR does not rename the codebase, app routes, UI labels, Supabase project, Edge Functions, database tables, or environment variables.** No DNS records have been configured, no provider connections have been made. The domain supports the future Paddle KYB / domain verification (C18), Google Workspace business email, Resend transactional-email sending subdomain (`auth.paperlume.app`), Supabase Auth Custom SMTP, and the marketing-site landing pages that C14 / C16 require. **See [`deployment.md §8a`](deployment.md) for the target URL layout, the pre-paid-beta checklist, and the wording constraints around brand / trademark language.** See [C19](decisions-and-triggers.md) for the durable decision, constraints, and re-evaluation triggers.
+> **Brand + domain (C19, 2026-05-21; current state as noted).** Working commercial brand: **Paperlume**. Primary working domain: **`paperlume.app`**, secured via **Cloudflare Registrar** (Cloudflare = registrar + DNS). **Paperlume is not a registered trademark**; trademark registration was explored and deferred (Israeli filing ~1,900 ILS for Class 42 alone) until closer to paid public launch / B2B outreach.
+>
+> **What is live now:** the app runs on **`app.paperlume.app`** (Vercel), and Supabase Auth Custom SMTP routes through Resend on **`auth.paperlume.app`** with SPF/DKIM/DMARC verified — so DNS records and provider connections **are** configured for the app and auth-email halves. Visible **UI labels now read `PaperLume`** on every reachable surface (sidebar, Auth card, `<title>`/`og:title`). **Still unchanged and deliberately so:** the repository/package name (`paper-whisperer-62` / `paper-whisperer`), app routes, Supabase project ref, Edge Function names, database tables, and environment variables. **Still not built:** the marketing site on the root domain, its legal URLs, and Google Workspace business email.
+>
+> The domain also supports future Paddle KYB / domain verification (C18) and the marketing-site landing pages that C14 / C16 require. **See [`deployment.md §8a`](deployment.md) for the target URL layout, the pre-paid-beta checklist, and the wording constraints around brand / trademark language.** See [C19](decisions-and-triggers.md) for the durable decision, constraints, and re-evaluation triggers.
 
 ---
 
@@ -23,7 +27,7 @@ The first commercial release of Paper Whisperer is a **web-first PLG** product.
 - **Paid monetization.** A single self-serve paid tier — **Pro / Researcher** — at an MVP baseline of **$15/month**. No paid AI-free "Core" tier in MVP; the previously-planned Core / AI split has been collapsed into Free / Pro.
 - **B2B future path.** A **Labs / Teams** tier is included in marketing and pricing copy as **"Coming Soon" / "Contact Sales"** only. It is **not self-serve in MVP** and **must not be sold** until shared libraries, seat management, team-owner / admin roles, invitations, and team-level entitlements exist. Its role today is price anchoring and B2B lead capture for academic labs, clinical research groups, and dietitian / clinician teams.
 - **Billing provider.** **Merchant of Record (MoR)-first** for the web MVP (C17, 2026-05-21 — supersedes the earlier C8 Stripe-first direction). **Provider selected: Paddle** (C18, 2026-05-21). **Lemon Squeezy** remains a fallback only and would be reconsidered if Paddle onboarding fails. Paddle acts as the seller of record for payment collection, invoicing, and international tax / VAT / sales-tax operations **subject to Paddle's terms**, which reduces operational and accounting overhead for an Israel-based independent operator (it does **not** remove all tax / legal obligations). **Paddle integration is blocked** until (a) owner-side Paddle setup (Sandbox / KYB / domain / Product + $15/mo Price / customer-portal config / secrets) is complete, and (b) the launch-blocker items in §6 below are complete. (b)(1) AI quota enforcement and (b)(2) storage privacy + quota are **already complete** — see PRs #143 / #144.
-- **Storage.** Attachments / PDF storage are **in launch scope**. Attachment privacy hardening (close the public-bucket gap) and storage-quota enforcement are **launch blockers** before paid beta. See §7.
+- **Storage.** Attachments / PDF storage are **in launch scope**. Attachment privacy hardening and storage-quota enforcement were launch blockers and are now **complete and live** — see §6 items 3–4.
 - **Locale.** English-only LTR for MVP. Hebrew / RTL is out of scope.
 
 Numeric quotas, prices, and the exact Free / Pro feature split are tracked in [quotas-and-pricing.md](quotas-and-pricing.md). Every number is an **MVP baseline with instrumentation** — high-confidence starting values that must be validated against real beta usage, AI cost, and conversion data before being treated as permanent.
@@ -65,7 +69,7 @@ Every quota and entitlement gate is enforced **inside Postgres or inside an Edge
 - Client-side checks exist to give immediate UX feedback ("you've used 13/15 lifetime AI calls — upgrade to keep analyzing"). They are not a security boundary.
 - Server-side checks are the truth: AI quota is decremented and verified inside the `analyze-paper` Edge Function before Gemini is called; the storage cap is enforced by a `BEFORE INSERT` trigger on `paper_attachments`; the paper cap is enforced by the `safe_bulk_insert_papers` RPC.
 - A user with a debugger and a valid JWT cannot bypass server-side checks. They can bypass client-side ones trivially.
-- **The current `analyze-paper` Edge Function has no server-side quota check.** That is the primary blocker for paid beta and is the next implementation phase after the schema lands.
+- **`analyze-paper` enforces the AI quota server-side today.** It calls the `consume_ai_quota` SECURITY DEFINER RPC **before** invoking Gemini; when the quota is unavailable it returns the structured **HTTP 402** without calling the provider, and it calls `refund_ai_quota` best-effort if the Gemini call or response parsing fails after a successful consume. This is live in Production, not planned.
 
 ### 2.4 Read model on the hot path, history off the hot path
 
@@ -123,71 +127,56 @@ This avoids forcing every render to scan a multi-row history of subscription eve
 
 ---
 
-## 4. Proposed tables (conceptual only — none exist yet)
+## 4. Commercial tables — schema is LIVE; some behavior is still future
 
-These tables **do not exist in the schema today.** They are the agreed conceptual shape for the next schema PR. The names and field lists below are guidance; the actual migration may diverge.
+**These tables exist and are applied in Production.** They shipped in `20260521010000_add_entitlement_usage_schema.sql` (plus `user_storage_usage` in `20260521030000`). The paragraphs below describe the **as-built** schema, and flag separately where a *behavior* that writes or consumes a column is still future work.
 
-### 4.1 `user_entitlements` (one row per user)
+Two distinctions matter throughout, and must not be collapsed:
 
-The flattened, hot-path read model. Holds **what the user is allowed to do right now**.
+- **The table/column exists** (live, verified against the linked project) — versus —
+- **Something populates or consumes it** (in several cases still future, because billing ingestion does not exist).
 
-Conceptual fields:
+The authority for column-level truth is `supabase/migrations/` and the linked schema, not this document.
 
-- `user_id` (PK, references `auth.users`)
-- `plan` (e.g. `free` / `pro` — Labs values added when that tier becomes real)
-- `subscription_status` (e.g. `none` / `active` / `past_due` / `canceled` / `expired`; **no `trialing`** in MVP because there is no time-bounded trial)
-- `current_period_start`, `current_period_end` (nullable on Free)
-- `ai_monthly_quota` (e.g. 0 on Free; per-period quota on Pro)
-- `ai_lifetime_quota` (e.g. 15 on Free; null / unused on Pro)
-- `storage_quota_bytes`
-- `paper_limit`
-- `features` (small JSONB flag bag for per-account overrides — e.g. comp accounts, beta access)
+### 4.1 `user_entitlements` (one row per user) — LIVE
 
-This row is **maintained by server-side webhook ingestion and by period-rollover jobs**. The client has SELECT-only access to its own row.
+The flattened, hot-path read model: **what the user is allowed to do right now**. `handle_new_user()` seeds a Free row at signup. The client has **SELECT-own** access; all writes are server-side.
 
-### 4.2 `subscriptions` (history, one or more rows per user)
+As-built columns include `id` (PK) and a **unique** `user_id` (the doc previously described `user_id` itself as the PK), `plan` (`free` / `pro` / `labs_team`, CHECK-constrained), `plan_status` (**not** `subscription_status`), `paper_limit`, `storage_quota_bytes`, `ai_lifetime_quota`, `ai_monthly_quota`, `premium_taxonomy_enabled`, `labs_team_enabled`, `current_period_start` / `current_period_end`, the three nullable `billing_provider` / `billing_customer_id` / `billing_subscription_id` columns, `metadata` (JSONB — the flag bag previously sketched as `features`), and timestamps.
 
-Each row corresponds to a billing-provider subscription instance.
+**Live behavior:** the quota columns are read and enforced by the AI-quota RPCs and the storage triggers. **Future behavior:** the `billing_*` columns and period boundaries are **never written today** — nothing populates them until billing ingestion exists, and there is no period-rollover job.
 
-Conceptual fields:
+### 4.2 `subscriptions` (history, one or more rows per user) — LIVE, and empty by design
 
-- `id` (PK)
-- `user_id`
-- `billing_provider` (`paddle` per C18 for MVP; `apple` / `google` / `revenuecat` / `lemon_squeezy` / `stripe` / `manual` reserved for later)
-- `billing_customer_id` (Paddle Customer ID `ctm_...` for MVP)
-- `billing_subscription_id` (Paddle Subscription ID `sub_...` for MVP)
-- `plan` (e.g. `pro`)
-- `billing_period` (`monthly` / `annual`)
-- `status`
-- `current_period_start`, `current_period_end`
-- `raw_payload` (JSONB — last verified provider event, for forensics)
-- `created_at`, `updated_at`
+Provider-normalized subscription state. It is **not** the enforcement boundary — the application reads `user_entitlements`. RLS is deny-all to the client (server-only).
 
-Uniqueness: `(billing_provider, billing_subscription_id)`. Writes only by the `paddle-webhook` Edge Function (the MVP ingestion path under C18).
+As-built columns include `id`, nullable `user_id` (`ON DELETE SET NULL`, deliberate — see §6 item 7), `provider` (**not** `billing_provider`), `provider_customer_id` / `provider_subscription_id` / `provider_price_id` / `provider_product_id`, `status`, `plan`, `quantity`, period boundaries, `cancel_at_period_end`, `canceled_at`, `metadata`, and timestamps. There is no `raw_payload` column here — the verified payload lives on `subscription_events` (§4.4).
 
-### 4.3 `usage_counters` (one row per user per billing period)
+**The `provider` CHECK constraint currently allows `stripe` / `apple` / `google` / `revenuecat` / `manual` — it does not yet include `'paddle'`.** Adding that value is part of the future Paddle integration migration (§6 item 5, §7 item 7), not something already done. **The table holds no rows and nothing writes to it**, because no ingestion path is implemented.
 
-Per-period usage counters. A new row is created at each period rollover so history is preserved. On Free, the row tracks **lifetime** AI usage instead (period boundaries are `period_start = sign-up, period_end = null`).
+### 4.3 `usage_counters` (per user, per feature, per period) — LIVE
 
-Conceptual fields:
+Per-period usage counters, written only by the SECURITY DEFINER AI-quota RPCs. RLS is deny-all to the client — **there is no client SELECT policy**, which is why quota state reaches the UI through the read-only `get_ai_quota_status` RPC rather than a direct table read.
 
-- `id` (PK)
-- `user_id`
-- `period_start`, `period_end` (nullable end for the lifetime row on Free)
-- `ai_used`
-- `storage_used_bytes` (maintained by triggers on `paper_attachments`)
-- `imports_used` (optional)
-- `updated_at`
+As-built columns include `id`, `user_id`, `feature` (CHECK-constrained to `ai_analysis`), `period_type` (`lifetime` / `monthly`), `period_start` (the **`epoch` sentinel** for lifetime rows, so uniqueness works without NULL handling — not the sign-up timestamp originally sketched), `period_end`, `used` (**not** `ai_used`), `reserved`, `metadata`, and timestamps.
 
-Uniqueness: `(user_id, period_start)`. Writes only via SECURITY DEFINER RPCs.
+Note the shape correction: storage usage is **not** a column here. It lives in the separate **`user_storage_usage`** table (§4.6). The optional `imports_used` counter was never built.
 
-### 4.4 `subscription_events` (append-only audit log)
+### 4.4 `subscription_events` (append-only audit log) — LIVE, and empty by design
 
-Every webhook event we processed (Paddle for MVP per C18; Apple S2S / Google RTDN later): provider, event type, raw payload, signature verification result, resulting entitlement change, timestamp. Service-role-only writes; admin-only reads. Useful for support, dispute resolution, billing reconciliation. Idempotency: `(provider, provider_event_id)` unique on `subscription_events`. Paddle supplies a stable globally-unique `event.id` that lands directly in `provider_event_id`.
+Append-only record of processed provider events: `provider` (same CHECK set as §4.2, likewise **without** `'paddle'` today), `provider_event_id`, `event_type`, nullable `user_id` and `subscription_id`, `processed_at`, the verified `payload` JSONB, `metadata`, `created_at`. Idempotency comes from unique `(provider, provider_event_id)`. Server-only writes, no client read policy.
 
-### 4.5 `usage_credits` (future — not MVP)
+**Nothing writes to it today** — it becomes active only when webhook ingestion ships. Paddle's stable globally-unique `event.id` is what would land in `provider_event_id`.
 
-Add-on credit packs. Conceptual fields: `user_id`, `kind` (`ai`), `amount_remaining`, `purchased_at`, `expires_at`, `source` (Paddle one-time `transaction.id` for MVP per C18). Consumed by `analyze-paper` **after** the monthly quota is exhausted. Not built in MVP.
+### 4.5 `usage_credits` — table LIVE, behavior FUTURE
+
+The add-on credit-pack table exists so the shape is settled from day one (C13), with `feature`, `source` (`purchase` / `manual_grant` / `promo` / `refund`), `provider` / `provider_reference_id`, `quantity_granted`, `quantity_remaining`, `expires_at`, `metadata`, and timestamps. The client has SELECT-own access so a future Settings → Credits view needs no new policy.
+
+**The behavior is not built:** `consume_ai_quota` does **not** fall through to credits when the monthly or lifetime quota is exhausted, nothing grants credits, and the table is empty. Credit packs remain future work per C13.
+
+### 4.6 `user_storage_usage` — LIVE
+
+Per-user running total of attachment bytes, one row per user, `used_bytes` as `BIGINT` (32-bit would overflow at the future Labs/Teams 10 GB cap). Maintained by the `BEFORE INSERT` check-and-consume and `AFTER DELETE` refund triggers on `paper_attachments`. Client SELECT-own is allowed, which is what the read-only Settings → Storage gauge reads.
 
 ---
 
@@ -199,14 +188,14 @@ Every action in the table below is enforced **server-side**. Client-side checks 
 
 | Action | Client-side check (UX) | Server-side enforcement (truth) | Status |
 |---|---|---|---|
-| **Single AI analysis** | If quota exhausted or plan does not include AI, disable Analyze and show upgrade nudge. | Inside `analyze-paper`: read `user_entitlements` + `usage_counters`, atomically increment + verify `ai_used < ai_monthly_quota` (or `ai_lifetime_quota` on Free), only then call Gemini. Refund on Gemini hard failure. | **Not implemented.** Blocker for paid beta. |
-| **Bulk AI analysis** | Show "you can analyze N of M selected" and confirm before starting. | Same per-call enforcement inside `analyze-paper`. Returns structured `{ error: "quota_exceeded", reset_at }` so the bulk loop stops cleanly. | **Not implemented.** Blocker for paid beta. |
-| **Attachment upload** | Read storage used / quota; refuse oversize uploads with a clear toast. | `BEFORE INSERT` trigger on `paper_attachments` sums `size_bytes` for the user and rejects if it would exceed `storage_quota_bytes`. `AFTER INSERT/DELETE` triggers maintain `usage_counters.storage_used_bytes`. | **Not implemented.** Blocker for paid beta. |
-| **Attachment privacy** | n/a | Tighten the `attachments` storage bucket from public SELECT to owner-only RLS. Signed URLs continue as the read path. | **Not implemented.** Blocker for paid beta. |
-| **Single paper add (manual / identifier)** | If `paper_limit` would be exceeded, refuse with a clear toast. | `safe_bulk_insert_papers` RPC counts existing papers and rejects when over `paper_limit`. | **Partial** (RPC exists; per-plan limit check not wired). |
-| **Bulk import** | Refuse to start a batch larger than `import_batch_limit`; refuse if final count would exceed `paper_limit`. | Same RPC enforces atomically. | **Partial.** |
+| **Single AI analysis** | Header indicator shows used/remaining and an actionable message when the server returns 402. **No upgrade nudge exists** (C27). | Inside `analyze-paper`: the `consume_ai_quota` SECURITY DEFINER RPC atomically consumes a unit against `usage_counters` + `user_entitlements` (monthly on Pro, lifetime on Free) **before** Gemini is called; `refund_ai_quota` refunds best-effort on provider failure. | ✅ **Implemented and live.** |
+| **Bulk AI analysis** | Bulk run stops after the first authoritative quota response, with complete `analyzed + failed + not attempted = total` accounting. | Same per-call enforcement inside `analyze-paper`; the structured **HTTP 402** body lets the bulk loop stop cleanly. | ✅ **Implemented and live.** |
+| **Attachment upload** | Read-only Settings → Storage gauge shows used / quota / remaining. The raw Postgres over-quota message on rejected uploads is **not** yet a friendly toast. | `BEFORE INSERT` trigger on `paper_attachments` does an atomic quota-gated check-and-consume against `user_storage_usage.used_bytes` vs `user_entitlements.storage_quota_bytes`; `AFTER DELETE` refunds, floored at zero. | ✅ **Implemented and live.** Error-message polish outstanding. |
+| **Attachment privacy** | n/a | Bucket is `public = false`; the owner-scoped SELECT policy keys on the `{userId}/{paperId}/…` path prefix. Signed URLs are the client read path. | ✅ **Implemented and live.** |
+| **Single paper add (manual / identifier)** | None today. *Intended:* refuse with a clear toast if `paper_limit` would be exceeded. | `safe_bulk_insert_papers` performs the atomic ownership-scoped insert, but **does not read `paper_limit` at all**. *Intended:* count existing papers and reject over the cap. | **Partial.** The RPC exists and is the right enforcement point; the per-plan cap is **not wired**. `user_entitlements.paper_limit` is stored but never enforced. |
+| **Bulk import** | None today. *Intended:* refuse a batch larger than `import_batch_limit`, or one whose final count would exceed `paper_limit`. | Same RPC, same gap — no cap check. | **Partial**, for the same reason. Not a C27-blocked item: it is unbuilt enforcement, not billing. |
 | **Identifier metadata fetch (PubMed / Crossref)** | None for MVP. | Function already caps each request at 50 identifiers. No per-month metering for MVP. | Sufficient. |
-| **Synonyms / Exclusions feature access (Pro-only)** | Hide / disable feature surface for Free. | Server-side check at the relevant RPC / hook; Free users get a clear "upgrade to Pro" error. | **Not implemented.** Required at paid beta if the feature stays user-visible. |
+| **Synonyms / Exclusions feature access (Pro-only)** | *Intended:* hide / disable the feature surface for Free. | *Intended:* server-side check at the relevant RPC. `user_entitlements.premium_taxonomy_enabled` exists to carry this but is **read by nothing**. | **Not implemented.** Both pools are fully usable by every account today. Remains a launch blocker if they stay user-visible. |
 | **Export (CSV / RIS / BibTeX, and the PFA-C02 full account ZIP export)** | None. | None for MVP — exporting one's own data is a baseline expectation, and data portability must not sit behind a plan. | Sufficient. Both export paths are implemented and deliberately ungated. |
 
 ### 5.2 The AI quota RPC pattern
@@ -240,10 +229,10 @@ When `consume_ai_quota` would return `quota_exceeded`, a future variant checks `
 
 The following items **must** be complete before opening the closed paid pilot (Paddle Live mode under C18). They are the minimum bar at which charging users is defensible.
 
-1. **Entitlement + quota schema.** ✅ **Implemented** in migration `20260521010000_add_entitlement_usage_schema.sql` (repo only — remote deploy pending). Five tables: `user_entitlements`, `subscriptions`, `usage_counters`, `subscription_events`, `usage_credits`. RLS posture: client SELECT-own only on `user_entitlements` and `usage_credits`; everything else server-only. Signup trigger extended to seed Free defaults. See [migration-history.md](migration-history.md) under "Commercial foundation — entitlement and usage schema".
-2. **Server-side AI quota enforcement inside `analyze-paper`.** ✅ **Implemented** in migration `20260521020000_add_ai_quota_rpcs.sql` + the `analyze-paper` Edge Function (repo only — remote DB push + Edge Function deploy pending). `consume_ai_quota` is called before Gemini; on `allowed=false` the function returns HTTP 402 `Payment Required` with a structured body and does not invoke Gemini. `refund_ai_quota` is called best-effort if the Gemini call or response parsing fails after a successful consume. See [migration-history.md](migration-history.md) under "Commercial foundation — AI quota enforcement".
+1. **Entitlement + quota schema.** ✅ **Implemented and applied to Production.** Migration `20260521010000_add_entitlement_usage_schema.sql` is in the aligned ledger. Five tables: `user_entitlements`, `subscriptions`, `usage_counters`, `subscription_events`, `usage_credits`. RLS posture: client SELECT-own only on `user_entitlements` and `usage_credits`; everything else server-only. Signup trigger extended to seed Free defaults. See [migration-history.md](migration-history.md) under "Commercial foundation — entitlement and usage schema".
+2. **Server-side AI quota enforcement inside `analyze-paper`.** ✅ **Implemented, applied, and deployed.** Migration `20260521020000_add_ai_quota_rpcs.sql` is applied to Production and the `analyze-paper` Edge Function is deployed. `consume_ai_quota` is called before Gemini; on `allowed=false` the function returns HTTP 402 `Payment Required` with a structured body and does not invoke Gemini. `refund_ai_quota` is called best-effort if the Gemini call or response parsing fails after a successful consume. See [migration-history.md](migration-history.md) under "Commercial foundation — AI quota enforcement".
 3. **Attachment bucket privacy hardening.** ✅ **Already implemented** in `20260327100000_private_attachments_bucket.sql` (repo-tracked, applied to remote since March 2026; retro-documented in `migration-history.md` during PR #144). Bucket is `public = false`; `attachments_owner_read` SELECT policy keys on the `{userId}/{paperId}/…` path prefix. Signed URLs are the client read path.
-4. **Storage quota enforcement.** ✅ **Implemented** in `20260521030000_harden_attachment_privacy_and_storage_quota.sql` (repo only — remote `db push` pending). Dedicated `user_storage_usage` table (BIGINT-typed `used_bytes`); `BEFORE INSERT` trigger does atomic check-and-increment via a single quota-gated UPDATE; `AFTER DELETE` trigger decrements floored at zero. Backfill computes real usage per existing user.
+4. **Storage quota enforcement.** ✅ **Implemented and applied to Production** via `20260521030000_harden_attachment_privacy_and_storage_quota.sql`. Dedicated `user_storage_usage` table (BIGINT-typed `used_bytes`); `BEFORE INSERT` trigger does atomic check-and-increment via a single quota-gated UPDATE; `AFTER DELETE` trigger decrements floored at zero. Backfill computes real usage per existing user.
 5. **Paddle integration** (C18, 2026-05-21; selected via the MoR provider-selection audit recorded in `migration-history.md` and PR #145's follow-up). Three Edge Functions: `paddle-webhook` (idempotent ingestion into `subscriptions` + recompute of `user_entitlements` via `recompute_entitlement_from_subscription`); `create-payment-session` (authenticated; creates a Paddle checkout/transaction with `custom_data: { supabase_user_id }`); `create-customer-portal-session` (authenticated; returns the Paddle customer portal URL). Signature verification on `paddle-webhook` is **mandatory** (`Paddle-Signature` header → `HMAC-SHA256(secret, ts + ":" + rawBody)` against `h1`; 5-second timestamp tolerance — public `atomica-software/deno_paddle_verify` library is the recommended helper). All provider-specific configuration lives in Supabase secrets (`PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_PRO_MONTHLY_PRICE_ID`, `APP_URL`); no client-side Paddle SDK; no `VITE_PADDLE_*` secret of any kind. A small migration extends the `provider` CHECK constraint on `subscriptions` and `subscription_events` to include `'paddle'` (and adds the value to `user_entitlements.billing_provider`, which has no CHECK today). **Implementation of this PR is blocked until owner-side Paddle setup is complete** — see `owner-decisions.md §2.1`.
 6. **Privacy policy + terms + support URL + AI disclosure** linked from inside the app (URLs hosted on the external marketing site — see §11).
 7. **In-app account deletion.** ✅ **Implemented** (PFA-C04): the `delete-account` Edge Function authenticates the caller, requires the exact typed confirmation phrase server-side, deletes every Storage object under the account's `{userId}/` bucket prefix through the Storage API, and then calls `auth.admin.deleteUser(userId, false)` — a hard delete. Owned database rows are removed by the existing `ON DELETE CASCADE` foreign keys, so **no deletion RPC and no migration were required**; the cascade is pinned by `supabase/tests/database/008_account_deletion_cascade.test.sql`. The confirmation UI is Settings → Danger zone. **Retention exception:** `subscriptions.user_id` and `subscription_events.user_id` are `ON DELETE SET NULL` by design (§4.2 / §4.4), so those rows survive with a NULL `user_id` rather than being deleted. That is harmless today — C27 pauses billing, so no provider data reaches them — but **before commercial or public launch, provider/billing audit-history retention must be re-evaluated against the applicable legal and privacy requirements** (what may be retained, for how long, and in what form) once those tables actually hold real provider data. No retention policy is asserted here.
@@ -258,16 +247,18 @@ Items not on this list (mobile packaging, app-store assets, Labs/Teams shared li
 
 ## 7. Recommended future implementation order
 
-The next ~6 PRs are blocked by each other in a clear order. This is the recommended sequence:
+**Items 1–5 are complete and live** — the commercial *foundations* (entitlement/usage schema, server-side AI quota, attachment privacy, storage quota, provider selection) are built, applied to Production, and no longer pending anything. They are retained below as the record of what the later steps build on, not as outstanding work.
+
+**The resume point is item 6**, and it is **paused under C27**. Nothing from item 6 onward may be started without a new explicit owner decision — this section is a reactivation sequence, not a work queue.
 
 1. **Commercial strategy docs pivot** *(PR #141, merged 2026-05-21).* ✅ Done.
-2. **Entitlement + usage schema** — migration + RLS + Free-tier seeding for the existing user. ✅ **Implemented** in `20260521010000_add_entitlement_usage_schema.sql` (remote deploy pending).
-3. **AI quota enforcement in `analyze-paper`** — `consume_ai_quota` / `refund_ai_quota` RPCs + Edge Function wiring. ✅ **Implemented** in `20260521020000_add_ai_quota_rpcs.sql` + the `analyze-paper` Edge Function (remote deploy pending). Client UI for quota state + quota-exceeded toast is **deferred** to a later PR — the Edge Function already returns a structured 402 body that the UI consumes later.
-4. **Attachments privacy hardening + storage-quota enforcement** — ✅ **Completed.** Privacy hardening was previously done by `20260327100000` (retro-documented). Storage-quota enforcement implemented in `20260521030000_harden_attachment_privacy_and_storage_quota.sql` (remote deploy pending).
+2. **Entitlement + usage schema** — migration + RLS + Free-tier seeding. ✅ **Done — applied to Production.**
+3. **AI quota enforcement in `analyze-paper`** — `consume_ai_quota` / `refund_ai_quota` RPCs + Edge Function wiring. ✅ **Done — applied and deployed.** The client quota surface also shipped: a header usage indicator plus an actionable message on the 402. It is **transparency only** — no upgrade, checkout, or paywall path was added (C27).
+4. **Attachments privacy hardening + storage-quota enforcement** — ✅ **Done — applied to Production** (`20260327100000` privacy; `20260521030000` quota). The read-only Settings → Storage gauge also shipped, again transparency-only.
 5. **MoR provider-selection audit** — short audit between Paddle and Lemon Squeezy producing a dated C18 owner decision recording the choice. ✅ **Completed (C18, 2026-05-21) — Paddle selected.** Lemon Squeezy retained as fallback only. See `decisions-and-triggers.md` C18.
 6. **Owner-side Paddle setup gate** (no code; owner action). Paddle Sandbox account; KYB / business verification; domain verification; Product creation; $15 / month recurring Price; capture Price ID; Paddle API key; webhook signing secret once endpoint is registered; customer portal config; `APP_URL` decided. **Paused (C27) — off the active critical path; not the recommended next task.** This sequence resumes only after a new explicit owner decision to return to launch work.
 7. **Paddle integration** — three Edge Functions (`paddle-webhook`, `create-payment-session`, `create-customer-portal-session`) + `_shared/paddle.ts` initializer + two SECURITY DEFINER RPCs (`set_billing_customer`, `recompute_entitlement_from_subscription`) + a small migration extending the `provider` CHECK constraints to include `'paddle'`. Blocked on #6 (owner setup gate).
-8. **UI: paywall / upgrade / quota state** — `<UpgradeNudge>` component, per-action quota display, Settings → subscription / Paddle customer portal / cancel; quota-aware error toasts surfacing the existing 402 (AI) and the `Storage quota exceeded` Postgres error (storage).
+8. **UI: paywall / upgrade** — `<UpgradeNudge>` component, Settings → subscription / Paddle customer portal / cancel. **Not** quota *display*: the AI header indicator, the 402 message, and the Settings → Storage gauge already shipped as transparency-only surfaces. What remains here is strictly the upgrade/checkout path, plus friendlier surfacing of the raw `Storage quota exceeded` Postgres error.
 9. **Privacy + AI disclosure + support links** — external URLs wired into the app. The **account-deletion** half of this item is already done (PFA-C04: the `delete-account` Edge Function plus the Settings → Danger zone surface); what remains here is the legal/marketing URL wiring, which still depends on the marketing site (§11).
 10. **Closed technical beta on Paddle Sandbox.** Internal testing only; not "paid beta" because Paddle is in Sandbox mode.
 11. **Closed paid pilot on Paddle Live** — small invited cohort with real charges.
