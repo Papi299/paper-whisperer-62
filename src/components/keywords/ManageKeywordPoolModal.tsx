@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Plus, Trash2, Upload, X } from "lucide-react";
 import { PoolKeyword } from "@/hooks/useKeywordPool";
 import { cn } from "@/lib/utils";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 
 interface ManageKeywordPoolModalProps {
   open: boolean;
@@ -44,6 +45,11 @@ export function ManageKeywordPoolModal({
   const [bulkKeywords, setBulkKeywords] = useState("");
   const [selectedForImport, setSelectedForImport] = useState<Set<string>>(new Set());
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  // Same rule as the Projects/Tags managers: opening the pool is a request to
+  // read it, so a coarse pointer lands on the heading instead of "Add a
+  // keyword…" and the badge list can be panned straight away. Scoped to this
+  // dialog — the Bulk Add / Import sub-dialogs are untouched.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   const handleAddKeyword = async () => {
     if (newKeyword.trim()) {
@@ -89,9 +95,11 @@ export function ManageKeywordPoolModal({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="bg-background max-w-lg">
+        <DialogContent className="bg-background max-w-lg" onOpenAutoFocus={onOpenAutoFocus}>
           <DialogHeader>
-            <DialogTitle>Manage Keyword Pool</DialogTitle>
+            <DialogTitle ref={focusRef} tabIndex={-1} className="outline-none">
+              Manage Keyword Pool
+            </DialogTitle>
             <DialogDescription>
               Keywords in your pool are auto-detected in paper abstracts.
             </DialogDescription>

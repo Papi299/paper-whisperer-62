@@ -673,9 +673,28 @@ function DashboardContent() {
         onMobileNavOpenChange={setMobileNavOpen}
       />
       <main className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
+        {/* This region is `shrink-0` inside an `overflow-hidden` main, so
+            until now nothing in the ancestor chain owned a vertical scroll:
+            once it grew past the viewport — which only the expanded Analytics
+            Collapsible does — the excess was simply clipped and unreachable.
+            Measured on this branch's parent at 1024×768: the region wanted
+            822px of a 768px main, and the whole paper table sat below the fold
+            with no way to scroll to any of it.
+
+            `max-h-[85%] overflow-y-auto` makes it an explicit, bounded scroll
+            owner: expanded Analytics is always reachable by scrolling *within*
+            the header region, the document itself still never scrolls, and the
+            15% floor keeps the table it belongs to on screen instead of being
+            pushed to zero height. Below 85% — every viewport with Analytics
+            collapsed, and every desktop tall enough to fit it expanded — no
+            scrollbar appears and nothing about the layout changes.
+
+            Mobile (<768px) renders `MobileDashboardControls` here and puts
+            Analytics in `MobileAnalyticsSheet`, which owns its own bounded
+            scroll region; this compact stack never approaches 85%. */}
         <div
           data-testid="dashboard-controls"
-          className="flex flex-col gap-4 bg-background border-b px-4 py-3 sm:px-6 sm:py-4 shadow-sm shrink-0 z-10"
+          className="flex flex-col gap-4 bg-background border-b px-4 py-3 sm:px-6 sm:py-4 shadow-sm shrink-0 min-h-0 max-h-[85%] overflow-y-auto z-10"
         >
           {isMobile ? (
             /* Three compact levels. Everything else is one tap away behind

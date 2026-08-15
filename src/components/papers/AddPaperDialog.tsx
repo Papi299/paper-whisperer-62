@@ -33,6 +33,7 @@ import { parseFile, FileParseResult } from "@/lib/importParsers";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 
 interface ManualPaperData {
   title: string;
@@ -118,11 +119,16 @@ interface AssignmentEntity {
  *
  * Desktop keeps the compact `w-52` Command popover. Below 768px it becomes a
  * bottom sheet: the assign section sits low in an already-tall dialog, so the
- * anchored panel — pinned with `avoidCollisions={false}` — opened straight off
- * the bottom of the phone viewport, and its `CommandInput` was autofocused, so
- * tapping "Projects" raised the software keyboard over what little of the list
- * was on screen. Selection semantics are untouched: the same toggle handler and
- * the same shared `selectedProjectIds` / `selectedTagIds` arrays.
+ * anchored panel — then pinned with `avoidCollisions={false}` — opened straight
+ * off the bottom of the phone viewport, and its `CommandInput` was autofocused,
+ * so tapping "Projects" raised the software keyboard over what little of the
+ * list was on screen. Selection semantics are untouched: the same toggle
+ * handler and the same shared `selectedProjectIds` / `selectedTagIds` arrays.
+ *
+ * The popover that a tablet still gets inherited both halves of that problem
+ * because a tablet is also a finger: it now declines initial autofocus on a
+ * coarse pointer, and the collision pin is gone so a short landscape tablet
+ * flips the panel above the trigger instead of off the bottom edge.
  */
 function AssignmentSelector({
   items,
@@ -148,6 +154,12 @@ function AssignmentSelector({
   const [open, setOpen] = useState(false);
   const isMobile = useIsMobile();
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // A tablet keeps the anchored popover but is driven by a finger: opening the
+  // selector must not autofocus the CommandInput and raise the keyboard over
+  // the options. Focus goes to the popover panel (Radix gives it
+  // `tabIndex={-1}`), so it is still inside the open surface.
+  const { focusRef: popoverRef, onOpenAutoFocus } =
+    useTouchSafeInitialFocus<HTMLDivElement>();
 
   const triggerContent = (
     <>
@@ -198,7 +210,24 @@ function AssignmentSelector({
           {triggerContent}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
+      {/* `avoidCollisions={false}` was dropped on measured evidence, not on
+          principle. The assign section sits low in a tall dialog, so with a
+          realistic 12-project list the pinned panel ran 67px past the bottom
+          edge at 1024×768 — a landscape tablet — leaving its last options
+          unreachable. With collision avoidance on, Radix flips it to
+          `side="top"` there (fully on screen), and 768×1024 and 834×1194 stay
+          byte-identical to the pinned placement, so nothing that already
+          worked moved. */}
+      <PopoverContent
+        ref={popoverRef}
+        onOpenAutoFocus={onOpenAutoFocus}
+        className="w-52 p-0"
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        collisionPadding={8}
+        style={{ pointerEvents: 'auto' }}
+      >
         <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
           <CommandInput placeholder={searchPlaceholder} aria-label={searchLabel} />
           <CommandList>

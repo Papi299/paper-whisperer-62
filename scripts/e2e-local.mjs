@@ -85,6 +85,13 @@ const DEFAULT_SPECS = [
   // Beyond that it is read-only: filter and analytics-target selections are
   // in-memory, no import is ever run, and nothing else is written.
   "e2e/mobile-selectors.spec.ts",
+  // REAL-DEVICE-TOUCH-UX-REMEDIATION-001 touch/tablet focus, hit-target and
+  // analytics-overflow coverage. Creates the same kind of disposable fixtures
+  // as the spec above — two projects, one tag — plus one disposable saved
+  // search, and deletes all of them again in afterAll. Beyond that it is
+  // read-only: it measures geometry, opens and closes dialogs and popovers,
+  // and toggles in-memory filter/assignment selections. No import is ever run.
+  "e2e/touch-tablet-ux.spec.ts",
   "e2e/bulk-actions.spec.ts",
   "e2e/eager-load.spec.ts",
   "e2e/filters.spec.ts",

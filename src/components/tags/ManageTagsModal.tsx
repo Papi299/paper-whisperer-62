@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Pencil, Trash2, Plus, Tag as TagIcon } from "lucide-react";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 
 interface ManageTagsModalProps {
   open: boolean;
@@ -31,6 +32,9 @@ export function ManageTagsModal({
   onDeleteTag,
 }: ManageTagsModalProps) {
   const [newName, setNewName] = useState("");
+  // Same rule as Manage Projects: opening the dialog is not consent to create a
+  // tag, so a coarse pointer lands on the heading and the keyboard stays down.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   const handleCreate = () => {
     if (newName.trim()) {
@@ -41,9 +45,9 @@ export function ManageTagsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" onOpenAutoFocus={onOpenAutoFocus}>
         <DialogHeader>
-          <DialogTitle>
+          <DialogTitle ref={focusRef} tabIndex={-1} className="outline-none">
             Manage Tags
             {tags.length > 0 && (
               <Badge variant="secondary" className="ml-2 text-xs">{tags.length}</Badge>
