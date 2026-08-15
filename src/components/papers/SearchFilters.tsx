@@ -1,58 +1,23 @@
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, X, Download, FileText, FileSpreadsheet, BookOpen, Loader2 } from "lucide-react";
-import { KeywordFilterDropdown } from "./KeywordFilterDropdown";
-import { SearchableEntityMultiFilter } from "./SearchableEntityMultiFilter";
+import { X, Download, Loader2 } from "lucide-react";
+import { FilterControls, type FilterControlsProps } from "./FilterControls";
+import { PaperSearchField } from "./PaperSearchField";
 import { FilterPresetsMenu, type FilterPresetsMenuProps } from "./FilterPresetsMenu";
-import { Project, Tag } from "@/types/database";
-import type { EntityMatchMode } from "@/lib/filterSets";
-import type { NotesPresence } from "@/hooks/papers/types";
+import { EXPORT_FORMAT_OPTIONS } from "@/lib/exportFormats";
 import type { ExportFormat } from "@/hooks/useExportPapers";
 
-interface SearchFiltersProps {
+interface SearchFiltersProps extends Omit<FilterControlsProps, "variant"> {
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  yearFrom: string;
-  yearTo: string;
-  onYearFromChange: (year: string) => void;
-  onYearToChange: (year: string) => void;
-  studyType: string;
-  onStudyTypeChange: (type: string) => void;
-  studyTypeFilterOptions: string[];
-  notesPresence: NotesPresence;
-  onNotesPresenceChange: (v: NotesPresence) => void;
-  selectedKeywords: string[];
-  availableKeywords: string[];
-  onKeywordToggle: (keyword: string) => void;
   onClearFilters: () => void;
   onExport: (format: ExportFormat) => void;
   hasActiveFilters: boolean;
-  projects: Project[];
-  tags: Tag[];
-  selectedProjectIds: string[];
-  selectedTagIds: string[];
-  onProjectToggle: (projectId: string) => void;
-  onTagToggle: (tagId: string) => void;
-  onClearProjects: () => void;
-  onClearTags: () => void;
-  projectMatchMode: EntityMatchMode;
-  tagMatchMode: EntityMatchMode;
-  onProjectMatchModeChange: (mode: EntityMatchMode) => void;
-  onTagMatchModeChange: (mode: EntityMatchMode) => void;
   isExportReady?: boolean;
   isExporting?: boolean;
   /**
@@ -63,163 +28,39 @@ interface SearchFiltersProps {
   filterPresets: FilterPresetsMenuProps;
 }
 
+/**
+ * The desktop search + filter toolbar: one wrapping row of inline controls.
+ *
+ * This is now a thin composition of `PaperSearchField`, `FilterControls` and
+ * the actions, rather than owning that markup itself — the mobile Filters sheet
+ * renders the same `FilterControls` in its stacked variant, so the two
+ * presentations cannot drift apart in which filters they offer or what those
+ * filters mean. The rendered desktop result is unchanged.
+ */
 export function SearchFilters({
   searchQuery,
   onSearchChange,
-  yearFrom,
-  yearTo,
-  onYearFromChange,
-  onYearToChange,
-  studyType,
-  onStudyTypeChange,
-  studyTypeFilterOptions,
-  notesPresence,
-  onNotesPresenceChange,
-  selectedKeywords,
-  availableKeywords,
-  onKeywordToggle,
   onClearFilters,
   onExport,
   hasActiveFilters,
-  projects,
-  tags,
-  selectedProjectIds,
-  selectedTagIds,
-  onProjectToggle,
-  onTagToggle,
-  onClearProjects,
-  onClearTags,
-  projectMatchMode,
-  tagMatchMode,
-  onProjectMatchModeChange,
-  onTagMatchModeChange,
   isExportReady,
   isExporting = false,
   filterPresets,
+  ...filterControls
 }: SearchFiltersProps) {
-
   // Export gating: based on isExportReady (from useExportPapers)
   const exportDisabled = !isExportReady || isExporting;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-4 items-center">
-        {/* Search. The visible design is deliberately label-less, so the name is
-            carried by an `sr-only` <label> rather than by the placeholder — a
-            placeholder disappears the moment the user types. */}
-        <div className="relative flex-1 min-w-[200px]">
-          <Label htmlFor="paper-search" className="sr-only">
-            Search papers
-          </Label>
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-          <Input
-            id="paper-search"
-            placeholder={'Search titles, authors, notes, keywords... Use "..." for exact phrase'}
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-
-        {/* Year range */}
-        <div className="flex items-center gap-2">
-          <Label htmlFor="year-from" className="sr-only">
-            Published from year
-          </Label>
-          <Input
-            id="year-from"
-            type="number"
-            placeholder="From"
-            value={yearFrom}
-            onChange={(e) => onYearFromChange(e.target.value)}
-            className="w-24"
-          />
-          <span className="text-muted-foreground" aria-hidden="true">-</span>
-          <Label htmlFor="year-to" className="sr-only">
-            Published to year
-          </Label>
-          <Input
-            id="year-to"
-            type="number"
-            placeholder="To"
-            value={yearTo}
-            onChange={(e) => onYearToChange(e.target.value)}
-            className="w-24"
-          />
-        </div>
-
-        {/* Study Type. A Radix select trigger takes its name from the selected
-            value ("All Types"), which says nothing about what it filters. */}
-        <Select value={studyType} onValueChange={onStudyTypeChange}>
-          <SelectTrigger className="w-[180px]" aria-label="Filter by study type">
-            <SelectValue placeholder="Study Type" />
-          </SelectTrigger>
-          <SelectContent className="bg-popover">
-            <SelectItem value="all">All Types</SelectItem>
-            {studyTypeFilterOptions.map((type) => (
-              <SelectItem key={type} value={type}>
-                {type}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Notes presence */}
-        <Select value={notesPresence} onValueChange={(v) => onNotesPresenceChange(v as NotesPresence)}>
-          <SelectTrigger className="w-[160px]" aria-label="Filter by notes presence">
-            <SelectValue placeholder="Notes" />
-          </SelectTrigger>
-          <SelectContent className="bg-popover">
-            <SelectItem value="all">All Papers</SelectItem>
-            <SelectItem value="has">Has notes</SelectItem>
-            <SelectItem value="none">No notes</SelectItem>
-          </SelectContent>
-        </Select>
-
-        {/* Project Filter (searchable multi-select) */}
-        <SearchableEntityMultiFilter
-          items={projects}
-          selectedIds={selectedProjectIds}
-          onToggle={onProjectToggle}
-          onClear={onClearProjects}
-          allLabel="All Projects"
-          nounSingular="Project"
-          nounPlural="Projects"
-          searchPlaceholder="Search projects..."
-          emptyMessage="No projects found."
-          ariaLabel="Filter by project"
-          matchMode={projectMatchMode}
-          onMatchModeChange={onProjectMatchModeChange}
-          matchModeGroupLabel="Match projects"
-          matchAnyDescription="Match papers in at least one selected project"
-          matchAllDescription="Match papers in every selected project"
+        <PaperSearchField
+          value={searchQuery}
+          onChange={onSearchChange}
+          className="flex-1 min-w-[200px]"
         />
 
-        {/* Tag Filter (searchable multi-select) */}
-        <SearchableEntityMultiFilter
-          items={tags}
-          selectedIds={selectedTagIds}
-          onToggle={onTagToggle}
-          onClear={onClearTags}
-          allLabel="All Tags"
-          nounSingular="Tag"
-          nounPlural="Tags"
-          searchPlaceholder="Search tags..."
-          emptyMessage="No tags found."
-          ariaLabel="Filter by tag"
-          matchMode={tagMatchMode}
-          onMatchModeChange={onTagMatchModeChange}
-          matchModeGroupLabel="Match tags"
-          matchAnyDescription="Match papers with at least one selected tag"
-          matchAllDescription="Match papers with every selected tag"
-        />
-
-        {/* Keywords Dropdown */}
-        <KeywordFilterDropdown
-          selectedKeywords={selectedKeywords}
-          availableKeywords={availableKeywords}
-          onKeywordToggle={onKeywordToggle}
-        />
+        <FilterControls {...filterControls} variant="inline" />
 
         {/* Actions */}
         <div className="flex gap-2">
@@ -238,18 +79,12 @@ export function SearchFilters({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-popover">
-              <DropdownMenuItem onClick={() => onExport("csv")}>
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                Export as CSV
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onExport("ris")}>
-                <FileText className="mr-2 h-4 w-4" />
-                Export as RIS
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onExport("bibtex")}>
-                <BookOpen className="mr-2 h-4 w-4" />
-                Export as BibTeX
-              </DropdownMenuItem>
+              {EXPORT_FORMAT_OPTIONS.map(({ format, label, Icon }) => (
+                <DropdownMenuItem key={format} onClick={() => onExport(format)}>
+                  <Icon className="mr-2 h-4 w-4" />
+                  {label}
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
