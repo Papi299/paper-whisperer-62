@@ -34,7 +34,7 @@ The core application is **stable, hardened, and feature-complete at current scal
 - Paywall / upgrade UX, Free-tier feature gating, legal pages, marketing site.
 - The product is **not commercially launched**.
 
-Self-serve **account deletion** now exists (PFA-C04): **Settings → Danger zone** permanently deletes the signed-in account after the user types `DELETE MY ACCOUNT`. It runs through the privileged `delete-account` Edge Function, which derives the target user from the authenticated bearer token, deletes the account's private attachment binaries through the Storage API, and then hard-deletes the Auth user; the user's database rows are removed by the existing `ON DELETE CASCADE` foreign keys. Account *export* (PFA-C02) is the separate export-before-delete path.
+Self-serve **account deletion** is live: **Settings → Danger zone** permanently deletes the signed-in account after the user types `DELETE MY ACCOUNT`. It runs through the privileged `delete-account` Edge Function — deployed to the linked project — which derives the target user from the authenticated bearer token, deletes the account's private attachment binaries through the Storage API, and then hard-deletes the Auth user; the user's database rows are removed by the existing `ON DELETE CASCADE` foreign keys. Account *export* is the separate export-before-delete path.
 
 For the full current-state handoff, see [docs/start-here.md](docs/start-here.md).
 
@@ -120,11 +120,14 @@ Requires Node.js 20.19+ or 22.12+. Supabase project config is in `supabase/confi
 
 ## Supabase Edge Functions
 
-Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`). **Edge Function deploys are separate from frontend / Vercel deploys** — a GitHub merge alone does not update the deployed function. After any change under `supabase/functions/<name>/`, deploy explicitly:
+Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`). All four are deployed to the linked project. `get-gemini-provider-quota` is **deployed but intentionally unused** — its manager-facing dashboard is deferred under decision C29, and no frontend code calls or renders it.
+
+**Edge Function deploys are separate from frontend / Vercel deploys** — a GitHub merge alone does not update the deployed function. After any change under `supabase/functions/<name>/`, deploy each changed function explicitly:
 
 ```sh
 supabase functions deploy analyze-paper --project-ref <project-ref>
 supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
+supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>
 supabase functions deploy delete-account --project-ref <project-ref>
 ```
 
@@ -158,14 +161,38 @@ For the full deployment runbook — including pre-merge / pre-deploy / migration
 ## Testing
 
 ```sh
-npm run typecheck            # TypeScript (application + Node projects; 0 diagnostics)
-npx vitest run               # Unit / integration tests
-npx playwright test          # E2E tests (Chromium, single-worker serial)
-npx playwright test --ui     # Interactive test runner
+npm run lint                 # ESLint
+npm run typecheck            # TypeScript (application + Node projects)
+npm test                     # Unit / integration tests (Vitest)
+npm run build                # Production build
+npm run test:e2e:local       # Playwright E2E against an ephemeral local Supabase stack
+npm run test:db:local        # pgTAP database-security suites on an ephemeral local stack
 ```
 
 > Use `npm run typecheck` (not a bare `tsc --noEmit`): the root `tsconfig.json` has an empty file set, so it delegates to the `tsconfig.app.json` and `tsconfig.node.json` project references that the script checks.
 
-E2E auth credentials are in `.env.test` (dedicated test account). The Playwright suite covers the read path, filters, paper import/order, bulk actions, attachments, mutations, saved searches / filter presets (`e2e/filter-presets.spec.ts`), notes (`e2e/notes.spec.ts`), and the server-driven `Matched in:` search-attribution UI for all six sources (`e2e/search-attribution.spec.ts`).
+### Local-first end-to-end tests
 
-CI runs on GitHub Actions: the **`Validate`** workflow (`.github/workflows/validate.yml`) runs `npm ci`, lint, `npm run typecheck`, Vitest and the production build on Node 22 for every pull request to `main` and every push to `main`, and `main` is protected to require the `validate` check before merge. Playwright is deliberately **not** part of required CI — the E2E suite runs against the production Supabase project and no isolated staging project exists, so it stays a local/manual gate. Database-layer tests (pgTAP) and Edge Function (Deno) tests do not exist yet. See [docs/start-here.md](docs/start-here.md) for the full testing and merge-safety baseline.
+`npm run test:e2e:local` is the **supported, safe E2E lifecycle**. It starts an ephemeral local Supabase stack (Docker required), replays every tracked migration, applies a deterministic local-only seed, and runs the Chromium single-worker suite behind a two-layer fail-closed guard that rejects any Production or remote backend before credentials are read. Use `npm run test:e2e:local:stop` if a run is interrupted and leaves the stack up.
+
+A bare `npm run test:e2e` (plain `playwright test`) **deliberately fails closed** without an explicit local backend contract — running the suite against the Production Supabase project is not a supported path.
+
+The suite covers the read path, filters, paper import/order, bulk actions, attachments, mutations, saved searches / filter presets, notes, search attribution, account export and deletion, branding, and the responsive / mobile / touch behaviors.
+
+### Database tests
+
+pgTAP suites in `supabase/tests/database/` cover core and relational RLS isolation, RPC caller scope and grants, storage and quota enforcement, duplicate-merge behavior, publication-type provenance, function `search_path` hardening, and account-deletion cascade. `npm run test:db:local` runs them all on an ephemeral local stack alongside a framework-free verification file, an expected-failure negative control, a concurrency probe, and fail-closed teardown checks.
+
+### CI
+
+| Workflow | Runs | Required to merge? |
+|---|---|---|
+| **`Validate`** (`.github/workflows/validate.yml`) | `npm ci`, lint, typecheck, Vitest, production build on Node 22 | **Yes** — the only required check on `main` |
+| **`E2E (local)`** (`.github/workflows/e2e-local.yml`) | The same local-first Playwright lifecycle on an ephemeral local stack | No |
+| **`DB Tests`** (`.github/workflows/db-tests.yml`) | The same `test:db:local` database lifecycle | No |
+
+All three run on pull requests to `main` and pushes to `main`, use a read-only token, and require no repository secret, variable, or Environment; the two non-required workflows skip fork-origin pull requests before executing anything. None of them contact Production or any cloud Supabase project — there is **no hosted staging environment**, and local-first is the accepted path.
+
+Edge Function tests executed by a **Deno** runtime do not exist. `delete-account` is the partial exception: its request path lives in a runtime-agnostic handler plus a pure shared module, so it is covered by Vitest and additionally invoked for real as a served local Edge Function under the local E2E lifecycle.
+
+See [docs/start-here.md](docs/start-here.md) for the full testing and merge-safety baseline.

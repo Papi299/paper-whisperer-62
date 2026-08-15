@@ -22,7 +22,7 @@ Different PRs require different deploy actions. The table below maps PR scope to
 | **Docs-only** | README, `docs/*.md` (including this file) | Merge only. No runtime deploy. Vercel may rebuild but nothing user-visible changes unless the README is shipped as a docs site (not the case in this repo today). |
 | **Supabase migration** | Files under `supabase/migrations/` | Merge → run the [Supabase migration deployment](#6-supabase-migration-deployment) sequence. Vercel deploy not blocked by migration but should happen after the DB is in the expected state. |
 | **Edge Function code** | Files under `supabase/functions/<name>/`, including `supabase/functions/_shared/*` | Merge → `supabase functions deploy <name> --project-ref <project-ref>` for **every** changed function. **GitHub merge alone does not update Edge Functions.** No `supabase db push`. |
-| **Edge Function secrets** | `GEMINI_API_KEY` rotation | `supabase secrets set <NAME>=<value> --project-ref <project-ref>`. No code deploy needed unless secret values are read at module top-level (none are in this repo — both functions read `Deno.env.get` inside the request handler via `requireEdgeEnv`). |
+| **Edge Function secrets** | `GEMINI_API_KEY` rotation | `supabase secrets set <NAME>=<value> --project-ref <project-ref>`. No code deploy needed unless secret values are read at module top-level (none are in this repo — every function reads `Deno.env.get` inside the request handler via `requireEdgeEnv`). |
 | **Mixed PR** | Frontend + migration; Edge Function + frontend; etc. | Follow each applicable row above, in order: **migration first → Edge Function deploy → frontend (Vercel) last**. Frontend last so the client doesn't briefly call a Function or query a schema that hasn't caught up yet. |
 
 If a PR's report doesn't make its type obvious, look at the file paths in `git diff --stat <merge-commit>^!` against `main`.
@@ -50,7 +50,7 @@ For local dev, the same two values go in a local `.env.local` (or the existing `
 |---|---|---|
 | `GEMINI_API_KEY` | `analyze-paper` | Required for the Gemini analysis call. Without it, `analyze-paper` fails fast with a clear in-source throw (preserved by PR #139). |
 | `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota` | **Optional.** Overrides the Gemini model alias. Both functions resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never silently disagree. Unset = fallback (current behavior). |
-| `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated.** Google Cloud project that owns the Gemini API usage. Absent → the provider-quota panel fails soft ("not configured"); ordinary analysis is unaffected. |
+| `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated, and currently inert.** Google Cloud project that owns the Gemini API usage. Under C29 **no frontend surface calls this function**, so these three secrets affect nothing today; absent, the function's own response is a bounded "not configured" and ordinary analysis is unaffected. |
 | `GOOGLE_MONITORING_CLIENT_EMAIL` | `get-gemini-provider-quota` | Service-account email for the Monitoring reader (below). |
 | `GOOGLE_MONITORING_PRIVATE_KEY` | `get-gemini-provider-quota` | Service-account private key (PEM). Escaped `\n` newlines are normalized in-code. **Never** exposed to the browser, logged, or committed. |
 
@@ -88,7 +88,8 @@ Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_sh
 
 Before clicking **Merge** on the PR:
 
-- [ ] **The required `Validate` GitHub Actions check is green on the PR's latest head.** `main` is protected to require it: the `.github/workflows/validate.yml` workflow (`npm ci`, lint, `npm run typecheck`, Vitest, production build on Node 22) must pass before the **Merge** button is enabled — a PR cannot be merged while it is pending or failing, and pushing a new commit re-runs it against the new head under strict/up-to-date mode. This required check — **not** operator-attested local validation — is the authoritative merge gate. Playwright is deliberately **not** part of it (production-backed E2E, no isolated staging); run it locally when UI behavior changes. Zero human approvals are required, but unresolved PR conversations block the merge.
+- [ ] **The required `Validate` GitHub Actions check is green on the PR's latest head.** `main` is protected to require it: the `.github/workflows/validate.yml` workflow (`npm ci`, lint, `npm run typecheck`, Vitest, production build on Node 22) must pass before the **Merge** button is enabled — a PR cannot be merged while it is pending or failing, and pushing a new commit re-runs it against the new head under strict/up-to-date mode. This required check — **not** operator-attested local validation — is the authoritative merge gate. Zero human approvals are required, but unresolved PR conversations block the merge.
+- [ ] **Review the two non-required workflows as evidence, not as gates.** `E2E (local)` (`.github/workflows/e2e-local.yml`) and `DB Tests` (`.github/workflows/db-tests.yml`) also run on pull requests to `main`. Both execute against an **ephemeral local Supabase stack**, never Production, and neither is in `main` branch protection — a red or skipped run does not block the **Merge** button, so read them deliberately. Fork-origin pull requests skip both before any execution. Promoting either to a required check is an unresolved owner decision (D5) — do **not** describe them as required.
 - [ ] PR scope matches the title and description — no surprise migration, no surprise Edge Function change, no commercial-doc edit smuggled in.
 - [ ] Docs are updated alongside the change, per [`docs/documentation-policy.md`](documentation-policy.md). The PR report ends with a "Documentation updates" section.
 - [ ] **If the PR adds a migration:**
@@ -113,15 +114,31 @@ Before clicking **Merge** on the PR:
 These are **pre-deploy** checks on the merged `main` (and, run before pushing, useful pre-push evidence). They are no longer the authoritative merge gate — the required `Validate` GitHub Actions check (§4) is. Run them from the project root on the merged `main` (after `git pull --ff-only origin main`):
 
 ```sh
-npm run typecheck                         # tsconfig.app.json + tsconfig.node.json (0 diagnostics)
-npx vitest run
-npx eslint .                              # or scope to touched files for speed
+npm run lint                              # ESLint (0 errors)
+npm run typecheck                         # tsconfig.app.json + tsconfig.node.json
+npm test                                  # Vitest
+npm run build                             # production build
 supabase migration list --linked          # confirm Local = Remote on every row
 ```
 
+When UI behavior changed, run the **safe local E2E lifecycle** — never a Production-backed Playwright run:
+
+```sh
+npm run test:e2e:local                    # ephemeral local Supabase stack, fail-closed guard
+npm run test:e2e:local:stop               # only if an interrupted run left the stack up
+```
+
+When database code changed (migration, RPC, RLS, grants, triggers):
+
+```sh
+npm run test:db:local                     # pgTAP suites on an ephemeral local stack
+```
+
+A bare `npm run test:e2e` (plain `playwright test`) **deliberately fails closed** without an explicit local backend contract. Do not attempt to point Playwright at the linked/Production project — the merged two-layer guard rejects it, and doing so is not a supported operational path.
+
 - **Do not use plain `npx tsc --noEmit` as a check** — the root solution-style `tsconfig.json` has an empty file set, so it validates nothing (2026-07-18 audit). Use `npm run typecheck`, which runs both project references: `typecheck:app` (`tsc --noEmit -p tsconfig.app.json`) and `typecheck:node` (`tsc --noEmit -p tsconfig.node.json`). Both now pass with **0 diagnostics** (TYPESCRIPT-BASELINE-001, 2026-07-20). **Edge Functions are not covered by tsc** (they target Deno; not part of any `tsconfig` `include`). Edge Function code is bundled and checked by Deno during `supabase functions deploy`.
-- `npx vitest run` should pass in full. A count change versus the previous run usually means tests were added/removed in the PR; verify against the PR's stated test delta.
-- `npx eslint .` should be 0 errors. Pre-existing warnings (e.g. `react-hooks/exhaustive-deps` on `PaperList.tsx:302`, `useBulkMutations.ts:217/366`, `usePaperMutations.ts:235`) are tolerated; **new** warnings on touched files are not.
+- `npm test` should pass in full. A count change versus the previous run usually means tests were added/removed in the PR; verify against the PR's stated test delta.
+- `npm run lint` should be 0 errors. Pre-existing warnings (e.g. `react-hooks/exhaustive-deps` on `PaperList.tsx:302`, `useBulkMutations.ts:217/366`, `usePaperMutations.ts:235`) are tolerated; **new** warnings on touched files are not.
 - `supabase migration list --linked` (from a worktree linked to the project — `/Users/maor/Documents/GitHub/paper-whisperer-62` on the primary dev box) should show **identical values in the Local and Remote columns on every row**. Drift is the trigger for §6.2.
 
 **Do not** run `supabase db push` unless the PR added a migration. **Do not** run `supabase functions deploy` unless the PR touched `supabase/functions/`. Running them anyway is usually a no-op but adds noise — and `db push` with stale state can re-attempt already-applied migrations.
@@ -186,11 +203,11 @@ The Supabase CLI runs Deno bundling at deploy time and surfaces compile errors b
 - Afterwards, use the strongest comparison the chosen mechanism actually supports: **byte** comparison when it demonstrably returns the uploaded source representation; otherwise **semantic** comparison of the changed behavior, or a **differential** comparison of the old and new read-backs taken through the same mechanism (capture the previous version before deploying).
 - Record the resulting version and `ezbr_sha256` in the rollout entry in [`migration-history.md`](migration-history.md); do not treat any particular version or hash as a fixed baseline here.
 
-### 7a. `delete-account` — deploy BEFORE merging (PFA-C04)
+### 7a. `delete-account` — endpoint-before-UI ordering, and never smoke-test it destructively
 
-`delete-account` is the first Edge Function whose **absence is user-visible**. Merging to `main` auto-deploys the frontend (§8), which means the Settings → Danger zone button goes live the moment the PR lands. Edge Functions do **not** ship with that merge. Merging first would therefore put a working destructive button in front of users while the endpoint it calls does not exist — every attempt would fail with the generic error.
+**Current state: `delete-account` is deployed and live**, and the Settings → Danger zone flow calls it in Production. The two rules below are durable and apply to every future change to this function.
 
-The required order is:
+**Rule 1 — the endpoint must never lag the UI that calls it.** Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge. So for any change that makes a *new* destructive surface reachable, deploy the function first:
 
 ```text
 1. independent review approves the exact PR head
@@ -202,16 +219,16 @@ The required order is:
 6. verify merged-main CI + the automatic Vercel Production deployment
 ```
 
-**Non-destructive Production verification only.** Never "smoke test" this function by deleting a real account — not the owner's, and not a throwaway account created for the purpose. The safe checks are:
+The same rule runs in reverse on rollback: redeploy the previous function version **before** reverting the frontend. The button must never outlive the endpoint.
+
+**Rule 2 — non-destructive Production verification only.** Never "smoke test" this function by deleting a real account — not the owner's, and not a throwaway account created for the purpose. The safe checks are:
 
 - `OPTIONS` returns 200 with the CORS headers (preflight, mutates nothing);
 - `GET` returns `405 method_not_allowed`;
 - `POST` with no Authorization header returns `401 unauthenticated`;
 - `POST` with a valid token and a *wrong* confirmation phrase returns `400 invalid_confirmation`.
 
-Each of those is refused before any privileged client is constructed, so none can delete anything. Correctness of the destructive path itself is established before rollout by the Vitest suites, the pgTAP cascade suite (`008_account_deletion_cascade`), and the local destructive Playwright spec running against an ephemeral local stack — not by a Production deletion.
-
-If the function ever has to be rolled back, redeploy the previous version **before** reverting the frontend, for the same reason: the button must never outlive the endpoint.
+Each of those is refused before any privileged client is constructed, so none can delete anything. Correctness of the destructive path itself is established by the Vitest suites, the pgTAP cascade suite (`008_account_deletion_cascade`), and the destructive Playwright spec running against an ephemeral local stack — never by a Production deletion.
 
 ---
 
@@ -219,17 +236,17 @@ If the function ever has to be rolled back, redeploy the previous version **befo
 
 The frontend deploys from `main` to Vercel. The repository ships [`vercel.json`](../vercel.json) with a single SPA-rewrite rule (`/((?!assets/).*) → /index.html`); env vars are configured in the Vercel project dashboard, not in `vercel.json`.
 
-What we know:
-- The frontend production target is Vercel.
+**Vercel Git integration is the Production deployment model.** Merging to `main` creates a **Production** deployment on `app.paperlume.app` automatically; every pull-request head gets a **Preview** deployment. There is **no manual promote step**, and no `vercel deploy` is run by hand as part of the normal release path.
+
 - Required client env vars (§3.1) must be configured in the Vercel project before any deploy that needs them.
-- A Vercel build with either `VITE_*` var missing will produce a bundle that throws the PR #138 fail-fast error at module load in the browser console.
+- A Vercel build with either `VITE_*` var missing will produce a bundle that throws the client-env fail-fast error at module load in the browser console.
+- Vercel is **not** a required GitHub status check — a failed or pending Vercel deployment does not block the **Merge** button. The `Validate` check (§4) is the only merge gate.
 
-What is **not** specified in this repo and intentionally left to the operator:
-- Branch protection / auto-deploy / preview-deploy configuration (lives in the Vercel project settings, not in this repo).
-- Whether Vercel deploys are gated by a status check; verify in the Vercel project before assuming.
-- Rollback procedure for the frontend (use Vercel's deployment history UI; not codified here).
+What lives in the Vercel project settings rather than in this repository, and must be verified there rather than assumed:
+- Deployment protection, build/environment configuration, and domain assignment.
+- Rollback: use Vercel's deployment history (promote a prior READY Production deployment). Not codified here.
 
-If Vercel automation is not yet set up for a given environment, follow the hosting provider's standard manual-deploy workflow. Do not invent automation in this doc that isn't actually configured.
+**Never hand-deploy the frontend to work around a failing merge.** If Production is wrong, either land a fix through the normal PR path or roll back through Vercel's deployment history.
 
 ---
 
@@ -468,6 +485,7 @@ No code redeploy needed; the next function invocation picks up the new secret.
 - **Do not use service-role keys in client code.** The repo currently has zero service-role references in `src/` (verified). Keep it that way. RLS plus the SECURITY DEFINER `auth.uid()` guards from PR #130 are the security boundary.
 - **Do not run `supabase db push`** for docs-only or client-only PRs. Even if it's a no-op, it adds noise; with stale local state it can re-trigger already-applied migrations.
 - **Do not run `supabase db push --include-all`** unless you are deliberately reproducing the PR #131 / #132 reconciliation pattern with the same audit-first discipline. The `--include-all` flag bypasses ordering safety.
+- **Do not run Playwright against Production or any linked/cloud Supabase project.** The supported lifecycle is `npm run test:e2e:local` on an ephemeral local stack; a bare `npm run test:e2e` fails closed by design. Do not work around the guard.
 - **Do not assume Vercel deploys Edge Functions.** It doesn't. Edge Function code only updates via `supabase functions deploy <name>`.
 - **Do not deploy a frontend that depends on a migration before the migration is applied.** Order: migration → Edge Function (if any) → frontend.
 
@@ -492,9 +510,9 @@ No code redeploy needed; the next function invocation picks up the new secret.
 > - **Migrations applied:** `20260725090000` **and** the grant-hardening `20260726120000` (which `REVOKE`s direct `internal_user_access` privileges from `PUBLIC`/`anon`/`authenticated` as defense in depth atop FORCE RLS + no policy). Ledger aligned through `20260726120000` (68 rows).
 > - **Owner bootstrap complete and verified** (owner internal role + AI-quota exemption + Pro-baseline entitlement, confirmed via the read-only RPCs; usage history preserved; no subscription/billing identity created).
 > - **Google Monitoring configured:** `monitoring.googleapis.com` + `iam.googleapis.com` enabled on the Gemini project; a narrowly-privileged Monitoring service account holds **only** `roles/monitoring.viewer`; the three Google Edge secrets `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_MONITORING_CLIENT_EMAIL`, `GOOGLE_MONITORING_PRIVATE_KEY` are set (`GEMINI_MODEL` intentionally unset).
-> - **Deployed functions:** `fetch-paper-metadata` **v10**, `analyze-paper` **v15**, `get-gemini-provider-quota` **v3**.
-> - **Billing intentionally DISABLED** on the Gemini project; **provider monitoring is unavailable** (the deployed v3 function's Cloud Monitoring call returns HTTP 403 — see the read-only evidence in decision **C29**). Read-only investigation confirmed: billing disabled, **no** project-level IAM deny policy, **no** parent org/folder.
-> - **Frontend no longer calls or renders provider monitoring.** Under **C29** (scope normalization task 001Y) the frontend provider-quota card, fetch hook, client library, their tests, and the orphaned query key were removed. The deployed v3 function is **retained but intentionally unused** — deferred infrastructure, not active product functionality.
+> - **Deployed functions:** all four functions in `supabase/functions/` are deployed and ACTIVE. Deployed version numbers are volatile — read them back with `supabase functions list --project-ref <project-ref>` rather than trusting a snapshot recorded here.
+> - **Billing intentionally DISABLED** on the Gemini project; **provider monitoring is unavailable** (the deployed provider-quota function's Cloud Monitoring call returns HTTP 403 — see the read-only evidence in decision **C29**). Read-only investigation confirmed: billing disabled, **no** project-level IAM deny policy, **no** parent org/folder.
+> - **Frontend no longer calls or renders provider monitoring.** Under **C29** (scope normalization task 001Y) the frontend provider-quota card, fetch hook, client library, their tests, and the orphaned query key were removed. The deployed provider-quota function is **retained but intentionally unused** — deferred infrastructure, not active product functionality.
 > - **No Production rollback or deletion occurred in 001Y.** No migration, secret, Edge deploy/invocation, Google/billing/IAM, Vercel, or merge mutation was performed by the scope-normalization task.
 >
 > **Do NOT enable Google Cloud billing during development.** Under C27 (commercialization paused) + C29 (Free Tier), the correct posture is the working Gemini Free Tier with billing off; Gemini usage/limits are checked **manually via Google AI Studio**. Reactivating the dashboard (and any billing change) requires a new explicit commercialization decision. See decisions **C28** and **C29** in [decisions-and-triggers.md](decisions-and-triggers.md).
@@ -503,7 +521,7 @@ This feature adds internal `owner`/`manager` roles (separate from the commercial
 
 ### 13.1 Google Cloud prerequisites (owner-side; not repo actions) — DEFERRED (reactivation only)
 
-> **Deferred under C29.** §13.1–§13.5 are the **reactivation runbook for when commercialization resumes** — they are **not** development-phase steps. The Google Monitoring API, service account, `roles/monitoring.viewer`, and Edge secrets already exist from the C28 staged deployment; the deployed v3 function is retained but unused. During development, do **not** run these steps, and do **not** enable billing.
+> **Deferred under C29.** §13.1–§13.5 are the **reactivation runbook for when commercialization resumes** — they are **not** development-phase steps. The Google Monitoring API, service account, `roles/monitoring.viewer`, and Edge secrets already exist from the C28 staged deployment; the deployed provider-quota function is retained but unused. During development, do **not** run these steps, and do **not** enable billing.
 
 Required before the provider-quota panel can return data. Absent, the panel fails soft ("not configured") and ordinary analysis is unaffected.
 
@@ -546,7 +564,7 @@ A manager is granted the same way but with `role = 'manager'` and **without** `a
 
 ### 13.4 Deployment order (each Production mutation separately authorized) — DEFERRED (reactivation only)
 
-> **Deferred under C29.** The backend steps (migrations, owner bootstrap, secrets, function deploys → `analyze-paper` v15 / `get-gemini-provider-quota` v3) are **already complete**. This ordered sequence is retained for a future commercialization reactivation of the dashboard; step 9's "frontend head" no longer includes a provider-quota surface (removed under C29). Do not enable billing as part of development.
+> **Deferred under C29.** The backend steps (migrations, owner bootstrap, secrets, function deploys for `analyze-paper` and `get-gemini-provider-quota`) are **already complete**. This ordered sequence is retained for a future commercialization reactivation of the dashboard; step 9's "frontend head" no longer includes a provider-quota surface (removed under C29). Do not enable billing as part of development.
 
 1. Independently approve the exact PR head.
 2. Owner configures/confirms the Google Cloud Monitoring project (§13.1 steps 1–2).
