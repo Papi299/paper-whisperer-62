@@ -23,6 +23,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Plus, X, Trash2 } from "lucide-react";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { ExcludedKeyword, ExcludedStudyType } from "@/hooks/useExclusionPools";
 
 interface ManageExclusionsModalProps {
@@ -52,6 +53,11 @@ export function ManageExclusionsModal({
 }: ManageExclusionsModalProps) {
   const [newKeyword, setNewKeyword] = useState("");
   const [newStudyType, setNewStudyType] = useState("");
+  // Same rule as Manage Tags / Manage Projects: opening the dialog is not
+  // consent to type an exclusion, so a coarse pointer lands on the heading
+  // rather than on the first tabbable element — which here is the excluded-
+  // keyword input — and the software keyboard stays down.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   const handleAddKeyword = async () => {
     if (newKeyword.trim()) {
@@ -69,9 +75,11 @@ export function ManageExclusionsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-background max-w-lg">
+      <DialogContent className="bg-background max-w-lg" onOpenAutoFocus={onOpenAutoFocus}>
         <DialogHeader>
-          <DialogTitle>Manage Exclusion Pools</DialogTitle>
+          <DialogTitle ref={focusRef} tabIndex={-1} className="outline-none">
+            Manage Exclusion Pools
+          </DialogTitle>
           <DialogDescription>
             Excluded keywords and study types are hidden from display.
           </DialogDescription>

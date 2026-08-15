@@ -280,6 +280,62 @@ test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-001 — coarse pointer", () => {
     });
   }
 
+  /**
+   * Manage Exclusions gets its own case rather than a row in MANAGE_DIALOGS:
+   * it is the only management dialog with *two* create fields, so the shared
+   * shape above would only prove the first one is left alone. This asserts the
+   * whole contract — the heading is the deliberate target, neither exclusion
+   * field is focused, and both still take an explicit tap.
+   */
+  test("Manage exclusions opens on its heading, not either exclusion field", async ({ page }) => {
+    await page.setViewportSize(TABLET_PORTRAIT);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await page.getByRole("button", { name: "Manage exclusions", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    const active = await activeElement(page);
+    expect(
+      active.isTextEntry,
+      `opening must not focus a text field (focused ${active.tag}#${active.id})`,
+    ).toBe(false);
+    expect(active.isBody, "focus must not be dropped on <body>").toBe(false);
+    expect(await activeElementIsInside(dialog), "focus stays inside the open dialog").toBe(true);
+    await expect(
+      dialog.getByRole("heading", { name: "Manage Exclusion Pools" }),
+      "the dialog heading is the deliberate coarse-pointer target",
+    ).toBeFocused();
+
+    const keyword = dialog.getByRole("textbox", { name: "Keyword to exclude" });
+    const studyType = dialog.getByRole("textbox", { name: "Study type to exclude" });
+    await expect(keyword, "the keyword field is not autofocused").not.toBeFocused();
+    await expect(studyType, "the study-type field is not autofocused").not.toBeFocused();
+
+    // Both fields still accept an explicit tap. Neither probe is submitted, so
+    // this writes no exclusion record.
+    await keyword.click();
+    await expect(keyword).toBeFocused();
+    await keyword.fill("zz probe keyword");
+    await expect(keyword).toHaveValue("zz probe keyword");
+
+    await studyType.click();
+    await expect(studyType).toBeFocused();
+    await studyType.fill("zz probe study type");
+    await expect(studyType).toHaveValue("zz probe study type");
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    // The sidebar opener carries `aria-label="Manage exclusions"`, so this
+    // identifies the restored node without holding a handle across the close.
+    const restored = await activeElement(page);
+    expect(restored.isBody, "focus restored off <body>").toBe(false);
+    expect(restored.ariaLabel, "focus returns to the Manage exclusions opener").toBe(
+      "Manage exclusions",
+    );
+  });
+
   // ── C. Tablet Analytics vertical reachability ───────────────────────────
 
   for (const vp of [TABLET_PORTRAIT, TABLET_11, TABLET_LANDSCAPE]) {
@@ -523,6 +579,7 @@ test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-001 — fine pointer preserved",
       { trigger: "Manage projects", field: "New project name" },
       { trigger: "Manage tags", field: "New tag name" },
       { trigger: "Manage keyword pool", field: "Keyword to add to pool" },
+      { trigger: "Manage exclusions", field: "Keyword to exclude" },
     ]) {
       await page.getByRole("button", { name: trigger, exact: true }).click();
       const dialog = page.getByRole("dialog");
