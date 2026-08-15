@@ -1,5 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { decodeHTMLEntities } from "@/lib/decodeHTMLEntities";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 import { Paper } from "@/types/database";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import { Button } from "@/components/ui/button";
@@ -58,6 +60,16 @@ interface AnalyticsContentProps {
   compact?: boolean;
 }
 
+/**
+ * A target selector (keywords or authors).
+ *
+ * Desktop keeps the anchored popover. Below 768px it becomes a bottom sheet:
+ * these two controls sit at the very end of the mobile Analytics overlay, so an
+ * anchored panel opened into the last few pixels of the screen, and Radix
+ * autofocused its search box — raising the software keyboard over the little
+ * that was left. The author list in particular runs to hundreds of entries and
+ * has to be genuinely scrollable to be usable at all.
+ */
 function MultiSelectPopover({
   label,
   options,
@@ -74,11 +86,86 @@ function MultiSelectPopover({
   fullWidth?: boolean;
 }) {
   const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const filtered = useMemo(
     () =>
       options.filter((o) => o.toLowerCase().includes(search.toLowerCase())),
     [options, search]
   );
+
+  const triggerContent = (
+    <>
+      {label}
+      {selected.length > 0 && (
+        <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">
+          {selected.length}
+        </Badge>
+      )}
+    </>
+  );
+
+  const selectedBadges = selected.length > 0 && (
+    <div className="flex flex-wrap gap-1">
+      {selected.map((s) => (
+        <Badge key={s} variant="secondary" className="text-xs pr-1">
+          <span className="truncate max-w-[120px]">{s}</span>
+          <button
+            onClick={() => onToggle(s)}
+            aria-label={`Remove ${s}`}
+            className="ml-1 hover:text-destructive"
+          >
+            <X className="h-3 w-3" aria-hidden="true" />
+          </button>
+        </Badge>
+      ))}
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Button
+            ref={triggerRef}
+            variant="outline"
+            size="sm"
+            className={fullWidth ? "h-8 flex-1 text-xs" : "h-8 text-xs"}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            onClick={() => setOpen(true)}
+          >
+            {triggerContent}
+          </Button>
+          {selected.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-1.5 text-xs text-muted-foreground"
+              onClick={onClear}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <MobileMultiSelectSheet
+          open={open}
+          onOpenChange={setOpen}
+          title={label}
+          triggerRef={triggerRef}
+          options={options.map((option) => ({ value: option, label: option }))}
+          selectedValues={selected}
+          onToggle={onToggle}
+          onClear={onClear}
+          searchPlaceholder={`Search ${label.toLowerCase()}...`}
+          searchLabel={`Search ${label.toLowerCase()}`}
+          emptyMessage="No matches"
+        />
+        {selectedBadges}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">
@@ -90,12 +177,7 @@ function MultiSelectPopover({
               size="sm"
               className={fullWidth ? "h-8 flex-1 text-xs" : "h-8 text-xs"}
             >
-              {label}
-              {selected.length > 0 && (
-                <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">
-                  {selected.length}
-                </Badge>
-              )}
+              {triggerContent}
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-72 max-w-[calc(100vw-2rem)] p-2" align="start">
@@ -141,22 +223,7 @@ function MultiSelectPopover({
           </Button>
         )}
       </div>
-      {selected.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {selected.map((s) => (
-            <Badge key={s} variant="secondary" className="text-xs pr-1">
-              <span className="truncate max-w-[120px]">{s}</span>
-              <button
-                onClick={() => onToggle(s)}
-                aria-label={`Remove ${s}`}
-                className="ml-1 hover:text-destructive"
-              >
-                <X className="h-3 w-3" aria-hidden="true" />
-              </button>
-            </Badge>
-          ))}
-        </div>
-      )}
+      {selectedBadges}
     </div>
   );
 }

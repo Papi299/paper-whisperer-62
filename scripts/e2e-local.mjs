@@ -78,6 +78,13 @@ const DEFAULT_SPECS = [
   // sheets, and sets a year filter that is cleared again in the same test. It
   // never exports, never merges duplicates and writes nothing to the database.
   "e2e/mobile-dashboard-density.spec.ts",
+  // ADD-PAPERS-MOBILE-SELECTORS-001 mobile selector focus/scroll coverage.
+  // Creates two disposable projects and one disposable tag through the real
+  // management modals — the seed ships none, and the Add Papers assign section
+  // does not render without them — and deletes all three again in afterAll.
+  // Beyond that it is read-only: filter and analytics-target selections are
+  // in-memory, no import is ever run, and nothing else is written.
+  "e2e/mobile-selectors.spec.ts",
   "e2e/bulk-actions.spec.ts",
   "e2e/eager-load.spec.ts",
   "e2e/filters.spec.ts",

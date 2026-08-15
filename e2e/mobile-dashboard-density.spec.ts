@@ -147,22 +147,23 @@ async function selectFirstTarget(
   label: "Target Keywords" | "Target Authors",
   scope: Locator,
 ): Promise<string> {
-  await scope.getByRole("button", { name: label }).click();
+  await scope.getByRole("button", { name: new RegExp(`^${label}`) }).click();
 
-  const search = page.getByRole("textbox", { name: `Search ${label.toLowerCase()}` });
+  // ADD-PAPERS-MOBILE-SELECTORS-001 replaced the anchored popover with a bottom
+  // sheet below 768px, so the search field is located by accessible name rather
+  // than by which overlay primitive happens to host it.
+  const search = page.locator(`input[aria-label="Search ${label.toLowerCase()}"]`);
   await expect(search).toBeVisible();
-  const popover = page.getByRole("dialog").filter({ has: search });
+  const selector = page.getByRole("dialog").filter({ has: search });
 
-  const option = popover.locator("label").first();
+  // One control per row, carrying its own accessible name.
+  const option = selector.getByRole("checkbox").first();
   await expect(option).toBeVisible();
   const value = (await option.innerText()).trim();
   expect(value, `the seed must offer at least one ${label}`).not.toBe("");
+  await option.click();
 
-  // Click the control itself rather than the wrapping <label>: Radix's checkbox
-  // is a button beside a hidden input, so a label click is not a reliable proxy.
-  await option.getByRole("checkbox").click();
-
-  // Escape dismisses only the topmost layer — the popover, not the sheet.
+  // Escape dismisses only the topmost layer — the selector, not the sheet.
   await page.keyboard.press("Escape");
   await expect(search).toBeHidden();
   return value;

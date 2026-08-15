@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -16,6 +16,8 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 import type { EntityMatchMode } from "@/lib/filterSets";
 
 /** Minimal shape the filter needs from a Project or Tag. */
@@ -69,8 +71,9 @@ interface SearchableEntityMultiFilterProps {
    * `stacked` — full width inside the mobile Filters sheet, where the control
    * owns a labelled section rather than sitting in a wrapping row.
    *
-   * Presentation only: selection semantics, search matching and the accessible
-   * name are identical in both variants.
+   * Trigger *width* only. Which selection surface opens is decided by viewport
+   * width (`useIsMobile`), not by this prop, so the 768px contract is read in
+   * exactly one place.
    */
   variant?: "inline" | "stacked";
 }
@@ -95,6 +98,13 @@ interface SearchableEntityMultiFilterProps {
  * here (`shouldFilter={false}` on `Command`) so behavior is deterministic and
  * unit-testable rather than dependent on cmdk's internal fuzzy scoring. The
  * popover stays open across selections, and the search box resets on close.
+ *
+ * Below 768px the anchored popover is replaced by `MobileMultiSelectSheet`:
+ * an anchored panel opening from a trigger near the bottom of the Filters sheet
+ * had nowhere to go, and Radix autofocused its search box so merely opening the
+ * list raised the software keyboard. Only the presentation differs — the same
+ * `items`, the same `onToggle`/`onClear`, the same match mode, the same
+ * accessible trigger name.
  */
 export function SearchableEntityMultiFilter({
   items,
@@ -117,6 +127,8 @@ export function SearchableEntityMultiFilter({
 }: SearchableEntityMultiFilterProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const isMobile = useIsMobile();
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -174,6 +186,94 @@ export function SearchableEntityMultiFilter({
         : `${ariaLabel}. ${count} ${noun} selected`;
   }
 
+  const triggerClassName = cn(
+    "justify-between font-normal min-w-0",
+    variant === "stacked" ? "w-full" : "w-[180px]",
+    className,
+  );
+
+  // Identical Any/All control in both presentations — same enum, same handler,
+  // same "only meaningful from two selections" rule.
+  const modeSelector = showModeSelector ? (
+    <div className="flex shrink-0 items-center justify-between gap-2">
+      <span className="text-xs font-medium text-muted-foreground">Match selected</span>
+      <ToggleGroup
+        type="single"
+        value={matchMode}
+        // Radix single-mode fires "" when the active item is re-clicked;
+        // ignore anything outside the enum so the mode can never be
+        // cleared to an empty value.
+        onValueChange={(next) => {
+          if (next === "any" || next === "all") onMatchModeChange?.(next);
+        }}
+        aria-label={matchModeGroupLabel ?? "Match selected"}
+        className="gap-0.5"
+      >
+        <ToggleGroupItem
+          value="any"
+          aria-label={matchAnyDescription}
+          title={matchAnyDescription}
+          className="h-7 px-2.5 text-xs"
+        >
+          Any
+        </ToggleGroupItem>
+        <ToggleGroupItem
+          value="all"
+          aria-label={matchAllDescription}
+          title={matchAllDescription}
+          className="h-7 px-2.5 text-xs"
+        >
+          All
+        </ToggleGroupItem>
+      </ToggleGroup>
+    </div>
+  ) : null;
+
+  if (isMobile) {
+    return (
+      <>
+        <Button
+          ref={triggerRef}
+          variant="outline"
+          // Still a combobox: it selects from a list of values. It now expands a
+          // dialog rather than an inline listbox, which `aria-haspopup` states.
+          role="combobox"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label={accessibleName}
+          className={triggerClassName}
+          onClick={() => setOpen(true)}
+        >
+          <span className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+            {triggerContent}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+        <MobileMultiSelectSheet
+          open={open}
+          onOpenChange={setOpen}
+          title={`Select ${nounPlural.toLowerCase()}`}
+          triggerRef={triggerRef}
+          options={items.map((item) => ({
+            value: item.id,
+            label: item.name,
+            color: item.color,
+          }))}
+          selectedValues={selectedIds}
+          onToggle={onToggle}
+          onClear={onClear}
+          clearLabel={`Clear ${
+            count === 1 ? nounSingular.toLowerCase() : nounPlural.toLowerCase()
+          }`}
+          searchPlaceholder={searchPlaceholder}
+          searchLabel={searchPlaceholder.replace(/\.\.\.$/, "")}
+          emptyMessage={emptyMessage}
+          headerExtra={modeSelector}
+        />
+      </>
+    );
+  }
+
   return (
     <Popover
       open={open}
@@ -188,11 +288,7 @@ export function SearchableEntityMultiFilter({
           role="combobox"
           aria-expanded={open}
           aria-label={accessibleName}
-          className={cn(
-            "justify-between font-normal min-w-0",
-            variant === "stacked" ? "w-full" : "w-[180px]",
-            className,
-          )}
+          className={triggerClassName}
         >
           <span className="flex items-center gap-1.5 min-w-0 overflow-hidden">
             {triggerContent}
@@ -201,57 +297,11 @@ export function SearchableEntityMultiFilter({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className={cn(
-          "max-w-[calc(100vw-2rem)] p-0 bg-popover",
-          variant === "stacked"
-            ? // In the mobile sheet the trigger spans the section, so a fixed
-              // 16rem panel would float detached from the control it belongs to
-              // — and a fixed *height* would be clipped once the software
-              // keyboard shrinks the viewport, whichever way Radix flips it.
-              // `--radix-popover-content-available-height` is Radix's own
-              // measurement of the space actually left.
-              "flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col"
-            : "w-[16rem]",
-        )}
+        className="w-[16rem] max-w-[calc(100vw-2rem)] p-0 bg-popover"
         align="start"
         collisionPadding={8}
       >
-        {showModeSelector && (
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
-            <span className="text-xs font-medium text-muted-foreground">
-              Match selected
-            </span>
-            <ToggleGroup
-              type="single"
-              value={matchMode}
-              // Radix single-mode fires "" when the active item is re-clicked;
-              // ignore anything outside the enum so the mode can never be
-              // cleared to an empty value.
-              onValueChange={(next) => {
-                if (next === "any" || next === "all") onMatchModeChange?.(next);
-              }}
-              aria-label={matchModeGroupLabel ?? "Match selected"}
-              className="gap-0.5"
-            >
-              <ToggleGroupItem
-                value="any"
-                aria-label={matchAnyDescription}
-                title={matchAnyDescription}
-                className="h-7 px-2.5 text-xs"
-              >
-                Any
-              </ToggleGroupItem>
-              <ToggleGroupItem
-                value="all"
-                aria-label={matchAllDescription}
-                title={matchAllDescription}
-                className="h-7 px-2.5 text-xs"
-              >
-                All
-              </ToggleGroupItem>
-            </ToggleGroup>
-          </div>
-        )}
+        {modeSelector && <div className="border-b px-3 py-2">{modeSelector}</div>}
         <Command shouldFilter={false} className="min-h-0 flex-1">
           <CommandInput
             placeholder={searchPlaceholder}

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 
 interface KeywordFilterDropdownProps {
   selectedKeywords: string[];
@@ -23,7 +25,9 @@ interface KeywordFilterDropdownProps {
    * wrapping onto their own line below the trigger instead of competing with
    * it for a 390px row.
    *
-   * Presentation only — the same selection state and the same toggle handler.
+   * Trigger/badge layout only — the same selection state and the same toggle
+   * handler. Which selection surface opens is decided by viewport width
+   * (`useIsMobile`), not by this prop.
    */
   variant?: "inline" | "stacked";
 }
@@ -36,6 +40,8 @@ export function KeywordFilterDropdown({
 }: KeywordFilterDropdownProps) {
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const isMobile = useIsMobile();
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const filteredKeywords = useMemo(() => {
     if (!searchQuery) return availableKeywords;
@@ -53,6 +59,79 @@ export function KeywordFilterDropdown({
 
   const stacked = variant === "stacked";
 
+  const trigger = (
+    <>
+      <span className="mr-2">Keywords</span>
+      {selectedKeywords.length > 0 && (
+        <Badge variant="secondary" className="ml-1 h-5 px-1.5">
+          {selectedKeywords.length}
+        </Badge>
+      )}
+      <ChevronDown className={cn("h-4 w-4", stacked ? "ml-auto" : "ml-2")} />
+    </>
+  );
+
+  const selectedBadges = selectedKeywords.length > 0 && (
+    <div className="flex flex-wrap gap-1">
+      {selectedKeywords.slice(0, 3).map((keyword) => (
+        <Badge
+          key={keyword}
+          variant="secondary"
+          className="cursor-pointer"
+          onClick={() => onKeywordToggle(keyword)}
+        >
+          {keyword}
+          <X className="ml-1 h-3 w-3" />
+        </Badge>
+      ))}
+      {selectedKeywords.length > 3 && (
+        <Badge variant="outline">+{selectedKeywords.length - 3}</Badge>
+      )}
+    </div>
+  );
+
+  // Below 768px the anchored panel is replaced by a bottom sheet. The keyword
+  // list is the longest of the filter selectors, so it was also the least usable
+  // one: anchored under a trigger low in the Filters sheet it had almost no room
+  // left, and its search box was autofocused, raising the keyboard over what
+  // little there was.
+  if (isMobile) {
+    return (
+      <div className={cn(stacked ? "space-y-2" : "flex items-center gap-2")}>
+        <Button
+          ref={triggerRef}
+          variant="outline"
+          size="sm"
+          className={cn("h-9", stacked && "w-full justify-between")}
+          aria-label="Filter by keyword"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+        >
+          {trigger}
+        </Button>
+        <MobileMultiSelectSheet
+          open={open}
+          onOpenChange={setOpen}
+          title="Select keywords"
+          triggerRef={triggerRef}
+          options={availableKeywords.map((keyword) => ({
+            value: keyword,
+            label: keyword,
+          }))}
+          selectedValues={selectedKeywords}
+          onToggle={onKeywordToggle}
+          onClear={handleClearAll}
+          clearLabel="Clear all"
+          searchPlaceholder="Search keywords..."
+          searchLabel="Search keywords"
+          emptyMessage="No keywords found"
+        />
+        {selectedBadges}
+      </div>
+    );
+  }
+
   return (
     <div className={cn(stacked ? "space-y-2" : "flex items-center gap-2")}>
       <Popover open={open} onOpenChange={setOpen}>
@@ -63,29 +142,11 @@ export function KeywordFilterDropdown({
             className={cn("h-9", stacked && "w-full justify-between")}
             aria-label="Filter by keyword"
           >
-            <span className="mr-2">Keywords</span>
-            {selectedKeywords.length > 0 && (
-              <Badge variant="secondary" className="ml-1 h-5 px-1.5">
-                {selectedKeywords.length}
-              </Badge>
-            )}
-            <ChevronDown className={cn("h-4 w-4", stacked ? "ml-auto" : "ml-2")} />
+            {trigger}
           </Button>
         </PopoverTrigger>
         <PopoverContent
-          className={cn(
-            "p-0 bg-popover max-w-[calc(100vw-2rem)]",
-            stacked
-              ? // Fit whatever space is actually left rather than a fixed 315px
-                // panel. On a phone with the software keyboard raised the
-                // viewport can drop to ~420px, and a fixed-height panel is then
-                // clipped whichever way Radix flips it — measured at 390x420:
-                // 145px cut off below when anchored down, 12px above when
-                // flipped up. `--radix-popover-content-available-height` is
-                // Radix's own measurement of the room remaining.
-                "flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col"
-              : "w-72",
-          )}
+          className="w-72 p-0 bg-popover max-w-[calc(100vw-2rem)]"
           align="start"
           collisionPadding={8}
         >
@@ -101,7 +162,7 @@ export function KeywordFilterDropdown({
               />
             </div>
           </div>
-          <ScrollArea className={cn(stacked ? "min-h-0 flex-1" : "h-64")}>
+          <ScrollArea className="h-64">
             <div className="p-2">
               {filteredKeywords.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">
@@ -139,24 +200,7 @@ export function KeywordFilterDropdown({
       </Popover>
 
       {/* Selected keywords badges */}
-      {selectedKeywords.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {selectedKeywords.slice(0, 3).map((keyword) => (
-            <Badge
-              key={keyword}
-              variant="secondary"
-              className="cursor-pointer"
-              onClick={() => onKeywordToggle(keyword)}
-            >
-              {keyword}
-              <X className="ml-1 h-3 w-3" />
-            </Badge>
-          ))}
-          {selectedKeywords.length > 3 && (
-            <Badge variant="outline">+{selectedKeywords.length - 3}</Badge>
-          )}
-        </div>
-      )}
+      {selectedBadges}
     </div>
   );
 }

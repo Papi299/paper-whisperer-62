@@ -31,6 +31,8 @@ import { Project, Tag } from "@/types/database";
 import { RawPaperData } from "@/lib/normalizePaperData";
 import { parseFile, FileParseResult } from "@/lib/importParsers";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 
 interface ManualPaperData {
   title: string;
@@ -100,6 +102,123 @@ export const ACCEPTED_FILE_EXTENSIONS = [".bib", ".ris", ".nbib", ".enw", ".csv"
 
 export type AcceptedFileExtension = (typeof ACCEPTED_FILE_EXTENSIONS)[number];
 
+/** One assignable category (Projects or Tags) in the shared assign-on-import section. */
+interface AssignmentEntity {
+  id: string;
+  name: string;
+  color: string;
+}
+
+/**
+ * The Projects / Tags picker in the shared assign-on-import section.
+ *
+ * One component for both categories and therefore for all three tabs — Import
+ * IDs, Import File and Manual render the same section, so there is exactly one
+ * selector implementation and no per-tab assignment state.
+ *
+ * Desktop keeps the compact `w-52` Command popover. Below 768px it becomes a
+ * bottom sheet: the assign section sits low in an already-tall dialog, so the
+ * anchored panel — pinned with `avoidCollisions={false}` — opened straight off
+ * the bottom of the phone viewport, and its `CommandInput` was autofocused, so
+ * tapping "Projects" raised the software keyboard over what little of the list
+ * was on screen. Selection semantics are untouched: the same toggle handler and
+ * the same shared `selectedProjectIds` / `selectedTagIds` arrays.
+ */
+function AssignmentSelector({
+  items,
+  selectedIds,
+  onToggle,
+  icon,
+  triggerLabel,
+  mobileTitle,
+  searchPlaceholder,
+  searchLabel,
+  emptyMessage,
+}: {
+  items: AssignmentEntity[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  icon: React.ReactNode;
+  triggerLabel: string;
+  mobileTitle: string;
+  searchPlaceholder: string;
+  searchLabel: string;
+  emptyMessage: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const triggerContent = (
+    <>
+      {icon}
+      {triggerLabel}
+      <ChevronsUpDown className="h-3 w-3 opacity-50" />
+    </>
+  );
+
+  if (isMobile) {
+    return (
+      <>
+        <Button
+          ref={triggerRef}
+          variant="outline"
+          size="sm"
+          className="h-8 justify-between gap-1"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+        >
+          {triggerContent}
+        </Button>
+        <MobileMultiSelectSheet
+          open={open}
+          onOpenChange={setOpen}
+          title={mobileTitle}
+          triggerRef={triggerRef}
+          options={items.map((item) => ({
+            value: item.id,
+            label: item.name,
+            color: item.color,
+          }))}
+          selectedValues={selectedIds}
+          onToggle={onToggle}
+          searchPlaceholder={searchPlaceholder}
+          searchLabel={searchLabel}
+          emptyMessage={emptyMessage}
+        />
+      </>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen} modal={true}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
+          {triggerContent}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
+        <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
+          <CommandInput placeholder={searchPlaceholder} aria-label={searchLabel} />
+          <CommandList>
+            <CommandEmpty>{emptyMessage}</CommandEmpty>
+            <CommandGroup>
+              {items.map((item) => (
+                <CommandItem key={item.id} value={item.name} onSelect={() => onToggle(item.id)}>
+                  <Check className={cn("mr-2 h-4 w-4", selectedIds.includes(item.id) ? "opacity-100" : "opacity-0")} />
+                  <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: item.color }} />
+                  {item.name}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, projects = [], tags = [] }: AddPaperDialogProps) {
   const [activeTab, setActiveTab] = useState<"import" | "file" | "manual">("import");
 
@@ -125,8 +244,6 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   // Project/Tag assignment state (shared between all tabs)
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
-  const [projectOpen, setProjectOpen] = useState(false);
-  const [tagOpen, setTagOpen] = useState(false);
 
   // Refs used only to restore focus after a continuation transition
   // (Import More / Import Another File) — never for reading/writing values.
@@ -320,12 +437,11 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     setSelectedProjectIds([]);
     setSelectedTagIds([]);
     // Transient interaction state must not survive a close/reopen: clear both
-    // drop-zone drag overlays and both controlled assignment popovers so the
-    // reopened dialog is in a clean, non-dragging, no-popover state.
+    // drop-zone drag overlays so the reopened dialog is in a clean, non-dragging
+    // state. Each `AssignmentSelector` owns its own open/search state and is
+    // unmounted with the dialog, so it starts closed and unfiltered by itself.
     setIsDragging(false);
     setIsFileDragging(false);
-    setProjectOpen(false);
-    setTagOpen(false);
     setActiveTab("import");
     onOpenChange(false);
   };
@@ -397,67 +513,39 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
       )}
       <div className="flex flex-wrap gap-2">
         {projects.length > 0 && (
-          <Popover open={projectOpen} onOpenChange={setProjectOpen} modal={true}>
-            <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
-                <FolderOpen className="h-3.5 w-3.5 mr-1" />
-                {selectedProjectIds.length > 0
-                  ? `${selectedProjectIds.length} project${selectedProjectIds.length !== 1 ? "s" : ""}`
-                  : "Projects"}
-                <ChevronsUpDown className="h-3 w-3 opacity-50" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
-              <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
-                <CommandInput placeholder="Search projects..." aria-label="Search projects" />
-                <CommandList>
-                  <CommandEmpty>No projects found.</CommandEmpty>
-                  <CommandGroup>
-                    {projects.map((p) => (
-                      <CommandItem
-                        key={p.id}
-                        value={p.name}
-                        onSelect={() => toggleProject(p.id)}
-                      >
-                        <Check className={cn("mr-2 h-4 w-4", selectedProjectIds.includes(p.id) ? "opacity-100" : "opacity-0")} />
-                        <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: p.color }} />
-                        {p.name}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
+          <AssignmentSelector
+            items={projects}
+            selectedIds={selectedProjectIds}
+            onToggle={toggleProject}
+            icon={<FolderOpen className="h-3.5 w-3.5 mr-1" aria-hidden="true" />}
+            triggerLabel={
+              selectedProjectIds.length > 0
+                ? `${selectedProjectIds.length} project${selectedProjectIds.length !== 1 ? "s" : ""}`
+                : "Projects"
+            }
+            mobileTitle="Select projects"
+            searchPlaceholder="Search projects..."
+            searchLabel="Search projects"
+            emptyMessage="No projects found."
+          />
         )}
 
         {tags.length > 0 && (
-          <Popover open={tagOpen} onOpenChange={setTagOpen} modal={true}>
-            <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
-                <Tags className="h-3.5 w-3.5 mr-1" />
-                {selectedTagIds.length > 0 ? `${selectedTagIds.length} tag${selectedTagIds.length !== 1 ? "s" : ""}` : "Tags"}
-                <ChevronsUpDown className="h-3 w-3 opacity-50" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-52 p-0" side="bottom" align="start" sideOffset={4} avoidCollisions={false} style={{ pointerEvents: 'auto' }}>
-              <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
-                <CommandInput placeholder="Search tags..." aria-label="Search tags" />
-                <CommandList>
-                  <CommandEmpty>No tags found.</CommandEmpty>
-                  <CommandGroup>
-                    {tags.map((t) => (
-                      <CommandItem key={t.id} value={t.name} onSelect={() => toggleTag(t.id)}>
-                        <Check className={cn("mr-2 h-4 w-4", selectedTagIds.includes(t.id) ? "opacity-100" : "opacity-0")} />
-                        <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: t.color }} />
-                        {t.name}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
+          <AssignmentSelector
+            items={tags}
+            selectedIds={selectedTagIds}
+            onToggle={toggleTag}
+            icon={<Tags className="h-3.5 w-3.5 mr-1" aria-hidden="true" />}
+            triggerLabel={
+              selectedTagIds.length > 0
+                ? `${selectedTagIds.length} tag${selectedTagIds.length !== 1 ? "s" : ""}`
+                : "Tags"
+            }
+            mobileTitle="Select tags"
+            searchPlaceholder="Search tags..."
+            searchLabel="Search tags"
+            emptyMessage="No tags found."
+          />
         )}
       </div>
 
