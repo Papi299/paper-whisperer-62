@@ -14,6 +14,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Plus, Trash2, Pencil, Search } from "lucide-react";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { Synonym } from "@/hooks/useSynonymPool";
 
 interface ManageSynonymsModalProps {
@@ -38,6 +39,12 @@ export function ManageSynonymsModal({
   const [canonicalTerm, setCanonicalTerm] = useState("");
   const [synonymsText, setSynonymsText] = useState("");
   const [search, setSearch] = useState("");
+  // Initial focus for the Add/Edit sub-dialog. Its first tabbable element is
+  // the canonical-term field, so on a coarse pointer opening a group to read it
+  // raised the keyboard over the form. The heading takes focus instead. Add and
+  // Edit share this one Dialog, so both become touch-safe together — which is
+  // the right answer for both, and better than branching on edit mode.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   const parseSynonyms = (text: string): string[] => {
     const matches = text.match(/\[([^\]]+)\]/g);
@@ -186,9 +193,9 @@ export function ManageSynonymsModal({
 
       {/* Add/Edit sub-dialog */}
       <Dialog open={editDialogOpen} onOpenChange={(o) => { if (!o) resetEditForm(); else setEditDialogOpen(true); }}>
-        <DialogContent className="bg-background">
+        <DialogContent className="bg-background" onOpenAutoFocus={onOpenAutoFocus}>
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle ref={focusRef} tabIndex={-1} className="outline-none">
               {editingGroup ? "Edit Synonym Group" : "Add Synonym Group"}
             </DialogTitle>
             <DialogDescription>

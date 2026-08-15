@@ -25,7 +25,10 @@ import { waitForDashboard } from "./helpers";
  * State: creates two disposable projects and one disposable tag (the seed ships
  * none, and neither the Filters option lists nor the Add Papers assign section
  * render without them) and deletes them afterwards. One disposable saved search
- * is created and deleted for the Save/Rename dialogs. Nothing else is written.
+ * is created and deleted for the Save/Rename dialogs, and one disposable synonym
+ * group for the Edit Synonym Group sub-dialog (REAL-DEVICE-TOUCH-UX-REMEDIATION
+ * -002). All of it is written and removed through the UI. Nothing else is
+ * written — in particular no focus probe below ever saves an edit.
  */
 
 const PHONE = { width: 390, height: 844 };
@@ -38,6 +41,8 @@ const FIXTURE_PROJECT = "ZZ Touch Fixture Project";
 const FIXTURE_PROJECT_ALT = "ZZ Touch Fixture Project Two";
 const FIXTURE_TAG = "ZZ Touch Fixture Tag";
 const FIXTURE_PRESET = "ZZ Touch Fixture Search";
+const FIXTURE_SYNONYM = "ZZ Touch Fixture Synonym";
+const FIXTURE_SYNONYM_TERMS = "[ZZ Touch Alias One][ZZ Touch Alias Two]";
 
 // ── Probes ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +80,42 @@ async function activeElement(page: Page): Promise<ActiveElement> {
 /** Whether the focused element is inside `surface` — i.e. the trap still holds. */
 async function activeElementIsInside(surface: Locator) {
   return surface.evaluate((root) => root.contains(document.activeElement));
+}
+
+/**
+ * Scope a Dialog by its heading.
+ *
+ * Every REMEDIATION-002 edit surface is a sub-dialog opened from a management
+ * dialog, so two Dialogs are on screen at once and a bare `getByRole("dialog")`
+ * is ambiguous. A `hasText` filter is not enough either — the Manage Synonyms
+ * dialog contains an "Add Synonym Group" *button*, so filtering on that string
+ * matches both. The heading is the only unambiguous discriminator.
+ */
+function dialogByHeading(page: Page, heading: string) {
+  return page
+    .getByRole("dialog")
+    .filter({ has: page.getByRole("heading", { name: heading, exact: true }) });
+}
+
+/**
+ * Open a sidebar management dialog. Below 768px the sidebar itself lives behind
+ * the nav sheet, so the manage button has to be reached through it.
+ */
+async function openSidebarManager(page: Page, label: string, viewportWidth: number) {
+  if (viewportWidth < 768) {
+    await page.getByRole("button", { name: "Open navigation menu" }).click();
+  }
+  await page.getByRole("button", { name: label, exact: true }).click();
+}
+
+/** Escape out of however many Dialogs are stacked, and wait for them to go. */
+async function closeAllDialogs(page: Page) {
+  for (let i = 0; i < 4; i++) {
+    if ((await page.getByRole("dialog").count()) === 0) break;
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(250);
+  }
+  await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 5_000 });
 }
 
 /** Document-level horizontal overflow, measured the way a user experiences it. */
@@ -138,6 +179,24 @@ async function createEntityFixtures(page: Page) {
   await add("Manage projects", "New project name", FIXTURE_PROJECT_ALT);
   await add("Manage tags", "New tag name", FIXTURE_TAG);
 
+  // One synonym group, so the Edit Synonym Group sub-dialog has something to
+  // edit. Created through the Add sub-dialog — the same surface under test —
+  // rather than by writing to the database directly.
+  await page.getByRole("button", { name: "Manage synonyms", exact: true }).click();
+  const synonyms = dialogByHeading(page, "Manage Synonyms");
+  await expect(synonyms).toBeVisible();
+  if ((await page.getByRole("button", { name: `Edit synonym group ${FIXTURE_SYNONYM}` }).count()) === 0) {
+    await page.getByRole("button", { name: "Add Synonym Group", exact: true }).click();
+    const sub = dialogByHeading(page, "Add Synonym Group");
+    await expect(sub).toBeVisible();
+    await sub.getByLabel("Display Name (Canonical Term)").fill(FIXTURE_SYNONYM);
+    await sub.getByLabel(/^Synonyms/).fill(FIXTURE_SYNONYM_TERMS);
+    await sub.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(sub).toBeHidden({ timeout: 10_000 });
+  }
+  await page.keyboard.press("Escape");
+  await expect(synonyms).toBeHidden();
+
   // One saved search, so the Rename dialog has something to rename.
   await page.getByRole("button", { name: /Saved Searches|Presets/i }).click();
   await page.getByRole("menuitem", { name: /Save current search/i }).click();
@@ -181,6 +240,18 @@ async function removeEntityFixtures(page: Page) {
   await remove("Manage projects", `Delete project ${FIXTURE_PROJECT}`);
   await remove("Manage projects", `Delete project ${FIXTURE_PROJECT_ALT}`);
   await remove("Manage tags", `Delete tag ${FIXTURE_TAG}`);
+
+  // The synonym group deletes without a confirm step.
+  await page.getByRole("button", { name: "Manage synonyms", exact: true }).click();
+  const synonyms = dialogByHeading(page, "Manage Synonyms");
+  await expect(synonyms).toBeVisible();
+  const deleteSynonym = page.getByRole("button", { name: `Delete synonym group ${FIXTURE_SYNONYM}` });
+  if (await deleteSynonym.count()) {
+    await deleteSynonym.first().click();
+    await expect(deleteSynonym).toHaveCount(0, { timeout: 10_000 });
+  }
+  await page.keyboard.press("Escape");
+  await expect(synonyms).toBeHidden();
 }
 
 // ── Touch-context specs ─────────────────────────────────────────────────────
@@ -668,5 +739,584 @@ test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-001 — fine pointer preserved",
     }));
     expect(collapsed.overflows, "collapsed header fits, so no scrollbar appears").toBe(false);
     await expect(page.locator("tbody tr").first()).toBeVisible();
+  });
+});
+
+// ── REAL-DEVICE-TOUCH-UX-REMEDIATION-002 ────────────────────────────────────
+
+/**
+ * REAL-DEVICE-TOUCH-UX-REMEDIATION-002 — the surfaces the owner found still
+ * broken on real hardware after PR #214 shipped REMEDIATION-001.
+ *
+ * Same defect class, same rule — opening a surface is not consent to type — on
+ * the management/edit/settings/analytics surfaces that REMEDIATION-001 did not
+ * reach: Analytics' two Target selectors, Settings, Edit Project, Edit Tag,
+ * Edit Synonym Group, Edit Paper and Edit Paper's own Projects/Tags selectors.
+ *
+ * Plus one layout defect that is not a focus problem at all: the long Edit Paper
+ * form was not reliably scrollable on the owner's iPhone/iPad. See the scroll
+ * describe below for exactly what automation can and cannot prove about it.
+ */
+test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-002 — coarse pointer", () => {
+  test.use({ hasTouch: true });
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await createEntityFixtures(page);
+    await page.close();
+  });
+
+  test.afterAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await removeEntityFixtures(page).catch(() => {});
+    await page.close();
+  });
+
+  // ── A. Analytics → Target Keywords / Target Authors ─────────────────────
+
+  const TARGET_SELECTORS = [
+    { label: "Target Keywords", search: "Search target keywords" },
+    { label: "Target Authors", search: "Search target authors" },
+  ];
+
+  for (const { label, search } of TARGET_SELECTORS) {
+    for (const vp of [TABLET_PORTRAIT, TABLET_LANDSCAPE]) {
+      test(`Analytics ${label} does not autofocus Search @${vp.width}x${vp.height}`, async ({ page }) => {
+        await page.setViewportSize(vp);
+        await page.goto("/", { waitUntil: "networkidle" });
+        await waitForDashboard(page);
+
+        await page.getByRole("button", { name: /Analytics & Insights/ }).click();
+        await expect(page.getByText("Publication Year Distribution")).toBeAttached();
+
+        // These two controls sit at the very bottom of the analytics region,
+        // which owns its own scroll above 768px.
+        const trigger = page.getByRole("button", { name: new RegExp(`^${label}`) }).first();
+        await trigger.scrollIntoViewIfNeeded();
+        await trigger.click();
+
+        const popover = page.locator("[data-radix-popper-content-wrapper]").last();
+        await expect(popover).toBeVisible();
+
+        // Pre-fix this was the search box: INPUT[aria-label="Search target
+        // keywords"], isTextEntry true — so the keyboard covered the option
+        // list the user opened the selector to read.
+        const active = await activeElement(page);
+        expect(
+          active.isTextEntry,
+          `${label}: opening must not focus Search (focused ${active.tag} "${active.ariaLabel}")`,
+        ).toBe(false);
+        expect(active.isBody, `${label}: focus must not be dropped on <body>`).toBe(false);
+        expect(await activeElementIsInside(popover), `${label}: focus stays inside the popover`).toBe(
+          true,
+        );
+
+        const searchBox = popover.getByRole("textbox", { name: search });
+        await expect(searchBox, `${label}: Search is not focused`).not.toBeFocused();
+
+        // The list is readable before anything is typed — the whole point of
+        // not raising the keyboard over it. Target Keywords draws its options
+        // from paper keywords/MeSH terms, which the deterministic seed does not
+        // populate, so that one legitimately renders an empty list; either way
+        // the list content has to be on screen without typing first.
+        const options = popover.getByRole("checkbox");
+        const optionCount = await options.count();
+        if (optionCount > 0) {
+          await expect(
+            options.first(),
+            `${label}: options are visible before typing`,
+          ).toBeVisible();
+        } else {
+          await expect(
+            popover.getByText("No matches"),
+            `${label}: the empty list is readable before typing`,
+          ).toBeVisible();
+        }
+
+        // Explicitly tapping Search still focuses it and still accepts input.
+        await searchBox.click();
+        await expect(searchBox).toBeFocused();
+        if (optionCount > 0) {
+          // …and still filters the list down to a match.
+          const optionText = (await popover.locator("label").first().innerText()).trim();
+          await searchBox.fill(optionText.slice(0, 4));
+          await expect(options.first()).toBeVisible();
+          await expect(
+            popover.getByText(optionText, { exact: true }).first(),
+            `${label}: filtering keeps the matching option`,
+          ).toBeVisible();
+        } else {
+          await searchBox.fill("zz probe");
+          await expect(searchBox).toHaveValue("zz probe");
+        }
+
+        await page.keyboard.press("Escape");
+        await expect(popover).toBeHidden();
+        expect(
+          (await activeElement(page)).isBody,
+          `${label}: focus restored off <body>`,
+        ).toBe(false);
+      });
+    }
+  }
+
+  // ── B. Settings ─────────────────────────────────────────────────────────
+
+  test("Settings opens on its heading, not the PubMed API key field", async ({ page }) => {
+    await page.setViewportSize(TABLET_PORTRAIT);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = dialogByHeading(page, "Settings");
+    await expect(dialog).toBeVisible();
+
+    const active = await activeElement(page);
+    expect(
+      active.isTextEntry,
+      `opening Settings must not focus a text field (focused ${active.tag}#${active.id})`,
+    ).toBe(false);
+    expect(active.isBody, "focus must not be dropped on <body>").toBe(false);
+    expect(await activeElementIsInside(dialog), "focus stays inside Settings").toBe(true);
+    await expect(
+      dialog.getByRole("heading", { name: "Settings" }),
+      "the dialog heading is the deliberate coarse-pointer target",
+    ).toBeFocused();
+
+    // The field loads asynchronously; it must still be unfocused once it has.
+    const pubmed = dialog.getByLabel("PubMed API Key (NCBI)");
+    await expect(pubmed).toBeVisible({ timeout: 10_000 });
+    await expect(pubmed, "the PubMed field is not implicitly focused once it resolves").not.toBeFocused();
+
+    // An explicit tap focuses it. Nothing is typed and nothing is saved, so the
+    // user's real API key is neither read back nor mutated by this test.
+    await pubmed.click();
+    await expect(pubmed).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    expect((await activeElement(page)).isBody, "focus restored off <body>").toBe(false);
+  });
+
+  // ── C/D/E. Edit Project / Edit Tag / Edit Synonym Group ─────────────────
+
+  const EDIT_SUB_DIALOGS = [
+    {
+      manage: "Manage projects",
+      open: () => `Edit project ${FIXTURE_PROJECT}`,
+      heading: "Edit Project",
+      field: "Name",
+      fieldId: "project-name",
+    },
+    {
+      manage: "Manage tags",
+      open: () => `Edit tag ${FIXTURE_TAG}`,
+      heading: "Edit Tag",
+      field: "Name",
+      fieldId: "tag-name",
+    },
+    {
+      manage: "Manage synonyms",
+      open: () => `Edit synonym group ${FIXTURE_SYNONYM}`,
+      heading: "Edit Synonym Group",
+      field: "Display Name (Canonical Term)",
+      fieldId: "canonical",
+    },
+  ];
+
+  for (const { manage, open, heading, field, fieldId } of EDIT_SUB_DIALOGS) {
+    for (const vp of [PHONE, TABLET_PORTRAIT]) {
+      test(`${heading} opens on its heading @${vp.width}x${vp.height}`, async ({ page }) => {
+        await page.setViewportSize(vp);
+        await page.goto("/", { waitUntil: "networkidle" });
+        await waitForDashboard(page);
+
+        await openSidebarManager(page, manage, vp.width);
+        // `exact` matters: the fixture project's name is a prefix of the second
+        // fixture project's, so a substring match resolves to both openers.
+        const opener = page.getByRole("button", { name: open(), exact: true });
+        await expect(opener).toBeVisible();
+        await opener.click();
+
+        const dialog = dialogByHeading(page, heading);
+        await expect(dialog).toBeVisible();
+
+        // Pre-fix: INPUT#<fieldId>, isTextEntry true.
+        const active = await activeElement(page);
+        expect(
+          active.isTextEntry,
+          `${heading}: opening must not focus a text field (focused ${active.tag}#${active.id})`,
+        ).toBe(false);
+        expect(active.isBody, `${heading}: focus must not be dropped on <body>`).toBe(false);
+        expect(
+          await activeElementIsInside(dialog),
+          `${heading}: focus stays inside the open sub-dialog`,
+        ).toBe(true);
+        await expect(
+          dialog.getByRole("heading", { name: heading, exact: true }),
+          `${heading}: the heading is the deliberate coarse-pointer target`,
+        ).toBeFocused();
+
+        const input = dialog.getByLabel(field, { exact: true });
+        await expect(input, `${heading}: ${field} is not autofocused`).not.toBeFocused();
+        expect(active.id, `${heading}: #${fieldId} specifically is not the focused node`).not.toBe(
+          fieldId,
+        );
+
+        // An explicit tap still focuses and still types. Nothing is submitted:
+        // no Save/Update is clicked, so the fixture is not mutated.
+        await input.click();
+        await expect(input).toBeFocused();
+        await input.fill("zz probe");
+        await expect(input).toHaveValue("zz probe");
+
+        await closeAllDialogs(page);
+        expect((await activeElement(page)).isBody, `${heading}: focus restored off <body>`).toBe(
+          false,
+        );
+      });
+    }
+  }
+
+  // ── F. Edit Paper outer Dialog ──────────────────────────────────────────
+
+  for (const vp of [PHONE, TABLET_PORTRAIT]) {
+    test(`Edit Paper opens on its heading @${vp.width}x${vp.height}`, async ({ page }) => {
+      await page.setViewportSize(vp);
+      await page.goto("/", { waitUntil: "networkidle" });
+      await waitForDashboard(page);
+
+      await page.locator("tbody tr").first().getByRole("button", { name: /^Edit / }).click();
+      const dialog = dialogByHeading(page, "Edit Paper");
+      await expect(dialog).toBeVisible();
+
+      // Pre-fix: INPUT#title, isTextEntry true.
+      const active = await activeElement(page);
+      expect(
+        active.isTextEntry,
+        `Edit Paper: opening must not focus Title (focused ${active.tag}#${active.id})`,
+      ).toBe(false);
+      expect(active.isBody, "focus must not be dropped on <body>").toBe(false);
+      expect(await activeElementIsInside(dialog), "focus stays inside Edit Paper").toBe(true);
+      await expect(
+        dialog.getByRole("heading", { name: "Edit Paper", exact: true }),
+        "the dialog heading is the deliberate coarse-pointer target",
+      ).toBeFocused();
+
+      const title = dialog.locator("#title");
+      await expect(title, "Title is not autofocused").not.toBeFocused();
+      await title.click();
+      await expect(title).toBeFocused();
+
+      // Deliberately no Save Changes: the paper is not modified by this probe.
+      await closeAllDialogs(page);
+      const restored = await activeElement(page);
+      expect(restored.isBody, "focus restored off <body>").toBe(false);
+      expect(restored.ariaLabel ?? "", "focus returns to the paper's Edit opener").toMatch(/^Edit /);
+    });
+  }
+
+  // ── G. Edit Paper vertical reachability ─────────────────────────────────
+
+  /**
+   * The owner's report is that the long Edit Paper form is not reliably
+   * scrollable on an iPhone/iPad. That specific failure is an iOS one and this
+   * suite cannot reproduce it: `vh` in Chromium equals the visible viewport,
+   * whereas on iOS Safari it resolves against the *large* viewport, so the
+   * pre-fix `max-h-[90vh]` shell could be taller than the screen while the
+   * browser still believed its contents fit. What this test does prove is the
+   * contract that makes the iOS case impossible: a single deliberate scroll
+   * owner, bounded to the viewport that is actually visible, with the whole
+   * form reachable inside it and no dependence on the page behind the modal.
+   */
+  for (const vp of [PHONE, TABLET_PORTRAIT, TABLET_LANDSCAPE]) {
+    test(`Edit Paper is fully reachable @${vp.width}x${vp.height}`, async ({ page }) => {
+      await page.setViewportSize(vp);
+      await page.goto("/", { waitUntil: "networkidle" });
+      await waitForDashboard(page);
+
+      await page.locator("tbody tr").first().getByRole("button", { name: /^Edit / }).click();
+      const dialog = dialogByHeading(page, "Edit Paper");
+      await expect(dialog).toBeVisible();
+
+      const scroller = dialog.getByTestId("edit-paper-scroll");
+      await expect(scroller, "Edit Paper has one deliberate scroll owner").toBeVisible();
+
+      const before = await scroller.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return {
+          overflowY: cs.overflowY,
+          overscrollY: cs.overscrollBehaviorY,
+          touchAction: cs.touchAction,
+          clientHeight: el.clientHeight,
+          scrollHeight: el.scrollHeight,
+          scrollTop: el.scrollTop,
+          viewport: window.innerHeight,
+          dialogBottom: (el.closest("[role=dialog]") as HTMLElement).getBoundingClientRect().bottom,
+          dialogTop: (el.closest("[role=dialog]") as HTMLElement).getBoundingClientRect().top,
+        };
+      });
+
+      expect(before.overflowY, "the scroll owner declares vertical overflow").toBe("auto");
+      // Touch panning is allowed on it, and a pan that runs past the end does
+      // not chain out to the scroll-locked page behind the modal.
+      expect(before.touchAction, "touch panning is allowed").toMatch(/pan-y|auto/);
+      expect(before.overscrollY, "overscroll does not chain to the page behind").toBe("contain");
+
+      // Bounded to the viewport that is actually visible — the property the
+      // pre-fix `vh` shell could not guarantee on iOS.
+      expect(
+        before.clientHeight,
+        "the scroll owner never exceeds the visible viewport",
+      ).toBeLessThanOrEqual(before.viewport);
+      expect(before.dialogTop, "the dialog's top edge is on screen").toBeGreaterThanOrEqual(-1);
+      expect(
+        before.dialogBottom,
+        "the dialog's bottom edge is on screen",
+      ).toBeLessThanOrEqual(before.viewport + 1);
+
+      // The document behind the modal is not the scroll owner.
+      const bodyLocked = await page.evaluate(() => getComputedStyle(document.body).overflow);
+      expect(bodyLocked, "the page behind the modal stays scroll-locked").toBe("hidden");
+
+      if (before.scrollHeight > before.clientHeight) {
+        // Content genuinely exceeds the box: scrollTop must actually move.
+        const moved = await scroller.evaluate((el) => {
+          el.scrollTop = el.scrollHeight;
+          return el.scrollTop;
+        });
+        expect(moved, "scrollTop moves off 0").toBeGreaterThan(0);
+      }
+
+      // Bottom of the form is reachable and lands fully inside the viewport.
+      const save = dialog.getByRole("button", { name: "Save Changes" });
+      await save.scrollIntoViewIfNeeded();
+      const saveBox = await save.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, viewport: window.innerHeight };
+      });
+      expect(saveBox.top, "Save Changes top is on screen").toBeGreaterThanOrEqual(0);
+      expect(saveBox.bottom, "Save Changes bottom is on screen").toBeLessThanOrEqual(
+        saveBox.viewport + 1,
+      );
+
+      // The attachments region is part of the same scroll owner when rendered.
+      const attachments = dialog.getByText("Visuals & Attachments", { exact: false });
+      if (await attachments.count()) {
+        await attachments.first().scrollIntoViewIfNeeded();
+        const inView = await attachments.first().evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return r.top >= 0 && r.bottom <= window.innerHeight;
+        });
+        expect(inView, "the attachments section is reachable").toBe(true);
+      }
+
+      // …and the top comes back.
+      const title = dialog.locator("#title");
+      await title.scrollIntoViewIfNeeded();
+      const titleBox = await title.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, viewport: window.innerHeight };
+      });
+      expect(titleBox.top, "Title can be returned into view").toBeGreaterThanOrEqual(0);
+      expect(titleBox.bottom, "Title lands fully on screen").toBeLessThanOrEqual(
+        titleBox.viewport + 1,
+      );
+
+      await expectNoHorizontalOverflow(page, `Edit Paper @${vp.width}x${vp.height}`);
+      await closeAllDialogs(page);
+    });
+  }
+
+  // ── H. Edit Paper → Projects / Tags ─────────────────────────────────────
+
+  const PAPER_SELECTORS = [
+    { trigger: /Select projects|project.? selected/, search: "Search projects", option: FIXTURE_PROJECT },
+    { trigger: /Select tags|tags? selected/, search: "Search tags", option: FIXTURE_TAG },
+  ];
+
+  for (const { trigger, search, option } of PAPER_SELECTORS) {
+    for (const vp of [PHONE, TABLET_PORTRAIT, TABLET_LANDSCAPE]) {
+      test(`Edit Paper ${search} does not autofocus @${vp.width}x${vp.height}`, async ({ page }) => {
+        await page.setViewportSize(vp);
+        await page.goto("/", { waitUntil: "networkidle" });
+        await waitForDashboard(page);
+
+        await page.locator("tbody tr").first().getByRole("button", { name: /^Edit / }).click();
+        const dialog = dialogByHeading(page, "Edit Paper");
+        await expect(dialog).toBeVisible();
+
+        // Held as a handle: the trigger's label changes once something is
+        // selected, so a name-based locator could not be re-resolved after.
+        const triggerEl = await dialog.getByRole("button", { name: trigger }).first().elementHandle();
+        await triggerEl!.scrollIntoViewIfNeeded();
+        await triggerEl!.click();
+
+        const popover = page.locator("[data-radix-popper-content-wrapper]").last();
+        await expect(popover).toBeVisible();
+
+        // Pre-fix this was the CommandInput: INPUT[role=combobox], isTextEntry
+        // true, so the keyboard covered the very list being chosen from.
+        const active = await activeElement(page);
+        expect(
+          active.isTextEntry,
+          `${search}: opening must not focus Search (focused ${active.tag} "${active.ariaLabel}")`,
+        ).toBe(false);
+        expect(active.isBody, `${search}: focus must not be dropped on <body>`).toBe(false);
+        expect(await activeElementIsInside(popover), `${search}: focus stays inside the popover`).toBe(
+          true,
+        );
+
+        const searchBox = popover.getByRole("combobox", { name: search });
+        await expect(searchBox, `${search}: Search is not focused`).not.toBeFocused();
+
+        // The panel is on screen. Pre-fix, with collision avoidance disabled,
+        // the Tags panel opened past the bottom edge of a landscape tablet.
+        const geo = await popover.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom, viewport: window.innerHeight };
+        });
+        expect(geo.top, `${search}: popover top is on screen`).toBeGreaterThanOrEqual(0);
+        expect(geo.bottom, `${search}: popover bottom is on screen`).toBeLessThanOrEqual(
+          geo.viewport + 1,
+        );
+
+        // Options are inspectable and selectable before anything is typed.
+        const optionRow = popover.getByRole("option", { name: option, exact: true });
+        await expect(optionRow, `${search}: options are usable before typing`).toBeVisible();
+
+        // Explicit Search interaction still focuses and still filters.
+        await searchBox.click();
+        await expect(searchBox).toBeFocused();
+        await searchBox.fill(option);
+        await expect(optionRow).toBeVisible();
+
+        // Selection semantics are unchanged — this is dialog-local state until
+        // Save Changes, which this test never clicks.
+        await optionRow.click();
+        await expect(optionRow).toHaveAttribute("aria-selected", "true");
+        await page.keyboard.press("Escape");
+        await expect(popover).toBeHidden();
+        await expect(
+          dialog.getByRole("button", { name: `Remove ${option.includes("Project") ? "project" : "tag"} "${option}"` }),
+          `${search}: the selection landed in the dialog's own state`,
+        ).toBeVisible();
+
+        await closeAllDialogs(page);
+      });
+    }
+  }
+});
+
+// ── REMEDIATION-002 desktop preservation ────────────────────────────────────
+
+test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-002 — fine pointer preserved", () => {
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await createEntityFixtures(page);
+    await page.close();
+  });
+
+  test.afterAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await removeEntityFixtures(page).catch(() => {});
+    await page.close();
+  });
+
+  test("Analytics target selectors still autofocus their search box", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await page.getByRole("button", { name: /Analytics & Insights/ }).click();
+    await expect(page.getByText("Publication Year Distribution")).toBeAttached();
+
+    for (const { label, search } of [
+      { label: "Target Keywords", search: "Search target keywords" },
+      { label: "Target Authors", search: "Search target authors" },
+    ]) {
+      const trigger = page.getByRole("button", { name: new RegExp(`^${label}`) }).first();
+      await trigger.scrollIntoViewIfNeeded();
+      await trigger.click();
+      const popover = page.locator("[data-radix-popper-content-wrapper]").last();
+      await expect(popover.getByRole("textbox", { name: search })).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(popover).toBeHidden();
+    }
+  });
+
+  test("Settings still autofocuses the PubMed API key field", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    // Measured baseline: on a fine pointer this field is focused the moment the
+    // dialog opens, and still focused once the settings query resolves.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = dialogByHeading(page, "Settings");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("PubMed API Key (NCBI)")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+  });
+
+  test("Edit sub-dialogs still autofocus their first field", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    for (const { manage, open, heading, field } of [
+      { manage: "Manage projects", open: `Edit project ${FIXTURE_PROJECT}`, heading: "Edit Project", field: "Name" },
+      { manage: "Manage tags", open: `Edit tag ${FIXTURE_TAG}`, heading: "Edit Tag", field: "Name" },
+      {
+        manage: "Manage synonyms",
+        open: `Edit synonym group ${FIXTURE_SYNONYM}`,
+        heading: "Edit Synonym Group",
+        field: "Display Name (Canonical Term)",
+      },
+    ]) {
+      await page.getByRole("button", { name: manage, exact: true }).click();
+      await page.getByRole("button", { name: open, exact: true }).click();
+      const dialog = dialogByHeading(page, heading);
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByLabel(field, { exact: true })).toBeFocused();
+      await closeAllDialogs(page);
+    }
+  });
+
+  test("Edit Paper still autofocuses Title, and its selectors still autofocus Search", async ({
+    page,
+  }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await page.locator("tbody tr").first().getByRole("button", { name: /^Edit / }).click();
+    const dialog = dialogByHeading(page, "Edit Paper");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("#title")).toBeFocused();
+
+    for (const { trigger, search } of [
+      { trigger: /Select projects|project.? selected/, search: "Search projects" },
+      { trigger: /Select tags|tags? selected/, search: "Search tags" },
+    ]) {
+      const triggerEl = await dialog.getByRole("button", { name: trigger }).first().elementHandle();
+      await triggerEl!.scrollIntoViewIfNeeded();
+      await triggerEl!.click();
+      const popover = page.locator("[data-radix-popper-content-wrapper]").last();
+      await expect(popover.getByRole("combobox", { name: search })).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(popover).toBeHidden();
+    }
+
+    // The desktop two-column composition and its scroll owner are unchanged.
+    const desktop = await dialog.getByTestId("edit-paper-scroll").evaluate((el) => ({
+      overflowY: getComputedStyle(el).overflowY,
+      columns: getComputedStyle(el.querySelector(".grid") as HTMLElement).gridTemplateColumns.split(" ").length,
+    }));
+    expect(desktop.overflowY).toBe("auto");
+    expect(desktop.columns, "desktop keeps the two-column form").toBe(2);
+
+    await closeAllDialogs(page);
   });
 });

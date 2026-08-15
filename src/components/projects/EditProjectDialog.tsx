@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 
 interface EditProjectDialogProps {
   project: Project | null;
@@ -43,6 +44,11 @@ export function EditProjectDialog({
   const [description, setDescription] = useState("");
   const [color, setColor] = useState("#6366f1");
   const [saving, setSaving] = useState(false);
+  // Opening a project to *look* at it is not consent to type. On a coarse
+  // pointer initial focus goes to the heading rather than the Name field, so
+  // the software keyboard no longer covers the dialog the moment it opens.
+  // A mouse still lands in Name, unchanged.
+  const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   useEffect(() => {
     if (project) {
@@ -70,9 +76,11 @@ export function EditProjectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent onOpenAutoFocus={onOpenAutoFocus}>
         <DialogHeader>
-          <DialogTitle>Edit Project</DialogTitle>
+          <DialogTitle ref={focusRef} tabIndex={-1} className="outline-none">
+            Edit Project
+          </DialogTitle>
           <DialogDescription>
             Update the project name, description, and color.
           </DialogDescription>
