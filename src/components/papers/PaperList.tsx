@@ -243,6 +243,47 @@ interface PaperListProps {
 const BASE_ROW_HEIGHT = 52;
 const EXPANDED_ROW_HEIGHT = 220;
 
+/**
+ * What `PaperList` remembers, at the moment a deletion is *confirmed*, about
+ * where the deleted paper sat — captured before it is dispatched, because
+ * afterwards the answer is unrecoverable.
+ */
+interface PendingDeleteFocus {
+  deletedId: string;
+  /** The deleted paper's index in the pre-deletion `papers` array. */
+  originalIndex: number;
+  /** The paper immediately after it in the pre-deletion visible order. */
+  nextId: string | null;
+  /** The paper immediately before it in the pre-deletion visible order. */
+  previousId: string | null;
+}
+
+/**
+ * Which row should take focus once the deleted paper is gone, as an index into
+ * the *current* `papers` array — or `null` when no row survives.
+ *
+ * Both captured neighbours are re-checked against live data rather than
+ * trusted, because an unrelated refetch or a second mutation can remove them
+ * between confirmation and removal. The clamped-slot rule is the deterministic
+ * answer for that case: it keeps the user where they were looking, and it is
+ * still derived from data order, not from the DOM.
+ */
+function resolvePostDeleteIndex(
+  papers: PaperWithTags[],
+  pending: PendingDeleteFocus,
+): number | null {
+  if (papers.length === 0) return null;
+  if (pending.nextId) {
+    const next = papers.findIndex((p) => p.id === pending.nextId);
+    if (next !== -1) return next;
+  }
+  if (pending.previousId) {
+    const previous = papers.findIndex((p) => p.id === pending.previousId);
+    if (previous !== -1) return previous;
+  }
+  return Math.min(pending.originalIndex, papers.length - 1);
+}
+
 // mergeStudyTypesByWeight and findMatchingStudyTypes removed — flat multi-select now
 
 export function PaperList({
@@ -330,6 +371,126 @@ export function PaperList({
     }, []),
   });
 
+  // ── Post-deletion focus continuity ────────────────────────────────────────
+  //
+  // Dismissing this confirmation is already solved centrally: the opener is
+  // still mounted, so `useDialogFocusRestore` puts focus back on it. Confirming
+  // is the case that layer cannot serve. `deletePaper` removes the paper from
+  // the cache optimistically, which unmounts the row *and* the Delete button
+  // that opened the confirmation, so there is no opener left to restore and
+  // focus falls to `<body>`.
+  //
+  // The replacement target is positional and comes entirely from this
+  // component's own `papers` array: the paper that followed the deleted one,
+  // else the one that preceded it, else whatever now occupies the same slot,
+  // else the empty-state heading. Papers are identified by id and reached
+  // through refs registered by the rows themselves — the table is virtualized,
+  // sorted and filtered, so no DOM search could name the right button.
+
+  /** Every mounted row's Delete button, keyed by paper id. */
+  const deleteButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  /** Armed only by the confirmation's Action; never by Cancel or Escape. */
+  const pendingDeleteFocusRef = useRef<PendingDeleteFocus | null>(null);
+  /** A resolved target that was virtualized out, awaiting its row's mount. */
+  const pendingFocusIdRef = useRef<string | null>(null);
+  /** The confirmation panel, so "focus is still inside it" is a ref test. */
+  const confirmContentRef = useRef<HTMLDivElement>(null);
+  /** The empty-state heading, focused only as a deliberate delete handoff. */
+  const emptyStateHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  /**
+   * Whether focus actually needs repairing right now.
+   *
+   * This is the guard against stealing focus the user chose. Deletion is
+   * asynchronous, so between confirming and the row disappearing they may have
+   * moved on deliberately; if something connected and unrelated holds focus,
+   * the handoff stands down. Focus is only claimed when it has nowhere to be:
+   *
+   *  - `<body>` (or nothing) — the row that held focus was removed;
+   *  - a detached element — same thing, observed a moment earlier;
+   *  - still inside the confirmation — Radix keeps the panel mounted through
+   *    its close animation and the optimistic removal normally lands inside
+   *    that window, so focus is on the Action button and about to be dropped.
+   *    Taking it there is the handoff, not a theft.
+   */
+  const focusNeedsRecovery = useCallback(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) return true;
+    if (!active.isConnected) return true;
+    const confirmContent = confirmContentRef.current;
+    return confirmContent !== null && confirmContent.contains(active);
+  }, []);
+
+  const registerDeleteButton = useCallback(
+    (paperId: string, el: HTMLButtonElement | null) => {
+      const refs = deleteButtonRefs.current;
+      if (!el) {
+        refs.delete(paperId);
+        return;
+      }
+      refs.set(paperId, el);
+      // The row was scrolled back into the render window for a pending handoff
+      // and has just mounted. Re-check the guard: the scroll is not instant and
+      // the user may have moved focus in the meantime.
+      if (pendingFocusIdRef.current === paperId) {
+        pendingFocusIdRef.current = null;
+        if (focusNeedsRecovery()) el.focus();
+      }
+    },
+    [focusNeedsRecovery],
+  );
+
+  const handleConfirmDelete = useCallback(() => {
+    const paperId = deleteConfirmId;
+    if (!paperId) return;
+    const index = papers.findIndex((p) => p.id === paperId);
+    pendingDeleteFocusRef.current =
+      index === -1
+        ? null
+        : {
+            deletedId: paperId,
+            originalIndex: index,
+            nextId: papers[index + 1]?.id ?? null,
+            previousId: papers[index - 1]?.id ?? null,
+          };
+    onDelete(paperId);
+    setDeleteConfirmId(null);
+  }, [deleteConfirmId, papers, onDelete]);
+
+  useEffect(() => {
+    const pending = pendingDeleteFocusRef.current;
+    if (!pending) return;
+    // The optimistic removal is the signal. Any earlier `papers` update — a
+    // background refetch, someone else's mutation — is not, so stay armed.
+    if (papers.some((p) => p.id === pending.deletedId)) return;
+    // Single-shot: the first render without the deleted paper either performs
+    // the handoff or deliberately declines it. Nothing stays armed after that,
+    // so no later list change can trigger a surprise focus move.
+    pendingDeleteFocusRef.current = null;
+    if (!focusNeedsRecovery()) return;
+
+    const targetIndex = resolvePostDeleteIndex(papers, pending);
+    if (targetIndex === null) {
+      // Nothing survives: `PaperListEmptyState` is rendering by now, and its
+      // heading tells the user what state they are in without consuming the
+      // Clear filters / Add papers action that should be their next Tab stop.
+      emptyStateHeadingRef.current?.focus();
+      return;
+    }
+
+    const targetId = papers[targetIndex].id;
+    const button = deleteButtonRefs.current.get(targetId);
+    if (button?.isConnected) {
+      button.focus();
+      return;
+    }
+    // The target exists in the data but is outside the virtualizer's render
+    // window. Bring it in through the virtualizer that already owns scrolling
+    // and let its own ref registration complete the handoff on mount.
+    pendingFocusIdRef.current = targetId;
+    rowVirtualizer.scrollToIndex(targetIndex);
+  }, [papers, rowVirtualizer, focusNeedsRecovery]);
+
   const generateGoogleScholarUrl = (title: string) => {
     return `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
   };
@@ -408,6 +569,7 @@ export function PaperList({
         hasActiveFilters={hasActiveFilters}
         onAddPapers={onAddPapers}
         onClearFilters={onClearFilters}
+        headingRef={emptyStateHeadingRef}
       />
     );
   }
@@ -507,6 +669,7 @@ export function PaperList({
               visibleColumnCount={visibleColumnCount}
               onEdit={onEdit}
               onRequestDelete={setDeleteConfirmId}
+              registerDeleteButton={registerDeleteButton}
               excludedStudyTypes={excludedStudyTypes}
               onExcludeStudyType={onExcludeStudyType}
               onExcludeKeyword={onExcludeKeyword}
@@ -540,8 +703,11 @@ export function PaperList({
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
       )}
+      {/* Cancel and Escape both close through `onOpenChange`, which only clears
+          the id — they never arm a post-deletion handoff, so their restoration
+          behaviour is exactly what it was. */}
       <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent ref={confirmContentRef}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Paper</AlertDialogTitle>
             <AlertDialogDescription>
@@ -552,12 +718,7 @@ export function PaperList({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                if (deleteConfirmId) {
-                  onDelete(deleteConfirmId);
-                  setDeleteConfirmId(null);
-                }
-              }}
+              onClick={handleConfirmDelete}
             >
               Delete
             </AlertDialogAction>
@@ -587,6 +748,12 @@ interface PaperRowProps {
   visibleColumnCount: number;
   onEdit: (paper: PaperWithTags) => void;
   onRequestDelete: (paperId: string) => void;
+  /**
+   * Publishes this row's Delete button to `PaperList` under the paper's id, so
+   * a post-deletion focus handoff can reach it without searching the DOM.
+   * Called with `null` when the row unmounts (scrolled out, or deleted).
+   */
+  registerDeleteButton: (paperId: string, el: HTMLButtonElement | null) => void;
   excludedStudyTypes: Set<string>;
   onExcludeStudyType: (studyType: string) => Promise<boolean>;
   onExcludeKeyword: (keyword: string) => Promise<boolean>;
@@ -618,6 +785,7 @@ function PaperRow({
   visibleColumnCount,
   onEdit,
   onRequestDelete,
+  registerDeleteButton,
   excludedStudyTypes,
   onExcludeStudyType,
   onExcludeKeyword,
@@ -644,6 +812,13 @@ function PaperRow({
 
   /** Stable id for the expanded-abstract region, wired to `aria-controls`. */
   const abstractRegionId = `paper-abstract-${paper.id}`;
+
+  // Memoized on the paper id so the callback identity survives re-renders and
+  // the registry is not churned (unregister/re-register) on every commit.
+  const setDeleteButtonRef = useCallback(
+    (el: HTMLButtonElement | null) => registerDeleteButton(paper.id, el),
+    [registerDeleteButton, paper.id],
+  );
 
   return (
     <tbody ref={measureElement} data-index={virtualIndex}>
@@ -987,6 +1162,7 @@ function PaperRow({
               <Pencil className="h-4 w-4" aria-hidden="true" />
             </Button>
             <Button
+              ref={setDeleteButtonRef}
               variant="ghost"
               size="icon"
               className="h-8 w-8 coarse:h-10 coarse:w-10 coarse:shrink-0 text-destructive group-hover:text-red-200 hover:!text-red-100 group-hover:hover:bg-white/20 transition-colors"

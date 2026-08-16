@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { BookOpen, FlaskConical, FolderOpen, Plus, SearchX, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -60,6 +61,15 @@ export interface PaperListEmptyStateProps {
   onAddPapers: () => void;
   /** Dashboard's `handleClearFilters` (also clears the loaded-preset pointer). */
   onClearFilters: () => void;
+  /**
+   * The heading of whichever state renders, exposed so `PaperList` can move
+   * focus to it after a confirmed deletion leaves no visible row to hand off
+   * to. Every branch wires it, and every heading is `tabIndex={-1}`: reachable
+   * programmatically, never inserted into the Tab order, so the next Tab stop
+   * is still the state's own action (Clear filters / Add your first papers).
+   * Nothing here focuses itself — it is a deliberate handoff target only.
+   */
+  headingRef?: Ref<HTMLHeadingElement>;
 }
 
 /**
@@ -94,6 +104,7 @@ export function PaperListEmptyState({
   hasActiveFilters,
   onAddPapers,
   onClearFilters,
+  headingRef,
 }: PaperListEmptyStateProps) {
   // First-run guidance requires positive proof that the library is empty. An
   // unresolved or failed count is "unknown", and unknown must never read as zero.
@@ -119,7 +130,9 @@ export function PaperListEmptyState({
     return (
       <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
         <SearchX className="mb-3 h-8 w-8 text-muted-foreground" aria-hidden="true" />
-        <h2 className="text-lg font-semibold">{heading}</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-lg font-semibold">
+          {heading}
+        </h2>
         <p className="mt-1 max-w-md text-sm text-muted-foreground">{body}</p>
         {/* Offered whenever filters are narrowing the view — it is an action on
             state the user created, so it stays truthful even when the library
@@ -139,7 +152,9 @@ export function PaperListEmptyState({
       <div className="w-full max-w-2xl rounded-lg border bg-card p-6 text-card-foreground sm:p-8">
         <div className="flex flex-col items-center text-center">
           <BookOpen className="mb-3 h-8 w-8 text-muted-foreground" aria-hidden="true" />
-          <h2 className="text-xl font-semibold">Build your research library</h2>
+          <h2 ref={headingRef} tabIndex={-1} className="text-xl font-semibold">
+            Build your research library
+          </h2>
           <p className="mt-2 max-w-lg text-sm text-muted-foreground">
             Start by adding papers with PMIDs, DOIs, or titles, importing a
             reference file, or entering a paper manually.
