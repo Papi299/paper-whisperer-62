@@ -200,6 +200,30 @@ export function FilterPresetsMenu({
   const [renameDraft, setRenameDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const presetsTriggerRef = useRef<HTMLButtonElement>(null);
+
+  /**
+   * Close-focus target for the two confirmations that are opened from inside
+   * the dropdown.
+   *
+   * `AlertDialogContent` now captures whatever had focus when a confirmation
+   * opened and restores it on close, which is the right answer everywhere the
+   * opener survives — a paper row's Delete button, an exclusion-pool Clear
+   * trigger. It cannot be the answer here: both `Delete preset "…"` and
+   * `Update "…"` also call `setMenuOpen(false)`, so the control that opened the
+   * confirmation is unmounted with the menu and is no longer a focus target at
+   * all. Without this the central restore correctly declines and Radix's own
+   * `triggerRef` fallback is `null`, so focus falls to `<body>`.
+   *
+   * The Presets trigger is the persistent control that owns this workflow and
+   * is where the user's next action starts, so it is the deliberate fallback.
+   * `preventDefault()` first, which is also what stops the central wrapper from
+   * moving focus afterwards.
+   */
+  const restorePresetsTrigger = useCallback((event: Event) => {
+    event.preventDefault();
+    presetsTriggerRef.current?.focus();
+  }, []);
 
   /**
    * Initial focus for both name dialogs, on Radix's `onOpenAutoFocus` rather
@@ -329,6 +353,7 @@ export function FilterPresetsMenu({
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <Button
+            ref={presetsTriggerRef}
             variant="outline"
             size="sm"
             className="relative"
@@ -449,7 +474,7 @@ export function FilterPresetsMenu({
         open={!!presetToDelete}
         onOpenChange={(open) => !open && setPresetToDelete(null)}
       >
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={restorePresetsTrigger}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete saved search?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -475,7 +500,7 @@ export function FilterPresetsMenu({
         open={!!presetToUpdate}
         onOpenChange={(open) => !open && !isUpdating && setPresetToUpdate(null)}
       >
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={restorePresetsTrigger}>
           <AlertDialogHeader>
             <AlertDialogTitle>Update saved search?</AlertDialogTitle>
             <AlertDialogDescription>
