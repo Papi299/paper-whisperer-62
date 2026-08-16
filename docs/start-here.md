@@ -168,7 +168,6 @@ Meaningful open items. This is a pointer list, not a backlog database — none o
 - **Desktop Paper Actions compression.** The Actions buttons compress to 16×32 on desktop as well; desktop density was explicitly accepted, so this stays low priority unless new evidence or an owner decision escalates it.
 - **React Router Cluster 5** — see §8.
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
-- **Orphaned management-component audit.** Two verified-orphaned components were removed; other components looked sparse under static search but were deliberately **not** removed without the same proof. A bounded audit is available work.
 - **Duplicate favicon declaration.** `index.html` carries two `rel="icon"` links with the same data URI — noted, cosmetic, never yet cleaned up.
 
 ## 11. Before selecting the next task
@@ -206,4 +205,4 @@ At most 5 items; remove the oldest when adding.
 2. **Mobile searchable selectors.** Seven selectors below 768px render a shared touch-safe sheet — heading focused on open, search never autofocused, native scroll container sized from `window.visualViewport` — and the Filters sheet focuses its title rather than a number input. Desktop popovers are untouched.
 3. **Mobile Dashboard density.** The permanent smartphone toolbar was compacted from roughly three quarters of the viewport to about a fifth via progressive disclosure (Filters and Library-actions sheets); nothing was removed and no touch target shrank. Desktop geometry is byte-identical to baseline.
 4. **Responsive/accessibility pass (PFA-C09).** Shell responsive below `md` via a navigation drawer, contained table overflow with no document/body horizontal overflow at any checked viewport, keyboard-operable sorting and column resizing with real ARIA values, real accessible names on management and filter controls, and central dialog close-focus restoration.
-5. **Dead-component cleanup and visible branding.** Two verified-orphaned components deleted; every reachable surface now presents exactly one name, `PaperLume`. Internal identifiers, resource names, and historical documentation were deliberately left intact.
+5. **Management-component surface re-audited, and visible branding.** The six sidebar management families are now fully audited: the pool `*Section` components that no runtime, re-export, dynamic, config or test path reached — and which the production module graph confirmed were never bundled — were removed, and every surviving management dialog is untouched. The sidebar rows and their modals remain the only implementation of that UI. Every reachable surface presents exactly one name, `PaperLume`; internal identifiers, resource names, and historical documentation were deliberately left intact.
