@@ -168,7 +168,6 @@ Meaningful open items. This is a pointer list, not a backlog database — none o
 - **Desktop Paper Actions compression.** The Actions buttons compress to 16×32 on desktop as well; desktop density was explicitly accepted, so this stays low priority unless new evidence or an owner decision escalates it.
 - **React Router Cluster 5** — see §8.
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
-- **Duplicate favicon declaration.** `index.html` carries two `rel="icon"` links with the same data URI — noted, cosmetic, never yet cleaned up.
 
 ## 11. Before selecting the next task
 
