@@ -62,7 +62,14 @@ const ROOT = resolve(__dirname, "..");
 const PRODUCTION_SUPABASE_REF = "lioxtgiputfniqbktcsz";
 const AUTH_STATE_FILE = resolve(ROOT, "e2e/.auth/user.json");
 
-/** The authorized read-only specs — the safe default subset for `run`. */
+/**
+ * The authorized SAFE spec set — the default subset for `run`. Most entries are
+ * read-only; the ones that write are annotated below and each removes its own
+ * fixtures again, so none of them leaves the deterministic seed altered. The
+ * account-deletion spec at the end of the list is the one deliberately
+ * destructive entry, and it owns a disposable per-run account rather than a
+ * deterministic fixture.
+ */
 const DEFAULT_SPECS = [
   "e2e/auth.spec.ts",
   // Reads the product name on the unauthenticated Auth card, the authenticated
@@ -96,6 +103,13 @@ const DEFAULT_SPECS = [
   "e2e/eager-load.spec.ts",
   "e2e/filters.spec.ts",
   "e2e/paper-import.spec.ts",
+  // D4 external-metadata import-order regression. Imports three disposable
+  // local papers through the real Add Papers UI and the real bulk-insert RPC,
+  // then deletes them again before the test ends, restoring the seeded count.
+  // Metadata comes from a deterministic stand-in fulfilled at the
+  // `fetch-paper-metadata` HTTP boundary — no live PubMed/Crossref egress, and
+  // no served local Edge Function is required.
+  "e2e/import-order.spec.ts",
   "e2e/pools.spec.ts",
   // Opens Settings and reads the storage gauge; mutates nothing.
   "e2e/settings-storage.spec.ts",
