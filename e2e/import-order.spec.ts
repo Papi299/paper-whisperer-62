@@ -167,6 +167,16 @@ const EXPECTED_TABLE_ORDER = [CHARLIE.title, BRAVO.title, ALPHA.title];
 
 const FIXTURES_BY_IDENTIFIER = new Map(FIXTURES.map((f) => [f.identifier, f]));
 
+/**
+ * Readable detail for a thrown value. Used only to build the message of the
+ * double-failure `AggregateError` below — the thrown values themselves are
+ * still carried intact on `.errors`, never replaced by their text.
+ */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.stack ?? error.message;
+  return String(error);
+}
+
 /** What the route handler observed. The bearer token itself is never stored. */
 interface MetadataInvocation {
   method: string;
@@ -399,9 +409,9 @@ test.describe("External-metadata import order (deterministic stand-in)", () => {
       primaryError = error;
     }
 
-    // Cleanup always runs — later specs in the shared local lifecycle expect the
-    // deterministic seed back. A cleanup failure is reported in its own right,
-    // but never replaces the original failure.
+    // Cleanup always runs — the rest of the shared local lifecycle expects the
+    // deterministic seed back, so it must not be skipped just because the
+    // regression above failed.
     let cleanupError: unknown = null;
     try {
       await openDashboard(page);
@@ -412,6 +422,24 @@ test.describe("External-metadata import order (deterministic stand-in)", () => {
       cleanupError = error;
     }
 
+    // BOTH failures are preserved when both happen — the same contract
+    // `cmdRun` in scripts/e2e-local.mjs uses for a lifecycle failure that is
+    // followed by a teardown failure. A cleanup failure must never hide the
+    // regression failure, and a regression failure must never hide the fact
+    // that D4 fixtures were left behind for every spec that follows.
+    // The reporter prints only the thrown error's own message, so both
+    // underlying messages are restated there too — otherwise a double failure
+    // would name the two failures without saying what either one was.
+    if (primaryError && cleanupError) {
+      throw new AggregateError(
+        [primaryError, cleanupError],
+        [
+          "D4 import-order regression failed AND fixture cleanup failed:",
+          `[1/2] regression: ${describeError(primaryError)}`,
+          `[2/2] fixture cleanup: ${describeError(cleanupError)}`,
+        ].join("\n\n"),
+      );
+    }
     if (primaryError) throw primaryError;
     if (cleanupError) throw cleanupError;
   });
