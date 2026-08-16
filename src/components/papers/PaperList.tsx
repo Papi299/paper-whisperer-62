@@ -627,16 +627,21 @@ export function PaperList({
               <ResizableTableHeader columnId="links" label="Links" width={getWidth("links")} onResize={onColumnResize} />
             )}
             {/* The column is `table-layout: fixed`, so this width is the hard
-                content box the action buttons get. At 80px minus the cell's
-                `p-4` there are 48px left for up to four `h-8 w-8` buttons, and
-                because they were shrinkable they compressed to 16px wide, 2px
-                apart — the mis-tap the owner hit on an iPhone. On a coarse
-                pointer the column is widened to fit four 40px targets with 8px
-                between them (4×40 + 3×8 + 32px padding = 216, rounded up to
-                224 for slack); the table's own horizontal scroll absorbs the
-                extra width, which is already the responsive contract here.
-                Pointer-fine density is unchanged. */}
-            <TableHead className="w-[80px] coarse:w-[224px]">Actions</TableHead>
+                content box the action buttons get, and it has to fit the
+                worst case of four actions at whatever size that pointer gets.
+
+                Fine pointer: four 32px buttons with the compact 2px gaps, plus
+                the cell's own `p-4` (4×32 + 3×2 + 32 = 166), rounded up to 176
+                for slack. The old 80px left only 48px of content box, which is
+                why the buttons compressed to their 16px icon.
+
+                Coarse pointer: four 40px targets 8px apart (4×40 + 3×8 + 32 =
+                216), rounded up to 224.
+
+                Either way the table's own horizontal scroll absorbs the extra
+                width, which is already the responsive contract here — the
+                document itself never scrolls sideways. */}
+            <TableHead className="w-[176px] coarse:w-[224px]">Actions</TableHead>
           </TableRow>
         </TableHeader>
         {/* Spacer for items before visible window */}
@@ -1101,16 +1106,20 @@ function PaperRow({
           </TableCell>
         )}
         <TableCell>
-          {/* `coarse:shrink-0` is the actual defect fix: these buttons declare
-              32px but sat in a fixed 80px column, so flex shrank them to their
-              16px icon. Under a finger they now hold 40px and stand 8px apart
-              instead of 2. The icons themselves stay `h-4 w-4` at every size. */}
+          {/* `shrink-0` is the actual defect fix: these buttons declare a size
+              but sit in a fixed-width column, so flex was free to shrink them
+              down to their 16px icon. It is unconditional because the pressure
+              is geometric, not a property of the pointer — a mouse user got the
+              same 16px-wide control the finger did. Paired with the column
+              widths above, each pointer now keeps its declared box: 32px under
+              a mouse, 2px apart, and 40px under a finger, 8px apart. The icons
+              themselves stay `h-4 w-4` at every size. */}
           <div className="flex items-center gap-0.5 coarse:gap-2">
             {onAnalyzePaper && (
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 coarse:h-10 coarse:w-10 coarse:shrink-0 group-hover:text-white group-hover:hover:bg-white/20"
+                className="h-8 w-8 shrink-0 coarse:h-10 coarse:w-10 group-hover:text-white group-hover:hover:bg-white/20"
                 onClick={() => onAnalyzePaper(paper)}
                 disabled={isAnalyzing || !paper.has_abstract}
                 aria-label={
@@ -1134,7 +1143,7 @@ function PaperRow({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 coarse:h-10 coarse:w-10 coarse:shrink-0 group-hover:text-white group-hover:hover:bg-white/20"
+                    className="h-8 w-8 shrink-0 coarse:h-10 coarse:w-10 group-hover:text-white group-hover:hover:bg-white/20"
                     aria-label={`View notes for ${paper.title}`}
                     title="View notes"
                   >
@@ -1154,7 +1163,7 @@ function PaperRow({
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 coarse:h-10 coarse:w-10 coarse:shrink-0 group-hover:text-white group-hover:hover:bg-white/20"
+              className="h-8 w-8 shrink-0 coarse:h-10 coarse:w-10 group-hover:text-white group-hover:hover:bg-white/20"
               onClick={() => onEdit(paper)}
               aria-label={`Edit ${paper.title}`}
               title="Edit"
@@ -1165,7 +1174,7 @@ function PaperRow({
               ref={setDeleteButtonRef}
               variant="ghost"
               size="icon"
-              className="h-8 w-8 coarse:h-10 coarse:w-10 coarse:shrink-0 text-destructive group-hover:text-red-200 hover:!text-red-100 group-hover:hover:bg-white/20 transition-colors"
+              className="h-8 w-8 shrink-0 coarse:h-10 coarse:w-10 text-destructive group-hover:text-red-200 hover:!text-red-100 group-hover:hover:bg-white/20 transition-colors"
               onClick={() => onRequestDelete(paper.id)}
               aria-label={`Delete ${paper.title}`}
               title="Delete"

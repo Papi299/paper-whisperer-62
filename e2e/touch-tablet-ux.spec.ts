@@ -723,9 +723,42 @@ test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-001 — fine pointer preserved",
       );
       return th ? th.getBoundingClientRect().width : null;
     });
-    // The coarse-pointer widening must not leak into the mouse layout.
-    expect(actionsColumnWidth).toBeLessThanOrEqual(96);
+    // The fine-pointer column is 176px — four 32px buttons, their 2px gaps and
+    // the cell's 32px padding. What must not leak into the mouse layout is the
+    // 224px coarse widening, so the bound sits between the two.
+    expect(actionsColumnWidth).toBeLessThanOrEqual(192);
     await expectNoHorizontalOverflow(page, "desktop dashboard");
+  });
+
+  test("paper actions preserve their declared desktop width", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(false);
+
+    const geo = await actionGeometry(page);
+    expect(geo, "actions cell resolved").not.toBeNull();
+    expect(geo!.boxes.length, "at least Edit and Delete are present").toBeGreaterThanOrEqual(2);
+
+    for (const box of geo!.boxes) {
+      // Pre-fix these measured 16×32 on a mouse too: the buttons declared 32px
+      // but were shrinkable inside a fixed 80px column, so flex took the width
+      // back. The coarse fix only ever covered the finger.
+      expect(box.width, `desktop width of "${box.label}"`).toBeGreaterThanOrEqual(32);
+      expect(box.height, `desktop height of "${box.label}"`).toBeGreaterThanOrEqual(32);
+      // …and the fix is to restore the declared box, not to hand the mouse the
+      // 40px touch target. Desktop density is deliberate.
+      expect(box.width, `"${box.label}" is not promoted to touch sizing`).toBeLessThan(40);
+      expect(box.height, `"${box.label}" is not promoted to touch sizing`).toBeLessThan(40);
+    }
+    for (const gap of geo!.gaps) {
+      // `gap-0.5`, not the coarse `gap-2` — non-negative proves nothing overlaps.
+      expect(gap, "adjacent action buttons do not overlap").toBeGreaterThanOrEqual(0);
+      expect(gap, "desktop spacing stays compact").toBeLessThan(6);
+    }
+
+    await expectNoHorizontalOverflow(page, "desktop actions column");
   });
 
   test("desktop dashboard header does not scroll when analytics is collapsed", async ({ page }) => {

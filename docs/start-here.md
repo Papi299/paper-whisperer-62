@@ -165,7 +165,6 @@ Owner-action blockers that gate the paused C27 work — Paddle Sandbox setup, ma
 
 Meaningful open items. This is a pointer list, not a backlog database — none of it is auto-selected.
 
-- **Desktop Paper Actions compression.** The Actions buttons compress to 16×32 on desktop as well; desktop density was explicitly accepted, so this stays low priority unless new evidence or an owner decision escalates it.
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
 
 ## 11. Before selecting the next task
