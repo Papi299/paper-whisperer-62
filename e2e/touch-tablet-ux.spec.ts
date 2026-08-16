@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { waitForDashboard } from "./helpers";
+import { getPaperCount, waitForDashboard } from "./helpers";
 
 /**
  * REAL-DEVICE-TOUCH-UX-REMEDIATION-001 — touch behaviour above the 768px
@@ -1341,7 +1341,11 @@ test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-002 — fine pointer preserved",
  *   • controlled, opener goes  — saved-search Delete (a dropdown item that unmounts)
  *
  * Every assertion reads `document.activeElement`; none infers focus from
- * styling. No probe below confirms a destructive action — each one cancels.
+ * styling. All but the last probe below dismiss the confirmation (Cancel or
+ * Escape) and destroy nothing; the final probe deliberately *confirms* the
+ * saved-search deletion, which is also how that disposable fixture is disposed
+ * of. Post-deletion focus in the paper table is a separate contract, proven in
+ * POST-DELETION-PAPER-TABLE-FOCUS-CONTINUITY-001 below.
  */
 
 const FIXTURE_ALERT_PRESET = "ZZ Alert Focus Fixture Search";
@@ -1629,5 +1633,370 @@ test.describe("ALERT-DIALOG-FOCUS-RESTORATION-001 — close-focus restoration", 
     await trigger.click();
     await expect(menuItem).toHaveCount(0, { timeout: 10_000 });
     await page.keyboard.press("Escape");
+  });
+});
+
+// ── Post-deletion focus continuity in the paper table ───────────────────────
+
+/**
+ * POST-DELETION-PAPER-TABLE-FOCUS-CONTINUITY-001 — where focus lands after a
+ * paper deletion is *confirmed*.
+ *
+ * The block above proves *dismissal*: the opener survives, so restoring it is
+ * the whole answer. Confirming is the case restoration cannot serve — the row
+ * and its Delete button are unmounted by the optimistic cache update, so there
+ * is no opener left to return to and focus fell to `<body>`.
+ *
+ * The implemented contract is positional, resolved from `PaperList`'s own
+ * `papers` array by id: the row that *followed* the deleted one, else the row
+ * that preceded it, else the same clamped slot, else the empty-state heading.
+ *
+ * Every fixture here is a disposable paper created through Add Papers →
+ * Manual and removed again through the product's own delete confirmation, so
+ * the deterministic seed is never touched. Each scenario isolates its fixtures
+ * behind a unique search token, which is also what makes the visible ordering
+ * knowable — the order is *read* from the DOM, never assumed.
+ */
+
+/** Search tokens embedded in fixture titles so each scenario owns its own view. */
+const PDF_GROUP_TOKEN = "zzpdfgroup";
+const PDF_LAST_TOKEN = "zzpdflast";
+const PDF_SOLO_TOKEN = "zzpdfsolo";
+const PDF_SLOW_TOKEN = "zzpdfslow";
+const PDF_THEFT_TOKEN = "zzpdftheft";
+const PDF_ALL_TOKENS = [
+  PDF_GROUP_TOKEN,
+  PDF_LAST_TOKEN,
+  PDF_SOLO_TOKEN,
+  PDF_SLOW_TOKEN,
+  PDF_THEFT_TOKEN,
+];
+
+function searchBox(page: Page) {
+  return page.getByRole("searchbox").or(page.getByPlaceholder(/search/i)).first();
+}
+
+/**
+ * Every row Delete button, in visible order.
+ *
+ * Their accessible names are `Delete ${paper.title}`, so this doubles as the
+ * ordered identity of the visible rows — the trailing space in the pattern is
+ * what keeps the confirmation's own bare `Delete` action out of the set.
+ */
+function rowDeleteButtons(page: Page) {
+  return page.getByRole("button", { name: /^Delete / });
+}
+
+/** The observed visible ordering, as accessible names. Never assumed. */
+async function visibleDeleteLabels(page: Page): Promise<string[]> {
+  return rowDeleteButtons(page).evaluateAll((els) =>
+    els.map((el) => el.getAttribute("aria-label") ?? ""),
+  );
+}
+
+/** Narrow the table to one scenario's fixtures and wait for exactly `expected` rows. */
+async function filterToFixtures(page: Page, token: string, expected: number) {
+  await searchBox(page).fill(token);
+  await expect(rowDeleteButtons(page)).toHaveCount(expected, { timeout: 20_000 });
+}
+
+/** Create one disposable paper through Add Papers → Manual. */
+async function createDisposablePaper(page: Page, title: string) {
+  await page.getByRole("button", { name: /add papers/i }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("tab", { name: /manual/i }).click();
+  await page.locator("#manual-title").fill(title);
+  await dialog.getByRole("button", { name: /^add paper$/i }).click();
+  await expect(dialog).toBeHidden({ timeout: 20_000 });
+}
+
+/**
+ * Remove every paper still matching `token`, through the product's own row
+ * confirmation. Tolerant of an already-empty view so it is safe in teardown.
+ */
+async function deleteFixturesMatching(page: Page, token: string) {
+  await searchBox(page).fill(token);
+  // Give the filtered read a chance to settle before concluding "nothing left".
+  await page.waitForTimeout(1_500);
+  for (let i = 0; i < 8; i++) {
+    const buttons = rowDeleteButtons(page);
+    if ((await buttons.count()) === 0) break;
+    await buttons.first().click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toBeVisible({ timeout: 10_000 });
+    await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+    await page.waitForTimeout(500);
+  }
+  await expect(rowDeleteButtons(page)).toHaveCount(0, { timeout: 20_000 });
+}
+
+test.describe("POST-DELETION-PAPER-TABLE-FOCUS-CONTINUITY-001 — confirmed-delete focus", () => {
+  test.afterAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await page
+      .goto("/", { waitUntil: "networkidle" })
+      .then(async () => {
+        await page.setViewportSize(DESKTOP);
+        await waitForDashboard(page);
+        for (const token of PDF_ALL_TOKENS) {
+          await deleteFixturesMatching(page, token).catch(() => {});
+        }
+      })
+      .catch(() => {});
+    await page.close();
+  });
+
+  // ── A. Middle-row deletion → the row that followed it ─────────────────────
+
+  test("deleting a middle row focuses the following row's Delete button", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    try {
+      for (const name of ["Alfa", "Bravo", "Charlie"]) {
+        await createDisposablePaper(page, `ZZ Post Delete Focus ${name} ${PDF_GROUP_TOKEN}`);
+      }
+      await filterToFixtures(page, PDF_GROUP_TOKEN, 3);
+
+      // The pre-deletion ordering is read, not assumed: sort/filter order lives
+      // in the data, and the contract is defined against *that* order.
+      const before = await visibleDeleteLabels(page);
+      expect(before, "three disposable rows are isolated by the search token").toHaveLength(3);
+      const [previousLabel, deletedLabel, nextLabel] = before;
+
+      const opener = page.getByRole("button", { name: deletedLabel, exact: true });
+      const openerHandle = await opener.elementHandle();
+      await opener.click();
+
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await expect(confirm.getByText("Delete Paper", { exact: true })).toBeVisible();
+      await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+      // The row really is gone, and with it the control that opened the
+      // confirmation — this is the lifecycle restoration cannot serve.
+      await expect(rowDeleteButtons(page)).toHaveCount(2, { timeout: 20_000 });
+      expect(
+        await openerHandle!.evaluate((el) => el.isConnected),
+        "the opener leaves the DOM with its row",
+      ).toBe(false);
+
+      const active = await activeElement(page);
+      expect(active.isBody, "focus must not drop to <body>").toBe(false);
+      expect(active.ariaLabel, "focus lands on the row that followed the deleted one").toBe(
+        nextLabel,
+      );
+      await expect(page.getByRole("button", { name: nextLabel, exact: true })).toBeFocused();
+
+      // …and the preceding row is untouched, i.e. this is genuinely positional.
+      await expect(page.getByRole("button", { name: previousLabel, exact: true })).toBeVisible();
+    } finally {
+      await deleteFixturesMatching(page, PDF_GROUP_TOKEN).catch(() => {});
+    }
+  });
+
+  // ── B. Last-row deletion → the row that preceded it ───────────────────────
+
+  test("deleting the last visible row focuses the preceding row's Delete button", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    try {
+      for (const name of ["Delta", "Echo"]) {
+        await createDisposablePaper(page, `ZZ Post Delete Focus ${name} ${PDF_LAST_TOKEN}`);
+      }
+      await filterToFixtures(page, PDF_LAST_TOKEN, 2);
+
+      const before = await visibleDeleteLabels(page);
+      expect(before).toHaveLength(2);
+      const [previousLabel, deletedLabel] = before;
+
+      const opener = page.getByRole("button", { name: deletedLabel, exact: true });
+      const openerHandle = await opener.elementHandle();
+      await opener.click();
+
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+      await expect(rowDeleteButtons(page)).toHaveCount(1, { timeout: 20_000 });
+      expect(
+        await openerHandle!.evaluate((el) => el.isConnected),
+        "the opener leaves the DOM with its row",
+      ).toBe(false);
+
+      // No following row exists, so the contract falls back to the previous one.
+      const active = await activeElement(page);
+      expect(active.isBody, "focus must not drop to <body>").toBe(false);
+      expect(active.ariaLabel, "focus falls back to the preceding row").toBe(previousLabel);
+      await expect(page.getByRole("button", { name: previousLabel, exact: true })).toBeFocused();
+    } finally {
+      await deleteFixturesMatching(page, PDF_LAST_TOKEN).catch(() => {});
+    }
+  });
+
+  // ── C. Deleting the only visible row → the empty-state heading ────────────
+
+  test("deleting the only visible row focuses the no-results heading", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    // The library is *not* empty — the seed owns papers — so the truthful
+    // resulting state is the filtered one, not first-run onboarding.
+    expect(await getPaperCount(page), "the account still owns other papers").toBeGreaterThan(0);
+
+    await createDisposablePaper(page, `ZZ Post Delete Focus Solo ${PDF_SOLO_TOKEN}`);
+    await filterToFixtures(page, PDF_SOLO_TOKEN, 1);
+
+    const [deletedLabel] = await visibleDeleteLabels(page);
+    const opener = page.getByRole("button", { name: deletedLabel, exact: true });
+    const openerHandle = await opener.elementHandle();
+    await opener.click();
+
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+    await expect(rowDeleteButtons(page)).toHaveCount(0, { timeout: 20_000 });
+    expect(
+      await openerHandle!.evaluate((el) => el.isConnected),
+      "the opener leaves the DOM with the table",
+    ).toBe(false);
+
+    const heading = page.getByRole("heading", {
+      level: 2,
+      name: "No papers match your current filters",
+      exact: true,
+    });
+    await expect(heading, "the truthful filtered-empty state is shown").toBeVisible();
+
+    const active = await activeElement(page);
+    expect(active.isBody, "focus must not drop to <body>").toBe(false);
+    expect(active.tag, "focus lands on the empty-state heading").toBe("H2");
+    await expect(heading).toBeFocused();
+
+    // Programmatically focusable, but deliberately not a Tab stop: the next Tab
+    // should reach Clear filters, not the heading itself.
+    await expect(heading).toHaveAttribute("tabindex", "-1");
+  });
+
+  // ── D. Slow removal: restoration first, then the handoff ──────────────────
+
+  /**
+   * The two removal timings must both end in the same place.
+   *
+   * Normally the optimistic removal lands while Radix is still animating the
+   * confirmation out, so focus goes straight from the panel to the successor.
+   * Delaying the pre-deletion attachment read — a real request, delayed, not
+   * stubbed — produces the other order: the confirmation closes first,
+   * `useDialogFocusRestore` restores the still-mounted original Delete button,
+   * and only then does the row disappear underneath it. Focus must not be left
+   * on `<body>` when that happens.
+   */
+  test("a slow removal restores the opener first and still hands off afterwards", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    try {
+      for (const name of ["Foxtrot", "Golf"]) {
+        await createDisposablePaper(page, `ZZ Post Delete Focus ${name} ${PDF_SLOW_TOKEN}`);
+      }
+      await filterToFixtures(page, PDF_SLOW_TOKEN, 2);
+
+      const [deletedLabel, nextLabel] = await visibleDeleteLabels(page);
+
+      await page.route(/paper_attachments/, async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        await route.continue();
+      });
+
+      const opener = page.getByRole("button", { name: deletedLabel, exact: true });
+      await opener.click();
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+      // Close-focus ran while the row was still there: PR #219's restoration
+      // put focus back on the opener, which is correct for this instant.
+      await expect(rowDeleteButtons(page)).toHaveCount(2);
+      await expect(opener).toBeFocused();
+
+      // Now the row — and the focused button with it — is removed.
+      await expect(rowDeleteButtons(page)).toHaveCount(1, { timeout: 20_000 });
+      const active = await activeElement(page);
+      expect(active.isBody, "focus must not drop to <body>").toBe(false);
+      expect(active.ariaLabel, "the handoff picks up where restoration left off").toBe(nextLabel);
+      await expect(page.getByRole("button", { name: nextLabel, exact: true })).toBeFocused();
+    } finally {
+      await page.unroute(/paper_attachments/).catch(() => {});
+      await deleteFixturesMatching(page, PDF_SLOW_TOKEN).catch(() => {});
+    }
+  });
+
+  // ── E. The handoff must never take focus the user has moved elsewhere ─────
+
+  /**
+   * Deletion is asynchronous: the optimistic cache removal only runs after the
+   * pre-deletion attachment read returns, so there is a real window in which
+   * the user can move on before the row disappears. Delaying exactly that one
+   * PostgREST read — the request still executes, nothing is stubbed — widens
+   * the window deterministically instead of racing it.
+   */
+  test("the handoff does not steal focus the user moved after confirming", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await createDisposablePaper(page, `ZZ Post Delete Focus Theft ${PDF_THEFT_TOKEN}`);
+    await filterToFixtures(page, PDF_THEFT_TOKEN, 1);
+
+    await page.route(/paper_attachments/, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      await route.continue();
+    });
+
+    try {
+      const [deletedLabel] = await visibleDeleteLabels(page);
+      await page.getByRole("button", { name: deletedLabel, exact: true }).click();
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+      // The row is still there — the deletion has not settled yet.
+      await expect(rowDeleteButtons(page)).toHaveCount(1);
+
+      // The user deliberately moves on to another valid control.
+      const addPapers = page.getByRole("button", { name: /add papers/i }).first();
+      await addPapers.focus();
+      await expect(addPapers).toBeFocused();
+
+      // Now the removal lands. Focus must stay where the user put it.
+      await expect(rowDeleteButtons(page)).toHaveCount(0, { timeout: 20_000 });
+      const active = await activeElement(page);
+      expect(active.isBody, "focus must not drop to <body>").toBe(false);
+      await expect(addPapers, "the late handoff must not pull focus back").toBeFocused();
+    } finally {
+      await page.unroute(/paper_attachments/).catch(() => {});
+    }
   });
 });
