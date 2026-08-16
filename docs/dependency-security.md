@@ -17,11 +17,11 @@
 | Full (incl. dev) | 2 | 0 | **2** | 0 | 0 |
 | Production only | 2 | 0 | **2** | 0 | 0 |
 
-All remaining findings belong to a **single group**: the **React Router family — 2 moderate** (`react-router`, `react-router-dom`). See [Remaining React Router findings](#remaining-react-router-findings).
+All remaining findings belong to a **single group**: the **React Router family — 2 moderate** (`react-router`, `react-router-dom`). See [Remaining React Router findings](#remaining-react-router-findings). A fresh re-measurement performed for the Cluster 5 audit confirmed these totals and found **no unrelated advisory** in either graph; React Router remains the only residual dependency-security family.
 
 The previously recorded `nanoid` high has been **remediated** by a lockfile-only in-range resolution and no longer appears in either graph — see [NanoID finding](#nanoid-finding--remediated). **No high or critical advisory is currently outstanding in either graph.**
 
-The audit is **not at zero**. The residual React Router findings **cannot** be cleared on the v6 line and need the unstarted major-version Cluster 5. Unlike the `nanoid` advisory, they have no in-range patch available.
+The audit is **not at zero**. The residual React Router findings **cannot** be cleared on the v6 line and need the major-version Cluster 5, which is now owner-selected and designed but **not yet implemented**. Unlike the `nanoid` advisory, they have no in-range patch available.
 
 ## Completed remediation boundaries
 
@@ -36,7 +36,7 @@ Four bounded clusters are complete. In each, the **dependency implementation del
 
 Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 then took it to **2 moderate** — the state at the time Cluster 4 landed, not the current total in [Current audit state](#current-audit-state).
 
-**Clusters 1–4 being complete does not mean dependency remediation is complete.** Cluster 4 was explicitly bounded to the v6 line and cleared only what v6 can clear; the residual Router findings require the unstarted Cluster 5. The later `nanoid` advisory is outside all four clusters and was remediated separately as a standalone bounded dependency-advisory task, not as a cluster.
+**Clusters 1–4 being complete does not mean dependency remediation is complete.** Cluster 4 was explicitly bounded to the v6 line and cleared only what v6 can clear; the residual Router findings require Cluster 5, which is selected and designed but not yet implemented. The later `nanoid` advisory is outside all four clusters and was remediated separately as a standalone bounded dependency-advisory task, not as a cluster.
 
 ## Current resolved security baseline
 
@@ -122,11 +122,11 @@ react-router      6.30.4
 
 Three advisories remain, and **none has a patched release on the v6 line**:
 
-| Advisory | Package | Affected range | First patched release |
-|---|---|---|---|
-| [GHSA-wrjc-x8rr-h8h6](https://github.com/advisories/GHSA-wrjc-x8rr-h8h6) | `react-router` | `>=6.0.0 <7.18.0` | 7.18.0 — **7.x only** |
-| [GHSA-337j-9hxr-rhxg](https://github.com/advisories/GHSA-337j-9hxr-rhxg) | `react-router` | `>=6.4.0 <7.18.0` | 7.18.0 — **7.x only** |
-| [GHSA-jjmj-jmhj-qwj2](https://github.com/advisories/GHSA-jjmj-jmhj-qwj2) | `react-router-dom` | `>=6.30.2 <=6.30.4` | **none on v6** — the range includes 6.30.4, the terminal v6 release |
+| Advisory | CVE | Package | Affected range | First patched release |
+|---|---|---|---|---|
+| [GHSA-wrjc-x8rr-h8h6](https://github.com/advisories/GHSA-wrjc-x8rr-h8h6) | CVE-2026-53669 | `react-router` | `>=6.0.0 <7.18.0` | 7.18.0 — **7.x only** |
+| [GHSA-337j-9hxr-rhxg](https://github.com/advisories/GHSA-337j-9hxr-rhxg) | CVE-2026-53666 | `react-router` | `>=6.4.0 <7.18.0` | 7.18.0 — **7.x only** |
+| [GHSA-jjmj-jmhj-qwj2](https://github.com/advisories/GHSA-jjmj-jmhj-qwj2) | CVE-2026-53668 | `react-router-dom` | `>=6.30.2 <=6.30.4` | **none on v6** — the range includes 6.30.4, the terminal v6 release |
 
 ### Applicability to Paperlume
 
@@ -135,14 +135,48 @@ Paperlume uses React Router in **declarative mode only**: a single `BrowserRoute
 On that evidence, all three residual advisories are assessed **not currently reachable** — which is a statement about today's usage, not a claim that the packages are safe:
 
 - **GHSA-wrjc-x8rr-h8h6** (open redirect via backslash in `<Link>`/`useNavigate`) requires an attacker-supplied path reaching a navigation target. All six `navigate()` call sites pass hardcoded literals (`/`, `/auth`, `/dashboard`), and **no `<Link>`/`<NavLink>` is rendered anywhere** — the former `src/components/NavLink.tsx` wrapper was deleted as a verified orphan, and it was never re-introduced.
-- **GHSA-337j-9hxr-rhxg** (constructor injection via `deserializeErrors()` during SSR hydration) needs the SSR hydration path. Paperlume has no `hydrateRoot`, `StaticRouter`, `createStaticHandler`, or `__staticRouterHydrationData`.
+- **GHSA-337j-9hxr-rhxg** (constructor injection via `deserializeErrors()` during SSR hydration) needs the SSR hydration path. Paperlume has no `hydrateRoot`, `StaticRouter`, `createStaticHandler`, or `__staticRouterHydrationData`. This is the one conclusion the **advisory text itself** states rather than one inferred from usage: it records that the issue "does not impact your application if you are using Declarative Mode" and "only impacts Framework Mode and Data Mode applications doing manual SSR/hydration".
 - **GHSA-jjmj-jmhj-qwj2** (open redirect leading to XSS) is conditioned on the application already having an open-redirect surface. No navigation target in Paperlume is derived from URL parameters or user input. The published advisory text is thin on mechanism, so this classification rests on the absence of the precondition rather than on a reading of the patch.
 
 This is the weakest of the three conclusions and should be re-checked whenever a navigation target stops being a hardcoded literal.
 
-### Cluster 5 — NOT STARTED
+### Cluster 5 — SELECTED; design complete, implementation pending
 
-Because every residual advisory is first fixed on the 7.x line (or has no v6 fix at all), **reaching audit zero is impossible without crossing the major-version boundary**. Cluster 5 is therefore what would be required **to eliminate the remaining npm-audit findings under the current advisory data** — that is the precise sense in which it is necessary. It is **not** thereby the next product-development task: it is **NOT STARTED**, **not owner-approved**, and **no React Router major migration is authorized**. No target version is committed to here — the advisory database and available release lines must both be re-measured when that work is selected. A major-version move is an application-code migration, not a lockfile change.
+Because every residual advisory is first fixed on the 7.x line (or has no v6 fix at all), **reaching audit zero is impossible without crossing the major-version boundary**. Cluster 5 is what is required to eliminate the remaining npm-audit findings under the current advisory data.
+
+**The owner has selected Cluster 5, and the audit/design phase is complete. No implementation has started**: the Router packages are untouched, no import has been rewritten, and no future flag has been enabled. What follows is the designed boundary for a subsequent, independently reviewed implementation task — not a description of shipped work.
+
+#### Recommended target — `react-router` 7.18.2, as a direct-package migration
+
+Drop `react-router-dom`, declare `react-router` directly, and repoint the six first-party imports. This is the migration path the **official v6→v7 upgrade guide** prescribes: "In v7 we no longer need `react-router-dom` as the packages have been simplified… Note you only need `react-router` in your `package.json`."
+
+**7.18.2 is the floor, not 7.18.0.** The three advisories reported today are first patched in 7.18.0, but [GHSA-qwww-vcr4-c8h2](https://github.com/advisories/GHSA-qwww-vcr4-c8h2) (**high**, RSC-mode CSRF bypass) affects `react-router` `>=7.12.0 <7.18.2`. Targeting 7.18.0 or 7.18.1 would clear three moderates and introduce a high. Any target below 7.18.2 must be re-justified against the live advisory set, since several v7-line advisories do not apply to the installed v6 tree and so are invisible to today's `npm audit`.
+
+#### Why not v8
+
+v8 is **out of scope as a platform upgrade**, not merely "newer than needed". No current finding requires it, and per the official v7→v8 guide plus npm package metadata it requires **`react@19.2.7+` / `react-dom@19.2.7+` and `node@22.22+`**. Paperlume is on React 18.3.1, so v8 would convert a bounded dependency remediation into a React major migration. `react-router-dom` is also not published on the v8 line at all. Adopting v8 would need a **separate owner decision**; the owner selected a Router remediation, not a React upgrade.
+
+#### Compatibility check
+
+v7 requires `node@20+`, `react@18+`, `react-dom@18+` — all already satisfied, on Node 22.x in CI and React 18.3.1 in the app. React stays on 18. `@remix-run/router` leaves the graph entirely under v7 (replaced by `cookie` and `set-cookie-parser`).
+
+Both future flags that apply to declarative mode have **no affected code** here: `v7_relativeSplatPath` needs a multi-segment splat (`dashboard/*`) with relative links beneath it, and the only splat is the bare catch-all `*`; `v7_startTransition` only requires changes for `React.lazy` used *inside* a component, and there is no `React.lazy` anywhere. The remaining v7 flags are documented as data-router-only and do not apply. Because there is no flag work to stage separately, the implementation is designed as **one PR**, not a staged sequence.
+
+#### Designed implementation boundary
+
+| Area | Expected change |
+|---|---|
+| `package.json` | remove `react-router-dom`, add `react-router` |
+| `package-lock.json` | `react-router` 6.30.4 → 7.18.2; `react-router-dom` and `@remix-run/router` removed; `cookie` and `set-cookie-parser` added |
+| Source (6 files) | `src/App.tsx`, `src/pages/{Index,Auth,Dashboard,ResetPassword,NotFound}.tsx` — import specifier only |
+
+Every import moves to bare `react-router`. **None** belongs in `react-router/dom`, which carries only `RouterProvider`, `HydratedRouter`, and RSC APIs — none of which Paperlume uses. No route, navigation target, component, test, workflow, or Supabase file is in scope.
+
+Candidate resolution was verified in disposable sandboxes outside the repository: both the full and production audits reach **zero**, `typecheck:app` and `typecheck:node` pass with no errors against the rewritten imports, and the production build succeeds.
+
+#### Validation required at implementation
+
+Routing behavior is currently covered **only** by Playwright — no Vitest test renders a Router — so E2E is the real regression gate: `auth.spec.ts` (unauthenticated `/` → `/auth` redirect, post-login dashboard) and `account-deletion.spec.ts` (post-deletion `/auth` landing) are the targeted specs, plus the full local lane. Alongside them: `npm ci` reproducibility, full and production audits, lint, typecheck, Vitest, build, and the required CI gates.
 
 With the `nanoid` high remediated, these **are** currently the only remaining npm-audit findings in both the full and the **production dependency graph**. Presence in the production graph is not by itself proof of an exploitable path, and the applicability assessment above is **not** a declaration that the vulnerable packages are safe — it is a reason to schedule Cluster 5 deliberately rather than urgently, not a reason to skip it.
 
@@ -177,7 +211,7 @@ Revisit this document when any of the following occurs:
 
 - a **new high or critical** advisory appears in either graph — **not currently fired**; the `nanoid` high that previously fired it is remediated, and no high or critical finding is outstanding;
 - a **new advisory reaches the production graph** (today only the React Router family is present there);
-- Cluster 5 is owner-selected, or a residual Router advisory gains a **backported v6 fix** (which would re-open bounded v6 remediation), or a new Router advisory appears;
+- Cluster 5 selection — **fired**; the owner has selected it and the design above is the result. It re-fires when Cluster 5 is implemented, when a residual Router advisory gains a **backported v6 fix** (which would re-open bounded v6 remediation), or when a new Router advisory appears — including one affecting the recommended 7.18.2 target, which would move the floor;
 - Paperlume's Router usage changes in a way that affects the applicability assessment — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
 - any baseline version in [Current resolved security baseline](#current-resolved-security-baseline) regresses;
