@@ -131,11 +131,10 @@ Operational procedures, secrets, migration sequence, smoke checklists: [deployme
 
 Authoritative current state, remediation policy, and re-evaluation triggers: [dependency-security.md](dependency-security.md). `npm audit` (full and `--omit=dev`) on the current checkout is the live source — **do not treat a count written in any document as current**.
 
-- Dependency Clusters 1–4 are complete. In all four the implementation delta was confined to `package-lock.json`.
-- The **`nanoid` high advisory has been remediated** by a name-scoped, lockfile-only update to a patched version already permitted by its parent's existing semver range — no `package.json`, source, or config change. It is no longer reported in either graph.
-- **`npm audit` is not at zero, in either the full or the production-only graph.** The remaining audit residue is the separately documented **React Router moderate family** — it cannot be cleared on the v6 line. Paperlume uses declarative routing only (no data router, no SSR) with hardcoded navigation targets, so these are assessed **not currently reachable** under today's usage — which is not a declaration that the packages are safe.
-- **React Router Cluster 5 is owner-selected; its audit/design phase is complete and implementation has not started.** The designed boundary is a v6 → **`react-router` 7.18.2** direct-package migration keeping React 18 — `package.json`, `package-lock.json`, and the import specifier in six source files. v8 is **out of scope**: it requires React 19.2.7+ and Node 22.22+, and no current finding needs it. Rationale, advisory detail, and the validation plan: [dependency-security.md](dependency-security.md).
-- **Dependency remediation is NOT complete.** Do not restate audit counts from memory — run `npm audit` and read [dependency-security.md](dependency-security.md).
+- **All five dependency clusters are complete, and `npm audit` is at zero in both the full and the production-only graph.** In Clusters 1–4 the implementation delta was confined to `package-lock.json`; Cluster 5 additionally changed `package.json` and six import specifiers, because clearing it required crossing a major version.
+- **React Router Cluster 5 is implemented**: `react-router` **7.18.2** is now the single declared Router dependency, and `react-router-dom` and `@remix-run/router` have left the graph entirely. It was a direct-package migration of import provenance only — **React and ReactDOM stay 18.3.1**, the route tree and every navigation target are unchanged, and no future flag was enabled. React Router v8 remains **out of scope** (it requires React 19.2.7+ and Node 22.22+).
+- The **`nanoid` high advisory remains remediated** by a name-scoped, lockfile-only update within its parent's existing semver range.
+- **Zero is a measurement, not a guarantee.** Advisory databases move, so a new finding can appear without any repository change. Never restate a count from memory — run `npm audit` and read [dependency-security.md](dependency-security.md).
 
 ## 9. Active decisions and constraints — do not casually reopen
 
@@ -167,7 +166,6 @@ Owner-action blockers that gate the paused C27 work — Paddle Sandbox setup, ma
 Meaningful open items. This is a pointer list, not a backlog database — none of it is auto-selected.
 
 - **Desktop Paper Actions compression.** The Actions buttons compress to 16×32 on desktop as well; desktop density was explicitly accepted, so this stays low priority unless new evidence or an owner decision escalates it.
-- **React Router Cluster 5** — selected; audit/design complete, implementation pending an independently reviewed plan. See §8.
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
 
 ## 11. Before selecting the next task
