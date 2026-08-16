@@ -1,6 +1,6 @@
 # PFA-C03 — Staging Environment and Automated Security-Test Contract
 
-> **Status: PFA-C03 is COMPLETE — Phase A and Phase B have both shipped and this document is the reconciled record.** C03A1-L and C03A2-L are merged and accepted, so **Phase A is complete** for the selected local-first path. **Phase B is complete:** the pre-existing security defects found while authoring C03B1 were remediated, merged, and deployed to Production (PR #177, merge `f408870…`, migration `20260802025704`; §9.6); C03B1's four comprehensive pgTAP suites + the `test:db:local` runner + the true-concurrency probe are merged and accepted (PR #179, merge `0f786dac…`; §9.7); and **C03B2 — the hosted, non-required `DB Tests / db-tests` workflow — is merged and accepted** (PR #181, merge `b57614182fdabff94bc26d128585c7754b7ae45c`; §9.8), so `.github/workflows/db-tests.yml` **now exists on `main`** and ran green on the merge commit itself. D3 resolved (2026-08-02, pgTAP); **D4–D5 remain unresolved and block nothing**. `Validate / validate` remains the **sole required merge gate**; both `DB Tests / db-tests` and `E2E (local) / e2e-local` are **non-required**. This document is the durable implementation and decision contract for **PFA-C03 — Safe staging environment and automated security tests**. **C03A0** (this contract) is complete; **C03A1-L** (local-stack seed/reset + env/guard foundation) is **merged to `main` and independently accepted** (PR #173, merge `299b19a…` — see §7.3, §10, §14); **C03A2-L** (non-required local Playwright CI workflow, `E2E (local)` / job `e2e-local`) is now **merged to `main` and accepted** (PR #175, merge `1d091e476461b50375083ac4c1a156e7c38a0b4b` — see §8.1, §10, §14) — its workflow file `.github/workflows/e2e-local.yml` now **exists on `main`**. **Phase A is complete for the selected local-first path. Phase B is complete:** C03B1 authoring uncovered pre-existing database-security defects; the bounded remediation was merged and deployed (PR #177, merge `f4088705a2d3b8869579b253b5d8f7b3162414cf`; migration `20260802025704` applied to Production, ledger 70) — see §9.6; C03B1's implementation was then merged and accepted (PR #179, merge `0f786dac7088b2afafc16cb76afae8eee5f206d6`; §9.7); and **C03B2's hosted `db-tests` workflow is merged and accepted** (PR #181, merge `b57614182fdabff94bc26d128585c7754b7ae45c`; §9.8). **D3 is resolved (2026-08-02, pgTAP); PFA-C03 is complete.** The required **`Validate / validate`** gate is **unchanged and remains the sole required merge gate**; `E2E (local)` and `DB Tests` are both **non-required**. No **cloud** Supabase project, GitHub secret/variable/Environment, or cloud fixture exists. On the database-test side, **all of it now lives on `main`**: the focused pgTAP regression file (`supabase/tests/database/000_preexisting_security_regressions.test.sql`, 139 assertions, merged with the §9.6 security remediation), the **full C03B1 four-suite pgTAP architecture** (`001`–`004`, 255 assertions), the framework-free 18-case verification, the **`test:db:local` local runner and its integrated lifecycle** (merged via PR #179 — see §9.7), **and the hosted `DB Tests / db-tests` workflow that executes them automatically** (merged via PR #181 — see §9.8). **Automated, non-required hosted DB-security CI therefore exists on `main`; a *required* DB-security gate does not exist** (promotion is D5, deliberately unresolved). pgTAP was selected by D3; every suite creates the `pgtap` extension **transactionally** and rolls back, so **no persistent pgTAP installation is added through a migration**. The remaining named cloud artifacts remain **recommendations or future artifacts**.
+> **Status: PFA-C03 is COMPLETE — Phase A and Phase B have both shipped and this document is the reconciled record.** C03A1-L and C03A2-L are merged and accepted, so **Phase A is complete** for the selected local-first path. **Phase B is complete:** the pre-existing security defects found while authoring C03B1 were remediated, merged, and deployed to Production (PR #177, merge `f408870…`, migration `20260802025704`; §9.6); C03B1's four comprehensive pgTAP suites + the `test:db:local` runner + the true-concurrency probe are merged and accepted (PR #179, merge `0f786dac…`; §9.7); and **C03B2 — the hosted, non-required `DB Tests / db-tests` workflow — is merged and accepted** (PR #181, merge `b57614182fdabff94bc26d128585c7754b7ae45c`; §9.8), so `.github/workflows/db-tests.yml` **now exists on `main`** and ran green on the merge commit itself. D3 resolved (2026-08-02, pgTAP); **D4–D5 remain unresolved and block nothing** — D5 was **evaluated read-only on 2026-08-16** (recommendation **`REQUIRE_DB_TESTS`**, owner decision still pending; evidence in §16, canonical entry in §12). `Validate / validate` remains the **sole required merge gate**; both `DB Tests / db-tests` and `E2E (local) / e2e-local` are **non-required**. This document is the durable implementation and decision contract for **PFA-C03 — Safe staging environment and automated security tests**. **C03A0** (this contract) is complete; **C03A1-L** (local-stack seed/reset + env/guard foundation) is **merged to `main` and independently accepted** (PR #173, merge `299b19a…` — see §7.3, §10, §14); **C03A2-L** (non-required local Playwright CI workflow, `E2E (local)` / job `e2e-local`) is now **merged to `main` and accepted** (PR #175, merge `1d091e476461b50375083ac4c1a156e7c38a0b4b` — see §8.1, §10, §14) — its workflow file `.github/workflows/e2e-local.yml` now **exists on `main`**. **Phase A is complete for the selected local-first path. Phase B is complete:** C03B1 authoring uncovered pre-existing database-security defects; the bounded remediation was merged and deployed (PR #177, merge `f4088705a2d3b8869579b253b5d8f7b3162414cf`; migration `20260802025704` applied to Production, ledger 70) — see §9.6; C03B1's implementation was then merged and accepted (PR #179, merge `0f786dac7088b2afafc16cb76afae8eee5f206d6`; §9.7); and **C03B2's hosted `db-tests` workflow is merged and accepted** (PR #181, merge `b57614182fdabff94bc26d128585c7754b7ae45c`; §9.8). **D3 is resolved (2026-08-02, pgTAP); PFA-C03 is complete.** The required **`Validate / validate`** gate is **unchanged and remains the sole required merge gate**; `E2E (local)` and `DB Tests` are both **non-required**. No **cloud** Supabase project, GitHub secret/variable/Environment, or cloud fixture exists. On the database-test side, **all of it now lives on `main`**: the focused pgTAP regression file (`supabase/tests/database/000_preexisting_security_regressions.test.sql`, 139 assertions, merged with the §9.6 security remediation), the **full C03B1 four-suite pgTAP architecture** (`001`–`004`, 255 assertions), the framework-free 18-case verification, the **`test:db:local` local runner and its integrated lifecycle** (merged via PR #179 — see §9.7), **and the hosted `DB Tests / db-tests` workflow that executes them automatically** (merged via PR #181 — see §9.8). **Automated, non-required hosted DB-security CI therefore exists on `main`; a *required* DB-security gate does not exist** (promotion is D5, deliberately unresolved). pgTAP was selected by D3; every suite creates the `pgtap` extension **transactionally** and rolls back, so **no persistent pgTAP installation is added through a migration**. The remaining named cloud artifacts remain **recommendations or future artifacts**.
 >
 > **Owner selection.** The owner selected **PFA-C03** on 2026-07-31. Its first bounded subtask, **PFA-C03A0** (contract + readiness audit), produced this contract; **PFA-C03A1-L** (local-stack seed/reset + env/guard foundation) was then **implemented, merged, and independently accepted** (PR #173, merge commit `299b19a08da0a61984bf2333d12406cbfd62aef7`, merged-main `Validate` run `30697869074` success, Vercel Production `dpl_9zhjYVmjLKTKqrt7PW6haZej9rLf` READY on `app.paperlume.app` — see §7.3, §10, §14); and **PFA-C03A2-L** (non-required local Playwright CI) has since been **merged and accepted** (PR #175, merge commit `1d091e476461b50375083ac4c1a156e7c38a0b4b`, merged-main `Validate` run `30711943868` and `E2E (local)` run `30711943858` both success, Vercel Production `dpl_4fZ4zGs2itrzKamigJF4gcPGGkVv` READY on `app.paperlume.app` — see §8.1, §10, §14). This document still ships no cloud project/workflow/framework of its own. Phase A is complete for the selected local-first path, Phase B is complete (§9.6–§9.8), and **PFA-C03 is complete** (§14).
 >
@@ -497,7 +497,7 @@ In the table below each phase is tagged **(shared)**, **(local-first)**, or **(c
 - **D2 — Test-backend architecture (local-first / cloud-first / local-first + optional cloud). `[RESOLVED 2026-07-31 → local-first]`** *Why:* the substantive architecture choice; it selects the required Phase A branch (§10) and drives determinism, cost, secret surface, and which specs run first. *Recommended default:* **local-first**, adding cloud only when a wave demonstrably needs it. *Alternatives:* cloud-first; local-first + optional cloud. *Trade-off:* realism vs cost/complexity/secret surface. *Selects the Phase A branch:* local-first → `C03A1-L → C03A2-L`; cloud-first → `C03A1-C → C03A2-C`; hybrid → `C03A1-L → C03A2-L` first, optional `C03A1-C → C03A2-C` later. *Blocks:* the Phase A branch shape (local-first unblocks `C03A1-L` immediately without any cloud decision; cloud-first additionally needs D1). Phase B (`C03B1 → C03B2`) is shared and unaffected. **Owner outcome:** local-first selected; path `C03A1-L → C03A2-L`; cloud phases not selected; D1 still does not block the local path. The Data API grant-parity prerequisite (`PFA-C03A1-L-GRANT-PARITY-001`, §7.3) is **complete — merged and applied to Production 2026-07-31**, and **C03A1-L has now been implemented, merged, and independently accepted** (`…-MERGE-001`: PR #173, merge `299b19a…`; local stack replays all 69 migrations, deterministic 120/5 seed, two-layer fail-closed guards + negative controls, six read-only specs green (32), deterministic second reset/reseed (auth 6)). **C03A1-L is merged and accepted; C03A2-L is merged and accepted (PR #175, merge `1d091e4…` — see §8.1, §10); Phase A is complete for the selected local-first path. Phase B has since completed as well, and PFA-C03 is complete (§14).**
 - **D3 — DB-test framework (framework-free hybrid vs pgTAP). `[RESOLVED 2026-08-02 → pgTAP]`** *Why:* maintenance/reporting. **Owner outcome:** new C03B1 suites use **pgTAP**; the framework-free `owner_access_and_quota_verification.sql` is preserved byte-identical and executed alongside them. *Trade-off:* zero-dep vs standardized TAP. *Formerly blocked:* C03B1's framework choice. **The former pre-existing-security blocker (§9.6) was remediated and removed; C03B1 subsequently resumed, was implemented, and merged via PR #179 (§9.7). D3 remains resolved to pgTAP; C03B2 was separately authorized and is now merged and accepted via PR #181 (§9.8), so the pgTAP lifecycle runs automatically on `main` through the non-required `DB Tests / db-tests` check.**
 - **D4 — External-metadata E2E (`import-order`). `[UNRESOLVED — non-blocking]`** *Why:* PubMed/Crossref are nondeterministic and need served Edge Functions + egress. *Recommended default:* defer to Wave 4; assert on stable identifiers/counts (not exact remote titles), or use a deterministic stand-in. *Trade-off:* coverage vs flakiness/cost. *Blocks:* the final, optional E2E wave only — **it does not block PFA-C03's Definition of Done**, whose Phase A criterion is the accepted initial six-spec hosted lane (already shipped). **No `import-order` automation exists.**
-- **D5 — Promotion of `e2e-local` or `db-tests` to a required check. `[UNRESOLVED — non-blocking]`** *Why:* changes the merge gate. *Current state:* `Validate / validate` is the **sole required merge gate**; **`E2E (local) / e2e-local` and `DB Tests / db-tests` both exist on `main` and are both non-required**. *Recommended default:* keep them **non-required** until proven stable over time; revisit later (the deterministic `db-tests` check is the stronger promotion candidate). *Trade-off:* stronger gate vs flakiness. *Blocks:* **nothing** — PFA-C03's Definition of Done deliberately specifies a *separate, non-required* Phase B workflow, so completion neither requires nor implies promotion.
+- **D5 — Promotion of `e2e-local` or `db-tests` to a required check. `[UNRESOLVED — EVALUATED 2026-08-16; OWNER DECISION PENDING]`** *Why:* changes the merge gate. *Current state:* `Validate` is the **sole required merge gate** — the live required context is the bare **`validate`** (GitHub Actions app `15368`), strict/up-to-date, admins enforced; **`E2E (local)` and `DB Tests` both exist on `main` and are both non-required**. *Evaluation:* a read-only audit of live branch protection and full current run history was completed **2026-08-16** against `main` `86fe1d78…` — evidence in **[§16](#16-d5-required-check-evaluation--point-in-time-evidence-2026-08-16)**. *Recommendation:* **`REQUIRE_DB_TESTS`** — promote **`db-tests`** only and keep **`e2e-local`** non-required (confidence **MEDIUM**). It measured 100% first-attempt success on scored pull-request runs, a flat-to-tightening duration well inside its timeout, the smallest added merge latency, and it emitted its check on every eligible pull-request head; `e2e-local` measured a materially higher duration trend and its only red was a defect in its own spec, not in the product. *Trade-off:* stronger gate vs flakiness and added merge latency. *Blocks:* **nothing**. **The evaluation changed no branch protection. D5 is resolved only when the owner selects an outcome; the recommendation is advisory until then.**
 
 ---
 
@@ -544,3 +544,158 @@ All read-only; gathered on branch `docs/pfa-c03-staging-contract` (from `origin/
 - **Supabase:** `supabase/config.toml` (ref `lioxtgiputfniqbktcsz`; three `verify_jwt=false` functions); 69 migrations (chain end `20260731162729`); storage/quota migrations in §2.4; `supabase/functions/_shared/env.ts`; secret names + external hosts grepped from `supabase/functions/`.
 - **DB test:** `supabase/tests/owner_access_and_quota_verification.sql` (18 cases, `BEGIN … ROLLBACK`).
 - **Decisions:** C27/C28/C29 and S1 in [decisions-and-triggers.md](decisions-and-triggers.md); unlock order in [owner-decisions.md](owner-decisions.md); PFA-C03 in [product-feature-audit.md](product-feature-audit.md) §14/§15; line budget in [documentation-policy.md](documentation-policy.md).
+
+---
+
+## 16. D5 required-check evaluation — point-in-time evidence (2026-08-16)
+
+`[FACT]` **Read-only audit `CI-GATE-EVALUATION-001`.** Every number below is **point-in-time evidence measured on 2026-08-16** against `main` `86fe1d78324c99588dfa1ed95b3088f17d7f5eca`, not an evergreen invariant. Re-measure before relying on any of it. **No branch protection, ruleset, or workflow was modified by this evaluation, and no workflow run was re-run, dispatched, or cancelled.** D5 remains an **open owner decision** — §12 records the recommendation, not a resolution.
+
+### 16.1 Live protection baseline
+
+Read from `GET /repos/Papi299/paper-whisperer-62/branches/main/protection`, `…/rulesets`, and `…/rules/branches/main`:
+
+- **Classic branch protection only.** `rulesets` = `[]` and branch-applicable `rules` = `[]` — **no ruleset overrides classic protection**, and no merge queue applies. A future mutation therefore only has to reason about classic protection.
+- **Required status checks:** `strict: true` (up-to-date required); `contexts: ["validate"]`; `checks: [{ "context": "validate", "app_id": 15368 }]` (GitHub Actions).
+- **Reviews:** `required_approving_review_count: 0`; stale-dismissal, code-owner review and last-push approval all off.
+- **Other:** `enforce_admins: true`; `required_conversation_resolution: true`; `allow_force_pushes: false`; `allow_deletions: false`; `block_creations: false`; `lock_branch: false`; `required_linear_history: false`; `required_signatures: false`.
+- Repository visibility is **public** (owner-controlled), so fork-origin pull requests are possible in principle.
+
+### 16.2 Check identities — the required context is the bare job name
+
+Verified against actual emitted check runs, not UI labels. **Branch protection uses the bare job name, not the `Workflow / job` display string** — the live required context is `validate`, *not* `Validate / validate`.
+
+| Lane | Workflow file | Workflow name | Job key | Displayed job | **Emitted check name / protection context** | App | Required today |
+|---|---|---|---|---|---|---|---|
+| Validate | `.github/workflows/validate.yml` | `Validate` | `validate` | `validate` | **`validate`** | GitHub Actions (`15368`) | **YES** |
+| E2E | `.github/workflows/e2e-local.yml` | `E2E (local)` | `e2e-local` | `e2e-local` | **`e2e-local`** | GitHub Actions (`15368`) | no |
+| DB | `.github/workflows/db-tests.yml` | `DB Tests` | `db-tests` | `db-tests` | **`db-tests`** | GitHub Actions (`15368`) | no |
+
+Vercel occupies a separate namespace (commit-status context `Vercel`; check run `Vercel Preview Comments`, app `8329`) and **no external service emits `e2e-local` or `db-tests`**, so neither candidate context is ambiguous or spoofable by a third party.
+
+### 16.3 Methodology and sample
+
+All runs since each workflow's introduction were inspected — each lane's total history is smaller than the 60-run target window, so the sample is complete rather than truncated. **Zero `workflow_dispatch` runs exist in any lane.**
+
+| Lane | Introduced | Total runs | PR runs | `main` push runs | Dispatch |
+|---|---|---|---|---|---|
+| Validate | 2026-07-21 | 174 | 118 | 56 | 0 |
+| E2E (local) | 2026-08-01 | 122 | 81 | 41 | 0 |
+| DB Tests | 2026-08-07 | 103 | 68 | 35 | 0 |
+
+Pull-request runs are scored separately from `main`-push runs because **only pull-request behavior determines suitability as a pre-merge gate**. Superseded concurrency cancellations are excluded from success rates (they are correct behavior, not failures). First-attempt success is distinguished from eventual success by reading every attempt of every re-run run. Every non-success pull-request run was inspected at step level, and job logs were read where the step alone was not conclusive.
+
+**Material-change check.** `validate.yml` and `db-tests.yml` have exactly **one commit each** (their creation). `e2e-local.yml` has two, the second (`bfbddf4`) being a **comment-only** edit. No workflow rename, job-key change, display-name change, trigger change, or concurrency change has ever occurred, so the measured history corresponds to today's configuration. The *test corpus* did grow during the window (E2E specs added 2026-08-10/11/14/15; DB suites `005`–`008` added 2026-08-07/09/11), which is reflected in the recent-window duration trend below.
+
+### 16.4 Reliability — pull-request runs
+
+| Lane | PR runs | Superseded cancels | Scored | **First-attempt success** | Eventual success | Legitimate failures | Flakes | Infra transients | Timeouts | Same-SHA re-runs needed |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Validate | 118 | 0 | 118 | **117/118 (99.2%)** | 117/118 | 1 | 0 | 0 | 0 | 0 |
+| E2E (local) | 81 | 6 | 75 | **73/75 (97.3%)** | 74/75 (98.7%) | 1 | 0 | 1 | 0 | 1 |
+| DB Tests | 68 | 4 | 64 | **64/64 (100%)** | 64/64 (100%) | 0 | 0 | 0 | 0 | 0 |
+
+`main`-push runs were green in every lane across the whole sample except one E2E run (`31175196562` attempt 1, an infrastructure transient that passed on attempt 2 of the same SHA).
+
+**Every non-success pull-request run, classified:**
+
+- **Validate — 1 `LEGITIMATE_PRODUCT_OR_TEST_FAILURE`.** Run `29817120858`, the workflow's own first run ever, on the branch that authored it: `Report tool versions` ran *before* `Install dependencies`, so `npx tsc --version` had no project TypeScript to resolve. Fixed by reordering the steps within that same authoring PR. Predates the check becoming required; Validate has been **117/117 green on pull requests since**.
+- **E2E — 1 `LEGITIMATE…FAILURE` (test harness, not product).** Run `31456354260`, SHA `332c6745…` (PR #203). Analysed in §16.6.
+- **E2E — 1 `CI_INFRASTRUCTURE_TRANSIENT`.** Run `31796835366` attempt 1, SHA `9d74f70b…`: `supabase start` exited 1 while bringing up the ephemeral stack. Attempt 2 on the identical SHA passed. `DB Tests` and `Validate` both passed on that same SHA on their first attempt.
+- **E2E — 6 `SUPERSEDED_CANCEL`; DB Tests — 4 `SUPERSEDED_CANCEL`.** All ten fall on just two branches during rapid successive pushes (`fix/pfa-c08-security-hardening`, `fix/import-nbib-enw-formats`). In every case a newer run on a newer SHA of the same branch started immediately and the branch's final SHA passed in all lanes. This is `cancel-in-progress` working as designed, **not** a false failure. `DB Tests` was cancelled less often than `E2E` simply because it finishes sooner.
+
+**Shared latent hazard.** The two E2E transients were both ephemeral-Supabase bring-up failures: `supabase/setup-cli` resolving no CLI binary (`No matching Supabase CLI binary package found for linux-x64`) and `supabase start` exiting 1. **`DB Tests` uses the identical pinned action and CLI version and is exposed to the same hazard** — it has simply not been hit (0 in 103 runs). Across both candidate lanes the observed rate is **2 in 225 runs (~0.9%)**, i.e. roughly one false block per ~110 required runs, recoverable by a single re-run of a ~3-minute job. In the worst observed case the fail-closed teardown and residue assertions still confirmed no leftover stack and no generated auth state, so **cleanup held even when setup failed**.
+
+### 16.5 Runtime, timeout headroom, and added merge latency
+
+Measured from actual job start/completion timestamps of successful pull-request runs. Both candidates declare `timeout-minutes: 20`.
+
+| Lane | min | p50 | p90 | max | p90 % of timeout | max % of timeout |
+|---|---|---|---|---|---|---|
+| Validate | 0m38s | 1m02s | 1m33s | 1m45s | 7.8% | 8.8% |
+| E2E (local) | 3m39s | 4m37s | 6m58s | **10m38s** | 34.9% | **53.2%** |
+| DB Tests | 2m41s | 3m09s | 4m03s | 4m19s | 20.3% | 21.6% |
+
+**Recent-window stability (latest 20 eligible pull-request runs per lane, 2026-08-11 → 2026-08-15).** All three lanes were 20/20 green. Durations diverge sharply: `DB Tests` is **flat-to-tightening** (p50 3m03s, p90 3m14s, max 3m22s — a p90 *improvement* on the full sample), while `E2E` is **trending upward** (p50 5m18s, p90 8m49s, max 10m38s — p50 +15% and p90 +27% versus its own full sample) as its spec corpus grows.
+
+**Added blocking latency.** The lanes run in parallel, so their runtimes are *not* additive. For each paired pull-request head the candidate's added gate delay is `max(0, candidate completion − Validate completion)`:
+
+| Promotion modelled | Paired heads | p50 added | p90 added | max added |
+|---|---|---|---|---|
+| `REQUIRE_E2E_LOCAL` | 74 | 3m37s | 6m54s | 13m49s |
+| `REQUIRE_DB_TESTS` | 64 | **1m59s** | **2m34s** | **2m52s** |
+| `REQUIRE_BOTH` | 61 | 3m38s | 6m58s | 9m15s |
+
+Both candidates finished after `Validate` on **every** paired head, so promotion always adds some delay. `DB Tests` is the only candidate whose added delay is tightly bounded — its worst observed case is under three minutes, whereas `REQUIRE_BOTH` is dominated by `E2E` and effectively costs the same as `REQUIRE_E2E_LOCAL`.
+
+**Runner consumption is unchanged by promotion.** Both candidates *already* run on every same-repository pull request, so making one required adds **no** runner minutes — it changes only merge-blocking semantics. Median successful runner time per PR is ~1m (Validate), ~3m (DB Tests), ~4.6m (E2E). GitHub plan/billing data is **not readable** with the available credentials, so **no cost figure is claimed**; the repository is currently public, which is an owner-controlled setting.
+
+### 16.6 Unique merge-safety value — candidate red while `Validate` green
+
+Exactly **one** such event exists in the entire sample.
+
+| SHA | PR | Candidate | Validate (same SHA) | DB Tests (same SHA) | Root cause | Legitimate catch | Code change required |
+|---|---|---|---|---|---|---|---|
+| `332c6745…` | #203 | `e2e-local` **failed** | **success** | **success** | The PR's own **new** spec `e2e/account-export.spec.ts` closed the export dialog with a synthetic `Escape`; triggering a browser download had moved keyboard focus out of the page, so the dialog never closed | **Yes, but test-harness only** | Yes — fix `8b60a817…` touched **only** `e2e/account-export.spec.ts` (+5/−1) |
+
+The failure was **deterministic**, not flaky: all three Playwright attempts (initial plus the two CI retries) failed, and 33 other tests passed. But the defect was in the spec the same pull request was adding, **not in the application or database** — no product code changed to fix it. So `E2E (local)`'s measured unique-catch rate against application defects is **0 in 81 pull-request runs**; its one catch was a broken new test.
+
+`DB Tests` has never been red, so it has produced **zero** empirical unique catches. That absence is weaker evidence than a demonstrated catch, but it is **not** the same as an unexercised detector: every `DB Tests` run executes an **expected-failure papers-RLS negative control** that must detect an intentionally injected cross-user RLS regression and then verify the rollback, plus a **catalog-fingerprint sensitivity probe** that must detect same-name definition changes. A green `DB Tests` run therefore carries a per-run proof that its detectors still fire — the suite validates its own sensitivity on every execution. Its coverage (RLS isolation, relational ownership, RPC caller scope and grants, storage/quota invariants, duplicate-merge behaviour, publication-type provenance, function `search_path` hardening, account-deletion cascades, ~70-migration replay, true-concurrency AI-quota cap, residue/catalog equality) is a layer `Validate` cannot reach at all, since `Validate` runs no Supabase stack.
+
+### 16.7 Fork-origin behaviour and check emission
+
+Both candidate jobs carry a **job-level** same-repository `if` condition and **neither workflow has path filters**. Per GitHub's official documentation, these two cases differ decisively: a workflow skipped by *path or branch filtering* leaves its checks **Pending and blocks merging**, whereas **a job skipped by a conditional reports its status as `Success` and will not prevent a pull request from merging, even if it is a required check.**
+
+Consequences if a candidate were promoted: a fork-origin pull request would still trigger the workflow, the job would skip before any dependency install, Docker use, or stack startup, and the required check would report success — so **no fork-origin pull request becomes permanently unmergeable**. The honest caveat is the mirror image: that green is **vacuous**, giving no actual protection on fork PRs. This is not material today (**all 215 pull requests in repository history are same-repository, single-author; zero fork PRs ever**) but it would become material the moment outside contributions are accepted. **Weakening the same-repository restriction to make a required check meaningful on forks is explicitly not proposed here** — it is a security boundary, and no workflow change was authorised by this evaluation.
+
+**Emission reliability.** A required check must actually appear on every eligible head. It does: `E2E (local)` emitted on **81/81** eligible pull-request heads since its introduction and `DB Tests` on **68/68**, with no missing, duplicated, or ambiguous check. Both contexts have been **stable since creation** (§16.3).
+
+### 16.8 Eligibility rubric
+
+| # | Criterion | `E2E (local)` | `DB Tests` |
+|---|---|---|---|
+| 1 | Local-only safe under normal execution | **Yes** | **Yes** |
+| 2 | No secret / Environment / Production dependency | **Yes** | **Yes** |
+| 3 | Stable, identifiable check on every eligible PR | **Yes** (81/81) | **Yes** (68/68) |
+| 4 | Required-check semantics for intentional skips understood | **Yes** | **Yes** |
+| 5 | Meaningful current-history evidence | **Yes** (81 PR runs) | **Yes** (68 PR runs) |
+| 6 | No unresolved recurring flake/transient pattern | **No** — 1 PR + 1 push stack-bring-up transient; 1 same-SHA re-run needed | **Yes** — 0 in 103 runs (shared latent risk noted) |
+| 7 | No unexplained timeout/duration trend | **No** — p90 +27% recent, max 53.2% of timeout | **Yes** — flat/tightening, max 21.6% |
+| 8 | Cleanup/residue behaviour reliable | **Yes** | **Yes** |
+| 9 | Logs actionable enough for a required gate | **Yes** | **Yes** |
+| 10 | Unique value material enough to justify its latency | **No** — only red was its own spec; highest latency | **Yes** — unreachable-by-`Validate` security layer at ~2m p90 |
+| | **Technically eligible today** | **NO** | **YES** |
+
+### 16.9 Recommendation
+
+**`REQUIRE_DB_TESTS`** — confidence **MEDIUM**.
+
+- **Strongest reason for:** `DB Tests` is the only lane that is perfect on the metrics a required gate actually depends on — 100% first-attempt success on all 64 scored pull-request runs, a check emitted on 68/68 eligible heads, a duration distribution that is *tightening* rather than drifting (p90 3m14s recently, 20% of its timeout), and the smallest added merge latency of any option (p90 2m34s, worst case under three minutes) — while covering the RLS, grant, RPC-scope, quota and cascade invariants that the required `Validate` lane cannot test at all, with per-run negative controls proving its detectors still fire.
+- **Strongest reason against:** it has never been red, so its pre-merge catch value is inferred from coverage and self-validating negative controls rather than demonstrated on a real regression; and it shares the `supabase/setup-cli` + `supabase start` bring-up dependency that produced both E2E transients, a hazard it has avoided so far in a relatively young 8-day, 68-run window (~0.9% observed across both lanes, ≈ one false block per ~110 runs, recoverable by one re-run).
+- **Why `KEEP_BOTH_NON_REQUIRED` lost:** the mechanical evidence for `DB Tests` clears every rubric criterion, and the status quo permits a red `db-tests` to be merged past silently — precisely the failure mode (an unnoticed RLS/grant regression) that this repository's security work exists to prevent. Deferring buys little: the lane is already paid for on every PR, so the only thing withheld is enforcement.
+- **Why `REQUIRE_E2E_LOCAL` lost:** it fails rubric criteria 6, 7 and 10. Its only red in 81 pull-request runs was a defect in its own new spec rather than in the product; it needed a same-SHA re-run to go green once; its p90 has risen 27% in the recent window as the corpus grows, with its maximum already at 53% of its timeout; and it carries the largest added merge latency (p90 6m54s, max 13m49s).
+- **Why `REQUIRE_BOTH` lost:** it inherits every `E2E` deficiency above and its modelled blocking latency (p50 3m38s, p90 6m58s) is dominated by `E2E`, so it costs essentially the same as promoting `E2E` alone while adding the same unresolved flake and duration-trend risk.
+
+**Operational caveats the owner should weigh.** Protection is `strict: true`, so a base update requires the branch to be brought up to date and the gate re-run; at the recent cadence (4–8 merges/day) `DB Tests`'s ~2-minute cost stays cheap, whereas `E2E`'s would repeat at ~7 minutes per base update. Neither candidate has path filters, so a promoted gate **also blocks documentation-only pull requests** — including the pull request carrying this very evaluation. Adding path filters, retries, sharding or any other workflow improvement was **out of scope** and deliberately not implemented.
+
+### 16.10 Future branch-protection mutation plan — design only, NOT executed
+
+**No protection mutation was performed.** This is the design a *separate, future, owner-authorised* task would follow if the owner selects `REQUIRE_DB_TESTS`.
+
+1. **Narrowest official endpoint:** `PATCH /repos/Papi299/paper-whisperer-62/branches/main/protection/required_status_checks`. This sub-resource touches **only** the required-status-check policy and leaves reviews, admin enforcement, conversation resolution, force-push and deletion settings untouched. **Do not use `PUT /branches/main/protection`** — it replaces the *entire* protection policy and would silently erase any unrelated setting omitted from the payload.
+2. **The `checks` list is replacement-based, not additive.** The payload must therefore restate the retained context alongside the new one: `{"strict": true, "checks": [{"context": "validate", "app_id": 15368}, {"context": "db-tests", "app_id": 15368}]}`. (`POST …/required_status_checks/contexts` is additive but accepts bare context strings only, which would drop the GitHub App binding — prefer the PATCH above so both contexts stay app-pinned to `15368`.)
+3. **Precondition snapshot, asserted immediately before the write:** `contexts == ["validate"]`, `strict == true`, `enforce_admins == true`, `required_conversation_resolution == true`, `required_approving_review_count == 0`, `allow_force_pushes == false`, `allow_deletions == false`, and `rulesets == []` (§16.1). If a ruleset has appeared since, **stop** — classic protection would no longer be the whole picture.
+4. **Expected post-state:** `contexts == ["validate", "db-tests"]`, both app-bound to `15368`, `strict` still `true`, every other protection field byte-identical to the snapshot.
+5. **Rollback:** PATCH the same sub-resource back to `{"strict": true, "checks": [{"context": "validate", "app_id": 15368}]}`.
+6. **Read-back verification:** re-`GET` the full protection object and diff it against the precondition snapshot, confirming that **only** `required_status_checks.checks` changed; re-`GET` `rulesets` to confirm it is still empty; then confirm on the next same-repository pull request that `db-tests` appears as required and that `validate` is still required.
+
+### 16.11 Reevaluation contract for `E2E (local)`
+
+`e2e-local` should be reconsidered **second**, only after all of the following hold over a defined window (values derived from its own measured behaviour, not chosen arbitrarily):
+
+- **≥ 40 further eligible pull-request runs** after 2026-08-16 with **zero same-SHA re-runs** required to reach green;
+- **zero ephemeral-stack bring-up transients** (`supabase/setup-cli` or `supabase start`) over that window;
+- **p90 successful duration ≤ 7m00s and maximum ≤ 12m00s** (≤ 60% of the declared 20-minute timeout), with **no upward p90 trend across two consecutive windows** — this is the criterion it currently fails, at p90 8m49s and rising;
+- **≥ 1 legitimate unique catch whose root cause is application or database code** (candidate red / `Validate` green), as opposed to a defect in its own spec.
+
+Should the repository begin accepting fork-origin contributions, the vacuous-green fork behaviour in §16.7 must be resolved for **any** promoted candidate before its required status can be trusted.
