@@ -165,7 +165,6 @@ Meaningful open items. This is a pointer list, not a backlog database — none o
 
 - **Desktop Paper Actions compression.** The Actions buttons compress to 16×32 on desktop as well; desktop density was explicitly accepted, so this stays low priority unless new evidence or an owner decision escalates it.
 - **D4 — external-metadata import-order E2E coverage.** Unresolved and non-blocking; PubMed/Crossref are nondeterministic and need served Edge Functions plus egress. No `import-order` automation exists.
-- **Auth validation-error accessibility** (`role="alert"` on validation errors) — pre-existing, non-blocking.
 - **`AlertDialogContent` focus-restoration audit** — the central `DialogContent`/`SheetContent` restoration fix did not cover `AlertDialogContent`.
 - **React Router Cluster 5** — see §8.
 - **Optional hosted staging** remains unselected; local-first is the accepted path.

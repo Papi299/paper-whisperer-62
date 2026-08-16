@@ -185,9 +185,11 @@ const Auth = () => {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={loading}
+                      aria-invalid={!!errors.email}
+                      aria-describedby={errors.email ? "forgot-email-error" : undefined}
                     />
                     {errors.email && (
-                      <p className="text-sm text-destructive">{errors.email}</p>
+                      <p id="forgot-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
                     )}
                   </div>
                   <Button type="submit" className="w-full" disabled={loading}>
@@ -215,9 +217,11 @@ const Auth = () => {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={loading}
+                      aria-invalid={!!errors.email}
+                      aria-describedby={errors.email ? "signin-email-error" : undefined}
                     />
                     {errors.email && (
-                      <p className="text-sm text-destructive">{errors.email}</p>
+                      <p id="signin-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
                     )}
                   </div>
                   <div className="space-y-2">
@@ -229,9 +233,11 @@ const Auth = () => {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       disabled={loading}
+                      aria-invalid={!!errors.password}
+                      aria-describedby={errors.password ? "signin-password-error" : undefined}
                     />
                     {errors.password && (
-                      <p className="text-sm text-destructive">{errors.password}</p>
+                      <p id="signin-password-error" role="alert" className="text-sm text-destructive">{errors.password}</p>
                     )}
                   </div>
                   <Button type="submit" className="w-full" disabled={loading}>
@@ -261,9 +267,11 @@ const Auth = () => {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     disabled={loading}
+                    aria-invalid={!!errors.email}
+                    aria-describedby={errors.email ? "signup-email-error" : undefined}
                   />
                   {errors.email && (
-                    <p className="text-sm text-destructive">{errors.email}</p>
+                    <p id="signup-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
                   )}
                 </div>
                 <div className="space-y-2">
@@ -275,9 +283,11 @@ const Auth = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     disabled={loading}
+                    aria-invalid={!!errors.password}
+                    aria-describedby={errors.password ? "signup-password-error" : undefined}
                   />
                   {errors.password && (
-                    <p className="text-sm text-destructive">{errors.password}</p>
+                    <p id="signup-password-error" role="alert" className="text-sm text-destructive">{errors.password}</p>
                   )}
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
