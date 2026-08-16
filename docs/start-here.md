@@ -119,6 +119,7 @@ Operational procedures, secrets, migration sequence, smoke checklists: [deployme
 - **Local-first Playwright is the supported safe lifecycle.** `npm run test:e2e:local` starts an **ephemeral local Supabase stack**, replays every tracked migration, applies a deterministic local-only seed, and runs the suite behind a **two-layer fail-closed** Production/remote guard (Layer 2 runs in the browser before any credential read or fill). Raw key-bearing stack-startup output is suppressed.
   - A bare **`npm run test:e2e` deliberately fails closed** without an explicit local backend contract. **Production-backed Playwright is prohibited by the merged guard** and is not an available path.
   - The `E2E (local)` workflow reuses this same local-first lifecycle. It never contacts Production or any cloud project.
+  - **External-metadata import order is covered deterministically.** The `import-order` spec is part of this lane: Playwright fulfils the one `fetch-paper-metadata` request so the metadata is fixed, while the real Add Papers UI, bulk-insert RPC, `insert_order`, refetch, table and refresh persistence all run for real. It needs no live PubMed/Crossref, no served Edge Function and no provider credential, and it deletes the papers it imports.
   - **There is no hosted staging environment.** The accepted path is local-first; no cloud test project, secret, or Environment is provisioned, and selecting one is optional and unselected.
 - **Database-layer tests exist.** `supabase/tests/database/` holds pgTAP suites covering core and relational RLS isolation, RPC caller scope and grants, storage and quota, duplicate-merge success, publication-type provenance, function `search_path` hardening, and account-deletion cascade — plus a preserved framework-free verification file. `npm run test:db:local` runs them all on an ephemeral local stack with a catalog-fingerprint baseline, an expected-failure negative control, a true-concurrency AI-quota probe, and fail-closed residue/teardown inspection. The hosted `DB Tests` workflow is a thin wrapper around that same lifecycle.
 - **Local pre-push baseline:** `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` — plus `npm run test:e2e:local` when UI behavior changes, and `npm run test:db:local` when database code changes.
@@ -165,7 +166,6 @@ Owner-action blockers that gate the paused C27 work — Paddle Sandbox setup, ma
 Meaningful open items. This is a pointer list, not a backlog database — none of it is auto-selected.
 
 - **Desktop Paper Actions compression.** The Actions buttons compress to 16×32 on desktop as well; desktop density was explicitly accepted, so this stays low priority unless new evidence or an owner decision escalates it.
-- **D4 — external-metadata import-order E2E coverage.** Unresolved and non-blocking; PubMed/Crossref are nondeterministic and need served Edge Functions plus egress. No `import-order` automation exists.
 - **React Router Cluster 5** — see §8.
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
 - **Orphaned management-component audit.** Two verified-orphaned components were removed; other components looked sparse under static search but were deliberately **not** removed without the same proof. A bounded audit is available work.
@@ -196,7 +196,7 @@ Meaningful open items. This is a pointer list, not a backlog database — none o
 | [store-launch-checklist.md](store-launch-checklist.md) | Launch/store readiness (mobile deferred; planning) |
 | [migration-history.md](migration-history.md) | Historical chronology — **history, not current state** |
 | [product-feature-audit.md](product-feature-audit.md) | Point-in-time capability audit and owner decision packet — **historical, not an evergreen authority** |
-| [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) | PFA-C03 contract and evidence record (complete); D4 rationale; §16 D5 audit evidence (frozen) and §17 D5 activation record |
+| [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) | PFA-C03 contract and evidence record (complete); D4 decision and resolution; §16 D5 audit evidence (frozen) and §17 D5 activation record |
 
 ## 13. Recent material changes
 
