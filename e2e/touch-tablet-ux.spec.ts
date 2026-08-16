@@ -1320,3 +1320,314 @@ test.describe("REAL-DEVICE-TOUCH-UX-REMEDIATION-002 — fine pointer preserved",
     await closeAllDialogs(page);
   });
 });
+
+// ── AlertDialog close-focus restoration ─────────────────────────────────────
+
+/**
+ * ALERT-DIALOG-FOCUS-RESTORATION-001 — where focus lands *after* an
+ * `AlertDialogContent` closes.
+ *
+ * Separate concern from everything above: those specs pin which control an
+ * opening surface focuses; these pin which control gets focus back when a
+ * confirmation is dismissed. Radix's modal content prevents the FocusScope's
+ * natural restore and focuses `triggerRef` instead, so a confirmation opened
+ * without an `<AlertDialogTrigger>` had nothing to restore to and dropped the
+ * keyboard user on `<body>`.
+ *
+ * Three opener lifecycles exist in this app and each is proven here:
+ *
+ *   • trigger-backed          — Manage exclusions → Clear (real AlertDialogTrigger)
+ *   • controlled, opener stays — paper row Delete (button is still mounted)
+ *   • controlled, opener goes  — saved-search Delete (a dropdown item that unmounts)
+ *
+ * Every assertion reads `document.activeElement`; none infers focus from
+ * styling. No probe below confirms a destructive action — each one cancels.
+ */
+
+const FIXTURE_ALERT_PRESET = "ZZ Alert Focus Fixture Search";
+const FIXTURE_ALERT_KEYWORD = "zzalertfocusfixture";
+
+/** The Presets dropdown trigger — the persistent control that owns the saved-search workflow. */
+function presetsTrigger(page: Page) {
+  return page.getByRole("button", { name: /Saved Searches|Presets/i });
+}
+
+test.describe("ALERT-DIALOG-FOCUS-RESTORATION-001 — close-focus restoration", () => {
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    // One disposable saved search, so the transient-opener probe has a row with
+    // a Delete control inside the Presets dropdown.
+    await presetsTrigger(page).click();
+    await page.getByRole("menuitem", { name: /Save current search/i }).click();
+    const saveDialog = page.getByRole("dialog");
+    await expect(saveDialog).toBeVisible();
+    await saveDialog.getByRole("textbox").fill(FIXTURE_ALERT_PRESET);
+    await saveDialog.getByRole("button", { name: /^Save$/ }).click();
+    await expect(saveDialog).toBeHidden({ timeout: 15_000 });
+
+    await page.close();
+  });
+
+  test.afterAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await page
+      .goto("/", { waitUntil: "networkidle" })
+      .then(async () => {
+        await page.setViewportSize(DESKTOP);
+        await waitForDashboard(page);
+
+        // Saved search — deleted through its own confirmation.
+        await presetsTrigger(page).click();
+        const del = page.getByRole("button", { name: `Delete preset "${FIXTURE_ALERT_PRESET}"` });
+        if (await del.count()) {
+          await del.first().click();
+          await page.getByRole("alertdialog").getByRole("button", { name: /^Delete$/ }).click();
+          await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+        }
+        await page.keyboard.press("Escape");
+
+        // Excluded keyword — removed individually, never via Clear All.
+        await page.getByRole("button", { name: "Manage exclusions", exact: true }).click();
+        const manage = page.getByRole("dialog");
+        await expect(manage).toBeVisible();
+        const remove = manage.getByRole("button", {
+          name: `Remove excluded keyword ${FIXTURE_ALERT_KEYWORD}`,
+        });
+        if (await remove.count()) {
+          await remove.first().click();
+          await expect(remove).toHaveCount(0, { timeout: 10_000 });
+        }
+        await closeAllDialogs(page);
+      })
+      .catch(() => {});
+    await page.close();
+  });
+
+  // ── A. Controlled AlertDialog whose opener stays mounted ──────────────────
+
+  for (const close of ["Cancel", "Escape"] as const) {
+    test(`paper delete confirmation dismissed with ${close} restores the exact Delete button`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(DESKTOP);
+      await page.goto("/", { waitUntil: "networkidle" });
+      await waitForDashboard(page);
+
+      const deleteButton = page.locator("tbody tr").first().getByRole("button", { name: /^Delete / });
+      await deleteButton.scrollIntoViewIfNeeded();
+      const openerLabel = await deleteButton.getAttribute("aria-label");
+      expect(openerLabel, "the row Delete button carries its paper title").toBeTruthy();
+      // A handle, not the Locator: Radix marks everything behind an open modal
+      // `aria-hidden`, so a role-based query stops resolving while it is up.
+      const openerHandle = await deleteButton.elementHandle();
+
+      await deleteButton.click();
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await expect(confirm.getByText("Delete Paper", { exact: true })).toBeVisible();
+
+      // The opener is still in the document while the confirmation is open —
+      // this is the class where exact restoration is possible.
+      expect(
+        await openerHandle!.evaluate((el) => el.isConnected),
+        "the row Delete button stays mounted behind the confirmation",
+      ).toBe(true);
+
+      if (close === "Cancel") {
+        await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      } else {
+        await page.keyboard.press("Escape");
+      }
+      await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+      const active = await activeElement(page);
+      expect(active.isBody, "focus must not drop to <body>").toBe(false);
+      expect(active.ariaLabel, "focus returns to the exact Delete button that opened it").toBe(
+        openerLabel,
+      );
+      await expect(deleteButton).toBeFocused();
+
+      // Cancelling deletes nothing: the row is still there.
+      await expect(deleteButton).toBeVisible();
+    });
+  }
+
+  // ── B. Controlled AlertDialog whose opener is unmounted ───────────────────
+
+  test("saved-search delete confirmation restores the persistent Presets trigger", async ({
+    page,
+  }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const trigger = presetsTrigger(page);
+    await trigger.click();
+    const menuItem = page.getByRole("button", { name: `Delete preset "${FIXTURE_ALERT_PRESET}"` });
+    await expect(menuItem).toBeVisible();
+    // Hold a handle to the launching control so its lifecycle can be read after
+    // the dropdown closes — a Locator would just resolve to nothing.
+    const menuItemHandle = await menuItem.elementHandle();
+
+    await menuItem.click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByText("Delete saved search?", { exact: true })).toBeVisible();
+
+    // The defining property of this class: the control that opened the
+    // confirmation has left the DOM, so it is not a restoration target at all.
+    await expect
+      .poll(
+        async () => menuItemHandle!.evaluate((el) => el.isConnected),
+        { message: "the dropdown item that opened the confirmation unmounts", timeout: 5_000 },
+      )
+      .toBe(false);
+
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+    const active = await activeElement(page);
+    expect(active.isBody, "focus must not drop to <body>").toBe(false);
+    await expect(trigger).toBeFocused();
+
+    // Cancelling deletes nothing: the saved search is still listed.
+    await trigger.click();
+    await expect(menuItem).toBeVisible();
+    await page.keyboard.press("Escape");
+  });
+
+  test("saved-search update confirmation restores the persistent Presets trigger", async ({
+    page,
+  }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const trigger = presetsTrigger(page);
+
+    // Load the fixture preset, then dirty the filter state so `Update "…"`
+    // becomes enabled. Both menu items share the dropdown's lifecycle, so this
+    // is the same disconnected-opener class as the Delete confirmation.
+    await trigger.click();
+    await page.getByRole("button", { name: FIXTURE_ALERT_PRESET, exact: true }).click();
+    await expect(page.getByRole("menu")).toHaveCount(0, { timeout: 5_000 });
+
+    const search = page.getByRole("searchbox").or(page.getByPlaceholder(/search/i)).first();
+    await search.fill("zz alert focus probe");
+    await expect(trigger).toHaveAccessibleName(/unsaved changes/i, { timeout: 10_000 });
+
+    await trigger.click();
+    const updateItem = page.getByRole("menuitem", { name: /^Update/ });
+    await expect(updateItem).toBeEnabled();
+    const updateHandle = await updateItem.elementHandle();
+
+    await updateItem.click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByText("Update saved search?", { exact: true })).toBeVisible();
+    await expect
+      .poll(async () => updateHandle!.evaluate((el) => el.isConnected), {
+        message: "the Update menu item unmounts with the dropdown",
+        timeout: 5_000,
+      })
+      .toBe(false);
+
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+    const active = await activeElement(page);
+    expect(active.isBody, "focus must not drop to <body>").toBe(false);
+    await expect(trigger).toBeFocused();
+
+    // Cancelling overwrites nothing: the preset is still dirty, i.e. unsaved.
+    await expect(trigger).toHaveAccessibleName(/unsaved changes/i);
+  });
+
+  // ── C. Trigger-backed AlertDialog ─────────────────────────────────────────
+
+  test("trigger-backed Clear confirmation still restores its own trigger", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await page.getByRole("button", { name: "Manage exclusions", exact: true }).click();
+    const manage = page.getByRole("dialog");
+    await expect(manage).toBeVisible();
+
+    // The Clear control only renders once the pool is non-empty, so seed one
+    // disposable keyword through the dialog's own Add control.
+    const keywordField = manage.getByRole("textbox", { name: "Keyword to exclude" });
+    await keywordField.fill(FIXTURE_ALERT_KEYWORD);
+    await manage.getByRole("button", { name: "Add excluded keyword" }).click();
+    const chip = manage.getByRole("button", {
+      name: `Remove excluded keyword ${FIXTURE_ALERT_KEYWORD}`,
+    });
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+
+    // This one has a real <AlertDialogTrigger>; native Radix restoration must
+    // keep working once the central wrapper takes part in close focus.
+    const clear = manage.getByRole("button", { name: "Clear" }).first();
+    await clear.focus();
+    await expect(clear).toBeFocused();
+    await clear.click();
+
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByText("Clear all excluded keywords?", { exact: true })).toBeVisible();
+
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+    const active = await activeElement(page);
+    expect(active.isBody, "focus must not drop to <body>").toBe(false);
+    await expect(clear).toBeFocused();
+
+    // Cancelling clears nothing, and the fixture keyword is removed one-by-one
+    // rather than through the destructive Clear All action.
+    await expect(chip).toBeVisible();
+    await chip.click();
+    await expect(chip).toHaveCount(0, { timeout: 10_000 });
+    await closeAllDialogs(page);
+  });
+
+  // ── D. Confirming the action, not just dismissing it ──────────────────────
+
+  /**
+   * Runs last, and is also how the saved-search fixture is disposed of: the
+   * confirmation is the product's own delete path, so proving focus through it
+   * costs no mutation that the teardown would not perform anyway.
+   *
+   * The fallback is on `onCloseAutoFocus`, which fires for every close reason,
+   * so confirming lands on the same persistent trigger as cancelling — the one
+   * case where the opener is gone *and* the row it referred to is gone too.
+   */
+  test("confirming the saved-search delete also lands on the Presets trigger", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const trigger = presetsTrigger(page);
+    await trigger.click();
+    const menuItem = page.getByRole("button", { name: `Delete preset "${FIXTURE_ALERT_PRESET}"` });
+    await expect(menuItem).toBeVisible();
+    await menuItem.click();
+
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+    const active = await activeElement(page);
+    expect(active.isBody, "focus must not drop to <body>").toBe(false);
+    await expect(trigger).toBeFocused();
+
+    // The saved search really is gone — this is the confirm path, not Cancel.
+    await trigger.click();
+    await expect(menuItem).toHaveCount(0, { timeout: 10_000 });
+    await page.keyboard.press("Escape");
+  });
+});
