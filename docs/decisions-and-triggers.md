@@ -616,3 +616,41 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 **Consequence:** No Supabase plan, billing, or Auth setting changes are authorized during development by this decision. PFA-C08's database hardening was a separate track and is now **complete**: migration `20260810152125_harden_remaining_function_search_paths` was merged (PR #200, merge `7c61ba39…`) and **deployed to Production on 2026-08-10 under separate authorization** (`PFA-C08-SECURITY-HARDENING-001P`), taking the ledger from 72 to **73** rows; post-deploy verification confirmed the four `function_search_path_mutable` warnings cleared, with `proconfig` the only changed catalog field and `papers.search_vector`, the `papers` indexes, and the `set_updated_at` trigger all unchanged — see [migration-history.md](migration-history.md). **PFA-C08 is therefore closed for the current development scope.** Leaked-password protection stays **disabled** and is an explicit **commercialization prerequisite**, not an unresolved development blocker.
 
 **Re-evaluation trigger:** before commercial/public paid launch, or earlier if the Supabase organization moves to Pro for another reason or Supabase makes leaked-password protection available on the current plan. At re-evaluation, confirm the current Supabase documentation and project configuration rather than assuming today's plan gate still applies; if supported, enable leaked-password protection and re-run the Security Advisor to verify the finding clears.
+
+## CI merge-gate decisions (2026-08-16)
+
+### D5 — Required DB-security merge gate (2026-08-16)
+
+**Status: RESOLVED 2026-08-16 → `REQUIRE_DB_TESTS`.** D5 originated in the PFA-C03 contract as the open question of whether either non-required CI lane — `E2E (local) / e2e-local` or `DB Tests / db-tests` — should become a required merge gate for `main`.
+
+**Decision (owner, 2026-08-16):**
+
+- keep **`validate`** required;
+- add **`db-tests`** as required;
+- keep **`e2e-local`** non-required.
+
+**Implemented state:** branch protection on `main` now requires exactly two contexts — **`validate`** (GitHub Actions app `15368`) and **`db-tests`** (GitHub Actions app `15368`). **Strict / require-branches-to-be-up-to-date remains enabled.** **`e2e-local` remains non-required**, as do the Vercel checks. No repository ruleset exists, and no other protection setting (review count, stale-review dismissal, code-owner review, last-push approval, conversation resolution, administrator enforcement, force pushes, deletions, linear history, signatures, branch lock) was changed. Required contexts are the **bare emitted job names**, not the `Workflow / job` labels shown in the GitHub UI.
+
+**Rationale:**
+
+- `DB Tests` covers database invariants that `Validate` structurally cannot reach — RLS isolation, table/RPC grants, `SECURITY DEFINER` caller scope, quota and true-concurrency behaviour, full migration replay, and account-deletion cascades. A green `Validate` says nothing about any of them.
+- The read-only D5 audit (2026-08-16) found `DB Tests` **operationally eligible**: it emitted its check on every eligible pull-request head, passed on first attempt across the scored pull-request sample, ran well inside its declared timeout with a flat-to-tightening duration, and adds the smallest merge latency of the candidates. It also carries per-run self-validating controls (an expected-failure negative control and a catalog-fingerprint sensitivity probe), so a green result is meaningful rather than vacuous.
+- `E2E (local)` was **not** promoted: its measured duration trend was materially higher and rising, its only red in the sampled window was a defect in its own spec rather than in the product, and it needed a same-SHA re-run to reach green once.
+- Promotion adds **no** runner minutes — both lanes already run on every eligible pull request — so the only cost is merge-blocking latency.
+
+**Consequence:** `D5-REQUIRED-DB-TESTS-PROMOTION-001` — one narrow `PATCH` to the `required_status_checks` sub-resource of `main`'s classic branch protection, plus documentation. No workflow, source, test, package, Supabase, or Vercel change. A failing `db-tests` now blocks merge; that is the intended behaviour and is **not** grounds for rolling the gate back. Point-in-time audit evidence, the eligibility rubric, and the rejected alternatives live in [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) §16; the activation record is §17 of the same document.
+
+**Re-evaluation triggers.**
+
+*Reconsider promoting `e2e-local` when all of the following hold:*
+
+- at least **40 further eligible pull-request runs** after the 2026-08-16 audit;
+- **zero same-SHA re-runs** needed to reach green during that window;
+- **zero ephemeral-stack bring-up transients** (`supabase/setup-cli` or `supabase start`) during that window;
+- **p90 ≤ 7m00s** and **maximum ≤ 12m00s**;
+- **no upward p90 trend** across two consecutive windows;
+- **at least one legitimate unique catch** whose root cause is application or database code (candidate red while `Validate` is green), as opposed to a defect in its own spec.
+
+*Revisit fork semantics when* outside/fork-origin contributions become part of the supported contribution model: both candidate workflows carry a same-repository job condition, so on a fork-origin pull request the job **skips and reports success**, producing a vacuous green. That must be resolved before any required check can be trusted on fork-origin contributions.
+
+*Reconsider required `db-tests` if* recurring false-red or infrastructure failures materially disrupt merges; `DB Tests` becomes cloud- or secret-dependent; its check identity (`db-tests`, app `15368`) changes; its runtime materially expands; or its test architecture is replaced.
