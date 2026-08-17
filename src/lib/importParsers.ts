@@ -15,6 +15,13 @@
  */
 
 import Papa from "papaparse";
+import {
+  AUTHOR_PROVENANCE_SOURCES,
+  buildUnstructuredAuthorProvenance,
+  makeAuthorProvenance,
+  type AuthorProvenance,
+  type AuthorProvenanceKind,
+} from "./authorProvenance";
 import type { RawPaperData } from "./normalizePaperData";
 import {
   canonicalPubMedUrl,
@@ -304,6 +311,19 @@ function bibtexEntryToRawPaper(entry: BibTeXEntry): RawPaperData | null {
   return {
     title,
     authors,
+    // BibTeX's `author` field has a personal-name grammar (von/last/jr/first
+    // with brace protection) that this parser deliberately does not implement:
+    // it splits on ` and ` and keeps each part whole. So each entry is recorded
+    // as an opaque `unknown` mention with no components guessed — a value like
+    // `Phillips, Stuart M` is one mention that happens to contain a comma, not
+    // evidence of a family/given split. Braces and wording are likewise not
+    // read as a corporate-vs-person signal, because this parser draws no such
+    // structural distinction.
+    author_provenance: buildUnstructuredAuthorProvenance(
+      authors,
+      AUTHOR_PROVENANCE_SOURCES.bibtex,
+      "author",
+    ),
     year,
     journal: f.journal ? decodeLatex(stripOuterBraces(f.journal)).trim() : null,
     pmid,
@@ -396,8 +416,14 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
   const title = getFirst("T1") || getFirst("TI") || getFirst("T2");
   if (!title || !title.trim()) return null;
 
-  // Authors: AU tags
-  const authors = getAll("AU").concat(getAll("A1"));
+  // Authors: AU tags, then A1. Which tag produced each entry is retained for
+  // provenance — RIS distinguishes the two fields, so that distinction is
+  // recorded rather than flattened away.
+  const authorFields = [
+    ...getAll("AU").map((value) => ({ field: "AU", value })),
+    ...getAll("A1").map((value) => ({ field: "A1", value })),
+  ];
+  const authors = authorFields.map((entry) => entry.value);
 
   // Year: PY field, extract first 4 digits
   const pyVal = getFirst("PY") || getFirst("Y1") || getFirst("DA");
@@ -455,6 +481,22 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
   return {
     title: title.trim(),
     authors,
+    // RIS states an author as one opaque string per tag. The format draws no
+    // personal-vs-corporate distinction in the tags this parser reads, and
+    // `Smith, John` is not split on its comma — RIS does not define that comma
+    // as a family/given separator, and the same tag carries corporate names
+    // written the same way.
+    author_provenance:
+      authorFields.length > 0
+        ? authorFields.map((entry) =>
+            makeAuthorProvenance({
+              source: AUTHOR_PROVENANCE_SOURCES.ris,
+              source_field: entry.field,
+              kind: "unknown",
+              source_name: entry.value,
+            }),
+          )
+        : null,
     year,
     journal: journal?.trim() || null,
     pmid,
@@ -650,25 +692,151 @@ function firstQualifiedDoi(values: string[]): string | null {
   return null;
 }
 
+/**
+ * One authorship mention found while walking a MEDLINE record in file order,
+ * together with the author-scoped fields that followed it.
+ */
+interface NbibAuthorMention {
+  sourceName: string;
+  sourceField: "FAU" | "AU" | "CN";
+  kind: AuthorProvenanceKind;
+  identifiers: { scheme: string; value: string }[];
+  affiliations: string[];
+}
+
+/**
+ * An `AUID` value, whose documented shape is `AUTHORITY: identifier` — NLM
+ * emits `AUID- ORCID: 0000-0003-0945-2970`.
+ *
+ * The authority prefix is the whole point: it is what lets an ORCID be
+ * recognized as an ORCID rather than assumed from the value's shape. A value
+ * with no stated authority yields `null` and is dropped, because there is no
+ * honest scheme to record it under — including a bare URI, whose leading
+ * `https` is a URI scheme, not an identifier authority. Nothing is inferred
+ * from the identifier's own format.
+ */
+function parseAuid(value: string): { scheme: string; value: string } | null {
+  const separator = value.indexOf(":");
+  if (separator <= 0) return null;
+
+  const scheme = value.slice(0, separator).trim();
+  const identifier = value.slice(separator + 1).trim();
+  if (!scheme || !identifier) return null;
+  // `https://orcid.org/…` splits into a URI scheme, not an authority.
+  if (/^https?$/i.test(scheme)) return null;
+
+  return { scheme, value: identifier };
+}
+
+/**
+ * Walk a MEDLINE record in its original field order and group author-scoped
+ * fields onto the authorship mention they belong to.
+ *
+ * ## Why a sequential walk rather than zipping `allFieldValues` arrays
+ *
+ * `AUID` and `AD` carry no author index. Their association is **positional**:
+ * each one belongs to the author whose `FAU`/`AU`/`CN` field precedes it, and
+ * the next author field ends that scope. Collecting `allFieldValues("FAU")` and
+ * `allFieldValues("AUID")` separately and pairing them by index would be wrong
+ * the moment any author lacks an identifier — every later ORCID would shift
+ * onto the wrong person, which is precisely the fabricated identity evidence
+ * this task forbids. Verified against NCBI's own EFetch MEDLINE output:
+ *
+ *     FAU - Soto-Rifo, Ricardo
+ *     AU  - Soto-Rifo R
+ *     AUID- ORCID: 0000-0003-0945-2970
+ *     AD  - Laboratory of Molecular and Cellular Virology, …
+ *     AD  - HIV/AIDS Workgroup, …
+ *
+ * `AD` is an AuthorList-level element (NLM moved it there from the Article
+ * level in December 2013), so in a current export it is author-scoped. An `AD`
+ * or `AUID` appearing before any author field has no author to belong to and is
+ * dropped rather than guessed at.
+ *
+ * `FAU` and `AU` are two representations of the SAME author, so only one of
+ * them opens mentions — `FAU` when the record has any, matching the display
+ * rule — and the other is passed over rather than creating a second mention.
+ * `CN` is NLM's corporate author, which the format states explicitly, so it is
+ * the one place `collective` is used.
+ */
+function collectNbibAuthorMentions(record: TaggedRecord): NbibAuthorMention[] {
+  const opensPersonalMention = record.some(
+    (field) => field.tag === "FAU" && field.value,
+  )
+    ? "FAU"
+    : "AU";
+
+  const mentions: NbibAuthorMention[] = [];
+  let current: NbibAuthorMention | null = null;
+
+  for (const field of record) {
+    // Empty values are skipped, exactly as `allFieldValues` drops them, so the
+    // mentions here stay in step with the author list built from it.
+    if (!field.value) continue;
+
+    if (field.tag === opensPersonalMention || field.tag === "CN") {
+      const isCorporate = field.tag === "CN";
+      current = {
+        sourceName: field.value,
+        sourceField: isCorporate ? "CN" : opensPersonalMention,
+        // Established by the field, not by the name: NLM defines FAU/AU as
+        // personal author fields and CN as the corporate author field. The
+        // *components* of a personal name are still not derived — `Jin, Youkai`
+        // is never split into family/given, because the tagged format does not
+        // define that comma as a separator.
+        kind: isCorporate ? "collective" : "personal",
+        identifiers: [],
+        affiliations: [],
+      };
+      mentions.push(current);
+      continue;
+    }
+
+    if (!current) continue;
+
+    if (field.tag === "AUID") {
+      const identifier = parseAuid(field.value);
+      if (identifier) current.identifiers.push(identifier);
+      continue;
+    }
+
+    if (field.tag === "AD") {
+      current.affiliations.push(field.value);
+    }
+  }
+
+  return mentions;
+}
+
 function nbibRecordToRawPaper(record: TaggedRecord): RawPaperData | null {
   const title = firstFieldValue(record, "TI")?.trim();
   if (!title) return null;
 
+  // Every authorship mention in file order, each carrying the AUID/AD fields
+  // that are positionally scoped to it.
+  //
   // FAU and AU are two representations of the *same* personal authors, so
   // reading both would duplicate every name. FAU carries the full form
   // ("Jin, Youkai") and wins; AU ("Jin Y") is used only when FAU is absent.
-  const fullAuthors = allFieldValues(record, "FAU");
-  const authors = fullAuthors.length > 0 ? fullAuthors : allFieldValues(record, "AU");
+  const mentions = collectNbibAuthorMentions(record);
+  const personalMentions = mentions.filter((m) => m.sourceField !== "CN");
 
   // CN is a corporate author — real authorship that neither FAU nor AU carries
-  // — appended in file order, skipping a name already selected above.
-  const selected = new Set(authors);
-  for (const corporate of allFieldValues(record, "CN")) {
-    if (!selected.has(corporate)) {
-      selected.add(corporate);
-      authors.push(corporate);
+  // — appended in file order, skipping a name already selected above. The
+  // display order is unchanged: corporate authors still land after the personal
+  // ones rather than at their byline position.
+  const orderedMentions = [...personalMentions];
+  const selected = new Set(personalMentions.map((m) => m.sourceName));
+  for (const corporate of mentions.filter((m) => m.sourceField === "CN")) {
+    if (!selected.has(corporate.sourceName)) {
+      selected.add(corporate.sourceName);
+      orderedMentions.push(corporate);
     }
   }
+
+  // One ordered list is the single source of both arrays, so the author list
+  // and its provenance cannot disagree about which mention sits at which index.
+  const authors = orderedMentions.map((m) => m.sourceName);
 
   // DP is the date of publication. EDAT / MHDA / CRDT are Entrez processing
   // dates — when NLM handled the record, not when the work was published — and
@@ -711,6 +879,27 @@ function nbibRecordToRawPaper(record: TaggedRecord): RawPaperData | null {
   return {
     title,
     authors,
+    // NBIB is the one file format that states real authorship structure: which
+    // field named the author (personal FAU/AU vs corporate CN), the author's
+    // own identifiers, and their affiliations. Name *components* are still not
+    // derived — the format does not define FAU's comma as a family/given
+    // separator — and an ORCID is only recognized when an AUID's authority
+    // prefix says ORCID and the checksum validates.
+    author_provenance:
+      orderedMentions.length > 0
+        ? orderedMentions.map((mention) =>
+            makeAuthorProvenance({
+              source: AUTHOR_PROVENANCE_SOURCES.nbib,
+              source_field: mention.sourceField,
+              kind: mention.kind,
+              source_name: mention.sourceName,
+              collective_name:
+                mention.kind === "collective" ? mention.sourceName : null,
+              affiliations: mention.affiliations,
+              identifiers: mention.identifiers,
+            }),
+          )
+        : null,
     year,
     journal: journal?.trim() || null,
     pmid,
@@ -860,6 +1049,15 @@ function endNoteRecordToRawPaper(record: TaggedRecord): RawPaperData | null {
   return {
     title,
     authors,
+    // Each `%A` is one whole author as EndNote wrote it. EndNote's convention
+    // is "Smith, John", but the tag does not declare the value to be a personal
+    // name — corporate authors use the same tag — so nothing is split on the
+    // comma and nothing is classified from punctuation.
+    author_provenance: buildUnstructuredAuthorProvenance(
+      authors,
+      AUTHOR_PROVENANCE_SOURCES.endnote,
+      "%A",
+    ),
     year,
     journal: journal?.trim() || null,
     pmid,
@@ -1002,9 +1200,21 @@ export function parseCSV(content: string): FileParseResult {
     // which CSV used to leave permanently null.
     const journal_url = isPubMedRecordUrl(urlVal) ? null : toImportableExternalUrl(urlVal);
 
+    // Split exactly as before — the delimiter behavior is untouched — and
+    // record each resulting value as an opaque mention. A CSV authors column is
+    // free-form and user-controlled: it carries no schema saying whether a
+    // value is a person or an organization, so nothing is classified and
+    // nothing is parsed out of it.
+    const csvAuthors = splitSemicolon(getVal(row, "authors"));
+
     papers.push({
       title,
-      authors: splitSemicolon(getVal(row, "authors")),
+      authors: csvAuthors,
+      author_provenance: buildUnstructuredAuthorProvenance(
+        csvAuthors,
+        AUTHOR_PROVENANCE_SOURCES.csv,
+        "authors",
+      ),
       year,
       journal: getVal(row, "journal") || null,
       pmid,

@@ -5,6 +5,7 @@
  * Both API fetches and manual entries MUST pass through this pipeline.
  */
 
+import type { AuthorProvenance } from "./authorProvenance";
 import { decodeHTMLEntities } from "./decodeHTMLEntities";
 import { evaluateStudyType, StudyTypePoolEntry } from "./evaluateStudyType";
 import { escapeRegExp, NEGATION_TRIGGERS, normalizeText, extractContextualKeywords } from "./textUtils";
@@ -148,6 +149,17 @@ export interface RawPaperData {
    * without it keep their existing `study_type`-only behavior.
    */
   publication_types?: string[];
+  /**
+   * Structured authorship provenance from the source, aligned one-to-one with
+   * `authors`. Absent for a source that stated none.
+   *
+   * Unlike `publication_types`, this one DOES continue into
+   * `NormalizedPaperData`: normalization does not derive anything from it, it
+   * simply must not lose it, and every insert path builds its payload from the
+   * normalized object. Carrying it through is what keeps the worker path and
+   * the direct path from disagreeing.
+   */
+  author_provenance?: AuthorProvenance[] | null;
   pubmed_url: string | null;
   journal_url: string | null;
   drive_url: string | null;
@@ -156,6 +168,13 @@ export interface RawPaperData {
 export interface NormalizedPaperData {
   title: string;
   authors: string[];
+  /**
+   * Source provenance, passed through untouched and still index-aligned with
+   * `authors`. Normalization only HTML-decodes author strings — it never
+   * reorders, adds or drops one — so the alignment established by the parser
+   * survives unchanged.
+   */
+  author_provenance?: AuthorProvenance[] | null;
   year: number | null;
   journal: string | null;
   pmid: string | null;
@@ -236,6 +255,13 @@ export function normalizePaperData(
   return {
     title: decodedTitle,
     authors: decodedAuthors,
+    // Structured provenance is passed through byte-for-byte. It is emphatically
+    // NOT run through author canonicalization, entity decoding, initial
+    // expansion, reordering or accent stripping: it records what the source
+    // stated, and rewriting it would replace that record with Paperlume's
+    // opinion of it. `decodedAuthors` is a per-element map, so index alignment
+    // with the array below is preserved.
+    author_provenance: raw.author_provenance,
     year: raw.year,
     journal: decodedJournal,
     pmid: raw.pmid,
