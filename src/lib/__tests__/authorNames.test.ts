@@ -33,9 +33,20 @@ const UNICODE_HYPHEN = "‐"; // HYPHEN, not ASCII hyphen-minus
 const DOTLESS_I = "ı"; // Turkish dotless i
 const THIN_SPACE = " ";
 
+/**
+ * LATIN CAPITAL LETTER I WITH DOT ABOVE: one code point that lowercases to
+ * TWO (`i` + COMBINING DOT ABOVE). This is the letter that makes classifying a
+ * standalone initial *after* case folding wrong.
+ */
+const DOTTED_I = "İ";
+
 /** `Jos<e-acute> Garc<i-acute>a` precomposed, and its decomposed twin. */
 const JOSE_COMPOSED = `Jos${E_ACUTE} Garc${I_ACUTE}a`;
 const JOSE_DECOMPOSED = `Jose${COMBINING_ACUTE} Garci${COMBINING_ACUTE}a`;
+
+/** `<dotted-I> Y<dotless-i>lmaz`, without and with the initial's period. */
+const YILMAZ = `${DOTTED_I} Y${DOTLESS_I}lmaz`;
+const YILMAZ_PERIOD = `${DOTTED_I}. Y${DOTLESS_I}lmaz`;
 
 /** Both directions of "these are one mention", stated once. */
 function expectSameKey(a: string, b: string) {
@@ -132,6 +143,30 @@ describe("authorMentionKey — formatting equivalences that MUST collapse", () =
     // Cyrillic Yu, then Greek Theta.
     expectSameKey("Ю. Петров", "Ю Петров");
     expectSameKey("Θ. Παπας", "Θ Παπας");
+  });
+
+  /**
+   * The one-letter test has to be made on the display form, before comparison
+   * folding, because lowercasing can expand a single letter into several code
+   * points: `İ` becomes `i` + COMBINING DOT ABOVE. An implementation that folds
+   * first stops seeing one letter and leaves the period attached, so the two
+   * spellings of the same initial split into two author mentions.
+   */
+  it("collapses the initial period for a letter whose case folding expands", () => {
+    expect([...DOTTED_I]).toHaveLength(1);
+    expect([...DOTTED_I.toLowerCase()]).toHaveLength(2);
+
+    expectSameKey(YILMAZ_PERIOD, YILMAZ);
+    expectSameKey(`${DOTTED_I}.`, DOTTED_I);
+  });
+
+  /**
+   * The same ordering argument for the other direction: a decomposed accented
+   * initial is two code points until NFC composes it, so canonical
+   * normalization must also precede the one-letter test.
+   */
+  it("collapses the initial period for a decomposed accented initial", () => {
+    expectSameKey(`E${COMBINING_ACUTE}. Dupont`, `E${COMBINING_ACUTE} Dupont`);
   });
 
   it("collapses canonically equivalent Unicode forms", () => {
@@ -233,6 +268,17 @@ describe("authorMentionKey — ambiguities that MUST NOT collapse", () => {
     // Turkish dotless i is a different letter, not a case variant of `i`.
     expect(authorMentionKey(DOTLESS_I)).not.toBe(authorMentionKey("i"));
     expectDifferentKey(`Ayd${DOTLESS_I}n`, "Aydin");
+  });
+
+  /**
+   * Removing the period from `İ.` is a formatting fold and nothing more. The
+   * dotted capital, the ordinary `I`/`i` and the dotless `ı` remain three
+   * different letters, so only the period distinguishes the pair above.
+   */
+  it("does not equate a dotted capital I with ordinary or dotless i", () => {
+    expectDifferentKey(YILMAZ, `I Y${DOTLESS_I}lmaz`);
+    expectDifferentKey(YILMAZ_PERIOD, `I. Y${DOTLESS_I}lmaz`);
+    expectDifferentKey(YILMAZ, `${DOTLESS_I} Y${DOTLESS_I}lmaz`);
   });
 
   it("does not equate unrelated Greek spellings", () => {
@@ -386,6 +432,11 @@ describe("authorSearchMatches", () => {
     expect(authorSearchMatches("Stuart M. Phillips", "  STUART   M PHILLIPS ")).toBe(
       true,
     );
+  });
+
+  it("finds an expanding-case initial typed with either spelling", () => {
+    expect(authorSearchMatches(YILMAZ, YILMAZ_PERIOD)).toBe(true);
+    expect(authorSearchMatches(YILMAZ_PERIOD, YILMAZ)).toBe(true);
   });
 
   it("still matches on a prefix or fragment", () => {

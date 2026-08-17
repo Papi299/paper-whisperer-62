@@ -360,6 +360,48 @@ describe("AnalyticsContent — Unicode author mentions", () => {
   });
 });
 
+describe("AnalyticsContent — expanding-case initials", () => {
+  // LATIN CAPITAL LETTER I WITH DOT ABOVE lowercases to TWO code points, so an
+  // implementation that folds case before classifying the initial leaves the
+  // period on and splits this author into two options.
+  const DOTTED_I = "İ";
+  const DOTLESS_I = "ı";
+  const withPeriod = `${DOTTED_I}. Y${DOTLESS_I}lmaz`;
+  const withoutPeriod = `${DOTTED_I} Y${DOTLESS_I}lmaz`;
+
+  it("groups the two spellings into one option, count and selection", () => {
+    setViewportWidth(DESKTOP_WIDTH);
+    render(
+      <Harness papers={[makePaper([withPeriod]), makePaper([withoutPeriod])]} />,
+    );
+
+    expect(authorsTileCount()).toBe("1");
+
+    openAuthors();
+    expect(optionLabels()).toEqual([withPeriod]);
+
+    // Found by the spelling that is not the representative.
+    fireEvent.change(screen.getByRole("textbox", { name: "Search target authors" }), {
+      target: { value: withoutPeriod },
+    });
+    expect(optionLabels()).toEqual([withPeriod]);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: withPeriod }));
+    expect(authorSeries()).toEqual([`${withPeriod} = 2`]);
+  });
+
+  it("keeps an ordinary capital I initial separate", () => {
+    setViewportWidth(DESKTOP_WIDTH);
+    render(
+      <Harness
+        papers={[makePaper([withoutPeriod]), makePaper([`I Y${DOTLESS_I}lmaz`])]}
+      />,
+    );
+    openAuthors();
+    expect(optionLabels()).toEqual([`I Y${DOTLESS_I}lmaz`, withoutPeriod]);
+  });
+});
+
 describe("AnalyticsContent — selection stability", () => {
   it("does not select a canonical author twice when the representative changes", () => {
     setViewportWidth(DESKTOP_WIDTH);

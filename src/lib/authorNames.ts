@@ -78,6 +78,9 @@ const WHITESPACE_RUN = /\s+/gu;
  * standalone initial); expanding either would need a name parser this phase
  * deliberately does not have. `\p{L}` rather than `[A-Za-z]` so Cyrillic and
  * Greek initials are treated like Latin ones.
+ *
+ * This is tested against the DISPLAY token — see `keyFromDisplay` for why the
+ * test cannot survive being moved after comparison folding.
  */
 const STANDALONE_INITIAL = /^(\p{L})\.$/u;
 
@@ -119,18 +122,49 @@ function foldCharacter(character: string): string {
   return lowered;
 }
 
-/** Comparison key for an already display-normalized mention. */
+/** Folds a whole token into its comparison form, code point by code point. */
+function foldForComparison(token: string): string {
+  let folded = "";
+  // `for…of` iterates code points, so surrogate pairs survive intact.
+  for (const character of token) folded += foldCharacter(character);
+  return folded;
+}
+
+/**
+ * Comparison key for an already display-normalized mention.
+ *
+ * Order matters, and this is the order:
+ *
+ *   1. the display form has already been decoded, NFC-composed, whitespace-
+ *      collapsed and trimmed;
+ *   2. split into tokens — whitespace runs are already single spaces, so this
+ *      is exact;
+ *   3. classify and strip the standalone initial's period, **on the display
+ *      token**;
+ *   4. only then fold for comparison;
+ *   5. rejoin.
+ *
+ * Steps 3 and 4 cannot be swapped. Case folding may expand one letter into
+ * several code points — `İ` (U+0130) lowercases to `i` + COMBINING DOT ABOVE —
+ * so a token that *is* exactly one letter plus a period stops looking like one
+ * the moment it is folded, and `İ. Yılmaz` would split away from `İ Yılmaz`.
+ * The rule is about the letter the source wrote, not about how many code points
+ * it happens to fold into, and stating it in that order keeps it correct for
+ * any other letter that gains a multi-code-point mapping later.
+ *
+ * The same argument is why NFC belongs in the display form (step 1): a
+ * decomposed `É.` is two code points plus a period until it is composed.
+ *
+ * Folding per token rather than over the whole string changes nothing else —
+ * no fold produces or consumes a space, and case folding is already per code
+ * point, so the sigma family stays context-independent.
+ */
 function keyFromDisplay(display: string): string {
   if (!display) return "";
 
-  let folded = "";
-  // `for…of` iterates code points, so surrogate pairs survive intact.
-  for (const character of display) folded += foldCharacter(character);
-
-  // Whitespace is already collapsed to single spaces, so tokens split cleanly.
-  return folded
+  return display
     .split(" ")
-    .map((token) => token.replace(STANDALONE_INITIAL, "$1"))
+    .map((token) => foldForComparison(token.replace(STANDALONE_INITIAL, "$1")))
     .join(" ");
 }
 
