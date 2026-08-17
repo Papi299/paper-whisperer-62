@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect, useMemo, ReactNode } from "react";
+import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { PaperWithTags } from "@/types/database";
 import type { PoolStudyType } from "@/hooks/useStudyTypePool";
@@ -31,7 +31,7 @@ import { PaperListEmptyState } from "./PaperListEmptyState";
 import { ColumnId } from "@/hooks/useColumnVisibility";
 import { getDefaultColumnWidth } from "@/lib/columnWidths";
 import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
-import { escapeRegExp } from "@/lib/textUtils";
+import { HighlightedAbstract } from "./HighlightedAbstract";
 import { toSafeExternalHref } from "@/lib/externalUrl";
 import { useAbstract } from "@/hooks/useAbstract";
 import type { MatchFlags } from "@/hooks/papers/types";
@@ -55,42 +55,6 @@ function decodeHtml(html: string): string {
   const txt = document.createElement("textarea");
   txt.innerHTML = html;
   return txt.value;
-}
-
-/** Renders abstract text with matched keywords highlighted. */
-function HighlightedAbstract({ text, keywords }: { text: string; keywords: string[] }) {
-  if (keywords.length === 0) return <>{text}</>;
-
-  // Build a single regex that matches any keyword (case-insensitive, word-boundary-aware)
-  const pattern = keywords
-    .map(kw => escapeRegExp(kw))
-    .sort((a, b) => b.length - a.length) // longest first to avoid partial matches
-    .join("|");
-  const regex = new RegExp(`(${pattern})`, "gi");
-
-  const parts: ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(text)) !== null) {
-    // Text before match
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
-    // Highlighted match
-    parts.push(
-      <mark key={match.index} className="bg-yellow-200/60 rounded-sm px-0.5">
-        {match[0]}
-      </mark>
-    );
-    lastIndex = regex.lastIndex;
-  }
-  // Remaining text after last match
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-
-  return <>{parts}</>;
 }
 
 /**
