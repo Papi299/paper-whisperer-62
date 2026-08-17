@@ -363,4 +363,41 @@ describe("computeEnrichedKeywords", () => {
     );
     expect(result).toContain("Hypertension");
   });
+
+  it("does not enrich a short pool term found only inside an unrelated word", () => {
+    const config = makeConfig({ poolKeywords: ["CT"] });
+    const result = computeEnrichedKeywords(
+      [],
+      "Adverse effects of the intervention",
+      "The effects were evaluated across a separate cohort with no imaging.",
+      config,
+    );
+    expect(result).not.toContain("CT");
+    expect(result).toEqual([]);
+  });
+
+  it("still enriches a standalone occurrence of the same short pool term", () => {
+    const config = makeConfig({ poolKeywords: ["CT"] });
+    const result = computeEnrichedKeywords(
+      [],
+      "Adverse effects of the intervention",
+      "The effects were evaluated by CT in every participant.",
+      config,
+    );
+    expect(result).toContain("CT");
+  });
+
+  it("does not drop a raw pool keyword because of a substring-only occurrence", () => {
+    // `filterKeywordsByAbstractContext` keeps a raw pool keyword only when the
+    // abstract genuinely contains it, so a substring-only hit must not have been
+    // what kept it.
+    const config = makeConfig({ poolKeywords: ["CT"] });
+    const result = computeEnrichedKeywords(
+      ["CT"],
+      "Study title",
+      "Only the effects were reported.",
+      config,
+    );
+    expect(result).not.toContain("CT");
+  });
 });

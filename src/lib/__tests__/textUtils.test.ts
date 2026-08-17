@@ -102,3 +102,87 @@ describe("extractContextualKeywords", () => {
     expect(extractContextualKeywords("Some text about diabetes.", [])).toEqual([]);
   });
 });
+
+describe("extractContextualKeywords — lexical term boundaries", () => {
+  it("rejects the reported substring false positives", () => {
+    expect(extractContextualKeywords("The effects were evaluated.", ["CT"])).toEqual([]);
+    expect(extractContextualKeywords("Grip strength was measured.", ["TRE"])).toEqual([]);
+    expect(extractContextualKeywords("A separate cohort was used.", ["EPA"])).toEqual([]);
+    expect(extractContextualKeywords("Risk of bias was assessed.", ["BIA"])).toEqual([]);
+  });
+
+  it("still accepts the same terms standing alone", () => {
+    expect(extractContextualKeywords("CT was performed.", ["CT"])).toEqual(["CT"]);
+    expect(extractContextualKeywords("TRE was measured.", ["TRE"])).toEqual(["TRE"]);
+    expect(extractContextualKeywords("EPA supplementation helped.", ["EPA"])).toEqual(["EPA"]);
+    expect(extractContextualKeywords("BIA assessment was used.", ["BIA"])).toEqual(["BIA"]);
+  });
+
+  it("does not accept a term embedded in a larger token", () => {
+    expect(extractContextualKeywords("A preCT CTscan CT2 reading.", ["CT"])).toEqual([]);
+    expect(extractContextualKeywords("TP53 mutation status.", ["p53"])).toEqual([]);
+    expect(extractContextualKeywords("The CT_value column.", ["CT"])).toEqual([]);
+  });
+
+  it("returns the term as the pool spelled it, whatever the text casing", () => {
+    expect(extractContextualKeywords("ct was performed.", ["CT"])).toEqual(["CT"]);
+  });
+
+  it("accepts terms adjacent to punctuation", () => {
+    expect(extractContextualKeywords("Imaging (CT) was used.", ["CT"])).toEqual(["CT"]);
+    expect(extractContextualKeywords("Both CT/MRI were used.", ["CT", "MRI"])).toEqual(["CT", "MRI"]);
+    expect(extractContextualKeywords("CT-based imaging.", ["CT"])).toEqual(["CT"]);
+  });
+
+  it("accepts hyphenated terms across dash variants", () => {
+    expect(extractContextualKeywords("IL-6 increased.", ["IL-6"])).toEqual(["IL-6"]);
+    expect(extractContextualKeywords("IL–6 increased.", ["IL-6"])).toEqual(["IL-6"]);
+    expect(extractContextualKeywords("IL—6 increased.", ["IL-6"])).toEqual(["IL-6"]);
+  });
+
+  it("does not treat spaces and hyphens as synonyms", () => {
+    expect(extractContextualKeywords("T-cell response measured.", ["T cell"])).toEqual([]);
+    expect(extractContextualKeywords("T cell response measured.", ["T-cell"])).toEqual([]);
+  });
+
+  it("matches multi-word terms across arbitrary whitespace", () => {
+    const term = "randomized controlled trial";
+    expect(extractContextualKeywords("A randomized    controlled trial ran.", [term])).toEqual([term]);
+    expect(extractContextualKeywords("A randomized\ncontrolled\ttrial ran.", [term])).toEqual([term]);
+    expect(extractContextualKeywords("Randomized controlled trials pooled.", [term])).toEqual([]);
+  });
+
+  it("uses Unicode-aware boundaries rather than ASCII ones", () => {
+    // ASCII \b sees a boundary between a Greek letter and "C", so the previous
+    // implementation matched here.
+    expect(extractContextualKeywords("The αCTβ subunit.", ["CT"])).toEqual([]);
+    expect(extractContextualKeywords("The éCTé marker.", ["CT"])).toEqual([]);
+    // ...and it saw no boundary around a bare Greek letter, so this never matched.
+    expect(extractContextualKeywords("The (β) subunit was measured.", ["β"])).toEqual(["β"]);
+    expect(extractContextualKeywords("The αβγ complex.", ["β"])).toEqual([]);
+  });
+
+  it("treats regex-significant characters in a term as literal text", () => {
+    expect(extractContextualKeywords("Written in C++ mostly.", ["C++"])).toEqual(["C++"]);
+    expect(extractContextualKeywords("Written in Cxx mostly.", ["C++"])).toEqual([]);
+    expect(extractContextualKeywords("Any text at all.", [".*"])).toEqual([]);
+  });
+
+  it("preserves pool order and duplicate entries", () => {
+    expect(extractContextualKeywords("CT and MRI were used.", ["MRI", "CT", "MRI"]))
+      .toEqual(["MRI", "CT", "MRI"]);
+  });
+
+  it("ignores empty and whitespace-only pool entries", () => {
+    expect(extractContextualKeywords("CT was performed.", ["", "   ", "CT"])).toEqual(["CT"]);
+  });
+
+  it("keeps negation separate from lexical matching", () => {
+    // "non-CT" is a real lexical occurrence of CT (the highlighter shows it),
+    // but "non" is a negation trigger, so extraction still rejects it.
+    expect(extractContextualKeywords("A non-CT finding was noted.", ["CT"])).toEqual([]);
+    // A later non-negated occurrence rescues the term, as before.
+    expect(extractContextualKeywords("A non-CT finding was noted, then CT confirmed it.", ["CT"]))
+      .toEqual(["CT"]);
+  });
+});
