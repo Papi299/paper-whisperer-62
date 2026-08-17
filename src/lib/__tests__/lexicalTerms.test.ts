@@ -272,18 +272,84 @@ describe("scanLexicalTerms — empty and pathological input", () => {
 });
 
 describe("normalizeLexicalTerm", () => {
-  it("applies the same folds as normalizeText", () => {
+  it("applies the shared quote, dash and whitespace folds", () => {
     expect(normalizeLexicalTerm("  IL–6  Levels ")).toBe("il-6 levels");
     expect(normalizeLexicalTerm("")).toBe("");
     expect(normalizeLexicalTerm("   ")).toBe("");
   });
 });
 
-describe("normalized comparison text stays aligned with normalizeText", () => {
+describe("scanLexicalTerms — context-independent case folding", () => {
+  // Greek sigma is the one language-independent context-sensitive lowercase
+  // mapping in ECMAScript: "Σ" lowercases to final sigma "ς" at the
+  // end of a word but to "σ" elsewhere, so whole-string lowercasing gives
+  // a position-dependent answer. Case-insensitive matching has to be stable, so
+  // the three sigma forms must all compare equal.
+  const SIGMA_CAPITAL = "Σ"; // Σ
+  const SIGMA_MEDIAL = "σ"; // σ
+  const SIGMA_FINAL = "ς"; // ς
+  const OMICRON_CAPITAL = "Ο"; // Ο
+  const OMICRON_SMALL = "ο"; // ο
+
+  const equivalents: Array<[string, string]> = [
+    [OMICRON_CAPITAL + SIGMA_CAPITAL, OMICRON_SMALL + SIGMA_FINAL],
+    [OMICRON_SMALL + SIGMA_FINAL, OMICRON_CAPITAL + SIGMA_CAPITAL],
+    [OMICRON_SMALL + SIGMA_MEDIAL, OMICRON_CAPITAL + SIGMA_CAPITAL],
+    [SIGMA_CAPITAL, SIGMA_MEDIAL],
+    [SIGMA_CAPITAL, SIGMA_FINAL],
+    [SIGMA_MEDIAL, SIGMA_CAPITAL],
+    [SIGMA_FINAL, SIGMA_CAPITAL],
+  ];
+
+  it.each(equivalents)("matches keyword %j against text %j", (term, text) => {
+    expect(scanLexicalTerms(text, [term]).matches).toHaveLength(1);
+  });
+
+  it("collapses all three sigma forms to one comparison form", () => {
+    const forms = [SIGMA_CAPITAL, SIGMA_MEDIAL, SIGMA_FINAL].map(normalizeLexicalTerm);
+    expect(new Set(forms).size).toBe(1);
+  });
+
+  it("does not depend on the sigma's position in the text", () => {
+    // The same term must match whether the source sigma sits word-final or not.
+    expect(matchedTexts(OMICRON_CAPITAL + SIGMA_CAPITAL, [OMICRON_SMALL + SIGMA_MEDIAL]))
+      .toEqual([OMICRON_CAPITAL + SIGMA_CAPITAL]);
+    expect(matchedTexts(`${OMICRON_SMALL + SIGMA_FINAL} tail`, [OMICRON_SMALL + SIGMA_MEDIAL]))
+      .toEqual([OMICRON_SMALL + SIGMA_FINAL]);
+  });
+
+  it("preserves the original sigma spelling in the reported match", () => {
+    const [match] = scanLexicalTerms(
+      `The ${OMICRON_SMALL + SIGMA_FINAL} subunit.`,
+      [OMICRON_CAPITAL + SIGMA_CAPITAL],
+    ).matches;
+    expect(match.matchedText).toBe(OMICRON_SMALL + SIGMA_FINAL);
+    expect(match.start).toBe(4);
+    expect(match.end).toBe(6);
+  });
+
+  it("still applies lexical boundaries to Greek terms", () => {
+    expect(matches(OMICRON_CAPITAL + SIGMA_CAPITAL + "Τ", OMICRON_SMALL + SIGMA_MEDIAL))
+      .toBe(false);
+    expect(matches(`(${OMICRON_CAPITAL + SIGMA_CAPITAL})`, OMICRON_SMALL + SIGMA_MEDIAL))
+      .toBe(true);
+  });
+
+  it("keeps lunate sigma a distinct letter", () => {
+    // U+03F2 folds to itself, not into the σ/ς/Σ family.
+    expect(matches("ϲ", SIGMA_MEDIAL)).toBe(false);
+    // ...but its own case pair still matches.
+    expect(matches("Ϲ", "ϲ")).toBe(true);
+  });
+});
+
+describe("normalized comparison text vs normalizeText", () => {
   // The matcher folds character-by-character so it can map offsets back to the
-  // source. This locks that fold against normalizeText, the fold used by the
-  // synonym and study-type paths, so the two cannot drift apart.
-  const samples = [
+  // source. These samples lock the folds it SHARES with normalizeText — quotes,
+  // dashes, whitespace and ordinary case — so the two cannot drift apart on
+  // them. This is deliberately NOT a claim of exhaustive equivalence: case
+  // folding differs for Greek sigma, which is asserted separately below.
+  const sharedFoldSamples = [
     "",
     "   ",
     "The effects were evaluated by CT.",
@@ -296,7 +362,20 @@ describe("normalized comparison text stays aligned with normalizeText", () => {
     "MIXED Case WITH  Multiple   Spaces",
   ];
 
-  it.each(samples)("matches normalizeText for %j", sample => {
+  it.each(sharedFoldSamples)("matches normalizeText for %j", sample => {
     expect(scanLexicalTerms(sample, []).normalizedText).toBe(normalizeText(sample));
+  });
+
+  it("intentionally diverges from normalizeText on Greek sigma", () => {
+    const text = "ΟΣ";
+    // normalizeText lowercases the whole string, so it produces a word-final
+    // sigma — a position-dependent form that cannot support stable
+    // case-insensitive comparison.
+    expect(normalizeText(text)).toBe("ος");
+    // The matcher collapses the sigma family instead.
+    expect(scanLexicalTerms(text, []).normalizedText).toBe("οσ");
+    // Sigma is the only reason the two may differ, so a sample without one
+    // must still agree.
+    expect(scanLexicalTerms("ΟΤ", []).normalizedText).toBe(normalizeText("ΟΤ"));
   });
 });

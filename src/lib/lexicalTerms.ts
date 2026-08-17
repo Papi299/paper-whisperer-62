@@ -9,9 +9,16 @@
  * This module is deliberately free of negation semantics. It answers the purely
  * lexical question; deciding whether an occurrence *counts* belongs to callers.
  *
- * Matching runs against a normalized copy of the text (same folds as
- * `normalizeText`), but every match carries offsets back into the ORIGINAL
- * string, so callers highlight the user's exact spelling, casing and spacing.
+ * Matching runs against a normalized copy of the text, but every match carries
+ * offsets back into the ORIGINAL string, so callers highlight the user's exact
+ * spelling, casing and spacing.
+ *
+ * The comparison form shares `normalizeText`'s quote, dash and whitespace
+ * folds. Case folding deliberately differs: `normalizeText` lowercases the
+ * whole string, which is context-sensitive for Greek sigma, so this module folds
+ * per code point and collapses the sigma family instead (see `FINAL_SIGMA`).
+ * The two therefore agree on everything except sigma, where this module is
+ * intentionally the more case-insensitive of the pair.
  */
 
 /**
@@ -35,6 +42,25 @@ const DOUBLE_QUOTES = new Set(["“", "”"]);
 /** Folded to `-` by `normalizeText` — hyphen, en dash, em dash. */
 const DASHES = new Set(["-", "–", "—"]);
 
+/**
+ * Greek final sigma, folded to medial sigma (U+03C3) for comparison.
+ *
+ * Case-insensitive comparison needs a *context-independent* representation, and
+ * lowercasing is not one: U+03A3 (Σ) lowercases to final sigma at the end of a
+ * word and to medial sigma everywhere else, so `"ΟΣ".toLowerCase()` is `"ος"`
+ * while `"ΟΣΑ".toLowerCase()` is `"οσα"`. Whether a pool term matched would
+ * then depend on where in a word the sigma happened to fall.
+ *
+ * Folding per code point already sidesteps the context sensitivity, and
+ * collapsing the sigma family on top makes all three forms — Σ, σ, ς — compare
+ * equal, which is what Unicode simple case folding does for sigma. Final_Sigma
+ * is the only language-independent context-sensitive lowercase mapping in
+ * ECMAScript, so no other character needs this treatment. Lunate sigma (U+03F2)
+ * is a separate letter and is deliberately left alone.
+ */
+const FINAL_SIGMA = "ς";
+const MEDIAL_SIGMA = "σ";
+
 export interface LexicalTermMatch {
   /** Index into the `terms` array that produced this match. */
   termIndex: number;
@@ -52,9 +78,11 @@ export interface LexicalTermMatch {
 
 export interface LexicalScan {
   /**
-   * The normalized comparison text. Equivalent to `normalizeText(text)`, and
-   * exposed so callers that reason about surrounding context (negation windows)
-   * do not have to normalize a second time and risk diverging.
+   * The normalized comparison text, exposed so callers that reason about
+   * surrounding context (negation windows) do not have to normalize a second
+   * time and risk diverging. Shares `normalizeText`'s quote, dash and
+   * whitespace folds; case folding is per code point with the sigma family
+   * collapsed.
    */
   normalizedText: string;
   /**
@@ -93,15 +121,20 @@ function isTokenCodePoint(codePoint: number | null): boolean {
 }
 
 /**
- * Folds a single source character the way `normalizeText` folds the whole
- * string. Lowercasing can expand one character into several (U+0130 → "i̇"),
- * so this returns a string rather than a character.
+ * Folds a single source character into its comparison form.
+ *
+ * Case folding is done per code point, so it never depends on surrounding
+ * context, and the sigma family is collapsed (see `FINAL_SIGMA`). The quote,
+ * dash and whitespace folds match `normalizeText`. Lowercasing can expand one
+ * character into several (U+0130 → "i̇"), so this returns a string rather
+ * than a character.
  */
 function foldCharacter(source: string): string {
   const lowered = source.toLowerCase();
   if (APOSTROPHES.has(lowered)) return "'";
   if (DOUBLE_QUOTES.has(lowered)) return '"';
   if (DASHES.has(lowered)) return "-";
+  if (lowered === FINAL_SIGMA) return MEDIAL_SIGMA;
   return lowered;
 }
 
@@ -153,9 +186,9 @@ function buildNormalizedIndex(text: string): NormalizedIndex {
 }
 
 /**
- * Normalizes a pool term for comparison against normalized text: same folds,
- * whitespace runs collapsed, trimmed. Returns "" for terms that carry no
- * matchable content.
+ * Normalizes a pool term into the comparison form used against normalized text:
+ * same folds, whitespace runs collapsed, trimmed. Returns "" for terms that
+ * carry no matchable content.
  */
 export function normalizeLexicalTerm(term: string): string {
   return buildNormalizedIndex(term).normalized;

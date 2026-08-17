@@ -177,6 +177,22 @@ describe("extractContextualKeywords — lexical term boundaries", () => {
     expect(extractContextualKeywords("CT was performed.", ["", "   ", "CT"])).toEqual(["CT"]);
   });
 
+  it("matches Greek terms case-insensitively through the contextual layer", () => {
+    // "Σ" lowercases to a word-final sigma or a medial one depending on
+    // position, so a whole-string lowercase would make extraction depend on
+    // where the sigma fell. All three forms must be interchangeable here.
+    expect(extractContextualKeywords("The ΟΣ subunit was measured.", ["ος"])).toEqual(["ος"]);
+    expect(extractContextualKeywords("The ος subunit was measured.", ["ΟΣ"])).toEqual(["ΟΣ"]);
+    expect(extractContextualKeywords("The οσ subunit was measured.", ["ΟΣ"])).toEqual(["ΟΣ"]);
+    expect(extractContextualKeywords("Levels of Σ rose.", ["ς"])).toEqual(["ς"]);
+    expect(extractContextualKeywords("Levels of ς rose.", ["Σ"])).toEqual(["Σ"]);
+  });
+
+  it("still applies negation and boundaries to Greek terms", () => {
+    expect(extractContextualKeywords("Patients without ΟΣ were enrolled.", ["ος"])).toEqual([]);
+    expect(extractContextualKeywords("The ΟΣΤ complex.", ["ος"])).toEqual([]);
+  });
+
   it("keeps negation separate from lexical matching", () => {
     // "non-CT" is a real lexical occurrence of CT (the highlighter shows it),
     // but "non" is a negation trigger, so extraction still rejects it.

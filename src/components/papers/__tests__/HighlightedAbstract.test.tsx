@@ -85,6 +85,27 @@ describe("HighlightedAbstract", () => {
     expect(highlights("A non-CT finding was noted.", ["CT"])).toEqual(["CT"]);
   });
 
+  it("highlights a case-equivalent Greek term without rewriting the source", () => {
+    // Pool term is uppercase; the source carries a lowercase word-final sigma.
+    // The <mark> must contain the exact source spelling, not a folded form.
+    const abstract = "The ος subunit was measured.";
+    const { container } = render(
+      <HighlightedAbstract text={abstract} keywords={["ΟΣ"]} />,
+    );
+    const marks = container.querySelectorAll("mark");
+    expect(marks).toHaveLength(1);
+    expect(marks[0].textContent).toBe("ος");
+    expect(marks[0].textContent).not.toBe("οσ");
+    expect(marks[0].textContent).not.toBe("ΟΣ");
+    expect(container.textContent).toBe(abstract);
+  });
+
+  it("highlights every sigma form for a single pool term", () => {
+    expect(highlights("Both ος and οσ and ΟΣ appear.", ["Σ"])).toEqual([]);
+    expect(highlights("Forms ος, οσ, ΟΣ.", ["ΟΣ"])).toEqual(["ος", "οσ", "ΟΣ"]);
+    expect(rendered("Forms ος, οσ, ΟΣ.", ["ΟΣ"])).toBe("Forms ος, οσ, ΟΣ.");
+  });
+
   it("renders plain text when there is nothing to highlight", () => {
     expect(rendered(ABSTRACT, [])).toBe(ABSTRACT);
     expect(highlights(ABSTRACT, [])).toEqual([]);
