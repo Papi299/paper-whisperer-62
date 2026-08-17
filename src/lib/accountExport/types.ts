@@ -26,7 +26,16 @@ export const ACCOUNT_EXPORT_FORMAT = "paperlume-account-export" as const;
  * existing file changes in a way a reader must notice. Adding a new category
  * file is additive; removing or reshaping one is not.
  */
-export const ACCOUNT_EXPORT_VERSION = 1 as const;
+/**
+ * Bumped 1 → 2 for structured authorship provenance.
+ *
+ * `data/papers.json` gains a persisted `author_provenance` field on every paper
+ * object. That is a change to the shape of an existing archive file, which the
+ * contract above says a reader must be able to notice — a v1 reader parsing a
+ * v2 archive would silently discard it. Adding a whole new category file would
+ * have been additive; reshaping `papers` is not.
+ */
+export const ACCOUNT_EXPORT_VERSION = 2 as const;
 
 /** Root-relative path of the manifest inside the archive. */
 export const MANIFEST_PATH = "manifest.json";
@@ -174,6 +183,10 @@ export const PAPER_EXPORT_COLUMNS = [
   "user_id",
   "title",
   "authors",
+  // Structured authorship provenance. User-associated bibliographic data, so it
+  // belongs in a portability contract; exported verbatim, including SQL NULL
+  // for the papers that never had any.
+  "author_provenance",
   "year",
   "journal",
   "pmid",

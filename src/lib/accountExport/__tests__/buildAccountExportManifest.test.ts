@@ -41,7 +41,11 @@ describe("buildAccountExportManifest", () => {
 
     expect(manifest.format).toBe("paperlume-account-export");
     expect(manifest.format).toBe(ACCOUNT_EXPORT_FORMAT);
-    expect(manifest.version).toBe(1);
+    // Literal on purpose, so a version change has to be made deliberately here
+    // rather than tracking the constant silently. 2 since papers gained the
+    // persisted `author_provenance` field — a reshape of an existing archive
+    // file, which a reader must be able to notice.
+    expect(manifest.version).toBe(2);
     expect(manifest.version).toBe(ACCOUNT_EXPORT_VERSION);
   });
 

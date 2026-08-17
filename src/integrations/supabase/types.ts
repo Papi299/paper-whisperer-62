@@ -210,6 +210,7 @@ export type Database = {
         Row: {
           abstract: string | null
           authors: Json | null
+          author_provenance: Json | null
           created_at: string
           doi: string | null
           drive_url: string | null
@@ -239,6 +240,7 @@ export type Database = {
         Insert: {
           abstract?: string | null
           authors?: Json | null
+          author_provenance?: Json | null
           created_at?: string
           doi?: string | null
           drive_url?: string | null
@@ -268,6 +270,7 @@ export type Database = {
         Update: {
           abstract?: string | null
           authors?: Json | null
+          author_provenance?: Json | null
           created_at?: string
           doi?: string | null
           drive_url?: string | null

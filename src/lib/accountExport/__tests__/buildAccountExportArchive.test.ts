@@ -57,6 +57,23 @@ function samplePaper(overrides: Partial<ExportedPaper> = {}): ExportedPaper {
     study_type: "RCT",
     raw_study_type: "Clinical Trial, Phase II",
     raw_publication_types: ["Clinical Trial, Phase II", "Multicenter Study"],
+    author_provenance: [
+      {
+        source: "pubmed_api",
+        source_field: "Author",
+        kind: "personal",
+        source_name: "Ada L.",
+        given_name: "Ada",
+        family_name: "L.",
+        initials: "A",
+        suffix: null,
+        collective_name: null,
+        affiliations: ["Analytical Engine Institute"],
+        identifiers: [{ scheme: "ORCID", value: "0000-0002-1825-0097" }],
+        orcid: "0000-0002-1825-0097",
+        orcid_authenticated: true,
+      },
+    ],
     statistical_methods: { anova: true },
     keywords: ["muscle"],
     raw_keywords: null,
@@ -265,6 +282,10 @@ describe("buildAccountExportArchive — papers fidelity", () => {
       "Clinical Trial, Phase II",
       "Multicenter Study",
     ]);
+    // Structured provenance survives the JSON round trip whole — nested
+    // identifier objects, the affiliation list and the provider assertion flag
+    // included. Nothing else in the archive could reconstruct them.
+    expect(papers[0].author_provenance).toEqual(paper.author_provenance);
     expect(papers[0].substances).toBeNull();
     expect(papers[0].mesh_terms).toEqual([]);
     expect(papers[0].insert_order).toBe(7);

@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Paper, PaperWithTags, Project, Tag, BulkInsertResult } from "@/types/database";
 import { queryKeys } from "@/lib/queryKeys";
 import { NormalizationConfig, RawPaperData, computeEnrichedKeywords } from "@/lib/normalizePaperData";
+import { normalizeAuthorProvenanceForStorage } from "@/lib/authorProvenance";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { evaluateStudyType, StudyTypePoolEntry } from "@/lib/evaluateStudyType";
 import {
@@ -106,6 +107,11 @@ export function useBulkMutations(
         mesh_terms: meta.mesh_terms || [],
         substances: meta.substances || [],
         study_type: meta.study_type || null,
+        // Structured authorship provenance exactly as the Edge Function stated
+        // it, aligned with `authors` above. An older deployed Edge version
+        // omits the field entirely, which simply means no provenance — the
+        // import succeeds either way.
+        author_provenance: meta.author_provenance,
         // PubMed states publication types discretely; the joined `study_type`
         // above cannot be split back apart without breaking an official type
         // that contains a comma. Forwarding the structured values lets
@@ -140,6 +146,14 @@ export function useBulkMutations(
       const insertPayload = normalizedPapers.map((normalized, i) => ({
         title: normalized.title,
         authors: normalized.authors || [],
+        // Aligned against the SAME `authors` array being stored, and degraded
+        // to NULL by `normalizeAuthorProvenanceForStorage` if it is not — a
+        // misaligned array would attach every mention's structure to the wrong
+        // name, so absence is the only safe alternative to correctness.
+        author_provenance: normalizeAuthorProvenanceForStorage(
+          normalized.author_provenance,
+          normalized.authors || [],
+        ),
         year: normalized.year ?? null,
         journal: normalized.journal ?? null,
         pmid: normalized.pmid ?? null,
@@ -300,6 +314,14 @@ export function useBulkMutations(
       const insertPayload = normalizedPapers.map((normalized, i) => ({
         title: normalized.title,
         authors: normalized.authors || [],
+        // Aligned against the SAME `authors` array being stored, and degraded
+        // to NULL by `normalizeAuthorProvenanceForStorage` if it is not — a
+        // misaligned array would attach every mention's structure to the wrong
+        // name, so absence is the only safe alternative to correctness.
+        author_provenance: normalizeAuthorProvenanceForStorage(
+          normalized.author_provenance,
+          normalized.authors || [],
+        ),
         year: normalized.year ?? null,
         journal: normalized.journal ?? null,
         pmid: normalized.pmid ?? null,

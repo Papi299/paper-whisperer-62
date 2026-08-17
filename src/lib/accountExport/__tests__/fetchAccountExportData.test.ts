@@ -38,6 +38,7 @@ function paper(id: string, overrides: Record<string, unknown> = {}) {
     study_type: null,
     raw_study_type: null,
     raw_publication_types: null,
+    author_provenance: null,
     statistical_methods: null,
     keywords: [],
     raw_keywords: null,
@@ -320,6 +321,55 @@ describe("fetchAccountExportData — serialization fidelity", () => {
     expect(exported.substances).toBeNull();
     expect(exported.year).toBeNull();
     expect(exported.insert_order).toBe(42);
+  });
+
+  it("exports structured author provenance losslessly, nested objects included", () => {
+    // Portability is the contract: an ORCID, an affiliation list and the
+    // identifier array it was derived from must all survive the round trip
+    // exactly, because nothing else in the archive can reconstruct them.
+    const provenance = [
+      {
+        source: "pubmed_api",
+        source_field: "Author",
+        kind: "personal",
+        source_name: "Ricardo Soto-Rifo",
+        given_name: "Ricardo",
+        family_name: "Soto-Rifo",
+        initials: "R",
+        suffix: null,
+        collective_name: null,
+        affiliations: ["Universidad de Chile", "Millennium Institute"],
+        identifiers: [{ scheme: "ORCID", value: "0000-0003-0945-2970" }],
+        orcid: "0000-0003-0945-2970",
+        orcid_authenticated: null,
+      },
+    ];
+    install(
+      createSupabaseMock({
+        tables: baseTables({
+          papers: [
+            paper("p1", { authors: ["Ricardo Soto-Rifo"], author_provenance: provenance }),
+          ],
+        }),
+      }),
+    );
+
+    return fetchAccountExportData(USER).then((data) => {
+      const exported = data.papers[0] as unknown as Record<string, unknown>;
+      expect(exported.author_provenance).toEqual(provenance);
+    });
+  });
+
+  it("exports a legacy paper's NULL provenance as null, not as an omission", async () => {
+    // NULL is the truthful state for every row predating the column, and a
+    // reader must be able to tell it apart from a field that was dropped.
+    install(createSupabaseMock({ tables: baseTables({ papers: [paper("p1")] }) }));
+
+    const data = await fetchAccountExportData(USER);
+    const exported = data.papers[0] as unknown as Record<string, unknown>;
+
+    expect("author_provenance" in exported).toBe(true);
+    expect(exported.author_provenance).toBeNull();
   });
 });
 
