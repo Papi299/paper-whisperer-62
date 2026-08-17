@@ -152,7 +152,7 @@ INSERT INTO public.papers (id, user_id, title, authors, insert_order, created_at
 VALUES ('09000000-0000-0000-0000-0000000000a0','09000000-0000-0000-0000-000000000001',
         'Legacy row', '["S M Phillips"]'::jsonb, 301, '2026-01-01T00:00:00Z');
 
-SELECT plan(75);
+SELECT plan(88);
 
 -- ══ 1. Column shape ═════════════════════════════════════════════════════════
 
@@ -240,6 +240,82 @@ SELECT is(pg_temp.errcode_as('postgres', NULL,
        '[{"source":"csv","kind":"editor","source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
      WHERE title = 'Legacy row'$q$),
   '23514', 'check: an unknown kind is rejected');
+
+-- kind is REQUIRED, not merely constrained when present, and it must be a
+-- string. Independent review flagged this predicate; the cases below are the
+-- ones a violation probe written as a bare comparison lets through, because a
+-- SQL/JSON filter selects an item only when its predicate is TRUE:
+--   * a non-string scalar compares *unknown* against "personal", so negating it
+--     never yields TRUE and the probe reports no violation;
+--   * lax mode unwraps an array before comparing, so ["personal"] compares TRUE
+--     and an array spelling passes as though it were the scalar.
+-- Each of these stores an entry whose kind cannot be read as one of the three
+-- known values, which is exactly what the column contract forbids.
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: an entry with NO kind key at all is rejected — kind is required');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":null,"source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: a null kind is rejected — absence has no legal spelling');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":42,"source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: a numeric kind is rejected — an incomparable type is a violation, not an unknown');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":true,"source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: a boolean kind is rejected');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":["personal"],"source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: an array-wrapped kind is rejected even though it wraps a legal value');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":["personal","editor"],"source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: an array kind is rejected even when one member is legal');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":{"k":"personal"},"source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: an object kind is rejected');
+
+-- The three legal values still store, so the tightened guard did not overshoot.
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '00000', 'check: kind "personal" is still accepted');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"collective","source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '00000', 'check: kind "collective" is still accepted');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"unknown","source_name":"A","affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '00000', 'check: kind "unknown" is still accepted');
+
+-- …and the row is put back the way section 3 found it, so later sections that
+-- read 'Legacy row' still see the untouched pre-migration state.
+UPDATE public.papers SET author_provenance = NULL WHERE title = 'Legacy row';
 
 SELECT is(pg_temp.errcode_as('postgres', NULL,
   $q$UPDATE public.papers SET author_provenance =
@@ -422,6 +498,26 @@ SELECT is(
     'title','Bulk bad kind', 'authors','["A B"]'::jsonb,
     'author_provenance','[{"source":"csv","kind":"editor","source_name":"A B","affiliations":[],"identifiers":[]}]'::jsonb))), 0),
   'error', 'bulk: an unknown kind fails the row via the column CHECK');
+
+-- The same required-kind rule reached through the RPC, which is the path the
+-- application actually writes on. The arrays here are correctly ALIGNED, so
+-- nothing but the kind guard can fail these rows.
+SELECT is(
+  pg_temp.row_status(pg_temp.bulk_insert_u1(jsonb_build_array(jsonb_build_object(
+    'title','Bulk no kind', 'authors','["A B"]'::jsonb,
+    'author_provenance','[{"source":"csv","source_name":"A B","affiliations":[],"identifiers":[]}]'::jsonb))), 0),
+  'error', 'bulk: an entry with no kind key fails the row — kind is required, not optional');
+
+SELECT is(
+  pg_temp.row_status(pg_temp.bulk_insert_u1(jsonb_build_array(jsonb_build_object(
+    'title','Bulk array kind', 'authors','["A B"]'::jsonb,
+    'author_provenance','[{"source":"csv","kind":["personal"],"source_name":"A B","affiliations":[],"identifiers":[]}]'::jsonb))), 0),
+  'error', 'bulk: an array-wrapped kind fails the row despite wrapping a legal value');
+
+SELECT is(
+  (SELECT count(*)::int FROM public.papers
+   WHERE title IN ('Bulk no kind','Bulk array kind')),
+  0, 'bulk: no row is persisted with an unreadable kind');
 
 SELECT is(
   pg_temp.row_status(pg_temp.bulk_insert_u1(jsonb_build_array(jsonb_build_object(

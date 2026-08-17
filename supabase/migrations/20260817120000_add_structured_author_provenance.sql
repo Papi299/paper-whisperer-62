@@ -72,7 +72,7 @@ COMMENT ON COLUMN public.papers.author_provenance IS
 --     about a person. A partial array is worse than none, so it is refused
 --     rather than stored and trusted.
 --   * source and source_name must be present, string, and non-blank; kind must
---     be exactly one of the three known values.
+--     be present, a string, and exactly one of the three known values.
 --   * The optional name components are null-or-string. Absent is allowed and
 --     means the same as null.
 --   * affiliations is an array of strings; identifiers is an array of objects
@@ -85,13 +85,33 @@ COMMENT ON COLUMN public.papers.author_provenance IS
 --     storage, so one canonical form is the only thing readers ever see.
 --   * orcid_authenticated is null or boolean, never a string.
 --
--- Written as jsonb_path_exists probes that search for VIOLATIONS, with
--- exists(@.key) guarding every required field — a bare comparison against a
--- missing key yields unknown in lax mode and would let it through. Each probe
--- is IMMUTABLE and subquery-free, so the whole rule is one deterministic
--- column-level CHECK. It validates against NULL fine, so the rows this
--- migration leaves NULL all satisfy it and the constraint is added validated
--- in place.
+-- Written as jsonb_path_exists probes that search for VIOLATIONS, so every
+-- required field is guarded by BOTH exists(@.key) AND @.key.type(). Both halves
+-- are load bearing, for two different reasons, and a violation probe that omits
+-- either one fails OPEN — it reports "no violation found" and the CHECK admits
+-- the malformed value:
+--
+--   * SQL/JSON filters are three-valued. Comparing values of different types
+--     yields *unknown*, not false, and a filter only selects an item when its
+--     predicate is TRUE. So `!(@.kind == "personal" || ...)` is unknown — never
+--     true — when kind is a number, a boolean, or an object, and the probe
+--     silently finds nothing. The `.type() == "string"` guard is what converts
+--     that unknown into a definite violation.
+--   * Lax mode auto-unwraps arrays before a comparison. Without the type guard
+--     `@.kind == "personal"` is TRUE for `{"kind": ["personal"]}` and even for
+--     `{"kind": ["personal", "bogus"]}`, so an array spelling of a legal value
+--     is accepted as if it were the scalar. `.type()` is applied to the item
+--     itself and does not unwrap, so it rejects the array outright.
+--
+-- exists() alone covers the third case: a key that is absent entirely. (Against
+-- a missing key the comparison yields false rather than unknown, so negation
+-- does catch it — but relying on that is subtle and leaves the two cases above
+-- open, which is why every required field carries the full guard.)
+--
+-- Each probe is IMMUTABLE and subquery-free, so the whole rule is one
+-- deterministic column-level CHECK. It validates against NULL fine, so the rows
+-- this migration leaves NULL all satisfy it and the constraint is added
+-- validated in place.
 ALTER TABLE public.papers
   ADD CONSTRAINT papers_author_provenance_shape_check
   CHECK (
@@ -104,7 +124,7 @@ ALTER TABLE public.papers
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (@.type() != "object")')
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.source) && @.source.type() == "string" && !(@.source like_regex "^\\s*$")))')
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.source_name) && @.source_name.type() == "string" && !(@.source_name like_regex "^\\s*$")))')
-      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(@.kind == "personal" || @.kind == "collective" || @.kind == "unknown"))')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.kind) && @.kind.type() == "string" && (@.kind == "personal" || @.kind == "collective" || @.kind == "unknown")))')
       AND NOT jsonb_path_exists(author_provenance, '$[*].source_field    ? (@.type() != "string" && @.type() != "null")')
       AND NOT jsonb_path_exists(author_provenance, '$[*].given_name      ? (@.type() != "string" && @.type() != "null")')
       AND NOT jsonb_path_exists(author_provenance, '$[*].family_name     ? (@.type() != "string" && @.type() != "null")')
