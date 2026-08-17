@@ -199,6 +199,38 @@ describe("normalizePaperData", () => {
     expect(result.substances).toEqual(["compound\u2009A"]);
   });
 
+  /**
+   * AUTHOR-NAME-CANONICALIZATION-001A pinned down: Analytics groups
+   * formatting-equivalent author mentions at *read* time, and the stored string
+   * must not follow it. The source spelling is provenance — it is what the
+   * provider published and what every export, edit dialog and paper row shows —
+   * so nothing on the write path may fold it toward a comparison form.
+   */
+  it("stores author names exactly as the source wrote them", () => {
+    const result = normalizePaperData(
+      makeRaw({
+        authors: [
+          "Stuart M. Phillips",
+          "Stuart M Phillips",
+          "S M Phillips",
+          "Phillips, Stuart M",
+          "  Ann-Marie  O’Connor  ",
+        ],
+      }),
+      makeConfig()
+    );
+
+    // The initial period, the spacing, the punctuation glyphs and the comma
+    // order all survive; no two entries are collapsed into one.
+    expect(result.authors).toEqual([
+      "Stuart M. Phillips",
+      "Stuart M Phillips",
+      "S M Phillips",
+      "Phillips, Stuart M",
+      "  Ann-Marie  O’Connor  ",
+    ]);
+  });
+
   it("leaves already-decoded Unicode unchanged", () => {
     const result = normalizePaperData(
       makeRaw({ abstract: "Value ± 5.4 kg/m2", authors: ["José García"] }),

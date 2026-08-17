@@ -37,6 +37,17 @@ interface MobileMultiSelectSheetProps {
   searchLabel: string;
   emptyMessage: string;
   /**
+   * How the query is matched against an option label. Omit for the default —
+   * case-insensitive substring on a trimmed query — which every existing caller
+   * relies on.
+   *
+   * Analytics' author selector supplies one because its options are grouped by
+   * a canonical author-mention key: `Stuart M. Phillips` and `Stuart M Phillips`
+   * are a single option, and it has to stay findable by either spelling. The
+   * rule itself lives with the grouping it belongs to, not here.
+   */
+  matchesSearch?: (label: string, search: string) => boolean;
+  /**
    * Extra controls between the search field and the option list, for rules this
    * component deliberately knows nothing about (the Filters Any/All mode).
    */
@@ -92,6 +103,7 @@ export function MobileMultiSelectSheet({
   searchPlaceholder,
   searchLabel,
   emptyMessage,
+  matchesSearch,
   headerExtra,
   triggerRef,
 }: MobileMultiSelectSheetProps) {
@@ -102,10 +114,13 @@ export function MobileMultiSelectSheet({
   const selectedSet = React.useMemo(() => new Set(selectedValues), [selectedValues]);
 
   const filtered = React.useMemo(() => {
+    if (matchesSearch) {
+      return options.filter((option) => matchesSearch(option.label, search));
+    }
     const q = search.trim().toLowerCase();
     if (!q) return options;
     return options.filter((option) => option.label.toLowerCase().includes(q));
-  }, [options, search]);
+  }, [options, search, matchesSearch]);
 
   const handleOpenChange = (next: boolean) => {
     if (!next) setSearch("");

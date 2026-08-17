@@ -1,5 +1,9 @@
-import { useState, useMemo, useRef } from "react";
-import { decodeHTMLEntities } from "@/lib/decodeHTMLEntities";
+import { useState, useMemo, useCallback, useRef } from "react";
+import {
+  authorMentionKey,
+  authorSearchMatches,
+  indexAuthorMentions,
+} from "@/lib/authorNames";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
@@ -78,6 +82,7 @@ function MultiSelectPopover({
   onToggle,
   onClear,
   fullWidth,
+  matchesSearch,
 }: {
   label: string;
   options: string[];
@@ -85,6 +90,15 @@ function MultiSelectPopover({
   onToggle: (value: string) => void;
   onClear: () => void;
   fullWidth?: boolean;
+  /**
+   * How a query is matched against an option. Omit for the default —
+   * case-insensitive substring — which is what Keywords use and must keep
+   * using: a keyword is a literal string, so folding its punctuation would
+   * change which keywords a search finds. Authors override it because their
+   * options are grouped by a canonical mention key, and an option must stay
+   * reachable by any spelling that groups into it.
+   */
+  matchesSearch?: (option: string, search: string) => boolean;
 }) {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
@@ -102,8 +116,12 @@ function MultiSelectPopover({
     useTouchSafeInitialFocus<HTMLDivElement>();
   const filtered = useMemo(
     () =>
-      options.filter((o) => o.toLowerCase().includes(search.toLowerCase())),
-    [options, search]
+      options.filter((o) =>
+        matchesSearch
+          ? matchesSearch(o, search)
+          : o.toLowerCase().includes(search.toLowerCase())
+      ),
+    [options, search, matchesSearch]
   );
 
   const triggerContent = (
@@ -172,6 +190,7 @@ function MultiSelectPopover({
           searchPlaceholder={`Search ${label.toLowerCase()}...`}
           searchLabel={`Search ${label.toLowerCase()}`}
           emptyMessage="No matches"
+          matchesSearch={matchesSearch}
         />
         {selectedBadges}
       </div>
@@ -286,9 +305,29 @@ export function AnalyticsContent({
     onClearAuthors,
   } = targets;
 
+  /**
+   * Every author mention in the current papers, grouped by canonical key.
+   *
+   * One pass is the whole author story: the option list, the summary tile and
+   * the per-author paper counts all read from this, so they cannot disagree
+   * about what counts as one author. Grouping is textual — `Stuart M. Phillips`
+   * and `Stuart M Phillips` are one mention written twice — and deliberately
+   * stops there: `S M Phillips` and `Stuart Phillips` stay separate, because
+   * nothing in a flattened author string proves they are the same researcher.
+   * See `lib/authorNames`.
+   */
+  const authorMentions = useMemo(
+    () => indexAuthorMentions(papers.map((p) => p.authors)),
+    [papers]
+  );
+
+  const authorsByKey = useMemo(
+    () => new Map(authorMentions.map((entry) => [entry.key, entry])),
+    [authorMentions]
+  );
+
   // Summary stats
   const summaryStats = useMemo(() => {
-    const uniqueAuthors = new Set(papers.flatMap(p => p.authors || []));
     const years = papers.map(p => p.year).filter((y): y is number => y != null);
     const minYear = years.length > 0 ? Math.min(...years) : null;
     const maxYear = years.length > 0 ? Math.max(...years) : null;
@@ -297,13 +336,15 @@ export function AnalyticsContent({
     );
     return {
       totalPapers: papers.length,
-      uniqueAuthors: uniqueAuthors.size,
+      // Distinct canonical author *mentions*, not verified people — two
+      // spellings of one name count once, two ambiguous names count twice.
+      uniqueAuthors: authorMentions.length,
       yearRange: minYear && maxYear
         ? minYear === maxYear ? `${minYear}` : `${minYear}–${maxYear}`
         : "N/A",
       studyTypesCount: uniqueStudyTypes.size,
     };
-  }, [papers]);
+  }, [papers, authorMentions]);
 
   // Study type distribution (auto, no selection needed)
   // Exclude: empty/generic types, PubMed funding tags, excluded/rejected papers
@@ -349,13 +390,47 @@ export function AnalyticsContent({
     return Array.from(set).sort();
   }, [papers]);
 
-  const availableAuthors = useMemo(() => {
-    const set = new Set<string>();
-    papers.forEach((p) => {
-      p.authors?.forEach((a) => set.add(decodeHTMLEntities(a) ?? a));
-    });
-    return Array.from(set).sort();
-  }, [papers]);
+  // One option per canonical mention key, labelled with the first source
+  // spelling that produced it. Distinct keys always have distinct labels — the
+  // label determines the key — so sorting by label cannot merge two options.
+  const availableAuthors = useMemo(
+    () => authorMentions.map((entry) => entry.label).sort(),
+    [authorMentions]
+  );
+
+  /**
+   * Selections rendered as the label that currently represents their key.
+   *
+   * The stored selection is whichever spelling the user clicked; the option
+   * list is rebuilt from `papers` and may come to represent that same key with
+   * the other equivalent spelling (filtering away the paper the label came
+   * from). Resolving through the key keeps such a selection ticked and badged
+   * under the label actually on screen, instead of silently orphaning it.
+   */
+  const selectedAuthorLabels = useMemo(
+    () =>
+      selectedAuthors.map(
+        (author) => authorsByKey.get(authorMentionKey(author))?.label ?? author
+      ),
+    [selectedAuthors, authorsByKey]
+  );
+
+  /**
+   * Toggling an option that is formatting-equivalent to an existing selection
+   * removes THAT selection rather than appending a second spelling of it, so a
+   * canonical author can never be selected twice. Selection state itself stays
+   * a plain list of source-derived strings — no internal keys leak into it.
+   */
+  const handleToggleAuthor = useCallback(
+    (author: string) => {
+      const key = authorMentionKey(author);
+      const alreadySelected = key
+        ? selectedAuthors.find((selected) => authorMentionKey(selected) === key)
+        : undefined;
+      onToggleAuthor(alreadySelected ?? author);
+    },
+    [selectedAuthors, onToggleAuthor]
+  );
 
   // Compute keyword stats
   const keywordStats = useMemo(() => {
@@ -370,17 +445,23 @@ export function AnalyticsContent({
     }).sort((a, b) => b.count - a.count);
   }, [selectedKeywords, papers]);
 
-  // Compute author stats
+  // Compute author stats. Counts come from the shared mention index, so a
+  // selected author is credited with every formatting-equivalent spelling and
+  // each paper is credited at most once — including papers whose author array
+  // happens to list two equivalent spellings.
   const authorStats = useMemo(() => {
     if (selectedAuthors.length === 0) return [];
-    return selectedAuthors.map((author) => {
-      const authorLower = author.toLowerCase();
-      const count = papers.filter((p) =>
-        p.authors?.some((a) => a.toLowerCase() === authorLower)
-      ).length;
-      return { name: author, count };
-    }).sort((a, b) => b.count - a.count);
-  }, [selectedAuthors, papers]);
+    const counted = new Set<string>();
+    const stats: Array<{ name: string; count: number }> = [];
+    selectedAuthors.forEach((author) => {
+      const key = authorMentionKey(author);
+      if (!key || counted.has(key)) return;
+      counted.add(key);
+      const entry = authorsByKey.get(key);
+      stats.push({ name: entry?.label ?? author, count: entry?.documentCount ?? 0 });
+    });
+    return stats.sort((a, b) => b.count - a.count);
+  }, [selectedAuthors, authorsByKey]);
 
   const chartHeight = (dataLength: number) =>
     Math.max(150, Math.min(dataLength * 28 + 40, 400));
@@ -492,10 +573,11 @@ export function AnalyticsContent({
           <MultiSelectPopover
             label="Target Authors"
             options={availableAuthors}
-            selected={selectedAuthors}
-            onToggle={onToggleAuthor}
+            selected={selectedAuthorLabels}
+            onToggle={handleToggleAuthor}
             onClear={onClearAuthors}
             fullWidth={compact}
+            matchesSearch={authorSearchMatches}
           />
         </div>
 
