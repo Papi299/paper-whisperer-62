@@ -73,7 +73,9 @@ COMMENT ON COLUMN public.papers.author_provenance IS
 --     rather than stored and trusted.
 --   * source and source_name must be present, string, and non-blank; kind must
 --     be present, a string, and exactly one of the three known values.
---   * The optional name components are null-or-string. Absent is allowed and
+--   * The optional scalar members (source_field, given_name, family_name,
+--     initials, suffix, collective_name) are null-or-string, and nothing else —
+--     an array is not a legal spelling of any of them. Absent is allowed and
 --     means the same as null.
 --   * affiliations is an array of strings; identifiers is an array of objects
 --     each carrying non-blank string scheme AND value — half an identifier
@@ -83,7 +85,8 @@ COMMENT ON COLUMN public.papers.author_provenance IS
 --     ISO 7064 legibly), but it does refuse every non-canonical spelling: a URL
 --     form, an unhyphenated run of digits, or a lowercase x never reaches
 --     storage, so one canonical form is the only thing readers ever see.
---   * orcid_authenticated is null or boolean, never a string.
+--   * orcid_authenticated is null or a real JSON boolean — never a string, and
+--     never a one-element array wrapping one.
 --
 -- Written as jsonb_path_exists probes that search for VIOLATIONS, so every
 -- required field is guarded by BOTH exists(@.key) AND @.key.type(). Both halves
@@ -108,6 +111,26 @@ COMMENT ON COLUMN public.papers.author_provenance IS
 -- does catch it — but relying on that is subtle and leaves the two cases above
 -- open, which is why every required field carries the full guard.)
 --
+-- The same unwrapping decides WHERE each probe filters, which is why none of
+-- them is written as `$[*].field ? (@.type() != ...)`. That form selects the
+-- member and then filters it, and in lax mode a filter unwraps an array operand
+-- BEFORE evaluating — so `{"given_name": ["Ada"]}` is tested as the string
+-- "Ada", reports no violation, and stores an array where every reader and the
+-- TypeScript contract promise `string | null`. The same held for `orcid`
+-- (["0000-0002-1825-0097"] passing as canonical), for `orcid_authenticated`
+-- ([true] passing as true), for a nested affiliation (["Nested"] passing as a
+-- string), for a nested identifier, and for a whole array-wrapped provenance
+-- ENTRY passing the "each entry is an object" rule.
+--
+-- Two forms avoid it, and every probe below uses one of them:
+--   * For a member of the provenance object, filter on the OBJECT and reach the
+--     member through `@.field.type()` — an object is never unwrapped, and
+--     `.type()` reports "array" instead of dissolving into the element.
+--   * For an ARRAY ELEMENT (an affiliation, an identifier, a provenance entry)
+--     there is no parent object to stand on, so call `.type()` first and filter
+--     the resulting type STRING: `$[*].affiliations[*].type() ? (@ != "string")`.
+--     A string operand has nothing to unwrap, so the test cannot be dodged.
+--
 -- Each probe is IMMUTABLE and subquery-free, so the whole rule is one
 -- deterministic column-level CHECK. It validates against NULL fine, so the rows
 -- this migration leaves NULL all satisfy it and the constraint is added
@@ -121,24 +144,24 @@ ALTER TABLE public.papers
       AND jsonb_array_length(author_provenance) > 0
       AND jsonb_typeof(authors) = 'array'
       AND jsonb_array_length(author_provenance) = jsonb_array_length(authors)
-      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (@.type() != "object")')
+      AND NOT jsonb_path_exists(author_provenance, '$[*].type() ? (@ != "object")')
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.source) && @.source.type() == "string" && !(@.source like_regex "^\\s*$")))')
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.source_name) && @.source_name.type() == "string" && !(@.source_name like_regex "^\\s*$")))')
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.kind) && @.kind.type() == "string" && (@.kind == "personal" || @.kind == "collective" || @.kind == "unknown")))')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].source_field    ? (@.type() != "string" && @.type() != "null")')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].given_name      ? (@.type() != "string" && @.type() != "null")')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].family_name     ? (@.type() != "string" && @.type() != "null")')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].initials        ? (@.type() != "string" && @.type() != "null")')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].suffix          ? (@.type() != "string" && @.type() != "null")')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].collective_name ? (@.type() != "string" && @.type() != "null")')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.source_field)    && !(@.source_field.type()    == "string" || @.source_field.type()    == "null"))')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.given_name)      && !(@.given_name.type()      == "string" || @.given_name.type()      == "null"))')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.family_name)     && !(@.family_name.type()     == "string" || @.family_name.type()     == "null"))')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.initials)        && !(@.initials.type()        == "string" || @.initials.type()        == "null"))')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.suffix)          && !(@.suffix.type()          == "string" || @.suffix.type()          == "null"))')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.collective_name) && !(@.collective_name.type() == "string" || @.collective_name.type() == "null"))')
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.affiliations) && @.affiliations.type() == "array"))')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].affiliations[*] ? (@.type() != "string")')
+      AND NOT jsonb_path_exists(author_provenance, '$[*].affiliations[*].type() ? (@ != "string")')
       AND NOT jsonb_path_exists(author_provenance, '$[*] ? (!(exists(@.identifiers) && @.identifiers.type() == "array"))')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].identifiers[*] ? (@.type() != "object")')
+      AND NOT jsonb_path_exists(author_provenance, '$[*].identifiers[*].type() ? (@ != "object")')
       AND NOT jsonb_path_exists(author_provenance, '$[*].identifiers[*] ? (!(exists(@.scheme) && @.scheme.type() == "string" && !(@.scheme like_regex "^\\s*$")))')
       AND NOT jsonb_path_exists(author_provenance, '$[*].identifiers[*] ? (!(exists(@.value) && @.value.type() == "string" && !(@.value like_regex "^\\s*$")))')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].orcid ? (@.type() != "null" && !(@.type() == "string" && @ like_regex "^[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X]$"))')
-      AND NOT jsonb_path_exists(author_provenance, '$[*].orcid_authenticated ? (@.type() != "boolean" && @.type() != "null")')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.orcid) && !(@.orcid.type() == "null" || (@.orcid.type() == "string" && @.orcid like_regex "^[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X]$")))')
+      AND NOT jsonb_path_exists(author_provenance, '$[*] ? (exists(@.orcid_authenticated) && !(@.orcid_authenticated.type() == "boolean" || @.orcid_authenticated.type() == "null"))')
     )
   );
 

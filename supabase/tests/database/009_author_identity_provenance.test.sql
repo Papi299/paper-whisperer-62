@@ -33,6 +33,11 @@
 --     affiliation, wrong identifiers type, identifier missing scheme or value,
 --     non-boolean orcid_authenticated, non-canonical orcid, and — the
 --     load-bearing one — a provenance length that differs from authors;
+--   * that an ARRAY is never a legal spelling of a scalar member. SQL/JSON lax
+--     mode unwraps an array before a filter evaluates, so a probe written as
+--     `$[*].field ? (...)` silently tests the element instead of the array;
+--     every optional scalar, the ORCID, the authenticated flag, an affiliation,
+--     an identifier and a whole provenance entry are pinned against that;
 --   * safe_bulk_insert_papers canonicalization: a valid aligned array is
 --     stored intact; a missing key, JSON null and empty array all become SQL
 --     NULL; a malformed value yields a per-row 'error' while the rest of the
@@ -152,7 +157,7 @@ INSERT INTO public.papers (id, user_id, title, authors, insert_order, created_at
 VALUES ('09000000-0000-0000-0000-0000000000a0','09000000-0000-0000-0000-000000000001',
         'Legacy row', '["S M Phillips"]'::jsonb, 301, '2026-01-01T00:00:00Z');
 
-SELECT plan(88);
+SELECT plan(111);
 
 -- ══ 1. Column shape ═════════════════════════════════════════════════════════
 
@@ -315,6 +320,135 @@ SELECT is(pg_temp.errcode_as('postgres', NULL,
 
 -- …and the row is put back the way section 3 found it, so later sections that
 -- read 'Legacy row' still see the untouched pre-migration state.
+UPDATE public.papers SET author_provenance = NULL WHERE title = 'Legacy row';
+
+-- ── Optional scalar members: an array is never a legal spelling ──────────────
+-- Second independent review. Every predicate here used to be written as
+-- `$[*].field ? (@.type() != ...)`, which selects the member and then filters
+-- it — and in lax mode a filter unwraps an array operand BEFORE evaluating, so
+-- each of these was tested as its own element and stored. The column is the
+-- last line of defence for a writer that bypasses the RPC, and TypeScript
+-- promises `string | null`, so an array here is a persisted contract violation.
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","source_field":["Author"],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: source_field ["Author"] is rejected — an array is not a string');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","given_name":["Ada"],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: given_name ["Ada"] is rejected — an array is not a string');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","family_name":["Lovelace"],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: family_name ["Lovelace"] is rejected — an array is not a string');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","initials":["AL"],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: initials ["AL"] is rejected — an array is not a string');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","suffix":["Jr."],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: suffix ["Jr."] is rejected — an array is not a string');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"collective","source_name":"G","collective_name":["Study Group"],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: collective_name ["Study Group"] is rejected — an array is not a string');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","orcid":["0000-0002-1825-0097"],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: orcid ["0000-0002-1825-0097"] is rejected — an array never passes as canonical');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","orcid_authenticated":[true],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: orcid_authenticated [true] is rejected — an array is not a boolean');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","orcid_authenticated":[false],"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: orcid_authenticated [false] is rejected too — the wrapper is what fails, not the value');
+
+-- Non-array wrong types on the same members, so the repaired predicates are
+-- pinned for every illegal shape rather than only the array one.
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","given_name":{"first":"Ada"},"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: an object given_name is rejected');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","given_name":42,"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: a numeric given_name is rejected');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","orcid":123,"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: a numeric orcid is rejected');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","orcid":{"value":"0000-0002-1825-0097"},"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: an object orcid is rejected even when it wraps a canonical value');
+
+-- The same unwrapping hid three more shapes that are not "optional scalars":
+-- an affiliation, an identifier, and a whole provenance ENTRY could each be
+-- array-wrapped and pass the rule meant to type them.
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","affiliations":[["Nested"]],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: a nested-array affiliation is rejected — elements are typed, not unwrapped');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"personal","source_name":"A","affiliations":[],"identifiers":[[{"scheme":"ORCID","value":"0000-0002-1825-0097"}]]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: a nested-array identifier is rejected');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[[{"source":"csv","kind":"personal","source_name":"A","affiliations":[],"identifiers":[]}]]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '23514', 'check: an array-wrapped provenance ENTRY is rejected — entries are objects, not arrays');
+
+-- Positive control: the repaired predicates did not overshoot. One complete
+-- entry exercising every optional scalar in its legal form, stored and read
+-- back byte-for-byte.
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"pubmed_api","source_field":"Author","kind":"personal","source_name":"Ada Lovelace","given_name":"Ada","family_name":"Lovelace","initials":"AL","suffix":"Jr.","collective_name":null,"affiliations":["Analytical Engine Group"],"identifiers":[{"scheme":"ORCID","value":"0000-0002-1825-0097"}],"orcid":"0000-0002-1825-0097","orcid_authenticated":true}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '00000', 'check: a complete entry with every optional scalar in scalar form still stores');
+
+SELECT is(pg_temp.stored_prov('Legacy row') -> 0 ->> 'orcid', '0000-0002-1825-0097',
+  'check: the stored canonical ORCID reads back as a string, not an array');
+
+SELECT is(pg_temp.errcode_as('postgres', NULL,
+  $q$UPDATE public.papers SET author_provenance =
+       '[{"source":"csv","kind":"unknown","source_name":"A","source_field":null,"given_name":null,"family_name":null,"initials":null,"suffix":null,"collective_name":null,"orcid":null,"orcid_authenticated":null,"affiliations":[],"identifiers":[]}]'::jsonb
+     WHERE title = 'Legacy row'$q$),
+  '00000', 'check: every optional member explicitly null is still accepted');
+
 UPDATE public.papers SET author_provenance = NULL WHERE title = 'Legacy row';
 
 SELECT is(pg_temp.errcode_as('postgres', NULL,
@@ -518,6 +652,33 @@ SELECT is(
   (SELECT count(*)::int FROM public.papers
    WHERE title IN ('Bulk no kind','Bulk array kind')),
   0, 'bulk: no row is persisted with an unreadable kind');
+
+-- The same array-shaped scalars through the RPC, which is the path the
+-- application writes on. The RPC keeps no validation of its own — the column
+-- CHECK is the single deep-shape authority — so these prove the authority is
+-- actually reached and that a malformed row is failed, not stored.
+SELECT is(
+  pg_temp.row_status(pg_temp.bulk_insert_u1(jsonb_build_array(jsonb_build_object(
+    'title','Bulk array given_name', 'authors','["Ada Lovelace"]'::jsonb,
+    'author_provenance','[{"source":"csv","kind":"personal","source_name":"Ada Lovelace","given_name":["Ada"],"affiliations":[],"identifiers":[]}]'::jsonb))), 0),
+  'error', 'bulk: an array given_name fails the row');
+
+SELECT is(
+  pg_temp.row_status(pg_temp.bulk_insert_u1(jsonb_build_array(jsonb_build_object(
+    'title','Bulk array orcid_auth', 'authors','["Ada Lovelace"]'::jsonb,
+    'author_provenance','[{"source":"csv","kind":"personal","source_name":"Ada Lovelace","orcid_authenticated":[true],"affiliations":[],"identifiers":[]}]'::jsonb))), 0),
+  'error', 'bulk: an array orcid_authenticated fails the row');
+
+SELECT is(
+  pg_temp.row_status(pg_temp.bulk_insert_u1(jsonb_build_array(jsonb_build_object(
+    'title','Bulk array orcid', 'authors','["Ada Lovelace"]'::jsonb,
+    'author_provenance','[{"source":"csv","kind":"personal","source_name":"Ada Lovelace","orcid":["0000-0002-1825-0097"],"affiliations":[],"identifiers":[]}]'::jsonb))), 0),
+  'error', 'bulk: an array orcid fails the row — it never passes as canonical');
+
+SELECT is(
+  (SELECT count(*)::int FROM public.papers
+   WHERE title IN ('Bulk array given_name','Bulk array orcid_auth','Bulk array orcid')),
+  0, 'bulk: no row is persisted with an array-shaped provenance scalar');
 
 SELECT is(
   pg_temp.row_status(pg_temp.bulk_insert_u1(jsonb_build_array(jsonb_build_object(
