@@ -94,7 +94,10 @@ test.describe("Account data export", () => {
 
     const manifest = readJson("manifest.json") as Manifest;
     expect(manifest.format).toBe("paperlume-account-export");
-    expect(manifest.version).toBe(1);
+    // 2 since papers gained the persisted `author_provenance` field — a reshape
+    // of an existing archive file, which a reader must be able to notice.
+    // Literal on purpose, so a version change has to be made deliberately here.
+    expect(manifest.version).toBe(2);
     expect(manifest.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
     expect(manifest.user_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,

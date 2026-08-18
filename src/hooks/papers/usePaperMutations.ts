@@ -5,6 +5,11 @@ import { useToast } from "@/hooks/use-toast";
 import { Paper, PaperWithTags, Project, Tag } from "@/types/database";
 import { queryKeys } from "@/lib/queryKeys";
 import { NormalizationConfig, RawPaperData } from "@/lib/normalizePaperData";
+import {
+  AUTHOR_PROVENANCE_SOURCES,
+  authorsArraysEqual,
+  buildUnstructuredAuthorProvenance,
+} from "@/lib/authorProvenance";
 import { ServerFilterParams, ServerSortParams } from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
@@ -142,6 +147,16 @@ export function usePaperMutations(
       const rawPaper: RawPaperData = {
         title: manualTitle,
         authors: authorsArray,
+        // Manually typed names carry no source structure whatsoever: the user
+        // wrote a comma-separated string, so every entry is `unknown` with no
+        // components, no identifiers and no ORCID. An empty list yields null —
+        // the single representation of "no provenance persisted" — rather than
+        // an empty array.
+        author_provenance: buildUnstructuredAuthorProvenance(
+          authorsArray,
+          AUTHOR_PROVENANCE_SOURCES.manual,
+          "authors",
+        ),
         year: yearNum,
         journal: paperData.journal.trim() || null,
         pmid: manualPmid || null,
@@ -160,7 +175,16 @@ export function usePaperMutations(
         ? await normalize([rawPaper], normalizationConfig)
         : [rawPaper];
 
-      const insertData = { user_id: userId, ...normalized, raw_study_type: null, raw_keywords: rawPaper.keywords || [] };
+      const insertData = {
+        user_id: userId,
+        ...normalized,
+        raw_study_type: null,
+        raw_keywords: rawPaper.keywords || [],
+        // Spelled out rather than left to the spread: normalization returns the
+        // field as optional, and an explicit `null` is what the column's
+        // "no provenance" state is, where an absent key would be ambiguous.
+        author_provenance: normalized.author_provenance ?? null,
+      };
 
       const { data: insertedPaper, error } = await supabase.from("papers").insert(insertData).select().single();
 
@@ -260,6 +284,48 @@ export function usePaperMutations(
       if (!userId) return false;
       const { tagIds, projectIds, ...paperUpdates } = updates;
 
+      // ── Stale-provenance prevention ──────────────────────────────────
+      //
+      // Structured provenance describes the exact author strings some source
+      // supplied. Once the user rewrites those strings, the old given/family
+      // components, affiliations, identifiers and ORCID no longer describe what
+      // is stored — and an ORCID left attached to a name the user changed is a
+      // false claim about a person, the worst failure this column can produce.
+      // So any real change to the authors array replaces provenance wholesale
+      // with honest manual/unknown entries for the new array.
+      //
+      // It must be a *change* that triggers this, not merely the presence of
+      // the key: `EditPaperDialog` always submits an authors array, so keying
+      // off presence alone would erase PubMed provenance every time a user
+      // edited an unrelated field like notes or year. The comparison is exact
+      // and order-sensitive — provenance is bound to the literal string, so a
+      // punctuation-only edit or a reorder still invalidates it.
+      //
+      // Fail closed when the paper is not in the loaded list: unable to prove
+      // the authors are unchanged, rebuild. That direction is safe because the
+      // rebuilt value is truthful — the user did submit these strings through
+      // the manual edit form — whereas keeping unproven provenance risks the
+      // stale-ORCID failure above.
+      //
+      // Assigned onto `paperUpdates` so `authors` and `author_provenance` are
+      // written by the SAME `papers` UPDATE below, never as two statements that
+      // could interleave or half-fail.
+      if ("authors" in paperUpdates) {
+        const nextAuthors = paperUpdates.authors ?? [];
+        const currentPaper = papers.find((paper) => paper.id === paperId);
+        const authorsUnchanged =
+          currentPaper !== undefined &&
+          authorsArraysEqual(currentPaper.authors, nextAuthors);
+
+        if (!authorsUnchanged) {
+          paperUpdates.author_provenance = buildUnstructuredAuthorProvenance(
+            nextAuthors,
+            AUTHOR_PROVENANCE_SOURCES.manual,
+            "authors",
+          );
+        }
+      }
+
       await cancelQueries();
       const snapshot = snapshotCache();
 
@@ -327,7 +393,12 @@ export function usePaperMutations(
       toast({ title: "Paper updated" });
       return true;
     },
-    [userId, tags, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, queryClient, toast],
+    // `papers` is a real dependency now: the stale-provenance guard above reads
+    // the currently loaded paper to decide whether the authors array actually
+    // changed. It shares the identity churn `tags`/`projects` already have, and
+    // a stale closure here would compare against outdated authors — exactly the
+    // mistake the guard exists to prevent.
+    [userId, papers, tags, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, queryClient, toast],
   );
 
   const deletePaper = useCallback(

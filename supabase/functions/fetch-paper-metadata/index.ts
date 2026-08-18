@@ -18,6 +18,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import { canonicalDoiUrl, detectIdentifier } from "../_shared/identifierDetection.ts";
+import type { AuthorProvenance } from "../_shared/authorProvenance.ts";
+import { extractCrossrefAuthors } from "../_shared/crossrefAuthors.ts";
+import { decodeHTMLEntities } from "../_shared/htmlEntities.ts";
+import { extractPubMedAuthors } from "../_shared/pubmedAuthors.ts";
 import {
   extractPublicationTypes,
   joinPublicationTypes,
@@ -54,6 +58,20 @@ interface PaperMetadata {
    * Crossref-only result omits this field rather than inventing one.
    */
   publication_types?: string[];
+  /**
+   * Structured authorship provenance, aligned one-to-one with `authors`.
+   *
+   * Optional, and must stay optional: an older deployed version of this
+   * function predates the field, and a source path that cannot produce a
+   * complete aligned array omits it rather than sending a partial one. Absence
+   * means "no trustworthy structured provenance", never "this paper has no
+   * authors" — `authors` remains the sole display/search representation and is
+   * unchanged by this field's presence or absence.
+   *
+   * It records what the provider stated about each mention. It does not assert
+   * that two mentions are the same person, and a captured ORCID does not either.
+   */
+  author_provenance?: AuthorProvenance[] | null;
   pubmed_url?: string | null;
   journal_url?: string | null;
   source?: "pubmed" | "crossref";
@@ -77,24 +95,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Decodes common HTML entities (numeric and named).
- * Uses regex since Deno edge runtime doesn't provide DOMParser.
- */
-function decodeHTMLEntities(text: string): string {
-  return text
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) =>
-      String.fromCodePoint(parseInt(hex, 16))
-    )
-    .replace(/&#(\d+);/g, (_, dec: string) =>
-      String.fromCodePoint(parseInt(dec, 10))
-    )
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
-}
+// `decodeHTMLEntities` moved to `../_shared/htmlEntities.ts` unchanged: the
+// PubMed author extractor needs the same decoding, and a second copy is how two
+// subtly different decoders begin.
 
 // ── Rate Limiting & Retry ──
 
@@ -191,40 +194,16 @@ async function fetchFromPubMed(
       .match(/<ArticleTitle[^>]*>([\s\S]*?)<\/ArticleTitle>/)?.[1]
       ?.replace(/<[^>]+>/g, "");
 
-    // Two-pass author extraction: first slice each <Author>...</Author>
-    // block (bounded by the FIRST </Author>, never spans siblings), then
-    // per-block extract CollectiveName (consortia / collaborator groups)
-    // OR LastName + ForeName (personal authors). This eliminates the lazy
-    // [\s\S]*? cross-boundary backtracking the previous single-regex form
-    // suffered on Authors lacking <ForeName>. Behavior preserved for
-    // personal authors: only emit when both <LastName> and <ForeName>
-    // exist; format `${foreName} ${lastName}`. Behavior added: emit
-    // <CollectiveName> entries (e.g. PubMed consortium / collaborator
-    // groups like "GBD 2023 IHD & Dietary Risk Factors Collaborators")
-    // — previously skipped, leaving such papers with empty author lists.
+    // Author extraction moved to `../_shared/pubmedAuthors.ts`, which produces
+    // the same compatibility list it always did AND the structured provenance
+    // behind it from the same pass — so the two arrays cannot fall out of
+    // alignment. Living under `_shared/` also makes it Node-importable, so the
+    // whole DTD-driven contract (personal vs collective, optional ForeName,
+    // author-level vs affiliation-level Identifier) is unit-tested by Vitest
+    // without adding a Deno runtime to CI.
     const tAuthorsStart = performance.now();
-    const authorBlocks = xml.matchAll(/<Author[^>]*>([\s\S]*?)<\/Author>/g);
-    const authors: string[] = [];
-    for (const block of authorBlocks) {
-      const body = block[1];
-
-      // Collective / consortium author takes precedence over LastName/ForeName.
-      // Strip any nested tags defensively, decode HTML entities, then trim.
-      const collectiveName = body
-        .match(/<CollectiveName[^>]*>([\s\S]*?)<\/CollectiveName>/)?.[1]
-        ?.replace(/<[^>]+>/g, "")
-        .trim();
-      if (collectiveName) {
-        authors.push(decodeHTMLEntities(collectiveName));
-        continue;
-      }
-
-      const lastName = body.match(/<LastName>([^<]+)<\/LastName>/)?.[1];
-      const foreName = body.match(/<ForeName>([^<]+)<\/ForeName>/)?.[1];
-      if (lastName && foreName) {
-        authors.push(`${foreName} ${lastName}`);
-      }
-    }
+    const { authors, author_provenance: authorProvenance } =
+      extractPubMedAuthors(xml);
     const tAuthorsMs = performance.now() - tAuthorsStart;
 
     const year = xml.match(
@@ -286,6 +265,10 @@ async function fetchFromPubMed(
       identifier: pmid,
       title,
       authors,
+      // Structured provenance for the same mentions, in the same order. Never a
+      // replacement for `authors`, and never a claim that two mentions are one
+      // person — only a record of what PubMed stated about each.
+      author_provenance: authorProvenance,
       year: year ? parseInt(year) : null,
       journal,
       pmid,
@@ -354,11 +337,12 @@ function mapCrossrefToSchema(
   const title = (work.title as string[])?.[0] || null;
   if (!title) return null;
 
-  const authors = (
-    (work.author as Array<{ given?: string; family?: string }>) || []
-  )
-    .map((a) => `${a.given || ""} ${a.family || ""}`.trim())
-    .filter(Boolean);
+  // Same compatibility projection as before, now produced alongside the
+  // structured provenance in one pass — see `../_shared/crossrefAuthors.ts`.
+  // A contributor with no usable name is skipped in BOTH arrays, so a partial
+  // contributor cannot shift provenance out of alignment.
+  const { authors, author_provenance: authorProvenance } =
+    extractCrossrefAuthors(work);
 
   const getYear = (dateField: unknown): number | null => {
     if (!dateField || typeof dateField !== "object") return null;
@@ -398,6 +382,7 @@ function mapCrossrefToSchema(
     identifier,
     title,
     authors,
+    author_provenance: authorProvenance,
     year,
     journal,
     pmid: null,

@@ -1,3 +1,5 @@
+import type { AuthorProvenance } from "@/lib/authorProvenance";
+
 export interface Profile {
   id: string;
   user_id: string;
@@ -34,6 +36,23 @@ export interface Paper {
   user_id: string;
   title: string;
   authors: string[];
+  /**
+   * Structured authorship provenance, aligned one-to-one with `authors`:
+   * `author_provenance[i]` describes the source mention stored at `authors[i]`.
+   *
+   * Optional **and** nullable, and both halves matter:
+   *  • *optional*, because the papers-list query selects an explicit column
+   *    list that deliberately omits it (provenance is not list-render data, the
+   *    same call `raw_publication_types` already makes). A read path that does
+   *    not select it must not be typed as if it did.
+   *  • *nullable*, because SQL NULL is the single stored representation of "no
+   *    trustworthy structured provenance was persisted for this paper" — the
+   *    truthful state for every row predating the column.
+   *
+   * No read path may require it. `authors` remains the display, search and
+   * Analytics representation, and legacy rows stay fully usable without this.
+   */
+  author_provenance?: AuthorProvenance[] | null;
   year: number | null;
   journal: string | null;
   pmid: string | null;
@@ -150,6 +169,15 @@ export interface PaperMetadata {
    * report. Absence means "no structured provenance", never "none exist".
    */
   publication_types?: string[];
+  /**
+   * Structured authorship provenance aligned one-to-one with `authors`.
+   *
+   * Optional, and must stay optional: the deployed Edge Function version may
+   * predate the field, so its absence has to mean "no structured provenance"
+   * rather than a failed import. A source path that cannot produce a complete
+   * aligned array omits it rather than sending a partial one.
+   */
+  author_provenance?: AuthorProvenance[] | null;
   pubmed_url?: string | null;
   journal_url?: string | null;
   source?: "pubmed" | "crossref";
