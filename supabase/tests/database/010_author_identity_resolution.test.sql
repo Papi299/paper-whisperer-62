@@ -25,7 +25,9 @@
 --     authenticated surface, nothing for anon or service_role, and no global
 --     uniqueness on a name;
 --   * user scoping enforced structurally — a cross-user alias, link or merge
---     edge is rejected by a composite foreign key, not merely by policy;
+--     edge is rejected by a composite foreign key, not merely by policy, and a
+--     link's PAPER endpoint is composite too, so a privileged direct write
+--     cannot attach one user's person to another user's paper;
 --   * create/link validation: ownership, index bounds, the exact expected-author
 --     guard, blank mentions, explicitly collective provenance, and that NULL or
 --     `unknown` provenance stays manually resolvable;
@@ -163,7 +165,7 @@ INSERT INTO public.papers (id, user_id, title, authors, insert_order, created_at
 VALUES ('0a000000-0000-0000-0000-0000000000b1','0a000000-0000-0000-0000-000000000002',
         'Foreign paper', '["Someone Else"]'::jsonb, 404, '2026-01-04T00:00:00Z');
 
-SELECT plan(108);
+SELECT plan(117);
 
 -- ══ 1. Shape and security posture ═══════════════════════════════════════════
 
@@ -522,6 +524,122 @@ SELECT lives_ok(
          END
        $chk$$inner$)$q$,
   'rls: U2 sees only their own identity data across all four tables');
+
+-- ══ 5b. Structural ownership — the graph cannot HOLD a cross-account edge ═══
+--
+-- Everything above proves the RPCs refuse a cross-user relationship and that RLS
+-- hides one. Both are policy: they describe what the application and the policy
+-- engine will do, not what the database is capable of storing. This section
+-- proves the stronger claim the migration header makes — that the row is not
+-- representable — by writing it DIRECTLY as a privileged role, with RLS bypassed
+-- and no RPC involved. If only policy stood in the way, these inserts would
+-- succeed here.
+
+SELECT ok(
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.papers'::regclass
+            AND conname  = 'papers_user_id_id_key'
+            AND contype  = 'u'
+            AND pg_get_constraintdef(oid) = 'UNIQUE (user_id, id)'),
+  'ownership: papers carries the (user_id, id) key a composite reference needs');
+
+-- Additive, never a replacement. `papers.id` remains the primary key, so every
+-- existing single-column reference to a paper is untouched.
+SELECT ok(
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.papers'::regclass
+            AND contype  = 'p'
+            AND pg_get_constraintdef(oid) = 'PRIMARY KEY (id)'),
+  'ownership: papers keeps its original PRIMARY KEY (id)');
+
+SELECT is(
+  (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+   WHERE conrelid = 'public.author_identity_links'::regclass
+     AND conname  = 'author_identity_links_paper_fk'),
+  'FOREIGN KEY (user_id, paper_id) REFERENCES papers(user_id, id) ON DELETE CASCADE',
+  'ownership: the link→paper edge is user-scoped and cascades');
+
+-- A surviving single-column reference would make the composite one decorative:
+-- the row would satisfy the loose constraint and never be checked against the
+-- strict one.
+SELECT is(
+  (SELECT count(*)::int
+     FROM pg_constraint c
+    WHERE c.contype   = 'f'
+      AND c.conrelid  = 'public.author_identity_links'::regclass
+      AND c.confrelid = 'public.papers'::regclass
+      AND array_length(c.conkey, 1) = 1),
+  0,
+  'ownership: no single-column paper reference survives alongside it');
+
+-- The general rule, so a future edge added without `user_id` fails here rather
+-- than silently reopening the hole.
+SELECT is(
+  (SELECT count(*)::int
+     FROM pg_constraint c
+     JOIN pg_class ch      ON ch.oid = c.conrelid
+     JOIN pg_namespace chn ON chn.oid = ch.relnamespace
+    WHERE c.contype = 'f'
+      AND chn.nspname = 'public'
+      AND ch.relname IN ('author_identities', 'author_identity_aliases',
+                         'author_identity_links', 'author_identity_merges')
+      AND NOT EXISTS (
+        SELECT 1
+          FROM unnest(c.conkey) AS k(attnum)
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+         WHERE a.attname = 'user_id')),
+  0,
+  'ownership: every foreign key out of the identity tables carries user_id');
+
+-- A paper of U1's that nothing else in this suite touches, so the positive
+-- control below cannot disturb any later section. Removed again at the end.
+INSERT INTO public.papers (id, user_id, title, authors, insert_order, created_at)
+VALUES ('0a000000-0000-0000-0000-0000000000a9','0a000000-0000-0000-0000-000000000001',
+        'Ownership probe paper', '["Probe Author"]'::jsonb, 409, '2026-01-09T00:00:00Z');
+
+-- THE TEST THAT MATTERS. U1's own user_id, U1's own identity, U2's paper: every
+-- value individually legitimate, the combination a relationship across an
+-- account boundary. Written as `postgres`, which holds BYPASSRLS — so RLS is not
+-- what rejects it, and neither is an RPC, because none is called.
+SELECT is(pg_temp.errcode_as('postgres', NULL, $q$
+    INSERT INTO public.author_identity_links
+      (user_id, identity_id, paper_id, author_index, author_name_snapshot, resolution_basis)
+    SELECT '0a000000-0000-0000-0000-000000000001'::uuid,
+           (SELECT id FROM public.author_identities
+             WHERE user_id = '0a000000-0000-0000-0000-000000000001'
+             ORDER BY created_at, id LIMIT 1),
+           '0a000000-0000-0000-0000-0000000000b1'::uuid,
+           0, 'Someone Else', 'manual'
+  $q$),
+  '23503',
+  'ownership: a privileged direct write cannot link U1''s person to U2''s paper');
+
+-- The positive control. Identical statement, U1's own paper: it succeeds. So the
+-- rejection above is about ownership, not about the statement being malformed or
+-- the role lacking privilege.
+SELECT is(pg_temp.errcode_as('postgres', NULL, $q$
+    INSERT INTO public.author_identity_links
+      (user_id, identity_id, paper_id, author_index, author_name_snapshot, resolution_basis)
+    SELECT '0a000000-0000-0000-0000-000000000001'::uuid,
+           (SELECT id FROM public.author_identities
+             WHERE user_id = '0a000000-0000-0000-0000-000000000001'
+             ORDER BY created_at, id LIMIT 1),
+           '0a000000-0000-0000-0000-0000000000a9'::uuid,
+           0, 'Probe Author', 'manual'
+  $q$),
+  '00000',
+  'ownership: the same write against the caller''s own paper is accepted');
+
+SELECT is(pg_temp.link_count('0a000000-0000-0000-0000-0000000000b1'), 0,
+  'ownership: the rejected cross-account write stored nothing');
+
+-- Deleting the probe paper cascades its one link away through the composite FK,
+-- which also demonstrates the cascade still works in its new two-column form.
+DELETE FROM public.papers WHERE id = '0a000000-0000-0000-0000-0000000000a9';
+
+SELECT is(pg_temp.link_count('0a000000-0000-0000-0000-0000000000a9'), 0,
+  'ownership: the composite foreign key still cascades on paper delete');
+
 
 -- ══ 6. Unlinking ════════════════════════════════════════════════════════════
 

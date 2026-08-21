@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { fetchAllPages, type RangeableQuery } from "@/lib/fetchAllPages";
 import { fetchAllPagesInChunks } from "@/lib/fetchAllPagesInChunks";
+import { isAuthorIdentitySchemaMissing } from "@/lib/authorIdentityAvailability";
 import { attachmentArchivePath, isSafeArchivePath } from "./sanitizeArchiveFilename";
 import {
   AccountExportError,
@@ -107,6 +108,104 @@ async function fetchOwnedTable<T>(
   });
 }
 
+/** The four 001C collections, read or stood in for as one unit. */
+interface AuthorIdentityExportTables {
+  identities: ExportedAuthorIdentity[];
+  aliases: ExportedAuthorIdentityAlias[];
+  links: ExportedAuthorIdentityLink[];
+  merges: ExportedAuthorIdentityMerge[];
+}
+
+/** The pre-migration stand-in. Four present-but-empty categories, never absent ones. */
+const EMPTY_AUTHOR_IDENTITY_EXPORT: AuthorIdentityExportTables = {
+  identities: [],
+  aliases: [],
+  links: [],
+  merges: [],
+};
+
+/** Unwrap a settled read, re-throwing the original failure unchanged. */
+function requireFulfilled<T>(settled: PromiseSettledResult<T>): T {
+  if (settled.status === "rejected") throw settled.reason;
+  return settled.value;
+}
+
+/**
+ * Read the 001C identity collections, tolerating exactly one thing: this
+ * environment predating the migration that creates them.
+ *
+ * WHY THIS EXISTS. The 001C schema is applied to Production separately from —
+ * and before — the code that uses it. In the window between, and on every Vercel
+ * Preview built from this branch while Production is still behind, an
+ * unconditional read of `author_identities` fails. Full account export must not
+ * be one of the things that breaks: a user asking for all of their data during a
+ * rollout should get all of their data, not an error about a feature they have
+ * never used.
+ *
+ * WHY IT IS ALL-OR-NONE. The migration creates the four tables in one
+ * transaction, so a real environment has all four or none. `author_identities`
+ * is therefore treated as the probe: if IT reports "no such table", the
+ * subsystem is absent and all four categories are exported empty. If it answers
+ * normally, the subsystem exists and the other three reads must succeed on their
+ * own terms — a schema where one identity table is missing and another is
+ * present is a broken installation, and quietly exporting it as empty would hand
+ * the user an archive that silently omits decisions they made.
+ *
+ * WHAT IS NOT TOLERATED. Permission denied, an RLS refusal, a network failure, a
+ * malformed query, a missing UNRELATED table: every one of those still fails the
+ * export. The classifier is the same narrow one the identity UI uses — it
+ * demands both a missing-object code and a 001C object name — precisely so this
+ * cannot widen into "if anything goes wrong, pretend the user has no identities".
+ */
+async function fetchAuthorIdentityExportTables(
+  userId: string,
+): Promise<AuthorIdentityExportTables> {
+  const [identities, aliases, links, merges] = await Promise.allSettled([
+    // 001C identity decisions. Directly user-owned, so they take the same
+    // S2-scoped, paginated, deterministically ordered path as every other owned
+    // table. Merge edges order by their primary key (`source_identity_id`)
+    // because that is the only column guaranteed distinct per row.
+    fetchOwnedTable<ExportedAuthorIdentity>(
+      "author_identities",
+      AUTHOR_IDENTITIES_SELECT,
+      userId,
+      ["created_at", "id"],
+    ),
+    fetchOwnedTable<ExportedAuthorIdentityAlias>(
+      "author_identity_aliases",
+      AUTHOR_IDENTITY_ALIASES_SELECT,
+      userId,
+      ["created_at", "id"],
+    ),
+    fetchOwnedTable<ExportedAuthorIdentityLink>(
+      "author_identity_links",
+      AUTHOR_IDENTITY_LINKS_SELECT,
+      userId,
+      ["created_at", "id"],
+    ),
+    fetchOwnedTable<ExportedAuthorIdentityMerge>(
+      "author_identity_merges",
+      AUTHOR_IDENTITY_MERGES_SELECT,
+      userId,
+      ["created_at", "source_identity_id"],
+    ),
+  ]);
+
+  if (identities.status === "rejected") {
+    if (isAuthorIdentitySchemaMissing(identities.reason)) {
+      return EMPTY_AUTHOR_IDENTITY_EXPORT;
+    }
+    throw identities.reason;
+  }
+
+  return {
+    identities: identities.value,
+    aliases: requireFulfilled(aliases),
+    links: requireFulfilled(links),
+    merges: requireFulfilled(merges),
+  };
+}
+
 /** Read junction rows reachable from the user's own paper IDs. */
 async function fetchJunction<T>(
   table: "paper_projects" | "paper_tags",
@@ -165,6 +264,31 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     if (profileResult.error) throw profileResult.error;
     profile = (profileResult.data as SafeExportProfile | null) ?? null;
 
+    const [coreTables, identityTables] = await Promise.all([
+      Promise.all([
+        fetchOwnedTable<ExportedPaper>("papers", PAPERS_SELECT, userId, ["insert_order", "id"]),
+        fetchOwnedTable<ExportedProject>("projects", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<ExportedTag>("tags", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<ExportedFilterPreset>("filter_presets", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<ExportedKeywordPool>("keyword_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<ExportedSynonymPool>("synonym_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<ExportedStudyTypePool>("study_type_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<ExportedKeywordExclusion>("keyword_exclusion_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<ExportedStudyTypeExclusion>("study_type_exclusion_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
+        fetchOwnedTable<Omit<ExportedAttachment, "archive_path">>(
+          "paper_attachments",
+          ALL_COLUMNS,
+          userId,
+          ["created_at", "id"],
+        ),
+      ]),
+      // Read in parallel with everything else, but through its own all-or-none
+      // gate: the 001C tables are the only ones whose absence is an expected
+      // state of a correctly deployed environment. See
+      // `fetchAuthorIdentityExportTables`.
+      fetchAuthorIdentityExportTables(userId),
+    ]);
+
     [
       papers,
       projects,
@@ -176,55 +300,12 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
       keywordExclusionPool,
       studyTypeExclusionPool,
       attachmentRows,
-      authorIdentities,
-      authorIdentityAliases,
-      authorIdentityLinks,
-      authorIdentityMerges,
-    ] = await Promise.all([
-      fetchOwnedTable<ExportedPaper>("papers", PAPERS_SELECT, userId, ["insert_order", "id"]),
-      fetchOwnedTable<ExportedProject>("projects", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<ExportedTag>("tags", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<ExportedFilterPreset>("filter_presets", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<ExportedKeywordPool>("keyword_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<ExportedSynonymPool>("synonym_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<ExportedStudyTypePool>("study_type_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<ExportedKeywordExclusion>("keyword_exclusion_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<ExportedStudyTypeExclusion>("study_type_exclusion_pool", ALL_COLUMNS, userId, ["created_at", "id"]),
-      fetchOwnedTable<Omit<ExportedAttachment, "archive_path">>(
-        "paper_attachments",
-        ALL_COLUMNS,
-        userId,
-        ["created_at", "id"],
-      ),
-      // 001C identity decisions. Directly user-owned, so they take the same
-      // S2-scoped, paginated, deterministically ordered path as every other
-      // owned table. Merge edges order by their primary key (`source_identity_id`)
-      // because that is the only column guaranteed distinct per row.
-      fetchOwnedTable<ExportedAuthorIdentity>(
-        "author_identities",
-        AUTHOR_IDENTITIES_SELECT,
-        userId,
-        ["created_at", "id"],
-      ),
-      fetchOwnedTable<ExportedAuthorIdentityAlias>(
-        "author_identity_aliases",
-        AUTHOR_IDENTITY_ALIASES_SELECT,
-        userId,
-        ["created_at", "id"],
-      ),
-      fetchOwnedTable<ExportedAuthorIdentityLink>(
-        "author_identity_links",
-        AUTHOR_IDENTITY_LINKS_SELECT,
-        userId,
-        ["created_at", "id"],
-      ),
-      fetchOwnedTable<ExportedAuthorIdentityMerge>(
-        "author_identity_merges",
-        AUTHOR_IDENTITY_MERGES_SELECT,
-        userId,
-        ["created_at", "source_identity_id"],
-      ),
-    ]);
+    ] = coreTables;
+
+    authorIdentities = identityTables.identities;
+    authorIdentityAliases = identityTables.aliases;
+    authorIdentityLinks = identityTables.links;
+    authorIdentityMerges = identityTables.merges;
   } catch (error) {
     if (error instanceof AccountExportError) throw error;
     throw readFailure(error);

@@ -36,7 +36,15 @@
 -- person record, and no cross-user candidate generation. The `user_id` column
 -- is not decoration: every foreign key below is COMPOSITE on `(user_id, …)`,
 -- which makes a cross-user edge structurally unrepresentable rather than merely
--- forbidden by policy.
+-- forbidden by policy. That claim covers all five edges in the graph —
+--
+--     alias  → identity          (user_id, identity_id)
+--     link   → identity          (user_id, identity_id)
+--     link   → paper             (user_id, paper_id)
+--     merge  → source identity   (user_id, source_identity_id)
+--     merge  → target identity   (user_id, target_identity_id)
+--
+-- — and the third of them is why section 0 below exists.
 --
 -- WHAT IS NOT MODELLED HERE
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -51,13 +59,50 @@
 --
 -- EXPAND-FIRST / ROLLOUT SAFETY
 -- ─────────────────────────────────────────────────────────────────────────────
--- Strictly additive. Four new tables, one new trigger on `papers`, and eight new
--- functions. No existing table, column, constraint, policy, grant, function or
--- row is altered or dropped. The migration may therefore be applied to
+-- Additive. Four new tables, one new unique constraint on `papers`, one new
+-- trigger on `papers`, and eight new functions. No existing table, column,
+-- constraint, policy, grant, function or row is altered or dropped, and no
+-- historical migration is touched. The migration may therefore be applied to
 -- Production BEFORE the frontend that uses it is merged: the current frontend
 -- neither reads nor writes any of it, and the one behavioural change visible to
 -- old code — the author-change trigger — can only delete rows in a table that
 -- did not exist a moment ago and is empty.
+--
+-- The one lock worth naming is in section 0. `ALTER TABLE public.papers ADD
+-- CONSTRAINT … UNIQUE` takes ACCESS EXCLUSIVE on `papers` and builds an index
+-- under it, so writes to `papers` wait for the duration of one index build.
+-- `CREATE UNIQUE INDEX CONCURRENTLY` would avoid that but cannot run inside a
+-- transaction, and a migration that half-applies is a worse problem than a brief
+-- pause. Apply it like any other index-building migration: off peak, and expect
+-- the wait to scale with the row count.
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 0. papers (user_id, id) — the ownership key the link table references
+-- ═════════════════════════════════════════════════════════════════════════════
+--
+-- `papers.id` is already globally unique, so this constraint forbids nothing
+-- that was previously legal and accepts every row that already exists. It is not
+-- here to constrain `papers`. It is here because a composite foreign key needs a
+-- composite key to point at, and without one the identity→paper edge cannot be
+-- made user-scoped.
+--
+-- WHY THAT MATTERS. `author_identity_links` carries `user_id`, `identity_id` and
+-- `paper_id`. The identity side is already composite, so a link can never name
+-- another user's identity. The paper side, referencing `papers(id)` alone, was
+-- not — which left this state STORABLE by a privileged or direct write:
+--
+--     user_id     = User A
+--     identity_id = User A's identity      ✓ same account
+--     paper_id    = User B's paper         ✗ different account
+--
+-- The RPCs reject it, RLS hides it, and no application path produces it. But
+-- "the application will not write it" is a weaker guarantee than "the database
+-- cannot hold it", and the header above claims the stronger one. Pointing the
+-- edge at `papers (user_id, id)` makes the claim literally true: the row is
+-- rejected with a foreign-key violation before any policy is consulted, whoever
+-- is writing and whatever they have bypassed.
+ALTER TABLE public.papers
+    ADD CONSTRAINT papers_user_id_id_key UNIQUE (user_id, id);
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- 1. author_identities — the user's own person record
@@ -148,7 +193,8 @@ CREATE TABLE public.author_identity_links (
     id                   UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     user_id              UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     identity_id          UUID NOT NULL,
-    paper_id             UUID NOT NULL REFERENCES public.papers(id) ON DELETE CASCADE,
+    -- No single-column REFERENCES here: the paper edge is composite, below.
+    paper_id             UUID NOT NULL,
     author_index         INTEGER NOT NULL,
     author_name_snapshot TEXT NOT NULL,
     resolution_basis     TEXT NOT NULL,
@@ -175,21 +221,42 @@ CREATE TABLE public.author_identity_links (
         FOREIGN KEY (user_id, identity_id)
         REFERENCES public.author_identities (user_id, id) ON DELETE CASCADE,
 
+    -- And the same for the paper. A link names one person and one paper, and
+    -- BOTH endpoints must belong to the account named in `user_id` — otherwise a
+    -- privileged write could attach this user's person to another user's paper
+    -- and the row would sit there, invisible to RLS and to every RPC, describing
+    -- a relationship across an account boundary.
+    --
+    -- Cascade because a deleted paper takes its links with it, exactly as the
+    -- single-column reference did. The absent ON UPDATE is deliberate: nothing
+    -- reassigns a paper to a different owner, and if anything ever tried, this
+    -- constraint should stop it rather than quietly follow it.
+    CONSTRAINT author_identity_links_paper_fk
+        FOREIGN KEY (user_id, paper_id)
+        REFERENCES public.papers (user_id, id) ON DELETE CASCADE,
+
     -- At most one identity per authorship position. Two people cannot occupy
     -- one slot, and this is also the concurrency boundary: two tabs racing to
     -- resolve the same mention produce one winner and one 23505, never a
     -- last-write-wins overwrite of someone's decision.
     --
-    -- `paper_id` leads, so this index also serves the FK cascade when a paper is
-    -- deleted. The reverse direction — several mentions on ONE paper resolving
-    -- to the SAME identity — stays legal, because a paper may genuinely list a
-    -- person twice.
+    -- `paper_id` leads, which is also the useful order for looking a paper's
+    -- links up directly. The reverse direction — several mentions on ONE paper
+    -- resolving to the SAME identity — stays legal, because a paper may
+    -- genuinely list a person twice.
     CONSTRAINT author_identity_links_paper_author_index_key
         UNIQUE (paper_id, author_index)
 );
 
 CREATE INDEX idx_author_identity_links_user_identity
     ON public.author_identity_links (user_id, identity_id);
+
+-- Serves the composite paper cascade. Deleting a paper now searches this table
+-- on `(user_id, paper_id)`, and the unique constraint above leads with
+-- `paper_id` alone — usable, but only by scanning every link the user has for
+-- that paper's id across the index. This is the exact key the cascade uses.
+CREATE INDEX idx_author_identity_links_user_paper
+    ON public.author_identity_links (user_id, paper_id);
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- 4. author_identity_merges — a REVERSIBLE graph edge, not a reassignment
@@ -1340,6 +1407,76 @@ BEGIN
       AND pg_get_indexdef(i.indexrelid) ILIKE '%preferred_name%'
   ) THEN
     RAISE EXCEPTION 'author_identity: preferred_name must not be unique — two people may share a name';
+  END IF;
+
+  -- ── Every identity relationship is structurally user-scoped ──
+  -- The header claims a cross-account relationship is unrepresentable, not
+  -- merely forbidden. This is that claim, checked rather than asserted: EVERY
+  -- foreign key leaving the four 001C tables must carry `user_id` among its
+  -- referencing columns, so both endpoints of every edge are pinned to one
+  -- account by the key itself. A future edit that adds a convenient
+  -- single-column reference fails the migration instead of silently reopening
+  -- the hole this section closes.
+  FOR v_row IN
+    SELECT c.conname,
+           ch.relname AS child,
+           c.confdeltype,
+           (SELECT array_agg(a.attname ORDER BY k.ord)
+              FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+              JOIN pg_attribute a
+                ON a.attrelid = c.conrelid AND a.attnum = k.attnum) AS child_cols
+    FROM pg_constraint c
+    JOIN pg_class ch ON ch.oid = c.conrelid
+    JOIN pg_namespace chn ON chn.oid = ch.relnamespace
+    WHERE c.contype = 'f'
+      AND chn.nspname = 'public'
+      AND ch.relname = ANY (v_tables)
+  LOOP
+    IF NOT ('user_id' = ANY (v_row.child_cols)) THEN
+      RAISE EXCEPTION
+        'author_identity: foreign key % on public.% is not user-scoped; referencing columns are %',
+        v_row.conname, v_row.child, v_row.child_cols;
+    END IF;
+    IF v_row.confdeltype <> 'c' THEN
+      RAISE EXCEPTION
+        'author_identity: foreign key % on public.% does not cascade on delete',
+        v_row.conname, v_row.child;
+    END IF;
+  END LOOP;
+
+  -- The ownership key those composite references depend on.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.papers'::regclass
+      AND conname = 'papers_user_id_id_key'
+      AND contype = 'u'
+      AND pg_get_constraintdef(oid) = 'UNIQUE (user_id, id)'
+  ) THEN
+    RAISE EXCEPTION 'author_identity: papers is missing the (user_id, id) ownership key';
+  END IF;
+
+  -- `papers.id` stays the primary key. The constraint above is additive; it
+  -- must never have been mistaken for a replacement.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.papers'::regclass
+      AND contype = 'p'
+      AND pg_get_constraintdef(oid) = 'PRIMARY KEY (id)'
+  ) THEN
+    RAISE EXCEPTION 'author_identity: papers no longer has its original PRIMARY KEY (id)';
+  END IF;
+
+  -- And the link edge itself, spelled out.
+  SELECT pg_get_constraintdef(oid) INTO v_sig
+  FROM pg_constraint
+  WHERE conrelid = 'public.author_identity_links'::regclass
+    AND conname = 'author_identity_links_paper_fk';
+
+  IF v_sig IS DISTINCT FROM
+     'FOREIGN KEY (user_id, paper_id) REFERENCES papers(user_id, id) ON DELETE CASCADE' THEN
+    RAISE EXCEPTION
+      'author_identity: the link→paper edge is not the expected user-scoped composite: %',
+      COALESCE(v_sig, '<missing>');
   END IF;
 END
 $verify$;

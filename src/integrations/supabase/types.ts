@@ -105,11 +105,11 @@ export type Database = {
             referencedColumns: ["user_id", "id"]
           },
           {
-            foreignKeyName: "author_identity_links_paper_id_fkey"
-            columns: ["paper_id"]
+            foreignKeyName: "author_identity_links_paper_fk"
+            columns: ["user_id", "paper_id"]
             isOneToOne: false
             referencedRelation: "papers"
-            referencedColumns: ["id"]
+            referencedColumns: ["user_id", "id"]
           },
         ]
       }
