@@ -33,6 +33,8 @@ const PAPER_E = "E2E Identity E — Rewritten authors";
 const PERSON_A = "Stuart M Phillips";
 const PERSON_B = "S M Phillips";
 const MERCER = "Alex R Mercer";
+/** Paper D spells the same name with a period — two people, one 001A key. */
+const MERCER_D = "Alex R. Mercer";
 const EDITABLE_AUTHOR = "Dana Q Rewritten";
 
 /** Open Analytics (desktop inline panel) and wait for the author selector. */
@@ -164,7 +166,7 @@ async function resetIdentities(page: Page) {
     // left — each step is what makes the next one legal.
     let acted = false;
     for (const name of [
-      /Undo one merge/,
+      /^Undo merge of /,
       /^Unlink$/,
       /^Remove alias /,
       /Delete person/,
@@ -258,8 +260,16 @@ test("a shared ORCID suggests a link but never applies one", async ({ page }) =>
   // `li li` reaches the mention row inside the person card. Matching plain `li`
   // would also match the card itself, which by now holds two linked mentions and
   // therefore two Unlink buttons.
-  const mentionRow = forUnlink.locator("li li").filter({ hasText: PAPER_B }).first();
-  await mentionRow.getByRole("button", { name: /^Unlink$/ }).click();
+  const mentionRows = forUnlink.locator("li li").filter({ hasText: PAPER_B });
+  await expect(mentionRows).toHaveCount(1);
+  await mentionRows.first().getByRole("button", { name: /^Unlink$/ }).click();
+  // Wait for the decision to land before reading Analytics. Unlinking refetches
+  // the identity dataset AND the linked-paper evidence behind it, so closing the
+  // dialog immediately can read a cache that still holds the link. Asserting on
+  // the COUNT rather than on the clicked element is the file's rule: `.first()`
+  // re-resolves, so "the row I clicked is gone" can never become true while a
+  // sibling row still matches.
+  await expect(mentionRows).toHaveCount(0, { timeout: 15_000 });
   await closeManager(page);
 
   const split = await authorOptions(page);
@@ -331,7 +341,9 @@ test("a merge is reversible and moves nothing", async ({ page }) => {
   const forUndo = await openManager(page);
   await forUndo.getByRole("tab", { name: /People/ }).click();
   await expect(forUndo.getByText("1 merged")).toBeVisible();
-  await forUndo.getByRole("button", { name: /Undo one merge/ }).first().click();
+  await forUndo
+    .getByRole("button", { name: `Undo merge of ${PERSON_A} into ${PERSON_B}` })
+    .click();
   await expect(forUndo.getByText("1 merged")).toBeHidden({ timeout: 15_000 });
   await closeManager(page);
 
@@ -339,6 +351,189 @@ test("a merge is reversible and moves nothing", async ({ page }) => {
   const unmerged = await authorOptions(page);
   expect(unmerged).toContain(PERSON_A);
   expect(unmerged).toContain(PERSON_B);
+});
+
+test("an unresolved mention is linked to a person the evidence never suggested", async ({
+  page,
+}) => {
+  // The manual path, exercised where deterministic evidence offers nothing at
+  // all. `Dana Q Rewritten` shares neither an ORCID nor a name key with
+  // `Alex R Mercer`, so no candidate button can exist — and that is precisely
+  // when a user needs to be able to decide for themselves.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_C);
+
+  const card = await unresolvedCard(dialog, PAPER_E);
+  await expect(card.getByRole("button", { name: /^Link to / })).toHaveCount(0);
+
+  await card
+    .getByRole("button", { name: `Link ${EDITABLE_AUTHOR} to an existing person` })
+    .click();
+  await card
+    .getByLabel(`Search people to link ${EDITABLE_AUTHOR} to`, { exact: true })
+    .fill(MERCER);
+  await card.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
+
+  // Choosing is not deciding. Nothing is written until the second, explicit step.
+  await expect(card).toContainText(`Link ${EDITABLE_AUTHOR} to ${MERCER}.`);
+  await expect(card.getByRole("button", { name: "Link to this person" })).toBeVisible();
+
+  await card.getByRole("button", { name: "Link to this person" }).click();
+  await expect(card).toBeHidden({ timeout: 15_000 });
+
+  await closeManager(page);
+
+  // The mention now counts as that person, and its own spelling is gone.
+  const options = await authorOptions(page);
+  expect(options).toContain(MERCER);
+  expect(options).not.toContain(EDITABLE_AUTHOR);
+});
+
+test("a manual override is offered, warned about, and reversible", async ({ page }) => {
+  // The case the algorithm refuses on purpose: identical names, contradicting
+  // ORCIDs. No suggestion is offered — and the person is still selectable by
+  // hand, because the user may know which iD is wrong and Paperlume may not.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_C);
+
+  const cardD = await unresolvedCard(dialog, PAPER_D);
+  await expect(cardD.getByRole("button", { name: /^Link to / })).toHaveCount(0);
+
+  await cardD.getByRole("button", { name: `Link ${MERCER_D} to an existing person` }).click();
+  await cardD.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
+
+  // Both iDs are stated so the user can check them. Neither is called wrong.
+  await expect(cardD).toContainText(/Paperlume did not suggest this match/i);
+  await expect(cardD).toContainText(/Continuing is your decision/i);
+
+  // Cancelling writes nothing at all.
+  await cardD.getByRole("button", { name: /^Cancel$/ }).click();
+  await expect(cardD.getByRole("button", { name: "Link to this person" })).toHaveCount(0);
+  await closeManager(page);
+  expect(await authorOptions(page), "cancelling changed nothing").toContain(MERCER);
+
+  // Committing the override groups them, and the conflict is then reported on
+  // the person rather than hidden.
+  const again = await openManager(page);
+  const retry = await unresolvedCard(again, PAPER_D);
+  await retry.getByRole("button", { name: `Link ${MERCER_D} to an existing person` }).click();
+  await retry.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
+  await retry.getByRole("button", { name: "Link to this person" }).click();
+  await expect(retry).toBeHidden({ timeout: 15_000 });
+
+  await again.getByRole("tab", { name: /People/ }).click();
+  await expect(again.getByText(/Linked papers state different ORCIDs/i)).toBeVisible();
+  await closeManager(page);
+
+  // One person now, where the algorithm alone would have left two.
+  const options = await authorOptions(page);
+  expect(options.filter((label) => label.startsWith("Alex R"))).toHaveLength(1);
+});
+
+test("any two people can be merged without a duplicate suggestion", async ({ page }) => {
+  // Two people with no shared ORCID and no shared name key, so the duplicate
+  // detector says nothing about them. The detector is an assistant, not the list
+  // of merges the user is allowed to make.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_C);
+  await createPersonFrom(dialog, PAPER_E);
+
+  await dialog.getByRole("tab", { name: /Duplicates/ }).click();
+  await expect(dialog.getByText(/No possible duplicates found/i)).toBeVisible();
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const peoplePanel = dialog.getByRole("tabpanel", { name: /People/ });
+  await peoplePanel
+    .getByRole("button", { name: `Merge ${MERCER} into another person` })
+    .click();
+  await peoplePanel
+    .getByRole("button", { name: new RegExp(`^Choose ${EDITABLE_AUTHOR}`) })
+    .click();
+
+  // Direction is explicit: the target's name becomes the group's name.
+  await expect(peoplePanel).toContainText(`Merge ${MERCER} into ${EDITABLE_AUTHOR}.`);
+  await peoplePanel.getByRole("button", { name: "Merge into this person" }).click();
+  await expect(
+    peoplePanel.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
+  ).toBeVisible({ timeout: 15_000 });
+  await closeManager(page);
+
+  // Analytics resolves the merged-away person through the root.
+  const merged = await authorOptions(page);
+  expect(merged).toContain(EDITABLE_AUTHOR);
+  expect(merged).not.toContain(MERCER);
+
+  // And undoing restores both, because nothing was moved.
+  const undo = await openManager(page);
+  await undo.getByRole("tab", { name: /People/ }).click();
+  await undo
+    .getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` })
+    .click();
+  await expect(
+    undo.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
+  ).toBeHidden({ timeout: 15_000 });
+  await closeManager(page);
+
+  const restored = await authorOptions(page);
+  expect(restored).toContain(MERCER);
+  expect(restored).toContain(EDITABLE_AUTHOR);
+});
+
+test("one merge edge out of a chain is undone by name", async ({ page }) => {
+  // `A → B → C` puts two merged members on one card. The user has to be able to
+  // tell them apart and reverse exactly one — undoing the wrong edge silently
+  // regroups their library.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+  await createPersonFrom(dialog, PAPER_C);
+  await createPersonFrom(dialog, PAPER_E);
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const peoplePanel = dialog.getByRole("tabpanel", { name: /People/ });
+
+  // A into Mercer.
+  await peoplePanel
+    .getByRole("button", { name: `Merge ${PERSON_A} into another person` })
+    .click();
+  await peoplePanel.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
+  await peoplePanel.getByRole("button", { name: "Merge into this person" }).click();
+  await expect(
+    peoplePanel.getByRole("button", { name: `Undo merge of ${PERSON_A} into ${MERCER}` }),
+  ).toBeVisible({ timeout: 15_000 });
+
+  // Mercer into Rewritten, which makes Rewritten the root of all three.
+  await peoplePanel
+    .getByRole("button", { name: `Merge ${MERCER} into another person` })
+    .click();
+  await peoplePanel
+    .getByRole("button", { name: new RegExp(`^Choose ${EDITABLE_AUTHOR}`) })
+    .click();
+  await peoplePanel.getByRole("button", { name: "Merge into this person" }).click();
+  await expect(
+    peoplePanel.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
+  ).toBeVisible({ timeout: 15_000 });
+
+  // Two undo controls on one card, each naming its own edge rather than reading
+  // "Undo one merge" twice over.
+  const undoA = peoplePanel.getByRole("button", {
+    name: `Undo merge of ${PERSON_A} into ${MERCER}`,
+  });
+  const undoMercer = peoplePanel.getByRole("button", {
+    name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}`,
+  });
+  await expect(undoA).toBeVisible();
+  await expect(undoMercer).toBeVisible();
+
+  // Reverse A's edge only. Mercer must stay merged into Rewritten.
+  await undoA.click();
+  await expect(undoA).toBeHidden({ timeout: 15_000 });
+  await expect(undoMercer).toBeVisible();
+  await closeManager(page);
+
+  const options = await authorOptions(page);
+  expect(options, "A is independent again").toContain(PERSON_A);
+  expect(options, "the rest of the chain still stands").toContain(EDITABLE_AUTHOR);
+  expect(options).not.toContain(MERCER);
 });
 
 test("an alias is added and removed by the row it names", async ({ page }) => {
