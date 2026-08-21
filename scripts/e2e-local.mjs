@@ -115,6 +115,13 @@ const DEFAULT_SPECS = [
   "e2e/settings-storage.spec.ts",
   // Opens Settings and downloads the account export; reads only, mutates nothing.
   "e2e/account-export.spec.ts",
+  // AUTHOR-IDENTITY-RESOLUTION-001C acceptance flows. Mutating, but only within
+  // the identity tables it also cleans up: each test resets every identity,
+  // link, alias and merge edge before it runs and the suite resets again at the
+  // end, so it is order-independent. The one paper it edits (identity fixture E)
+  // exists for that purpose alone and is restored before the test finishes.
+  // No import, no live ORCID lookup, no Edge Function.
+  "e2e/author-identity.spec.ts",
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
   // local delete-account Edge Function. The lifecycle proves afterwards that the

@@ -349,6 +349,21 @@ function UnresolvedRow({
   );
 }
 
+/**
+ * How many unresolved mentions are rendered at once.
+ *
+ * A modest library reaches several hundred author mentions — 120 papers with two
+ * authors each is already 240 — and every one of them is a card carrying its own
+ * buttons and an editable field. Rendering them all makes the dialog slow to open
+ * and slow to update after every decision, which matters most exactly when the
+ * user is working through a long list.
+ *
+ * Suggestions are ordered first, so the mentions worth acting on are the ones on
+ * screen; the search box reaches anything else. The tab label keeps showing the
+ * true total, because how much work remains is the honest number.
+ */
+const UNRESOLVED_RENDER_LIMIT = 50;
+
 function UnresolvedList({
   entries,
   identities,
@@ -358,6 +373,21 @@ function UnresolvedList({
   identities: IdentitiesApi;
   busy: boolean;
 }) {
+  const [search, setSearch] = useState("");
+
+  const matching = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return entries;
+    return entries.filter(
+      (entry) =>
+        entry.mention.displayName.toLowerCase().includes(query) ||
+        entry.mention.paperTitle.toLowerCase().includes(query),
+    );
+  }, [entries, search]);
+
+  const visible = matching.slice(0, UNRESOLVED_RENDER_LIMIT);
+  const hidden = matching.length - visible.length;
+
   if (entries.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
@@ -368,19 +398,40 @@ function UnresolvedList({
   }
 
   return (
-    <ScrollArea className="h-[52vh] pr-3">
-      <ul className="space-y-2 py-2">
-        {entries.map((entry) => (
-          <UnresolvedRow
-            key={`${entry.mention.paperId}:${entry.mention.authorIndex}`}
-            mention={entry.mention}
-            candidates={entry.candidates}
-            identities={identities}
-            busy={busy}
-          />
-        ))}
-      </ul>
-    </ScrollArea>
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <Input
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="Search author or paper"
+        aria-label="Search unresolved author mentions"
+        className="h-8 text-sm"
+      />
+      {matching.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          No unresolved author mentions match that search.
+        </p>
+      ) : (
+        <ScrollArea className="h-[46vh] pr-3">
+          <ul className="space-y-2 py-1">
+            {visible.map((entry) => (
+              <UnresolvedRow
+                key={`${entry.mention.paperId}:${entry.mention.authorIndex}`}
+                mention={entry.mention}
+                candidates={entry.candidates}
+                identities={identities}
+                busy={busy}
+              />
+            ))}
+          </ul>
+          {hidden > 0 && (
+            <p className="px-1 pb-2 text-xs text-muted-foreground">
+              {hidden} more not shown. Search to narrow the list, or resolve these
+              first — mentions with a suggestion are listed before the rest.
+            </p>
+          )}
+        </ScrollArea>
+      )}
+    </div>
   );
 }
 

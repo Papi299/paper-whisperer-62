@@ -82,16 +82,39 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.search_papers(uuid,text,integer,integer)',
     'public.search_papers_short(uuid,text)',
     'public.set_paper_projects(uuid,uuid[])',
-    'public.set_paper_tags(uuid,uuid[])'
+    'public.set_paper_tags(uuid,uuid[])',
+    -- AUTHOR-IDENTITY-RESOLUTION-001C. Every identity decision that must be
+    -- validated against current paper state or the merge graph is an RPC, so all
+    -- six belong in this matrix.
+    'public.create_author_identity_from_mention(uuid,integer,text,text)',
+    'public.link_author_mention_to_identity(uuid,integer,text,uuid,text,boolean)',
+    'public.unlink_author_mention_identity(uuid,integer)',
+    'public.merge_author_identities(uuid,uuid)',
+    'public.unmerge_author_identity(uuid)',
+    'public.delete_empty_author_identity(uuid)'
   ]);
 $hlp$;
 
 -- The three trigger-only SECURITY DEFINER functions.
+-- Internal 001C helpers: called only from inside other SECURITY DEFINER
+-- functions, which execute as the owner, so no role needs EXECUTE on them. Same
+-- required posture as a trigger-only function, different reason for it.
+CREATE FUNCTION pg_temp.internal_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
+  SELECT * FROM (VALUES
+    ('public.author_identity_effective_root(uuid,uuid)'),
+    ('public.validate_author_mention_for_identity(uuid,uuid,integer,text)')
+  ) v(sig)
+$hlp$;
+
 CREATE FUNCTION pg_temp.trigger_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.check_and_consume_storage_quota()',
     'public.handle_new_user()',
-    'public.refund_storage_quota()'
+    'public.refund_storage_quota()',
+    -- 001C stale-link invalidation. SECURITY DEFINER because clients hold no
+    -- DELETE on author_identity_links, so no role may be able to call it as a
+    -- general-purpose privileged delete.
+    'public.clear_author_identity_links_on_authors_change()'
   ]);
 $hlp$;
 
@@ -118,13 +141,17 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(164);
+SELECT plan(203);
 
--- ══ 1. Inventory: exactly 20 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 29 SECURITY DEFINER functions, none unexpected ═════
+-- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
+-- internal helpers and one trigger function. The count is deliberately exact: a
+-- new definer function that nobody registered here is the single easiest way to
+-- widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  20, 'exactly 20 SECURITY DEFINER functions in public');
+  29, 'exactly 29 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -148,11 +175,20 @@ SELECT is(
        'public.set_paper_tags(uuid,uuid[])'::regprocedure,
        'public.check_and_consume_storage_quota()'::regprocedure,
        'public.handle_new_user()'::regprocedure,
-       'public.refund_storage_quota()'::regprocedure
+       'public.refund_storage_quota()'::regprocedure,
+       'public.create_author_identity_from_mention(uuid,integer,text,text)'::regprocedure,
+       'public.link_author_mention_to_identity(uuid,integer,text,uuid,text,boolean)'::regprocedure,
+       'public.unlink_author_mention_identity(uuid,integer)'::regprocedure,
+       'public.merge_author_identities(uuid,uuid)'::regprocedure,
+       'public.unmerge_author_identity(uuid)'::regprocedure,
+       'public.delete_empty_author_identity(uuid)'::regprocedure,
+       'public.author_identity_effective_root(uuid,uuid)'::regprocedure,
+       'public.validate_author_mention_for_identity(uuid,uuid,integer,text)'::regprocedure,
+       'public.clear_author_identity_links_on_authors_change()'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
--- ══ 2. EXECUTE matrix over the 17 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 23 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -180,7 +216,28 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'trigger-only owner execution preserved: ' || sig) FROM pg_temp.trigger_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 17) ═══════════
+-- ══ 3c. Internal-only helpers: reachable by nobody but their owner ══════════
+-- These exist so the write paths agree on one definition of "effective identity"
+-- and one definition of "is this mention still what the user read". Neither is a
+-- product API, and `validate_author_mention_for_identity` in particular takes a
+-- caller-supplied user id — granting it would hand any client a way to probe
+-- another account's papers.
+SELECT ok(
+  NOT has_function_privilege('authenticated', sig::regprocedure, 'EXECUTE')
+  AND NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = sig::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+  'internal-only not client-executable (PUBLIC/anon/authenticated): ' || sig
+) FROM pg_temp.internal_fns() sig;
+SELECT ok(NOT has_function_privilege('service_role', sig::regprocedure, 'EXECUTE'),
+  'internal-only not service_role-executable: ' || sig) FROM pg_temp.internal_fns() sig;
+SELECT ok(has_function_privilege(
+    (SELECT p.proowner::regrole::text FROM pg_proc p WHERE p.oid = sig::regprocedure),
+    sig::regprocedure, 'EXECUTE'),
+  'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
+
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 23) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(

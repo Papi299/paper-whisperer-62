@@ -239,6 +239,12 @@ export function useDeduplication(userId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: queryKeys.papers.all(userId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.papers.count(userId) });
       queryClient.invalidateQueries({ queryKey: ["junction"] });
+      // AUTHOR-IDENTITY-RESOLUTION-001C: a duplicate merge deletes the discarded
+      // papers — taking their identity links with them by cascade — and
+      // re-assigns the kept paper's authors, which clears its links too if the
+      // value actually changed. Both happen in the database, so the cached
+      // identity dataset is stale either way.
+      queryClient.invalidateQueries({ queryKey: queryKeys.authorIdentities.all(userId) });
 
       return true;
     },
