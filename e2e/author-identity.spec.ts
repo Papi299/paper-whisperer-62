@@ -341,6 +341,37 @@ test("a merge is reversible and moves nothing", async ({ page }) => {
   expect(unmerged).toContain(PERSON_B);
 });
 
+test("an alias is added and removed by the row it names", async ({ page }) => {
+  // The alias path is the one place where a name is NOT a key: two rows may
+  // carry the same words, so removal has to identify the row. A UI that removed
+  // "by text" would delete nothing and leave the name on screen, which is
+  // exactly what this asserts does not happen.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const panel = dialog.getByRole("tabpanel", { name: /People/ });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText(/No other names recorded/i)).toBeVisible();
+
+  await panel.getByLabel(`Add another name for ${PERSON_A}`).fill(PERSON_B);
+  await panel.getByRole("button", { name: /^Add$/ }).click();
+  await expect(panel.getByRole("button", { name: `Remove alias ${PERSON_B}` })).toBeVisible({
+    timeout: 15_000,
+  });
+  await closeManager(page);
+
+  // The alias makes the person findable by a name no linked mention supplies.
+  const forSearch = await openManager(page);
+  await forSearch.getByRole("tab", { name: /People/ }).click();
+  await forSearch.getByRole("button", { name: `Remove alias ${PERSON_B}` }).click();
+  await expect(
+    forSearch.getByText(/No other names recorded/i),
+    "removing an alias must actually delete its row",
+  ).toBeVisible({ timeout: 15_000 });
+  await closeManager(page);
+});
+
 test("editing a paper's authors clears its identity links atomically", async ({ page }) => {
   // Paper E exists for this test alone: rewriting an authors array also replaces
   // the paper's provenance with honest manual entries, and papers A-D must keep
