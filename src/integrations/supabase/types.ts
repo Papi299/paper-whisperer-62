@@ -9,6 +9,146 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      author_identities: {
+        Row: {
+          created_at: string
+          id: string
+          preferred_name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          preferred_name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          preferred_name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      author_identity_aliases: {
+        Row: {
+          alias: string
+          created_at: string
+          id: string
+          identity_id: string
+          user_id: string
+        }
+        Insert: {
+          alias: string
+          created_at?: string
+          id?: string
+          identity_id: string
+          user_id: string
+        }
+        Update: {
+          alias?: string
+          created_at?: string
+          id?: string
+          identity_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "author_identity_aliases_identity_fk"
+            columns: ["user_id", "identity_id"]
+            isOneToOne: false
+            referencedRelation: "author_identities"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
+      author_identity_links: {
+        Row: {
+          author_index: number
+          author_name_snapshot: string
+          created_at: string
+          id: string
+          identity_id: string
+          paper_id: string
+          resolution_basis: string
+          user_id: string
+        }
+        Insert: {
+          author_index: number
+          author_name_snapshot: string
+          created_at?: string
+          id?: string
+          identity_id: string
+          paper_id: string
+          resolution_basis: string
+          user_id: string
+        }
+        Update: {
+          author_index?: number
+          author_name_snapshot?: string
+          created_at?: string
+          id?: string
+          identity_id?: string
+          paper_id?: string
+          resolution_basis?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "author_identity_links_identity_fk"
+            columns: ["user_id", "identity_id"]
+            isOneToOne: false
+            referencedRelation: "author_identities"
+            referencedColumns: ["user_id", "id"]
+          },
+          {
+            foreignKeyName: "author_identity_links_paper_id_fkey"
+            columns: ["paper_id"]
+            isOneToOne: false
+            referencedRelation: "papers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      author_identity_merges: {
+        Row: {
+          created_at: string
+          source_identity_id: string
+          target_identity_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          source_identity_id: string
+          target_identity_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          source_identity_id?: string
+          target_identity_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "author_identity_merges_source_fk"
+            columns: ["user_id", "source_identity_id"]
+            isOneToOne: false
+            referencedRelation: "author_identities"
+            referencedColumns: ["user_id", "id"]
+          },
+          {
+            foreignKeyName: "author_identity_merges_target_fk"
+            columns: ["user_id", "target_identity_id"]
+            isOneToOne: false
+            referencedRelation: "author_identities"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
       filter_presets: {
         Row: {
           created_at: string
@@ -209,8 +349,8 @@ export type Database = {
       papers: {
         Row: {
           abstract: string | null
-          authors: Json | null
           author_provenance: Json | null
+          authors: Json | null
           created_at: string
           doi: string | null
           drive_url: string | null
@@ -239,8 +379,8 @@ export type Database = {
         }
         Insert: {
           abstract?: string | null
-          authors?: Json | null
           author_provenance?: Json | null
+          authors?: Json | null
           created_at?: string
           doi?: string | null
           drive_url?: string | null
@@ -269,8 +409,8 @@ export type Database = {
         }
         Update: {
           abstract?: string | null
-          authors?: Json | null
           author_provenance?: Json | null
+          authors?: Json | null
           created_at?: string
           doi?: string | null
           drive_url?: string | null
@@ -738,6 +878,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      author_identity_effective_root: {
+        Args: { p_identity_id: string; p_user_id: string }
+        Returns: string
+      }
       bulk_set_paper_projects: {
         Args: { p_paper_ids: string[]; p_project_ids: string[] }
         Returns: undefined
@@ -760,6 +904,19 @@ export type Database = {
           reset_at: string
           used: number
         }[]
+      }
+      create_author_identity_from_mention: {
+        Args: {
+          p_author_index: number
+          p_expected_author: string
+          p_paper_id: string
+          p_preferred_name?: string
+        }
+        Returns: Json
+      }
+      delete_empty_author_identity: {
+        Args: { p_identity_id: string }
+        Returns: boolean
       }
       filter_papers_by_keywords: {
         Args: { p_keywords: string[]; p_user_id: string }
@@ -814,6 +971,21 @@ export type Database = {
         Args: { arr: string[] }
         Returns: unknown
       }
+      link_author_mention_to_identity: {
+        Args: {
+          p_author_index: number
+          p_expected_author: string
+          p_identity_id: string
+          p_paper_id: string
+          p_replace_existing?: boolean
+          p_resolution_basis?: string
+        }
+        Returns: Json
+      }
+      merge_author_identities: {
+        Args: { p_source_identity_id: string; p_target_identity_id: string }
+        Returns: Json
+      }
       merge_exact_duplicates: {
         Args: { p_discard_ids: string[]; p_keep_id: string }
         Returns: undefined
@@ -867,6 +1039,23 @@ export type Database = {
       set_paper_tags: {
         Args: { p_paper_id: string; p_tag_ids: string[] }
         Returns: undefined
+      }
+      unlink_author_mention_identity: {
+        Args: { p_author_index: number; p_paper_id: string }
+        Returns: boolean
+      }
+      unmerge_author_identity: {
+        Args: { p_source_identity_id: string }
+        Returns: boolean
+      }
+      validate_author_mention_for_identity: {
+        Args: {
+          p_author_index: number
+          p_expected_author: string
+          p_paper_id: string
+          p_user_id: string
+        }
+        Returns: string
       }
     }
     Enums: {

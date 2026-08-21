@@ -9,6 +9,10 @@ import {
   MANIFEST_PATH,
   categoryArchivePath,
   type AccountExportDataMatchesRegistry,
+  type AuthorIdentityAliasColumnsAreExported,
+  type AuthorIdentityColumnsAreExported,
+  type AuthorIdentityLinkColumnsAreExported,
+  type AuthorIdentityMergeColumnsAreExported,
   type PaperColumnsAreClassified,
   type ProfileColumnsAreClassified,
 } from "../types";
@@ -67,6 +71,33 @@ describe("account export compile-time guards", () => {
     const guard: EveryTableIsClassified = true;
     expect(guard).toBe(true);
   });
+
+  /*
+   * 001C identity decisions are not reconstructible from anything else in the
+   * archive, so every column of all four tables must travel. There is no
+   * "excluded" counterpart to balance against: none of these tables holds a
+   * secret or a generated artifact, so a column missing from its export list is
+   * always a loss, never a decision.
+   */
+  it("exports every author_identities column", () => {
+    const guard: AuthorIdentityColumnsAreExported = true;
+    expect(guard).toBe(true);
+  });
+
+  it("exports every author_identity_aliases column", () => {
+    const guard: AuthorIdentityAliasColumnsAreExported = true;
+    expect(guard).toBe(true);
+  });
+
+  it("exports every author_identity_links column", () => {
+    const guard: AuthorIdentityLinkColumnsAreExported = true;
+    expect(guard).toBe(true);
+  });
+
+  it("exports every author_identity_merges column", () => {
+    const guard: AuthorIdentityMergeColumnsAreExported = true;
+    expect(guard).toBe(true);
+  });
 });
 
 describe("account export category registry", () => {
@@ -90,6 +121,12 @@ describe("account export category registry", () => {
         "keyword_exclusion_pool",
         "study_type_exclusion_pool",
         "paper_attachments",
+        // AUTHOR-IDENTITY-RESOLUTION-001C. Four additive files; no existing file
+        // changed shape, which is why ACCOUNT_EXPORT_VERSION stays 2.
+        "author_identities",
+        "author_identity_aliases",
+        "author_identity_links",
+        "author_identity_merges",
       ].sort(),
     );
   });

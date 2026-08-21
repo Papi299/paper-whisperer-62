@@ -5,9 +5,17 @@ import { fetchAllPagesInChunks } from "@/lib/fetchAllPagesInChunks";
 import { attachmentArchivePath, isSafeArchivePath } from "./sanitizeArchiveFilename";
 import {
   AccountExportError,
+  AUTHOR_IDENTITY_ALIAS_EXPORT_COLUMNS,
+  AUTHOR_IDENTITY_EXPORT_COLUMNS,
+  AUTHOR_IDENTITY_LINK_EXPORT_COLUMNS,
+  AUTHOR_IDENTITY_MERGE_EXPORT_COLUMNS,
   PAPER_EXPORT_COLUMNS,
   SAFE_PROFILE_COLUMNS,
   type AccountExportData,
+  type ExportedAuthorIdentity,
+  type ExportedAuthorIdentityAlias,
+  type ExportedAuthorIdentityLink,
+  type ExportedAuthorIdentityMerge,
   type ExportedAttachment,
   type ExportedFilterPreset,
   type ExportedKeywordExclusion,
@@ -48,6 +56,10 @@ type OwnedTable = keyof Database["public"]["Tables"];
 
 const PROFILE_SELECT = SAFE_PROFILE_COLUMNS.join(", ");
 const PAPERS_SELECT = PAPER_EXPORT_COLUMNS.join(", ");
+const AUTHOR_IDENTITIES_SELECT = AUTHOR_IDENTITY_EXPORT_COLUMNS.join(", ");
+const AUTHOR_IDENTITY_ALIASES_SELECT = AUTHOR_IDENTITY_ALIAS_EXPORT_COLUMNS.join(", ");
+const AUTHOR_IDENTITY_LINKS_SELECT = AUTHOR_IDENTITY_LINK_EXPORT_COLUMNS.join(", ");
+const AUTHOR_IDENTITY_MERGES_SELECT = AUTHOR_IDENTITY_MERGE_EXPORT_COLUMNS.join(", ");
 
 /**
  * `select("*")` is used only for tables with no secret column and no derived
@@ -136,6 +148,10 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
   let keywordExclusionPool: ExportedKeywordExclusion[];
   let studyTypeExclusionPool: ExportedStudyTypeExclusion[];
   let attachmentRows: Omit<ExportedAttachment, "archive_path">[];
+  let authorIdentities: ExportedAuthorIdentity[];
+  let authorIdentityAliases: ExportedAuthorIdentityAlias[];
+  let authorIdentityLinks: ExportedAuthorIdentityLink[];
+  let authorIdentityMerges: ExportedAuthorIdentityMerge[];
 
   try {
     // The profile projection lists its columns explicitly so `pubmed_api_key`
@@ -160,6 +176,10 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
       keywordExclusionPool,
       studyTypeExclusionPool,
       attachmentRows,
+      authorIdentities,
+      authorIdentityAliases,
+      authorIdentityLinks,
+      authorIdentityMerges,
     ] = await Promise.all([
       fetchOwnedTable<ExportedPaper>("papers", PAPERS_SELECT, userId, ["insert_order", "id"]),
       fetchOwnedTable<ExportedProject>("projects", ALL_COLUMNS, userId, ["created_at", "id"]),
@@ -175,6 +195,34 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
         ALL_COLUMNS,
         userId,
         ["created_at", "id"],
+      ),
+      // 001C identity decisions. Directly user-owned, so they take the same
+      // S2-scoped, paginated, deterministically ordered path as every other
+      // owned table. Merge edges order by their primary key (`source_identity_id`)
+      // because that is the only column guaranteed distinct per row.
+      fetchOwnedTable<ExportedAuthorIdentity>(
+        "author_identities",
+        AUTHOR_IDENTITIES_SELECT,
+        userId,
+        ["created_at", "id"],
+      ),
+      fetchOwnedTable<ExportedAuthorIdentityAlias>(
+        "author_identity_aliases",
+        AUTHOR_IDENTITY_ALIASES_SELECT,
+        userId,
+        ["created_at", "id"],
+      ),
+      fetchOwnedTable<ExportedAuthorIdentityLink>(
+        "author_identity_links",
+        AUTHOR_IDENTITY_LINKS_SELECT,
+        userId,
+        ["created_at", "id"],
+      ),
+      fetchOwnedTable<ExportedAuthorIdentityMerge>(
+        "author_identity_merges",
+        AUTHOR_IDENTITY_MERGES_SELECT,
+        userId,
+        ["created_at", "source_identity_id"],
       ),
     ]);
   } catch (error) {
@@ -198,6 +246,10 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
   assertOwnedRows(keywordExclusionPool, userId, "keyword_exclusion_pool");
   assertOwnedRows(studyTypeExclusionPool, userId, "study_type_exclusion_pool");
   assertOwnedRows(attachmentRows, userId, "paper_attachments");
+  assertOwnedRows(authorIdentities, userId, "author_identities");
+  assertOwnedRows(authorIdentityAliases, userId, "author_identity_aliases");
+  assertOwnedRows(authorIdentityLinks, userId, "author_identity_links");
+  assertOwnedRows(authorIdentityMerges, userId, "author_identity_merges");
 
   if (profile && profile.user_id !== userId) {
     throw integrityFailure("profiles returned a row belonging to another user");
@@ -245,6 +297,37 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     (a, b) => a.paper_id.localeCompare(b.paper_id) || a.tag_id.localeCompare(b.tag_id),
   );
 
+  // Identity decisions are a small graph, and every edge of it must land inside
+  // this account's own objects. The database already guarantees this with
+  // composite `(user_id, identity_id)` foreign keys, so a violation here would
+  // mean a row reached the client that the schema says cannot exist — the same
+  // fail-closed treatment the junction tables get, for the same reason.
+  const ownedIdentityIds = new Set(authorIdentities.map((identity) => identity.id));
+
+  for (const row of authorIdentityAliases) {
+    if (!ownedIdentityIds.has(row.identity_id)) {
+      throw integrityFailure("author_identity_aliases referenced an identity outside the account");
+    }
+  }
+  for (const row of authorIdentityLinks) {
+    if (!ownedIdentityIds.has(row.identity_id)) {
+      throw integrityFailure("author_identity_links referenced an identity outside the account");
+    }
+    // A link's paper must be one of the papers being archived, or the exported
+    // link would point at nothing a reader of this archive can resolve.
+    if (!ownedPaperIds.has(row.paper_id)) {
+      throw integrityFailure("author_identity_links referenced a paper outside the account");
+    }
+  }
+  for (const row of authorIdentityMerges) {
+    if (!ownedIdentityIds.has(row.source_identity_id)) {
+      throw integrityFailure("author_identity_merges referenced a source identity outside the account");
+    }
+    if (!ownedIdentityIds.has(row.target_identity_id)) {
+      throw integrityFailure("author_identity_merges referenced a target identity outside the account");
+    }
+  }
+
   const attachments: ExportedAttachment[] = attachmentRows.map((row) => {
     if (!ownedPaperIds.has(row.paper_id)) {
       throw integrityFailure("paper_attachments referenced a paper outside the account");
@@ -275,6 +358,10 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     keyword_exclusion_pool: keywordExclusionPool,
     study_type_exclusion_pool: studyTypeExclusionPool,
     paper_attachments: attachments,
+    author_identities: authorIdentities,
+    author_identity_aliases: authorIdentityAliases,
+    author_identity_links: authorIdentityLinks,
+    author_identity_merges: authorIdentityMerges,
   };
 }
 
