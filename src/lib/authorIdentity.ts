@@ -327,6 +327,37 @@ export interface AuthorIdentityClusterAlias {
   alias: string;
 }
 
+/**
+ * One identity that has been merged into this cluster, with enough context to
+ * tell it apart from the others.
+ *
+ * A cluster can absorb several identities, and undoing a merge reverses ONE
+ * outgoing edge — so a UI offering "Undo one merge" three times over is asking
+ * the user to pick blind. What distinguishes the choices has to be real
+ * evidence, never a UUID: the member's own name, the identity it merges
+ * directly into, and — when two merged members happen to share a preferred
+ * name, which nothing prevents — the aliases, linked spellings, ORCIDs and
+ * linked-mention count that belong to that member alone.
+ *
+ * All of it is the user's own recorded data. Nothing here is inferred.
+ */
+export interface AuthorIdentityMergedMember {
+  id: string;
+  preferredName: string;
+  /** The identity this member's own outgoing edge points at. */
+  targetId: string;
+  /** That target's `preferred_name`. `A → B → C` reads as A into B, not A into C. */
+  targetPreferredName: string;
+  /** This member's own manual aliases, display-normalized. */
+  aliases: readonly string[];
+  /** Distinct spellings of the mentions linked to THIS member. */
+  linkedSpellings: readonly string[];
+  /** Distinct valid ORCIDs on the mentions linked to THIS member. */
+  orcids: readonly string[];
+  /** How many mentions are linked to this member across the evidence papers. */
+  linkedMentionCount: number;
+}
+
 /** One effective person: a root identity plus everything merged into it. */
 export interface AuthorIdentityCluster {
   /** The terminal identity of the merge chain. The stable key for this person. */
@@ -337,6 +368,11 @@ export interface AuthorIdentityCluster {
   memberIds: readonly string[];
   /** Identities merged into the root, i.e. `memberIds` minus the root. */
   mergedMemberIds: readonly string[];
+  /**
+   * The same members, each carrying the context needed to identify the exact
+   * merge edge it owns. Same order as `mergedMemberIds`.
+   */
+  mergedMembers: readonly AuthorIdentityMergedMember[];
   /**
    * Manual aliases across the whole cluster, display-normalized and deduplicated
    * by text, each keeping the row id that identifies it.
@@ -362,6 +398,19 @@ export interface AuthorIdentityCluster {
   linkedMentions: readonly AuthorMentionRef[];
   /** Distinct papers contributing at least one linked mention. */
   paperIds: ReadonlySet<string>;
+  /**
+   * How many link ROWS the dataset holds for this cluster, whether or not the
+   * paper behind each one is present in the evidence set.
+   *
+   * `linkedMentions` answers "what can I show you"; this answers "is this person
+   * empty". They differ whenever evidence is incomplete, and only this one may
+   * gate a destructive action: `delete_empty_author_identity` counts rows, so a
+   * UI that counted resolvable mentions instead would offer Delete for a person
+   * the database will then refuse to delete.
+   */
+  linkRowCount: number;
+  /** Alias rows across the cluster, before deduplication by text. */
+  aliasRowCount: number;
 }
 
 /* -------------------------------------------------------------------------
@@ -388,6 +437,27 @@ export interface AuthorIdentityResolution {
   mentions: readonly AuthorMentionRef[];
   /** Positions with no link the user could still resolve (collectives excluded). */
   unresolvedMentions: readonly AuthorMentionRef[];
+  /**
+   * Links whose `author_name_snapshot` no longer matches the author text at
+   * their position, or whose position no longer exists on a paper that IS
+   * present in the evidence set.
+   *
+   * The database makes this unreachable through the application: a trigger
+   * clears every link on a paper the moment `authors` changes. These are what
+   * survives that guarantee failing — a privileged write, a restored backup, a
+   * future migration bug — and they are reported rather than obeyed, because a
+   * link that no longer describes its mention would otherwise resolve the wrong
+   * author to a person and be indistinguishable from a decision the user made.
+   */
+  staleLinks: readonly AuthorIdentityLinkRecord[];
+  /**
+   * `paperId:index` for every stale link at a position that still exists.
+   *
+   * The mention is offered as unresolved, so the user can put it right; acting
+   * on it has to replace the surviving row rather than insert beside it, and
+   * this is how the UI knows to ask for that.
+   */
+  staleLinkSlots: ReadonlySet<string>;
 }
 
 /** Root id for an identity, falling back to the identity itself. */
@@ -396,7 +466,32 @@ function rootFor(rootOf: ReadonlyMap<string, string>, identityId: string): strin
 }
 
 /**
- * Aggregate one user's identity decisions over their current papers.
+ * Aggregate one user's identity decisions.
+ *
+ * TWO PAPER COLLECTIONS, AND WHY THEY ARE NOT THE SAME ONE
+ * ─────────────────────────────────────────────────────────────────────────────
+ * `papers` is the CURRENT VIEW — whatever the Analytics filter is showing. It
+ * decides which mentions exist to be counted, charted and offered for
+ * resolution. Narrowing a filter should narrow all of that, and it does.
+ *
+ * `evidencePapers` is USER-WIDE — every paper the identity graph actually links
+ * to, fetched independently of any filter. It decides what an existing person
+ * *is*: which spellings the user accepted for them, which ORCIDs their linked
+ * papers carry, whether they have anything attached at all.
+ *
+ * Collapsing the two, as the first implementation did, makes a filter redefine
+ * the identity graph. Filter to one paper and a person's ORCID evidence
+ * vanishes, so the exact-ORCID candidate that person exists to produce is never
+ * offered; their linked spellings vanish, so manual search cannot find them;
+ * two people stop looking like duplicates because the paper that made them look
+ * alike is out of view; and an identity with links elsewhere in the library
+ * renders as empty, offering a Delete the database will then correctly refuse.
+ * None of those are filtering — they are the user's durable decisions changing
+ * shape because of a dropdown.
+ *
+ * `evidencePapers` defaults to `papers`, which is exactly right for a caller
+ * that has only one collection (every pure test, and any surface where the view
+ * IS the library).
  *
  * `dataset` is `null` when the identity subsystem is not installed in this
  * environment — a Preview running against a database that predates the 001C
@@ -404,22 +499,28 @@ function rootFor(rootOf: ReadonlyMap<string, string>, identityId: string): strin
  * mention is unresolved, which is precisely 001A behaviour, so every caller
  * degrades to the previous product rather than to an error state.
  *
- * Links are validated against CURRENT paper state before being trusted. A link
- * whose paper is not in `papers` (filtered out of the current view, or deleted)
- * contributes nothing, and neither does one whose author position no longer
- * exists. The database clears links whenever `papers.authors` changes, so a
- * surviving link's snapshot still matches its mention; this is the read-side
- * equivalent of that guarantee, and it means a stale row can never make two
- * unrelated authors look like one person.
+ * LINKS ARE VALIDATED BEFORE THEY ARE BELIEVED
+ * ─────────────────────────────────────────────────────────────────────────────
+ * A link is used only when all three hold: its paper is present, its author
+ * index still exists, and the author text at that index is byte-for-byte the
+ * `author_name_snapshot` recorded when the user decided. The database already
+ * guarantees the third by clearing every link on a paper whenever `authors`
+ * changes — this is the read-side twin of that trigger, and it is what makes the
+ * claim "a stale row can never resolve the wrong author to a person" true of the
+ * application and not only of the schema. A link that fails the check is
+ * reported through `staleLinks` and obeyed nowhere.
  */
 export function buildAuthorIdentityResolution(
   papers: readonly AuthorIdentityPaper[],
   dataset: AuthorIdentityDataset | null,
+  evidencePapers?: readonly AuthorIdentityPaper[],
 ): AuthorIdentityResolution {
   const mentions = collectAuthorMentions(papers);
-  const mentionBySlot = new Map<string, AuthorMentionRef>();
+  const viewMentionBySlot = new Map<string, AuthorMentionRef>();
+  const viewPaperIds = new Set<string>();
+  for (const paper of papers) viewPaperIds.add(paper.id);
   for (const mention of mentions) {
-    mentionBySlot.set(mentionSlotKey(mention.paperId, mention.authorIndex), mention);
+    viewMentionBySlot.set(mentionSlotKey(mention.paperId, mention.authorIndex), mention);
   }
 
   if (!dataset) {
@@ -430,7 +531,29 @@ export function buildAuthorIdentityResolution(
       linkBySlot: new Map(),
       mentions,
       unresolvedMentions: mentions.filter(isResolvableMention),
+      staleLinks: [],
+      staleLinkSlots: new Set(),
     };
+  }
+
+  /**
+   * Slot lookup over the union of both collections, view first.
+   *
+   * A paper in both describes the same row, so the duplicate is dropped rather
+   * than merged: preferring the view copy keeps every mention object identical
+   * to the one the charts were built from, which matters because consumers
+   * compare them by reference.
+   */
+  let evidenceMentionBySlot = viewMentionBySlot;
+  let evidencePaperIds = viewPaperIds;
+  if (evidencePapers && evidencePapers !== papers) {
+    evidenceMentionBySlot = new Map(viewMentionBySlot);
+    evidencePaperIds = new Set(viewPaperIds);
+    const extra = evidencePapers.filter((paper) => !viewPaperIds.has(paper.id));
+    for (const paper of extra) evidencePaperIds.add(paper.id);
+    for (const mention of collectAuthorMentions(extra)) {
+      evidenceMentionBySlot.set(mentionSlotKey(mention.paperId, mention.authorIndex), mention);
+    }
   }
 
   const rootOf = resolveAuthorIdentityRoots(dataset.merges);
@@ -446,37 +569,83 @@ export function buildAuthorIdentityResolution(
     else membersByRoot.set(root, [identity.id]);
   }
 
+  // Direct outgoing edge per identity, for naming the exact merge a member owns.
+  const mergeTargetById = new Map<string, string>();
+  for (const edge of dataset.merges) {
+    if (!mergeTargetById.has(edge.source_identity_id)) {
+      mergeTargetById.set(edge.source_identity_id, edge.target_identity_id);
+    }
+  }
+
   const aliasesByRoot = new Map<string, AuthorIdentityClusterAlias[]>();
+  const aliasRowsByIdentity = new Map<string, string[]>();
+  const aliasRowCountByRoot = new Map<string, number>();
   for (const alias of dataset.aliases) {
     // An alias on an identity the dataset does not contain cannot be attributed
     // to a cluster. The composite foreign key makes that unreachable; ignoring
     // it is the conservative response if it ever happens anyway.
     if (!identityById.has(alias.identity_id)) continue;
     const root = rootFor(rootOf, alias.identity_id);
+    aliasRowCountByRoot.set(root, (aliasRowCountByRoot.get(root) ?? 0) + 1);
     const display = normalizeAuthorDisplay(alias.alias);
     if (!display) continue;
     const entry: AuthorIdentityClusterAlias = { id: alias.id, alias: display };
     const list = aliasesByRoot.get(root);
     if (list) list.push(entry);
     else aliasesByRoot.set(root, [entry]);
+
+    const own = aliasRowsByIdentity.get(alias.identity_id);
+    if (own) own.push(display);
+    else aliasRowsByIdentity.set(alias.identity_id, [display]);
   }
 
   const linkBySlot = new Map<string, AuthorIdentityLinkRecord>();
   const linkedMentionsByRoot = new Map<string, AuthorMentionRef[]>();
+  const linkedMentionsByIdentity = new Map<string, AuthorMentionRef[]>();
+  const linkRowCountByRoot = new Map<string, number>();
+  const staleLinks: AuthorIdentityLinkRecord[] = [];
+  const staleLinkSlots = new Set<string>();
 
   for (const link of dataset.links) {
     if (!identityById.has(link.identity_id)) continue;
-    const slot = mentionSlotKey(link.paper_id, link.author_index);
-    const mention = mentionBySlot.get(slot);
-    // Not in the current paper set, or the position no longer exists.
-    if (!mention) continue;
-
-    linkBySlot.set(slot, link);
 
     const root = rootFor(rootOf, link.identity_id);
+    // Counted from the row, not from the mention: this is what decides whether
+    // the person is empty, and the database counts rows too.
+    linkRowCountByRoot.set(root, (linkRowCountByRoot.get(root) ?? 0) + 1);
+
+    const slot = mentionSlotKey(link.paper_id, link.author_index);
+    const mention = evidenceMentionBySlot.get(slot);
+
+    if (!mention) {
+      // A paper we do not have says nothing either way — it is simply not in
+      // evidence. A paper we DO have, missing the position the link names, is a
+      // genuine inconsistency and is reported as one.
+      if (evidencePaperIds.has(link.paper_id)) staleLinks.push(link);
+      continue;
+    }
+
+    // Byte-for-byte, matching the RPC's own expected-author guard. The 001A fold
+    // is deliberately not used: a punctuation-only edit still moved the text out
+    // from under the decision, and re-offering it is the conservative response.
+    if (mention.rawName !== link.author_name_snapshot) {
+      staleLinks.push(link);
+      staleLinkSlots.add(slot);
+      continue;
+    }
+
+    // The view's own resolution map stays view-scoped: it is what decides which
+    // mentions count as resolved on screen, and an out-of-view paper has no
+    // mention on screen to resolve.
+    if (viewMentionBySlot.has(slot)) linkBySlot.set(slot, link);
+
     const list = linkedMentionsByRoot.get(root);
     if (list) list.push(mention);
     else linkedMentionsByRoot.set(root, [mention]);
+
+    const own = linkedMentionsByIdentity.get(link.identity_id);
+    if (own) own.push(mention);
+    else linkedMentionsByIdentity.set(link.identity_id, [mention]);
   }
 
   const clusters = new Map<string, AuthorIdentityCluster>();
@@ -511,17 +680,42 @@ export function buildAuthorIdentityResolution(
       aliases.push(entry);
     }
 
+    const mergedMemberIds = ordered.slice(1);
+    const mergedMembers: AuthorIdentityMergedMember[] = mergedMemberIds.map((memberId) => {
+      const own = linkedMentionsByIdentity.get(memberId) ?? [];
+      const targetId = mergeTargetById.get(memberId) ?? root;
+      return {
+        id: memberId,
+        preferredName: identityById.get(memberId)?.preferred_name ?? "",
+        targetId,
+        targetPreferredName: identityById.get(targetId)?.preferred_name ?? "",
+        aliases: [...new Set(aliasRowsByIdentity.get(memberId) ?? [])],
+        linkedSpellings: [...new Set(own.map((mention) => mention.displayName))],
+        orcids: [
+          ...new Set(
+            own
+              .map((mention) => mention.orcid)
+              .filter((orcid): orcid is string => orcid !== null),
+          ),
+        ],
+        linkedMentionCount: own.length,
+      };
+    });
+
     clusters.set(root, {
       rootId: root,
       preferredName: rootRecord.preferred_name,
       memberIds: ordered,
-      mergedMemberIds: ordered.slice(1),
+      mergedMemberIds,
+      mergedMembers,
       aliases,
       linkedSpellings: [...spellings],
       orcids: [...orcids],
       hasOrcidConflict: orcids.size > 1,
       linkedMentions,
       paperIds,
+      linkRowCount: linkRowCountByRoot.get(root) ?? 0,
+      aliasRowCount: aliasRowCountByRoot.get(root) ?? 0,
     });
   }
 
@@ -538,6 +732,8 @@ export function buildAuthorIdentityResolution(
     linkBySlot,
     mentions,
     unresolvedMentions,
+    staleLinks,
+    staleLinkSlots,
   };
 }
 
@@ -615,12 +811,11 @@ function buildClusterIndexes(
   for (const cluster of clusters.values()) {
     for (const orcid of cluster.orcids) add(rootsByOrcid, orcid, cluster.rootId);
 
-    add(rootsByNameKey, authorMentionKey(cluster.preferredName), cluster.rootId);
-    for (const entry of cluster.aliases) {
-      add(rootsByNameKey, authorMentionKey(entry.alias), cluster.rootId);
-    }
-    for (const spelling of cluster.linkedSpellings) {
-      add(rootsByNameKey, authorMentionKey(spelling), cluster.rootId);
+    // The same approved-evidence terms the manual chooser searches, folded
+    // through 001A. One definition, so what the algorithm suggests and what the
+    // user can find can never drift apart.
+    for (const term of authorIdentitySearchTerms(cluster)) {
+      add(rootsByNameKey, authorMentionKey(term), cluster.rootId);
     }
   }
 
@@ -835,6 +1030,113 @@ export function findAuthorIdentityDuplicates(
 }
 
 /* -------------------------------------------------------------------------
+ * Manual selection — the user overriding the algorithm, on purpose
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Everything a cluster is findable by when the USER is doing the looking.
+ *
+ * Deliberately the same three sources the automatic candidate index uses — the
+ * preferred name, the manual aliases, every linked source spelling — plus the
+ * cluster's ORCID evidence, which a user can legitimately paste but which the
+ * automatic path must never match loosely.
+ *
+ * Every term is something the user already approved or a source already stated.
+ * Nothing is derived, expanded, transliterated or scored.
+ */
+export function authorIdentitySearchTerms(cluster: AuthorIdentityCluster): string[] {
+  return [
+    ...new Set([
+      cluster.preferredName,
+      ...cluster.aliases.map((entry) => entry.alias),
+      ...cluster.linkedSpellings,
+    ]),
+  ];
+}
+
+/**
+ * Clusters matching a manual search, for the user to choose from.
+ *
+ * THIS IS NOT CANDIDATE GENERATION, and the distinction is the point of the
+ * whole surface. `generateAuthorIdentityCandidates` answers "what does the
+ * evidence suggest?" and is deliberately, sometimes frustratingly, conservative
+ * — it withholds a name match when ORCID evidence contradicts it, precisely so
+ * a one-click Link never proposes joining two provably different people.
+ *
+ * That conservatism is advice. It is not permission. A user looking at their own
+ * library may know that one of those ORCIDs is simply wrong, and they must be
+ * able to say so. So this function applies no suppression at all: a cluster
+ * whose ORCID evidence contradicts the mention still appears, because hiding it
+ * would turn a suggestion engine into an authorization policy over which people
+ * the user is allowed to pick. The contradiction is surfaced at confirmation
+ * time instead — see `authorIdentityOrcidConflict`.
+ *
+ * An empty query returns everything, in preferred-name order, so the chooser
+ * opens as a browsable list rather than a blank prompt. Matching itself is 001A's
+ * unchanged `authorSearchMatches`, per term, so a query cannot straddle two
+ * terms — and a bare ORCID is matched exactly, since that is the only way a
+ * pasted iD is ever a search.
+ */
+export function searchAuthorIdentityClusters(
+  resolution: AuthorIdentityResolution,
+  search: string,
+  options: { excludeRootIds?: readonly string[] } = {},
+): AuthorIdentityCluster[] {
+  const excluded = new Set(options.excludeRootIds ?? []);
+  const query = search.trim();
+  const orcidQuery = normalizeOrcid(query);
+
+  const matches = [...resolution.clusters.values()].filter((cluster) => {
+    if (excluded.has(cluster.rootId)) return false;
+    if (!query) return true;
+    if (orcidQuery && cluster.orcids.includes(orcidQuery)) return true;
+    return authorIdentitySearchTerms(cluster).some((term) =>
+      authorSearchMatches(term, query),
+    );
+  });
+
+  return matches.sort(
+    (a, b) => a.preferredName.localeCompare(b.preferredName) || a.rootId.localeCompare(b.rootId),
+  );
+}
+
+/**
+ * The ORCIDs a cluster carries that contradict a given iD, or `[]` for none.
+ *
+ * Non-empty means: this mention states one iD, the person's linked papers state
+ * others, and no linked paper states this one. That is the exact condition that
+ * suppresses an automatic name candidate — reported here so a manual override
+ * can show the user what they are overriding, in their own data, before they
+ * commit to it.
+ *
+ * Neither value is called wrong. The application does not know which it is, and
+ * saying so would be an assertion it has no basis for.
+ */
+export function authorIdentityOrcidConflict(
+  orcid: string | null,
+  cluster: AuthorIdentityCluster,
+): string[] {
+  if (!orcid || cluster.orcids.length === 0) return [];
+  if (cluster.orcids.includes(orcid)) return [];
+  return [...cluster.orcids];
+}
+
+/**
+ * Whether two clusters carry non-empty, entirely disjoint ORCID evidence.
+ *
+ * The merge-time counterpart of the rule above, and the reason the duplicate
+ * detector stays quiet about such a pair. A manual merge may still proceed; the
+ * user is told first.
+ */
+export function authorIdentityClustersConflict(
+  a: AuthorIdentityCluster,
+  b: AuthorIdentityCluster,
+): boolean {
+  if (a.orcids.length === 0 || b.orcids.length === 0) return false;
+  return !a.orcids.some((orcid) => b.orcids.includes(orcid));
+}
+
+/* -------------------------------------------------------------------------
  * Analytics author entities
  * ---------------------------------------------------------------------- */
 
@@ -977,13 +1279,7 @@ export function indexAuthorEntities(
             rootId,
             // Deduplicated, and the preferred name leads so the most meaningful
             // term is first for any consumer that shows a subset.
-            searchTerms: [
-              ...new Set([
-                cluster.preferredName,
-                ...cluster.aliases.map((entry) => entry.alias),
-                ...cluster.linkedSpellings,
-              ]),
-            ],
+            searchTerms: authorIdentitySearchTerms(cluster),
           };
           entities.set(key, entity);
         }

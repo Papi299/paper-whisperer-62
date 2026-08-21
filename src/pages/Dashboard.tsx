@@ -787,6 +787,7 @@ function DashboardContent() {
                 onOpenChange={setIsAnalyticsOpen}
                 targets={analyticsTargets}
                 identityDataset={authorIdentities.dataset}
+                identityEvidencePapers={authorIdentities.linkedPapers}
                 identities={authorIdentities}
               />
             </>
@@ -906,6 +907,7 @@ function DashboardContent() {
           onOpenChange={setIsAnalyticsOpen}
           targets={analyticsTargets}
           identityDataset={authorIdentities.dataset}
+          identityEvidencePapers={authorIdentities.linkedPapers}
           identities={authorIdentities}
         />
       )}

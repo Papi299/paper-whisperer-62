@@ -4,15 +4,44 @@ import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/queryKeys";
 import { useToast } from "@/hooks/use-toast";
 import { isAuthorIdentitySchemaMissing } from "@/lib/authorIdentityAvailability";
+import { fetchAllPagesInChunks } from "@/lib/fetchAllPagesInChunks";
+import type { RangeableQuery } from "@/lib/fetchAllPages";
 import {
   EMPTY_AUTHOR_IDENTITY_DATASET,
   type AuthorIdentityAliasRecord,
   type AuthorIdentityDataset,
   type AuthorIdentityLinkRecord,
   type AuthorIdentityMergeRecord,
+  type AuthorIdentityPaper,
   type AuthorIdentityRecord,
   type AuthorResolutionBasis,
 } from "@/lib/authorIdentity";
+
+/**
+ * The only paper columns identity evidence needs.
+ *
+ * `authors` supplies the spellings and validates each link's snapshot;
+ * `author_provenance` supplies the ORCID and the collective flag; the rest is
+ * the context a user reads to recognise the paper. Nothing here is large — in
+ * particular `abstract` is absent, which is what keeps this from becoming a
+ * second copy of the library.
+ */
+const IDENTITY_EVIDENCE_SELECT = "id, title, authors, author_provenance, year, journal";
+
+/** What one identity read produced, as one indivisible unit. */
+interface AuthorIdentityQueryResult {
+  dataset: AuthorIdentityDataset;
+  linkedPapers: AuthorIdentityPaper[];
+}
+
+/**
+ * One shared empty array for the not-loaded-yet case.
+ *
+ * A fresh `[]` per render would change identity every time, and consumers
+ * memoize the whole resolution on it — so the entire identity graph would be
+ * rebuilt on every render for as long as the query is in flight.
+ */
+const NO_LINKED_PAPERS: readonly AuthorIdentityPaper[] = [];
 
 /**
  * The data layer for AUTHOR-IDENTITY-RESOLUTION-001C.
@@ -62,6 +91,25 @@ export interface AuthorIdentitiesState {
    * in this environment. Never an empty dataset standing in for "unknown".
    */
   dataset: AuthorIdentityDataset | null;
+  /**
+   * The papers the identity graph actually links to — USER-WIDE, and pointedly
+   * not the papers Analytics happens to be showing.
+   *
+   * What an existing person *is* — the spellings the user accepted for them, the
+   * ORCIDs their linked papers state, whether they have anything attached at all
+   * — is durable account state. Deriving it from the filtered Analytics
+   * collection, as the first implementation did, let a dropdown redefine the
+   * identity graph: filter to one paper and a person's ORCID evidence
+   * disappears, taking with it the exact-ORCID candidate that person exists to
+   * produce, their findability by linked spelling, and the duplicate pairing
+   * that spotted them in the first place.
+   *
+   * Fetched as a minimal projection — no abstract, no keywords, no MeSH terms —
+   * because identity evidence needs six columns and this must not become a
+   * whole-library read. Empty when nothing is linked yet, which is the common
+   * case and costs one skipped request.
+   */
+  linkedPapers: readonly AuthorIdentityPaper[];
   isLoading: boolean;
   /** True when reads failed specifically because the 001C schema is absent. */
   isUnavailable: boolean;
@@ -115,11 +163,11 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const query = useQuery<AuthorIdentityDataset | null, Error>({
+  const query = useQuery<AuthorIdentityQueryResult | null, Error>({
     queryKey: userId ? queryKeys.authorIdentities.all(userId) : ["authorIdentities", "anon"],
     enabled: !!userId,
     queryFn: async () => {
-      if (!userId) return EMPTY_AUTHOR_IDENTITY_DATASET;
+      if (!userId) return { dataset: EMPTY_AUTHOR_IDENTITY_DATASET, linkedPapers: [] };
 
       // Explicit column lists, and an explicit `user_id` filter on top of RLS —
       // the same defence-in-depth every other owned-table read in this codebase
@@ -159,12 +207,39 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
         throw result.error;
       }
 
-      return {
+      const dataset: AuthorIdentityDataset = {
         identities: (identities.data ?? []) as AuthorIdentityRecord[],
         aliases: (aliases.data ?? []) as AuthorIdentityAliasRecord[],
         links: (links.data ?? []) as AuthorIdentityLinkRecord[],
         merges: (merges.data ?? []) as AuthorIdentityMergeRecord[],
       };
+
+      /**
+       * The evidence read, in the same unit as the decisions it explains.
+       *
+       * Sequential rather than parallel because it cannot be anything else: the
+       * paper ids come from the links. Keeping it inside this one `queryFn`
+       * keeps the pair atomic — a cache holding new links beside old papers
+       * would show a person their evidence for one render, which is exactly the
+       * inconsistency the single query key exists to prevent.
+       *
+       * Only papers that are actually linked are fetched, chunked so a long id
+       * list cannot overflow the request URL and paginated so a large one cannot
+       * be silently truncated at PostgREST's 1000-row default.
+       */
+      const linkedPaperIds = [...new Set(dataset.links.map((link) => link.paper_id))].sort();
+      const linkedPapers = await fetchAllPagesInChunks<AuthorIdentityPaper>(
+        linkedPaperIds,
+        (chunk) =>
+          supabase
+            .from("papers")
+            .select(IDENTITY_EVIDENCE_SELECT)
+            .eq("user_id", userId)
+            .in("id", chunk)
+            .order("id", { ascending: true }) as unknown as RangeableQuery,
+      );
+
+      return { dataset, linkedPapers };
     },
     // Identity decisions change only when this user changes them, and every
     // mutation invalidates explicitly, so background refetching would be churn.
@@ -387,7 +462,8 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
   const isUnavailable = query.data === null && !query.isLoading && !readError;
 
   return {
-    dataset: query.data ?? null,
+    dataset: query.data?.dataset ?? null,
+    linkedPapers: query.data?.linkedPapers ?? NO_LINKED_PAPERS,
     isLoading: query.isLoading,
     isUnavailable,
     error: readError,

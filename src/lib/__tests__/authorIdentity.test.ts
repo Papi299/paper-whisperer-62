@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   EMPTY_AUTHOR_IDENTITY_DATASET,
   authorEntitySearchMatches,
+  authorIdentityClustersConflict,
+  authorIdentityOrcidConflict,
+  authorIdentitySearchTerms,
   buildAuthorIdentityResolution,
   collectAuthorMentions,
   findAuthorIdentityDuplicates,
@@ -12,6 +15,7 @@ import {
   mentionEntityKey,
   mentionSlotKey,
   resolveAuthorIdentityRoots,
+  searchAuthorIdentityClusters,
   toAuthorEntityKey,
   type AuthorIdentityDataset,
   type AuthorIdentityPaper,
@@ -1100,5 +1104,427 @@ describe("toAuthorEntityKey", () => {
 describe("mentionSlotKey", () => {
   it("distinguishes positions on the same paper", () => {
     expect(mentionSlotKey("p1", 0)).not.toBe(mentionSlotKey("p1", 1));
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 9. Identity evidence is user-wide, not whatever the view happens to show
+ *
+ * The identity graph is durable account state. Analytics filtering decides which
+ * mentions are being EXAMINED; it must not decide what an existing person IS.
+ * Collapsing the two let a dropdown erase a person's ORCID evidence, their
+ * findability, the duplicate pairing that spotted them, and the emptiness check
+ * that guards Delete. Every test below narrows the view to a paper that supplies
+ * none of the evidence, and asserts the evidence survives anyway.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+describe("buildAuthorIdentityResolution — user-wide evidence", () => {
+  /** Identity `sp` is linked to paper A, which carries the ORCID. */
+  const LINKED_PAPER = paper("pA", "Linked paper", ["Stuart M Phillips"], [
+    personalProvenance("Stuart M Phillips", ORCID_X),
+  ]);
+  const DATA = dataset({
+    identities: [{ id: "sp", preferred_name: "Stuart M Phillips" }],
+    aliases: [{ id: "al1", identity_id: "sp", alias: "S Phillips" }],
+    links: [link("sp", "pA", 0, "Stuart M Phillips")],
+  });
+
+  it("keeps ORCID evidence when the paper carrying it is filtered out", () => {
+    const inView = [paper("pB", "Other paper", ["Someone Else"], [
+      personalProvenance("Someone Else", ORCID_X),
+    ])];
+
+    const withoutEvidence = buildAuthorIdentityResolution(inView, DATA);
+    expect(withoutEvidence.clusters.get("sp")!.orcids).toEqual([]);
+
+    const withEvidence = buildAuthorIdentityResolution(inView, DATA, [LINKED_PAPER]);
+    expect(withEvidence.clusters.get("sp")!.orcids).toEqual([ORCID_X]);
+  });
+
+  it("offers the exact-ORCID candidate that the filtered-out evidence justifies", () => {
+    // The heart of the finding. Paper B states the same iD as the person's
+    // linked paper A. With A out of view the person has no ORCID evidence, so
+    // the strongest suggestion the feature offers silently never appears.
+    const inView = [paper("pB", "Other paper", ["S M Phillips"], [
+      personalProvenance("S M Phillips", ORCID_X),
+    ])];
+
+    const withoutEvidence = generateAuthorIdentityCandidates(
+      buildAuthorIdentityResolution(inView, DATA),
+    );
+    expect(withoutEvidence[0].candidates).toEqual([]);
+
+    const withEvidence = generateAuthorIdentityCandidates(
+      buildAuthorIdentityResolution(inView, DATA, [LINKED_PAPER]),
+    );
+    expect(withEvidence[0].candidates).toHaveLength(1);
+    expect(withEvidence[0].candidates[0].rootId).toBe("sp");
+    expect(withEvidence[0].candidates[0].reason).toBe("same_orcid");
+    expect(withEvidence[0].candidates[0].orcid).toBe(ORCID_X);
+  });
+
+  it("keeps linked spellings searchable when their paper is filtered out", () => {
+    const inView = [paper("pB", "Other paper", ["Someone Else"])];
+    const resolution = buildAuthorIdentityResolution(inView, DATA, [LINKED_PAPER]);
+
+    expect(resolution.clusters.get("sp")!.linkedSpellings).toEqual(["Stuart M Phillips"]);
+    expect(
+      searchAuthorIdentityClusters(resolution, "Stuart M Phillips").map((c) => c.rootId),
+    ).toEqual(["sp"]);
+  });
+
+  it("still knows the person has linked mentions when nothing is in view", () => {
+    const inView = [paper("pB", "Other paper", ["Someone Else"])];
+    const cluster = buildAuthorIdentityResolution(inView, DATA, [LINKED_PAPER])
+      .clusters.get("sp")!;
+
+    expect(cluster.linkedMentions).toHaveLength(1);
+    expect(cluster.paperIds.has("pA")).toBe(true);
+  });
+
+  it("counts link ROWS for emptiness, so Delete is never offered for a full person", () => {
+    // `delete_empty_author_identity` counts rows. A UI gating on visible
+    // mentions would offer Delete for a person the database then refuses.
+    const inView = [paper("pB", "Other paper", ["Someone Else"])];
+
+    // Even with no evidence papers at all — the worst case for the read layer —
+    // the row counts still say this person is carrying something.
+    const blind = buildAuthorIdentityResolution(inView, DATA).clusters.get("sp")!;
+    expect(blind.linkedMentions).toHaveLength(0);
+    expect(blind.linkRowCount).toBe(1);
+    expect(blind.aliasRowCount).toBe(1);
+  });
+
+  it("keeps a duplicate pair together when a supporting paper is filtered out", () => {
+    const data = dataset({
+      identities: [
+        { id: "one", preferred_name: "Stuart M Phillips" },
+        { id: "two", preferred_name: "S M Phillips" },
+      ],
+      links: [link("one", "pA", 0, "Stuart M Phillips"), link("two", "pC", 0, "S M Phillips")],
+    });
+    const evidence = [
+      LINKED_PAPER,
+      paper("pC", "Third paper", ["S M Phillips"], [
+        personalProvenance("S M Phillips", ORCID_X),
+      ]),
+    ];
+    const inView = [paper("pB", "Other paper", ["Someone Else"])];
+
+    expect(
+      findAuthorIdentityDuplicates(buildAuthorIdentityResolution(inView, data)),
+    ).toEqual([]);
+
+    const pairs = findAuthorIdentityDuplicates(
+      buildAuthorIdentityResolution(inView, data, evidence),
+    );
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].reason).toBe("same_orcid");
+    expect(pairs[0].orcid).toBe(ORCID_X);
+  });
+
+  it("does not let out-of-view evidence resolve an in-view mention", () => {
+    // Evidence explains existing people. It must never expand what counts as
+    // resolved on screen, or a filtered-away link would silently regroup the
+    // charts. The view's own mention stays unresolved.
+    const inView = [paper("pB", "Other paper", ["S M Phillips"])];
+    const resolution = buildAuthorIdentityResolution(inView, DATA, [LINKED_PAPER]);
+
+    expect(resolution.mentions).toHaveLength(1);
+    expect(resolution.unresolvedMentions).toHaveLength(1);
+    expect(resolution.linkBySlot.size).toBe(0);
+    expect(indexAuthorEntities(inView, resolution).map((e) => e.kind)).toEqual(["mention"]);
+  });
+
+  it("defaults to the view when no evidence collection is supplied", () => {
+    // Every caller whose view IS the library, and every pure test written before
+    // the split, keeps its previous behaviour exactly.
+    const resolution = buildAuthorIdentityResolution([LINKED_PAPER], DATA);
+    expect(resolution.clusters.get("sp")!.orcids).toEqual([ORCID_X]);
+    expect(resolution.linkBySlot.size).toBe(1);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 10. Stale links are reported, never obeyed
+ *
+ * The database clears every link on a paper the moment `papers.authors` changes,
+ * so a surviving link always describes its mention. This is the read-side twin
+ * of that trigger: defense in depth, and what makes the module's own comments
+ * true of the application rather than only of the schema.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+describe("buildAuthorIdentityResolution — stale-link defense", () => {
+  const DATA = dataset({
+    identities: [{ id: "sp", preferred_name: "Stuart M Phillips" }],
+    links: [link("sp", "p1", 0, "Stuart M Phillips")],
+  });
+
+  it("refuses to resolve a mention whose text moved under the link", () => {
+    // The author at index 0 is now a different person entirely. Obeying the
+    // surviving row would attribute their paper to Stuart M Phillips.
+    const papers = [paper("p1", "P1", ["Jane Roe"])];
+    const resolution = buildAuthorIdentityResolution(papers, DATA);
+
+    expect(resolution.linkBySlot.size).toBe(0);
+    expect(resolution.staleLinks).toHaveLength(1);
+    expect(resolution.staleLinkSlots.has(mentionSlotKey("p1", 0))).toBe(true);
+    expect(resolution.unresolvedMentions.map((m) => m.displayName)).toEqual(["Jane Roe"]);
+    expect(indexAuthorEntities(papers, resolution).map((e) => e.label)).toEqual(["Jane Roe"]);
+  });
+
+  it("refuses even a punctuation-only drift, matching the RPC's exact guard", () => {
+    // Not the 001A fold. The point is that the stored text moved, and a
+    // punctuation edit moved it — the same rule the server applies on write.
+    const resolution = buildAuthorIdentityResolution(
+      [paper("p1", "P1", ["Stuart M. Phillips"])],
+      DATA,
+    );
+
+    expect(resolution.staleLinks).toHaveLength(1);
+    expect(resolution.clusters.get("sp")!.linkedMentions).toHaveLength(0);
+  });
+
+  it("does not use a stale link's name or ORCID as cluster evidence", () => {
+    const papers = [paper("p1", "P1", ["Jane Roe"], [personalProvenance("Jane Roe", ORCID_Y)])];
+    const cluster = buildAuthorIdentityResolution(papers, DATA).clusters.get("sp")!;
+
+    expect(cluster.orcids).toEqual([]);
+    expect(cluster.linkedSpellings).toEqual([]);
+    // The row still exists, so the person is not treated as empty.
+    expect(cluster.linkRowCount).toBe(1);
+  });
+
+  it("reports a link whose position vanished from a paper it can see", () => {
+    const data = dataset({
+      identities: [{ id: "sp", preferred_name: "Stuart M Phillips" }],
+      links: [link("sp", "p1", 3, "Stuart M Phillips")],
+    });
+    const resolution = buildAuthorIdentityResolution([paper("p1", "P1", ["A", "B"])], data);
+
+    expect(resolution.staleLinks).toHaveLength(1);
+    // No position to re-offer, so nothing is marked replaceable.
+    expect(resolution.staleLinkSlots.size).toBe(0);
+  });
+
+  it("says nothing about a link whose paper is simply not present", () => {
+    // Absence of evidence is not evidence of corruption: a filtered-out or
+    // not-yet-fetched paper is silent, not stale.
+    const resolution = buildAuthorIdentityResolution(
+      [paper("p9", "Elsewhere", ["Someone Else"])],
+      DATA,
+    );
+
+    expect(resolution.staleLinks).toEqual([]);
+  });
+
+  it("accepts an exact match, which is the normal case", () => {
+    const resolution = buildAuthorIdentityResolution(
+      [paper("p1", "P1", ["Stuart M Phillips"])],
+      DATA,
+    );
+
+    expect(resolution.staleLinks).toEqual([]);
+    expect(resolution.linkBySlot.size).toBe(1);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 11. Manual search — advice is not authorization
+ *
+ * Candidate generation withholds a suggestion whenever ORCID evidence
+ * contradicts a name match. That is advice about what the evidence supports. It
+ * must not become a rule about which of the user's own people the user may pick.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+describe("searchAuthorIdentityClusters", () => {
+  const PAPERS = [
+    paper("p1", "P1", ["Alex R Mercer"], [personalProvenance("Alex R Mercer", ORCID_Y)]),
+  ];
+  const DATA = dataset({
+    identities: [
+      { id: "mercer", preferred_name: "Alex R Mercer" },
+      { id: "other", preferred_name: "Blair Nguyen" },
+    ],
+    aliases: [{ id: "al", identity_id: "mercer", alias: "A R Mercer" }],
+    links: [link("mercer", "p1", 0, "Alex R Mercer")],
+  });
+  const resolution = () => buildAuthorIdentityResolution(PAPERS, DATA);
+
+  it("returns every person, in name order, for an empty query", () => {
+    expect(searchAuthorIdentityClusters(resolution(), "").map((c) => c.preferredName)).toEqual([
+      "Alex R Mercer",
+      "Blair Nguyen",
+    ]);
+  });
+
+  it("finds a person by preferred name, alias, or linked spelling", () => {
+    const found = (q: string) =>
+      searchAuthorIdentityClusters(resolution(), q).map((c) => c.rootId);
+    expect(found("Alex")).toEqual(["mercer"]);
+    expect(found("A R Mercer")).toEqual(["mercer"]);
+    expect(found("mercer")).toEqual(["mercer"]);
+  });
+
+  it("finds a person by an ORCID pasted exactly", () => {
+    expect(searchAuthorIdentityClusters(resolution(), ORCID_Y).map((c) => c.rootId)).toEqual([
+      "mercer",
+    ]);
+    expect(searchAuthorIdentityClusters(resolution(), ORCID_X)).toEqual([]);
+  });
+
+  it("STILL finds the person whose ORCID evidence contradicts the mention", () => {
+    // The paired half of the suppression rule. The automatic candidate is
+    // withheld — asserted below — but the person stays reachable by hand, so a
+    // user who knows a source got the iD wrong can still say so.
+    const mention = paper("p2", "P2", ["Alex R Mercer"], [
+      personalProvenance("Alex R Mercer", ORCID_X),
+    ]);
+    const withMention = buildAuthorIdentityResolution([...PAPERS, mention], DATA);
+
+    const suggested = generateAuthorIdentityCandidates(withMention).find(
+      (entry) => entry.mention.paperId === "p2",
+    )!;
+    expect(suggested.candidates).toEqual([]);
+
+    expect(
+      searchAuthorIdentityClusters(withMention, "Alex R Mercer").map((c) => c.rootId),
+    ).toEqual(["mercer"]);
+  });
+
+  it("excludes the roots the caller names, so a merge cannot target itself", () => {
+    expect(
+      searchAuthorIdentityClusters(resolution(), "", { excludeRootIds: ["mercer"] }).map(
+        (c) => c.rootId,
+      ),
+    ).toEqual(["other"]);
+  });
+
+  it("searches only approved evidence — never an identity id", () => {
+    expect(searchAuthorIdentityClusters(resolution(), "mercer").map((c) => c.rootId)).toEqual([
+      "mercer",
+    ]);
+    // The id is not a search term; matching it would leak it into the interface.
+    expect(searchAuthorIdentityClusters(resolution(), "other")).toEqual([]);
+    expect(authorIdentitySearchTerms(resolution().clusters.get("mercer")!)).toEqual([
+      "Alex R Mercer",
+      "A R Mercer",
+    ]);
+  });
+});
+
+describe("ORCID conflict reporting", () => {
+  const PAPERS = [
+    paper("p1", "P1", ["Alex R Mercer"], [personalProvenance("Alex R Mercer", ORCID_Y)]),
+    paper("p2", "P2", ["Blair Nguyen"], [personalProvenance("Blair Nguyen", ORCID_Z)]),
+  ];
+  const DATA = dataset({
+    identities: [
+      { id: "mercer", preferred_name: "Alex R Mercer" },
+      { id: "nguyen", preferred_name: "Blair Nguyen" },
+      { id: "bare", preferred_name: "No Evidence" },
+    ],
+    links: [link("mercer", "p1", 0, "Alex R Mercer"), link("nguyen", "p2", 0, "Blair Nguyen")],
+  });
+  const resolution = buildAuthorIdentityResolution(PAPERS, DATA);
+  const mercer = resolution.clusters.get("mercer")!;
+  const nguyen = resolution.clusters.get("nguyen")!;
+  const bare = resolution.clusters.get("bare")!;
+
+  it("reports the person's contradicting iDs, and neither value as wrong", () => {
+    expect(authorIdentityOrcidConflict(ORCID_X, mercer)).toEqual([ORCID_Y]);
+  });
+
+  it("reports nothing when the iDs agree, or when either side has none", () => {
+    expect(authorIdentityOrcidConflict(ORCID_Y, mercer)).toEqual([]);
+    expect(authorIdentityOrcidConflict(null, mercer)).toEqual([]);
+    expect(authorIdentityOrcidConflict(ORCID_X, bare)).toEqual([]);
+  });
+
+  it("reports a conflict between two people only when both carry evidence", () => {
+    expect(authorIdentityClustersConflict(mercer, nguyen)).toBe(true);
+    expect(authorIdentityClustersConflict(mercer, bare)).toBe(false);
+    expect(authorIdentityClustersConflict(mercer, mercer)).toBe(false);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 12. Merged members carry enough context to name the edge being undone
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+describe("buildAuthorIdentityResolution — merged member context", () => {
+  it("names each member's own direct target, not the terminal root", () => {
+    // `A → B → C` renders on C's card. Undoing A's edge frees A and leaves
+    // `B → C` standing, so A must read as merging into B.
+    const papers = [paper("p1", "P1", ["A One"]), paper("p2", "P2", ["B Two"])];
+    const data = dataset({
+      identities: [
+        { id: "a", preferred_name: "A One" },
+        { id: "b", preferred_name: "B Two" },
+        { id: "c", preferred_name: "C Three" },
+      ],
+      links: [link("a", "p1", 0, "A One"), link("b", "p2", 0, "B Two")],
+      merges: [
+        { source_identity_id: "a", target_identity_id: "b" },
+        { source_identity_id: "b", target_identity_id: "c" },
+      ],
+    });
+
+    const cluster = buildAuthorIdentityResolution(papers, data).clusters.get("c")!;
+    const byId = new Map(cluster.mergedMembers.map((m) => [m.id, m]));
+
+    expect([...byId.keys()].sort()).toEqual(["a", "b"]);
+    expect(byId.get("a")!.targetPreferredName).toBe("B Two");
+    expect(byId.get("b")!.targetPreferredName).toBe("C Three");
+  });
+
+  it("attributes evidence to the member that owns it, not to the cluster", () => {
+    // Two merged members sharing a name are told apart by their own aliases,
+    // spellings, iDs and counts — never by an id.
+    const papers = [
+      paper("p1", "P1", ["J Smith"], [personalProvenance("J Smith", ORCID_X)]),
+      paper("p2", "P2", ["John Smith"], [personalProvenance("John Smith", ORCID_Y)]),
+    ];
+    const data = dataset({
+      identities: [
+        { id: "a", preferred_name: "John Smith" },
+        { id: "b", preferred_name: "John Smith" },
+        { id: "root", preferred_name: "John Smith" },
+      ],
+      aliases: [{ id: "al", identity_id: "a", alias: "Jack Smith" }],
+      links: [link("a", "p1", 0, "J Smith"), link("b", "p2", 0, "John Smith")],
+      merges: [
+        { source_identity_id: "a", target_identity_id: "root" },
+        { source_identity_id: "b", target_identity_id: "root" },
+      ],
+    });
+
+    const cluster = buildAuthorIdentityResolution(papers, data).clusters.get("root")!;
+    const byId = new Map(cluster.mergedMembers.map((m) => [m.id, m]));
+
+    expect(byId.get("a")!.orcids).toEqual([ORCID_X]);
+    expect(byId.get("a")!.aliases).toEqual(["Jack Smith"]);
+    expect(byId.get("a")!.linkedSpellings).toEqual(["J Smith"]);
+    expect(byId.get("a")!.linkedMentionCount).toBe(1);
+
+    expect(byId.get("b")!.orcids).toEqual([ORCID_Y]);
+    expect(byId.get("b")!.aliases).toEqual([]);
+    expect(byId.get("b")!.linkedSpellings).toEqual(["John Smith"]);
+
+    // The cluster still reports the union, and reports the conflict rather than
+    // resolving it.
+    expect([...cluster.orcids].sort()).toEqual([ORCID_X, ORCID_Y].sort());
+    expect(cluster.hasOrcidConflict).toBe(true);
+  });
+
+  it("lists no merged members for an identity nobody merged into", () => {
+    const resolution = buildAuthorIdentityResolution(
+      [paper("p1", "P1", ["A One"])],
+      dataset({
+        identities: [{ id: "a", preferred_name: "A One" }],
+        links: [link("a", "p1", 0, "A One")],
+      }),
+    );
+    expect(resolution.clusters.get("a")!.mergedMembers).toEqual([]);
   });
 });

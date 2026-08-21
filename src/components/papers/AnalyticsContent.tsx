@@ -3,9 +3,10 @@ import { authorSearchMatches } from "@/lib/authorNames";
 import {
   buildAuthorIdentityResolution,
   indexAuthorEntities,
-  toAuthorEntityKey,
   type AuthorIdentityDataset,
+  type AuthorIdentityPaper,
 } from "@/lib/authorIdentity";
+import { reconcileAuthorSelections, toggleAuthorSelection } from "@/lib/authorSelection";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
@@ -73,6 +74,23 @@ interface AnalyticsContentProps {
    */
   identityDataset?: AuthorIdentityDataset | null;
   /**
+   * The papers the identity graph links to, across the whole account.
+   *
+   * Not the same collection as `papers`, and deliberately so. `papers` is the
+   * current Analytics filter and decides what is counted and charted;
+   * `identityEvidencePapers` decides what an existing person IS — which
+   * spellings the user accepted for them, which ORCIDs their linked papers
+   * state, whether they have anything attached at all.
+   *
+   * Letting the filter supply both made a dropdown redefine the identity graph:
+   * narrowing the view removed the paper carrying a person's ORCID, so the
+   * exact-ORCID candidate that person exists to produce was never offered, their
+   * linked spellings stopped being searchable, and an identity with links
+   * elsewhere in the library rendered as empty. Omitted, it falls back to
+   * `papers`, which is correct for any caller whose view IS the library.
+   */
+  identityEvidencePapers?: readonly AuthorIdentityPaper[];
+  /**
    * The identity read/write API, when the application supplies one.
    *
    * Separate from `identityDataset` on purpose. The dataset is all this
@@ -125,6 +143,7 @@ function MultiSelectPopover({
   label,
   options,
   selected,
+  selectedBadges: selectedBadgeItems,
   onToggle,
   onClear,
   fullWidth,
@@ -134,7 +153,20 @@ function MultiSelectPopover({
   options: SelectOption[];
   /** Selected option VALUES, not labels. */
   selected: string[];
-  onToggle: (value: string) => void;
+  /**
+   * What to render as removable badges, each already carrying its own display
+   * text.
+   *
+   * Separate from `selected` because a value is not always printable. An author
+   * selection is an internal entity key (`identity:<uuid>`, `mention:<001A
+   * key>`), and the previous "fall back to the value when no option matches it"
+   * rule put exactly those keys on screen the moment a selection left the
+   * current view. The caller knows how to describe its own selections — and for
+   * authors, remembers how — so it supplies the text rather than this component
+   * guessing at it.
+   */
+  selectedBadges: readonly { value: string; label: string }[];
+  onToggle: (value: string, label: string) => void;
   onClear: () => void;
   fullWidth?: boolean;
   /**
@@ -173,11 +205,17 @@ function MultiSelectPopover({
     [options, search, matchesSearch]
   );
 
-  /** Selected values resolved to the label currently representing them. */
-  const labelByValue = useMemo(
-    () => new Map(options.map((option) => [option.value, option.label])),
-    [options]
-  );
+  /**
+   * The text for a value the sheet reported back.
+   *
+   * The sheet can only toggle something it rendered, which is either a current
+   * option or a current selection — so one of the two lookups always answers,
+   * and an internal author key never reaches the label through here.
+   */
+  const labelFor = (value: string) =>
+    options.find((option) => option.value === value)?.label ??
+    selectedBadgeItems.find((item) => item.value === value)?.label ??
+    value;
 
   const triggerContent = (
     <>
@@ -190,26 +228,23 @@ function MultiSelectPopover({
     </>
   );
 
-  const selectedBadges = selected.length > 0 && (
+  const selectedBadges = selectedBadgeItems.length > 0 && (
     <div className="flex flex-wrap gap-1">
-      {selected.map((value) => {
-        // A selection whose option is no longer on offer (its papers filtered
-        // away, or the identity deleted) still needs a badge the user can
-        // remove, so the value stands in for a label rather than vanishing.
-        const text = labelByValue.get(value) ?? value;
-        return (
-          <Badge key={value} variant="secondary" className="text-xs pr-1">
-            <span className="truncate max-w-[120px]">{text}</span>
-            <button
-              onClick={() => onToggle(value)}
-              aria-label={`Remove ${text}`}
-              className="ml-1 hover:text-destructive"
-            >
-              <X className="h-3 w-3" aria-hidden="true" />
-            </button>
-          </Badge>
-        );
-      })}
+      {selectedBadgeItems.map((item) => (
+        // A selection whose option is no longer on offer — its papers filtered
+        // away, the person deleted — still needs a badge the user can see and
+        // remove. It carries its own text, so nothing here has to invent one.
+        <Badge key={item.value} variant="secondary" className="text-xs pr-1">
+          <span className="truncate max-w-[120px]">{item.label}</span>
+          <button
+            onClick={() => onToggle(item.value, item.label)}
+            aria-label={`Remove ${item.label}`}
+            className="ml-1 hover:text-destructive"
+          >
+            <X className="h-3 w-3" aria-hidden="true" />
+          </button>
+        </Badge>
+      ))}
     </div>
   );
 
@@ -246,7 +281,7 @@ function MultiSelectPopover({
           triggerRef={triggerRef}
           options={options}
           selectedValues={selected}
-          onToggle={onToggle}
+          onToggle={(value) => onToggle(value, labelFor(value))}
           onClear={onClear}
           searchPlaceholder={`Search ${label.toLowerCase()}...`}
           searchLabel={`Search ${label.toLowerCase()}`}
@@ -299,7 +334,7 @@ function MultiSelectPopover({
                   >
                     <Checkbox
                       checked={selected.includes(option.value)}
-                      onCheckedChange={() => onToggle(option.value)}
+                      onCheckedChange={() => onToggle(option.value, option.label)}
                     />
                     <span className="truncate">{option.label}</span>
                   </label>
@@ -356,6 +391,7 @@ export function AnalyticsContent({
   isLoading,
   targets,
   identityDataset = null,
+  identityEvidencePapers,
   identities,
   compact = false,
 }: AnalyticsContentProps) {
@@ -363,7 +399,7 @@ export function AnalyticsContent({
     selectedKeywords,
     selectedAuthors,
     onToggleKeyword,
-    onToggleAuthor,
+    onSetAuthors,
     onClearKeywords,
     onClearAuthors,
   } = targets;
@@ -391,18 +427,13 @@ export function AnalyticsContent({
    * See `lib/authorIdentity` and `lib/authorNames`.
    */
   const identityResolution = useMemo(
-    () => buildAuthorIdentityResolution(papers, identityDataset),
-    [papers, identityDataset]
+    () => buildAuthorIdentityResolution(papers, identityDataset, identityEvidencePapers),
+    [papers, identityDataset, identityEvidencePapers]
   );
 
   const authorEntities = useMemo(
     () => indexAuthorEntities(papers, identityResolution),
     [papers, identityResolution]
-  );
-
-  const authorsByKey = useMemo(
-    () => new Map(authorEntities.map((entity) => [entity.key, entity])),
-    [authorEntities]
   );
 
   // Summary stats
@@ -498,43 +529,57 @@ export function AnalyticsContent({
     [availableKeywords]
   );
 
-  /**
-   * Selections as stable entity keys, whatever form they were stored in.
-   *
-   * Selection state lives above the responsive breakpoint in `useAnalyticsTargets`
-   * and is not persisted anywhere, so there is no stored history to migrate — but
-   * a value CAN predate the identity dataset finishing its load, or a component
-   * remount at 768px. `toAuthorEntityKey` folds any such legacy raw label into
-   * the mention key it used to mean, so a selection made a moment ago keeps
-   * meaning the same author afterwards.
-   *
-   * Deduplicated, because two legacy spellings of one canonical mention must not
-   * become two selections of the same author.
-   */
-  const selectedAuthorKeys = useMemo(() => {
-    const seen = new Set<string>();
-    for (const selected of selectedAuthors) {
-      const key = toAuthorEntityKey(selected);
-      if (key) seen.add(key);
-    }
-    return [...seen];
-  }, [selectedAuthors]);
+  // A keyword IS its own label — the string the user selected is the string they
+  // read — so nothing has to be remembered or reconciled for it.
+  const selectedKeywordBadges = useMemo(
+    () => selectedKeywords.map((keyword) => ({ value: keyword, label: keyword })),
+    [selectedKeywords]
+  );
 
   /**
-   * Toggling stores the entity key, not the label.
+   * What the stored author selections mean right now.
    *
-   * That is what keeps a selection alive across a rename, and across the option
-   * coming to be represented by a different source spelling — the two ways a
-   * label can change under a selection that was never meant to move.
+   * The identity graph moves while the user is looking at it — a mention becomes
+   * a person, two people become one, either is undone — and a selection stored as
+   * a bare key survives none of that. All of the reconciliation rules live in
+   * `lib/authorSelection`, computed on read rather than written back to state,
+   * which is what lets undoing a merge restore the earlier selection with no undo
+   * bookkeeping anywhere. This component only presents the result.
+   */
+  const authorSelections = useMemo(
+    () => reconcileAuthorSelections(selectedAuthors, authorEntities, identityResolution),
+    [selectedAuthors, authorEntities, identityResolution]
+  );
+
+  const selectedAuthorKeys = useMemo(
+    () => authorSelections.map((selection) => selection.entityKey),
+    [authorSelections]
+  );
+
+  const selectedAuthorBadges = useMemo(
+    () =>
+      authorSelections.map((selection) => ({
+        value: selection.entityKey,
+        label: selection.label,
+      })),
+    [authorSelections]
+  );
+
+  /**
+   * Toggling stores the entity key AND the label the user just read.
+   *
+   * The key is what keeps a selection alive across a rename or a merge; the
+   * label is the last-resort way to describe it if its entity later leaves the
+   * view entirely. Removal can touch several stored entries at once, so the whole
+   * computation is delegated rather than approximated here.
    */
   const handleToggleAuthor = useCallback(
-    (entityKey: string) => {
-      const existing = selectedAuthors.find(
-        (selected) => toAuthorEntityKey(selected) === entityKey
+    (entityKey: string, label: string) => {
+      onSetAuthors(
+        toggleAuthorSelection(selectedAuthors, authorSelections, { key: entityKey, label })
       );
-      onToggleAuthor(existing ?? entityKey);
     },
-    [selectedAuthors, onToggleAuthor]
+    [selectedAuthors, authorSelections, onSetAuthors]
   );
 
   // Compute keyword stats
@@ -556,14 +601,11 @@ export function AnalyticsContent({
   // for a resolved identity. Each paper is credited at most once, including a
   // paper that lists two spellings resolving to the same person.
   const authorStats = useMemo(() => {
-    if (selectedAuthorKeys.length === 0) return [];
-    return selectedAuthorKeys
-      .map((key) => {
-        const entity = authorsByKey.get(key);
-        return { name: entity?.label ?? key, count: entity?.documentCount ?? 0 };
-      })
+    if (authorSelections.length === 0) return [];
+    return authorSelections
+      .map((selection) => ({ name: selection.label, count: selection.documentCount }))
       .sort((a, b) => b.count - a.count);
-  }, [selectedAuthorKeys, authorsByKey]);
+  }, [authorSelections]);
 
   const chartHeight = (dataLength: number) =>
     Math.max(150, Math.min(dataLength * 28 + 40, 400));
@@ -668,6 +710,7 @@ export function AnalyticsContent({
             label="Target Keywords"
             options={availableKeywordOptions}
             selected={selectedKeywords}
+            selectedBadges={selectedKeywordBadges}
             onToggle={onToggleKeyword}
             onClear={onClearKeywords}
             fullWidth={compact}
@@ -676,6 +719,7 @@ export function AnalyticsContent({
             label="Target Authors"
             options={availableAuthors}
             selected={selectedAuthorKeys}
+            selectedBadges={selectedAuthorBadges}
             onToggle={handleToggleAuthor}
             onClear={onClearAuthors}
             fullWidth={compact}

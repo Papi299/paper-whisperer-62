@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/sheet";
 import { AnalyticsContent } from "./AnalyticsContent";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
-import type { AuthorIdentityDataset } from "@/lib/authorIdentity";
+import type { AuthorIdentityDataset, AuthorIdentityPaper } from "@/lib/authorIdentity";
 import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 
 interface MobileAnalyticsSheetProps {
@@ -22,6 +22,8 @@ interface MobileAnalyticsSheetProps {
    * shells group authors identically across the breakpoint.
    */
   identityDataset?: AuthorIdentityDataset | null;
+  /** User-wide linked-paper evidence, forwarded untouched. See `AnalyticsContent`. */
+  identityEvidencePapers?: readonly AuthorIdentityPaper[];
   /** The identity read/write API, forwarded so the manager can be opened here. */
   identities?: ReturnType<typeof useAuthorIdentities>;
   /** Owned by the Dashboard and shared with `AnalyticsPanel`. */
@@ -52,6 +54,7 @@ export function MobileAnalyticsSheet({
   onOpenChange,
   targets,
   identityDataset = null,
+  identityEvidencePapers,
   identities,
 }: MobileAnalyticsSheetProps) {
   return (
@@ -74,6 +77,7 @@ export function MobileAnalyticsSheet({
             isLoading={isLoading}
             targets={targets}
             identityDataset={identityDataset}
+            identityEvidencePapers={identityEvidencePapers}
             identities={identities}
             compact
           />
