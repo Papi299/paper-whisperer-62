@@ -169,7 +169,7 @@ async function resetIdentities(page: Page) {
       /^Undo merge of /,
       /^Unlink$/,
       /^Remove alias /,
-      /Delete person/,
+      /^Delete /,
     ]) {
       const matches = peoplePanel.getByRole("button", { name });
       const before = await matches.count();
@@ -326,7 +326,9 @@ test("a merge is reversible and moves nothing", async ({ page }) => {
   await expect(pair).toBeVisible();
   await expect(pair).toContainText("Same ORCID");
   await expect(pair).toContainText(/Merging keeps both records/i);
-  await pair.getByRole("button", { name: new RegExp(`Merge into ${PERSON_B}`) }).click();
+  // The accessible name states BOTH ends now — the visible "Merge into X" says
+  // only half of a decision whose whole content is its direction.
+  await pair.getByRole("button", { name: new RegExp(` into ${PERSON_B}$`) }).click();
   await expect(forMerge.getByRole("tab", { name: /Duplicates \(0\)/ })).toBeVisible({
     timeout: 15_000,
   });
@@ -534,6 +536,122 @@ test("one merge edge out of a chain is undone by name", async ({ page }) => {
   expect(options, "A is independent again").toContain(PERSON_A);
   expect(options, "the rest of the chain still stands").toContain(EDITABLE_AUTHOR);
   expect(options).not.toContain(MERCER);
+});
+
+test("a failed identity read is reported, not disguised as 001A grouping", async ({
+  page,
+}) => {
+  // The dangerous case: identity data that FAILS to load looks exactly like
+  // identity data that is not installed, and both leave Analytics grouping
+  // authors by name. A user who resolved two spellings into one person would
+  // watch them split apart and be told nothing.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+  const linkCard = await unresolvedCard(dialog, PAPER_B);
+  await linkCard.getByRole("button", { name: new RegExp(`Link to ${PERSON_A}`) }).click();
+  await expect(linkCard).toBeHidden({ timeout: 15_000 });
+  await closeManager(page);
+
+  // Both spellings are one person right now.
+  const grouped = await authorOptions(page);
+  expect(grouped).toContain(PERSON_A);
+  expect(grouped).not.toContain(PERSON_B);
+
+  // Now make the identity read genuinely fail, and reload into that state.
+  const identityRoute = "**/rest/v1/author_identities*";
+  await page.route(identityRoute, (route) => route.abort("failed"));
+  await page.reload();
+  await waitForDashboard(page);
+  await openAnalytics(page);
+
+  // Analytics says so rather than quietly reverting to name grouping.
+  await expect(page.getByText(/Author identities could not be loaded/i)).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(
+    page.getByText(/someone you resolved may appear more than once/i),
+  ).toBeVisible();
+
+  // The unaffected analytics keep working.
+  await expect(page.getByRole("button", { name: /^Target Keywords/ })).toBeVisible();
+
+  // The manager reports the failure too — and offers nothing to edit, because
+  // nothing may be written against a graph that did not load.
+  const failedDialog = await openManager(page);
+  await expect(failedDialog.getByText(/could not be loaded/i)).toBeVisible();
+  await expect(failedDialog.getByRole("tab")).toHaveCount(0);
+  await expect(
+    failedDialog.getByText(/not available in this environment yet/i),
+  ).toHaveCount(0);
+
+  // Retry restores the real thing.
+  await page.unroute(identityRoute);
+  await failedDialog.getByRole("button", { name: "Try again" }).click();
+  await expect(failedDialog.getByRole("tab", { name: /People/ })).toBeVisible({
+    timeout: 15_000,
+  });
+  await closeManager(page);
+
+  const restored = await authorOptions(page);
+  expect(restored, "the person is back once the read succeeds").toContain(PERSON_A);
+  expect(restored).not.toContain(PERSON_B);
+});
+
+test("two people with the same name give distinguishable merge actions", async ({
+  page,
+}) => {
+  // An exact shared name is itself duplicate evidence, so this tab is exactly
+  // where two legitimately same-named people meet. Two buttons both reading
+  // "Merge into Stuart M Phillips" would ask the user to pick blind between the
+  // two records whose fate they are deciding.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+  await createPersonFrom(dialog, PAPER_B);
+
+  // Rename the second so both people are called the same thing — which nothing
+  // prevents, and which the product deliberately allows.
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const secondName = dialog.getByLabel(`Name for ${PERSON_B}`, { exact: true });
+  await secondName.fill(PERSON_A);
+  await secondName.blur();
+  // Not exact: once two people share a name, each card's controls carry that
+  // card's own evidence so a screen reader can tell them apart.
+  await expect(dialog.getByLabel(new RegExp(`^Name for ${PERSON_A}`))).toHaveCount(2, {
+    timeout: 15_000,
+  });
+
+  await dialog.getByRole("tab", { name: /Duplicates/ }).click();
+  const merges = dialog
+    .getByRole("tabpanel", { name: /Duplicates/ })
+    .getByRole("button", { name: /^Merge / });
+  await expect(merges).toHaveCount(2);
+
+  const labels = await merges.evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute("aria-label") ?? ""),
+  );
+  expect(new Set(labels).size, "both directions must be distinguishable").toBe(2);
+  // Each names BOTH ends, so direction never has to be inferred from DOM order,
+  // and neither falls back to a UUID.
+  for (const label of labels) {
+    expect(label).toMatch(/ into /);
+    expect(label).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  }
+
+  // The visible text distinguishes them too, not only the accessible name.
+  const visible = await merges.allTextContents();
+  expect(new Set(visible).size).toBe(2);
+
+  await merges.first().click();
+  await expect(dialog.getByRole("tab", { name: /Duplicates \(0\)/ })).toBeVisible({
+    timeout: 15_000,
+  });
+  await closeManager(page);
+
+  // One person now, and undoing names the exact edge that was made.
+  const undo = await openManager(page);
+  await undo.getByRole("tab", { name: /People/ }).click();
+  await expect(undo.getByRole("button", { name: /^Undo merge of / })).toHaveCount(1);
+  await closeManager(page);
 });
 
 test("an alias is added and removed by the row it names", async ({ page }) => {

@@ -95,6 +95,12 @@ function stubIdentities(overrides: Partial<IdentitiesApi> = {}): IdentitiesApi {
     // Evidence defaults to empty; a test that needs user-wide evidence beyond
     // the papers it renders supplies it explicitly.
     linkedPapers: [],
+    // The healthy state by default. The read-state tests below override it —
+    // and the whole point of those is that "unavailable" and "failed" must not
+    // be allowed to look alike.
+    readState: "ready" as const,
+    canMutate: true,
+    retry: vi.fn(),
     isLoading: false,
     isUnavailable: false,
     error: null,
@@ -142,7 +148,15 @@ const tab = (name: RegExp) => {
 
 describe("AuthorIdentityManager — availability", () => {
   it("reports the subsystem as unavailable without offering any action", () => {
-    open([paper("p1", "P1", ["Stuart M Phillips"])], stubIdentities({ dataset: null, isUnavailable: true }));
+    open(
+      [paper("p1", "P1", ["Stuart M Phillips"])],
+      stubIdentities({
+        dataset: null,
+        readState: "unavailable",
+        canMutate: false,
+        isUnavailable: true,
+      }),
+    );
 
     expect(screen.getByText(/not available in this environment yet/i)).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /Unresolved/ })).not.toBeInTheDocument();
@@ -151,7 +165,10 @@ describe("AuthorIdentityManager — availability", () => {
   });
 
   it("shows a loading state without claiming there is nothing to resolve", () => {
-    open([paper("p1", "P1", ["Stuart M Phillips"])], stubIdentities({ isLoading: true }));
+    open(
+      [paper("p1", "P1", ["Stuart M Phillips"])],
+      stubIdentities({ readState: "loading", canMutate: false, isLoading: true }),
+    );
     expect(screen.getByText(/Loading author identities/i)).toBeInTheDocument();
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
@@ -315,6 +332,8 @@ describe("AuthorIdentityManager — unresolved mentions", () => {
       // The exact stored string, so the server's stale-mention guard can compare it.
       expectedAuthor: "Stuart M Phillips",
       preferredName: "Stuart Phillips (McMaster)",
+      // Nothing stale at this position, so nothing is being displaced.
+      replaceStaleExisting: false,
     });
   });
 
@@ -398,7 +417,7 @@ describe("AuthorIdentityManager — people", () => {
   it("offers delete only for a person carrying nothing", () => {
     open(papers, stubIdentities({ dataset }));
     tab(/People/);
-    expect(screen.queryByRole("button", { name: /Delete person/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
   });
 
   it("offers delete once the person is empty", () => {
@@ -408,7 +427,7 @@ describe("AuthorIdentityManager — people", () => {
     open(papers, identities);
     tab(/People/);
 
-    fireEvent.click(screen.getByRole("button", { name: /Delete person/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delete / }));
     expect(identities.deleteIdentity).toHaveBeenCalledWith("empty");
   });
 
@@ -476,7 +495,11 @@ describe("AuthorIdentityManager — duplicates", () => {
     tab(/Duplicates/);
 
     expect(screen.getByText(/Merging keeps both records/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Merge into Stu Phillips/ }));
+    // The accessible name now states BOTH ends, because direction is the whole
+    // decision and the visible "Merge into X" says only half of it.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Merge Stuart M Phillips into Stu Phillips" }),
+    );
     expect(identities.mergeIdentities).toHaveBeenCalledWith("aaa", "bbb");
   });
 
@@ -913,7 +936,7 @@ describe("AuthorIdentityManager — identity evidence is user-wide", () => {
     open([paper("visible", "Visible paper", ["Someone Else"])], identities);
     tab(/People/);
 
-    expect(screen.queryByRole("button", { name: "Delete person" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
     expect(screen.getByText(/Linked mentions \(1\)/)).toBeInTheDocument();
   });
 
@@ -981,5 +1004,356 @@ describe("AuthorIdentityManager — stale links are reported, not obeyed", () =>
     expect(identities.linkMention).toHaveBeenCalledWith(
       expect.objectContaining({ paperId: "p1", replaceExisting: true }),
     );
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * A failed read is a failed read
+ *
+ * `dataset === null` has two meanings that must never be rendered alike: the
+ * 001C subsystem is not installed here, or the user's decisions could not be
+ * read. The first is benign and warrants no error language; the second, dressed
+ * up as the first, tells a user with saved people that they have none.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("AuthorIdentityManager — real read failures", () => {
+  function failed(overrides: Partial<IdentitiesApi> = {}) {
+    return stubIdentities({
+      dataset: null,
+      readState: "failed",
+      canMutate: false,
+      isUnavailable: false,
+      error: new Error("permission denied for table author_identities"),
+      ...overrides,
+    });
+  }
+
+  it("says the identities could not be loaded, and offers a retry", () => {
+    const identities = failed();
+    open([paper("p1", "P1", ["Stuart M Phillips"])], identities);
+
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(identities.retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("never presents a failure as the not-installed-here case", () => {
+    open([paper("p1", "P1", ["Stuart M Phillips"])], failed());
+
+    expect(
+      screen.queryByText(/not available in this environment yet/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Everything\s+else on this page works normally/i))
+      .not.toBeInTheDocument();
+  });
+
+  it("offers no identity controls at all while the graph is unknown", () => {
+    open([paper("p1", "P1", ["Stuart M Phillips"])], failed());
+
+    // No tabs means no unresolved list claiming the user has decided nothing.
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Create a new person/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Link to/ })).not.toBeInTheDocument();
+  });
+
+  it("shows no raw database text to the user", () => {
+    open([paper("p1", "P1", ["Stuart M Phillips"])], failed());
+
+    const rendered = document.body.textContent ?? "";
+    expect(rendered).not.toMatch(/permission denied/i);
+    expect(rendered).not.toMatch(/42501|PGRST|relation|pg_/);
+  });
+});
+
+describe("AuthorIdentityManager — a stale graph is shown but not edited", () => {
+  function stale() {
+    return stubIdentities({
+      dataset: makeDataset({
+        identities: [{ id: "phillips", preferred_name: "Stuart M Phillips" }],
+        links: [link("phillips", "p1", 0, "Stuart M Phillips")],
+      }),
+      readState: "stale",
+      canMutate: false,
+      error: new Error("Failed to fetch"),
+    });
+  }
+
+  it("keeps the last known-good people on screen rather than discarding them", () => {
+    open([paper("p1", "P1", ["Stuart M Phillips"])], stale());
+    tab(/People/);
+
+    expect(screen.getByLabelText("Name for Stuart M Phillips")).toBeInTheDocument();
+  });
+
+  it("says plainly that it is last-known and offers a retry", () => {
+    const identities = stale();
+    open([paper("p1", "P1", ["Stuart M Phillips"])], identities);
+
+    expect(screen.getByText(/last author identities that loaded successfully/i))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(identities.retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables every decision, because editing could displace a newer one", () => {
+    const identities = stale();
+    open(
+      [paper("p1", "P1", ["Stuart M Phillips"]), paper("p2", "P2", ["Jane Roe"])],
+      identities,
+    );
+
+    expect(screen.getByRole("button", { name: /Create a new person/ })).toBeDisabled();
+
+    tab(/People/);
+    expect(screen.getByRole("button", { name: /^Unlink$/ })).toBeDisabled();
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Two people called John Smith
+ *
+ * An exact shared name is itself duplicate evidence, so the Duplicates tab is
+ * precisely where two legitimately same-named people meet. "Merge into John
+ * Smith" twice over asks the user to pick blind between the two records they
+ * are deciding the fate of.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("AuthorIdentityManager — same-name duplicate actions", () => {
+  /** Two `John Smith` identities, told apart only by their own evidence. */
+  function sameNamePair() {
+    return stubIdentities({
+      dataset: makeDataset({
+        identities: [
+          { id: "smith-a", preferred_name: "John Smith" },
+          { id: "smith-b", preferred_name: "John Smith" },
+        ],
+        aliases: [{ id: "al", identity_id: "smith-a", alias: "Jack Smith" }],
+        links: [link("smith-a", "p1", 0, "John Smith"), link("smith-b", "p2", 0, "John Smith")],
+      }),
+    });
+  }
+
+  const sameNamePapers = [
+    paper("p1", "First paper", ["John Smith"], [personal("John Smith", ORCID_X)]),
+    paper("p2", "Second paper", ["John Smith"], [personal("John Smith", ORCID_X)]),
+  ];
+
+  it("gives both merge directions distinct accessible names", () => {
+    open(sameNamePapers, sameNamePair());
+    tab(/Duplicates/);
+
+    const merges = screen
+      .getAllByRole("button", { name: /^Merge / })
+      .map((button) => button.getAttribute("aria-label") ?? "");
+
+    expect(merges).toHaveLength(2);
+    expect(new Set(merges).size).toBe(2);
+    // Each names BOTH ends, so direction is never inferred from DOM order.
+    for (const label of merges) {
+      expect(label).toMatch(/ into /);
+      expect(label).not.toMatch(/smith-a|smith-b/);
+    }
+  });
+
+  it("distinguishes the two sides visually with their own evidence", () => {
+    open(sameNamePapers, sameNamePair());
+    tab(/Duplicates/);
+
+    const visible = screen
+      .getAllByRole("button", { name: /^Merge / })
+      .map((button) => button.textContent ?? "");
+
+    expect(new Set(visible).size).toBe(2);
+    expect(visible.some((text) => text.includes("Jack Smith"))).toBe(true);
+  });
+
+  it("sends the right source and target for each direction", () => {
+    const identities = sameNamePair();
+    open(sameNamePapers, identities);
+    tab(/Duplicates/);
+
+    const [first, second] = screen.getAllByRole("button", { name: /^Merge / });
+    const firstLabel = first.getAttribute("aria-label") ?? "";
+
+    fireEvent.click(first);
+    // The label states the direction; the call must match it. Which of the two
+    // is rendered first is not something this test should depend on.
+    const expected = firstLabel.includes("Jack Smith") && firstLabel.indexOf("Jack Smith") < firstLabel.indexOf(" into ")
+      ? ["smith-a", "smith-b"]
+      : ["smith-b", "smith-a"];
+    expect(identities.mergeIdentities).toHaveBeenCalledWith(expected[0], expected[1]);
+
+    fireEvent.click(second);
+    expect(identities.mergeIdentities).toHaveBeenCalledWith(expected[1], expected[0]);
+  });
+
+  it("falls back to creation order when two people are otherwise identical", () => {
+    // Same name, no ORCIDs, no aliases, nothing linked — a real state, reached
+    // by creating two people and then unlinking both. Their shared name is still
+    // duplicate evidence, so they are still offered as a pair; creation order is
+    // the only true thing left that separates them, and it beats a UUID.
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [
+          { id: "twin-a", preferred_name: "John Smith" },
+          { id: "twin-b", preferred_name: "John Smith" },
+        ],
+      }),
+    });
+
+    open([paper("p1", "First paper", ["Someone Else"])], identities);
+    tab(/Duplicates/);
+
+    const merges = screen
+      .getAllByRole("button", { name: /^Merge / })
+      .map((button) => button.getAttribute("aria-label") ?? "");
+
+    expect(new Set(merges).size).toBe(2);
+    expect(merges.some((label) => label.includes("created 1st"))).toBe(true);
+    expect(merges.some((label) => label.includes("created 2nd"))).toBe(true);
+    for (const label of merges) expect(label).not.toMatch(/twin-a|twin-b/);
+  });
+
+  it("keeps ordinary different-name duplicates concise", () => {
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [
+          { id: "aaa", preferred_name: "Stuart M Phillips" },
+          { id: "bbb", preferred_name: "Stu Phillips" },
+        ],
+        links: [link("aaa", "p1", 0, "Stuart M Phillips"), link("bbb", "p2", 0, "Stu Phillips")],
+      }),
+    });
+
+    open(
+      [
+        paper("p1", "P1", ["Stuart M Phillips"], [personal("Stuart M Phillips", ORCID_X)]),
+        paper("p2", "P2", ["Stu Phillips"], [personal("Stu Phillips", ORCID_X)]),
+      ],
+      identities,
+    );
+    tab(/Duplicates/);
+
+    // The names already distinguish them, so the button text stays short.
+    expect(screen.getByRole("button", { name: "Merge Stuart M Phillips into Stu Phillips" }))
+      .toHaveTextContent("Merge into Stu Phillips");
+  });
+
+  it("distinguishes identical people in the manual chooser too", () => {
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [
+          { id: "twin-a", preferred_name: "John Smith" },
+          { id: "twin-b", preferred_name: "John Smith" },
+        ],
+      }),
+    });
+
+    open([paper("p3", "Third paper", ["Jane Roe"])], identities);
+
+    openPicker("Jane Roe");
+    const choices = screen
+      .getAllByRole("button", { name: /^Choose John Smith/ })
+      .map((button) => button.getAttribute("aria-label") ?? "");
+
+    expect(choices).toHaveLength(2);
+    expect(new Set(choices).size).toBe(2);
+    for (const label of choices) expect(label).not.toMatch(/twin-a|twin-b/);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Repairing a stale saved link
+ *
+ * The database makes these unreachable — a trigger clears a paper's links the
+ * moment its authors change. This is about what a user can DO if one survives
+ * anyway, because the previous behaviour offered actions that could only fail.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("AuthorIdentityManager — stale saved links can be repaired", () => {
+  it("lets Create a new person repair a stale row, not just Link", () => {
+    // Previously this button was offered and could only ever collide with the
+    // unique (paper_id, author_index) constraint: the UI said "unresolved" and
+    // every action it gave the user was impossible.
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [{ id: "old", preferred_name: "Old Person" }],
+        links: [link("old", "p1", 0, "Author As Written Before")],
+      }),
+    });
+
+    open([paper("p1", "P1", ["Current Author"])], identities);
+
+    expect(screen.getByText(/no longer match/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Create a new person/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Create person$/ }));
+
+    expect(identities.createIdentityFromMention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paperId: "p1",
+        authorIndex: 0,
+        expectedAuthor: "Current Author",
+        replaceStaleExisting: true,
+      }),
+    );
+  });
+
+  it("offers an explicit removal for a row whose author position is gone", () => {
+    // Nothing can render a mention for it, so no ordinary action reaches it —
+    // and its surviving row keeps the person non-empty and undeletable.
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [{ id: "old", preferred_name: "Old Person" }],
+        links: [link("old", "p1", 7, "Author At A Gone Position")],
+      }),
+      linkedPapers: [paper("p1", "Owned paper", ["Only Author"])],
+    });
+
+    open([paper("p1", "Owned paper", ["Only Author"])], identities);
+
+    const remove = screen.getByRole("button", {
+      name: "Remove stale saved link for Author At A Gone Position on Owned paper",
+    });
+    // The row is described in terms the user can recognise before acting.
+    expect(screen.getByText(/Author At A Gone Position/)).toBeInTheDocument();
+    expect(screen.getByText(/that author position no longer exists/i)).toBeInTheDocument();
+
+    fireEvent.click(remove);
+    expect(identities.unlinkMention).toHaveBeenCalledWith("p1", 7);
+  });
+
+  it("removes nothing until the user asks", () => {
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [{ id: "old", preferred_name: "Old Person" }],
+        links: [link("old", "p1", 7, "Author At A Gone Position")],
+      }),
+      linkedPapers: [paper("p1", "Owned paper", ["Only Author"])],
+    });
+
+    open([paper("p1", "Owned paper", ["Only Author"])], identities);
+
+    // Detection is read-only. A background effect that quietly deleted rows the
+    // frontend disliked would be Paperlume editing identity history on a hunch.
+    expect(identities.unlinkMention).not.toHaveBeenCalled();
+    expect(identities.createIdentityFromMention).not.toHaveBeenCalled();
+    expect(identities.linkMention).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about stale links when every link is valid", () => {
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [{ id: "phillips", preferred_name: "Stuart M Phillips" }],
+        links: [link("phillips", "p1", 0, "Stuart M Phillips")],
+      }),
+    });
+
+    open([paper("p1", "P1", ["Stuart M Phillips"])], identities);
+
+    expect(screen.queryByText(/no longer match/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Remove stale saved link/ }),
+    ).not.toBeInTheDocument();
   });
 });

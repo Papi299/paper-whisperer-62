@@ -911,6 +911,7 @@ export type Database = {
           p_expected_author: string
           p_paper_id: string
           p_preferred_name?: string
+          p_replace_stale_existing?: boolean
         }
         Returns: Json
       }

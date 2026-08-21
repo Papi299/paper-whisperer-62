@@ -86,7 +86,7 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     -- AUTHOR-IDENTITY-RESOLUTION-001C. Every identity decision that must be
     -- validated against current paper state or the merge graph is an RPC, so all
     -- six belong in this matrix.
-    'public.create_author_identity_from_mention(uuid,integer,text,text)',
+    'public.create_author_identity_from_mention(uuid,integer,text,text,boolean)',
     'public.link_author_mention_to_identity(uuid,integer,text,uuid,text,boolean)',
     'public.unlink_author_mention_identity(uuid,integer)',
     'public.merge_author_identities(uuid,uuid)',
@@ -176,7 +176,7 @@ SELECT is(
        'public.check_and_consume_storage_quota()'::regprocedure,
        'public.handle_new_user()'::regprocedure,
        'public.refund_storage_quota()'::regprocedure,
-       'public.create_author_identity_from_mention(uuid,integer,text,text)'::regprocedure,
+       'public.create_author_identity_from_mention(uuid,integer,text,text,boolean)'::regprocedure,
        'public.link_author_mention_to_identity(uuid,integer,text,uuid,text,boolean)'::regprocedure,
        'public.unlink_author_mention_identity(uuid,integer)'::regprocedure,
        'public.merge_author_identities(uuid,uuid)'::regprocedure,

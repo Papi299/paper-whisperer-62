@@ -356,6 +356,32 @@ export interface AuthorIdentityMergedMember {
   orcids: readonly string[];
   /** How many mentions are linked to this member across the evidence papers. */
   linkedMentionCount: number;
+  /** Position in the user's identity list. See `AuthorIdentityCluster.creationRank`. */
+  creationRank: number;
+}
+
+/**
+ * A saved link that no longer describes the mention it names.
+ *
+ * Unreachable through this application — a trigger clears a paper's links the
+ * moment its `authors` change — so these are what surviving that guarantee
+ * failing looks like. They are reported with enough context for the user to
+ * recognise what they are being asked about, and obeyed nowhere.
+ */
+export interface AuthorIdentityStaleLink {
+  link: AuthorIdentityLinkRecord;
+  /** The paper's title, when the paper is in the evidence set. */
+  paperTitle: string | null;
+  /** The person the row points at, when that identity is in the dataset. */
+  identityName: string | null;
+  /**
+   * Whether a current mention still exists at this position.
+   *
+   * True: the mention is re-offered as unresolved and acting on it must replace
+   * this row. False: nothing can render a mention for it, so the only repair is
+   * removing the row outright.
+   */
+  hasCurrentMention: boolean;
 }
 
 /** One effective person: a root identity plus everything merged into it. */
@@ -411,6 +437,17 @@ export interface AuthorIdentityCluster {
   linkRowCount: number;
   /** Alias rows across the cluster, before deduplication by text. */
   aliasRowCount: number;
+  /**
+   * The root identity's 0-based position in the user's identity list.
+   *
+   * The data layer reads identities ordered by `created_at`, so this is
+   * creation order. It exists for exactly one purpose: telling apart two people
+   * who are genuinely indistinguishable by their own evidence — same name, same
+   * (or no) ORCIDs, same aliases, nothing linked. "Created first" is then the
+   * only true, non-inferential thing left to say about them, and it is a great
+   * deal more useful to a human than a UUID.
+   */
+  creationRank: number;
 }
 
 /* -------------------------------------------------------------------------
@@ -449,7 +486,7 @@ export interface AuthorIdentityResolution {
    * link that no longer describes its mention would otherwise resolve the wrong
    * author to a person and be indistinguishable from a decision the user made.
    */
-  staleLinks: readonly AuthorIdentityLinkRecord[];
+  staleLinks: readonly AuthorIdentityStaleLink[];
   /**
    * `paperId:index` for every stale link at a position that still exists.
    *
@@ -558,6 +595,8 @@ export function buildAuthorIdentityResolution(
 
   const rootOf = resolveAuthorIdentityRoots(dataset.merges);
   const identityById = new Map(dataset.identities.map((i) => [i.id, i]));
+  // Position in the identity list, which the data layer reads in creation order.
+  const creationRankById = new Map(dataset.identities.map((identity, index) => [identity.id, index]));
 
   // Root → members. Built from the identity list rather than from the edges so
   // an unmerged identity is still its own single-member cluster.
@@ -603,8 +642,28 @@ export function buildAuthorIdentityResolution(
   const linkedMentionsByRoot = new Map<string, AuthorMentionRef[]>();
   const linkedMentionsByIdentity = new Map<string, AuthorMentionRef[]>();
   const linkRowCountByRoot = new Map<string, number>();
-  const staleLinks: AuthorIdentityLinkRecord[] = [];
+  const staleLinks: AuthorIdentityStaleLink[] = [];
   const staleLinkSlots = new Set<string>();
+
+  // Titles for stale-link reporting, so a row the user is asked about names a
+  // paper they can recognise rather than an id they cannot.
+  const titleByPaperId = new Map<string, string>();
+  for (const paper of papers) titleByPaperId.set(paper.id, paper.title);
+  if (evidencePapers) {
+    for (const paper of evidencePapers) {
+      if (!titleByPaperId.has(paper.id)) titleByPaperId.set(paper.id, paper.title);
+    }
+  }
+
+  const staleLinkOf = (
+    link: AuthorIdentityLinkRecord,
+    hasCurrentMention: boolean,
+  ): AuthorIdentityStaleLink => ({
+    link,
+    paperTitle: titleByPaperId.get(link.paper_id) ?? null,
+    identityName: identityById.get(link.identity_id)?.preferred_name ?? null,
+    hasCurrentMention,
+  });
 
   for (const link of dataset.links) {
     if (!identityById.has(link.identity_id)) continue;
@@ -621,7 +680,7 @@ export function buildAuthorIdentityResolution(
       // A paper we do not have says nothing either way — it is simply not in
       // evidence. A paper we DO have, missing the position the link names, is a
       // genuine inconsistency and is reported as one.
-      if (evidencePaperIds.has(link.paper_id)) staleLinks.push(link);
+      if (evidencePaperIds.has(link.paper_id)) staleLinks.push(staleLinkOf(link, false));
       continue;
     }
 
@@ -629,7 +688,7 @@ export function buildAuthorIdentityResolution(
     // is deliberately not used: a punctuation-only edit still moved the text out
     // from under the decision, and re-offering it is the conservative response.
     if (mention.rawName !== link.author_name_snapshot) {
-      staleLinks.push(link);
+      staleLinks.push(staleLinkOf(link, true));
       staleLinkSlots.add(slot);
       continue;
     }
@@ -699,6 +758,7 @@ export function buildAuthorIdentityResolution(
           ),
         ],
         linkedMentionCount: own.length,
+        creationRank: creationRankById.get(memberId) ?? 0,
       };
     });
 
@@ -716,6 +776,7 @@ export function buildAuthorIdentityResolution(
       paperIds,
       linkRowCount: linkRowCountByRoot.get(root) ?? 0,
       aliasRowCount: aliasRowCountByRoot.get(root) ?? 0,
+      creationRank: creationRankById.get(root) ?? 0,
     });
   }
 

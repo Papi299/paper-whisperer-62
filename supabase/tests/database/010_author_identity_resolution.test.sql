@@ -48,6 +48,9 @@
 --   * duplicate-paper merge interaction: discarded papers' links cascade, a kept
 --     paper whose authors changed loses its links, and identities survive both;
 --   * paper deletion cascades links and leaves the identity alone;
+--   * a stale saved link is repairable: an explicitly requested create replaces
+--     a row the SERVER proves stale, refuses one whose snapshot still matches,
+--     and an out-of-range saved row is removable through the plain unlink path;
 --   * account deletion removes every identity row through the auth.users cascade,
 --     with no Edge Function enumerating tables.
 --
@@ -165,7 +168,7 @@ INSERT INTO public.papers (id, user_id, title, authors, insert_order, created_at
 VALUES ('0a000000-0000-0000-0000-0000000000b1','0a000000-0000-0000-0000-000000000002',
         'Foreign paper', '["Someone Else"]'::jsonb, 404, '2026-01-04T00:00:00Z');
 
-SELECT plan(117);
+SELECT plan(134);
 
 -- ══ 1. Shape and security posture ═══════════════════════════════════════════
 
@@ -1017,6 +1020,162 @@ SELECT is(
    WHERE user_id = '0a000000-0000-0000-0000-000000000001' AND preferred_name = 'Keep Person'),
   1,
   'paper delete: the identity survives — a person is not deleted with a paper');
+
+-- ══ 12b. Repairing a stale link that survived the trigger ═══════════════════
+--
+-- Section 10 proves the trigger deletes a paper's links whenever its authors
+-- change, so a link whose snapshot no longer matches its mention is unreachable
+-- through this application. This section is about what happens if one exists
+-- anyway — a privileged write, a restored backup, a future bug.
+--
+-- The read layer already refuses to obey such a row. The gap this closes is that
+-- the user could then not REPAIR it: the UI correctly re-offered the mention as
+-- unresolved, and every action it offered collided with the unique
+-- (paper_id, author_index) constraint.
+--
+-- The repair is deliberately narrow. `p_replace_stale_existing` displaces only a
+-- row the SERVER can prove is stale, from data it reads itself inside the locked
+-- transaction. A valid decision is never overwritten by this path.
+
+-- A fresh paper and a fresh identity, so nothing above or below is disturbed.
+INSERT INTO public.papers (id, user_id, title, authors, insert_order, created_at)
+VALUES ('0a000000-0000-0000-0000-0000000000e1','0a000000-0000-0000-0000-000000000001',
+        'Stale repair paper', '["Current Author","Valid Author"]'::jsonb, 411, '2026-01-11T00:00:00Z');
+
+-- A link recorded against text the paper no longer holds. Written directly,
+-- because the application cannot produce this state — which is the point.
+INSERT INTO public.author_identities (id, user_id, preferred_name)
+VALUES ('0a000000-0000-0000-0000-0000000000f1','0a000000-0000-0000-0000-000000000001','Stale Person');
+
+INSERT INTO public.author_identity_links
+  (user_id, identity_id, paper_id, author_index, author_name_snapshot, resolution_basis)
+VALUES ('0a000000-0000-0000-0000-000000000001','0a000000-0000-0000-0000-0000000000f1',
+        '0a000000-0000-0000-0000-0000000000e1', 0, 'Author As Written Before', 'manual');
+
+-- Without the flag the collision is reported as a decision that already exists,
+-- rather than as a raw unique-constraint failure.
+SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims_u1(),
+  $q$SELECT public.create_author_identity_from_mention(
+       '0a000000-0000-0000-0000-0000000000e1'::uuid, 0, 'Current Author', 'New Person')$q$),
+  'P0001', 'stale repair: create without the flag refuses rather than colliding');
+
+SELECT is(
+  (SELECT author_name_snapshot FROM public.author_identity_links
+   WHERE paper_id = '0a000000-0000-0000-0000-0000000000e1' AND author_index = 0),
+  'Author As Written Before',
+  'stale repair: the refused call left the stale row exactly as it was');
+
+SELECT is(
+  (SELECT count(*)::int FROM public.author_identities
+   WHERE user_id = '0a000000-0000-0000-0000-000000000001' AND preferred_name = 'New Person'),
+  0,
+  'stale repair: and created no identity — the rejection is side-effect free');
+
+-- A VALID link must survive the same call. This is the guard that keeps
+-- `p_replace_stale_existing` from becoming a general overwrite switch: the
+-- server compares the stored snapshot against the paper's current text itself,
+-- so asking to replace a row that still matches is refused however the caller
+-- asks.
+SELECT lives_ok(
+  $q$SELECT pg_temp.create_identity_u1(
+       '0a000000-0000-0000-0000-0000000000e1'::uuid, 1, 'Valid Author', 'Valid Person')$q$,
+  'stale repair: a second, valid decision is recorded normally');
+
+SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims_u1(),
+  $q$SELECT public.create_author_identity_from_mention(
+       '0a000000-0000-0000-0000-0000000000e1'::uuid, 1, 'Valid Author',
+       'Should Not Exist', true)$q$),
+  'P0001', 'stale repair: a link that still matches is NOT replaceable by this path');
+
+SELECT is(
+  (SELECT preferred_name FROM public.author_identities i
+   JOIN public.author_identity_links l ON l.identity_id = i.id
+   WHERE l.paper_id = '0a000000-0000-0000-0000-0000000000e1' AND l.author_index = 1),
+  'Valid Person',
+  'stale repair: the valid decision is untouched');
+
+SELECT is(
+  (SELECT count(*)::int FROM public.author_identities
+   WHERE user_id = '0a000000-0000-0000-0000-000000000001' AND preferred_name = 'Should Not Exist'),
+  0,
+  'stale repair: the refused overwrite created no orphan identity');
+
+-- The repair itself.
+SELECT lives_ok(
+  $q$SELECT pg_temp.run_as(pg_temp.claims_u1(),
+       $inner$SELECT public.create_author_identity_from_mention(
+         '0a000000-0000-0000-0000-0000000000e1'::uuid, 0, 'Current Author',
+         'Repaired Person', true)$inner$)$q$,
+  'stale repair: an explicitly requested replacement of a provably stale row succeeds');
+
+SELECT is(pg_temp.link_count('0a000000-0000-0000-0000-0000000000e1'), 2,
+  'stale repair: one link per position — the stale row was replaced, not joined');
+
+SELECT is(
+  (SELECT author_name_snapshot FROM public.author_identity_links
+   WHERE paper_id = '0a000000-0000-0000-0000-0000000000e1' AND author_index = 0),
+  'Current Author',
+  'stale repair: the surviving link describes the mention as it reads now');
+
+SELECT is(
+  (SELECT preferred_name FROM public.author_identities i
+   JOIN public.author_identity_links l ON l.identity_id = i.id
+   WHERE l.paper_id = '0a000000-0000-0000-0000-0000000000e1' AND l.author_index = 0),
+  'Repaired Person',
+  'stale repair: the mention now resolves to the person the user just created');
+
+-- The displaced identity is NOT deleted. A merge or a rename may still reference
+-- it, and destroying a person as a side effect of repairing a link would be the
+-- silent assertion this whole feature refuses.
+SELECT is(
+  (SELECT count(*)::int FROM public.author_identities
+   WHERE id = '0a000000-0000-0000-0000-0000000000f1'),
+  1,
+  'stale repair: the previously linked person still exists, now carrying nothing');
+
+-- Out-of-range stale rows: nothing can render a mention for them, so the plain
+-- unlink path is the repair. It needs no author text, which is exactly why it
+-- works here.
+INSERT INTO public.author_identity_links
+  (user_id, identity_id, paper_id, author_index, author_name_snapshot, resolution_basis)
+VALUES ('0a000000-0000-0000-0000-000000000001','0a000000-0000-0000-0000-0000000000f1',
+        '0a000000-0000-0000-0000-0000000000e1', 9, 'Author At A Gone Position', 'manual');
+
+SELECT lives_ok(
+  $q$SELECT pg_temp.run_as(pg_temp.claims_u1(),
+       $inner$SELECT public.unlink_author_mention_identity(
+         '0a000000-0000-0000-0000-0000000000e1'::uuid, 9)$inner$)$q$,
+  'stale repair: an out-of-range saved link can be removed without any author text');
+
+SELECT is(pg_temp.link_count('0a000000-0000-0000-0000-0000000000e1'), 2,
+  'stale repair: exactly the out-of-range row went');
+
+SELECT is(
+  (SELECT authors::text FROM public.papers
+   WHERE id = '0a000000-0000-0000-0000-0000000000e1'),
+  '["Current Author", "Valid Author"]',
+  'stale repair: no paper data was touched by any of it');
+
+-- U2 must not be able to remove U1's stale row.
+INSERT INTO public.author_identity_links
+  (user_id, identity_id, paper_id, author_index, author_name_snapshot, resolution_basis)
+VALUES ('0a000000-0000-0000-0000-000000000001','0a000000-0000-0000-0000-0000000000f1',
+        '0a000000-0000-0000-0000-0000000000e1', 9, 'Author At A Gone Position', 'manual');
+
+SELECT lives_ok(
+  $q$SELECT pg_temp.run_as(pg_temp.claims_u2(),
+       $inner$SELECT public.unlink_author_mention_identity(
+         '0a000000-0000-0000-0000-0000000000e1'::uuid, 9)$inner$)$q$,
+  'stale repair: another user''s removal call is accepted but scoped');
+
+SELECT is(pg_temp.link_count('0a000000-0000-0000-0000-0000000000e1'), 3,
+  'stale repair: it deleted nothing, because the predicate is scoped to the caller');
+
+-- Clean up so sections 13 onward see the state they expect.
+DELETE FROM public.papers WHERE id = '0a000000-0000-0000-0000-0000000000e1';
+DELETE FROM public.author_identities
+ WHERE preferred_name IN ('Stale Person', 'Valid Person', 'Repaired Person');
+
 
 -- ══ 13. Account deletion ════════════════════════════════════════════════════
 -- delete-account removes Storage objects and the Auth user and enumerates no

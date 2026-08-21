@@ -60,7 +60,9 @@
 -- EXPAND-FIRST / ROLLOUT SAFETY
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Additive. Four new tables, one new unique constraint on `papers`, one new
--- trigger on `papers`, and eight new functions. No existing table, column,
+-- trigger on `papers`, and nine new functions — six client RPCs, two internal
+-- helpers and one trigger function, which is exactly the inventory the verify
+-- block at the end of this file enumerates and asserts. No existing table, column,
 -- constraint, policy, grant, function or row is altered or dropped, and no
 -- historical migration is touched. The migration may therefore be applied to
 -- Production BEFORE the frontend that uses it is merged: the current frontend
@@ -717,11 +719,32 @@ REVOKE ALL ON FUNCTION public.validate_author_mention_for_identity(uuid, uuid, i
 -- given_name/family_name components even when those exist — assembling a
 -- canonical person name out of source fields is Paperlume asserting how the
 -- person is called, which is the user's call, not a parser's.
+--
+-- `p_replace_stale_existing` exists for one specific repair, and is deliberately
+-- NOT a general "replace whatever is there" switch.
+--
+-- A link is bound to the author text it names, and section 8's trigger deletes a
+-- paper's links whenever that text changes — so a surviving row whose
+-- `author_name_snapshot` no longer matches the current author is unreachable
+-- through this application. If one exists anyway (a privileged write, a restored
+-- backup), the read layer already refuses to obey it and re-offers the mention as
+-- unresolved. But the unique `(paper_id, author_index)` constraint then rejected
+-- the user's attempt to resolve it: the UI said "unresolved", and every action it
+-- offered failed with 23505 for a reason the user could neither see nor fix.
+--
+-- So: when explicitly requested, this displaces a row it can PROVE is stale. The
+-- proof is made here, on data read inside the same locked transaction, never from
+-- the caller's word — `p_replace_stale_existing = true` on a link whose snapshot
+-- still matches the current text is REFUSED, because that is a decision the user
+-- made and this path has no mandate to overwrite it. Displacing a valid decision
+-- remains possible only through `link_author_mention_to_identity`'s explicit
+-- `p_replace_existing`, where the UI has to ask first.
 CREATE OR REPLACE FUNCTION public.create_author_identity_from_mention(
-  p_paper_id        uuid,
-  p_author_index    integer,
-  p_expected_author text,
-  p_preferred_name  text DEFAULT NULL
+  p_paper_id               uuid,
+  p_author_index           integer,
+  p_expected_author        text,
+  p_preferred_name         text DEFAULT NULL,
+  p_replace_stale_existing boolean DEFAULT false
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -734,6 +757,7 @@ DECLARE
   v_name        text;
   v_identity_id uuid;
   v_link_id     uuid;
+  v_existing    record;
 BEGIN
   IF v_user_id IS NULL THEN
     RAISE EXCEPTION 'Authentication required';
@@ -741,9 +765,37 @@ BEGIN
 
   -- Locks the paper and proves ownership, bounds, freshness and non-collective
   -- provenance. Every check precedes the first write, so a rejected call is
-  -- provably side-effect free.
+  -- provably side-effect free. The paper lock also serializes two callers racing
+  -- on the same mention, so the staleness test below cannot be evaluated against
+  -- a row another transaction is in the middle of replacing.
   v_current := public.validate_author_mention_for_identity(
     v_user_id, p_paper_id, p_author_index, p_expected_author);
+
+  -- Whatever decision is already recorded for this exact position. Read without
+  -- a user filter and then checked, rather than filtered: a row belonging to
+  -- someone else at this slot is structurally impossible (the composite paper
+  -- foreign key pins the link to the paper's owner), and if that ever failed,
+  -- reporting it beats silently colliding on the unique constraint.
+  SELECT id, user_id, author_name_snapshot
+  INTO v_existing
+  FROM public.author_identity_links
+  WHERE paper_id = p_paper_id AND author_index = p_author_index
+  FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_existing.user_id <> v_user_id THEN
+      RAISE EXCEPTION 'This author mention is already resolved in another account';
+    END IF;
+    IF NOT p_replace_stale_existing THEN
+      RAISE EXCEPTION 'This author mention is already linked to a person';
+    END IF;
+    -- The server's own staleness proof. `v_current` is the paper's text right
+    -- now, already shown to equal what the caller expected.
+    IF v_existing.author_name_snapshot = v_current THEN
+      RAISE EXCEPTION 'The existing link still matches this author mention and will not be replaced';
+    END IF;
+    DELETE FROM public.author_identity_links WHERE id = v_existing.id;
+  END IF;
 
   v_name := COALESCE(NULLIF(btrim(p_preferred_name), ''), v_current);
 
@@ -772,11 +824,11 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.create_author_identity_from_mention(uuid, integer, text, text)
+ALTER FUNCTION public.create_author_identity_from_mention(uuid, integer, text, text, boolean)
     OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.create_author_identity_from_mention(uuid, integer, text, text)
+REVOKE ALL ON FUNCTION public.create_author_identity_from_mention(uuid, integer, text, text, boolean)
     FROM PUBLIC, anon, service_role;
-GRANT  EXECUTE ON FUNCTION public.create_author_identity_from_mention(uuid, integer, text, text)
+GRANT  EXECUTE ON FUNCTION public.create_author_identity_from_mention(uuid, integer, text, text, boolean)
     TO authenticated;
 
 -- ═════════════════════════════════════════════════════════════════════════════
