@@ -481,9 +481,9 @@ function PersonCard({
   const removeAlias = useCallback(
     (aliasId: string) => {
       const order = cluster.aliases;
-      const index = order.indexOf(aliasId);
-      const next = index >= 0 ? order[index + 1] : undefined;
-      const previous = index > 0 ? order[index - 1] : undefined;
+      const index = order.findIndex((entry) => entry.id === aliasId);
+      const next = index >= 0 ? order[index + 1]?.id : undefined;
+      const previous = index > 0 ? order[index - 1]?.id : undefined;
 
       void identities
         .removeAlias(aliasId)
@@ -491,7 +491,7 @@ function PersonCard({
           const target =
             (next && aliasRefs.current.get(next)) ??
             (previous && aliasRefs.current.get(previous)) ??
-            aliasRefs.current.get(order[index]) ??
+            aliasRefs.current.get(aliasId) ??
             emptyAliasRef.current;
           // Only claim focus that has nowhere to be: a user who moved on during
           // the asynchronous delete keeps their place.
@@ -586,13 +586,13 @@ function PersonCard({
           </p>
         ) : (
           <div className="flex flex-wrap gap-1">
-            {cluster.aliases.map((value) => (
-              <Badge key={value} variant="secondary" className="text-xs pr-1">
-                <span className="truncate max-w-[160px]">{value}</span>
+            {cluster.aliases.map((entry) => (
+              <Badge key={entry.id} variant="secondary" className="text-xs pr-1">
+                <span className="truncate max-w-[160px]">{entry.alias}</span>
                 <button
-                  ref={(node) => aliasRefs.current.set(value, node)}
-                  onClick={() => removeAlias(value)}
-                  aria-label={`Remove alias ${value}`}
+                  ref={(node) => aliasRefs.current.set(entry.id, node)}
+                  onClick={() => removeAlias(entry.id)}
+                  aria-label={`Remove alias ${entry.alias}`}
                   className="ml-1 hover:text-destructive"
                   disabled={busy}
                 >

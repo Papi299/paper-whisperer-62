@@ -321,6 +321,12 @@ export function isResolvableMention(mention: AuthorMentionRef): boolean {
  * Clusters
  * ---------------------------------------------------------------------- */
 
+/** One manual alias, as displayed, with the row it came from. */
+export interface AuthorIdentityClusterAlias {
+  id: string;
+  alias: string;
+}
+
 /** One effective person: a root identity plus everything merged into it. */
 export interface AuthorIdentityCluster {
   /** The terminal identity of the merge chain. The stable key for this person. */
@@ -331,8 +337,15 @@ export interface AuthorIdentityCluster {
   memberIds: readonly string[];
   /** Identities merged into the root, i.e. `memberIds` minus the root. */
   mergedMemberIds: readonly string[];
-  /** Manual aliases across the whole cluster, display-normalized, deduplicated. */
-  aliases: readonly string[];
+  /**
+   * Manual aliases across the whole cluster, display-normalized and deduplicated
+   * by text, each keeping the row id that identifies it.
+   *
+   * The id is not decoration: removing an alias deletes a row, so the UI needs
+   * the identifier and not just the words. Deduplication keeps the first row for
+   * a given text, so removing it removes something the user can see.
+   */
+  aliases: readonly AuthorIdentityClusterAlias[];
   /** Distinct display spellings of the mentions currently linked to the cluster. */
   linkedSpellings: readonly string[];
   /** Distinct checksum-valid ORCIDs on the cluster's currently linked mentions. */
@@ -433,7 +446,7 @@ export function buildAuthorIdentityResolution(
     else membersByRoot.set(root, [identity.id]);
   }
 
-  const aliasesByRoot = new Map<string, string[]>();
+  const aliasesByRoot = new Map<string, AuthorIdentityClusterAlias[]>();
   for (const alias of dataset.aliases) {
     // An alias on an identity the dataset does not contain cannot be attributed
     // to a cluster. The composite foreign key makes that unreachable; ignoring
@@ -442,9 +455,10 @@ export function buildAuthorIdentityResolution(
     const root = rootFor(rootOf, alias.identity_id);
     const display = normalizeAuthorDisplay(alias.alias);
     if (!display) continue;
+    const entry: AuthorIdentityClusterAlias = { id: alias.id, alias: display };
     const list = aliasesByRoot.get(root);
-    if (list) list.push(display);
-    else aliasesByRoot.set(root, [display]);
+    if (list) list.push(entry);
+    else aliasesByRoot.set(root, [entry]);
   }
 
   const linkBySlot = new Map<string, AuthorIdentityLinkRecord>();
@@ -486,14 +500,23 @@ export function buildAuthorIdentityResolution(
       if (mention.orcid) orcids.add(mention.orcid);
     }
 
-    const aliasSet = new Set(aliasesByRoot.get(root) ?? []);
+    // Deduplicated by TEXT, keeping the first row that produced it: two rows
+    // spelling the same alias are one name to the user, and removing the one
+    // they can see must remove a row that exists.
+    const seenAliasText = new Set<string>();
+    const aliases: AuthorIdentityClusterAlias[] = [];
+    for (const entry of aliasesByRoot.get(root) ?? []) {
+      if (seenAliasText.has(entry.alias)) continue;
+      seenAliasText.add(entry.alias);
+      aliases.push(entry);
+    }
 
     clusters.set(root, {
       rootId: root,
       preferredName: rootRecord.preferred_name,
       memberIds: ordered,
       mergedMemberIds: ordered.slice(1),
-      aliases: [...aliasSet],
+      aliases,
       linkedSpellings: [...spellings],
       orcids: [...orcids],
       hasOrcidConflict: orcids.size > 1,
@@ -593,7 +616,9 @@ function buildClusterIndexes(
     for (const orcid of cluster.orcids) add(rootsByOrcid, orcid, cluster.rootId);
 
     add(rootsByNameKey, authorMentionKey(cluster.preferredName), cluster.rootId);
-    for (const alias of cluster.aliases) add(rootsByNameKey, authorMentionKey(alias), cluster.rootId);
+    for (const entry of cluster.aliases) {
+      add(rootsByNameKey, authorMentionKey(entry.alias), cluster.rootId);
+    }
     for (const spelling of cluster.linkedSpellings) {
       add(rootsByNameKey, authorMentionKey(spelling), cluster.rootId);
     }
@@ -955,7 +980,7 @@ export function indexAuthorEntities(
             searchTerms: [
               ...new Set([
                 cluster.preferredName,
-                ...cluster.aliases,
+                ...cluster.aliases.map((entry) => entry.alias),
                 ...cluster.linkedSpellings,
               ]),
             ],

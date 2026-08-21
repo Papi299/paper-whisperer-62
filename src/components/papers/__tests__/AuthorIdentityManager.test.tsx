@@ -376,7 +376,9 @@ describe("AuthorIdentityManager — people", () => {
     expect(identities.addAlias).toHaveBeenCalledWith("phillips", "Phillips, S M");
 
     fireEvent.click(screen.getByRole("button", { name: "Remove alias Phillips SM" }));
-    expect(identities.removeAlias).toHaveBeenCalledWith("Phillips SM");
+    // The alias ROW id, not the text: removing an alias deletes a row, and the
+    // words are not a key — two rows may carry the same name.
+    expect(identities.removeAlias).toHaveBeenCalledWith("a1");
   });
 
   it("unlinks a mention", () => {

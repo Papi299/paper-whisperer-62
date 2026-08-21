@@ -314,7 +314,7 @@ describe("buildAuthorIdentityResolution — clusters", () => {
 
     const cluster = resolution.clusters.get("phillips")!;
     expect(cluster.preferredName).toBe("Stuart M Phillips");
-    expect(cluster.aliases).toEqual(["Phillips SM"]);
+    expect(cluster.aliases).toEqual([{ id: "a1", alias: "Phillips SM" }]);
     expect([...cluster.linkedSpellings].sort()).toEqual(["S M Phillips", "Stuart M Phillips"]);
     expect(cluster.orcids).toEqual([ORCID_X]);
     expect(cluster.hasOrcidConflict).toBe(false);
@@ -348,8 +348,37 @@ describe("buildAuthorIdentityResolution — clusters", () => {
     expect([...cluster.mergedMemberIds].sort()).toEqual(["a", "b"]);
     // The merged member's alias belongs to the cluster — nothing was moved, it is
     // simply reachable through the root now.
-    expect(cluster.aliases).toEqual(["A. One"]);
+    expect(cluster.aliases).toEqual([{ id: "al", alias: "A. One" }]);
     expect([...cluster.linkedSpellings].sort()).toEqual(["A One", "B Two", "C Three"]);
+  });
+
+  it("keeps each alias's row id, because the text is not a key", () => {
+    // Removing an alias deletes a row. Two rows may legitimately carry the same
+    // words — the same name typed twice, or once on each of two merged
+    // identities — so a UI that removed "by text" would have nothing to delete.
+    const papers = [paper("p1", "P1", ["Stuart M Phillips"])];
+    const resolution = buildAuthorIdentityResolution(
+      papers,
+      dataset({
+        identities: [
+          { id: "phillips", preferred_name: "Stuart M Phillips" },
+          { id: "merged", preferred_name: "S M Phillips" },
+        ],
+        aliases: [
+          { id: "alias-1", identity_id: "phillips", alias: "Phillips SM" },
+          { id: "alias-2", identity_id: "merged", alias: "Phillips SM" },
+          { id: "alias-3", identity_id: "phillips", alias: "S. M. Phillips" },
+        ],
+        merges: [{ source_identity_id: "merged", target_identity_id: "phillips" }],
+      }),
+    );
+
+    const cluster = resolution.clusters.get("phillips")!;
+    // One entry per distinct name, each carrying a row that really exists.
+    expect(cluster.aliases).toEqual([
+      { id: "alias-1", alias: "Phillips SM" },
+      { id: "alias-3", alias: "S. M. Phillips" },
+    ]);
   });
 
   it("reports conflicting ORCID evidence without resolving it", () => {
