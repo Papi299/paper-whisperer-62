@@ -17,6 +17,18 @@ export interface MobileMultiSelectOption {
   value: string;
   label: string;
   color?: string;
+  /**
+   * Additional strings this option should be findable by, when the label alone
+   * is not everything the user might type.
+   *
+   * Analytics' author selector supplies these for a resolved author identity:
+   * the person's preferred name, every manual alias, and every source spelling
+   * the user has linked to them. Matching is per term rather than against a
+   * joined haystack, so a query cannot accidentally straddle two of them.
+   *
+   * Omitted everywhere else, where the label is the only sensible target.
+   */
+  searchTerms?: readonly string[];
 }
 
 interface MobileMultiSelectSheetProps {
@@ -115,7 +127,9 @@ export function MobileMultiSelectSheet({
 
   const filtered = React.useMemo(() => {
     if (matchesSearch) {
-      return options.filter((option) => matchesSearch(option.label, search));
+      return options.filter((option) =>
+        (option.searchTerms ?? [option.label]).some((term) => matchesSearch(term, search)),
+      );
     }
     const q = search.trim().toLowerCase();
     if (!q) return options;

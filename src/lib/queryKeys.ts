@@ -64,6 +64,18 @@ export const queryKeys = {
   filterPresets: {
     all: (userId: string) => ["filterPresets", userId] as const,
   },
+  authorIdentities: {
+    /**
+     * The user's whole author-identity dataset — identities, aliases, links and
+     * merge edges — read as one unit.
+     *
+     * One key rather than four because the four are only meaningful together: a
+     * link is uninterpretable without the merge graph that tells you which
+     * identity it effectively belongs to, so a partially-refreshed cache could
+     * render a person as two, or two as one, for the duration of a render.
+     */
+    all: (userId: string) => ["authorIdentities", userId] as const,
+  },
   aiQuota: {
     /** Per-user AI-analysis quota status (read-only get_ai_quota_status RPC). */
     status: (userId: string) => ["aiQuota", userId, "status"] as const,

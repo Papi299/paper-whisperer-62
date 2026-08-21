@@ -1,12 +1,16 @@
 import { useState, useMemo, useCallback, useRef } from "react";
+import { authorSearchMatches } from "@/lib/authorNames";
 import {
-  authorMentionKey,
-  authorSearchMatches,
-  indexAuthorMentions,
-} from "@/lib/authorNames";
+  buildAuthorIdentityResolution,
+  indexAuthorEntities,
+  toAuthorEntityKey,
+  type AuthorIdentityDataset,
+} from "@/lib/authorIdentity";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
+import { ManageAuthorIdentitiesButton } from "./AuthorIdentityManager";
+import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 import { Paper } from "@/types/database";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import { Button } from "@/components/ui/button";
@@ -57,12 +61,54 @@ interface AnalyticsContentProps {
    */
   targets: AnalyticsTargets;
   /**
+   * The signed-in user's author-identity decisions, or `null` when the identity
+   * subsystem is not installed in this environment.
+   *
+   * `null` is not "no decisions" — it is "cannot know", and it is also the
+   * default, which is what makes this additive. Without it every mention is
+   * unresolved and the author story is exactly the 001A textual grouping this
+   * component has always done. That is the behaviour a Vercel Preview gets while
+   * Production still predates the 001C migration, and the behaviour every
+   * pre-001C test of this component continues to assert.
+   */
+  identityDataset?: AuthorIdentityDataset | null;
+  /**
+   * The identity read/write API, when the application supplies one.
+   *
+   * Separate from `identityDataset` on purpose. The dataset is all this
+   * component needs to GROUP authors, so it stays a pure function of data and is
+   * testable as one; the API is only needed to OPEN the management surface, and
+   * omitting it simply means no manage button — which is what every unit test of
+   * the charts wants.
+   */
+  identities?: ReturnType<typeof useAuthorIdentities>;
+  /**
    * Narrow-viewport sizing. Purely dimensional: it shortens the category axis
    * (which is 320px wide on desktop and would leave almost no room for the bars
    * themselves at 390px) and drops the summary tiles to two columns. No series,
    * no filtering and no aggregate changes.
    */
   compact?: boolean;
+}
+
+/**
+ * One selectable option.
+ *
+ * `value` and `label` are separate because after 001C they genuinely differ for
+ * authors: the value is a stable entity key (`identity:<root>` or
+ * `mention:<key>`) and the label is what the user reads. Keeping them apart is
+ * what lets an identity keep its selection across a rename, and what allows two
+ * different people to legitimately share a display name without the selector
+ * collapsing them — a real possibility now that identities do not enforce unique
+ * preferred names.
+ *
+ * Keywords set both to the same string, which is exactly what they always were.
+ */
+interface SelectOption {
+  value: string;
+  label: string;
+  /** Extra strings this option is findable by. See `MobileMultiSelectOption`. */
+  searchTerms?: readonly string[];
 }
 
 /**
@@ -85,20 +131,23 @@ function MultiSelectPopover({
   matchesSearch,
 }: {
   label: string;
-  options: string[];
+  options: SelectOption[];
+  /** Selected option VALUES, not labels. */
   selected: string[];
   onToggle: (value: string) => void;
   onClear: () => void;
   fullWidth?: boolean;
   /**
-   * How a query is matched against an option. Omit for the default —
-   * case-insensitive substring — which is what Keywords use and must keep
-   * using: a keyword is a literal string, so folding its punctuation would
-   * change which keywords a search finds. Authors override it because their
-   * options are grouped by a canonical mention key, and an option must stay
-   * reachable by any spelling that groups into it.
+   * How a query is matched against one searchable term of an option. Omit for
+   * the default — case-insensitive substring on the label — which is what
+   * Keywords use and must keep using: a keyword is a literal string, so folding
+   * its punctuation would change which keywords a search finds.
+   *
+   * Authors override it because their options are grouped canonically and must
+   * stay reachable by any spelling that groups into them — including, for a
+   * resolved identity, its aliases and every linked source spelling.
    */
-  matchesSearch?: (option: string, search: string) => boolean;
+  matchesSearch?: (term: string, search: string) => boolean;
 }) {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
@@ -116,12 +165,18 @@ function MultiSelectPopover({
     useTouchSafeInitialFocus<HTMLDivElement>();
   const filtered = useMemo(
     () =>
-      options.filter((o) =>
+      options.filter((option) =>
         matchesSearch
-          ? matchesSearch(o, search)
-          : o.toLowerCase().includes(search.toLowerCase())
+          ? (option.searchTerms ?? [option.label]).some((term) => matchesSearch(term, search))
+          : option.label.toLowerCase().includes(search.toLowerCase())
       ),
     [options, search, matchesSearch]
+  );
+
+  /** Selected values resolved to the label currently representing them. */
+  const labelByValue = useMemo(
+    () => new Map(options.map((option) => [option.value, option.label])),
+    [options]
   );
 
   const triggerContent = (
@@ -137,18 +192,24 @@ function MultiSelectPopover({
 
   const selectedBadges = selected.length > 0 && (
     <div className="flex flex-wrap gap-1">
-      {selected.map((s) => (
-        <Badge key={s} variant="secondary" className="text-xs pr-1">
-          <span className="truncate max-w-[120px]">{s}</span>
-          <button
-            onClick={() => onToggle(s)}
-            aria-label={`Remove ${s}`}
-            className="ml-1 hover:text-destructive"
-          >
-            <X className="h-3 w-3" aria-hidden="true" />
-          </button>
-        </Badge>
-      ))}
+      {selected.map((value) => {
+        // A selection whose option is no longer on offer (its papers filtered
+        // away, or the identity deleted) still needs a badge the user can
+        // remove, so the value stands in for a label rather than vanishing.
+        const text = labelByValue.get(value) ?? value;
+        return (
+          <Badge key={value} variant="secondary" className="text-xs pr-1">
+            <span className="truncate max-w-[120px]">{text}</span>
+            <button
+              onClick={() => onToggle(value)}
+              aria-label={`Remove ${text}`}
+              className="ml-1 hover:text-destructive"
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </Badge>
+        );
+      })}
     </div>
   );
 
@@ -183,7 +244,7 @@ function MultiSelectPopover({
           onOpenChange={setOpen}
           title={label}
           triggerRef={triggerRef}
-          options={options.map((option) => ({ value: option, label: option }))}
+          options={options}
           selectedValues={selected}
           onToggle={onToggle}
           onClear={onClear}
@@ -233,14 +294,14 @@ function MultiSelectPopover({
                 )}
                 {filtered.map((option) => (
                   <label
-                    key={option}
+                    key={option.value}
                     className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-accent cursor-pointer text-sm"
                   >
                     <Checkbox
-                      checked={selected.includes(option)}
-                      onCheckedChange={() => onToggle(option)}
+                      checked={selected.includes(option.value)}
+                      onCheckedChange={() => onToggle(option.value)}
                     />
-                    <span className="truncate">{option}</span>
+                    <span className="truncate">{option.label}</span>
                   </label>
                 ))}
               </div>
@@ -294,6 +355,8 @@ export function AnalyticsContent({
   papers,
   isLoading,
   targets,
+  identityDataset = null,
+  identities,
   compact = false,
 }: AnalyticsContentProps) {
   const {
@@ -306,24 +369,40 @@ export function AnalyticsContent({
   } = targets;
 
   /**
-   * Every author mention in the current papers, grouped by canonical key.
+   * Every author in the current papers, grouped into effective author entities.
    *
    * One pass is the whole author story: the option list, the summary tile and
    * the per-author paper counts all read from this, so they cannot disagree
-   * about what counts as one author. Grouping is textual — `Stuart M. Phillips`
-   * and `Stuart M Phillips` are one mention written twice — and deliberately
-   * stops there: `S M Phillips` and `Stuart Phillips` stay separate, because
-   * nothing in a flattened author string proves they are the same researcher.
-   * See `lib/authorNames`.
+   * about what counts as one author.
+   *
+   * The grouping is deliberately mixed, and honest about it:
+   *
+   *   • a mention the user has explicitly resolved counts as the PERSON it
+   *     resolves to, collapsing every spelling they linked — so `Stuart M
+   *     Phillips` and `S M Phillips` become one author once, and only once, the
+   *     user says they are one;
+   *   • a mention they have not resolved counts as the 001A textual mention it
+   *     has always counted as. `Stuart M. Phillips` and `Stuart M Phillips`
+   *     still group as one spelling written twice; `S M Phillips` and `Stuart
+   *     Phillips` still stay apart, and a shared ORCID does NOT bring them
+   *     together, because a matching identifier is something a source stated,
+   *     not a decision this user made.
+   *
+   * See `lib/authorIdentity` and `lib/authorNames`.
    */
-  const authorMentions = useMemo(
-    () => indexAuthorMentions(papers.map((p) => p.authors)),
-    [papers]
+  const identityResolution = useMemo(
+    () => buildAuthorIdentityResolution(papers, identityDataset),
+    [papers, identityDataset]
+  );
+
+  const authorEntities = useMemo(
+    () => indexAuthorEntities(papers, identityResolution),
+    [papers, identityResolution]
   );
 
   const authorsByKey = useMemo(
-    () => new Map(authorMentions.map((entry) => [entry.key, entry])),
-    [authorMentions]
+    () => new Map(authorEntities.map((entity) => [entity.key, entity])),
+    [authorEntities]
   );
 
   // Summary stats
@@ -336,15 +415,16 @@ export function AnalyticsContent({
     );
     return {
       totalPapers: papers.length,
-      // Distinct canonical author *mentions*, not verified people — two
-      // spellings of one name count once, two ambiguous names count twice.
-      uniqueAuthors: authorMentions.length,
+      // Distinct effective author entities: one per identity the user has
+      // resolved, one per unresolved canonical mention. Not "verified people" —
+      // an unresolved mention is still just a string, and is counted as one.
+      uniqueAuthors: authorEntities.length,
       yearRange: minYear && maxYear
         ? minYear === maxYear ? `${minYear}` : `${minYear}–${maxYear}`
         : "N/A",
       studyTypesCount: uniqueStudyTypes.size,
     };
-  }, [papers, authorMentions]);
+  }, [papers, authorEntities]);
 
   // Study type distribution (auto, no selection needed)
   // Exclude: empty/generic types, PubMed funding tags, excluded/rejected papers
@@ -390,44 +470,69 @@ export function AnalyticsContent({
     return Array.from(set).sort();
   }, [papers]);
 
-  // One option per canonical mention key, labelled with the first source
-  // spelling that produced it. Distinct keys always have distinct labels — the
-  // label determines the key — so sorting by label cannot merge two options.
-  const availableAuthors = useMemo(
-    () => authorMentions.map((entry) => entry.label).sort(),
-    [authorMentions]
-  );
-
   /**
-   * Selections rendered as the label that currently represents their key.
+   * One option per effective author entity: a resolved identity is labelled with
+   * its preferred name, an unresolved mention with the representative source
+   * spelling 001A always chose.
    *
-   * The stored selection is whichever spelling the user clicked; the option
-   * list is rebuilt from `papers` and may come to represent that same key with
-   * the other equivalent spelling (filtering away the paper the label came
-   * from). Resolving through the key keeps such a selection ticked and badged
-   * under the label actually on screen, instead of silently orphaning it.
+   * Sorting by label no longer risks merging options, because the option's
+   * identity is now its `value` — an entity key — rather than its text. That
+   * matters: two identities may legitimately carry the same preferred name, and
+   * before 001C the label WAS the key, so this list could not have represented
+   * them as two options at all.
    */
-  const selectedAuthorLabels = useMemo(
+  const availableAuthors = useMemo(
     () =>
-      selectedAuthors.map(
-        (author) => authorsByKey.get(authorMentionKey(author))?.label ?? author
-      ),
-    [selectedAuthors, authorsByKey]
+      authorEntities
+        .map((entity) => ({
+          value: entity.key,
+          label: entity.label,
+          searchTerms: entity.searchTerms,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [authorEntities]
+  );
+
+  const availableKeywordOptions = useMemo(
+    () => availableKeywords.map((keyword) => ({ value: keyword, label: keyword })),
+    [availableKeywords]
   );
 
   /**
-   * Toggling an option that is formatting-equivalent to an existing selection
-   * removes THAT selection rather than appending a second spelling of it, so a
-   * canonical author can never be selected twice. Selection state itself stays
-   * a plain list of source-derived strings — no internal keys leak into it.
+   * Selections as stable entity keys, whatever form they were stored in.
+   *
+   * Selection state lives above the responsive breakpoint in `useAnalyticsTargets`
+   * and is not persisted anywhere, so there is no stored history to migrate — but
+   * a value CAN predate the identity dataset finishing its load, or a component
+   * remount at 768px. `toAuthorEntityKey` folds any such legacy raw label into
+   * the mention key it used to mean, so a selection made a moment ago keeps
+   * meaning the same author afterwards.
+   *
+   * Deduplicated, because two legacy spellings of one canonical mention must not
+   * become two selections of the same author.
+   */
+  const selectedAuthorKeys = useMemo(() => {
+    const seen = new Set<string>();
+    for (const selected of selectedAuthors) {
+      const key = toAuthorEntityKey(selected);
+      if (key) seen.add(key);
+    }
+    return [...seen];
+  }, [selectedAuthors]);
+
+  /**
+   * Toggling stores the entity key, not the label.
+   *
+   * That is what keeps a selection alive across a rename, and across the option
+   * coming to be represented by a different source spelling — the two ways a
+   * label can change under a selection that was never meant to move.
    */
   const handleToggleAuthor = useCallback(
-    (author: string) => {
-      const key = authorMentionKey(author);
-      const alreadySelected = key
-        ? selectedAuthors.find((selected) => authorMentionKey(selected) === key)
-        : undefined;
-      onToggleAuthor(alreadySelected ?? author);
+    (entityKey: string) => {
+      const existing = selectedAuthors.find(
+        (selected) => toAuthorEntityKey(selected) === entityKey
+      );
+      onToggleAuthor(existing ?? entityKey);
     },
     [selectedAuthors, onToggleAuthor]
   );
@@ -445,23 +550,20 @@ export function AnalyticsContent({
     }).sort((a, b) => b.count - a.count);
   }, [selectedKeywords, papers]);
 
-  // Compute author stats. Counts come from the shared mention index, so a
-  // selected author is credited with every formatting-equivalent spelling and
-  // each paper is credited at most once — including papers whose author array
-  // happens to list two equivalent spellings.
+  // Counts come from the shared entity index, so a selected author is credited
+  // with every spelling that groups into it — formatting-equivalent variants for
+  // an unresolved mention, and every linked spelling across the merged cluster
+  // for a resolved identity. Each paper is credited at most once, including a
+  // paper that lists two spellings resolving to the same person.
   const authorStats = useMemo(() => {
-    if (selectedAuthors.length === 0) return [];
-    const counted = new Set<string>();
-    const stats: Array<{ name: string; count: number }> = [];
-    selectedAuthors.forEach((author) => {
-      const key = authorMentionKey(author);
-      if (!key || counted.has(key)) return;
-      counted.add(key);
-      const entry = authorsByKey.get(key);
-      stats.push({ name: entry?.label ?? author, count: entry?.documentCount ?? 0 });
-    });
-    return stats.sort((a, b) => b.count - a.count);
-  }, [selectedAuthors, authorsByKey]);
+    if (selectedAuthorKeys.length === 0) return [];
+    return selectedAuthorKeys
+      .map((key) => {
+        const entity = authorsByKey.get(key);
+        return { name: entity?.label ?? key, count: entity?.documentCount ?? 0 };
+      })
+      .sort((a, b) => b.count - a.count);
+  }, [selectedAuthorKeys, authorsByKey]);
 
   const chartHeight = (dataLength: number) =>
     Math.max(150, Math.min(dataLength * 28 + 40, 400));
@@ -564,7 +666,7 @@ export function AnalyticsContent({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <MultiSelectPopover
             label="Target Keywords"
-            options={availableKeywords}
+            options={availableKeywordOptions}
             selected={selectedKeywords}
             onToggle={onToggleKeyword}
             onClear={onClearKeywords}
@@ -573,13 +675,25 @@ export function AnalyticsContent({
           <MultiSelectPopover
             label="Target Authors"
             options={availableAuthors}
-            selected={selectedAuthorLabels}
+            selected={selectedAuthorKeys}
             onToggle={handleToggleAuthor}
             onClear={onClearAuthors}
             fullWidth={compact}
             matchesSearch={authorSearchMatches}
           />
         </div>
+
+        {/* Sited with Target Authors because this is the screen where a user
+            notices one researcher showing up as three. */}
+        {identities && (
+          <div className="flex justify-end">
+            <ManageAuthorIdentitiesButton
+              papers={papers}
+              identities={identities}
+              compact={compact}
+            />
+          </div>
+        )}
 
         {keywordStats.length === 0 && authorStats.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-2">
