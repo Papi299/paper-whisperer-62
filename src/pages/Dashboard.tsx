@@ -788,6 +788,7 @@ function DashboardContent() {
                 targets={analyticsTargets}
                 identityDataset={authorIdentities.dataset}
                 identityEvidencePapers={authorIdentities.linkedPapers}
+                identityReadState={authorIdentities.readState}
                 identities={authorIdentities}
               />
             </>
@@ -908,6 +909,7 @@ function DashboardContent() {
           targets={analyticsTargets}
           identityDataset={authorIdentities.dataset}
           identityEvidencePapers={authorIdentities.linkedPapers}
+          identityReadState={authorIdentities.readState}
           identities={authorIdentities}
         />
       )}

@@ -105,9 +105,11 @@ function makePaper(authors: string[], provenance?: AuthorProvenance[] | null): P
 function Harness({
   papers,
   identityDataset,
+  identityReadState,
 }: {
   papers: Paper[];
   identityDataset?: AuthorIdentityDataset | null;
+  identityReadState?: "loading" | "unavailable" | "ready" | "failed" | "stale";
 }) {
   const targets = useAnalyticsTargets();
   return (
@@ -116,6 +118,7 @@ function Harness({
       isLoading={false}
       targets={targets}
       identityDataset={identityDataset}
+      identityReadState={identityReadState}
     />
   );
 }
@@ -425,5 +428,90 @@ describe("Mixed resolved and unresolved authors", () => {
     const chart = screen.getByText(/Jane Roe = /).closest("ul")!;
     expect(within(chart).getByText("Jane Roe = 2")).toBeInTheDocument();
     expect(within(chart).getByText("Stuart M Phillips = 2")).toBeInTheDocument();
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * A failed identity read must not look like an absent one
+ *
+ * `identityDataset === null` reaches this component for two opposite reasons:
+ * the 001C subsystem is not installed here (benign — 001A grouping IS the right
+ * answer), or the user's saved decisions could not be read.
+ *
+ * The second, rendered as the first, is the worst outcome the feature can
+ * produce: someone who resolved two spellings into one person watches them split
+ * back apart, is told nothing, and has no reason to doubt what they are seeing.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("Analytics reports a failed identity read instead of hiding it", () => {
+  const papers = [
+    makePaper(["Stuart M Phillips"], provenanceFor(["Stuart M Phillips"], SHARED_ORCID)),
+    makePaper(["S M Phillips"], provenanceFor(["S M Phillips"], SHARED_ORCID)),
+  ];
+
+  it("says the identities could not be loaded", () => {
+    render(<Harness papers={papers} identityDataset={null} identityReadState="failed" />);
+
+    expect(screen.getByText(/Author identities could not be loaded/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/someone you resolved may appear more than once/i),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the analytics that never depended on identities", () => {
+    // Suppressing the whole screen would punish the user for a failure that has
+    // nothing to do with keywords, years or study types.
+    render(<Harness papers={papers} identityDataset={null} identityReadState="failed" />);
+
+    expect(screen.getByText("Publication Year Distribution")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Target Keywords/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Target Authors/ })).toBeInTheDocument();
+  });
+
+  it("still groups authors by 001A, but never silently", () => {
+    render(<Harness papers={papers} identityDataset={null} identityReadState="failed" />);
+
+    // Two textual mentions, as 001A has always produced — and a warning above
+    // them saying why a resolved person may be showing up twice.
+    openAuthors();
+    expect(optionLabels().sort()).toEqual(["S M Phillips", "Stuart M Phillips"]);
+    expect(screen.getByText(/Author identities could not be loaded/i)).toBeInTheDocument();
+  });
+
+  it("marks a last-known graph as stale rather than presenting it as current", () => {
+    const [first] = papers;
+    render(
+      <Harness
+        papers={papers}
+        identityDataset={makeDataset({
+          identities: [{ id: "phillips", preferred_name: "Stuart M Phillips" }],
+          links: [link("phillips", first.id, 0, "Stuart M Phillips")],
+        })}
+        identityReadState="stale"
+      />,
+    );
+
+    expect(
+      screen.getByText(/last author identities that loaded successfully/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/may be out of date/i)).toBeInTheDocument();
+  });
+
+  it("says nothing at all when the subsystem is simply not installed here", () => {
+    // The expected compatibility case. Error language here would alarm a user
+    // about something that is working exactly as designed.
+    render(<Harness papers={papers} identityDataset={null} identityReadState="unavailable" />);
+
+    expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/out of date/i)).not.toBeInTheDocument();
+    openAuthors();
+    expect(optionLabels().sort()).toEqual(["S M Phillips", "Stuart M Phillips"]);
+  });
+
+  it("says nothing when the read was healthy", () => {
+    render(<Harness papers={papers} identityDataset={makeDataset({})} />);
+
+    expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/out of date/i)).not.toBeInTheDocument();
   });
 });

@@ -10,6 +10,7 @@ import { BarChart3, ChevronDown, ChevronUp } from "lucide-react";
 import { AnalyticsContent } from "./AnalyticsContent";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import type { AuthorIdentityDataset, AuthorIdentityPaper } from "@/lib/authorIdentity";
+import type { AuthorIdentityReadState } from "@/hooks/useAuthorIdentities";
 import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 
 interface AnalyticsPanelProps {
@@ -25,6 +26,8 @@ interface AnalyticsPanelProps {
   identityDataset?: AuthorIdentityDataset | null;
   /** User-wide linked-paper evidence, forwarded untouched. See `AnalyticsContent`. */
   identityEvidencePapers?: readonly AuthorIdentityPaper[];
+  /** Why the identity dataset looks the way it does. See `AnalyticsContent`. */
+  identityReadState?: AuthorIdentityReadState;
   /** The identity read/write API, forwarded so the manager can be opened here. */
   identities?: ReturnType<typeof useAuthorIdentities>;
   /** Owned by the Dashboard and shared with `MobileAnalyticsSheet`. */
@@ -52,6 +55,7 @@ export function AnalyticsPanel({
   targets,
   identityDataset = null,
   identityEvidencePapers,
+  identityReadState,
   identities,
 }: AnalyticsPanelProps) {
   return (
@@ -76,6 +80,7 @@ export function AnalyticsPanel({
               targets={targets}
               identityDataset={identityDataset}
               identityEvidencePapers={identityEvidencePapers}
+              identityReadState={identityReadState}
               identities={identities}
             />
           </CardContent>

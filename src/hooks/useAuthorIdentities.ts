@@ -85,12 +85,56 @@ export class AuthorIdentityError extends Error {
   }
 }
 
+/**
+ * What the identity read currently knows, as five states that must never be
+ * confused for one another.
+ *
+ *   `loading`      the query has not resolved.
+ *   `unavailable`  the precise, expected compatibility case: this environment
+ *                  predates the 001C migration. Consumers fall back to 001A
+ *                  grouping, and no error language is warranted.
+ *   `ready`        installed and healthy.
+ *   `failed`       a REAL read failure with no usable dataset — permission,
+ *                  RLS, network, malformed query, or the linked-paper evidence
+ *                  read.
+ *   `stale`        a real refetch failure over a dataset that HAD loaded. The
+ *                  last known-good graph is still shown, and said to be stale.
+ *
+ * The distinction that matters most is `unavailable` versus `failed`. Both leave
+ * a consumer without identity data, and it is tempting to treat them alike — but
+ * one means "this user has no identity subsystem", and the other means "we could
+ * not read this user's identity decisions". Collapsing them silently regroups a
+ * user's resolved people back into separate 001A mentions and tells them
+ * nothing, which is worse than an error: the screen looks correct and is wrong.
+ */
+export type AuthorIdentityReadState =
+  | "loading"
+  | "unavailable"
+  | "ready"
+  | "failed"
+  | "stale";
+
 export interface AuthorIdentitiesState {
   /**
-   * The user's identity decisions, or `null` when the subsystem is not installed
-   * in this environment. Never an empty dataset standing in for "unknown".
+   * The user's identity decisions, or `null` when there are none to show —
+   * either because the subsystem is not installed here, or because the read
+   * failed. `readState` is what says which, and consumers must consult it
+   * rather than inferring from this being null.
    */
   dataset: AuthorIdentityDataset | null;
+  /** Which of the five read states this is. See `AuthorIdentityReadState`. */
+  readState: AuthorIdentityReadState;
+  /**
+   * Whether identity decisions may be written right now.
+   *
+   * False for every state except `ready`. A mutation validates against the
+   * CURRENT graph, and a caller that could not read the graph cannot know what
+   * it is about to displace — so the controls are disabled rather than offered
+   * and allowed to fail.
+   */
+  canMutate: boolean;
+  /** Re-run the identity read. The user's own retry, never automatic. */
+  retry: () => void;
   /**
    * The papers the identity graph actually links to — USER-WIDE, and pointedly
    * not the papers Analytics happens to be showing.
@@ -125,6 +169,15 @@ export interface CreateIdentityFromMentionInput {
   expectedAuthor: string;
   /** The label the user confirmed. Blank falls back to the current author string. */
   preferredName?: string;
+  /**
+   * Displace a saved link at this position that the SERVER can prove is stale.
+   *
+   * Not a general overwrite. The database re-reads the stored snapshot against
+   * the paper's current text and refuses if they still match, so this can only
+   * ever repair a row that no longer describes its mention — never overwrite a
+   * decision the user actually made.
+   */
+  replaceStaleExisting?: boolean;
 }
 
 export interface LinkMentionInput {
@@ -251,6 +304,38 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
     queryClient.invalidateQueries({ queryKey: queryKeys.authorIdentities.all(userId) });
   }, [queryClient, userId]);
 
+  const readError = query.error ?? null;
+  const dataset = query.data?.dataset ?? null;
+
+  /**
+   * The five states, resolved in the one order that cannot mislead.
+   *
+   * A real error is classified BEFORE the schema-absence sentinel, because
+   * TanStack keeps the last successful `data` alongside a failed refetch: a
+   * query that once answered `null` (schema absent) and then hit a permission
+   * error still has `data === null`, and reporting that as "not installed" would
+   * dress a genuine failure up as the expected compatibility case.
+   */
+  const readState: AuthorIdentityReadState = query.isLoading
+    ? "loading"
+    : readError
+      ? dataset === null
+        ? "failed"
+        : "stale"
+      : query.data === null
+        ? "unavailable"
+        : dataset !== null
+          ? "ready"
+          : "loading";
+
+  const isUnavailable = readState === "unavailable";
+  const canMutate = readState === "ready";
+
+  const retry = useCallback(() => {
+    void query.refetch();
+  }, [query]);
+
+
   /**
    * Surface a mutation failure without destroying anything.
    *
@@ -280,6 +365,7 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
         p_author_index: input.authorIndex,
         p_expected_author: input.expectedAuthor,
         p_preferred_name: input.preferredName ?? undefined,
+        p_replace_stale_existing: input.replaceStaleExisting ?? false,
       });
       if (error) throw toIdentityError(error.message, error);
       const result = data as { identity_id?: string } | null;
@@ -403,6 +489,22 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
   const guard = useCallback(
     <TInput, TResult>(title: string, run: (input: TInput) => Promise<TResult>) =>
       async (input: TInput): Promise<TResult> => {
+        // Every mutation validates against the CURRENT graph. A caller that
+        // could not read that graph does not know what it is about to displace,
+        // so the write is refused here as well as disabled in the UI — a stale
+        // render or a forgotten prop must not be the only thing standing
+        // between a failed read and a decision written on top of it.
+        if (!canMutate) {
+          const message =
+            readState === "unavailable"
+              ? "Author identities are not available in this environment yet."
+              : "Author identities could not be loaded, so this cannot be saved yet.";
+          const refusal = new AuthorIdentityError(message, {
+            schemaMissing: readState === "unavailable",
+          });
+          reportFailure(title, refusal);
+          throw refusal;
+        }
         try {
           return await run(input);
         } catch (error) {
@@ -410,7 +512,7 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
           throw error;
         }
       },
-    [reportFailure],
+    [reportFailure, canMutate, readState],
   );
 
   const createIdentityFromMention = useMemo(
@@ -458,12 +560,17 @@ export function useAuthorIdentities(userId: string | undefined): AuthorIdentitie
     [guard, deleteMutation],
   );
 
-  const readError = query.error ?? null;
-  const isUnavailable = query.data === null && !query.isLoading && !readError;
-
   return {
-    dataset: query.data?.dataset ?? null,
-    linkedPapers: query.data?.linkedPapers ?? NO_LINKED_PAPERS,
+    dataset,
+    // Withheld unless the graph they explain is trustworthy. Evidence beside a
+    // dataset that failed to load would describe a person the caller cannot see.
+    linkedPapers:
+      readState === "ready" || readState === "stale"
+        ? (query.data?.linkedPapers ?? NO_LINKED_PAPERS)
+        : NO_LINKED_PAPERS,
+    readState,
+    canMutate,
+    retry,
     isLoading: query.isLoading,
     isUnavailable,
     error: readError,

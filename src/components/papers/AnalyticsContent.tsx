@@ -11,7 +11,10 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 import { ManageAuthorIdentitiesButton } from "./AuthorIdentityManager";
-import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
+import type {
+  AuthorIdentityReadState,
+  useAuthorIdentities,
+} from "@/hooks/useAuthorIdentities";
 import { Paper } from "@/types/database";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import { Button } from "@/components/ui/button";
@@ -90,6 +93,21 @@ interface AnalyticsContentProps {
    * `papers`, which is correct for any caller whose view IS the library.
    */
   identityEvidencePapers?: readonly AuthorIdentityPaper[];
+  /**
+   * Why `identityDataset` looks the way it does.
+   *
+   * `identityDataset === null` has two completely different meanings, and this
+   * component cannot tell them apart on its own: the 001C subsystem is not
+   * installed here (expected, and 001A grouping is the correct answer), or the
+   * user's identity decisions FAILED TO LOAD. Treating the second as the first
+   * is the quiet failure this prop exists to prevent — a user who has resolved
+   * `Stuart M Phillips` and `S M Phillips` into one person would watch them
+   * silently become two authors again and be told nothing.
+   *
+   * Defaults to `"ready"`, which is what every pure test of the charts wants:
+   * the dataset it passes is the whole truth and no warning is warranted.
+   */
+  identityReadState?: AuthorIdentityReadState;
   /**
    * The identity read/write API, when the application supplies one.
    *
@@ -392,6 +410,7 @@ export function AnalyticsContent({
   targets,
   identityDataset = null,
   identityEvidencePapers,
+  identityReadState = "ready",
   identities,
   compact = false,
 }: AnalyticsContentProps) {
@@ -726,6 +745,36 @@ export function AnalyticsContent({
             matchesSearch={authorSearchMatches}
           />
         </div>
+
+        {/* The author story is only trustworthy when the identity read was.
+            Analytics keeps working either way — the keyword, year and study-type
+            charts never depended on identities at all — but a user whose saved
+            people failed to load must not be quietly handed 001A grouping and
+            left to conclude their decisions vanished. */}
+        {(identityReadState === "failed" || identityReadState === "stale") && (
+          <div className="space-y-1.5 rounded-md border border-dashed p-2.5">
+            <p className="text-xs font-medium">
+              {identityReadState === "failed"
+                ? "Author identities could not be loaded."
+                : "Showing the last author identities that loaded successfully."}
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              {identityReadState === "failed"
+                ? "Your saved people and links are unchanged. Until they load, authors below are grouped by name spelling, so someone you resolved may appear more than once."
+                : "A refresh failed, so the author grouping below may be out of date."}
+            </p>
+            {identities && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={identities.retry}
+              >
+                Try again
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* Sited with Target Authors because this is the screen where a user
             notices one researcher showing up as three. */}
