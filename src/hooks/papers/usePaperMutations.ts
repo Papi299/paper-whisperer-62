@@ -380,6 +380,21 @@ export function usePaperMutations(
         queryClient.invalidateQueries({ queryKey: queryKeys.papers.abstract(paperId) });
       }
 
+      // AUTHOR-IDENTITY-RESOLUTION-001C: a real change to the authors array
+      // makes the database delete every author-identity link on this paper, in
+      // the same transaction as the update. That happens server-side, in a
+      // trigger, so nothing on the client would otherwise know: the cached
+      // identity dataset would keep listing a link to a mention that no longer
+      // exists, and the identity manager would show a person as still resolved
+      // to text the user just rewrote.
+      //
+      // Keyed off the same `author_provenance` rebuild decision above, so the
+      // two stay in step: whenever provenance is replaced because the authors
+      // moved, the identity links have been cleared for exactly the same reason.
+      if ("author_provenance" in paperUpdates && userId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.authorIdentities.all(userId) });
+      }
+
       // Post-confirm: invalidate to fix any filter membership changes
       // (e.g., year/study_type edit may take paper out of active filter)
       removeStaleListCaches();
@@ -444,9 +459,15 @@ export function usePaperMutations(
       }
 
       removeStaleListCaches();
+      // AUTHOR-IDENTITY-RESOLUTION-001C: the paper's identity links cascade away
+      // with it. The identities themselves survive — a person is not deleted
+      // because a paper was — but the cached links now name a paper that is gone.
+      if (userId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.authorIdentities.all(userId) });
+      }
       toast({ title: "Paper deleted" });
     },
-    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, adjustFilteredCount, rollbackCache, removeStaleListCaches, toast],
+    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, adjustFilteredCount, rollbackCache, removeStaleListCaches, queryClient, toast],
   );
 
   return { addPaperManually, updatePaper, deletePaper };

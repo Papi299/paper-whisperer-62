@@ -9,12 +9,27 @@ import {
 import { BarChart3, ChevronDown, ChevronUp } from "lucide-react";
 import { AnalyticsContent } from "./AnalyticsContent";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
+import type { AuthorIdentityDataset, AuthorIdentityPaper } from "@/lib/authorIdentity";
+import type { AuthorIdentityReadState } from "@/hooks/useAuthorIdentities";
+import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 
 interface AnalyticsPanelProps {
   papers: Paper[];
   isLoading: boolean;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * The user's author-identity decisions, or `null` when the identity subsystem
+   * is not installed in this environment. Passed through untouched — this shell
+   * makes no author decisions of its own.
+   */
+  identityDataset?: AuthorIdentityDataset | null;
+  /** User-wide linked-paper evidence, forwarded untouched. See `AnalyticsContent`. */
+  identityEvidencePapers?: readonly AuthorIdentityPaper[];
+  /** Why the identity dataset looks the way it does. See `AnalyticsContent`. */
+  identityReadState?: AuthorIdentityReadState;
+  /** The identity read/write API, forwarded so the manager can be opened here. */
+  identities?: ReturnType<typeof useAuthorIdentities>;
   /** Owned by the Dashboard and shared with `MobileAnalyticsSheet`. */
   targets: AnalyticsTargets;
 }
@@ -38,6 +53,10 @@ export function AnalyticsPanel({
   isOpen,
   onOpenChange,
   targets,
+  identityDataset = null,
+  identityEvidencePapers,
+  identityReadState,
+  identities,
 }: AnalyticsPanelProps) {
   return (
     <Collapsible open={isOpen} onOpenChange={onOpenChange}>
@@ -55,7 +74,15 @@ export function AnalyticsPanel({
       <CollapsibleContent>
         <Card className="mb-4">
           <CardContent className="pt-4 pb-4">
-            <AnalyticsContent papers={papers} isLoading={isLoading} targets={targets} />
+            <AnalyticsContent
+              papers={papers}
+              isLoading={isLoading}
+              targets={targets}
+              identityDataset={identityDataset}
+              identityEvidencePapers={identityEvidencePapers}
+              identityReadState={identityReadState}
+              identities={identities}
+            />
           </CardContent>
         </Card>
       </CollapsibleContent>

@@ -36,12 +36,112 @@ export const SECONDARY_EMAIL = "e2e-secondary@paperlume.test";
 export const PRIMARY_PAPER_COUNT = 120;
 export const SECONDARY_PAPER_COUNT = 5;
 
+/** AUTHOR-IDENTITY-RESOLUTION-001C fixture papers, defined below. */
+export const IDENTITY_PAPER_COUNT = 5;
+
+/**
+ * Everything the primary account actually holds: the generated library plus the
+ * identity fixtures. `PRIMARY_PAPER_COUNT` stays the size of the GENERATED
+ * library because the pagination and ordering fixtures are defined in terms of
+ * it, so a spec asserting a whole-account total must use this instead.
+ */
+export const PRIMARY_TOTAL_PAPER_COUNT = PRIMARY_PAPER_COUNT + IDENTITY_PAPER_COUNT;
+
 /** The newest N primary papers (highest insert_order) are intentionally note-less. */
 const PRIMARY_NOTELESS_TAIL = 5;
 
 /** Clearly designated disposable / highest-order paper for later attribution work. */
 export const DISPOSABLE_PAPER_TITLE =
   "E2E Primary Paper 120 — Disposable Highest-Order";
+
+/* ---------------------------------------------------------------------------
+ * AUTHOR-IDENTITY-RESOLUTION-001C fixtures
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Four papers whose authorship deliberately reproduces the cases the identity
+ * feature exists to handle, so the E2E flows need no live ORCID lookup and no
+ * import.
+ *
+ *   IDENTITY-A / IDENTITY-B  the same person written two ways — `Stuart M
+ *                            Phillips` and `S M Phillips` — carrying the SAME
+ *                            checksum-valid ORCID. 001A keeps them apart and
+ *                            001B does not merge them, so they start as two
+ *                            authors and only an explicit link makes them one.
+ *   IDENTITY-C / IDENTITY-D  001A-EQUIVALENT names carrying DIFFERENT valid
+ *                            ORCIDs. Two real people who share a name, which is
+ *                            why a name match must never override contradictory
+ *                            identifier evidence.
+ *
+ * ORCIDs are real-format, checksum-valid values used as opaque fixtures; nothing
+ * in the stack ever contacts orcid.org.
+ */
+export const IDENTITY_FIXTURE_PREFIX = "E2E Identity";
+
+const IDENTITY_ORCID_SHARED = "0000-0002-1825-0097";
+const IDENTITY_ORCID_FIRST = "0000-0003-0945-2970";
+const IDENTITY_ORCID_SECOND = "0000-0001-5109-3700";
+
+export const IDENTITY_PAPERS = {
+  sameOrcidFullName: `${IDENTITY_FIXTURE_PREFIX} A — Same ORCID, full name`,
+  sameOrcidInitials: `${IDENTITY_FIXTURE_PREFIX} B — Same ORCID, initials`,
+  conflictingFirst: `${IDENTITY_FIXTURE_PREFIX} C — Same name, first ORCID`,
+  conflictingSecond: `${IDENTITY_FIXTURE_PREFIX} D — Same name, second ORCID`,
+  /**
+   * Reserved for the stale-link E2E, which rewrites the authors array and
+   * therefore also replaces the paper's provenance with honest manual entries.
+   * Its own paper, so A-D keep the source provenance the other flows depend on.
+   *
+   * The title deliberately avoids the substring "edit": every row control is
+   * labelled "<action> <paper title>", so a title containing an action word makes
+   * a name-matched locator ambiguous across five buttons in the same row.
+   */
+  editable: `${IDENTITY_FIXTURE_PREFIX} E — Rewritten authors`,
+};
+
+/** One `personal` provenance entry carrying a single ORCID identifier. */
+function identityProvenance(sourceName, orcid) {
+  return {
+    source: "pubmed_api",
+    source_field: "Author",
+    kind: "personal",
+    source_name: sourceName,
+    given_name: null,
+    family_name: null,
+    initials: null,
+    suffix: null,
+    collective_name: null,
+    affiliations: ["McMaster University"],
+    identifiers: [{ scheme: "ORCID", value: orcid }],
+    orcid,
+    orcid_authenticated: null,
+  };
+}
+
+/**
+ * The identity fixture papers, ordered so their insert_order stays below the
+ * disposable highest-order paper the other specs rely on.
+ */
+function buildIdentityPapers(userId) {
+  const rows = [
+    [IDENTITY_PAPERS.sameOrcidFullName, "Stuart M Phillips", IDENTITY_ORCID_SHARED],
+    [IDENTITY_PAPERS.sameOrcidInitials, "S M Phillips", IDENTITY_ORCID_SHARED],
+    [IDENTITY_PAPERS.conflictingFirst, "Alex R Mercer", IDENTITY_ORCID_FIRST],
+    [IDENTITY_PAPERS.conflictingSecond, "Alex R. Mercer", IDENTITY_ORCID_SECOND],
+    [IDENTITY_PAPERS.editable, "Dana Q Rewritten", IDENTITY_ORCID_SHARED],
+  ];
+
+  return rows.map(([title, author, orcid]) => ({
+    user_id: userId,
+    title,
+    authors: [author],
+    author_provenance: [identityProvenance(author, orcid)],
+    year: 2019,
+    journal: "Journal of Author Identity",
+    keywords: ["epidemiology"],
+    notes: null,
+  }));
+}
 
 /** Deterministic keyword vocabulary so the keyword filter has stable options. */
 const KEYWORD_VOCAB = [
@@ -252,6 +352,117 @@ async function verifyAuthenticatedIsolation({ apiUrl, anonKey, email, password, 
 }
 
 /**
+ * AUTHOR-IDENTITY-RESOLUTION-001C — cross-user isolation, proven over the real
+ * Data API rather than only in pgTAP.
+ *
+ * The database suite already proves this at the SQL level. This probe exists
+ * because the property that actually matters to a user is reached through
+ * PostgREST with a real JWT, where a missing grant, a missing policy or a
+ * mis-scoped RPC would show up as a leak that SQL-level tests cannot see.
+ *
+ * User A creates an identity from one of their own papers. User B must then be
+ * unable to read it, to infer its name or its ORCID, or to attach their own
+ * paper to it.
+ *
+ * Runs entirely on the loopback stack with `.test` identities and the local
+ * publishable key. No Production account is involved.
+ */
+async function verifyIdentityIsolation({ apiUrl, anonKey, primary, secondary, log }) {
+  const clientFor = async ({ email, password }) => {
+    const client = createClient(apiUrl, anonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const signIn = await client.auth.signInWithPassword({ email, password });
+    if (signIn.error) throw new Error(`identity probe sign-in failed: ${signIn.error.message}`);
+    return client;
+  };
+
+  const a = await clientFor(primary);
+  const b = await clientFor(secondary);
+
+  try {
+    // A owns the identity fixtures, so this paper is theirs.
+    const target = await a
+      .from("papers")
+      .select("id, authors")
+      .eq("title", IDENTITY_PAPERS.sameOrcidFullName)
+      .maybeSingle();
+    if (target.error || !target.data) {
+      throw new Error(`identity probe: fixture paper missing (${target.error?.message ?? "no row"})`);
+    }
+
+    const created = await a.rpc("create_author_identity_from_mention", {
+      p_paper_id: target.data.id,
+      p_author_index: 0,
+      p_expected_author: target.data.authors[0],
+      p_preferred_name: "E2E Isolation Person",
+    });
+    if (created.error) {
+      throw new Error(`identity probe: A could not create an identity (${created.error.message})`);
+    }
+    const identityId = created.data?.identity_id;
+    if (!identityId) throw new Error("identity probe: no identity id returned");
+
+    // B must see nothing of it, through any of the four tables.
+    for (const table of [
+      "author_identities",
+      "author_identity_aliases",
+      "author_identity_links",
+      "author_identity_merges",
+    ]) {
+      const seen = await b.from(table).select("*", { count: "exact", head: true });
+      if (seen.error) throw new Error(`identity probe: B read of ${table} errored: ${seen.error.message}`);
+      if ((seen.count ?? 0) !== 0) {
+        throw new Error(`RLS breach: B can see ${seen.count} row(s) of A's ${table}.`);
+      }
+    }
+
+    // B must not be able to attach their own paper to A's identity. The failure
+    // must come from the server, not from the absence of a UI path.
+    const bPaper = await b.from("papers").select("id, authors").limit(1).maybeSingle();
+    if (bPaper.error || !bPaper.data) {
+      throw new Error(`identity probe: B has no paper to test with (${bPaper.error?.message ?? "no row"})`);
+    }
+    const attach = await b.rpc("link_author_mention_to_identity", {
+      p_paper_id: bPaper.data.id,
+      p_author_index: 0,
+      p_expected_author: bPaper.data.authors[0],
+      p_identity_id: identityId,
+      p_resolution_basis: "manual",
+      p_replace_existing: false,
+    });
+    if (!attach.error) {
+      throw new Error("RLS breach: B attached their paper to A's identity.");
+    }
+
+    // ...nor merge into it, nor delete it.
+    const merge = await b.rpc("merge_author_identities", {
+      p_source_identity_id: identityId,
+      p_target_identity_id: identityId,
+    });
+    if (!merge.error) throw new Error("RLS breach: B merged A's identity.");
+
+    const remove = await b.rpc("delete_empty_author_identity", { p_identity_id: identityId });
+    if (!remove.error) throw new Error("RLS breach: B deleted A's identity.");
+
+    // Leave the stack exactly as the specs expect to find it: no identity
+    // decisions, so every E2E flow starts from the same unresolved state.
+    const unlink = await a.rpc("unlink_author_mention_identity", {
+      p_paper_id: target.data.id,
+      p_author_index: 0,
+    });
+    if (unlink.error) throw new Error(`identity probe cleanup failed: ${unlink.error.message}`);
+    const cleanup = await a.rpc("delete_empty_author_identity", { p_identity_id: identityId });
+    if (cleanup.error) throw new Error(`identity probe cleanup failed: ${cleanup.error.message}`);
+
+    log("  verified cross-user author-identity isolation over the Data API");
+  } finally {
+    await a.auth.signOut();
+    await b.auth.signOut();
+  }
+}
+
+/**
  * Seed the validated local stack. Returns the ephemeral primary/secondary
  * credentials in memory so the caller can hand them to Playwright without ever
  * writing them to disk. Never logs a password or key.
@@ -290,6 +501,9 @@ export async function seedLocalStack({ apiUrl, serviceRoleKey, anonKey, log = ()
     disposableTitle: DISPOSABLE_PAPER_TITLE,
   });
   const secondaryPapers = buildPapers(secondaryId, SECONDARY_PAPER_COUNT, "E2E Secondary Paper");
+  // Identity fixtures go in FIRST so the disposable paper keeps the highest
+  // insert_order, which the ordering specs depend on.
+  await insertPapersInOrder(admin, buildIdentityPapers(primaryId), log, "primary identity fixture");
   await insertPapersInOrder(admin, primaryPapers, log, "primary");
   await insertPapersInOrder(admin, secondaryPapers, log, "secondary");
 
@@ -299,7 +513,7 @@ export async function seedLocalStack({ apiUrl, serviceRoleKey, anonKey, log = ()
     anonKey,
     email: PRIMARY_EMAIL,
     password: primaryPassword,
-    expectedCount: PRIMARY_PAPER_COUNT,
+    expectedCount: PRIMARY_TOTAL_PAPER_COUNT,
     foreignTitlePrefix: "E2E Secondary Paper",
     expectHighestOrderTitle: DISPOSABLE_PAPER_TITLE,
     log,
@@ -314,12 +528,21 @@ export async function seedLocalStack({ apiUrl, serviceRoleKey, anonKey, log = ()
     log,
   });
 
+  // 5. AUTHOR-IDENTITY-RESOLUTION-001C cross-user isolation, over the real API.
+  await verifyIdentityIsolation({
+    apiUrl,
+    anonKey,
+    primary: { email: PRIMARY_EMAIL, password: primaryPassword },
+    secondary: { email: SECONDARY_EMAIL, password: secondaryPassword },
+    log,
+  });
+
   return {
     primary: {
       email: PRIMARY_EMAIL,
       password: primaryPassword,
       userId: primaryId,
-      paperCount: PRIMARY_PAPER_COUNT,
+      paperCount: PRIMARY_TOTAL_PAPER_COUNT,
       disposableTitle: DISPOSABLE_PAPER_TITLE,
     },
     secondary: {

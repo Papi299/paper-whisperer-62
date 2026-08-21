@@ -12,7 +12,9 @@ import { waitForDashboard } from "./helpers";
  * mutates any backend state — every assertion is about data the seed already
  * created.
  *
- * Fixture expectations: the primary user holds 120 seeded papers and no binary
+ * Fixture expectations: the primary user holds 125 seeded papers — the 120-row
+ * generated library plus the five AUTHOR-IDENTITY-RESOLUTION-001C fixtures — and
+ * no binary
  * attachment. A zero-attachment account is a valid and important case here —
  * it proves the archive is complete and well-formed without binaries. Exact
  * binary handling (bytes, paths, collisions, traversal, failure) is covered in
@@ -20,7 +22,8 @@ import { waitForDashboard } from "./helpers";
  * seed is deliberately left unchanged.
  */
 
-const PRIMARY_PAPER_COUNT = 120;
+/** The whole seeded library: 120 generated rows + 5 identity fixtures. */
+const PRIMARY_PAPER_COUNT = 125;
 
 /** Every JSON path the archive contract requires, empty collections included. */
 const EXPECTED_JSON_PATHS = [
@@ -38,6 +41,12 @@ const EXPECTED_JSON_PATHS = [
   "data/keyword_exclusion_pool.json",
   "data/study_type_exclusion_pool.json",
   "data/paper_attachments.json",
+  // AUTHOR-IDENTITY-RESOLUTION-001C. Four additive category files; no existing
+  // file changed shape, which is why the manifest version stays 2.
+  "data/author_identities.json",
+  "data/author_identity_aliases.json",
+  "data/author_identity_links.json",
+  "data/author_identity_merges.json",
 ];
 
 interface Manifest {

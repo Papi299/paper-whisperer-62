@@ -101,6 +101,10 @@ vi.mock("@/lib/queryKeys", () => ({
     },
     projects: { all: (uid: string) => ["projects", uid] },
     tags: { all: (uid: string) => ["tags", uid] },
+    // 001C: a real change to the authors array makes the database clear that
+    // paper's identity links in the same transaction, so the update path
+    // invalidates the identity dataset alongside the provenance rebuild.
+    authorIdentities: { all: (uid: string) => ["authorIdentities", uid] },
   },
 }));
 

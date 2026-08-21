@@ -20,9 +20,11 @@
 -- What it is NOT:
 --   an identity model. Provenance records a source's statement. It does not
 --   assert that two mentions are the same researcher, and a matching ORCID in
---   two rows does not assert it either. This suite therefore also proves the
---   *absence* of any person/alias/link table and of any global identifier
---   uniqueness — 001B must leave that design open, not pre-empt it.
+--   two rows does not assert it either. This suite therefore also proves that
+--   nothing 001B stores ever creates an identity record, and that no global
+--   identifier uniqueness exists. AUTHOR-IDENTITY-RESOLUTION-001C later added a
+--   user-scoped identity graph, which is the design 001B left open; the boundary
+--   it must not cross is unchanged, and suite 010 owns that graph's contract.
 --
 -- Proves:
 --   * the column's shape: jsonb, nullable, no default, and a validated CHECK;
@@ -157,7 +159,7 @@ INSERT INTO public.papers (id, user_id, title, authors, insert_order, created_at
 VALUES ('09000000-0000-0000-0000-0000000000a0','09000000-0000-0000-0000-000000000001',
         'Legacy row', '["S M Phillips"]'::jsonb, 301, '2026-01-01T00:00:00Z');
 
-SELECT plan(111);
+SELECT plan(112);
 
 -- ══ 1. Column shape ═════════════════════════════════════════════════════════
 
@@ -177,16 +179,33 @@ SELECT ok(
             AND contype = 'c' AND convalidated),
   'column: the fail-closed CHECK exists and is validated');
 
--- ══ 2. No identity model was introduced ═════════════════════════════════════
--- 001B stores provenance. Resolving mentions to people is a later decision, and
--- a table or a global uniqueness rule created now would pre-empt it.
+-- ══ 2. No identity model was introduced BY 001B ═════════════════════════════
+-- 001B stores provenance. Resolving mentions to people was a later decision, and
+-- a table or a global uniqueness rule created here would have pre-empted it.
+--
+-- AUTHOR-IDENTITY-RESOLUTION-001C has since made that decision, and made it in
+-- the shape this suite was holding open: `author_identities`,
+-- `author_identity_aliases`, `author_identity_links` and
+-- `author_identity_merges`, all user-scoped, all created empty. So the guard is
+-- no longer "no such table exists" — that sentence stopped being true the day
+-- 001C shipped, and asserting it would only mean "001C has not been merged yet".
+--
+-- What remains true forever, and is what this suite was ever really protecting,
+-- is asserted in two halves:
+--
+--   * the DESIGNS 001C did not choose stay unrepresented. A flat `authors` or a
+--     global `people`/`person` table, or a user-independent `author_aliases`,
+--     would be a different and much stronger claim than the user-scoped graph
+--     that was actually built, and would pre-empt it just as surely;
+--   * 001B's own write paths resolve nobody. That is checked at the very end of
+--     this file, against the fixtures that carry real matching ORCIDs — see
+--     "identity: nothing 001B stored resolved a person".
 
 SELECT ok(
   NOT EXISTS (SELECT 1 FROM information_schema.tables
               WHERE table_schema='public'
-                AND table_name IN ('authors','people','person','author_identities',
-                                   'author_aliases','author_identity_links')),
-  'identity: 001B creates no author/person/alias/link table');
+                AND table_name IN ('authors','people','person','author_aliases')),
+  'identity: no flat author, global person or user-independent alias table exists');
 
 SELECT ok(
   NOT EXISTS (
@@ -877,6 +896,24 @@ SELECT is(pg_temp.stored_prov('Foreign paper'),
 
 SELECT is(pg_temp.stored_prov('Legacy row'), NULL::jsonb,
   'security: the rejected merge left the caller''s own row untouched too');
+
+-- ══ 9. Provenance still resolves nobody ═════════════════════════════════════
+-- The load-bearing half of section 2, checked here because by this point the
+-- suite has inserted rows carrying real, checksum-valid, MATCHING ORCIDs through
+-- safe_bulk_insert_papers and merged papers through merge_exact_duplicates.
+--
+-- If storing provenance — or any 001B code path — ever began creating identity
+-- rows, this is where it would show. The semantic boundary of the whole author
+-- objective is that a matching ORCID is a value two sources supplied, and only an
+-- explicit user action makes two mentions one person. 001C added the action; it
+-- did not move the boundary.
+SELECT is(
+  (SELECT count(*)::int FROM public.author_identities)
+  + (SELECT count(*)::int FROM public.author_identity_aliases)
+  + (SELECT count(*)::int FROM public.author_identity_links)
+  + (SELECT count(*)::int FROM public.author_identity_merges),
+  0,
+  'identity: nothing 001B stored resolved a person, matching ORCIDs included');
 
 SELECT * FROM finish();
 ROLLBACK;

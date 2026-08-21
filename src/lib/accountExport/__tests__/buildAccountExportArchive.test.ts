@@ -39,6 +39,10 @@ function emptyData(): AccountExportData {
     keyword_exclusion_pool: [],
     study_type_exclusion_pool: [],
     paper_attachments: [],
+    author_identities: [],
+    author_identity_aliases: [],
+    author_identity_links: [],
+    author_identity_merges: [],
   };
 }
 

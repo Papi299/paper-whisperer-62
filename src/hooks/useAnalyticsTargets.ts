@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import type { AuthorTargetSelection } from "@/lib/authorSelection";
 
 /**
  * The Analytics "target" selections — the keywords and authors whose
@@ -19,9 +20,33 @@ import { useCallback, useMemo, useState } from "react";
  */
 export interface AnalyticsTargets {
   selectedKeywords: string[];
-  selectedAuthors: string[];
+  /**
+   * Selected authors as `{ key, label }` rather than bare strings.
+   *
+   * A keyword is a literal: the string IS the thing selected, and nothing can
+   * change what it refers to. An author is not, and has not been since 001C —
+   * the same session can turn a selected mention into a person, merge that
+   * person into another, and undo both. A bare key cannot survive those
+   * transitions, and a bare key is also unprintable, so a selection whose entity
+   * has left the current view would have nothing to put on its badge.
+   *
+   * The key stays stable and the label rides along as the last-resort way to
+   * describe it. What each selection currently MEANS is derived on read by
+   * `lib/authorSelection`, never written back here — which is what lets undoing
+   * a merge restore the selection with no undo bookkeeping.
+   */
+  selectedAuthors: AuthorTargetSelection[];
   onToggleKeyword: (keyword: string) => void;
-  onToggleAuthor: (author: string) => void;
+  /**
+   * Replace the author selection wholesale.
+   *
+   * Deliberately not a toggle. Reconciling one click can touch several stored
+   * entries at once — removing every key that converged on the badge, pinning
+   * the siblings that would otherwise vanish with it — and that computation
+   * belongs with the reconciliation rules in `lib/authorSelection`, not split
+   * between there and a setter here. See `toggleAuthorSelection`.
+   */
+  onSetAuthors: (next: AuthorTargetSelection[]) => void;
   onClearKeywords: () => void;
   onClearAuthors: () => void;
 }
@@ -39,7 +64,7 @@ export interface AnalyticsTargets {
  */
 export function useAnalyticsTargets(): AnalyticsTargets {
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
-  const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
+  const [selectedAuthors, setSelectedAuthors] = useState<AuthorTargetSelection[]>([]);
 
   // Toggle semantics are unchanged from the previous in-component state:
   // present → removed, absent → appended, preserving selection order.
@@ -49,10 +74,8 @@ export function useAnalyticsTargets(): AnalyticsTargets {
     );
   }, []);
 
-  const onToggleAuthor = useCallback((author: string) => {
-    setSelectedAuthors((prev) =>
-      prev.includes(author) ? prev.filter((a) => a !== author) : [...prev, author],
-    );
+  const onSetAuthors = useCallback((next: AuthorTargetSelection[]) => {
+    setSelectedAuthors(next);
   }, []);
 
   const onClearKeywords = useCallback(() => setSelectedKeywords([]), []);
@@ -63,7 +86,7 @@ export function useAnalyticsTargets(): AnalyticsTargets {
       selectedKeywords,
       selectedAuthors,
       onToggleKeyword,
-      onToggleAuthor,
+      onSetAuthors,
       onClearKeywords,
       onClearAuthors,
     }),
@@ -71,7 +94,7 @@ export function useAnalyticsTargets(): AnalyticsTargets {
       selectedKeywords,
       selectedAuthors,
       onToggleKeyword,
-      onToggleAuthor,
+      onSetAuthors,
       onClearKeywords,
       onClearAuthors,
     ],

@@ -19,6 +19,7 @@ import {
 import { useExportPapers } from "@/hooks/useExportPapers";
 import { useAnalyticsData } from "@/hooks/useAnalyticsData";
 import { useAnalyticsTargets } from "@/hooks/useAnalyticsTargets";
+import { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
@@ -419,6 +420,22 @@ function DashboardContent() {
    */
   const analyticsTargets = useAnalyticsTargets();
 
+  /**
+   * The user's author-identity decisions (AUTHOR-IDENTITY-RESOLUTION-001C).
+   *
+   * Owned here for the same reason the target selections are: both analytics
+   * shells must group authors identically, and a dataset fetched inside either
+   * one would be refetched — and could momentarily differ — across the 768px
+   * breakpoint. It is also what the identity manager reads and writes.
+   *
+   * `dataset` is `null` when the 001C schema is not installed in this
+   * environment, which every consumer treats as "no identity information" and
+   * falls back to 001A textual grouping for. Nothing else on the dashboard
+   * depends on it, so an unavailable identity subsystem costs the user the
+   * identity features and nothing more.
+   */
+  const authorIdentities = useAuthorIdentities(userId);
+
   // Study type re-evaluation on pool changes
   const {
     handleStudyTypePoolModalClose,
@@ -769,6 +786,10 @@ function DashboardContent() {
                 isOpen={isAnalyticsOpen}
                 onOpenChange={setIsAnalyticsOpen}
                 targets={analyticsTargets}
+                identityDataset={authorIdentities.dataset}
+                identityEvidencePapers={authorIdentities.linkedPapers}
+                identityReadState={authorIdentities.readState}
+                identities={authorIdentities}
               />
             </>
           )}
@@ -886,6 +907,10 @@ function DashboardContent() {
           open={isAnalyticsOpen}
           onOpenChange={setIsAnalyticsOpen}
           targets={analyticsTargets}
+          identityDataset={authorIdentities.dataset}
+          identityEvidencePapers={authorIdentities.linkedPapers}
+          identityReadState={authorIdentities.readState}
+          identities={authorIdentities}
         />
       )}
     </div>

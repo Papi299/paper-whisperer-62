@@ -26,17 +26,21 @@ describe("useAnalyticsTargets", () => {
     expect(result.current.selectedKeywords).toEqual(["aspirin"]);
   });
 
-  it("toggles authors independently of keywords", () => {
+  it("holds authors independently of keywords", () => {
+    // Authors carry a label alongside their key. A keyword is its own label, so
+    // it stays a bare string; an author's key is an internal entity key that
+    // cannot be shown, and the label is what survives the entity leaving view.
+    const curie = { key: "mention:curie m", label: "Curie M" };
     const { result } = renderHook(() => useAnalyticsTargets());
 
     act(() => result.current.onToggleKeyword("neoplasms"));
-    act(() => result.current.onToggleAuthor("Curie M"));
+    act(() => result.current.onSetAuthors([curie]));
     expect(result.current.selectedKeywords).toEqual(["neoplasms"]);
-    expect(result.current.selectedAuthors).toEqual(["Curie M"]);
+    expect(result.current.selectedAuthors).toEqual([curie]);
 
     act(() => result.current.onClearKeywords());
     expect(result.current.selectedKeywords).toEqual([]);
-    expect(result.current.selectedAuthors).toEqual(["Curie M"]);
+    expect(result.current.selectedAuthors).toEqual([curie]);
 
     act(() => result.current.onClearAuthors());
     expect(result.current.selectedAuthors).toEqual([]);
@@ -62,7 +66,9 @@ describe("useAnalyticsTargets", () => {
 
     const { result, unmount } = renderHook(() => useAnalyticsTargets());
     act(() => result.current.onToggleKeyword("neoplasms"));
-    act(() => result.current.onToggleAuthor("Curie M"));
+    act(() =>
+      result.current.onSetAuthors([{ key: "mention:curie m", label: "Curie M" }]),
+    );
 
     expect(setItem).not.toHaveBeenCalled();
     expect(pushState).not.toHaveBeenCalled();

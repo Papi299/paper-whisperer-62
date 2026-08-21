@@ -554,3 +554,237 @@ describe("isOwnedStoragePath", () => {
     expect(isOwnedStoragePath("", USER)).toBe(false);
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * AUTHOR-IDENTITY-RESOLUTION-001C — exporting across the rollout window
+ *
+ * The 001C migration reaches Production separately from, and before, the code
+ * that uses it. In between — and on every Vercel Preview built from this branch
+ * while Production is still behind — the four identity tables do not exist.
+ *
+ * A user asking for all of their data during that window must get all of their
+ * data. What they must NOT get is an archive that quietly omits decisions they
+ * made because a read failed for some other reason, so the tolerance here is
+ * one specific, verifiable condition and nothing else.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const IDENTITY_TABLES = [
+  "author_identities",
+  "author_identity_aliases",
+  "author_identity_links",
+  "author_identity_merges",
+] as const;
+
+/** A PostgREST "no such table" error, exactly as the client surfaces one. */
+function missingTable(table: string): Error {
+  return Object.assign(
+    new Error(
+      `Could not find the table 'public.${table}' in the schema cache`,
+    ),
+    { code: "PGRST205", details: null, hint: null },
+  );
+}
+
+/** Every identity table absent — the real pre-migration state. */
+function missingIdentitySchema(): Record<string, Error> {
+  return Object.fromEntries(
+    IDENTITY_TABLES.map((table) => [table, missingTable(table)]),
+  );
+}
+
+function identityTables() {
+  return {
+    author_identities: [
+      {
+        id: "id-1",
+        user_id: USER,
+        preferred_name: "Stuart M Phillips",
+        created_at: "2026-02-01T00:00:00Z",
+        updated_at: "2026-02-01T00:00:00Z",
+      },
+    ],
+    author_identity_aliases: [
+      {
+        id: "al-1",
+        user_id: USER,
+        identity_id: "id-1",
+        alias: "S M Phillips",
+        created_at: "2026-02-01T00:00:00Z",
+      },
+    ],
+    author_identity_links: [
+      {
+        id: "ln-1",
+        user_id: USER,
+        identity_id: "id-1",
+        paper_id: "p1",
+        author_index: 0,
+        author_name_snapshot: "Author A",
+        resolution_basis: "manual",
+        created_at: "2026-02-01T00:00:00Z",
+      },
+    ],
+    author_identity_merges: [],
+  };
+}
+
+describe("fetchAccountExportData — 001C pre-migration compatibility", () => {
+  it("exports successfully when the identity schema is absent", async () => {
+    install(
+      createSupabaseMock({ tables: baseTables(), errors: missingIdentitySchema() }),
+    );
+
+    const data = await fetchAccountExportData(USER);
+
+    // Present but empty, never absent: the archive keeps all four categories so
+    // its shape does not depend on which side of the migration it was made on.
+    for (const table of IDENTITY_TABLES) {
+      expect(data[table]).toEqual([]);
+    }
+  });
+
+  it("leaves every other category completely intact", async () => {
+    install(
+      createSupabaseMock({ tables: baseTables(), errors: missingIdentitySchema() }),
+    );
+
+    const data = await fetchAccountExportData(USER);
+
+    expect(data.profile).not.toBeNull();
+    expect(data.papers).toHaveLength(2);
+    expect(data.paper_projects).toEqual([{ paper_id: "p1", project_id: "proj-1" }]);
+    expect(data.paper_tags).toEqual([{ paper_id: "p2", tag_id: "tag-1" }]);
+    expect(data.paper_attachments).toHaveLength(1);
+    for (const key of ACCOUNT_EXPORT_COLLECTIONS) {
+      expect(Array.isArray(data[key]), `${key} must still be an array`).toBe(true);
+    }
+  });
+
+  it("exports identity rows losslessly once the schema is installed", async () => {
+    install(createSupabaseMock({ tables: { ...baseTables(), ...identityTables() } }));
+
+    const data = await fetchAccountExportData(USER);
+
+    expect(data.author_identities).toHaveLength(1);
+    expect(data.author_identities[0].preferred_name).toBe("Stuart M Phillips");
+    expect(data.author_identity_aliases[0].alias).toBe("S M Phillips");
+    expect(data.author_identity_links[0].resolution_basis).toBe("manual");
+    expect(data.author_identity_links[0].author_name_snapshot).toBe("Author A");
+    expect(data.author_identity_merges).toEqual([]);
+  });
+});
+
+describe("fetchAccountExportData — 001C compatibility stays narrow", () => {
+  /** Every one of these must still fail the whole export. */
+  const realFailures: [string, Error][] = [
+    [
+      "permission denied on an identity table",
+      Object.assign(new Error("permission denied for table author_identities"), {
+        code: "42501",
+      }),
+    ],
+    [
+      "an RLS refusal",
+      Object.assign(
+        new Error("new row violates row-level security policy for table \"author_identities\""),
+        { code: "42501" },
+      ),
+    ],
+    ["a network failure", new TypeError("Failed to fetch")],
+    [
+      "a malformed identity query",
+      Object.assign(new Error("column author_identities.nope does not exist"), {
+        code: "42703",
+      }),
+    ],
+  ];
+
+  for (const [description, error] of realFailures) {
+    it(`still fails the export on ${description}`, async () => {
+      install(
+        createSupabaseMock({
+          tables: { ...baseTables(), ...identityTables() },
+          errors: { author_identities: error },
+        }),
+      );
+
+      await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+    });
+  }
+
+  it("still fails when an UNRELATED table is missing", async () => {
+    // Same SQLSTATE family, different object. Treating this as "identities are
+    // not installed" would hide a genuine schema problem in the user's papers.
+    install(
+      createSupabaseMock({
+        tables: baseTables(),
+        errors: { papers: missingTable("papers") },
+      }),
+    );
+
+    await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+
+  it("fails closed on a PARTIALLY installed identity schema", async () => {
+    // The migration creates all four tables in one transaction, so a real
+    // environment has all four or none. One missing while another answers is a
+    // broken installation — exporting it as empty would hand the user an
+    // archive that silently drops decisions they made.
+    install(
+      createSupabaseMock({
+        tables: { ...baseTables(), ...identityTables() },
+        errors: { author_identity_links: missingTable("author_identity_links") },
+      }),
+    );
+
+    await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+
+  it("fails on an identity row belonging to another account", async () => {
+    install(
+      createSupabaseMock({
+        tables: {
+          ...baseTables(),
+          ...identityTables(),
+          author_identities: [
+            {
+              id: "id-x",
+              user_id: OTHER_USER,
+              preferred_name: "Someone Else",
+              created_at: "2026-02-01T00:00:00Z",
+              updated_at: "2026-02-01T00:00:00Z",
+            },
+          ],
+        },
+        leakTables: ["author_identities"],
+      }),
+    );
+
+    await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+
+  it("fails when a link references a paper outside the account", async () => {
+    install(
+      createSupabaseMock({
+        tables: {
+          ...baseTables(),
+          ...identityTables(),
+          author_identity_links: [
+            {
+              id: "ln-x",
+              user_id: USER,
+              identity_id: "id-1",
+              paper_id: "paper-of-another-user",
+              author_index: 0,
+              author_name_snapshot: "Author A",
+              resolution_basis: "manual",
+              created_at: "2026-02-01T00:00:00Z",
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+});

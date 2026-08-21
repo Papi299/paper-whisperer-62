@@ -8,12 +8,27 @@ import {
 } from "@/components/ui/sheet";
 import { AnalyticsContent } from "./AnalyticsContent";
 import type { AnalyticsTargets } from "@/hooks/useAnalyticsTargets";
+import type { AuthorIdentityDataset, AuthorIdentityPaper } from "@/lib/authorIdentity";
+import type { AuthorIdentityReadState } from "@/hooks/useAuthorIdentities";
+import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 
 interface MobileAnalyticsSheetProps {
   papers: Paper[];
   isLoading: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * The user's author-identity decisions, or `null` when the identity subsystem
+   * is not installed in this environment. Shared with `AnalyticsPanel` so both
+   * shells group authors identically across the breakpoint.
+   */
+  identityDataset?: AuthorIdentityDataset | null;
+  /** User-wide linked-paper evidence, forwarded untouched. See `AnalyticsContent`. */
+  identityEvidencePapers?: readonly AuthorIdentityPaper[];
+  /** Why the identity dataset looks the way it does. See `AnalyticsContent`. */
+  identityReadState?: AuthorIdentityReadState;
+  /** The identity read/write API, forwarded so the manager can be opened here. */
+  identities?: ReturnType<typeof useAuthorIdentities>;
   /** Owned by the Dashboard and shared with `AnalyticsPanel`. */
   targets: AnalyticsTargets;
 }
@@ -41,6 +56,10 @@ export function MobileAnalyticsSheet({
   open,
   onOpenChange,
   targets,
+  identityDataset = null,
+  identityEvidencePapers,
+  identityReadState,
+  identities,
 }: MobileAnalyticsSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -61,6 +80,10 @@ export function MobileAnalyticsSheet({
             papers={papers}
             isLoading={isLoading}
             targets={targets}
+            identityDataset={identityDataset}
+            identityEvidencePapers={identityEvidencePapers}
+            identityReadState={identityReadState}
+            identities={identities}
             compact
           />
         </div>

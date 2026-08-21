@@ -115,6 +115,13 @@ const DEFAULT_SPECS = [
   "e2e/settings-storage.spec.ts",
   // Opens Settings and downloads the account export; reads only, mutates nothing.
   "e2e/account-export.spec.ts",
+  // AUTHOR-IDENTITY-RESOLUTION-001C acceptance flows. Mutating, but only within
+  // the identity tables it also cleans up: each test resets every identity,
+  // link, alias and merge edge before it runs and the suite resets again at the
+  // end, so it is order-independent. The one paper it edits (identity fixture E)
+  // exists for that purpose alone and is restored before the test finishes.
+  // No import, no live ORCID lookup, no Edge Function.
+  "e2e/author-identity.spec.ts",
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
   // local delete-account Edge Function. The lifecycle proves afterwards that the
@@ -561,6 +568,13 @@ const PROBE_USER = "cc000000-0000-0000-0000-0000000000cc";
 const PROBE_CAP = 2; // monthly AI cap; counter is preloaded to cap-1.
 const BARRIER_KEY = 918273645; // session advisory-lock key for the start barrier.
 
+// AUTHOR-IDENTITY-RESOLUTION-001C merge-cycle race probe. Its own user, its own
+// identities and its own barrier key so it cannot interact with the quota probe.
+const MERGE_PROBE_USER = "cc000000-0000-0000-0000-0000000000cd";
+const MERGE_ID_A = "cc000000-0000-0000-0000-0000000000e1";
+const MERGE_ID_B = "cc000000-0000-0000-0000-0000000000e2";
+const MERGE_BARRIER_KEY = 918273646;
+
 // Bounded, fail-closed timeouts for the concurrency probe (Section I). Every
 // coordinator/worker process must acquire, release, and terminate within these
 // windows or the probe fails and the stack is still torn down.
@@ -939,6 +953,8 @@ async function runLegacyVerification(container) {
 // classid/objid split of the 64-bit barrier key for pg_locks lookups.
 const BARRIER_OBJID = BARRIER_KEY & 0xffffffff;
 const BARRIER_CLASSID = Math.floor(BARRIER_KEY / 2 ** 32);
+const MERGE_BARRIER_OBJID = MERGE_BARRIER_KEY & 0xffffffff;
+const MERGE_BARRIER_CLASSID = Math.floor(MERGE_BARRIER_KEY / 2 ** 32);
 
 /** Count ungranted advisory-lock waiters on the barrier key. */
 async function countBarrierWaiters(container) {
@@ -1109,6 +1125,168 @@ async function runConcurrencyProbe(container) {
     .split("|").map((s) => parseInt(s, 10));
   if (residual.some((c) => c !== 0)) {
     throw new Error(`concurrency fixture not fully removed (user|entitlement|counter|storage|access|advisory = ${residual.join("|")}).`);
+  }
+}
+
+/** Count ungranted waiters on the merge probe's own barrier key. */
+async function countMergeBarrierWaiters(container) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${MERGE_BARRIER_CLASSID} ` +
+      `AND objid=${MERGE_BARRIER_OBJID} AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** One merge worker: block on the barrier, then attempt `source -> target`. */
+function mergeWorkerSql(source, target) {
+  return (
+    // The helper is created as postgres so it can exist in pg_temp, then called
+    // as `authenticated` — the RPC runs under the caller's role and reads
+    // `auth.uid()` from the claims, exactly as a real request does. Its exception
+    // handler turns a rejection into a value, so a refused merge is an outcome to
+    // assert on rather than a nonzero exit indistinguishable from a crash.
+    `CREATE FUNCTION pg_temp.try_merge(a uuid, b uuid) RETURNS text LANGUAGE plpgsql AS $fn$\n` +
+    `BEGIN\n` +
+    `  PERFORM public.merge_author_identities(a, b);\n` +
+    `  RETURN 'merged';\n` +
+    `EXCEPTION WHEN others THEN\n` +
+    // The message matters: only a CYCLE rejection proves the lock did its job.
+    // Any other refusal would mean the two calls never actually raced.
+    `  RETURN CASE WHEN SQLERRM ILIKE '%cycle%' THEN 'rejected-cycle' ELSE 'rejected-other' END;\n` +
+    `END\n` +
+    `$fn$;\n` +
+    `SELECT set_config('request.jwt.claims','{"sub":"${MERGE_PROBE_USER}","role":"authenticated"}', false);\n` +
+    "SET ROLE authenticated;\n" +
+    `SELECT pg_advisory_lock_shared(${MERGE_BARRIER_KEY});\n` +
+    `SELECT 'OUTCOME=' || pg_temp.try_merge('${source}'::uuid, '${target}'::uuid);\n`
+  );
+}
+
+/**
+ * True-concurrency merge-cycle probe (AUTHOR-IDENTITY-RESOLUTION-001C).
+ *
+ * Every other identity invariant is enforced by a constraint — the unique
+ * `(paper_id, author_index)` decides a link race, and the primary key on
+ * `source_identity_id` makes a second outgoing edge unstorable. The merge CYCLE
+ * rule is the exception: it is enforced by root resolution reading rows a
+ * concurrent transaction has not committed yet.
+ *
+ * Without the per-user `pg_advisory_xact_lock` in `merge_author_identities`, two
+ * tabs merging A into B and B into A would each resolve a root against a graph
+ * that did not yet contain the other's edge, both would pass their own cycle
+ * check, and both would commit — leaving `A -> B -> A`, a cluster in which no
+ * identity has a root and every read that walks the graph is wrong.
+ *
+ * So: two committed identities, a coordinator holding an EXCLUSIVE barrier, two
+ * workers blocked on the SHARED barrier attempting the opposing merges, released
+ * together. Exactly one must succeed, and the surviving graph must hold exactly
+ * one edge and resolve to a real root. Same fail-closed discipline as the quota
+ * probe: every process is tracked, bounded, and must exit cleanly, and the
+ * fixture is proven absent afterwards.
+ */
+async function runMergeCycleProbe(container) {
+  log("running true-concurrency author-identity merge-cycle probe…");
+
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO auth.users (id, email) VALUES ('${MERGE_PROBE_USER}','merge-race@paperlume.test') ON CONFLICT DO NOTHING;\n` +
+      `INSERT INTO public.author_identities (id, user_id, preferred_name) VALUES\n` +
+      `  ('${MERGE_ID_A}','${MERGE_PROBE_USER}','Race A'),\n` +
+      `  ('${MERGE_ID_B}','${MERGE_PROBE_USER}','Race B')\n` +
+      `ON CONFLICT (id) DO NOTHING;\n`,
+  );
+  if (setup.code !== 0) throw new Error(`merge-cycle fixture setup failed: ${setup.err.trim()}`);
+
+  let coord = null;
+  let w1 = null;
+  let w2 = null;
+  try {
+    coord = spawnDockerPsql(container);
+    coord.child.stdin.write(`SELECT pg_advisory_lock(${MERGE_BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
+    await waitUntil(() => /COORD_LOCKED/.test(coord.readOut()), PROBE_COORD_ACQUIRE_MS,
+      "merge-cycle coordinator failed to acquire the barrier lock.");
+
+    // Opposing directions: the only pair that can close a two-node cycle.
+    w1 = spawnDockerPsql(container);
+    w2 = spawnDockerPsql(container);
+    w1.child.stdin.write(mergeWorkerSql(MERGE_ID_A, MERGE_ID_B)); w1.child.stdin.end();
+    w2.child.stdin.write(mergeWorkerSql(MERGE_ID_B, MERGE_ID_A)); w2.child.stdin.end();
+    await waitUntil(async () => (await countMergeBarrierWaiters(container)) >= 2, PROBE_BARRIER_MS,
+      "both merge-cycle workers did not reach the barrier.");
+
+    const releaseAt = Date.now();
+    coord.child.stdin.write(
+      `SELECT 'UNLOCK=' || pg_advisory_unlock(${MERGE_BARRIER_KEY})::text; SELECT 'COORD_UNLOCKED';\n`);
+    coord.child.stdin.end();
+
+    const timed = (p) => p.then((v) => ({ v, ms: Date.now() - releaseAt }));
+    const [crT, r1T, r2T] = await Promise.all([
+      timed(withTimeout(coord.done, PROBE_COORD_EXIT_MS, "merge-cycle coordinator exit")),
+      timed(withTimeout(w1.done, PROBE_WORKER_MS, "merge-cycle worker 1 exit")),
+      timed(withTimeout(w2.done, PROBE_WORKER_MS, "merge-cycle worker 2 exit")),
+    ]);
+    const cr = crT.v;
+    const r1 = r1T.v;
+    const r2 = r2T.v;
+
+    log(`merge-cycle exits from barrier release (ms): coordinator=${crT.ms} (<= ${PROBE_COORD_EXIT_MS}); ` +
+      `worker1=${r1T.ms} (<= ${PROBE_WORKER_MS}); worker2=${r2T.ms} (<= ${PROBE_WORKER_MS}).`);
+    if (crT.ms > PROBE_COORD_EXIT_MS || r1T.ms > PROBE_WORKER_MS || r2T.ms > PROBE_WORKER_MS) {
+      throw new Error("merge-cycle probe: a process exited outside its deadline from barrier release.");
+    }
+    if (cr.code !== 0 || cr.signal !== null || !/UNLOCK=t/.test(cr.out) || !/COORD_UNLOCKED/.test(cr.out)) {
+      throw new Error(`merge-cycle coordinator did not acquire+release the barrier and exit cleanly (code=${cr.code}, signal=${cr.signal ?? "none"}).`);
+    }
+    for (const [nm, r] of [["worker 1", r1], ["worker 2", r2]]) {
+      if (r.code !== 0 || r.signal !== null) {
+        throw new Error(`merge-cycle ${nm} did not exit cleanly (code=${r.code}, signal=${r.signal ?? "none"}); output not accepted.`);
+      }
+    }
+
+    const outcomes = [parseProbeOutcome(r1), parseProbeOutcome(r2)].sort();
+    const merged = outcomes.filter((o) => o === "merged").length;
+    const rejected = outcomes.filter((o) => o === "rejected-cycle").length;
+    if (merged !== 1 || rejected !== 1) {
+      // Two "merged" is the failure this probe exists for: it means both
+      // transactions resolved a root against a graph missing the other's edge.
+      throw new Error(`merge-cycle probe expected exactly one merged + one rejected-cycle, got: ${outcomes.join(", ")}`);
+    }
+  } catch (err) {
+    await killPsql(w1);
+    await killPsql(w2);
+    await killPsql(coord);
+    throw err;
+  }
+
+  // The surviving graph, read on a fresh connection: one edge, and a root that
+  // resolves — a cycle would make the walk raise instead of returning.
+  const edges = parseInt(await dbScalar(container,
+    `SELECT count(*) FROM public.author_identity_merges WHERE user_id='${MERGE_PROBE_USER}';`), 10);
+  if (edges !== 1) throw new Error(`merge-cycle probe: expected exactly one surviving edge, found ${edges}.`);
+  const roots = await dbScalar(container,
+    `SELECT public.author_identity_effective_root('${MERGE_PROBE_USER}','${MERGE_ID_A}') || '|' || ` +
+    `public.author_identity_effective_root('${MERGE_PROBE_USER}','${MERGE_ID_B}');`);
+  const [rootA, rootB] = roots.split("|");
+  if (rootA !== rootB) {
+    throw new Error(`merge-cycle probe: the two identities resolve to different roots (${roots}).`);
+  }
+  const waiters = await countMergeBarrierWaiters(container);
+  if (waiters !== 0) throw new Error(`merge-cycle probe: ${waiters} ungranted barrier waiter(s) remain.`);
+  log("merge-cycle probe OK: one merge committed, one refused as a cycle; a single acyclic edge survives.");
+
+  const cleanup = await dockerPsql(container,
+    `SELECT pg_advisory_unlock_all();\n` +
+    `DELETE FROM auth.users WHERE id='${MERGE_PROBE_USER}';\n`);
+  if (cleanup.code !== 0) throw new Error(`merge-cycle fixture cleanup failed: ${cleanup.err.trim()}`);
+  const residual = (await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${MERGE_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.author_identities WHERE user_id='${MERGE_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.author_identity_merges WHERE user_id='${MERGE_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${MERGE_BARRIER_CLASSID} AND objid=${MERGE_BARRIER_OBJID});`))
+    .split("|").map((s) => parseInt(s, 10));
+  if (residual.some((c) => c !== 0)) {
+    throw new Error(`merge-cycle fixture not fully removed (user|identities|merges|advisory = ${residual.join("|")}).`);
   }
 }
 
@@ -1283,6 +1461,7 @@ async function cmdDbTests() {
 
     await runLegacyVerification(container);
     await runConcurrencyProbe(container);
+    await runMergeCycleProbe(container);
     await assertNoResidue(container, pgtapBefore, catalogBefore);
 
     log("all local database-security tests passed.");
