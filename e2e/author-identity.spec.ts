@@ -100,6 +100,23 @@ async function authorOptions(page: Page): Promise<string[]> {
 }
 
 /**
+ * Press the row that names a person in the existing-person chooser.
+ *
+ * Deliberately NOT a click on the radio itself. That control is visually
+ * replaced — a real `<input type="radio">` kept 1px and clipped so the platform
+ * still owns grouping, arrow-key movement and the checked state a screen reader
+ * reads — and a click aimed at its own box is intercepted by the row painted
+ * over it. Which is the whole design: the row is the affordance, for Playwright
+ * exactly as for a person. Anything that could only be driven by addressing the
+ * hidden control would be reproducing the defect this flow was rebuilt for.
+ */
+function personRow(scope: ReturnType<Page["getByRole"]>, name: string) {
+  return scope
+    .getByRole("radio", { name: new RegExp(`^${name}`) })
+    .locator("xpath=ancestor::label[1]");
+}
+
+/**
  * Narrow the unresolved list to one paper and return its card.
  *
  * The seeded library has 240-odd unresolved author mentions, and the surface
@@ -374,13 +391,18 @@ test("an unresolved mention is linked to a person the evidence never suggested",
   await card
     .getByLabel(`Search people to link ${EDITABLE_AUTHOR} to`, { exact: true })
     .fill(MERCER);
-  await card.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
+  await personRow(card, MERCER).click();
 
   // Choosing is not deciding. Nothing is written until the second, explicit step.
-  await expect(card).toContainText(`Link ${EDITABLE_AUTHOR} to ${MERCER}.`);
-  await expect(card.getByRole("button", { name: "Link to this person" })).toBeVisible();
+  await expect(card).toContainText(
+    `${EDITABLE_AUTHOR} on this paper will be recorded as ${MERCER}.`,
+  );
+  const confirmLink = card.getByRole("button", {
+    name: `Link ${EDITABLE_AUTHOR} to ${MERCER}`,
+  });
+  await expect(confirmLink).toBeVisible();
 
-  await card.getByRole("button", { name: "Link to this person" }).click();
+  await confirmLink.click();
   await expect(card).toBeHidden({ timeout: 15_000 });
 
   await closeManager(page);
@@ -389,6 +411,194 @@ test("an unresolved mention is linked to a person the evidence never suggested",
   const options = await authorOptions(page);
   expect(options).toContain(MERCER);
   expect(options).not.toContain(EDITABLE_AUTHOR);
+});
+
+test("every existing person is visibly selectable, not merely present in the DOM", async ({
+  page,
+}) => {
+  /*
+   * AUTHOR-IDENTITY-PICKER-USABILITY-001 — the regression the old suite could
+   * not have caught.
+   *
+   * The manual-link test above already drove this exact flow and passed while
+   * the owner, on the same build, could not select anyone. Three different
+   * things were being confused:
+   *
+   *   DOM existence        the option was in the tree, with an accessible name.
+   *   Playwright actionable  `.click()` calls `scrollIntoViewIfNeeded` first,
+   *                        which sets `scrollLeft` on the scroll viewport —
+   *                        something script may do even where `overflow-x` is
+   *                        `hidden` and no scrollbar is mounted.
+   *   Actually reachable   a person has none of that. If the control sits
+   *                        outside the viewport on an axis they cannot scroll,
+   *                        it does not exist for them.
+   *
+   * `toBeVisible()` only asserts a non-empty box and no `visibility: hidden`, so
+   * it was true throughout. What follows asserts the third thing: geometry
+   * inside the visible picker, and a hit test at the point the user would press.
+   */
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+  await createPersonFrom(dialog, PAPER_C);
+  await createPersonFrom(dialog, PAPER_E);
+
+  const card = await unresolvedCard(dialog, PAPER_D);
+  await card
+    .getByRole("button", { name: `Link ${MERCER_D} to an existing person` })
+    .click();
+
+  // The chooser says whose identity is being decided, and that nothing has been.
+  const group = card.getByRole("radiogroup", { name: `Who is ${MERCER_D}?` });
+  await expect(group).toBeVisible();
+  await expect(card).toContainText(/Nothing will be changed until you confirm/i);
+
+  const options = group.getByRole("radio");
+  await expect(options).toHaveCount(3);
+
+  // No container may hide content sideways: this is the measurement that was
+  // false before the fix (viewport scrollWidth 1287 against clientWidth 610).
+  const overflow = await dialog.evaluate((node) => {
+    const targets = [node, ...node.querySelectorAll("[data-radix-scroll-area-viewport]")];
+    return targets.map((el) => ({
+      cls: el.className.toString().slice(0, 40),
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+  });
+  for (const box of overflow) {
+    expect(box.scrollWidth, `horizontal overflow in ${box.cls}`).toBeLessThanOrEqual(
+      box.clientWidth,
+    );
+  }
+
+  /*
+   * Every option must be a real, pressable target where the user is looking.
+   *
+   * The two axes are NOT equivalent here, and that asymmetry is the bug. The
+   * viewport scrolls vertically, with a scrollbar and a wheel — a row below the
+   * fold is reachable, so it is measured after being scrolled to, exactly as a
+   * user would reach it. Horizontally there is no scrollbar and `overflow-x` is
+   * `hidden`: anything out there is reachable by script and by nobody else, so
+   * it is measured WITHOUT scrolling and must already be inside.
+   */
+  const geometry = await group.evaluate((node) => {
+    const viewport = node.closest("[data-radix-scroll-area-viewport]") as HTMLElement;
+    const rows = [...node.querySelectorAll('input[type="radio"]')].map(
+      (input) => input.closest("label") as HTMLElement,
+    );
+
+    // Horizontal containment, as the picker stands. No scrolling of any kind.
+    const horizontal = rows.map((row) => {
+      const r = row.getBoundingClientRect();
+      const vb = viewport.getBoundingClientRect();
+      return {
+        name: (row.textContent ?? "").slice(0, 40),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+        insideViewportHorizontally: r.left >= vb.left && r.right <= vb.right,
+      };
+    });
+
+    // Vertical reachability, using the only scroll a user actually has here.
+    const reachable = rows.map((row) => {
+      row.scrollIntoView({ block: "nearest" });
+      const r = row.getBoundingClientRect();
+      const vb = viewport.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        Math.round(r.x + r.width / 2),
+        Math.round(r.y + r.height / 2),
+      );
+      return {
+        name: (row.textContent ?? "").slice(0, 40),
+        insideViewport: r.top >= vb.top - 1 && r.bottom <= vb.bottom + 1,
+        // The decisive one. A control parked outside a viewport nothing can
+        // scroll has nothing painted at its own coordinates.
+        pressAtItsCentreLandsOnIt: hit !== null && row.contains(hit),
+      };
+    });
+
+    return { horizontal, reachable, scrollLeftAfterAll: viewport.scrollLeft };
+  });
+
+  expect(geometry.horizontal).toHaveLength(3);
+  for (const row of geometry.horizontal) {
+    expect(row.width, `${row.name} has no visible width`).toBeGreaterThan(0);
+    expect(row.height, `${row.name} is not a usable target`).toBeGreaterThanOrEqual(44);
+    expect(
+      row.insideViewportHorizontally,
+      `${row.name} sits outside the picker on the axis the user cannot scroll`,
+    ).toBe(true);
+  }
+  for (const row of geometry.reachable) {
+    expect(row.insideViewport, `${row.name} could not be brought into view`).toBe(true);
+    expect(row.pressAtItsCentreLandsOnIt, `${row.name} cannot be pressed`).toBe(true);
+  }
+  // Nothing above needed a horizontal scroll, because nothing is out there.
+  expect(geometry.scrollLeftAfterAll, "the picker scrolled sideways").toBe(0);
+
+  // Drive it the way a person does: press the row, not a control inside it.
+  await personRow(group, MERCER).click();
+  await expect(
+    group.getByRole("radio", { name: new RegExp(`^${MERCER}`) }),
+  ).toBeChecked();
+
+  // Selecting alone decides nothing; the commit names both sides of the link.
+  const confirm = card.getByRole("button", { name: `Link ${MERCER_D} to ${MERCER}` });
+  await expect(confirm).toBeVisible();
+  await confirm.click();
+  await expect(card).toBeHidden({ timeout: 15_000 });
+
+  await closeManager(page);
+
+  const options_ = await authorOptions(page);
+  expect(options_).toContain(MERCER);
+  expect(options_).not.toContain(MERCER_D);
+});
+
+test("the chooser stays usable when the keyboard is the only input", async ({ page }) => {
+  // The row is a real radio in a real group, so arrow keys move and select
+  // without any of it being reimplemented — and the row carrying focus is the
+  // row that is drawn as focused, which only holds because the visually-hidden
+  // control is positioned inside its own row.
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_C);
+
+  const card = await unresolvedCard(dialog, PAPER_E);
+  await card
+    .getByRole("button", { name: `Link ${EDITABLE_AUTHOR} to an existing person` })
+    .click();
+
+  const search = card.getByLabel(`Search people to link ${EDITABLE_AUTHOR} to`, {
+    exact: true,
+  });
+  await search.focus();
+  await page.keyboard.press("Tab");
+
+  const focused = card.getByRole("radio", { name: new RegExp(`^${MERCER}`) });
+  await expect(focused).toBeFocused();
+  await expect(focused).not.toBeChecked();
+
+  // Selecting from the keyboard is still only a selection.
+  await page.keyboard.press("Space");
+  await expect(focused).toBeChecked();
+
+  const confirm = card.getByRole("button", { name: `Link ${EDITABLE_AUTHOR} to ${MERCER}` });
+  await expect(confirm).toBeVisible();
+
+  // And the focused row is where the user thinks it is, not scrolled away.
+  const focusStaysInItsRow = await card.evaluate(() => {
+    const active = document.activeElement as HTMLElement | null;
+    const row = active?.closest("label");
+    if (!row) return false;
+    const a = active!.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    return Math.abs(a.top - r.top) < r.height;
+  });
+  expect(focusStaysInItsRow, "focus escaped the row it belongs to").toBe(true);
+
+  await card.getByRole("button", { name: /^Cancel$/ }).click();
+  await expect(card.getByRole("radiogroup")).toHaveCount(0);
+  await closeManager(page);
 });
 
 test("a manual override is offered, warned about, and reversible", async ({ page }) => {
@@ -402,7 +612,7 @@ test("a manual override is offered, warned about, and reversible", async ({ page
   await expect(cardD.getByRole("button", { name: /^Link to / })).toHaveCount(0);
 
   await cardD.getByRole("button", { name: `Link ${MERCER_D} to an existing person` }).click();
-  await cardD.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
+  await personRow(cardD, MERCER).click();
 
   // Both iDs are stated so the user can check them. Neither is called wrong.
   await expect(cardD).toContainText(/Paperlume did not suggest this match/i);
@@ -410,7 +620,9 @@ test("a manual override is offered, warned about, and reversible", async ({ page
 
   // Cancelling writes nothing at all.
   await cardD.getByRole("button", { name: /^Cancel$/ }).click();
-  await expect(cardD.getByRole("button", { name: "Link to this person" })).toHaveCount(0);
+  await expect(
+    cardD.getByRole("button", { name: `Link ${MERCER_D} to ${MERCER}` }),
+  ).toHaveCount(0);
   await closeManager(page);
   expect(await authorOptions(page), "cancelling changed nothing").toContain(MERCER);
 
@@ -419,8 +631,8 @@ test("a manual override is offered, warned about, and reversible", async ({ page
   const again = await openManager(page);
   const retry = await unresolvedCard(again, PAPER_D);
   await retry.getByRole("button", { name: `Link ${MERCER_D} to an existing person` }).click();
-  await retry.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
-  await retry.getByRole("button", { name: "Link to this person" }).click();
+  await personRow(retry, MERCER).click();
+  await retry.getByRole("button", { name: `Link ${MERCER_D} to ${MERCER}` }).click();
   await expect(retry).toBeHidden({ timeout: 15_000 });
 
   await again.getByRole("tab", { name: /People/ }).click();
@@ -448,13 +660,13 @@ test("any two people can be merged without a duplicate suggestion", async ({ pag
   await peoplePanel
     .getByRole("button", { name: `Merge ${MERCER} into another person` })
     .click();
-  await peoplePanel
-    .getByRole("button", { name: new RegExp(`^Choose ${EDITABLE_AUTHOR}`) })
-    .click();
+  await personRow(peoplePanel, EDITABLE_AUTHOR).click();
 
   // Direction is explicit: the target's name becomes the group's name.
   await expect(peoplePanel).toContainText(`Merge ${MERCER} into ${EDITABLE_AUTHOR}.`);
-  await peoplePanel.getByRole("button", { name: "Merge into this person" }).click();
+  await peoplePanel
+    .getByRole("button", { name: `Merge ${MERCER} into ${EDITABLE_AUTHOR}` })
+    .click();
   await expect(
     peoplePanel.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
   ).toBeVisible({ timeout: 15_000 });
@@ -497,8 +709,10 @@ test("one merge edge out of a chain is undone by name", async ({ page }) => {
   await peoplePanel
     .getByRole("button", { name: `Merge ${PERSON_A} into another person` })
     .click();
-  await peoplePanel.getByRole("button", { name: new RegExp(`^Choose ${MERCER}`) }).click();
-  await peoplePanel.getByRole("button", { name: "Merge into this person" }).click();
+  await personRow(peoplePanel, MERCER).click();
+  await peoplePanel
+    .getByRole("button", { name: `Merge ${PERSON_A} into ${MERCER}` })
+    .click();
   await expect(
     peoplePanel.getByRole("button", { name: `Undo merge of ${PERSON_A} into ${MERCER}` }),
   ).toBeVisible({ timeout: 15_000 });
@@ -507,10 +721,10 @@ test("one merge edge out of a chain is undone by name", async ({ page }) => {
   await peoplePanel
     .getByRole("button", { name: `Merge ${MERCER} into another person` })
     .click();
+  await personRow(peoplePanel, EDITABLE_AUTHOR).click();
   await peoplePanel
-    .getByRole("button", { name: new RegExp(`^Choose ${EDITABLE_AUTHOR}`) })
+    .getByRole("button", { name: `Merge ${MERCER} into ${EDITABLE_AUTHOR}` })
     .click();
-  await peoplePanel.getByRole("button", { name: "Merge into this person" }).click();
   await expect(
     peoplePanel.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
   ).toBeVisible({ timeout: 15_000 });

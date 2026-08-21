@@ -567,6 +567,22 @@ function openPicker(mentionName: string) {
   );
 }
 
+/**
+ * Select a person by pressing the ROW that names them, not a control inside it.
+ *
+ * Deliberately not `fireEvent.click(radio)`. The defect this surface was rebuilt
+ * for was an affordance the DOM could reach and a person could not, so the test
+ * presses what the user presses — the row body — and relies on the row being a
+ * real `<label>` for a real radio to turn that into a selection.
+ */
+function selectPerson(name: RegExp | string): HTMLInputElement {
+  const radio = screen.getByRole("radio", { name }) as HTMLInputElement;
+  const row = radio.closest("label");
+  expect(row).not.toBeNull();
+  fireEvent.click(row!);
+  return radio;
+}
+
 describe("AuthorIdentityManager — manual link to an existing person", () => {
   it("links a mention that produced no suggestion at all", () => {
     // Nothing about `Jane Roe` resembles `Stuart M Phillips`, so no candidate
@@ -591,12 +607,14 @@ describe("AuthorIdentityManager — manual link to an existing person", () => {
     fireEvent.change(screen.getByLabelText("Search people to link Jane Roe to"), {
       target: { value: "Stuart" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^Choose Stuart M Phillips/ }));
+    selectPerson(/^Stuart M Phillips/);
 
     // Choosing does not commit. The decision is still one deliberate step away.
     expect(identities.linkMention).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Link to this person" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Link Jane Roe to Stuart M Phillips" }),
+    );
 
     expect(identities.linkMention).toHaveBeenCalledWith({
       paperId: "p2",
@@ -632,7 +650,7 @@ describe("AuthorIdentityManager — manual link to an existing person", () => {
     ).not.toBeInTheDocument();
 
     openPicker("Alex R Mercer");
-    expect(screen.getByRole("button", { name: /^Choose Alex R Mercer/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Alex R Mercer/ })).toBeInTheDocument();
   });
 
   it("shows the contradiction before confirming, and calls neither iD wrong", () => {
@@ -652,7 +670,7 @@ describe("AuthorIdentityManager — manual link to an existing person", () => {
     );
 
     openPicker("Alex R Mercer");
-    fireEvent.click(screen.getByRole("button", { name: /^Choose Alex R Mercer/ }));
+    selectPerson(/^Alex R Mercer/);
 
     // Both values are stated so the user can check them; neither is judged.
     const warning = screen.getByText(new RegExp(`This mention states ORCID ${ORCID_X}`));
@@ -661,7 +679,9 @@ describe("AuthorIdentityManager — manual link to an existing person", () => {
     expect(warning).toHaveTextContent(/Continuing is your decision/i);
     expect(document.body.textContent).not.toMatch(/incorrect|wrong ORCID|invalid ORCID/i);
 
-    fireEvent.click(screen.getByRole("button", { name: "Link to this person" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Link Alex R Mercer to Alex R Mercer" }),
+    );
     expect(identities.linkMention).toHaveBeenCalledWith(
       expect.objectContaining({ identityId: "mercer", resolutionBasis: "manual" }),
     );
@@ -681,11 +701,13 @@ describe("AuthorIdentityManager — manual link to an existing person", () => {
     );
 
     openPicker("Jane Roe");
-    fireEvent.click(screen.getByRole("button", { name: /^Choose Stuart M Phillips/ }));
+    selectPerson(/^Stuart M Phillips/);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(identities.linkMention).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Link to this person" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Link Jane Roe to Stuart M Phillips" }),
+    ).not.toBeInTheDocument();
   });
 
   it("distinguishes two people who share a preferred name", () => {
@@ -715,9 +737,11 @@ describe("AuthorIdentityManager — manual link to an existing person", () => {
     );
 
     openPicker("Jane Roe");
+    // The accessible name of each option is the row's own text: the preferred
+    // name plus the evidence that tells two people of that name apart.
     const choices = screen
-      .getAllByRole("button", { name: /^Choose John Smith/ })
-      .map((button) => button.getAttribute("aria-label") ?? "");
+      .getAllByRole("radio", { name: /^John Smith/ })
+      .map((radio) => radio.closest("label")?.textContent ?? "");
 
     expect(choices).toHaveLength(2);
     expect(new Set(choices).size).toBe(2);
@@ -738,6 +762,237 @@ describe("AuthorIdentityManager — manual link to an existing person", () => {
       screen.queryByRole("button", { name: /Link Jane Roe to an existing person/ }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create a new person" })).toBeInTheDocument();
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Choosing an existing person is a usable interaction
+ *
+ * AUTHOR-IDENTITY-PICKER-USABILITY-001. The owner opened this chooser in
+ * Production, saw the three people they had created, and could not select any of
+ * them. Nothing was broken in the DOM: every option existed, carried an
+ * accessible name, and answered a programmatic click. It was the LAYOUT that was
+ * wrong — selection lived in a small button at the end of a `nowrap` row, and a
+ * nowrap row inside a Radix scroll viewport is not clipped by it but widens it,
+ * carrying whatever sits at the end of the row outside the visible area, on an
+ * axis with no scrollbar. Automation reached it by setting `scrollLeft` itself;
+ * a person had no way to.
+ *
+ * These tests hold the interaction contract that came out of that: the row IS
+ * the affordance, selection and confirmation are separate, and nothing reaches
+ * the server until the second step. The GEOMETRY half of the contract — that no
+ * affordance can leave the visible picker — needs a real layout engine and lives
+ * in `e2e/author-identity.spec.ts`.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("AuthorIdentityManager — the existing-person chooser is usable", () => {
+  const THREE = [
+    { id: "schoenfeld", preferred_name: "Brad J Schoenfeld" },
+    { id: "burke", preferred_name: "Louise M Burke" },
+    { id: "phillips", preferred_name: "Stuart M Phillips" },
+  ];
+
+  /** The owner's shape: three people already created, one mention undecided. */
+  function threePeople() {
+    return stubIdentities({
+      dataset: makeDataset({
+        identities: THREE,
+        links: [
+          link("schoenfeld", "p1", 0, "Brad J Schoenfeld"),
+          link("burke", "p2", 0, "Louise M Burke"),
+          link("phillips", "p3", 0, "Stuart M Phillips"),
+        ],
+      }),
+    });
+  }
+
+  const threePapers = [
+    paper("p1", "P1", ["Brad J Schoenfeld"]),
+    paper("p2", "P2", ["Louise M Burke"]),
+    paper("p3", "P3", ["Stuart M Phillips"]),
+    paper("p4", "P4", ["Stuart Phillips"]),
+  ];
+
+  it("asks who the mention is, and says nothing will change yet", () => {
+    open(threePapers, threePeople());
+    openPicker("Stuart Phillips");
+
+    // The question names the mention being resolved, not a generic prompt.
+    const group = screen.getByRole("radiogroup", { name: "Who is Stuart Phillips?" });
+    expect(group).toBeInTheDocument();
+    expect(
+      screen.getByText(/Select an existing person below\. Nothing will be changed until you confirm\./),
+    ).toBeInTheDocument();
+  });
+
+  it("offers every existing person as a selectable option", () => {
+    open(threePapers, threePeople());
+    openPicker("Stuart Phillips");
+
+    const options = screen.getAllByRole("radio");
+    expect(options).toHaveLength(3);
+
+    for (const name of ["Brad J Schoenfeld", "Louise M Burke", "Stuart M Phillips"]) {
+      const option = screen.getByRole("radio", { name: new RegExp(`^${name}`) });
+      expect(option).not.toBeDisabled();
+      expect(option).not.toBeChecked();
+      // The pressable region is the row that carries the name, so an affordance
+      // can only become unreachable by taking the person's name with it.
+      expect(option.closest("label")).toHaveTextContent(name);
+    }
+  });
+
+  it("selects the person whose row was pressed, and asks the server nothing", () => {
+    const identities = threePeople();
+    open(threePapers, identities);
+    openPicker("Stuart Phillips");
+
+    const chosen = selectPerson(/^Stuart M Phillips/);
+
+    expect(chosen).toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Brad J Schoenfeld/ })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Louise M Burke/ })).not.toBeChecked();
+    // Selecting is not deciding.
+    expect(identities.linkMention).not.toHaveBeenCalled();
+  });
+
+  it("names both sides of the decision on the button that commits it", () => {
+    const identities = threePeople();
+    open(threePapers, identities);
+    openPicker("Stuart Phillips");
+    selectPerson(/^Stuart M Phillips/);
+
+    expect(
+      screen.getByRole("button", { name: "Link Stuart Phillips to Stuart M Phillips" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Stuart Phillips on this paper will be recorded as Stuart M Phillips."),
+    ).toBeInTheDocument();
+    expect(identities.linkMention).not.toHaveBeenCalled();
+  });
+
+  it("links exactly once, and only on the confirmation", () => {
+    const identities = threePeople();
+    open(threePapers, identities);
+    openPicker("Stuart Phillips");
+    selectPerson(/^Stuart M Phillips/);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Link Stuart Phillips to Stuart M Phillips" }),
+    );
+
+    expect(identities.linkMention).toHaveBeenCalledTimes(1);
+    expect(identities.linkMention).toHaveBeenCalledWith({
+      paperId: "p4",
+      authorIndex: 0,
+      expectedAuthor: "Stuart Phillips",
+      identityId: "phillips",
+      resolutionBasis: "manual",
+      replaceExisting: false,
+    });
+  });
+
+  it("writes nothing when a selected chooser is cancelled", () => {
+    const identities = threePeople();
+    open(threePapers, identities);
+    openPicker("Stuart Phillips");
+    selectPerson(/^Stuart M Phillips/);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]);
+
+    expect(identities.linkMention).not.toHaveBeenCalled();
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
+  });
+
+  it("links the person selected last, having written nothing on the way there", () => {
+    const identities = threePeople();
+    open(threePapers, identities);
+    openPicker("Stuart Phillips");
+
+    selectPerson(/^Brad J Schoenfeld/);
+    expect(identities.linkMention).not.toHaveBeenCalled();
+
+    // Changing your mind is free, and does not close the chooser.
+    selectPerson(/^Louise M Burke/);
+    expect(identities.linkMention).not.toHaveBeenCalled();
+    expect(screen.getByRole("radio", { name: /^Brad J Schoenfeld/ })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /^Louise M Burke/ })).toBeChecked();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Link Stuart Phillips to Louise M Burke" }),
+    );
+
+    expect(identities.linkMention).toHaveBeenCalledTimes(1);
+    expect(identities.linkMention).toHaveBeenCalledWith(
+      expect.objectContaining({ identityId: "burke" }),
+    );
+    // The person passed over is not linked, and never was.
+    expect(identities.linkMention).not.toHaveBeenCalledWith(
+      expect.objectContaining({ identityId: "schoenfeld" }),
+    );
+  });
+
+  it("keeps long evidence in the row rather than on one unwrappable line", () => {
+    // The exact shape of the owner's data: a short name against a long title.
+    // `truncate` is what made the row nowrap, and a nowrap row is what pushed
+    // the affordance out of the viewport, so the option's own text must not use
+    // it. The visible consequence is asserted for real in the E2E spec.
+    const longTitle =
+      "Resistance training volume enhances muscle hypertrophy but not strength in trained men: a systematic review and meta-analysis of dose-response relationships";
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [{ id: "phillips", preferred_name: "Stuart M Phillips" }],
+        links: [link("phillips", "p1", 0, "Stuart M Phillips")],
+      }),
+    });
+
+    open(
+      [paper("p1", longTitle, ["Stuart M Phillips"]), paper("p2", "P2", ["Stuart Phillips"])],
+      identities,
+    );
+    openPicker("Stuart Phillips");
+
+    const row = screen.getByRole("radio", { name: /^Stuart M Phillips/ }).closest("label")!;
+    expect(row).toHaveTextContent(longTitle.slice(0, 40));
+    for (const node of row.querySelectorAll("*")) {
+      expect(node.className.toString()).not.toMatch(/\btruncate\b|\bwhitespace-nowrap\b/);
+    }
+
+    // And the affordance is still the row, not something after the long text.
+    fireEvent.click(row);
+    expect(screen.getByRole("radio", { name: /^Stuart M Phillips/ })).toBeChecked();
+  });
+
+  it("keeps a selection while the search hides it, and brings it back", () => {
+    // Searching changes the view, not the decision. Discarding a selection
+    // because the user typed would silently throw away a choice they made.
+    const identities = threePeople();
+    open(threePapers, identities);
+    openPicker("Stuart Phillips");
+    selectPerson(/^Stuart M Phillips/);
+
+    const search = screen.getByLabelText("Search people to link Stuart Phillips to");
+    fireEvent.change(search, { target: { value: "Burke" } });
+
+    expect(screen.queryByRole("radio", { name: /^Stuart M Phillips/ })).not.toBeInTheDocument();
+    // The confirmation still names the person, so the selection is never silent.
+    expect(
+      screen.getByRole("button", { name: "Link Stuart Phillips to Stuart M Phillips" }),
+    ).toBeInTheDocument();
+    expect(identities.linkMention).not.toHaveBeenCalled();
+
+    fireEvent.change(search, { target: { value: "" } });
+    expect(screen.getByRole("radio", { name: /^Stuart M Phillips/ })).toBeChecked();
+  });
+
+  it("exposes no identity id as the way to tell two people apart", () => {
+    open(threePapers, threePeople());
+    openPicker("Stuart Phillips");
+
+    const group = screen.getByRole("radiogroup", { name: "Who is Stuart Phillips?" });
+    for (const id of THREE.map((identity) => identity.id)) {
+      expect(group.textContent ?? "").not.toContain(id);
+    }
   });
 });
 
@@ -769,13 +1024,13 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
 
     tab(/People/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Choose B Two/ }));
+    selectPerson(/^B Two/);
 
     // Direction is spelled out, because the target's name becomes the group's.
     expect(screen.getByText(/Merge A One into B Two\./)).toBeInTheDocument();
     expect(identities.mergeIdentities).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Merge into this person" }));
+    fireEvent.click(screen.getByRole("button", { name: "Merge A One into B Two" }));
     expect(identities.mergeIdentities).toHaveBeenCalledWith("a", "b");
   });
 
@@ -785,13 +1040,13 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
 
     tab(/People/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Choose B Two/ }));
+    selectPerson(/^B Two/);
 
     const warning = screen.getByText(new RegExp(`A One is linked to papers stating ORCID ${ORCID_X}`));
     expect(warning).toHaveTextContent(ORCID_Y);
     expect(warning).toHaveTextContent(/Continuing is your decision/i);
 
-    fireEvent.click(screen.getByRole("button", { name: "Merge into this person" }));
+    fireEvent.click(screen.getByRole("button", { name: "Merge A One into B Two" }));
     expect(identities.mergeIdentities).toHaveBeenCalledWith("a", "b");
   });
 
@@ -801,7 +1056,7 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
 
     tab(/People/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Choose B Two/ }));
+    selectPerson(/^B Two/);
     fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]);
 
     expect(identities.mergeIdentities).not.toHaveBeenCalled();
@@ -814,8 +1069,8 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
     tab(/People/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
 
-    expect(screen.queryByRole("button", { name: /^Choose A One/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Choose B Two/ })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /^A One/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^B Two/ })).toBeInTheDocument();
   });
 
   it("offers no merge action when there is only one person", () => {
@@ -949,7 +1204,7 @@ describe("AuthorIdentityManager — identity evidence is user-wide", () => {
       target: { value: "Stuart M Phillips" },
     });
 
-    expect(screen.getByRole("button", { name: /^Choose Stuart M Phillips/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Stuart M Phillips/ })).toBeInTheDocument();
   });
 
   it("offers the ORCID candidate that the out-of-view evidence justifies", () => {
@@ -1253,8 +1508,8 @@ describe("AuthorIdentityManager — same-name duplicate actions", () => {
 
     openPicker("Jane Roe");
     const choices = screen
-      .getAllByRole("button", { name: /^Choose John Smith/ })
-      .map((button) => button.getAttribute("aria-label") ?? "");
+      .getAllByRole("radio", { name: /^John Smith/ })
+      .map((radio) => radio.closest("label")?.textContent ?? "");
 
     expect(choices).toHaveLength(2);
     expect(new Set(choices).size).toBe(2);

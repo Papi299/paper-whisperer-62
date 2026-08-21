@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
+import { cn } from "@/lib/utils";
 import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 import {
   authorIdentityClustersConflict,
@@ -344,10 +345,19 @@ function StaleLinkList({
  * So this refuses nobody. Every owned identity is searchable and selectable,
  * including — especially — the ones deterministic evidence declined to suggest.
  *
- * WHY TWO STEPS. Choosing surfaces the contradiction; confirming acts on it. A
+ * WHY TWO STEPS. Selecting surfaces the contradiction; confirming acts on it. A
  * single click that both selected and committed would make an override
  * indistinguishable from a misclick, and the whole point is that this one is
- * deliberate. Cancelling writes nothing.
+ * deliberate. Cancelling writes nothing, and so does changing the selection.
+ *
+ * WHY THE WHOLE ROW. Selection used to live in a `Choose` button at the far end
+ * of a single nowrap line. Inside a scroll viewport that does not clip such a
+ * line, it stretches the row instead — and a button pinned to the end of a row
+ * wider than the viewport sits outside it, with no scrollbar on that axis and
+ * nothing painted at its coordinates. It stayed clickable through the DOM, which
+ * is exactly why automation never noticed, and unreachable for a person, which
+ * is what the owner reported. The affordance is now the row itself: it cannot
+ * leave the viewport without taking the person's name with it.
  *
  * Rendered inline rather than in a nested dialog so the mention's own evidence —
  * its ORCID, its paper, its source — stays on screen while the user decides. The
@@ -357,8 +367,9 @@ function IdentityPicker({
   resolution,
   describe,
   excludeRootIds,
+  question,
   searchLabel,
-  confirmVerb,
+  confirmLabel,
   describeChoice,
   conflictFor,
   conflictNote,
@@ -370,10 +381,12 @@ function IdentityPicker({
   /** Distinct human descriptions, shared with every other person-choice surface. */
   describe: ReadonlyMap<string, string>;
   excludeRootIds?: readonly string[];
+  /** The question the list answers, e.g. "Who is Stuart Phillips?". */
+  question: string;
   /** Accessible name for the search field. Distinct per row, so it stays unique. */
   searchLabel: string;
-  /** The button that commits, e.g. "Link" or "Merge". */
-  confirmVerb: string;
+  /** The commit button's label. Names both sides of the decision. */
+  confirmLabel: (cluster: AuthorIdentityCluster) => string;
   /** Full sentence describing what confirming will do. */
   describeChoice: (cluster: AuthorIdentityCluster) => string;
   /** ORCIDs on the chosen person that contradict this decision, or `[]`. */
@@ -384,61 +397,52 @@ function IdentityPicker({
   onCancel: () => void;
   onConfirm: (cluster: AuthorIdentityCluster) => void;
 }) {
+  const groupId = useId();
+  const questionId = `${groupId}-question`;
   const [search, setSearch] = useState("");
-  const [chosen, setChosen] = useState<AuthorIdentityCluster | null>(null);
+  const [chosenId, setChosenId] = useState<string | null>(null);
 
   const matches = useMemo(
     () => searchAuthorIdentityClusters(resolution, search, { excludeRootIds }),
     [resolution, search, excludeRootIds],
   );
 
-  if (chosen) {
-    const conflicting = conflictFor(chosen);
-    return (
-      <div className="rounded-md border border-dashed p-2.5 space-y-2">
-        <p className="text-xs">{describeChoice(chosen)}</p>
-        <p className="text-[11px] text-muted-foreground">
-          {describe.get(chosen.rootId) ?? identityContextText(chosen)}
-        </p>
-        {conflicting.length > 0 && (
-          // Stated, not judged. Neither iD is called wrong, because this
-          // application has no way to know which one is — only that they
-          // disagree, and that the user is choosing to proceed anyway.
-          <p className="text-[11px] text-destructive">
-            {conflictNote(chosen, conflicting)} Paperlume did not suggest this
-            match, and is not changing either record. Continuing is your decision.
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            className="h-8 text-xs"
-            disabled={busy}
-            onClick={() => onConfirm(chosen)}
-          >
-            {confirmVerb}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 text-xs"
-            onClick={() => setChosen(null)}
-          >
-            Back
-          </Button>
-          <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={onCancel}>
-            Cancel
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  /**
+   * The selection is held as an id and re-read from the CURRENT graph.
+   *
+   * Searching is a change of view, not a change of mind: typing must not discard
+   * a decision the user already made, so filtering the list deliberately leaves
+   * the selection — and the confirmation naming it — standing even when the row
+   * itself is filtered out of sight. Clearing the search brings the row back
+   * already selected.
+   *
+   * What DOES clear it is the person genuinely ceasing to be a choice: deleted,
+   * merged into someone else, or excluded from this particular picker. Holding
+   * the cluster object instead would keep a stale copy of a person who no longer
+   * exists and offer to link to them, which the RPC would then refuse for a
+   * reason the user could not see.
+   */
+  const chosen = useMemo(() => {
+    if (chosenId === null) return null;
+    if (excludeRootIds?.includes(chosenId)) return null;
+    return resolution.clusters.get(chosenId) ?? null;
+  }, [chosenId, excludeRootIds, resolution]);
 
   const visible = matches.slice(0, PICKER_RENDER_LIMIT);
   const hidden = matches.length - visible.length;
+  const conflicting = chosen ? conflictFor(chosen) : [];
 
   return (
-    <div className="rounded-md border border-dashed p-2.5 space-y-2">
+    <div className="space-y-2.5 rounded-md border border-dashed p-2.5">
+      <div className="space-y-0.5">
+        <p id={questionId} className="text-xs font-medium">
+          {question}
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          Select an existing person below. Nothing will be changed until you confirm.
+        </p>
+      </div>
+
       <Input
         value={search}
         onChange={(event) => setSearch(event.target.value)}
@@ -446,48 +450,122 @@ function IdentityPicker({
         aria-label={searchLabel}
         className="h-8 text-sm"
       />
+
       {matches.length === 0 ? (
         <p className="text-xs text-muted-foreground">No people match that search.</p>
       ) : (
-        <ul className="space-y-1">
+        <div role="radiogroup" aria-labelledby={questionId} className="space-y-1">
           {visible.map((cluster) => {
             const context = describe.get(cluster.rootId) ?? identityContextText(cluster);
+            const selected = chosen?.rootId === cluster.rootId;
             return (
-              <li key={cluster.rootId} className="flex items-start justify-between gap-2">
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-medium">
-                    {cluster.preferredName}
+              // A real radio in a real group, visually replaced rather than
+              // reimplemented. Arrow-key movement, the group's single tab stop,
+              // and the checked state a screen reader reads out are all the
+              // platform's, not ours. The label wraps the whole row, so the row
+              // — not a control at the end of it — is what the user presses,
+              // whether with a mouse, a finger, or the keyboard.
+              <label
+                key={cluster.rootId}
+                className={cn(
+                  // `relative` is load-bearing: the visually-hidden radio is
+                  // absolutely positioned, so without a positioned row to belong
+                  // to it is laid out against the scroll viewport instead —
+                  // hundreds of pixels from its own label. Focusing it then
+                  // scrolls the list somewhere unrelated, which is exactly what
+                  // clicking a row does.
+                  "relative block rounded-md",
+                  busy ? "cursor-not-allowed" : "cursor-pointer",
+                )}
+              >
+                <input
+                  type="radio"
+                  name={groupId}
+                  value={cluster.rootId}
+                  checked={selected}
+                  disabled={busy}
+                  onChange={() => setChosenId(cluster.rootId)}
+                  className="peer sr-only"
+                />
+                <span
+                  className={cn(
+                    // min-h-11 keeps the row a comfortable touch target even
+                    // when the person carries a single short line of evidence.
+                    "flex min-h-11 w-full items-start gap-2.5 rounded-md border p-2 transition-colors",
+                    "peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-1",
+                    selected
+                      ? "border-primary bg-accent"
+                      : "border-transparent hover:bg-muted/60",
+                    busy && "opacity-60",
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                      selected ? "border-primary" : "border-muted-foreground/50",
+                    )}
+                  >
+                    {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
                   </span>
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    {context}
+                  {/* `min-w-0` plus wrapping, never `truncate`. A nowrap row
+                      inside a scroll viewport does not get clipped by it — it
+                      pushes the row wider than the viewport and takes whatever
+                      sits at the end of it out of reach. */}
+                  <span className="min-w-0 flex-1 space-y-0.5">
+                    <span className="block break-words text-xs font-medium">
+                      {cluster.preferredName}
+                    </span>
+                    {/* Two people may share a preferred name, so the evidence
+                        that tells them apart is part of the option itself and
+                        therefore part of its accessible name. */}
+                    <span className="block break-words text-[11px] text-muted-foreground">
+                      {context}
+                    </span>
                   </span>
                 </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 shrink-0 text-xs"
-                  disabled={busy}
-                  // Two people may share a preferred name, so the accessible
-                  // name carries the same distinguishing evidence the sighted
-                  // user reads underneath it.
-                  aria-label={`Choose ${cluster.preferredName} — ${context}`}
-                  onClick={() => setChosen(cluster)}
-                >
-                  Choose
-                </Button>
-              </li>
+              </label>
             );
           })}
-        </ul>
+        </div>
       )}
+
       {hidden > 0 && (
         <p className="text-[11px] text-muted-foreground">
           {hidden} more not shown. Search to narrow the list.
         </p>
       )}
-      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onCancel}>
-        Cancel
-      </Button>
+
+      {chosen && (
+        <div className="space-y-1.5 rounded-md bg-muted/50 p-2">
+          <p className="break-words text-xs">{describeChoice(chosen)}</p>
+          {conflicting.length > 0 && (
+            // Stated, not judged. Neither iD is called wrong, because this
+            // application has no way to know which one is — only that they
+            // disagree, and that the user is choosing to proceed anyway.
+            <p className="break-words text-[11px] text-destructive">
+              {conflictNote(chosen, conflicting)} Paperlume did not suggest this
+              match, and is not changing either record. Continuing is your decision.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {chosen && (
+          <Button
+            size="sm"
+            className="h-8 whitespace-normal text-left text-xs"
+            disabled={busy}
+            onClick={() => onConfirm(chosen)}
+          >
+            {confirmLabel(chosen)}
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }
@@ -674,6 +752,23 @@ export function AuthorIdentityManager({
   );
 }
 
+/**
+ * Makes a scroll viewport's content take the viewport's width.
+ *
+ * Radix wraps a ScrollArea's children in an element styled `display: table;
+ * min-width: 100%`, which is how it measures overflow on both axes. A table box
+ * is never laid out narrower than its own min-content width, so one `nowrap`
+ * descendant anywhere inside makes that wrapper — and every row in it — wider
+ * than the viewport rather than clipped by it. The viewport is `overflow-x:
+ * hidden` and mounts no horizontal scrollbar, so anything pushed out there is
+ * unreachable: not scrollable by wheel, trackpad or drag, and not painted.
+ *
+ * Forcing the wrapper to a block box gives it the viewport's width, which is the
+ * only width this dialog ever wants. Vertical scrolling, the axis that does have
+ * a scrollbar, is unaffected.
+ */
+const SCROLL_CONTENT_FITS_WIDTH = "[&_[data-radix-scroll-area-viewport]>div]:!block";
+
 /* -------------------------------------------------------------------------
  * Unresolved mentions
  * ---------------------------------------------------------------------- */
@@ -807,10 +902,15 @@ function UnresolvedRow({
         <IdentityPicker
           resolution={resolution}
           describe={describe}
+          question={`Who is ${mention.displayName}?`}
           searchLabel={`Search people to link ${mention.displayName} to`}
-          confirmVerb="Link to this person"
+          // Both halves of the decision, so the commit reads as the sentence the
+          // user is actually agreeing to rather than as a bare verb.
+          confirmLabel={(cluster) =>
+            `Link ${mention.displayName} to ${cluster.preferredName}`
+          }
           describeChoice={(cluster) =>
-            `Link ${mention.displayName} to ${cluster.preferredName}.`
+            `${mention.displayName} on this paper will be recorded as ${cluster.preferredName}.`
           }
           conflictFor={(cluster) => authorIdentityOrcidConflict(mention.orcid, cluster)}
           conflictNote={(cluster, conflicting) =>
@@ -945,7 +1045,7 @@ function UnresolvedList({
           No unresolved author mentions match that search.
         </p>
       ) : (
-        <ScrollArea className="h-[46vh] pr-3">
+        <ScrollArea className={cn("h-[46vh] pr-3", SCROLL_CONTENT_FITS_WIDTH)}>
           <ul className="space-y-2 py-1">
             {visible.map((entry) => (
               <UnresolvedRow
@@ -1295,8 +1395,11 @@ function PersonCard({
           // effective person by construction, so no choice here can close a
           // cycle — and the RPC re-checks anyway.
           excludeRootIds={[cluster.rootId]}
+          question={`Merge ${cluster.preferredName} into which person?`}
           searchLabel={`Search people to merge ${cluster.preferredName} into`}
-          confirmVerb="Merge into this person"
+          confirmLabel={(target) =>
+            `Merge ${cluster.preferredName} into ${target.preferredName}`
+          }
           describeChoice={(target) =>
             `Merge ${cluster.preferredName} into ${target.preferredName}. ${target.preferredName} becomes the name for the group, both records are kept, and you can undo this at any time.`
           }
@@ -1391,7 +1494,7 @@ function PeopleList({
   }
 
   return (
-    <ScrollArea className="h-[52vh] pr-3">
+    <ScrollArea className={cn("h-[52vh] pr-3", SCROLL_CONTENT_FITS_WIDTH)}>
       <ul className="space-y-2 py-2">
         {clusters.map((cluster) => (
           <PersonCard
@@ -1443,7 +1546,7 @@ function DuplicateList({
   }
 
   return (
-    <ScrollArea className="h-[52vh] pr-3">
+    <ScrollArea className={cn("h-[52vh] pr-3", SCROLL_CONTENT_FITS_WIDTH)}>
       <ul className="space-y-2 py-2">
         {duplicates.map((pair) => {
           const first = resolution.clusters.get(pair.firstRootId);
