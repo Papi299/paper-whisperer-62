@@ -131,7 +131,16 @@ export function ManageKeywordPoolModal({
             </div>
 
             {/* Action buttons */}
-            <div className="flex gap-2">
+            {/*
+             * `flex-wrap` is load-bearing, not cosmetic. `Button` is
+             * `whitespace-nowrap`, so these three have a combined min-content
+             * width of 420px; in a non-wrapping row that becomes the dialog's
+             * grid track, and every sibling — the keyword list included — is
+             * laid out 420px wide inside a 390px window. Measured: the
+             * ScrollArea root ran to x=445, stranding three destructive
+             * "Remove keyword" buttons off-screen entirely.
+             */}
+            <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => setBulkDialogOpen(true)}>
                 <Plus className="mr-1 h-3 w-3" />
                 Bulk Add
@@ -167,11 +176,16 @@ export function ManageKeywordPoolModal({
                   </p>
                 ) : (
                   poolKeywords.map((pk) => (
-                    <Badge key={pk.id} variant="outline" className="text-xs group cursor-default pr-1">
-                      {pk.keyword}
+                    <Badge key={pk.id} variant="outline" className="min-w-0 text-xs group cursor-default pr-1">
+                      {/* A keyword with no space in it is one token, and its
+                          min-content width is its full length — enough on its
+                          own to push this list past a phone screen (measured
+                          471px). `break-all` gives it break points; the remove
+                          action must not shrink with it. */}
+                      <span className="min-w-0 break-all">{pk.keyword}</span>
                       <button
                         type="button"
-                        className="ml-1 rounded-sm transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        className="ml-1 shrink-0 rounded-sm transition-opacity opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100 md:focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         aria-label={`Remove keyword ${pk.keyword} from pool`}
                         onClick={() => onDeleteKeyword(pk.id)}
                       >
