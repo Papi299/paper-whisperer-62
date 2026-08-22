@@ -157,6 +157,35 @@ function DuplicateGroupCard({
   );
 }
 
+/**
+ * Caps the duplicate list and makes it scroll — on the RADIX VIEWPORT, not on
+ * the ScrollArea root. Load-bearing; do not "simplify" it back to a plain
+ * `max-h-*` on the root.
+ *
+ * `ui/scroll-area` renders `<Root class="relative overflow-hidden {className}">
+ * <Viewport class="h-full w-full">`. A cap written on the root leaves the root
+ * with a computed `height: auto` (it is a `flex-1` item of an auto-height
+ * column, so its used height comes from its content and is then clamped by
+ * `max-height`). A clamped auto height is not a DEFINITE height, so the
+ * viewport's `h-full` resolves to `auto` and the viewport grows to its content
+ * instead of becoming the scrolling box. Measured at 390x844 with three
+ * duplicate groups: root 464px (`max-height: 464.2px`, `overflow: hidden`),
+ * viewport 2602px, `scrollHeight === clientHeight` — so the viewport had no
+ * scroll range, Radix mounted no scrollbar, the root silently clipped 7 of the
+ * 9 paper rows and the wheel moved nothing.
+ *
+ * Capping the viewport instead gives ONE element both the bounded height and
+ * the scrolling: `overflow-y: scroll` (set inline by Radix) now has a real
+ * range, so wheel, touch and keyboard all reach the last row. Short lists are
+ * unaffected — `max-height` only binds once the content exceeds it, so a single
+ * small group still sizes to its content and shows no scrollbar.
+ *
+ * Covered by e2e/scrollarea-reachability.spec.ts (real Chromium, with a
+ * negative control that restores the root-only cap).
+ */
+const RESULTS_SCROLL_CAP =
+  "[&_[data-radix-scroll-area-viewport]]:max-h-[55vh]";
+
 export function DeduplicationDialog({
   open,
   onOpenChange,
@@ -257,7 +286,7 @@ export function DeduplicationDialog({
 
         {hasDuplicates && (
           <>
-            <ScrollArea className="flex-1 max-h-[55vh] pr-4">
+            <ScrollArea className={`flex-1 pr-4 ${RESULTS_SCROLL_CAP}`}>
               <div className="space-y-4">
                 {duplicateGroups.map((group, idx) => (
                   <DuplicateGroupCard
