@@ -654,3 +654,24 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 *Revisit fork semantics when* outside/fork-origin contributions become part of the supported contribution model: both candidate workflows carry a same-repository job condition, so on a fork-origin pull request the job **skips and reports success**, producing a vacuous green. That must be resolved before any required check can be trusted on fork-origin contributions.
 
 *Reconsider required `db-tests` if* recurring false-red or infrastructure failures materially disrupt merges; `DB Tests` becomes cloud- or secret-dependent; its check identity (`db-tests`, app `15368`) changes; its runtime materially expands; or its test architecture is replaced.
+
+## Product feature architecture (2026-08-23)
+
+### C31. PubMed Search discovers PMIDs; the existing identifier importer imports them (2026-08-23)
+
+**Decision:** In-app PubMed discovery (`PUBMED-IN-APP-SEARCH-001`) is a **discovery** surface only. A PubMed search result is a transient display representation and is **never** a source of persisted paper metadata. The only value that crosses from discovery into persistence is the **PMID string**, handed to the pre-existing `onBulkImport` callback that the Import IDs tab already uses.
+
+Specifically, and permanently:
+
+- search results must not be fed to `bulkImportFromParsedData`;
+- no second `safe_bulk_insert_papers` payload may be built from them;
+- no second normalization, keyword enrichment, study-type evaluation, author-provenance derivation or duplicate algorithm may exist for them;
+- ESummary fields must not be written to `papers`, to author-identity tables, or to any curation pool;
+- a result carrying a DOI still imports by **PMID** — the discovery source is PubMed, and letting incidental metadata pick the provider would change which record is authenticated;
+- a search result must not be disabled merely because its PMID appears on the currently paginated paper list: that is an incomplete duplicate check, and duplicate classification belongs to the canonical insert path.
+
+**Rationale:** The canonical importer already owns complete PubMed metadata, structured publication types, author provenance, normalization, keyword enrichment, study-type evaluation, safe duplicate handling, chunked insertion, Project/Tag assignment, cache invalidation and import-summary semantics. A discovery summary is a deliberately thin projection — ESummary carries no abstract, no MeSH terms, no structured authorship and no reliable full author list — so persisting it would create a second, poorer source of truth whose rows would be silently inferior to identically-imported ones and would drift from the canonical path with every future change to either.
+
+**Consequence:** PubMed Search adds a UI mode, a client wrapper and one read-only Edge Function. It adds **no** database object: no table, column, RPC, RLS policy or migration. The `e2e/pubmed-search.spec.ts` regression captures the `fetch-paper-metadata` request at the HTTP boundary and asserts its identifiers are exactly the selected PMIDs with no summary field present, so a future change that inserts ESummary objects directly fails that test rather than shipping.
+
+**Re-evaluation trigger:** only if the canonical importer stops being able to fetch a record the search surface can find — for example if NCBI withdrew EFetch, or PubMed began returning search-only records with no retrievable full metadata. Wanting fewer network round-trips is **not** a trigger; the round-trip is what buys the authoritative record.

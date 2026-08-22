@@ -122,6 +122,16 @@ const DEFAULT_SPECS = [
   // exists for that purpose alone and is restored before the test finishes.
   // No import, no live ORCID lookup, no Edge Function.
   "e2e/author-identity.spec.ts",
+  // PUBMED-IN-APP-SEARCH-001 in-app PubMed discovery. Mutating, but only within
+  // fixtures it owns: it imports papers whose titles all start with "PMS-E2E"
+  // through the real Add Papers UI and the real bulk-insert RPC, and it removes
+  // every one of them in afterEach — plus one disposable project and tag created
+  // and deleted inside the single test that assigns. It is therefore
+  // order-independent and restores the deterministic seed within its own run.
+  // Both external boundaries are deterministic: Playwright fulfils the
+  // `search-pubmed` and `fetch-paper-metadata` requests, so there is no live
+  // NCBI egress and no served local Edge Function is required.
+  "e2e/pubmed-search.spec.ts",
   // SCROLLAREA-HORIZONTAL-REACHABILITY-AUDIT-001 geometry regressions. Mutating
   // only in that each test adds one long fixture keyword to the keyword pool
   // through the real modal and removes it again in afterEach, so it restores the

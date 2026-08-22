@@ -25,6 +25,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
 import { BulkActionsToolbar } from "@/components/papers/BulkActionsToolbar";
 import { AddPaperDialog } from "@/components/papers/AddPaperDialog";
+import { searchPubMed } from "@/lib/searchPubMedEdge";
 import { EditPaperDialog } from "@/components/papers/EditPaperDialog";
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
 import { EditTagDialog } from "@/components/tags/EditTagDialog";
@@ -857,6 +858,10 @@ function DashboardContent() {
         onSubmitManual={addPaperManually}
         onBulkImport={bulkImportPapers}
         onFileImport={bulkImportFromParsedData}
+        // Discovery only. It returns PubMed search summaries for the dialog to
+        // show; the papers the user then selects are imported through
+        // `onBulkImport` above — the same canonical path Import IDs uses.
+        onPubMedSearch={searchPubMed}
         projects={projects}
         tags={tags}
       />

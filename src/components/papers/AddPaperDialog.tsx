@@ -26,7 +26,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp, FolderOpen, Tags, Check, ChevronsUpDown, FileText, X } from "lucide-react";
+import { Loader2, Link as LinkIcon, Upload, PenLine, CheckCircle2, AlertTriangle, XCircle, FileUp, FolderOpen, Tags, Check, ChevronsUpDown, FileText, X, Search } from "lucide-react";
 import { Project, Tag } from "@/types/database";
 import { RawPaperData } from "@/lib/normalizePaperData";
 import { parseFile, FileParseResult } from "@/lib/importParsers";
@@ -34,6 +34,8 @@ import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
+import { PubMedSearchPanel } from "./PubMedSearchPanel";
+import { usePubMedSearch, type PubMedSearchFn } from "@/hooks/usePubMedSearch";
 
 interface ManualPaperData {
   title: string;
@@ -65,6 +67,13 @@ interface AddPaperDialogProps {
     onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void,
     options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
   ) => Promise<void>;
+  /**
+   * PubMed discovery search. Deliberately a callback like every other data
+   * concern here: the dialog never talks to Supabase itself. Absent (in tests,
+   * or if the Dashboard stops wiring it) the PubMed tab still renders and
+   * explains that search is unavailable — no other import mode is affected.
+   */
+  onPubMedSearch?: PubMedSearchFn;
   projects?: Project[];
   tags?: Tag[];
 }
@@ -102,6 +111,18 @@ const emptyManualData: ManualPaperData = {
 export const ACCEPTED_FILE_EXTENSIONS = [".bib", ".ris", ".nbib", ".enw", ".csv"] as const;
 
 export type AcceptedFileExtension = (typeof ACCEPTED_FILE_EXTENSIONS)[number];
+
+/**
+ * One class for all four mode triggers.
+ *
+ * `min-h-10` is the load-bearing part. Releasing the tab list's fixed `h-10` for
+ * the phone's two-row grid also released the triggers' height: measured at
+ * 390×844 they collapsed to their 30.5px content box, below the 40px coarse-
+ * pointer target this repository holds elsewhere. `sm:min-h-0` hands the height
+ * back to the `sm:h-10` list above, so the desktop row is byte-identical to
+ * what the three-tab layout produced.
+ */
+const TAB_TRIGGER_CLASS = "flex items-center gap-1.5 min-h-10 sm:min-h-0";
 
 /** One assignable category (Projects or Tags) in the shared assign-on-import section. */
 interface AssignmentEntity {
@@ -248,8 +269,10 @@ function AssignmentSelector({
   );
 }
 
-export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, projects = [], tags = [] }: AddPaperDialogProps) {
-  const [activeTab, setActiveTab] = useState<"import" | "file" | "manual">("import");
+export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, onPubMedSearch, projects = [], tags = [] }: AddPaperDialogProps) {
+  // The default mode is unchanged by the addition of PubMed Search: a user who
+  // opens Add Papers to paste identifiers still lands where they always did.
+  const [activeTab, setActiveTab] = useState<"pubmed" | "import" | "file" | "manual">("import");
 
   // Manual mode state
   const [manualData, setManualData] = useState<ManualPaperData>(emptyManualData);
@@ -270,7 +293,21 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const [fileImportComplete, setFileImportComplete] = useState(false);
   const [isFileDragging, setIsFileDragging] = useState(false);
 
-  // Project/Tag assignment state (shared between all tabs)
+  // PubMed discovery state. Owned here, not inside `PubMedSearchPanel`, because
+  // Radix unmounts an inactive TabsContent — the same reason the identifier and
+  // file runs keep their state at this level. Switching to Import IDs and back
+  // therefore preserves the query, the page and the selection; closing the
+  // dialog resets all of it.
+  const pubmedSearch = usePubMedSearch(onPubMedSearch);
+  const [pubmedRunning, setPubmedRunning] = useState(false);
+  const [pubmedProgress, setPubmedProgress] = useState({ current: 0, total: 0 });
+  const [pubmedResults, setPubmedResults] = useState<{ addedIds: string[]; skippedIds: string[]; failedIds: string[] }>({ addedIds: [], skippedIds: [], failedIds: [] });
+  const [pubmedComplete, setPubmedComplete] = useState(false);
+  const [pubmedImportError, setPubmedImportError] = useState<string | null>(null);
+
+  // Project/Tag assignment state (shared between ALL FOUR tabs). PubMed Search
+  // deliberately has no assignment state of its own: one Add Papers dialog
+  // means one assignment intent, whichever mode produced the papers.
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
@@ -452,6 +489,83 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     }
   };
 
+  /**
+   * Import the PubMed records the user selected.
+   *
+   * This is the whole architectural boundary in one function: the ONLY thing
+   * that crosses from discovery into persistence is a list of PMID strings, and
+   * they go into the exact `onBulkImport` callback the Import IDs tab calls,
+   * with the exact same shared assignment options. No search-summary object,
+   * no ESummary field and no discovery title is ever handed to the importer —
+   * it fetches the authoritative record for each PMID itself. There is no
+   * second insert path, no second normalization and no second duplicate check.
+   *
+   * A result carrying a DOI still imports by PMID: the discovery source is
+   * PubMed, and letting incidental metadata pick the provider would change
+   * which record is authenticated.
+   */
+  const handlePubMedImport = async () => {
+    if (!onBulkImport) return;
+    if (pubmedRunning) return;
+    // A copy taken before the await: the run is defined by what was selected
+    // when the user pressed Import, not by whatever the selection becomes while
+    // it is in flight.
+    const pmids = [...pubmedSearch.selectedPmids];
+    if (pmids.length === 0) return;
+
+    setPubmedResults({ addedIds: [], skippedIds: [], failedIds: [] });
+    setPubmedComplete(false);
+    setPubmedImportError(null);
+    setPubmedRunning(true);
+    setPubmedProgress({ current: 0, total: pmids.length });
+
+    try {
+      await onBulkImport(pmids, (current, total, addedIds, skippedIds, failedIds) => {
+        setPubmedProgress({ current, total });
+        setPubmedResults({ addedIds: [...addedIds], skippedIds: [...skippedIds], failedIds: [...failedIds] });
+      }, getImportOptions());
+      // Only a run that resolved without throwing reaches the completed state.
+      // The just-imported PMIDs leave the selection so they cannot be submitted
+      // twice by accident, while the query, the results page and the shared
+      // Project/Tag choices all stay — so the user can pick the next few papers
+      // from the same search and import again.
+      pubmedSearch.clearImported(pmids);
+      setPubmedComplete(true);
+    } catch {
+      // A run that threw is caught HERE rather than escaping the click handler
+      // as an unhandled rejection: the selection, the results and the assignment
+      // choices are all still intact, so the honest outcome is to say the run
+      // failed and leave everything ready for another attempt. The thrown value
+      // is deliberately not shown — it comes from the insert path and is not
+      // user-facing copy.
+      setPubmedImportError(
+        "The import could not be completed. Your selection was kept — you can try again.",
+      );
+    } finally {
+      setPubmedRunning(false);
+    }
+  };
+
+  /**
+   * A completed summary must never become a state the user is stuck in.
+   * Committing a new search dismisses it, exactly as pressing Import again
+   * replaces it, and "Dismiss" clears it by hand.
+   */
+  const clearPubMedRunSummary = () => {
+    setPubmedComplete(false);
+    setPubmedImportError(null);
+    setPubmedProgress({ current: 0, total: 0 });
+    setPubmedResults({ addedIds: [], skippedIds: [], failedIds: [] });
+  };
+
+  const pubmedActions = {
+    ...pubmedSearch,
+    submitSearch: () => {
+      clearPubMedRunSummary();
+      pubmedSearch.submitSearch();
+    },
+  };
+
   const resetAndClose = () => {
     setBulkInput("");
     setBulkRunning(false);
@@ -471,6 +585,14 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
     // unmounted with the dialog, so it starts closed and unfiltered by itself.
     setIsDragging(false);
     setIsFileDragging(false);
+    // Every ephemeral PubMed value: the draft and committed query, the results
+    // page, the offset, the total, the selected PMIDs, the search error and the
+    // search loading flag (`reset`), plus this tab's import progress and
+    // summary. `reset` also bumps the request generation, so a search still in
+    // flight when the dialog closes cannot repopulate the reopened dialog.
+    pubmedSearch.reset();
+    setPubmedRunning(false);
+    clearPubMedRunSummary();
     setActiveTab("import");
     onOpenChange(false);
   };
@@ -520,7 +642,77 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   const progressPercent = bulkProgress.total > 0 ? Math.round((bulkProgress.current / bulkProgress.total) * 100) : 0;
   const bulkComplete = !bulkRunning && bulkProgress.total > 0 && bulkProgress.current === bulkProgress.total;
   const fileProgressPercent = fileImportProgress.total > 0 ? Math.round((fileImportProgress.current / fileImportProgress.total) * 100) : 0;
-  const isAnyRunning = bulkRunning || fileImportRunning;
+  const pubmedProgressPercent = pubmedProgress.total > 0 ? Math.round((pubmedProgress.current / pubmedProgress.total) * 100) : 0;
+  const pubmedSelectedCount = pubmedSearch.selectedPmids.length;
+  // A PubMed-selected import is a real library mutation, so it locks the dialog
+  // exactly like the identifier and file runs: tabs disabled, close disabled.
+  // A read-only PubMed *search* does not — it mutates nothing, and its
+  // stale-response guard makes a late response harmless.
+  const isAnyRunning = bulkRunning || fileImportRunning || pubmedRunning;
+
+  /**
+   * The identifier-run outcome summary, in the ONE vocabulary this application
+   * has for an import: Added / Skipped — Duplicates / Failed, each listing the
+   * identifiers it applies to.
+   *
+   * Shared by the Import IDs tab and the PubMed Search tab so a PubMed-selected
+   * import can never grow a second, incompatible status vocabulary. Duplicate
+   * classification is not decided here or anywhere in the UI: the canonical
+   * insert path decides whether a paper was inserted, skipped as a duplicate or
+   * failed, and this only reports what it said. Identifiers alone are shown —
+   * a failed PMID is never re-labelled with a title taken from stale search
+   * results, which could name the wrong paper.
+   */
+  const renderIdentifierRunSummary = (
+    heading: string,
+    results: { addedIds: string[]; skippedIds: string[]; failedIds: string[] },
+  ) => (
+    <div className="rounded-md border border-border bg-muted/50 p-4 space-y-3 max-h-60 overflow-y-auto">
+      <p className="font-medium text-sm">{heading}</p>
+
+      {results.addedIds.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-green-700 dark:text-green-400">
+            <CheckCircle2 className="h-4 w-4" />
+            Added ({results.addedIds.length})
+          </div>
+          <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
+            {results.addedIds.map((id) => (
+              <li key={id} className="font-mono">{id}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {results.skippedIds.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-yellow-700 dark:text-yellow-400">
+            <AlertTriangle className="h-4 w-4" />
+            Skipped — Duplicates ({results.skippedIds.length})
+          </div>
+          <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
+            {results.skippedIds.map((id) => (
+              <li key={id} className="font-mono">{id}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {results.failedIds.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-destructive">
+            <XCircle className="h-4 w-4" />
+            Failed ({results.failedIds.length})
+          </div>
+          <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
+            {results.failedIds.map((id) => (
+              <li key={id} className="font-mono">{id}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 
   // Shared assign-to section rendered in all tabs. The `context` distinguishes
   // configuring the imminent run ("current-import") from configuring the *next*
@@ -627,25 +819,107 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
         <DialogHeader>
           <DialogTitle>Add Papers</DialogTitle>
           <DialogDescription>
-            Import by identifier, upload a file, or add manually.
+            Search PubMed, import by identifier, upload a file, or add manually.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "import" | "file" | "manual")}>
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="import" className="flex items-center gap-1.5" disabled={isAnyRunning}>
-              <Upload className="h-4 w-4" />
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "pubmed" | "import" | "file" | "manual")}>
+          {/*
+            Four modes do not fit one 390px row without either clipping a label
+            or hiding one behind a scrollbar nobody can see, so below `sm` the
+            list becomes a 2×2 grid instead: `h-auto` releases the primitive's
+            fixed `h-10`, every mode keeps its full label and its full-height
+            touch target, and no horizontal scrolling is required at any width.
+            PubMed Search leads the grid — top-left on a phone, first on a
+            desktop — because discovery precedes import, while the DEFAULT tab
+            stays Import IDs.
+          */}
+          <TabsList className="grid w-full h-auto grid-cols-2 gap-1 sm:h-10 sm:grid-cols-4">
+            <TabsTrigger
+              value="pubmed"
+              className={TAB_TRIGGER_CLASS}
+              disabled={isAnyRunning}
+              // The visible label is already the full one at every width; the
+              // explicit accessible name pins it so a future shortening cannot
+              // silently rename the mode for assistive technology.
+              aria-label="PubMed Search"
+            >
+              <Search className="h-4 w-4" aria-hidden="true" />
+              PubMed Search
+            </TabsTrigger>
+            <TabsTrigger value="import" className={TAB_TRIGGER_CLASS} disabled={isAnyRunning} aria-label="Import IDs">
+              <Upload className="h-4 w-4" aria-hidden="true" />
               Import IDs
             </TabsTrigger>
-            <TabsTrigger value="file" className="flex items-center gap-1.5" disabled={isAnyRunning}>
-              <FileText className="h-4 w-4" />
+            <TabsTrigger value="file" className={TAB_TRIGGER_CLASS} disabled={isAnyRunning} aria-label="Import File">
+              <FileText className="h-4 w-4" aria-hidden="true" />
               Import File
             </TabsTrigger>
-            <TabsTrigger value="manual" className="flex items-center gap-1.5" disabled={isAnyRunning}>
-              <PenLine className="h-4 w-4" />
+            <TabsTrigger value="manual" className={TAB_TRIGGER_CLASS} disabled={isAnyRunning} aria-label="Manual">
+              <PenLine className="h-4 w-4" aria-hidden="true" />
               Manual
             </TabsTrigger>
           </TabsList>
+
+          {/* ── PubMed Search Tab ── */}
+          <TabsContent value="pubmed" className="space-y-4 mt-4">
+            <PubMedSearchPanel
+              state={pubmedSearch}
+              actions={pubmedActions}
+              searchAvailable={Boolean(onPubMedSearch)}
+              importing={pubmedRunning}
+            />
+
+            {/* The SAME shared assign section every other tab renders, driven by
+                the SAME `selectedProjectIds` / `selectedTagIds`. After a
+                completed run it configures the next one, matching Import IDs. */}
+            {!pubmedRunning && renderAssignSection(pubmedComplete ? "next-import" : "current-import")}
+
+            {pubmedRunning && (
+              <div className="space-y-3">
+                <Progress value={pubmedProgressPercent} className="h-2" />
+                <p className="text-sm text-muted-foreground text-center">
+                  Processing {pubmedProgress.current} of {pubmedProgress.total}…
+                  {pubmedResults.addedIds.length > 0 && <span className="text-foreground"> · {pubmedResults.addedIds.length} added</span>}
+                  {pubmedResults.skippedIds.length > 0 && <span className="text-muted-foreground"> · {pubmedResults.skippedIds.length} skipped</span>}
+                  {pubmedResults.failedIds.length > 0 && <span className="text-destructive"> · {pubmedResults.failedIds.length} failed</span>}
+                </p>
+              </div>
+            )}
+
+            {pubmedImportError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm font-medium text-destructive"
+              >
+                <XCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 break-words">{pubmedImportError}</span>
+              </div>
+            )}
+
+            {pubmedComplete && renderIdentifierRunSummary("PubMed Import Results", pubmedResults)}
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={resetAndClose} disabled={pubmedRunning}>
+                {pubmedRunning ? "Running…" : "Close"}
+              </Button>
+              {(pubmedComplete || pubmedImportError) && (
+                <Button variant="ghost" onClick={clearPubMedRunSummary}>
+                  Dismiss results
+                </Button>
+              )}
+              {/* The canonical handoff. Only `pubmedSearch.selectedPmids` — the
+                  PMID strings — reach `onBulkImport`, together with the shared
+                  assignment options. */}
+              <Button
+                onClick={handlePubMedImport}
+                disabled={pubmedRunning || pubmedSelectedCount === 0 || !onBulkImport}
+              >
+                {pubmedRunning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Import {pubmedSelectedCount > 0 ? `${pubmedSelectedCount} Selected` : "Selected"}
+              </Button>
+            </div>
+          </TabsContent>
 
           {/* ── Import IDs Tab ── */}
           <TabsContent value="import" className="space-y-4 mt-4">
@@ -712,53 +986,7 @@ https://doi.org/10.1016/j.example.2024.01.001`}
               </div>
             )}
 
-            {bulkComplete && (
-              <div className="rounded-md border border-border bg-muted/50 p-4 space-y-3 max-h-60 overflow-y-auto">
-                <p className="font-medium text-sm">Import Results Summary</p>
-
-                {bulkResults.addedIds.length > 0 && (
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1.5 text-sm font-medium text-green-700 dark:text-green-400">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Added ({bulkResults.addedIds.length})
-                    </div>
-                    <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
-                      {bulkResults.addedIds.map((id) => (
-                        <li key={id} className="font-mono">{id}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {bulkResults.skippedIds.length > 0 && (
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1.5 text-sm font-medium text-yellow-700 dark:text-yellow-400">
-                      <AlertTriangle className="h-4 w-4" />
-                      Skipped — Duplicates ({bulkResults.skippedIds.length})
-                    </div>
-                    <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
-                      {bulkResults.skippedIds.map((id) => (
-                        <li key={id} className="font-mono">{id}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {bulkResults.failedIds.length > 0 && (
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1.5 text-sm font-medium text-destructive">
-                      <XCircle className="h-4 w-4" />
-                      Failed ({bulkResults.failedIds.length})
-                    </div>
-                    <ul className="ml-6 text-xs text-muted-foreground space-y-0.5">
-                      {bulkResults.failedIds.map((id) => (
-                        <li key={id} className="font-mono">{id}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
+            {bulkComplete && renderIdentifierRunSummary("Import Results Summary", bulkResults)}
 
             {/* After completion the assignment controls configure the NEXT run,
                 not the completed one. */}
