@@ -1211,6 +1211,23 @@ test("the People list opens compact and opens one person at a time", async ({ pa
   await panel.getByLabel("Search people").fill("");
   await expect(headers).toHaveCount(3);
 
+  // Keyboard only. The header is a real button, so activation and the single
+  // tab stop per person are the platform's — there is nothing here to
+  // reimplement, and nothing that leaves focus somewhere the user did not put
+  // it. Tab from the search field lands on the first person, not on a chevron.
+  await panel.getByLabel("Search people").focus();
+  await page.keyboard.press("Tab");
+  const firstHeader = headers.first();
+  await expect(firstHeader).toBeFocused();
+
+  await page.keyboard.press("Space");
+  await expect(firstHeader).toHaveAttribute("aria-expanded", "true");
+  await expect(firstHeader, "collapsing from the header keeps focus on it").toBeFocused();
+
+  await page.keyboard.press("Enter");
+  await expect(firstHeader).toHaveAttribute("aria-expanded", "false");
+  await expect(firstHeader).toBeFocused();
+
   await closeManager(page);
 });
 
