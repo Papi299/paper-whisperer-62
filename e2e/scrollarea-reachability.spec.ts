@@ -41,8 +41,8 @@ async function openKeywordPool(page: Page) {
 /** Adds the fixture keyword to the pool through the real modal. */
 async function addPoolKeyword(page: Page, keyword: string) {
   const dialog = await openKeywordPool(page);
-  await dialog.getByRole("textbox").first().fill(keyword);
-  await dialog.getByRole("button", { name: /^Add$/ }).click();
+  await dialog.getByPlaceholder(/Add a keyword/).fill(keyword);
+  await dialog.getByRole("button", { name: "Add keyword to pool" }).click();
   await expect(
     dialog.getByRole("button", { name: `Remove keyword ${keyword} from pool` }),
   ).toBeAttached({ timeout: 10_000 });
@@ -247,8 +247,13 @@ test.describe("ScrollArea horizontal reachability", () => {
     // Put back the exact layout cause — and nothing else — so the assertions
     // above are shown to be load-bearing rather than trivially true.
     await page.addStyleTag({
+      // The fix is a Tailwind arbitrary variant, so its selector already carries
+      // a class plus this attribute and type — an unqualified
+      // `[data-radix-scroll-area-viewport] > div` rule loses to it even with
+      // `!important`, and would quietly "reproduce" nothing. `html body` and the
+      // `:not(#x)` raise specificity above it.
       content:
-        "[data-radix-scroll-area-viewport] > div { display: table !important; min-width: 100%; }",
+        "html body [data-radix-scroll-area-viewport] > div:not(#x) { display: table !important; min-width: 100% !important; }",
     });
     const broken = await measure(scope);
 
