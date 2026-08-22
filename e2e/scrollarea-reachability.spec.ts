@@ -727,13 +727,23 @@ for (const size of [
         ).toBe(true);
       }
 
-      // Pressability is asserted on the rows the user can actually see. The
-      // floor keeps this from passing vacuously if the list ever renders empty.
+      /*
+       * Pressability is asserted on the rows the user can actually see, with a
+       * floor so this cannot pass vacuously against an empty list.
+       *
+       * The floor is ONE, deliberately. How many rows fit inside the clipped
+       * band is a function of row height and therefore of font metrics: macOS
+       * painted two, CI's Linux renderer painted one. Requiring two would
+       * encode an assumption about the vertical clipping this test explicitly
+       * does not assert — and would fail for a reason that has nothing to do
+       * with horizontal reachability. Horizontal containment is still checked
+       * on EVERY row above, painted or not, which is the contract that matters.
+       */
       const painted = g.rows.filter((row) => row.verticallyVisible);
       expect(
         painted.length,
         "no duplicate row was painted at all",
-      ).toBeGreaterThanOrEqual(2);
+      ).toBeGreaterThanOrEqual(1);
       for (const row of painted) {
         expect(
           row.pressAtItsCentreLandsOnIt,
