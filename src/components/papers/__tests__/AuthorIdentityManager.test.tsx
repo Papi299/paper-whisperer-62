@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { AuthorIdentityManager } from "../AuthorIdentityManager";
 import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 import { makeAuthorProvenance, type AuthorProvenance } from "@/lib/authorProvenance";
@@ -145,6 +145,24 @@ const tab = (name: RegExp) => {
   fireEvent.mouseDown(trigger);
   fireEvent.click(trigger);
 };
+
+/**
+ * Open one person's management panel in the People tab.
+ *
+ * The list is compact by default: a person's mentions, aliases, merge control
+ * and actions are not in the document at all until their row is opened. So
+ * every test about what a person can be managed with opens the row first —
+ * which is also, incidentally, the assertion that the whole header row is the
+ * control rather than a chevron at the end of it.
+ *
+ * Matched on the name prefix because the header's accessible name is its whole
+ * content: the person, then the counts that summarise them.
+ */
+function openPerson(name: RegExp) {
+  const header = screen.getByRole("button", { name, expanded: false });
+  fireEvent.click(header);
+  return header;
+}
 
 describe("AuthorIdentityManager — availability", () => {
   it("reports the subsystem as unavailable without offering any action", () => {
@@ -361,6 +379,7 @@ describe("AuthorIdentityManager — people", () => {
   it("shows the person's names, links and identifier evidence", () => {
     open(papers, stubIdentities({ dataset }));
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
 
     expect(screen.getByLabelText("Name for Stuart M Phillips")).toHaveValue("Stuart M Phillips");
     expect(screen.getByText("Phillips SM")).toBeInTheDocument();
@@ -372,12 +391,15 @@ describe("AuthorIdentityManager — people", () => {
     open(papers, stubIdentities({ dataset }));
     tab(/People/);
     expect(screen.queryByText(/verified/i)).not.toBeInTheDocument();
+    openPerson(/^Stuart M Phillips/);
+    expect(screen.queryByText(/verified/i)).not.toBeInTheDocument();
   });
 
   it("renames on blur without touching anything else", () => {
     const identities = stubIdentities({ dataset });
     open(papers, identities);
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
 
     const field = screen.getByLabelText("Name for Stuart M Phillips");
     fireEvent.change(field, { target: { value: "S. M. Phillips" } });
@@ -392,6 +414,7 @@ describe("AuthorIdentityManager — people", () => {
     const identities = stubIdentities({ dataset });
     open(papers, identities);
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
 
     fireEvent.change(screen.getByLabelText("Add another name for Stuart M Phillips"), {
       target: { value: "Phillips, S M" },
@@ -409,6 +432,7 @@ describe("AuthorIdentityManager — people", () => {
     const identities = stubIdentities({ dataset });
     open(papers, identities);
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
 
     fireEvent.click(screen.getByRole("button", { name: /^Unlink$/ }));
     expect(identities.unlinkMention).toHaveBeenCalledWith("p1", 0);
@@ -417,6 +441,7 @@ describe("AuthorIdentityManager — people", () => {
   it("offers delete only for a person carrying nothing", () => {
     open(papers, stubIdentities({ dataset }));
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
     expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
   });
 
@@ -426,6 +451,7 @@ describe("AuthorIdentityManager — people", () => {
     });
     open(papers, identities);
     tab(/People/);
+    openPerson(/^Nobody/);
 
     fireEvent.click(screen.getByRole("button", { name: /^Delete / }));
     expect(identities.deleteIdentity).toHaveBeenCalledWith("empty");
@@ -445,6 +471,7 @@ describe("AuthorIdentityManager — people", () => {
       }),
     );
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
 
     expect(screen.getByText(/Linked papers state different ORCIDs/i)).toBeInTheDocument();
   });
@@ -462,8 +489,13 @@ describe("AuthorIdentityManager — people", () => {
     });
     open(papers, identities);
     tab(/People/);
+    // The count is part of the collapsed row, so it is legible without opening
+    // anything — that is the point of the compact list.
+    expect(
+      screen.getByRole("button", { name: /^B Two.*1 merged/, expanded: false }),
+    ).toBeInTheDocument();
+    openPerson(/^B Two/);
 
-    expect(screen.getByText("1 merged")).toBeInTheDocument();
     // The control names the member and the target, not "one merge": a cluster
     // can hold several merged members and the user is choosing between edges.
     fireEvent.click(
@@ -1023,6 +1055,7 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
     expect(screen.getByText(/No possible duplicates found/i)).toBeInTheDocument();
 
     tab(/People/);
+    openPerson(/^A One/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
     selectPerson(/^B Two/);
 
@@ -1039,6 +1072,7 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
     open(unrelatedPapers, identities);
 
     tab(/People/);
+    openPerson(/^A One/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
     selectPerson(/^B Two/);
 
@@ -1055,6 +1089,7 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
     open(unrelatedPapers, identities);
 
     tab(/People/);
+    openPerson(/^A One/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
     selectPerson(/^B Two/);
     fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]);
@@ -1067,6 +1102,7 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
     open(unrelatedPapers, identities);
 
     tab(/People/);
+    openPerson(/^A One/);
     fireEvent.click(screen.getByRole("button", { name: "Merge A One into another person" }));
 
     expect(screen.queryByRole("radio", { name: /^A One/ })).not.toBeInTheDocument();
@@ -1083,6 +1119,7 @@ describe("AuthorIdentityManager — manual merge of any two people", () => {
     open([paper("p1", "P1", ["A One"])], identities);
 
     tab(/People/);
+    openPerson(/^A One/);
     expect(screen.queryByRole("button", { name: /into another person/ })).not.toBeInTheDocument();
   });
 });
@@ -1111,6 +1148,7 @@ describe("AuthorIdentityManager — undoing one merge out of several", () => {
   it("names each merge by its member and its direct target", () => {
     open(chainPapers, chain());
     tab(/People/);
+    openPerson(/^C Three/);
 
     // Not two identical "Undo one merge" controls: A merged into B, B into C,
     // and undoing the wrong one silently regroups the library.
@@ -1126,6 +1164,7 @@ describe("AuthorIdentityManager — undoing one merge out of several", () => {
     const identities = chain();
     open(chainPapers, identities);
     tab(/People/);
+    openPerson(/^C Three/);
 
     fireEvent.click(screen.getByRole("button", { name: "Undo merge of A One into B Two" }));
 
@@ -1158,6 +1197,7 @@ describe("AuthorIdentityManager — undoing one merge out of several", () => {
       identities,
     );
     tab(/People/);
+    openPerson(/^John Smith/);
 
     const undoLabels = screen
       .getAllByRole("button", { name: /^Undo merge of John Smith/ })
@@ -1190,6 +1230,7 @@ describe("AuthorIdentityManager — identity evidence is user-wide", () => {
     const identities = stubIdentities({ dataset: DATA, linkedPapers: [HIDDEN_PAPER] });
     open([paper("visible", "Visible paper", ["Someone Else"])], identities);
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
 
     expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
     expect(screen.getByText(/Linked mentions \(1\)/)).toBeInTheDocument();
@@ -1236,6 +1277,7 @@ describe("AuthorIdentityManager — stale links are reported, not obeyed", () =>
     expect(screen.getByText("Jane Roe")).toBeInTheDocument();
     // The wrong author is not resolved to the person.
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
     expect(screen.getByText(/Nothing is linked to this person/i)).toBeInTheDocument();
   });
 
@@ -1336,6 +1378,8 @@ describe("AuthorIdentityManager — a stale graph is shown but not edited", () =
   it("keeps the last known-good people on screen rather than discarding them", () => {
     open([paper("p1", "P1", ["Stuart M Phillips"])], stale());
     tab(/People/);
+    // A stale graph is still browsable: reading is not a decision.
+    openPerson(/^Stuart M Phillips/);
 
     expect(screen.getByLabelText("Name for Stuart M Phillips")).toBeInTheDocument();
   });
@@ -1360,6 +1404,7 @@ describe("AuthorIdentityManager — a stale graph is shown but not edited", () =
     expect(screen.getByRole("button", { name: /Create a new person/ })).toBeDisabled();
 
     tab(/People/);
+    openPerson(/^Stuart M Phillips/);
     expect(screen.getByRole("button", { name: /^Unlink$/ })).toBeDisabled();
   });
 });
@@ -1610,5 +1655,717 @@ describe("AuthorIdentityManager — stale saved links can be repaired", () => {
     expect(
       screen.queryByRole("button", { name: /Remove stale saved link/ }),
     ).not.toBeInTheDocument();
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * A People list that stays a list
+ *
+ * AUTHOR-IDENTITY-PEOPLE-LIST-COMPACTION-001. The owner opened People on a real
+ * library and found a single prolific author taller than the dialog: every
+ * person's mentions, aliases, alias editor and merge control were rendered at
+ * once, so the tab could not be scanned, compared or searched.
+ *
+ * These tests are about the two things that fixes it and the many things that
+ * must survive it. Compaction is not a rendering trick — a collapsed person's
+ * management body is genuinely absent from the document, and an expanded one
+ * shows five linked mentions rather than fifty — and no identity semantics
+ * change: every action that existed still exists, still names both sides, and
+ * still asks the server for exactly one thing.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("AuthorIdentityManager — the People list is compact by default", () => {
+  const TITLES = [
+    "Resistance training frequency and hypertrophy",
+    "Weekly set volume and muscle mass",
+    "Strategies for optimizing hypertrophy",
+    "Volume enhances hypertrophy but not strength",
+    "Protein distribution in a single meal",
+    "Mechanisms of muscle hypertrophy",
+    "Longer inter-set rest periods",
+    "Training frequency in well-trained men",
+    "Low- versus high-load resistance training",
+    "Repetition duration and hypertrophy",
+    "Loading recommendations for strength",
+    "Regional muscle activation",
+  ];
+
+  /** One person's papers and links, in the data layer's own order. */
+  function personLinks(identityId: string, spelling: string, count: number) {
+    const papers: AuthorIdentityPaper[] = [];
+    const links: ReturnType<typeof link>[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const paperId = `${identityId}-${index}`;
+      papers.push(paper(paperId, TITLES[index % TITLES.length], [spelling]));
+      links.push(link(identityId, paperId, 0, spelling));
+    }
+    return { papers, links };
+  }
+
+  const brad = personLinks("brad", "Brad J Schoenfeld", 12);
+  const eric = personLinks("eric", "Eric T. Trexler", 8);
+  const louise = personLinks("louise", "Louise M Burke", 2);
+
+  const PAPERS = [...brad.papers, ...eric.papers, ...louise.papers];
+
+  function library(overrides: Partial<AuthorIdentityDataset> = {}) {
+    return makeDataset({
+      identities: [
+        { id: "brad", preferred_name: "Brad J Schoenfeld" },
+        { id: "eric", preferred_name: "Eric T. Trexler" },
+        { id: "louise", preferred_name: "Louise M Burke" },
+      ],
+      aliases: [
+        { id: "al1", identity_id: "brad", alias: "Schoenfeld BJ" },
+        { id: "al2", identity_id: "brad", alias: "Schoenfeld, Brad Jon" },
+      ],
+      links: [...brad.links, ...eric.links, ...louise.links],
+      ...overrides,
+    });
+  }
+
+  /** Every person's disclosure header, in list order. */
+  const headers = () =>
+    screen.getAllByRole("button", { name: /linked mentions?/ }) as HTMLButtonElement[];
+
+  const header = (name: RegExp) =>
+    screen.getByRole("button", { name }) as HTMLButtonElement;
+
+  /** The linked-mention management rows currently in the document. */
+  const mentionRows = () => screen.queryAllByRole("button", { name: /^Unlink$/ });
+
+  function openPeople(identities: IdentitiesApi, papers: AuthorIdentityPaper[] = PAPERS) {
+    const view = open(papers, identities);
+    tab(/People/);
+    return view;
+  }
+
+  /**
+   * Replace the graph the way a successful mutation does.
+   *
+   * Every write here is server-driven: the component holds no optimistic copy,
+   * so what a user sees after a rename or an unlink is whatever the next read
+   * returns. These tests reproduce that rather than assuming it.
+   */
+  function refetch(
+    view: ReturnType<typeof open>,
+    papers: AuthorIdentityPaper[],
+    identities: IdentitiesApi,
+  ) {
+    view.rerender(
+      <AuthorIdentityManager
+        papers={papers}
+        identities={identities}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+  }
+
+  it("opens with every person collapsed and no management detail rendered", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    expect(headers()).toHaveLength(3);
+    for (const row of headers()) {
+      expect(row).toHaveAttribute("aria-expanded", "false");
+    }
+
+    // Not hidden — absent. Twenty-two mention rows, two alias editors and three
+    // merge controls are what this list is not carrying.
+    expect(mentionRows()).toHaveLength(0);
+    expect(screen.queryByLabelText(/^Name for /)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Add another name")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /into another person/ })).not.toBeInTheDocument();
+  });
+
+  it("says who each person is and how much is attached to them", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    // The whole row is the control, so the counts are its accessible name too:
+    // a screen-reader user hears the person and the size of them, then collapsed
+    // or expanded from `aria-expanded` rather than from a word we wrote.
+    expect(header(/^Brad J Schoenfeld/)).toHaveAccessibleName(
+      /12 linked mentions · 2 aliases/,
+    );
+    expect(header(/^Eric T. Trexler/)).toHaveAccessibleName(/8 linked mentions/);
+    expect(header(/^Louise M Burke/)).toHaveAccessibleName(/2 linked mentions/);
+  });
+
+  it("counts one mention and one alias in the singular", () => {
+    openPeople(
+      stubIdentities({
+        dataset: makeDataset({
+          identities: [{ id: "solo", preferred_name: "Solo Author" }],
+          aliases: [{ id: "a", identity_id: "solo", alias: "Author S" }],
+          links: [link("solo", "s1", 0, "Solo Author")],
+        }),
+      }),
+      [paper("s1", "One paper", ["Solo Author"])],
+    );
+
+    expect(header(/^Solo Author/)).toHaveAccessibleName(/1 linked mention · 1 alias/);
+  });
+
+  it("keeps a person with nothing linked to them in the list, stated plainly", () => {
+    openPeople(
+      stubIdentities({
+        dataset: library({
+          identities: [
+            { id: "brad", preferred_name: "Brad J Schoenfeld" },
+            { id: "eric", preferred_name: "Eric T. Trexler" },
+            { id: "louise", preferred_name: "Louise M Burke" },
+            { id: "nobody", preferred_name: "Nobody Yet" },
+          ],
+        }),
+      }),
+    );
+
+    expect(header(/^Nobody Yet/)).toHaveAccessibleName(/0 linked mentions/);
+  });
+
+  it("opens a person from anywhere on their row, and only one at a time", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    expect(header(/^Brad J Schoenfeld/)).toHaveAttribute("aria-expanded", "true");
+    expect(header(/^Eric T. Trexler/)).toHaveAttribute("aria-expanded", "false");
+    expect(header(/^Louise M Burke/)).toHaveAttribute("aria-expanded", "false");
+
+    // Opening the second closes the first. Two open people is how the list
+    // became a wall in the first place.
+    fireEvent.click(header(/^Eric T. Trexler/));
+    expect(header(/^Brad J Schoenfeld/)).toHaveAttribute("aria-expanded", "false");
+    expect(header(/^Eric T. Trexler/)).toHaveAttribute("aria-expanded", "true");
+
+    // And pressing the open one closes it, leaving the list fully compact.
+    fireEvent.click(header(/^Eric T. Trexler/));
+    for (const row of headers()) {
+      expect(row).toHaveAttribute("aria-expanded", "false");
+    }
+    expect(mentionRows()).toHaveLength(0);
+  });
+
+  it("points at the panel it controls only while that panel exists", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    expect(header(/^Brad J Schoenfeld/)).not.toHaveAttribute("aria-controls");
+
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    const panelId = header(/^Brad J Schoenfeld/).getAttribute("aria-controls");
+    expect(panelId).toBeTruthy();
+    expect(document.getElementById(panelId as string)).toBeInTheDocument();
+  });
+
+  it("hides the chevron from assistive technology, which already has the state", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    const chevron = header(/^Brad J Schoenfeld/).querySelector("svg");
+    expect(chevron).not.toBeNull();
+    expect(chevron).toHaveAttribute("aria-hidden", "true");
+    // Visual only, and it turns when the row does.
+    expect(chevron?.getAttribute("class")).not.toMatch(/rotate-90/);
+
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    expect(
+      header(/^Brad J Schoenfeld/).querySelector("svg")?.getAttribute("class"),
+    ).toMatch(/rotate-90/);
+  });
+
+  it("gives a person exactly one tab stop when they are closed", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    const focusable = screen
+      .getByRole("tabpanel")
+      .querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])');
+    // The search field and one header per person. The chevron is not a second
+    // stop, and nothing inside a closed person can be tabbed to.
+    expect(focusable).toHaveLength(4);
+  });
+
+  it("still offers everything a person could be managed with, once opened", () => {
+    const identities = stubIdentities({ dataset: library() });
+    openPeople(identities);
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+
+    expect(screen.getByLabelText("Name for Brad J Schoenfeld")).toBeInTheDocument();
+    expect(screen.getByText(/Linked mentions \(12\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Also known as \(2\)/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove alias Schoenfeld BJ" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Add another name for Brad J Schoenfeld")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Merge Brad J Schoenfeld into another person" }),
+    ).toBeInTheDocument();
+    // Reading a person is not deciding anything about them.
+    expect(identities.renameIdentity).not.toHaveBeenCalled();
+    expect(identities.linkMention).not.toHaveBeenCalled();
+    expect(identities.unlinkMention).not.toHaveBeenCalled();
+  });
+
+  it("shows the first five linked mentions and offers the rest", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+
+    // The count is the truth; five is what is rendered.
+    expect(screen.getByText(/Linked mentions \(12\)/)).toBeInTheDocument();
+    expect(mentionRows()).toHaveLength(5);
+    expect(
+      screen.getByRole("button", { name: "Show all 12 linked mentions" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 12 linked mentions" }));
+    expect(mentionRows()).toHaveLength(12);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    expect(mentionRows()).toHaveLength(5);
+  });
+
+  it("takes the first five in the data layer's order, unranked", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+
+    const shown = screen
+      .getAllByText(/Resistance training frequency|Weekly set volume|Strategies for|Volume enhances|Protein distribution|Mechanisms of muscle/)
+      .map((node) => node.textContent);
+    // Links are read `created_at, id` ascending, so "the first five" means the
+    // five decisions the user made first — not the five this component judged
+    // most interesting.
+    expect(shown).toHaveLength(5);
+    expect(shown[0]).toContain(TITLES[0]);
+    expect(shown[4]).toContain(TITLES[4]);
+    expect(screen.queryByText(new RegExp(TITLES[5]))).not.toBeInTheDocument();
+  });
+
+  it("offers no expansion control for a person who fits", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+    fireEvent.click(header(/^Louise M Burke/));
+
+    expect(mentionRows()).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /^Show (all|fewer)/ })).not.toBeInTheDocument();
+  });
+
+  it("forgets the expanded mention list when the person is closed", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    fireEvent.click(screen.getByRole("button", { name: "Show all 12 linked mentions" }));
+    expect(mentionRows()).toHaveLength(12);
+
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    // Reopening returns to the compact view. A row that reopens fifty rows tall
+    // because of something the user did earlier is a list that surprises them.
+    expect(mentionRows()).toHaveLength(5);
+    expect(
+      screen.getByRole("button", { name: "Show all 12 linked mentions" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a long name in the row rather than on one unwrappable line", () => {
+    // The row is the disclosure control, so anything that makes the row refuse
+    // to wrap takes the control itself out of reach: a nowrap line inside a
+    // Radix scroll viewport is not clipped by it but widens it, on an axis with
+    // no scrollbar. Measured for real in the E2E spec; guarded here so the class
+    // cannot come back by accident.
+    const LONG = "Maria-Jose van der Berg-Nakamura Rodriguez de la Fuente III";
+    openPeople(
+      stubIdentities({
+        dataset: makeDataset({
+          identities: [{ id: "long", preferred_name: LONG }],
+          links: [link("long", "l1", 0, LONG)],
+        }),
+      }),
+      [paper("l1", "One paper", [LONG])],
+    );
+
+    const row = header(new RegExp(`^${LONG}`));
+    expect(row).toHaveTextContent(LONG);
+    for (const node of row.querySelectorAll("*")) {
+      expect(node.className.toString()).not.toMatch(/\btruncate\b|\bwhitespace-nowrap\b/);
+    }
+    // ...and the text column may still shrink below its content, which is the
+    // other half of not widening the row.
+    expect(row.querySelector("span.min-w-0.flex-1")).not.toBeNull();
+  });
+
+  it("keeps the People scroll viewport's content at the viewport's width", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    // The PR #233 protection, still applied to this list. Without it Radix's
+    // `display: table` wrapper takes its width from its content instead of from
+    // the viewport, and the rows go with it.
+    const scrollArea = screen
+      .getByRole("tabpanel")
+      .querySelector("[data-radix-scroll-area-viewport]")?.parentElement;
+    expect(scrollArea?.className).toMatch(
+      /\[&_\[data-radix-scroll-area-viewport\]>div\]:!block/,
+    );
+  });
+
+  it("forgets it when a different person is opened too", () => {
+    openPeople(stubIdentities({ dataset: library() }));
+
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    fireEvent.click(screen.getByRole("button", { name: "Show all 12 linked mentions" }));
+    fireEvent.click(header(/^Eric T. Trexler/));
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+
+    expect(mentionRows()).toHaveLength(5);
+  });
+});
+
+describe("AuthorIdentityManager — searching People", () => {
+  const PAPERS = [
+    paper("p1", "P1", ["Brad J Schoenfeld"], [personal("Brad J Schoenfeld", ORCID_X)]),
+    paper("p2", "P2", ["Eric T. Trexler"]),
+  ];
+
+  const DATA = makeDataset({
+    identities: [
+      { id: "brad", preferred_name: "Brad J Schoenfeld" },
+      { id: "eric", preferred_name: "Eric T. Trexler" },
+    ],
+    aliases: [{ id: "al", identity_id: "brad", alias: "Schoenfeld BJ" }],
+    links: [link("brad", "p1", 0, "Brad J Schoenfeld"), link("eric", "p2", 0, "Eric T. Trexler")],
+  });
+
+  const header = (name: RegExp) => screen.getByRole("button", { name });
+  const search = (value: string) =>
+    fireEvent.change(screen.getByLabelText("Search people"), { target: { value } });
+
+  function openPeople() {
+    open(PAPERS, stubIdentities({ dataset: DATA }));
+    tab(/People/);
+  }
+
+  it("keeps the open person open while they still match", () => {
+    openPeople();
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+
+    search("Brad");
+
+    expect(header(/^Brad J Schoenfeld/)).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: /^Eric T. Trexler/ })).not.toBeInTheDocument();
+  });
+
+  it("closes the open person when the search filters them out", () => {
+    openPeople();
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+
+    search("Eric");
+
+    // Nothing is left open off-screen: an expanded panel belonging to a person
+    // who is not in the list is state the user cannot see or act on.
+    expect(screen.queryByLabelText("Name for Brad J Schoenfeld")).not.toBeInTheDocument();
+    expect(header(/^Eric T. Trexler/)).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("does not spring the person back open when the search is cleared", () => {
+    openPeople();
+    fireEvent.click(header(/^Brad J Schoenfeld/));
+    search("Eric");
+    search("");
+
+    expect(header(/^Brad J Schoenfeld/)).toHaveAttribute("aria-expanded", "false");
+    expect(header(/^Eric T. Trexler/)).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /^Unlink$/ })).not.toBeInTheDocument();
+  });
+
+  it("finds a person by a name they are also known as", () => {
+    openPeople();
+    search("Schoenfeld BJ");
+
+    expect(header(/^Brad J Schoenfeld/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Eric T. Trexler/ })).not.toBeInTheDocument();
+  });
+
+  it("finds a person by an exact ORCID and by nothing looser", () => {
+    openPeople();
+    search(ORCID_X);
+    expect(header(/^Brad J Schoenfeld/)).toBeInTheDocument();
+
+    // Approved 001C matching, unextended: no fuzzy match, no initials
+    // expansion, no partial iD.
+    search("0000-0002");
+    expect(screen.queryByRole("button", { name: /^Brad J Schoenfeld/ })).not.toBeInTheDocument();
+  });
+
+  it("says nothing matched rather than showing an empty list", () => {
+    openPeople();
+    search("zzzz");
+
+    expect(screen.getByText("No people match that search.")).toBeInTheDocument();
+  });
+});
+
+describe("AuthorIdentityManager — the open person survives their own edits", () => {
+  const PAPERS = [
+    paper("p1", "P1", ["Ada Lovelace"]),
+    paper("p2", "P2", ["Ada Lovelace"]),
+    paper("p3", "P3", ["Ada Lovelace"]),
+    paper("p4", "P4", ["Ada Lovelace"]),
+    paper("p5", "P5", ["Ada Lovelace"]),
+    paper("p6", "P6", ["Ada Lovelace"]),
+    paper("p7", "P7", ["Grace Hopper"]),
+  ];
+
+  const LINKS = [1, 2, 3, 4, 5, 6].map((n) => link("ada", `p${n}`, 0, "Ada Lovelace"));
+
+  function base(overrides: Partial<AuthorIdentityDataset> = {}) {
+    return makeDataset({
+      identities: [
+        { id: "ada", preferred_name: "Ada Lovelace" },
+        { id: "grace", preferred_name: "Grace Hopper" },
+      ],
+      aliases: [
+        { id: "a1", identity_id: "ada", alias: "A Lovelace" },
+        { id: "a2", identity_id: "ada", alias: "Lovelace, Ada" },
+      ],
+      links: [...LINKS, link("grace", "p7", 0, "Grace Hopper")],
+      ...overrides,
+    });
+  }
+
+  const header = (name: RegExp) => screen.getByRole("button", { name });
+  const mentionRows = () => screen.queryAllByRole("button", { name: /^Unlink$/ });
+
+  function refetch(view: ReturnType<typeof open>, identities: IdentitiesApi) {
+    view.rerender(
+      <AuthorIdentityManager
+        papers={PAPERS}
+        identities={identities}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+  }
+
+  it("keeps them open across a rename, and renames the row with them", () => {
+    const view = open(PAPERS, stubIdentities({ dataset: base() }));
+    tab(/People/);
+    fireEvent.click(header(/^Ada Lovelace/));
+
+    const field = screen.getByLabelText("Name for Ada Lovelace");
+    fireEvent.change(field, { target: { value: "Ada King" } });
+    fireEvent.blur(field);
+
+    refetch(
+      view,
+      stubIdentities({
+        dataset: base({
+          identities: [
+            { id: "ada", preferred_name: "Ada King" },
+            { id: "grace", preferred_name: "Grace Hopper" },
+          ],
+        }),
+      }),
+    );
+
+    // Keyed by identity, not by label: a person who changes their name is the
+    // same person, and their row must not shut because of it.
+    expect(header(/^Ada King/)).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: /^Ada Lovelace/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps them open across an alias change, and recounts the row", () => {
+    const view = open(PAPERS, stubIdentities({ dataset: base() }));
+    tab(/People/);
+    fireEvent.click(header(/^Ada Lovelace/));
+    expect(header(/^Ada Lovelace/)).toHaveAccessibleName(/2 aliases/);
+
+    refetch(
+      view,
+      stubIdentities({
+        dataset: base({
+          aliases: [
+            { id: "a1", identity_id: "ada", alias: "A Lovelace" },
+            { id: "a2", identity_id: "ada", alias: "Lovelace, Ada" },
+            { id: "a3", identity_id: "ada", alias: "Countess of Lovelace" },
+          ],
+        }),
+      }),
+    );
+
+    expect(header(/^Ada Lovelace/)).toHaveAccessibleName(/3 aliases/);
+    expect(header(/^Ada Lovelace/)).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/Also known as \(3\)/)).toBeInTheDocument();
+  });
+
+  it("drops the expansion offer when unlinking takes the list back under five", () => {
+    const view = open(PAPERS, stubIdentities({ dataset: base() }));
+    tab(/People/);
+    fireEvent.click(header(/^Ada Lovelace/));
+
+    expect(mentionRows()).toHaveLength(5);
+    expect(
+      screen.getByRole("button", { name: "Show all 6 linked mentions" }),
+    ).toBeInTheDocument();
+
+    refetch(
+      view,
+      stubIdentities({
+        dataset: base({
+          links: [...LINKS.slice(0, 5), link("grace", "p7", 0, "Grace Hopper")],
+        }),
+      }),
+    );
+
+    // Derived from what is there now, so nothing offers rows that are gone.
+    expect(header(/^Ada Lovelace/)).toHaveAccessibleName(/5 linked mentions/);
+    expect(mentionRows()).toHaveLength(5);
+    expect(screen.queryByRole("button", { name: /^Show (all|fewer)/ })).not.toBeInTheDocument();
+    expect(header(/^Ada Lovelace/)).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("closes a person who stops being their own root after a merge", () => {
+    const view = open(PAPERS, stubIdentities({ dataset: base() }));
+    tab(/People/);
+    fireEvent.click(header(/^Ada Lovelace/));
+    expect(screen.getByLabelText("Name for Ada Lovelace")).toBeInTheDocument();
+
+    refetch(
+      view,
+      stubIdentities({
+        dataset: base({
+          merges: [{ source_identity_id: "ada", target_identity_id: "grace" }],
+        }),
+      }),
+    );
+
+    // Ada is now part of Grace. There is no Ada row to be open, and Grace is
+    // not opened on the user's behalf.
+    expect(screen.queryByRole("button", { name: /^Ada Lovelace/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Name for Ada Lovelace")).not.toBeInTheDocument();
+    expect(header(/^Grace Hopper/)).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("closes a deleted person and moves focus to the next one", async () => {
+    const identities = stubIdentities({
+      dataset: makeDataset({
+        identities: [
+          { id: "empty", preferred_name: "Aaa Nobody" },
+          { id: "grace", preferred_name: "Grace Hopper" },
+        ],
+        links: [link("grace", "p7", 0, "Grace Hopper")],
+      }),
+    });
+    const view = open(PAPERS, identities);
+    tab(/People/);
+    fireEvent.click(header(/^Aaa Nobody/));
+
+    const remove = screen.getByRole("button", { name: "Delete Aaa Nobody" });
+    // A real activation — pointer or keyboard — leaves the focus on the control
+    // being pressed, which is the control this delete is about to destroy.
+    remove.focus();
+    fireEvent.click(remove);
+    expect(identities.deleteIdentity).toHaveBeenCalledWith("empty");
+
+    // The repository's post-delete focus rule: the next row, else the previous
+    // one, else the empty-state text.
+    await waitFor(() => expect(document.activeElement).toBe(header(/^Grace Hopper/)));
+
+    refetch(
+      view,
+      stubIdentities({
+        dataset: makeDataset({
+          identities: [{ id: "grace", preferred_name: "Grace Hopper" }],
+          links: [link("grace", "p7", 0, "Grace Hopper")],
+        }),
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: /^Aaa Nobody/ })).not.toBeInTheDocument();
+    expect(header(/^Grace Hopper/)).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("AuthorIdentityManager — two people called John Smith in the People list", () => {
+  const header = (name: RegExp) => screen.getByRole("button", { name });
+
+  function accessibleNames() {
+    return screen
+      .getAllByRole("button", { name: /^John Smith/ })
+      .map((button) => button.textContent ?? "");
+  }
+
+  it("tells apart two same-name people by their own evidence", () => {
+    open(
+      [
+        paper("p1", "P1", ["John Smith"], [personal("John Smith", ORCID_X)]),
+        paper("p2", "P2", ["J Smith"]),
+      ],
+      stubIdentities({
+        dataset: makeDataset({
+          identities: [
+            { id: "one", preferred_name: "John Smith" },
+            { id: "two", preferred_name: "John Smith" },
+          ],
+          aliases: [{ id: "al", identity_id: "two", alias: "Jack Smith" }],
+          links: [link("one", "p1", 0, "John Smith"), link("two", "p2", 0, "J Smith")],
+        }),
+      }),
+    );
+    tab(/People/);
+
+    const names = accessibleNames();
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+    expect(names.some((name) => name.includes(ORCID_X))).toBe(true);
+    expect(names.some((name) => name.includes("Jack Smith"))).toBe(true);
+    // A UUID is unique and tells a human nothing.
+    for (const name of names) {
+      expect(name).not.toMatch(/\b(one|two)\b/);
+    }
+  });
+
+  it("falls back to creation order when even the evidence is identical", () => {
+    open(
+      [paper("p1", "P1", ["Someone Else"])],
+      stubIdentities({
+        dataset: makeDataset({
+          identities: [
+            { id: "first", preferred_name: "John Smith" },
+            { id: "second", preferred_name: "John Smith" },
+          ],
+        }),
+      }),
+    );
+    tab(/People/);
+
+    const names = accessibleNames();
+    expect(new Set(names).size).toBe(2);
+    expect(names.some((name) => name.includes("created 1st"))).toBe(true);
+    expect(names.some((name) => name.includes("created 2nd"))).toBe(true);
+  });
+
+  it("keeps the cue short — no paper titles in a row meant to be scanned", () => {
+    const LONG = "A very long paper title that would swamp a compact list row entirely";
+    open(
+      [
+        paper("p1", LONG, ["John Smith"], [personal("John Smith", ORCID_X)]),
+        paper("p2", LONG, ["J Smith"]),
+      ],
+      stubIdentities({
+        dataset: makeDataset({
+          identities: [
+            { id: "one", preferred_name: "John Smith" },
+            { id: "two", preferred_name: "John Smith" },
+          ],
+          links: [link("one", "p1", 0, "John Smith"), link("two", "p2", 0, "J Smith")],
+        }),
+      }),
+    );
+    tab(/People/);
+
+    for (const name of accessibleNames()) {
+      expect(name).not.toContain(LONG);
+    }
+    // The full description, paper title and all, is still what the choice
+    // surfaces show — only the scannable row is kept short.
+    fireEvent.click(header(/^John Smith.*ORCID/));
+    expect(
+      screen.getByRole("button", { name: new RegExp(`Merge John Smith.*${LONG}`) }),
+    ).toBeInTheDocument();
   });
 });
