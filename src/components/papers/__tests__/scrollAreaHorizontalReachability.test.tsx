@@ -99,3 +99,30 @@ describe("DeduplicationDialog row shrinkability", () => {
     expect(src).toContain('<span className="font-mono break-all">');
   });
 });
+
+describe("ManageKeywordPoolModal row shrinkability", () => {
+  const src = read("components/keywords/ManageKeywordPoolModal.tsx");
+
+  /**
+   * The dominant cause was not the keywords at all. `Button` carries
+   * `whitespace-nowrap`, so "Bulk Add" + "Import from Papers" + "Clear All" in
+   * a non-wrapping row have a combined min-content width of 420px — which
+   * becomes the dialog's grid track, laying every sibling out 420px wide inside
+   * a 390px window. Measured on the rejected head: the ScrollArea root ran to
+   * x=445, and three destructive "Remove keyword" buttons sat entirely outside
+   * the screen with `elementFromPoint` returning null at their centres.
+   */
+  it("lets the action row wrap instead of setting the dialog width", () => {
+    expect(src).toContain('<div className="flex flex-wrap gap-2">');
+  });
+
+  /**
+   * A second, independent cause: one keyword with no space in it is a single
+   * token whose min-content width is its full length. Measured 471px even with
+   * the action row already wrapping, so both fixes are load-bearing.
+   */
+  it("lets a single-token keyword break, and keeps its Remove control fixed", () => {
+    expect(src).toContain('<span className="min-w-0 break-all">{pk.keyword}</span>');
+    expect(src).toMatch(/className="ml-1 shrink-0 rounded-sm/);
+  });
+});
