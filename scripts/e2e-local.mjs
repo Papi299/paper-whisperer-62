@@ -122,6 +122,12 @@ const DEFAULT_SPECS = [
   // exists for that purpose alone and is restored before the test finishes.
   // No import, no live ORCID lookup, no Edge Function.
   "e2e/author-identity.spec.ts",
+  // SCROLLAREA-HORIZONTAL-REACHABILITY-AUDIT-001 geometry regressions. Mutating
+  // only in that each test adds one long fixture keyword to the keyword pool
+  // through the real modal and removes it again in afterEach, so it restores the
+  // seed within its own run and is order-independent. No papers, projects or
+  // tags are touched; no import and no Edge Function.
+  "e2e/scrollarea-reachability.spec.ts",
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
   // local delete-account Edge Function. The lifecycle proves afterwards that the

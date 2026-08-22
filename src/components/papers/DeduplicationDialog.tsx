@@ -63,10 +63,12 @@ function MatchBadge({ group }: { group: DuplicateGroup }) {
         : `PMID + DOI: ${group.match_value}`;
 
   return (
-    <Badge
-      variant="outline"
-      className="font-mono text-xs"
-    >
+    /*
+     * A DOI is a single token with no break opportunity, so its min-content
+     * width is its full length — which the whole card was being sized to.
+     * `break-all` gives it break points; `min-w-0` lets the row act on them.
+     */
+    <Badge variant="outline" className="font-mono text-xs min-w-0 break-all">
       {label}
     </Badge>
   );
@@ -85,9 +87,9 @@ function DuplicateGroupCard({
 }) {
   return (
     <div className="rounded-lg border p-4 space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <MatchBadge group={group} />
-        <span className="text-xs text-muted-foreground">
+        <span className="shrink-0 text-xs text-muted-foreground">
           {group.papers.length} copies
         </span>
       </div>
@@ -105,7 +107,7 @@ function DuplicateGroupCard({
           return (
             <label
               key={paper.id}
-              className={`flex items-start gap-3 rounded-md border p-3 cursor-pointer transition-colors ${
+              className={`flex min-w-0 items-start gap-3 rounded-md border p-3 cursor-pointer transition-colors ${
                 isSelected
                   ? "border-primary bg-primary/5"
                   : "border-border hover:bg-muted/50"
@@ -133,10 +135,10 @@ function DuplicateGroupCard({
                   </span>
                   <span>Added {formatDate(paper.created_at)}</span>
                   {paper.pmid && (
-                    <span className="font-mono">PMID: {paper.pmid}</span>
+                    <span className="font-mono break-all">PMID: {paper.pmid}</span>
                   )}
                   {paper.doi && (
-                    <span className="font-mono">
+                    <span className="font-mono break-all">
                       DOI: {truncate(paper.doi, 25)}
                     </span>
                   )}
