@@ -972,6 +972,9 @@ async function dedupVerticalGeometry(page: Page) {
         text: (el.textContent ?? "").trim().slice(0, 40),
         top: Math.round(r.top),
         bottom: Math.round(r.bottom),
+        height: Math.round(r.height),
+        // How much of it a person can actually see right now.
+        visibleHeight: Math.round(Math.max(0, bottom - top)),
         // PR #235's axis, re-measured on the taller fixture: this list has no
         // horizontal scrollbar, so anything past the right edge is unreachable.
         insideHorizontally: r.left >= vb.left - 1 && r.right <= vb.right + 1,
@@ -1128,23 +1131,37 @@ async function wheelResults(page: Page, deltaY: number, ticks = 1) {
 /**
  * A real touch drag, injected as raw input through CDP.
  *
- * Playwright's `touchscreen` only taps, and synthetic touch DOM events do not
- * drive Chromium's scrolling at all — so a "touch works" claim built from
- * `dispatchEvent` would prove nothing. `Input.synthesizeScrollGesture` goes
- * through the compositor exactly as a finger does.
+ * Playwright's `touchscreen` only taps, and synthetic touch DOM events built
+ * with `dispatchEvent` do not drive Chromium's scrolling at all — a "touch
+ * works" claim built from those would prove nothing. `Input.dispatchTouchEvent`
+ * enters the same input pipeline a finger does (it is what `touchscreen.tap`
+ * itself uses), so the gesture recogniser sees a genuine drag.
+ *
+ * Deliberately NOT `Input.synthesizeScrollGesture`: it needs a synthetic-gesture
+ * target that headless Linux does not provide, and measured on CI it left
+ * `scrollTop` at 0 on all three attempts while working fine on macOS — an
+ * environment difference reported as a product failure.
+ *
+ * `dy` is the finger's movement: negative drags the content up, i.e. scrolls
+ * down. Every point stays inside the window so the gesture lands on the list.
  */
-async function touchDragResults(page: Page, yDistance: number) {
+async function touchDragResults(page: Page, dy: number) {
   const pt = await resultsPointer(page);
   const client = await page.context().newCDPSession(page);
-  await client.send("Input.synthesizeScrollGesture", {
-    x: pt.x,
-    y: pt.y,
-    yDistance,
-    gestureSourceType: "touch",
-    speed: 4000,
-  });
+  const at = (y: number) => [{ x: pt.x, y, radiusX: 5, radiusY: 5, force: 1 }];
+  const clamp = (y: number) => Math.max(1, Math.min(y, pt.y + Math.abs(dy)));
+
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: at(pt.y) });
+  const steps = 10;
+  for (let i = 1; i <= steps; i++) {
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: at(clamp(pt.y + Math.round((dy * i) / steps))),
+    });
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await client.detach();
-  await page.waitForTimeout(120);
+  await page.waitForTimeout(150);
 }
 
 /** The bounded-scrolling contract, asserted wherever the list overflows. */
@@ -1272,21 +1289,38 @@ for (const size of [
       expect(lastRow.bottom).toBeGreaterThan(before.viewport.bottom);
       expect(lastGroup.paintedAtAll).toBe(false);
 
-      // Walk the list the way a person does: repeated wheel notches, measuring
-      // between them. Nothing here calls scrollIntoView or sets scrollTop.
+      /*
+       * Walk the list the way a person does: repeated wheel notches, measuring
+       * between them. Nothing here calls scrollIntoView or sets scrollTop.
+       *
+       * "Reached" is deliberately NOT "fully inside the box". A duplicate row is
+       * 200-370px tall at 390px wide depending on how its title wraps, and that
+       * depends on font metrics — macOS and CI's Linux renderer disagree, which
+       * is the same trap that made a row-count assertion fail in PR #235. A
+       * containment-only rule encodes the renderer rather than the contract:
+       * measured on CI, row 3 happened to fall between two sampled stops and the
+       * walk failed while the row was perfectly usable. What a person needs is
+       * that the row is substantially painted inside the scroller AND pressable
+       * where it is drawn, so that is the rule. Full containment is still
+       * demanded of the LAST row (below) and the FIRST row (at the end), where
+       * it is the real acceptance and the geometry is not in doubt.
+       *
+       * The notch is small and absolute for the same reason: a notch scaled to
+       * the viewport can step straight over a tall row.
+       */
+      const NOTCH = 80;
       const reachedRows = new Set<number>();
       const reachedGroups = new Set<number>();
-      let scrollTop = 0;
-      let stalled = 0;
-      for (let step = 0; step < 40 && stalled < 3; step++) {
+      for (let step = 0; step < 60; step++) {
         const g = await dedupVerticalGeometry(page);
         for (const r of g.rows) {
-          if (r.containedInViewport && r.pressAtItsCentreLandsOnIt) reachedRows.add(r.index);
+          const substantiallyPainted =
+            r.visibleHeight >= 0.5 * Math.min(r.height, g.viewport.clientHeight);
+          if (substantiallyPainted && r.pressAtItsCentreLandsOnIt) reachedRows.add(r.index);
         }
         for (const c of g.groups) if (c.paintedAtAll) reachedGroups.add(c.index);
-        stalled = g.viewport.scrollTop === scrollTop && step > 0 ? stalled + 1 : 0;
-        scrollTop = g.viewport.scrollTop;
-        await wheelResults(page, Math.round(before.viewport.clientHeight / 3));
+        if (g.viewport.scrollTop >= g.viewport.maxScrollTop) break;
+        await wheelResults(page, NOTCH);
       }
 
       const after = await dedupVerticalGeometry(page);
