@@ -117,6 +117,28 @@ function personRow(scope: ReturnType<Page["getByRole"]>, name: string) {
 }
 
 /**
+ * Open one person's management panel in the People tab.
+ *
+ * AUTHOR-IDENTITY-PEOPLE-LIST-COMPACTION-001. The People list is compact: a
+ * person's linked mentions, aliases, merge control and delete are not in the
+ * document at all until their row is opened, and opening one closes any other.
+ * Pressing the row is how a person reaches them, so it is how these tests reach
+ * them too — the header is the control, not a chevron at the end of it.
+ */
+async function openPerson(scope: ReturnType<Page["getByRole"]>, name: string) {
+  const header = personHeader(scope, name);
+  await expect(header).toBeVisible({ timeout: 15_000 });
+  if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true", { timeout: 10_000 });
+  return header;
+}
+
+/** One person's collapsed disclosure header, by the name it states. */
+function personHeader(scope: ReturnType<Page["getByRole"]>, name: string) {
+  return scope.locator("button[aria-expanded]").filter({ hasText: name }).first();
+}
+
+/**
  * Narrow the unresolved list to one paper and return its card.
  *
  * The seeded library has 240-odd unresolved author mentions, and the surface
@@ -171,13 +193,31 @@ async function resetIdentities(page: Page) {
   const peopleTab = dialog.getByRole("tab", { name: /People/ });
   const peoplePanel = dialog.getByRole("tabpanel", { name: /People/ });
 
-  for (let sweep = 0; sweep < 20; sweep += 1) {
+  for (let sweep = 0; sweep < 80; sweep += 1) {
     await peopleTab.click();
     // Scoped to the panel, and waited for: searching the dialog as a whole would
     // silently look in whichever panel happened to be mounted.
     await expect(peoplePanel).toBeVisible({ timeout: 10_000 });
 
     if ((await peopleTab.textContent())?.includes("People (0)")) break;
+
+    // The list is compact, so a person's relationships are not in the document
+    // until their row is open. Exactly one is, and every person has at least one
+    // control: whatever is still attached to them, or Delete once nothing is.
+    if ((await peoplePanel.locator('button[aria-expanded="true"]').count()) === 0) {
+      await peoplePanel.locator('button[aria-expanded="false"]').first().click();
+      await expect(peoplePanel.locator('button[aria-expanded="true"]')).toHaveCount(1, {
+        timeout: 10_000,
+      });
+    }
+
+    // An open person shows only their first five linked mentions, so expand the
+    // list: the counted-progress assertion below needs every removable control
+    // on screen, or unlinking one of six leaves the count at five and stalls.
+    const showAll = peoplePanel.getByRole("button", {
+      name: /^Show all \d+ linked mentions$/,
+    });
+    if ((await showAll.count()) > 0) await showAll.click();
 
     // Undo merges, then unlink mentions, then drop aliases, then delete what is
     // left — each step is what makes the next one legal.
@@ -274,10 +314,14 @@ test("a shared ORCID suggests a link but never applies one", async ({ page }) =>
   // ...and unlinking puts it back, immediately.
   const forUnlink = await openManager(page);
   await forUnlink.getByRole("tab", { name: /People/ }).click();
-  // `li li` reaches the mention row inside the person card. Matching plain `li`
-  // would also match the card itself, which by now holds two linked mentions and
-  // therefore two Unlink buttons.
-  const mentionRows = forUnlink.locator("li li").filter({ hasText: PAPER_B });
+  const unlinkPanel = forUnlink.getByRole("tabpanel", { name: /People/ });
+  // The collapsed row already says how much is attached, without opening it.
+  await expect(personHeader(unlinkPanel, PERSON_A)).toContainText("2 linked mentions");
+  await openPerson(unlinkPanel, PERSON_A);
+  // `li li` reaches the mention row inside the person's panel. Matching plain
+  // `li` would also match the row itself, which by now holds two linked
+  // mentions and therefore two Unlink buttons.
+  const mentionRows = unlinkPanel.locator("li li").filter({ hasText: PAPER_B });
   await expect(mentionRows).toHaveCount(1);
   await mentionRows.first().getByRole("button", { name: /^Unlink$/ }).click();
   // Wait for the decision to land before reading Analytics. Unlinking refetches
@@ -327,8 +371,10 @@ test("a merge is reversible and moves nothing", async ({ page }) => {
   await createPersonFrom(dialog, PAPER_B);
 
   await dialog.getByRole("tab", { name: /People/ }).click();
-  await expect(dialog.getByLabel(`Name for ${PERSON_A}`, { exact: true })).toBeVisible();
-  await expect(dialog.getByLabel(`Name for ${PERSON_B}`, { exact: true })).toBeVisible();
+  const bothPanel = dialog.getByRole("tabpanel", { name: /People/ });
+  // Two rows, both closed: the list is scannable before anything is opened.
+  await expect(personHeader(bothPanel, PERSON_A)).toBeVisible();
+  await expect(personHeader(bothPanel, PERSON_B)).toBeVisible();
   await closeManager(page);
 
   const beforeMerge = await authorOptions(page);
@@ -359,11 +405,14 @@ test("a merge is reversible and moves nothing", async ({ page }) => {
   // copied or moved, which is the whole reason a merge is an edge.
   const forUndo = await openManager(page);
   await forUndo.getByRole("tab", { name: /People/ }).click();
-  await expect(forUndo.getByText("1 merged")).toBeVisible();
-  await forUndo
+  const undoPanel = forUndo.getByRole("tabpanel", { name: /People/ });
+  // The merge is legible from the compact row itself.
+  await expect(undoPanel.getByText("1 merged")).toBeVisible();
+  await openPerson(undoPanel, PERSON_B);
+  await undoPanel
     .getByRole("button", { name: `Undo merge of ${PERSON_A} into ${PERSON_B}` })
     .click();
-  await expect(forUndo.getByText("1 merged")).toBeHidden({ timeout: 15_000 });
+  await expect(undoPanel.getByText("1 merged")).toBeHidden({ timeout: 15_000 });
   await closeManager(page);
 
   // Undo restores the previous grouping immediately, with no reconstruction.
@@ -636,7 +685,12 @@ test("a manual override is offered, warned about, and reversible", async ({ page
   await expect(retry).toBeHidden({ timeout: 15_000 });
 
   await again.getByRole("tab", { name: /People/ }).click();
-  await expect(again.getByText(/Linked papers state different ORCIDs/i)).toBeVisible();
+  const conflictPanel = again.getByRole("tabpanel", { name: /People/ });
+  // Contradictory evidence is stated on the compact row rather than hidden
+  // behind a quiet ORCID badge that would imply agreement.
+  await expect(personHeader(conflictPanel, MERCER)).toContainText("ORCID conflict");
+  await openPerson(conflictPanel, MERCER);
+  await expect(conflictPanel.getByText(/Linked papers state different ORCIDs/i)).toBeVisible();
   await closeManager(page);
 
   // One person now, where the algorithm alone would have left two.
@@ -657,6 +711,7 @@ test("any two people can be merged without a duplicate suggestion", async ({ pag
 
   await dialog.getByRole("tab", { name: /People/ }).click();
   const peoplePanel = dialog.getByRole("tabpanel", { name: /People/ });
+  await openPerson(peoplePanel, MERCER);
   await peoplePanel
     .getByRole("button", { name: `Merge ${MERCER} into another person` })
     .click();
@@ -667,6 +722,10 @@ test("any two people can be merged without a duplicate suggestion", async ({ pag
   await peoplePanel
     .getByRole("button", { name: `Merge ${MERCER} into ${EDITABLE_AUTHOR}` })
     .click();
+  // The source stops being its own person, so its row goes with it and nothing
+  // is left open pointing at a person who is no longer in the list.
+  await expect(personHeader(peoplePanel, MERCER)).toHaveCount(0, { timeout: 15_000 });
+  await openPerson(peoplePanel, EDITABLE_AUTHOR);
   await expect(
     peoplePanel.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
   ).toBeVisible({ timeout: 15_000 });
@@ -680,11 +739,13 @@ test("any two people can be merged without a duplicate suggestion", async ({ pag
   // And undoing restores both, because nothing was moved.
   const undo = await openManager(page);
   await undo.getByRole("tab", { name: /People/ }).click();
-  await undo
+  const undoMergePanel = undo.getByRole("tabpanel", { name: /People/ });
+  await openPerson(undoMergePanel, EDITABLE_AUTHOR);
+  await undoMergePanel
     .getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` })
     .click();
   await expect(
-    undo.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
+    undoMergePanel.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
   ).toBeHidden({ timeout: 15_000 });
   await closeManager(page);
 
@@ -705,7 +766,9 @@ test("one merge edge out of a chain is undone by name", async ({ page }) => {
   await dialog.getByRole("tab", { name: /People/ }).click();
   const peoplePanel = dialog.getByRole("tabpanel", { name: /People/ });
 
-  // A into Mercer.
+  // A into Mercer. The undo control lands on the TARGET's panel, so that is
+  // the person opened to read it.
+  await openPerson(peoplePanel, PERSON_A);
   await peoplePanel
     .getByRole("button", { name: `Merge ${PERSON_A} into another person` })
     .click();
@@ -713,6 +776,8 @@ test("one merge edge out of a chain is undone by name", async ({ page }) => {
   await peoplePanel
     .getByRole("button", { name: `Merge ${PERSON_A} into ${MERCER}` })
     .click();
+  await expect(personHeader(peoplePanel, PERSON_A)).toHaveCount(0, { timeout: 15_000 });
+  await openPerson(peoplePanel, MERCER);
   await expect(
     peoplePanel.getByRole("button", { name: `Undo merge of ${PERSON_A} into ${MERCER}` }),
   ).toBeVisible({ timeout: 15_000 });
@@ -725,6 +790,8 @@ test("one merge edge out of a chain is undone by name", async ({ page }) => {
   await peoplePanel
     .getByRole("button", { name: `Merge ${MERCER} into ${EDITABLE_AUTHOR}` })
     .click();
+  await expect(personHeader(peoplePanel, MERCER)).toHaveCount(0, { timeout: 15_000 });
+  await openPerson(peoplePanel, EDITABLE_AUTHOR);
   await expect(
     peoplePanel.getByRole("button", { name: `Undo merge of ${MERCER} into ${EDITABLE_AUTHOR}` }),
   ).toBeVisible({ timeout: 15_000 });
@@ -739,6 +806,7 @@ test("one merge edge out of a chain is undone by name", async ({ page }) => {
   });
   await expect(undoA).toBeVisible();
   await expect(undoMercer).toBeVisible();
+  // Both on one panel — the compaction did not split a person in two.
 
   // Reverse A's edge only. Mercer must stay merged into Rewritten.
   await undoA.click();
@@ -825,14 +893,27 @@ test("two people with the same name give distinguishable merge actions", async (
   // Rename the second so both people are called the same thing — which nothing
   // prevents, and which the product deliberately allows.
   await dialog.getByRole("tab", { name: /People/ }).click();
-  const secondName = dialog.getByLabel(`Name for ${PERSON_B}`, { exact: true });
+  const renamePanel = dialog.getByRole("tabpanel", { name: /People/ });
+  await openPerson(renamePanel, PERSON_B);
+  const secondName = renamePanel.getByLabel(`Name for ${PERSON_B}`, { exact: true });
   await secondName.fill(PERSON_A);
   await secondName.blur();
-  // Not exact: once two people share a name, each card's controls carry that
-  // card's own evidence so a screen reader can tell them apart.
-  await expect(dialog.getByLabel(new RegExp(`^Name for ${PERSON_A}`))).toHaveCount(2, {
-    timeout: 15_000,
-  });
+  // Two rows now carrying the same name — and still two distinguishable rows,
+  // because each states its own evidence rather than the name alone.
+  const sameName = renamePanel.locator("button[aria-expanded]").filter({ hasText: PERSON_A });
+  await expect(sameName).toHaveCount(2, { timeout: 15_000 });
+  const rowNames = await sameName.evaluateAll((nodes) =>
+    nodes.map((node) => (node.textContent ?? "").trim()),
+  );
+  expect(new Set(rowNames).size, "same-name rows must be tellable apart").toBe(2);
+  for (const rowName of rowNames) {
+    expect(rowName).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  }
+  // The renamed person stayed open: a person who changes their name is the same
+  // person, and the row is keyed by identity rather than by label. Asserted on
+  // the count, because by now the NAME no longer identifies a row.
+  await expect(renamePanel.locator('button[aria-expanded="true"]')).toHaveCount(1);
+  await expect(renamePanel.getByLabel(new RegExp(`^Name for ${PERSON_A}`))).toHaveCount(1);
 
   await dialog.getByRole("tab", { name: /Duplicates/ }).click();
   const merges = dialog
@@ -864,7 +945,9 @@ test("two people with the same name give distinguishable merge actions", async (
   // One person now, and undoing names the exact edge that was made.
   const undo = await openManager(page);
   await undo.getByRole("tab", { name: /People/ }).click();
-  await expect(undo.getByRole("button", { name: /^Undo merge of / })).toHaveCount(1);
+  const undoNamePanel = undo.getByRole("tabpanel", { name: /People/ });
+  await openPerson(undoNamePanel, PERSON_A);
+  await expect(undoNamePanel.getByRole("button", { name: /^Undo merge of / })).toHaveCount(1);
   await closeManager(page);
 });
 
@@ -879,6 +962,7 @@ test("an alias is added and removed by the row it names", async ({ page }) => {
   await dialog.getByRole("tab", { name: /People/ }).click();
   const panel = dialog.getByRole("tabpanel", { name: /People/ });
   await expect(panel).toBeVisible();
+  await openPerson(panel, PERSON_A);
   await expect(panel.getByText(/No other names recorded/i)).toBeVisible();
 
   await panel.getByLabel(`Add another name for ${PERSON_A}`).fill(PERSON_B);
@@ -886,14 +970,25 @@ test("an alias is added and removed by the row it names", async ({ page }) => {
   await expect(panel.getByRole("button", { name: `Remove alias ${PERSON_B}` })).toBeVisible({
     timeout: 15_000,
   });
+  // The compact row recounts itself, and the person stays open through it.
+  await expect(personHeader(panel, PERSON_A)).toContainText("1 alias");
+  await expect(personHeader(panel, PERSON_A)).toHaveAttribute("aria-expanded", "true");
   await closeManager(page);
 
   // The alias makes the person findable by a name no linked mention supplies.
   const forSearch = await openManager(page);
   await forSearch.getByRole("tab", { name: /People/ }).click();
-  await forSearch.getByRole("button", { name: `Remove alias ${PERSON_B}` }).click();
+  const searchPanel = forSearch.getByRole("tabpanel", { name: /People/ });
+  // The alias makes the person findable by a name no linked mention supplies —
+  // 001C's approved matching, reached from the People tab's own search.
+  await searchPanel.getByLabel("Search people").fill(PERSON_B);
+  await expect(personHeader(searchPanel, PERSON_A)).toBeVisible();
+  await searchPanel.getByLabel("Search people").fill("");
+
+  await openPerson(searchPanel, PERSON_A);
+  await searchPanel.getByRole("button", { name: `Remove alias ${PERSON_B}` }).click();
   await expect(
-    forSearch.getByText(/No other names recorded/i),
+    searchPanel.getByText(/No other names recorded/i),
     "removing an alias must actually delete its row",
   ).toBeVisible({ timeout: 15_000 });
   await closeManager(page);
@@ -921,9 +1016,11 @@ test("editing a paper's authors clears its identity links atomically", async ({ 
   await openAnalytics(page);
   const afterNotes = await openManager(page);
   await afterNotes.getByRole("tab", { name: /People/ }).click();
-  await expect(afterNotes.getByRole("tabpanel", { name: /People/ })).toBeVisible();
+  const notesPanel = afterNotes.getByRole("tabpanel", { name: /People/ });
+  await expect(notesPanel).toBeVisible();
+  await openPerson(notesPanel, EDITABLE_AUTHOR);
   await expect(
-    afterNotes.getByText(/Linked mentions \(1\)/),
+    notesPanel.getByText(/Linked mentions \(1\)/),
     "an unrelated edit must not discard a person decision",
   ).toBeVisible();
   await closeManager(page);
@@ -941,9 +1038,16 @@ test("editing a paper's authors clears its identity links atomically", async ({ 
   await openAnalytics(page);
   const afterAuthors = await openManager(page);
   await afterAuthors.getByRole("tab", { name: /People/ }).click();
-  await expect(afterAuthors.getByRole("tabpanel", { name: /People/ })).toBeVisible();
+  const authorsPanel = afterAuthors.getByRole("tabpanel", { name: /People/ });
+  await expect(authorsPanel).toBeVisible();
+  // A person with nothing left attached keeps their row, and says so.
+  await expect(personHeader(authorsPanel, EDITABLE_AUTHOR)).toContainText(
+    "0 linked mentions",
+    { timeout: 15_000 },
+  );
+  await openPerson(authorsPanel, EDITABLE_AUTHOR);
   await expect(
-    afterAuthors.getByText(/Nothing is linked to this person/i),
+    authorsPanel.getByText(/Nothing is linked to this person/i),
     "an authors rewrite must clear the paper's links",
   ).toBeVisible({ timeout: 15_000 });
   await closeManager(page);
@@ -963,4 +1067,319 @@ test("editing a paper's authors clears its identity links atomically", async ({ 
   await expect(restore).toBeHidden();
   await clearPaperSearch(page);
   await openAnalytics(page);
+});
+
+/**
+ * Every disclosure header, and every Unlink inside whatever is open.
+ *
+ * Measured the way PR #233 taught: containment on the axis the user cannot
+ * scroll, and a hit test at the point they would actually press. `toBeVisible()`
+ * is true for a control parked outside a viewport with no horizontal scrollbar,
+ * and so is `.click()`, which scrolls there programmatically first.
+ */
+async function peopleGeometry(panel: ReturnType<Page["getByRole"]>) {
+  return panel.evaluate((node) => {
+    const viewport = node.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLElement;
+    const box = (el: Element) => el.getBoundingClientRect();
+    const vb = box(viewport);
+
+    const measure = (el: HTMLElement) => {
+      // Vertical scrolling is something a person has here — a scrollbar and a
+      // wheel — so a row below the fold is reached the way they would reach it.
+      el.scrollIntoView({ block: "nearest" });
+      const r = box(el);
+      const hit = document.elementFromPoint(
+        Math.round(r.x + r.width / 2),
+        Math.round(r.y + r.height / 2),
+      );
+      return {
+        name: (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40),
+        height: Math.round(r.height),
+        insideHorizontally: r.left >= vb.left - 1 && r.right <= vb.right + 1,
+        insideVertically: r.top >= vb.top - 1 && r.bottom <= vb.bottom + 1,
+        pressAtItsCentreLandsOnIt: hit !== null && el.contains(hit),
+      };
+    };
+
+    const headers = [...viewport.querySelectorAll("button[aria-expanded]")] as HTMLElement[];
+    const unlinks = ([...viewport.querySelectorAll("button")] as HTMLElement[]).filter(
+      (button) => button.textContent?.trim() === "Unlink",
+    );
+
+    return {
+      overflow: [node, viewport].map((el) => ({
+        cls: el.className.toString().slice(0, 40),
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      })),
+      documentOverflow: {
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      },
+      headers: headers.map(measure),
+      unlinks: unlinks.map(measure),
+      // Nothing above needed a sideways scroll, because nothing is out there.
+      scrollLeft: viewport.scrollLeft,
+    };
+  });
+}
+
+function expectReachable(
+  geometry: Awaited<ReturnType<typeof peopleGeometry>>,
+  where: string,
+) {
+  for (const el of geometry.overflow) {
+    expect(
+      el.scrollWidth,
+      `horizontal overflow in ${el.cls} at ${where}`,
+    ).toBeLessThanOrEqual(el.clientWidth);
+  }
+  expect(
+    geometry.documentOverflow.scrollWidth,
+    `the page itself overflows sideways at ${where}`,
+  ).toBeLessThanOrEqual(geometry.documentOverflow.clientWidth);
+
+  for (const row of [...geometry.headers, ...geometry.unlinks]) {
+    expect(row.insideHorizontally, `${row.name} is out of reach sideways at ${where}`).toBe(true);
+    expect(row.insideVertically, `${row.name} could not be brought into view at ${where}`).toBe(true);
+    expect(row.pressAtItsCentreLandsOnIt, `${row.name} cannot be pressed at ${where}`).toBe(true);
+  }
+  for (const header of geometry.headers) {
+    expect(header.height, `${header.name} is not a usable target at ${where}`).toBeGreaterThanOrEqual(44);
+  }
+  expect(geometry.scrollLeft, `the People list scrolled sideways at ${where}`).toBe(0);
+}
+
+test("the People list opens compact and opens one person at a time", async ({ page }) => {
+  /*
+   * AUTHOR-IDENTITY-PEOPLE-LIST-COMPACTION-001 — the owner opened People on a
+   * real library and found one prolific author taller than the whole dialog,
+   * because every person's mentions, aliases, alias editor and merge control
+   * were rendered at once. What follows is the contract that replaced it: a row
+   * per person, nothing but rows until one is asked for, and one at a time.
+   */
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+  await createPersonFrom(dialog, PAPER_C);
+  await createPersonFrom(dialog, PAPER_E);
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const panel = dialog.getByRole("tabpanel", { name: /People/ });
+  await expect(panel).toBeVisible();
+
+  const headers = panel.locator("button[aria-expanded]");
+  await expect(headers).toHaveCount(3);
+  await expect(panel.locator('button[aria-expanded="true"]')).toHaveCount(0);
+
+  // Not hidden — absent. This is the compaction: three people's management
+  // bodies are not in the document at all.
+  await expect(panel.getByRole("button", { name: /^Unlink$/ })).toHaveCount(0);
+  await expect(panel.getByLabel(/^Name for /)).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: /into another person/ })).toHaveCount(0);
+
+  // Each row states who and how much, so the list can be read without opening
+  // anything.
+  await expect(personHeader(panel, PERSON_A)).toContainText("1 linked mention");
+  await expect(personHeader(panel, MERCER)).toContainText("1 linked mention");
+  await expect(personHeader(panel, EDITABLE_AUTHOR)).toContainText("1 linked mention");
+
+  expectReachable(await peopleGeometry(panel), "1280×720, all collapsed");
+
+  // The whole row is the control. Opening the second closes the first.
+  await openPerson(panel, PERSON_A);
+  await expect(panel.getByLabel(`Name for ${PERSON_A}`, { exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: /^Unlink$/ })).toHaveCount(1);
+
+  await openPerson(panel, MERCER);
+  await expect(personHeader(panel, PERSON_A)).toHaveAttribute("aria-expanded", "false");
+  await expect(panel.getByLabel(`Name for ${PERSON_A}`, { exact: true })).toHaveCount(0);
+  await expect(panel.getByLabel(`Name for ${MERCER}`, { exact: true })).toBeVisible();
+
+  expectReachable(await peopleGeometry(panel), "1280×720, one person open");
+
+  // Pressing the open row closes it, leaving the list fully compact again.
+  await personHeader(panel, MERCER).click();
+  await expect(panel.locator('button[aria-expanded="true"]')).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: /^Unlink$/ })).toHaveCount(0);
+
+  // The People tab's own search, on 001C's approved evidence and nothing looser.
+  await panel.getByLabel("Search people").fill(MERCER);
+  await expect(headers).toHaveCount(1);
+  await expect(personHeader(panel, MERCER)).toBeVisible();
+  await panel.getByLabel("Search people").fill("");
+  await expect(headers).toHaveCount(3);
+
+  // Keyboard only. The header is a real button, so activation and the single
+  // tab stop per person are the platform's — there is nothing here to
+  // reimplement, and nothing that leaves focus somewhere the user did not put
+  // it. Tab from the search field lands on the first person, not on a chevron.
+  await panel.getByLabel("Search people").focus();
+  await page.keyboard.press("Tab");
+  const firstHeader = headers.first();
+  await expect(firstHeader).toBeFocused();
+
+  await page.keyboard.press("Space");
+  await expect(firstHeader).toHaveAttribute("aria-expanded", "true");
+  await expect(firstHeader, "collapsing from the header keeps focus on it").toBeFocused();
+
+  await page.keyboard.press("Enter");
+  await expect(firstHeader).toHaveAttribute("aria-expanded", "false");
+  await expect(firstHeader).toBeFocused();
+
+  await closeManager(page);
+});
+
+test("the compact People list is reachable on a phone-sized screen", async ({ page }) => {
+  // Its own flow rather than a resize mid-test: Analytics is a desktop inline
+  // panel, so narrowing the window unmounts it and the dialog inside it.
+  // A phone is where a stranded control is the same defect and where a chevron
+  // at the end of a row would be the whole target.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/", { waitUntil: "networkidle" });
+  await waitForDashboard(page);
+
+  // On a phone the library actions live behind a menu and Analytics is a sheet,
+  // so this is the route a person actually takes to the manager.
+  await page.getByRole("button", { name: "More library actions" }).click();
+  const actions = page.getByRole("dialog", { name: "Library actions" });
+  await expect(actions).toBeVisible();
+  await actions.getByRole("button", { name: /Analytics & Insights/ }).click();
+  await expect(page.getByRole("dialog", { name: /Analytics & Insights/ })).toBeVisible();
+
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+  await createPersonFrom(dialog, PAPER_C);
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const panel = dialog.getByRole("tabpanel", { name: /People/ });
+  await expect(panel.locator("button[aria-expanded]")).toHaveCount(2);
+
+  expectReachable(await peopleGeometry(panel), "390×844, all collapsed");
+
+  await openPerson(panel, PERSON_A);
+  await expect(panel.getByRole("button", { name: /^Unlink$/ })).toHaveCount(1);
+  expectReachable(await peopleGeometry(panel), "390×844, one person open");
+
+  // The alias controls and the merge action are reachable too, not only the
+  // header that opened them.
+  await expect(panel.getByLabel(`Add another name for ${PERSON_A}`)).toBeVisible();
+  const merge = panel.getByRole("button", { name: `Merge ${PERSON_A} into another person` });
+  await expect(merge).toBeVisible();
+  const mergeReach = await merge.evaluate((el) => {
+    const viewport = el.closest("[data-radix-scroll-area-viewport]") as HTMLElement;
+    el.scrollIntoView({ block: "nearest" });
+    const r = el.getBoundingClientRect();
+    const vb = viewport.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      Math.round(r.x + r.width / 2),
+      Math.round(r.y + r.height / 2),
+    );
+    return {
+      inside: r.left >= vb.left - 1 && r.right <= vb.right + 1,
+      pressed: hit !== null && el.contains(hit),
+      scrollLeft: viewport.scrollLeft,
+    };
+  });
+  expect(mergeReach.inside, "the merge action is out of reach sideways on a phone").toBe(true);
+  expect(mergeReach.pressed, "the merge action cannot be pressed on a phone").toBe(true);
+  expect(mergeReach.scrollLeft, "the People list scrolled sideways on a phone").toBe(0);
+
+  await closeManager(page);
+});
+
+test("deleting the last person leaves the focus on the empty state", async ({ page }) => {
+  /*
+   * REVIEW REMEDIATION 001, end to end. The component test models the
+   * mutation-settles-before-refetch ordering; this proves the real hook behaves
+   * that way. Deleting the only person leaves nothing to receive the focus at
+   * the moment the delete resolves — the empty state has not mounted yet — so
+   * the focus is handed on against the list that actually rendered.
+   */
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const panel = dialog.getByRole("tabpanel", { name: /People/ });
+  await openPerson(panel, PERSON_A);
+
+  // A person is only deletable once nothing is attached to them.
+  await panel.getByRole("button", { name: /^Unlink$/ }).click();
+  const remove = panel.getByRole("button", { name: `Delete ${PERSON_A}` });
+  await expect(remove).toBeVisible({ timeout: 15_000 });
+
+  await remove.click();
+
+  const emptyState = panel.getByText(
+    "No people yet. Create one from an unresolved author mention.",
+  );
+  await expect(emptyState).toBeVisible({ timeout: 15_000 });
+  // Not the body, and not wherever the browser happened to drop it.
+  await expect(emptyState).toBeFocused({ timeout: 15_000 });
+  await expect(dialog.getByRole("tab", { name: /People \(0\)/ })).toBeVisible();
+
+  await closeManager(page);
+});
+
+test("a long linked-mention list is capped until the user asks for it", async ({
+  page,
+}) => {
+  // Six mentions on one person: more than the panel shows, which is the case a
+  // prolific author reaches immediately and the reason this list is capped.
+  test.setTimeout(120_000);
+
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+
+  for (let n = 1; n <= 5; n += 1) {
+    const title = `E2E Primary Paper ${String(n).padStart(3, "0")}`;
+    const mention = `Author A${n}`;
+    await dialog.getByLabel("Search unresolved author mentions").fill(title);
+    // These papers carry two authors each, so the file's rule applies twice
+    // over: assert on the COUNT, never on the clicked card. `.first()` is a live
+    // locator and re-resolves to the paper's OTHER mention the moment this one
+    // is resolved, so "the card I clicked is gone" would never become true.
+    const cards = dialog.locator("li").filter({ hasText: title });
+    await expect(cards).toHaveCount(2);
+    const card = cards.first();
+    await card.getByRole("button", { name: `Link ${mention} to an existing person` }).click();
+    await personRow(card, PERSON_A).click();
+    await card.getByRole("button", { name: `Link ${mention} to ${PERSON_A}` }).click();
+    await expect(cards).toHaveCount(1, { timeout: 15_000 });
+  }
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const panel = dialog.getByRole("tabpanel", { name: /People/ });
+  await expect(personHeader(panel, PERSON_A)).toContainText("6 linked mentions", {
+    timeout: 15_000,
+  });
+
+  await openPerson(panel, PERSON_A);
+
+  // The count is the truth; five is what is rendered.
+  await expect(panel.getByText("Linked mentions (6)")).toBeVisible();
+  const unlinks = panel.getByRole("button", { name: /^Unlink$/ });
+  await expect(unlinks).toHaveCount(5);
+
+  const showAll = panel.getByRole("button", { name: "Show all 6 linked mentions" });
+  await expect(showAll).toBeVisible();
+  await showAll.click();
+  await expect(unlinks).toHaveCount(6);
+
+  // Every one of them is a control a person can actually press — six rows is
+  // where a list that widens itself would strand the last of them.
+  expectReachable(await peopleGeometry(panel), "1280×720, six mentions shown");
+
+  await panel.getByRole("button", { name: "Show fewer" }).click();
+  await expect(unlinks).toHaveCount(5);
+
+  // Closing and reopening starts from the compact view again, rather than
+  // remembering an expansion the user made several people ago.
+  await personHeader(panel, PERSON_A).click();
+  await openPerson(panel, PERSON_A);
+  await expect(unlinks).toHaveCount(5);
+  await expect(panel.getByRole("button", { name: "Show all 6 linked mentions" })).toBeVisible();
+
+  await closeManager(page);
 });

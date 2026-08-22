@@ -1,5 +1,5 @@
-import { useCallback, useId, useMemo, useRef, useState } from "react";
-import { Users } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ChevronRight, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -1076,17 +1076,6 @@ function UnresolvedList({
  * ---------------------------------------------------------------------- */
 
 /**
- * One effective person: their name, what they are also known as, what is linked
- * to them, and what identifier evidence those links currently carry.
- *
- * Note what is NOT here. There is no verified badge, because Paperlume verified
- * nothing — the user decided. ORCID evidence is described as coming from the
- * linked mentions, because that is where it comes from and it disappears if
- * those links do. Conflicting identifiers are reported and left alone: two valid
- * iDs under one person means either a source is wrong or the user merged two
- * people, and this application cannot know which.
- */
-/**
  * The accessible name for one "undo this merge" control.
  *
  * `A → B → C` puts both A and B under root C, so the card shows two undo
@@ -1147,13 +1136,91 @@ function undoMergeEvidence(member: AuthorIdentityMergedMember): string {
   return parts.join(" · ");
 }
 
-function PersonCard({
+/**
+ * How many linked mentions an expanded person shows before offering the rest.
+ *
+ * A prolific author accumulates dozens of linked mentions, and rendering all of
+ * them turns "who is this person" into a wall of paper titles that buries the
+ * name, the aliases and the merge control underneath it. Five is enough to
+ * recognise a person by the work attached to them; the rest is available on
+ * request and never rendered until then.
+ */
+const MENTION_PREVIEW_LIMIT = 5;
+
+/**
+ * The short facts a collapsed person row states about itself.
+ *
+ * `linkedMentions` rather than `linkRowCount`: this number is a promise about
+ * what opening the row will show, so it has to be the number of mentions the
+ * panel can actually list. `linkRowCount` answers a different question — "is
+ * this person empty" — and only that one may gate Delete.
+ */
+function personSummaryParts(cluster: AuthorIdentityCluster): string[] {
+  const mentions = cluster.linkedMentions.length;
+  const parts = [mentions === 1 ? "1 linked mention" : `${mentions} linked mentions`];
+  if (cluster.aliases.length > 0) {
+    parts.push(cluster.aliases.length === 1 ? "1 alias" : `${cluster.aliases.length} aliases`);
+  }
+  if (cluster.mergedMemberIds.length > 0) {
+    parts.push(`${cluster.mergedMemberIds.length} merged`);
+  }
+  return parts;
+}
+
+/**
+ * The short evidence that tells two same-name people apart in the compact list.
+ *
+ * Preferred names are not unique, and a list of identical rows is not a list.
+ * The full description every other choice surface here shows ends in an example
+ * paper title, which is exactly the kind of long text a scannable row must not
+ * carry — so this keeps the identifying evidence (other names, iDs) and drops
+ * both the example paper and the mention count the row already states in its
+ * own right.
+ *
+ * When even that evidence is identical, `describeIdentities` has already fallen
+ * back to creation order, and that tiebreak — the last thing it appends — is
+ * carried over, because at that point it is the only true distinction left.
+ */
+function ambiguityCue(
+  cluster: AuthorIdentityCluster,
+  describe: ReadonlyMap<string, string>,
+): string {
+  const parts = identityContextParts(cluster).filter(
+    (part) => !part.startsWith("including ") && !/\d+ linked mentions?$/.test(part),
+  );
+  const described = describe.get(cluster.rootId) ?? "";
+  const last = described.split(" · ").pop() ?? "";
+  if (/^created \d+(?:st|nd|rd|th)$/.test(last)) parts.push(last);
+  return parts.join(" · ");
+}
+
+/**
+ * One person, collapsed to a single row until the user asks for more.
+ *
+ * The whole header is the disclosure control, not a chevron at the end of it:
+ * a row is what a person aims at, with a mouse and much more so with a finger,
+ * and a 16px target beside a name that may wrap to two lines is neither. The
+ * chevron stays as the visual statement of state and is hidden from assistive
+ * technology, because `aria-expanded` already says it and saying it twice makes
+ * every row longer to listen to.
+ *
+ * The body is rendered only while open. Hiding it with CSS would leave every
+ * person's mention list, alias editor and merge control in the document at all
+ * times — the exact cost this compaction exists to remove.
+ */
+function PersonRow({
   cluster,
   resolution,
   describe,
   ambiguousName,
   identities,
   busy,
+  expanded,
+  onToggle,
+  showAllMentions,
+  onToggleShowAllMentions,
+  onDelete,
+  headerRef,
 }: {
   cluster: AuthorIdentityCluster;
   resolution: AuthorIdentityResolution;
@@ -1161,16 +1228,141 @@ function PersonCard({
   /**
    * Whether another person on this list is called the same thing.
    *
-   * When they are, every control on this card — the name field, the alias
-   * field, Merge, Delete — would otherwise carry an accessible name identical
-   * to its twin on the other card, and a screen-reader user would be choosing
-   * between two "Merge John Smith into another person" buttons with nothing to
-   * separate them. The card's own evidence is appended only then, because for
-   * the overwhelmingly common unique-name case the short label is clearer.
+   * When they are, every control on this row — the header, the name field, the
+   * alias field, Merge, Delete — would otherwise carry an accessible name
+   * identical to its twin, and a screen-reader user would be choosing between
+   * two "Merge John Smith into another person" buttons with nothing to separate
+   * them. The row's own evidence is added only then, because for the
+   * overwhelmingly common unique-name case the short label is clearer.
    */
   ambiguousName: boolean;
   identities: IdentitiesApi;
   busy: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  showAllMentions: boolean;
+  onToggleShowAllMentions: () => void;
+  onDelete: () => void;
+  headerRef: (node: HTMLButtonElement | null) => void;
+}) {
+  const rowId = useId();
+  const headerId = `${rowId}-header`;
+  const panelId = `${rowId}-panel`;
+  const summary = personSummaryParts(cluster);
+  if (ambiguousName) {
+    const cue = ambiguityCue(cluster, describe);
+    if (cue) summary.push(cue);
+  }
+
+  return (
+    <li className="rounded-md border">
+      <button
+        type="button"
+        id={headerId}
+        ref={headerRef}
+        aria-expanded={expanded}
+        // Only while the panel exists: pointing at an absent id is a promise
+        // assistive technology cannot follow.
+        aria-controls={expanded ? panelId : undefined}
+        onClick={onToggle}
+        className={cn(
+          // min-h-11 keeps the row a comfortable target on a touch screen even
+          // for a person whose name fits on one short line.
+          "flex min-h-11 w-full items-center gap-2 rounded-md p-2 text-left transition-colors",
+          "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2",
+          "focus-visible:ring-ring focus-visible:ring-offset-1",
+          expanded && "bg-muted/40",
+        )}
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
+        {/* `min-w-0` plus wrapping, never `nowrap`. A row that refuses to wrap
+            inside a scroll viewport is not clipped by it — it pushes itself
+            wider than the viewport and takes the disclosure control with it. */}
+        <span className="min-w-0 flex-1 space-y-0.5">
+          <span className="block break-words text-sm font-medium">
+            {cluster.preferredName}
+          </span>
+          {/* One text node, joined the way every other accessible name in this
+              dialog is joined. Separate elements with an aria-hidden separator
+              would read as "11 linked mentions2 aliases": the separator is
+              dropped from the accessible name and nothing replaces the space,
+              because inline nodes are concatenated without one. */}
+          <span className="block break-words text-[11px] text-muted-foreground">
+            {summary.join(" · ")}
+          </span>
+        </span>
+        {/* Evidence, never a verdict. A person carrying two contradictory iDs
+            must not wear the same quiet badge as one carrying a single agreed
+            one, because that badge would be hiding the thing worth knowing. */}
+        {cluster.hasOrcidConflict ? (
+          <Badge
+            variant="outline"
+            className="shrink-0 border-destructive text-[10px] font-normal text-destructive"
+          >
+            ORCID conflict
+          </Badge>
+        ) : cluster.orcids.length > 0 ? (
+          <Badge variant="outline" className="shrink-0 text-[10px] font-normal">
+            ORCID
+          </Badge>
+        ) : null}
+      </button>
+
+      {expanded && (
+        <div id={panelId} className="space-y-3 border-t p-2.5">
+          <PersonDetail
+            cluster={cluster}
+            resolution={resolution}
+            describe={describe}
+            ambiguousName={ambiguousName}
+            identities={identities}
+            busy={busy}
+            showAllMentions={showAllMentions}
+            onToggleShowAllMentions={onToggleShowAllMentions}
+            onDelete={onDelete}
+          />
+        </div>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Everything a person can be managed with, shown only for the open row.
+ *
+ * Note what is NOT here. There is no verified badge, because Paperlume verified
+ * nothing — the user decided. ORCID evidence is described as coming from the
+ * linked mentions, because that is where it comes from and it disappears if
+ * those links do. Conflicting identifiers are reported and left alone: two valid
+ * iDs under one person means either a source is wrong or the user merged two
+ * people, and this application cannot know which.
+ */
+function PersonDetail({
+  cluster,
+  resolution,
+  describe,
+  ambiguousName,
+  identities,
+  busy,
+  showAllMentions,
+  onToggleShowAllMentions,
+  onDelete,
+}: {
+  cluster: AuthorIdentityCluster;
+  resolution: AuthorIdentityResolution;
+  describe: ReadonlyMap<string, string>;
+  ambiguousName: boolean;
+  identities: IdentitiesApi;
+  busy: boolean;
+  showAllMentions: boolean;
+  onToggleShowAllMentions: () => void;
+  onDelete: () => void;
 }) {
   const nameSuffix = ambiguousName ? ` — ${describe.get(cluster.rootId) ?? ""}` : "";
   const [name, setName] = useState(cluster.preferredName);
@@ -1219,8 +1411,22 @@ function PersonCard({
     [identities, cluster],
   );
 
+  /**
+   * The mentions rendered right now.
+   *
+   * Ordering is the data layer's, untouched: links are read `created_at, id`
+   * ascending, so "the first five" means the five decisions the user made first
+   * and means the same thing on every render. Nothing here ranks by relevance,
+   * by identifier, or by anything else — a list that reorders itself is a list
+   * a user cannot return to.
+   */
+  const mentions = cluster.linkedMentions;
+  const visibleMentions = showAllMentions
+    ? mentions
+    : mentions.slice(0, MENTION_PREVIEW_LIMIT);
+
   return (
-    <li className="rounded-md border p-3 space-y-3">
+    <>
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={name}
@@ -1229,11 +1435,6 @@ function PersonCard({
           aria-label={`Name for ${cluster.preferredName}${nameSuffix}`}
           className="h-8 flex-1 min-w-[180px] text-sm font-medium"
         />
-        {cluster.mergedMemberIds.length > 0 && (
-          <Badge variant="secondary" className="text-[11px] font-normal">
-            {cluster.mergedMemberIds.length} merged
-          </Badge>
-        )}
       </div>
 
       {cluster.orcids.length > 0 && (
@@ -1253,15 +1454,15 @@ function PersonCard({
 
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-muted-foreground">
-          Linked mentions ({cluster.linkedMentions.length})
+          Linked mentions ({mentions.length})
         </p>
-        {cluster.linkedMentions.length === 0 ? (
+        {mentions.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             Nothing is linked to this person in the current papers.
           </p>
         ) : (
           <ul className="space-y-1">
-            {cluster.linkedMentions.map((mention) => (
+            {visibleMentions.map((mention) => (
               <li
                 key={`${mention.paperId}:${mention.authorIndex}`}
                 className="flex items-center justify-between gap-2"
@@ -1288,6 +1489,19 @@ function PersonCard({
               </li>
             ))}
           </ul>
+        )}
+        {/* Derived from the current list, never from a remembered total: unlink
+            a mention off the end of a long list and the offer to expand it
+            disappears on its own, rather than promising rows that are gone. */}
+        {mentions.length > MENTION_PREVIEW_LIMIT && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-1 text-xs"
+            onClick={onToggleShowAllMentions}
+          >
+            {showAllMentions ? "Show fewer" : `Show all ${mentions.length} linked mentions`}
+          </Button>
         )}
       </div>
 
@@ -1453,20 +1667,73 @@ function PersonCard({
               className="h-7 text-xs text-destructive"
               disabled={busy}
               aria-label={`Delete ${cluster.preferredName}${nameSuffix}`}
-              onClick={() =>
-                void identities.deleteIdentity(cluster.rootId).catch(() => {
-                  /* reported by the hook */
-                })
-              }
+              onClick={onDelete}
             >
               Delete person
             </Button>
           )}
       </div>
-    </li>
+    </>
   );
 }
 
+/**
+ * Whether the focus is currently parked somewhere nobody put it.
+ *
+ * Removing the element that holds the focus does not leave the focus nowhere in
+ * any observable sense: the browser drops it on the document body, and a
+ * dialog's focus scope may catch it first and park it on a container that only
+ * ever takes focus programmatically. Neither is a place a person chose to be.
+ *
+ * Anything a user could have reached themselves — a control, or an element that
+ * opted into the tab order — is theirs, and a list mutation must never take it
+ * from them.
+ */
+function focusIsUnclaimed(): boolean {
+  const active = document.activeElement;
+  if (!active || !active.isConnected) return true;
+  if (active === document.body || active === document.documentElement) return true;
+  return active.getAttribute("tabindex") === "-1";
+}
+
+/**
+ * A post-delete focus move, waiting for the list it is aimed at to exist.
+ *
+ * Deleting an identity resolves BEFORE the graph is re-read: the mutation
+ * invalidates the query and returns, so at that moment the deleted row is still
+ * on screen and whatever replaces it has not mounted. Acting there happens to
+ * work when a neighbour survives — that neighbour's header is already in the
+ * document — and fails silently when the deleted person was the last one
+ * visible, because the empty state does not exist yet, there is nothing to
+ * focus, and the focus is left to fall wherever the browser drops it.
+ *
+ * So the decision is recorded and carried out later, against the list that
+ * actually rendered.
+ */
+interface PendingDeleteFocus {
+  /** The identity whose disappearance from the list is the signal to act. */
+  rootId: string;
+  /** Neighbours captured by id BEFORE the row unmounts, never re-derived after. */
+  next?: string;
+  previous?: string;
+}
+
+/**
+ * The People tab: every person the user has said exists, one row each.
+ *
+ * The list is compact by default and opens one person at a time. Both halves of
+ * that matter. A management surface that renders every person's mentions,
+ * aliases and actions at once stops being a list at around three people — a
+ * single prolific author is taller than the dialog — and letting several open at
+ * once would recreate the same wall a few clicks later. So the row is the unit
+ * of the list, and the detail is a place you go rather than a thing you are in.
+ *
+ * The disclosure state is ephemeral by design: nothing about which row happens
+ * to be open belongs in the database, the URL or local storage. It is keyed by
+ * root id rather than by name, so renaming a person does not close their row,
+ * and it is reconciled against the CURRENT identity graph on every render, so a
+ * person who has been deleted or merged away cannot leave an open panel behind.
+ */
 function PeopleList({
   clusters,
   resolution,
@@ -1480,35 +1747,184 @@ function PeopleList({
   identities: IdentitiesApi;
   busy: boolean;
 }) {
+  const [search, setSearch] = useState("");
+  const [openedRootId, setOpenedRootId] = useState<string | null>(null);
+  const [showAllRootId, setShowAllRootId] = useState<string | null>(null);
+  const headerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const emptyRef = useRef<HTMLParagraphElement>(null);
+  const pendingDeleteFocus = useRef<PendingDeleteFocus | null>(null);
+
+  // 001C's approved matching, unchanged and unextended: preferred name, manual
+  // aliases, linked spellings, and an exact ORCID. No fuzzy matching, no
+  // initials expansion, no affiliation, nothing inferred.
+  const matches = useMemo(
+    () => searchAuthorIdentityClusters(resolution, search),
+    [resolution, search],
+  );
+
+  /**
+   * The person whose panel is actually open, reconciled against what is on
+   * screen right now.
+   *
+   * Two things can take the open row away without the user closing it: the
+   * search no longer matches it, or the identity itself stopped being an
+   * effective root — deleted, or merged into somebody else. Deriving the open
+   * row rather than trusting the stored id means neither can ever paint a panel
+   * belonging to a person who is not in the list.
+   */
+  const expandedRootId =
+    openedRootId !== null && matches.some((cluster) => cluster.rootId === openedRootId)
+      ? openedRootId
+      : null;
+
+  /**
+   * ...and then forget it, so clearing the search does not spring the row back
+   * open. A row that reappears expanded because of something the user typed
+   * several keystrokes ago is hidden state, and the cost of asking them to press
+   * it again is one press.
+   */
+  useEffect(() => {
+    if (openedRootId !== null && expandedRootId === null) {
+      setOpenedRootId(null);
+      setShowAllRootId(null);
+    }
+  }, [openedRootId, expandedRootId]);
+
+  const toggle = useCallback((rootId: string) => {
+    // Opening a second person closes the first, and reopening anyone starts
+    // from the compact five mentions again.
+    setShowAllRootId(null);
+    setOpenedRootId((current) => (current === rootId ? null : rootId));
+    // Pressing a row is the user saying where they are. Any focus move still
+    // owed to them from a delete is theirs to have already made.
+    pendingDeleteFocus.current = null;
+  }, []);
+
+  /**
+   * Deleting a person is a list deletion, so it follows the repository's
+   * post-delete focus rule: the next person's header, else the previous one,
+   * else the empty-state text.
+   *
+   * The move is only RECORDED here. Where it lands is decided against the list
+   * that renders after the graph is re-read — see the effect below.
+   */
+  const deletePerson = useCallback(
+    (rootId: string) => {
+      const index = matches.findIndex((cluster) => cluster.rootId === rootId);
+      pendingDeleteFocus.current = {
+        rootId,
+        next: index >= 0 ? matches[index + 1]?.rootId : undefined,
+        previous: index > 0 ? matches[index - 1]?.rootId : undefined,
+      };
+
+      void identities.deleteIdentity(rootId).catch(() => {
+        // Refused: the person is still there and nothing moved, so there is no
+        // focus to hand on.
+        if (pendingDeleteFocus.current?.rootId === rootId) {
+          pendingDeleteFocus.current = null;
+        }
+        /* the failure itself is reported by the hook */
+      });
+    },
+    [identities, matches],
+  );
+
+  /**
+   * Hand the focus on, once the list it is being handed to exists.
+   *
+   * The person being gone from `matches` IS the signal that the re-read landed:
+   * no timer, no polling, no assumption about how long a round trip takes. By
+   * the time this runs the new list is committed, so the neighbour's header —
+   * or, when there is no neighbour left, the empty state that replaced the whole
+   * list — is mounted and can actually be focused.
+   */
+  useEffect(() => {
+    const pending = pendingDeleteFocus.current;
+    if (!pending) return;
+    // Still listed: the delete has resolved but the graph has not been re-read,
+    // so the list this move is aimed at does not exist yet.
+    if (matches.some((cluster) => cluster.rootId === pending.rootId)) return;
+    pendingDeleteFocus.current = null;
+
+    const target =
+      (pending.next && headerRefs.current.get(pending.next)) ??
+      (pending.previous && headerRefs.current.get(pending.previous)) ??
+      emptyRef.current;
+    // The rule's limit: a user who moved somewhere real while the delete was in
+    // flight keeps their place, and gets no jump they did not ask for.
+    if (target && focusIsUnclaimed()) target.focus();
+  }, [matches]);
+
+  const nameCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const cluster of clusters) {
+      counts.set(cluster.preferredName, (counts.get(cluster.preferredName) ?? 0) + 1);
+    }
+    return counts;
+  }, [clusters]);
+
   if (clusters.length === 0) {
     return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
+      <p
+        ref={emptyRef}
+        tabIndex={-1}
+        className="py-8 text-center text-sm text-muted-foreground outline-none"
+      >
         No people yet. Create one from an unresolved author mention.
       </p>
     );
   }
 
-  const nameCounts = new Map<string, number>();
-  for (const cluster of clusters) {
-    nameCounts.set(cluster.preferredName, (nameCounts.get(cluster.preferredName) ?? 0) + 1);
-  }
-
   return (
-    <ScrollArea className={cn("h-[52vh] pr-3", SCROLL_CONTENT_FITS_WIDTH)}>
-      <ul className="space-y-2 py-2">
-        {clusters.map((cluster) => (
-          <PersonCard
-            key={cluster.rootId}
-            cluster={cluster}
-            resolution={resolution}
-            describe={describe}
-            ambiguousName={(nameCounts.get(cluster.preferredName) ?? 0) > 1}
-            identities={identities}
-            busy={busy}
-          />
-        ))}
-      </ul>
-    </ScrollArea>
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <Input
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="Search by name, other name, or ORCID"
+        aria-label="Search people"
+        className="h-8 text-sm"
+      />
+      {matches.length === 0 ? (
+        <p
+          ref={emptyRef}
+          tabIndex={-1}
+          className="py-8 text-center text-sm text-muted-foreground outline-none"
+        >
+          No people match that search.
+        </p>
+      ) : (
+        <ScrollArea className={cn("h-[52vh] pr-3", SCROLL_CONTENT_FITS_WIDTH)}>
+          <ul className="space-y-1.5 py-1">
+            {matches.map((cluster) => (
+              <PersonRow
+                key={cluster.rootId}
+                cluster={cluster}
+                resolution={resolution}
+                describe={describe}
+                ambiguousName={(nameCounts.get(cluster.preferredName) ?? 0) > 1}
+                identities={identities}
+                busy={busy}
+                expanded={expandedRootId === cluster.rootId}
+                onToggle={() => toggle(cluster.rootId)}
+                showAllMentions={showAllRootId === cluster.rootId}
+                onToggleShowAllMentions={() =>
+                  setShowAllRootId((current) =>
+                    current === cluster.rootId ? null : cluster.rootId,
+                  )
+                }
+                onDelete={() => deletePerson(cluster.rootId)}
+                // Dropped on unmount rather than left as a null entry, so a
+                // later lookup can never find a detached row.
+                headerRef={(node) => {
+                  if (node) headerRefs.current.set(cluster.rootId, node);
+                  else headerRefs.current.delete(cluster.rootId);
+                }}
+              />
+            ))}
+          </ul>
+        </ScrollArea>
+      )}
+    </div>
   );
 }
 
