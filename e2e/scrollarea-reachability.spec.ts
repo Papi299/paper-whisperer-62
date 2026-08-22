@@ -30,12 +30,17 @@ const LONG_KEYWORD =
   "postoperative cognitive dysfunction following cardiopulmonary bypass";
 
 async function openKeywordPool(page: Page) {
+  // A filter popover left open would swallow the first click as an
+  // outside-dismiss, so close whatever is open before reaching for the rail.
+  await page.keyboard.press("Escape");
   const gear = page
     .getByText("Keyword Pool")
     .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
     .locator("button");
   await gear.click();
-  return page.getByRole("dialog");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  return dialog;
 }
 
 /** Adds the fixture keyword to the pool through the real modal. */
@@ -56,6 +61,12 @@ async function removePoolKeyword(page: Page, keyword: string) {
   const remove = dialog.getByRole("button", {
     name: `Remove keyword ${keyword} from pool`,
   });
+  // `count()` does not auto-wait, so give the list a chance to render before
+  // concluding there is nothing to clean up.
+  await remove
+    .first()
+    .waitFor({ state: "attached", timeout: 5_000 })
+    .catch(() => undefined);
   if (await remove.count()) {
     await remove.first().click();
     await expect(remove).toHaveCount(0, { timeout: 10_000 });
@@ -86,8 +97,18 @@ async function measure(scope: Locator) {
       // scrollbar, so anything outside is outside for good.
       const insideHorizontally = r.left >= vb.left - 1 && r.right <= vb.right + 1;
 
-      // Vertical: reached the way a user reaches it, then hit-tested.
-      row.scrollIntoView({ block: "nearest" });
+      /*
+       * Vertical: reached the way a user reaches it, then hit-tested.
+       *
+       * Deliberately NOT `scrollIntoView({ block: "nearest" })`. `inline`
+       * defaults to `"nearest"`, so on a row that IS horizontally out of view
+       * it quietly scrolls sideways too — the exact programmatic rescue this
+       * spec exists to forbid, performed by the measurement itself. Measured:
+       * it moved `scrollLeft` 0 → 8 in the negative control. Driving
+       * `scrollTop` alone cannot touch the other axis.
+       */
+      const vb0 = viewport.getBoundingClientRect();
+      viewport.scrollTop += r.top + r.height / 2 - (vb0.top + vb0.height / 2);
       const r2 = row.getBoundingClientRect();
       const vb2 = viewport.getBoundingClientRect();
       const hit = document.elementFromPoint(
