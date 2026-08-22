@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { X, Search, FileText, Users, Calendar, FlaskConical } from "lucide-react";
 import {
@@ -157,6 +158,23 @@ interface SelectOption {
  * that was left. The author list in particular runs to hundreds of entries and
  * has to be genuinely scrollable to be usable at all.
  */
+/**
+ * Radix wraps a ScrollArea's children in an element styled
+ * `display: table; min-width: 100%`. A table box is never laid out narrower
+ * than its own min-content width, and `truncate` sets `white-space: nowrap`,
+ * which makes a line's min-content width its FULL length. So a long label does
+ * not get clipped by the viewport — it widens the wrapper past it, carrying the
+ * rest of the row out of view. The viewport is `overflow-x: hidden` and
+ * `ui/scroll-area` mounts only a vertical scrollbar, so what goes out there is
+ * reachable by script and by nobody else.
+ *
+ * Forcing the wrapper to `block` makes it take the viewport's width, which is
+ * what lets `truncate` do the clipping it was written to do. Local to this
+ * surface on purpose — the shared ScrollArea is left alone. Tailwind v3, so the
+ * `!block` prefix form is correct. Same fix as AUTHOR-IDENTITY-PICKER-USABILITY-001.
+ */
+const SCROLL_CONTENT_FITS_WIDTH = "[&_[data-radix-scroll-area-viewport]>div]:!block";
+
 function MultiSelectPopover({
   label,
   options,
@@ -340,7 +358,7 @@ function MultiSelectPopover({
                 className="h-8 pl-7 text-sm"
               />
             </div>
-            <ScrollArea className="max-h-[300px] overflow-y-auto">
+            <ScrollArea className={cn("max-h-[300px] overflow-y-auto", SCROLL_CONTENT_FITS_WIDTH)}>
               <div className="space-y-0.5">
                 {filtered.length === 0 && (
                   <p className="text-xs text-muted-foreground py-2 px-2">No matches</p>

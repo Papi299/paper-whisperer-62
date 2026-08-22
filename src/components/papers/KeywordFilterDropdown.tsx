@@ -14,6 +14,23 @@ import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
 
+/**
+ * Radix wraps a ScrollArea's children in an element styled
+ * `display: table; min-width: 100%`. A table box is never laid out narrower
+ * than its own min-content width, and `truncate` sets `white-space: nowrap`,
+ * which makes a line's min-content width its FULL length. So a long label does
+ * not get clipped by the viewport — it widens the wrapper past it, carrying the
+ * rest of the row out of view. The viewport is `overflow-x: hidden` and
+ * `ui/scroll-area` mounts only a vertical scrollbar, so what goes out there is
+ * reachable by script and by nobody else.
+ *
+ * Forcing the wrapper to `block` makes it take the viewport's width, which is
+ * what lets `truncate` do the clipping it was written to do. Local to this
+ * surface on purpose — the shared ScrollArea is left alone. Tailwind v3, so the
+ * `!block` prefix form is correct. Same fix as AUTHOR-IDENTITY-PICKER-USABILITY-001.
+ */
+const SCROLL_CONTENT_FITS_WIDTH = "[&_[data-radix-scroll-area-viewport]>div]:!block";
+
 interface KeywordFilterDropdownProps {
   selectedKeywords: string[];
   availableKeywords: string[];
@@ -162,7 +179,7 @@ export function KeywordFilterDropdown({
               />
             </div>
           </div>
-          <ScrollArea className="h-64">
+          <ScrollArea className={cn("h-64", SCROLL_CONTENT_FITS_WIDTH)}>
             <div className="p-2">
               {filteredKeywords.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">
