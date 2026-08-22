@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, within } from "@testing-library/react";
 import { AuthorIdentityManager } from "../AuthorIdentityManager";
 import type { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 import { makeAuthorProvenance, type AuthorProvenance } from "@/lib/authorProvenance";
@@ -2240,7 +2240,7 @@ describe("AuthorIdentityManager — the open person survives their own edits", (
     expect(header(/^Grace Hopper/)).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("closes a deleted person and moves focus to the next one", async () => {
+  it("removes a deleted person's row and its open state", async () => {
     const identities = stubIdentities({
       dataset: makeDataset({
         identities: [
@@ -2254,16 +2254,8 @@ describe("AuthorIdentityManager — the open person survives their own edits", (
     tab(/People/);
     fireEvent.click(header(/^Aaa Nobody/));
 
-    const remove = screen.getByRole("button", { name: "Delete Aaa Nobody" });
-    // A real activation — pointer or keyboard — leaves the focus on the control
-    // being pressed, which is the control this delete is about to destroy.
-    remove.focus();
-    fireEvent.click(remove);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Aaa Nobody" }));
     expect(identities.deleteIdentity).toHaveBeenCalledWith("empty");
-
-    // The repository's post-delete focus rule: the next row, else the previous
-    // one, else the empty-state text.
-    await waitFor(() => expect(document.activeElement).toBe(header(/^Grace Hopper/)));
 
     refetch(
       view,
@@ -2367,5 +2359,180 @@ describe("AuthorIdentityManager — two people called John Smith in the People l
     expect(
       screen.getByRole("button", { name: new RegExp(`Merge John Smith.*${LONG}`) }),
     ).toBeInTheDocument();
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Handing the focus on after a delete
+ *
+ * REVIEW REMEDIATION 001. Deleting an identity resolves BEFORE the graph is
+ * re-read: the mutation invalidates the query and returns, so at the moment the
+ * promise settles the deleted row is still on screen and whatever replaces it
+ * has not mounted. Acting there happens to work while a neighbour survives —
+ * that neighbour's header is already in the document — and fails silently for
+ * the last visible person, because the empty state does not exist yet, there is
+ * nothing to focus, and the focus is left to fall wherever the browser drops it.
+ *
+ * So every test below preserves that real sequencing: the delete settles first,
+ * with the data unchanged, and the query update arrives as a LATER render. The
+ * previous implementation passes the neighbour cases and fails the last-person
+ * and last-match cases under exactly this order.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("AuthorIdentityManager — handing focus on after a delete", () => {
+  const PAPERS = [paper("p1", "P1", ["Someone Else"])];
+
+  const header = (name: RegExp) => screen.getByRole("button", { name });
+  const searchField = () => screen.getByLabelText("Search people");
+
+  function people(...names: [string, string][]): AuthorIdentityDataset {
+    return makeDataset({
+      identities: names.map(([id, preferred_name]) => ({ id, preferred_name })),
+    });
+  }
+
+  function openPeople(identities: IdentitiesApi) {
+    const view = open(PAPERS, identities);
+    tab(/People/);
+    return view;
+  }
+
+  function refetch(view: ReturnType<typeof open>, identities: IdentitiesApi) {
+    view.rerender(
+      <AuthorIdentityManager
+        papers={PAPERS}
+        identities={identities}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+  }
+
+  /**
+   * Press Delete the way a person does, and let the mutation settle with the
+   * graph UNCHANGED — which is the architecture, not a contrivance: the hook
+   * invalidates its query and returns without awaiting the refetch.
+   */
+  async function pressDelete(name: string, identities: IdentitiesApi, expectedId: string) {
+    fireEvent.click(header(new RegExp(`^${name}`)));
+    const remove = screen.getByRole("button", { name: `Delete ${name}` });
+    // A real activation leaves the focus on the control being pressed, which is
+    // the control this delete is about to destroy.
+    remove.focus();
+    expect(document.activeElement).toBe(remove);
+    fireEvent.click(remove);
+    expect(identities.deleteIdentity).toHaveBeenCalledWith(expectedId);
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  it("moves to the next person's header", async () => {
+    const identities = stubIdentities({ dataset: people(["a", "Aaa Nobody"], ["b", "Bbb Nobody"]) });
+    const view = openPeople(identities);
+
+    await pressDelete("Aaa Nobody", identities, "a");
+    refetch(view, stubIdentities({ dataset: people(["b", "Bbb Nobody"]) }));
+
+    expect(screen.queryByRole("button", { name: /^Aaa Nobody/ })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(header(/^Bbb Nobody/));
+  });
+
+  it("falls back to the previous person's header", async () => {
+    const identities = stubIdentities({ dataset: people(["a", "Aaa Nobody"], ["b", "Bbb Nobody"]) });
+    const view = openPeople(identities);
+
+    // Bbb is last in the list, so there is no next row to receive the focus.
+    await pressDelete("Bbb Nobody", identities, "b");
+    refetch(view, stubIdentities({ dataset: people(["a", "Aaa Nobody"]) }));
+
+    expect(screen.queryByRole("button", { name: /^Bbb Nobody/ })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(header(/^Aaa Nobody/));
+  });
+
+  it("lands on the empty state when the last person is deleted", async () => {
+    // The case the previous implementation could not serve: at the moment the
+    // delete settled there was no neighbour AND no empty state, so it had
+    // nothing to focus and gave up.
+    const identities = stubIdentities({ dataset: people(["solo", "Solo Nobody"]) });
+    const view = openPeople(identities);
+
+    await pressDelete("Solo Nobody", identities, "solo");
+
+    // Nothing has moved yet, and nothing should have: the list is unchanged.
+    expect(screen.getByRole("button", { name: /^Solo Nobody/ })).toBeInTheDocument();
+
+    refetch(view, stubIdentities({ dataset: makeDataset({}) }));
+
+    expect(screen.queryByRole("button", { name: /^Solo Nobody/ })).not.toBeInTheDocument();
+    const emptyState = screen.getByText(
+      "No people yet. Create one from an unresolved author mention.",
+    );
+    expect(document.activeElement).toBe(emptyState);
+  });
+
+  it("lands on the no-results state when the last MATCH is deleted", async () => {
+    const identities = stubIdentities({
+      dataset: people(["a", "Aaa Nobody"], ["z", "Zzz Nobody"]),
+    });
+    const view = openPeople(identities);
+
+    fireEvent.change(searchField(), { target: { value: "Aaa" } });
+    expect(screen.queryByRole("button", { name: /^Zzz Nobody/ })).not.toBeInTheDocument();
+
+    await pressDelete("Aaa Nobody", identities, "a");
+    refetch(view, stubIdentities({ dataset: people(["z", "Zzz Nobody"]) }));
+
+    // Zzz still exists but does not match, so the list is legitimately empty —
+    // and the search is NOT cleared to manufacture somewhere to put the focus.
+    const emptyState = screen.getByText("No people match that search.");
+    expect(document.activeElement).toBe(emptyState);
+    expect(searchField()).toHaveValue("Aaa");
+    expect(screen.queryByRole("button", { name: /^Zzz Nobody/ })).not.toBeInTheDocument();
+  });
+
+  it("does not take focus back from a user who moved on", async () => {
+    const identities = stubIdentities({ dataset: people(["a", "Aaa Nobody"], ["b", "Bbb Nobody"]) });
+    const view = openPeople(identities);
+
+    await pressDelete("Aaa Nobody", identities, "a");
+
+    // The delete is in flight and the user goes somewhere real.
+    searchField().focus();
+    expect(document.activeElement).toBe(searchField());
+
+    refetch(view, stubIdentities({ dataset: people(["b", "Bbb Nobody"]) }));
+
+    expect(screen.queryByRole("button", { name: /^Aaa Nobody/ })).not.toBeInTheDocument();
+    // Their place is theirs. A list mutation is not permission to move them.
+    expect(document.activeElement).toBe(searchField());
+  });
+
+  it("leaves the focus alone when the delete is refused", async () => {
+    const identities = stubIdentities({
+      dataset: people(["a", "Aaa Nobody"], ["b", "Bbb Nobody"]),
+      deleteIdentity: vi.fn().mockRejectedValue(new Error("refused")),
+    });
+    const view = openPeople(identities);
+
+    await pressDelete("Aaa Nobody", identities, "a");
+    // The graph is unchanged because nothing was deleted.
+    refetch(view, stubIdentities({ dataset: people(["a", "Aaa Nobody"], ["b", "Bbb Nobody"]) }));
+
+    expect(screen.getByRole("button", { name: /^Aaa Nobody/ })).toBeInTheDocument();
+    expect(document.activeElement).not.toBe(header(/^Bbb Nobody/));
+  });
+
+  it("clears the expanded person's state along with them", async () => {
+    const identities = stubIdentities({ dataset: people(["solo", "Solo Nobody"]) });
+    const view = openPeople(identities);
+
+    await pressDelete("Solo Nobody", identities, "solo");
+    refetch(view, stubIdentities({ dataset: makeDataset({}) }));
+
+    // No stale open row, and nothing from the panel left behind.
+    expect(screen.queryByRole("button", { expanded: true })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Name for /)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
   });
 });

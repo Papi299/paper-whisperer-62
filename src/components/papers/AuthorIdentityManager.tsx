@@ -1678,6 +1678,47 @@ function PersonDetail({
 }
 
 /**
+ * Whether the focus is currently parked somewhere nobody put it.
+ *
+ * Removing the element that holds the focus does not leave the focus nowhere in
+ * any observable sense: the browser drops it on the document body, and a
+ * dialog's focus scope may catch it first and park it on a container that only
+ * ever takes focus programmatically. Neither is a place a person chose to be.
+ *
+ * Anything a user could have reached themselves — a control, or an element that
+ * opted into the tab order — is theirs, and a list mutation must never take it
+ * from them.
+ */
+function focusIsUnclaimed(): boolean {
+  const active = document.activeElement;
+  if (!active || !active.isConnected) return true;
+  if (active === document.body || active === document.documentElement) return true;
+  return active.getAttribute("tabindex") === "-1";
+}
+
+/**
+ * A post-delete focus move, waiting for the list it is aimed at to exist.
+ *
+ * Deleting an identity resolves BEFORE the graph is re-read: the mutation
+ * invalidates the query and returns, so at that moment the deleted row is still
+ * on screen and whatever replaces it has not mounted. Acting there happens to
+ * work when a neighbour survives — that neighbour's header is already in the
+ * document — and fails silently when the deleted person was the last one
+ * visible, because the empty state does not exist yet, there is nothing to
+ * focus, and the focus is left to fall wherever the browser drops it.
+ *
+ * So the decision is recorded and carried out later, against the list that
+ * actually rendered.
+ */
+interface PendingDeleteFocus {
+  /** The identity whose disappearance from the list is the signal to act. */
+  rootId: string;
+  /** Neighbours captured by id BEFORE the row unmounts, never re-derived after. */
+  next?: string;
+  previous?: string;
+}
+
+/**
  * The People tab: every person the user has said exists, one row each.
  *
  * The list is compact by default and opens one person at a time. Both halves of
@@ -1709,8 +1750,9 @@ function PeopleList({
   const [search, setSearch] = useState("");
   const [openedRootId, setOpenedRootId] = useState<string | null>(null);
   const [showAllRootId, setShowAllRootId] = useState<string | null>(null);
-  const headerRefs = useRef(new Map<string, HTMLButtonElement | null>());
+  const headerRefs = useRef(new Map<string, HTMLButtonElement>());
   const emptyRef = useRef<HTMLParagraphElement>(null);
+  const pendingDeleteFocus = useRef<PendingDeleteFocus | null>(null);
 
   // 001C's approved matching, unchanged and unextended: preferred name, manual
   // aliases, linked spellings, and an exact ORCID. No fuzzy matching, no
@@ -1753,46 +1795,65 @@ function PeopleList({
     // from the compact five mentions again.
     setShowAllRootId(null);
     setOpenedRootId((current) => (current === rootId ? null : rootId));
+    // Pressing a row is the user saying where they are. Any focus move still
+    // owed to them from a delete is theirs to have already made.
+    pendingDeleteFocus.current = null;
   }, []);
 
   /**
    * Deleting a person is a list deletion, so it follows the repository's
    * post-delete focus rule: the next person's header, else the previous one,
-   * else the empty-state text. Neighbours are captured by id BEFORE the row
-   * unmounts, never by searching the DOM afterwards.
+   * else the empty-state text.
+   *
+   * The move is only RECORDED here. Where it lands is decided against the list
+   * that renders after the graph is re-read — see the effect below.
    */
   const deletePerson = useCallback(
     (rootId: string) => {
       const index = matches.findIndex((cluster) => cluster.rootId === rootId);
-      const next = index >= 0 ? matches[index + 1]?.rootId : undefined;
-      const previous = index > 0 ? matches[index - 1]?.rootId : undefined;
-      // Whether the focus is standing on something that is about to be deleted.
-      // Captured now, because by the time the delete resolves the answer is the
-      // same but the row it refers to may be halfway out of the document.
-      const row = headerRefs.current.get(rootId)?.closest("li") ?? null;
-      const focusIsBeingDeleted = !!row && row.contains(document.activeElement);
+      pendingDeleteFocus.current = {
+        rootId,
+        next: index >= 0 ? matches[index + 1]?.rootId : undefined,
+        previous: index > 0 ? matches[index - 1]?.rootId : undefined,
+      };
 
-      void identities
-        .deleteIdentity(rootId)
-        .then(() => {
-          const target =
-            (next && headerRefs.current.get(next)) ??
-            (previous && headerRefs.current.get(previous)) ??
-            emptyRef.current;
-          // Claim focus in exactly two cases: it is about to be destroyed with
-          // the row, or it is already nowhere. A user who moved on during the
-          // asynchronous delete keeps their place.
-          if (!target) return;
-          if (focusIsBeingDeleted || document.activeElement === document.body) {
-            target.focus();
-          }
-        })
-        .catch(() => {
-          /* reported by the hook */
-        });
+      void identities.deleteIdentity(rootId).catch(() => {
+        // Refused: the person is still there and nothing moved, so there is no
+        // focus to hand on.
+        if (pendingDeleteFocus.current?.rootId === rootId) {
+          pendingDeleteFocus.current = null;
+        }
+        /* the failure itself is reported by the hook */
+      });
     },
     [identities, matches],
   );
+
+  /**
+   * Hand the focus on, once the list it is being handed to exists.
+   *
+   * The person being gone from `matches` IS the signal that the re-read landed:
+   * no timer, no polling, no assumption about how long a round trip takes. By
+   * the time this runs the new list is committed, so the neighbour's header —
+   * or, when there is no neighbour left, the empty state that replaced the whole
+   * list — is mounted and can actually be focused.
+   */
+  useEffect(() => {
+    const pending = pendingDeleteFocus.current;
+    if (!pending) return;
+    // Still listed: the delete has resolved but the graph has not been re-read,
+    // so the list this move is aimed at does not exist yet.
+    if (matches.some((cluster) => cluster.rootId === pending.rootId)) return;
+    pendingDeleteFocus.current = null;
+
+    const target =
+      (pending.next && headerRefs.current.get(pending.next)) ??
+      (pending.previous && headerRefs.current.get(pending.previous)) ??
+      emptyRef.current;
+    // The rule's limit: a user who moved somewhere real while the delete was in
+    // flight keeps their place, and gets no jump they did not ask for.
+    if (target && focusIsUnclaimed()) target.focus();
+  }, [matches]);
 
   const nameCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1852,7 +1913,12 @@ function PeopleList({
                   )
                 }
                 onDelete={() => deletePerson(cluster.rootId)}
-                headerRef={(node) => headerRefs.current.set(cluster.rootId, node)}
+                // Dropped on unmount rather than left as a null entry, so a
+                // later lookup can never find a detached row.
+                headerRef={(node) => {
+                  if (node) headerRefs.current.set(cluster.rootId, node);
+                  else headerRefs.current.delete(cluster.rootId);
+                }}
               />
             ))}
           </ul>

@@ -1289,6 +1289,39 @@ test("the compact People list is reachable on a phone-sized screen", async ({ pa
   await closeManager(page);
 });
 
+test("deleting the last person leaves the focus on the empty state", async ({ page }) => {
+  /*
+   * REVIEW REMEDIATION 001, end to end. The component test models the
+   * mutation-settles-before-refetch ordering; this proves the real hook behaves
+   * that way. Deleting the only person leaves nothing to receive the focus at
+   * the moment the delete resolves — the empty state has not mounted yet — so
+   * the focus is handed on against the list that actually rendered.
+   */
+  const dialog = await openManager(page);
+  await createPersonFrom(dialog, PAPER_A);
+
+  await dialog.getByRole("tab", { name: /People/ }).click();
+  const panel = dialog.getByRole("tabpanel", { name: /People/ });
+  await openPerson(panel, PERSON_A);
+
+  // A person is only deletable once nothing is attached to them.
+  await panel.getByRole("button", { name: /^Unlink$/ }).click();
+  const remove = panel.getByRole("button", { name: `Delete ${PERSON_A}` });
+  await expect(remove).toBeVisible({ timeout: 15_000 });
+
+  await remove.click();
+
+  const emptyState = panel.getByText(
+    "No people yet. Create one from an unresolved author mention.",
+  );
+  await expect(emptyState).toBeVisible({ timeout: 15_000 });
+  // Not the body, and not wherever the browser happened to drop it.
+  await expect(emptyState).toBeFocused({ timeout: 15_000 });
+  await expect(dialog.getByRole("tab", { name: /People \(0\)/ })).toBeVisible();
+
+  await closeManager(page);
+});
+
 test("a long linked-mention list is capped until the user asks for it", async ({
   page,
 }) => {
