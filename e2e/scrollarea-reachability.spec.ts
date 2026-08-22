@@ -542,20 +542,39 @@ const DUPLICATE_PAPER = (n: number) => ({
   created_at: "2026-03-14T09:12:00.000Z",
 });
 
-async function stubDuplicateScan(page: Page) {
+/** The horizontal audit's fixture: one group, two copies, one unbreakable DOI. */
+const HORIZONTAL_DUPLICATE_SET = [
+  {
+    match_type: "doi",
+    match_value: LONG_DOI,
+    papers: [DUPLICATE_PAPER(1), DUPLICATE_PAPER(2)],
+  },
+];
+
+async function stubDuplicateScan(
+  page: Page,
+  groups: unknown[] = HORIZONTAL_DUPLICATE_SET,
+) {
   await page.route("**/rest/v1/rpc/get_duplicate_papers*", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([
-        {
-          match_type: "doi",
-          match_value: LONG_DOI,
-          papers: [DUPLICATE_PAPER(1), DUPLICATE_PAPER(2)],
-        },
-      ]),
+      body: JSON.stringify(groups),
     });
   });
+}
+
+/** Opens Find Duplicates by its real control, which differs on the phone. */
+async function openDeduplicationDialog(page: Page, mobile: boolean) {
+  if (mobile) {
+    await page.getByRole("button", { name: "More library actions" }).click();
+    await page
+      .getByRole("dialog", { name: "Library actions" })
+      .getByRole("button", { name: /Find Duplicates/ })
+      .click();
+  } else {
+    await page.getByRole("button", { name: /Find Duplicates/ }).first().click();
+  }
 }
 
 /** Geometry for the dedup card: rows, the identifier badge and the copy count. */
@@ -594,6 +613,32 @@ async function dedupGeometry(page: Page) {
         rightOverhangPx: Math.round(Math.max(0, r.right - vb.right)),
         centreHitLandsOnIt: hit !== null && (el.contains(hit) || el === hit),
       };
+    };
+
+    /*
+     * The group header, the identifier badge, the copy count and the "Keep"
+     * marker are measured HERE, before the row loop below drives `scrollTop`.
+     *
+     * That loop leaves the viewport parked on the LAST row, and since
+     * DEDUPLICATION-DIALOG-VERTICAL-SCROLL-REACHABILITY-001 the viewport really
+     * scrolls, so anything at the top of the list has genuinely scrolled out of
+     * sight by then and `elementFromPoint` correctly returns something else.
+     * Reading them first is the only ordering that asks the question this test
+     * means to ask: is the badge pressable where the list actually opens?
+     */
+    const chromeBoxes = {
+      groupCard: box(viewport.querySelector(".rounded-lg.border")),
+      matchBadge: box(viewport.querySelector(".font-mono")),
+      copyCount: box(
+        [...viewport.querySelectorAll("span")].find((s) =>
+          /\d+ copies/.test(s.textContent ?? ""),
+        ) ?? null,
+      ),
+      keepBadge: box(
+        [...viewport.querySelectorAll("div")].find(
+          (d) => (d.textContent ?? "").trim() === "Keep",
+        ) ?? null,
+      ),
     };
 
     const rows = [...viewport.querySelectorAll("label")] as HTMLElement[];
@@ -657,18 +702,7 @@ async function dedupGeometry(page: Page) {
         ).wordBreak,
       },
       rows: measuredRows,
-      groupCard: box(viewport.querySelector(".rounded-lg.border")),
-      matchBadge: box(viewport.querySelector(".font-mono")),
-      copyCount: box(
-        [...viewport.querySelectorAll("span")].find((s) =>
-          /\d+ copies/.test(s.textContent ?? ""),
-        ) ?? null,
-      ),
-      keepBadge: box(
-        [...viewport.querySelectorAll("div")].find(
-          (d) => (d.textContent ?? "").trim() === "Keep",
-        ) ?? null,
-      ),
+      ...chromeBoxes,
     };
   });
 }
@@ -688,15 +722,7 @@ for (const size of [
       await stubDuplicateScan(page);
       await page.goto("/", { waitUntil: "networkidle" });
       await waitForDashboard(page);
-      if (size.mobile) {
-        await page.getByRole("button", { name: "More library actions" }).click();
-        await page
-          .getByRole("dialog", { name: "Library actions" })
-          .getByRole("button", { name: /Find Duplicates/ })
-          .click();
-      } else {
-        await page.getByRole("button", { name: /Find Duplicates/ }).first().click();
-      }
+      await openDeduplicationDialog(page, size.mobile);
       await expect(
         page.getByRole("dialog").getByText(/duplicate group/i).first(),
       ).toBeVisible({ timeout: 20_000 });
@@ -809,6 +835,881 @@ for (const size of [
       const fixed = await dedupGeometry(page);
       expect(fixed.viewport.scrollWidth).toBeLessThanOrEqual(fixed.viewport.clientWidth);
       expect(fixed.rows.every((r) => r.insideHorizontally)).toBe(true);
+    });
+  });
+}
+
+/* ══ Surface 3b — DeduplicationDialog, VERTICAL reach ══════════════════ */
+
+/**
+ * DEDUPLICATION-DIALOG-VERTICAL-SCROLL-REACHABILITY-001
+ *
+ * The horizontal audit above recorded — and deliberately did not fix — a second
+ * defect on this same surface: the duplicate list could not be scrolled at all.
+ *
+ * `<ScrollArea className="flex-1 max-h-[55vh]">` put the cap on the Radix ROOT.
+ * The root is a `flex-1` item of an auto-height column, so its used height comes
+ * from its content and is only then clamped, and a clamped auto height is not a
+ * DEFINITE height — so the viewport's `h-full` resolved to `auto` and the
+ * viewport grew to its content instead of becoming the scrolling box. Measured
+ * on `9d6c0c8` at 390x844 with three duplicate groups: root 464px with
+ * `overflow: hidden`, viewport 2602px, `scrollHeight === clientHeight`, no
+ * scrollbar mounted, the wheel moved nothing, and 7 of the 9 paper rows started
+ * below the root's bottom edge with no way to reach them. Same mechanism at
+ * 1024x800 (root 440 / viewport 1469) and 1280x900 (root 495 / viewport 1469).
+ *
+ * The cap now sits on the viewport itself, so ONE element owns both the bounded
+ * height and the scrolling. Nothing below reaches a row with `scrollIntoView()`
+ * or a `scrollTop` assignment: the last row is reached with the wheel, with a
+ * synthesized touch gesture, or with the keyboard, and `scrollLeft` is asserted
+ * 0 throughout so the vertical fix cannot quietly buy itself horizontal room.
+ */
+
+/** The cap the dialog intends for the results region, as a fraction of the window. */
+const RESULTS_CAP_VH = 0.55;
+
+const LONG_SET_TITLES = [
+  "Comparative Effectiveness of Perioperative Dexmedetomidine Versus Propofol Sedation on Postoperative Delirium in Elderly Cardiac Surgery",
+  "Restrictive Versus Liberal Transfusion Thresholds After Coronary Artery Bypass Grafting: A Multicentre Randomised Trial",
+  "Remote Ischaemic Preconditioning and Acute Kidney Injury Following Valve Replacement Surgery",
+];
+const LONG_SET_AUTHORS = [
+  ["Margarethe van der Brouwershaven-Oosterhuis", "Konstantinos Papadimitriou-Anagnostopoulos"],
+  ["Aleksandra Wiśniewska-Kowalczyk", "Rajesh Venkataraman Subramanian"],
+  ["Bartholomew Fitzwilliam-Harrington", "Yuki Matsumoto-Nakagawa"],
+];
+
+/**
+ * Group 0 keeps the audit's unbreakable DOI, so the hard combined case — a long
+ * single-token identifier AND enough rows to overflow vertically, at 390px — is
+ * exercised on the same DOM the vertical assertions measure.
+ */
+function longSetPaper(group: number, n: number) {
+  return {
+    id: `vert-dup-${group}-${n}`,
+    title: LONG_SET_TITLES[(group + n) % LONG_SET_TITLES.length],
+    authors: LONG_SET_AUTHORS[(group + n) % LONG_SET_AUTHORS.length],
+    year: 2020 + ((group + n) % 5),
+    journal: "Journal of Cardiothoracic and Vascular Anaesthesia",
+    pmid: `386120${group}${n}`,
+    doi: group === 0 ? LONG_DOI : `10.1097/aln.000000000000${group}${n}`,
+    abstract: "Deterministic audit fixture.",
+    study_type: "Randomised Controlled Trial",
+    keywords: [SHORT_KEYWORD],
+    created_at: "2026-03-14T09:12:00.000Z",
+  };
+}
+
+/** Three groups of three. Taller than the cap at every audited viewport. */
+const LONG_DUPLICATE_SET = Array.from({ length: 3 }, (_, g) => ({
+  match_type: g === 0 ? "doi" : "pmid",
+  match_value: g === 0 ? LONG_DOI : `3861200${g}`,
+  papers: Array.from({ length: 3 }, (_, n) => longSetPaper(g, n)),
+}));
+
+/** One small group whose content fits inside the cap at every audited viewport. */
+const SHORT_DUPLICATE_SET = [
+  {
+    match_type: "pmid",
+    match_value: "33991001",
+    papers: [0, 1].map((n) => ({
+      id: `vert-short-${n}`,
+      title: "Aspirin and Stroke Prevention",
+      authors: ["Lee J"],
+      year: 2021 + n,
+      journal: "Stroke",
+      pmid: `3399100${n}`,
+      doi: `10.1161/str.${n}`,
+      abstract: null,
+      study_type: "Meta-Analysis",
+      keywords: [],
+      created_at: "2026-03-14T09:12:00.000Z",
+    })),
+  },
+];
+
+/**
+ * Vertical geometry for the duplicate list. Measures ONLY — it never scrolls, so
+ * a "before" reading is genuinely before.
+ *
+ * The painted band is the ScrollArea ROOT clipped by the window, not the Radix
+ * viewport's raw box: on the broken baseline the viewport ran 2602px down a
+ * 844px screen, so a viewport-relative reading would have called rows "inside"
+ * that nothing ever drew.
+ */
+async function dedupVerticalGeometry(page: Page) {
+  return page.evaluate(() => {
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((d) =>
+      d.querySelector("[data-radix-scroll-area-viewport]"),
+    ) as HTMLElement;
+    const viewport = dialog.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLElement;
+    const root = viewport.parentElement as HTMLElement;
+    const wrapper = viewport.firstElementChild as HTMLElement;
+    const rb = root.getBoundingClientRect();
+    const vb = viewport.getBoundingClientRect();
+    const db = dialog.getBoundingClientRect();
+    const rs = getComputedStyle(root);
+    const vs = getComputedStyle(viewport);
+
+    const bandTop = Math.max(rb.top, 0);
+    const bandBottom = Math.min(rb.bottom, window.innerHeight);
+
+    const measure = (el: HTMLElement, i: number) => {
+      const r = el.getBoundingClientRect();
+      const top = Math.max(r.top, bandTop);
+      const bottom = Math.min(r.bottom, bandBottom);
+      const hit =
+        bottom > top
+          ? document.elementFromPoint(
+              Math.round(r.x + r.width / 2),
+              Math.round((top + bottom) / 2),
+            )
+          : null;
+      return {
+        index: i,
+        text: (el.textContent ?? "").trim().slice(0, 40),
+        top: Math.round(r.top),
+        bottom: Math.round(r.bottom),
+        height: Math.round(r.height),
+        // How much of it a person can actually see right now.
+        visibleHeight: Math.round(Math.max(0, bottom - top)),
+        // PR #235's axis, re-measured on the taller fixture: this list has no
+        // horizontal scrollbar, so anything past the right edge is unreachable.
+        insideHorizontally: r.left >= vb.left - 1 && r.right <= vb.right + 1,
+        rightOverhangPx: Math.round(Math.max(0, r.right - vb.right)),
+        // Fully inside the scrolling box — the acceptance shape for a row that
+        // is shorter than the viewport.
+        containedInViewport: r.top >= vb.top - 1 && r.bottom <= vb.bottom + 1,
+        // Drawn somewhere a person can see, however partially.
+        paintedAtAll: bottom > top,
+        pressAtItsCentreLandsOnIt: hit !== null && el.contains(hit),
+      };
+    };
+
+    const rows = ([...viewport.querySelectorAll("label")] as HTMLElement[]).map(measure);
+    const groups = ([...viewport.querySelectorAll(".rounded-lg.border")] as HTMLElement[]).map(
+      measure,
+    );
+    const scrollbars = [...root.querySelectorAll(":scope > [data-orientation]")].map((b) => ({
+      orientation: b.getAttribute("data-orientation"),
+      state: b.getAttribute("data-state"),
+      height: Math.round(b.getBoundingClientRect().height),
+      thumbs: b.querySelectorAll("[data-state]").length,
+    }));
+
+    const chrome = (label: string, el: Element | null) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        Math.round(r.x + r.width / 2),
+        Math.round(r.y + r.height / 2),
+      );
+      return {
+        label,
+        insideWindow:
+          r.top >= 0 && r.bottom <= window.innerHeight + 1 && r.left >= 0 && r.right <= window.innerWidth + 1,
+        centreHitLandsOnIt: hit !== null && (el.contains(hit) || el === hit),
+      };
+    };
+
+    return {
+      window: { width: window.innerWidth, height: window.innerHeight },
+      documentOverflowsX:
+        document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      dialog: {
+        top: Math.round(db.top),
+        bottom: Math.round(db.bottom),
+        height: Math.round(db.height),
+        insideWindow: db.top >= -1 && db.bottom <= window.innerHeight + 1,
+      },
+      root: {
+        top: Math.round(rb.top),
+        bottom: Math.round(rb.bottom),
+        height: Math.round(rb.height),
+        clientHeight: root.clientHeight,
+        scrollHeight: root.scrollHeight,
+        scrollTop: root.scrollTop,
+        cssMaxHeight: rs.maxHeight,
+        overflow: rs.overflow,
+      },
+      viewport: {
+        top: Math.round(vb.top),
+        bottom: Math.round(vb.bottom),
+        height: Math.round(vb.height),
+        clientHeight: viewport.clientHeight,
+        scrollHeight: viewport.scrollHeight,
+        scrollTop: Math.round(viewport.scrollTop),
+        maxScrollTop: viewport.scrollHeight - viewport.clientHeight,
+        clientWidth: viewport.clientWidth,
+        scrollWidth: viewport.scrollWidth,
+        scrollLeft: viewport.scrollLeft,
+        cssMaxHeight: vs.maxHeight,
+        overflowY: vs.overflowY,
+        overflowX: vs.overflowX,
+        // The viewport must be the thing the root shows, not something the root
+        // clips: these two are what the broken baseline got wrong.
+        containedByRoot: vb.top >= rb.top - 1 && vb.bottom <= rb.bottom + 1,
+        containedByWindow: vb.top >= -1 && vb.bottom <= window.innerHeight + 1,
+      },
+      wrapper: {
+        height: Math.round(wrapper.getBoundingClientRect().height),
+        display: getComputedStyle(wrapper).display,
+      },
+      rows,
+      groups,
+      scrollbars,
+      chrome: [
+        chrome("dialog title", dialog.querySelector("h2")),
+        chrome(
+          "Cancel button",
+          [...dialog.querySelectorAll("button")].find(
+            (b) => (b.textContent ?? "").trim() === "Cancel",
+          ) ?? null,
+        ),
+        chrome(
+          "Merge All button",
+          [...dialog.querySelectorAll("button")].find((b) =>
+            /^Merge All/.test((b.textContent ?? "").trim()),
+          ) ?? null,
+        ),
+      ],
+    };
+  });
+}
+
+type VerticalGeometry = Awaited<ReturnType<typeof dedupVerticalGeometry>>;
+
+/**
+ * `aria-checked` for every paper option, in list order.
+ *
+ * Scoped to the dedup dialog on purpose. An unscoped
+ * `document.querySelector("[data-radix-scroll-area-viewport]")` finds the
+ * Sidebar's ScrollArea — it comes first in document order and holds no radios —
+ * so the probe returns `[]` and every comparison against it passes vacuously.
+ * That is precisely the false green this suite exists to refuse.
+ */
+async function checkedStates(page: Page) {
+  return page.evaluate(() => {
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((d) =>
+      d.querySelector("[data-radix-scroll-area-viewport]"),
+    ) as HTMLElement;
+    const v = dialog.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement;
+    return [...v.querySelectorAll('[role="radio"]')].map((r) =>
+      r.getAttribute("aria-checked"),
+    );
+  });
+}
+
+/** The on-screen centre of the results viewport — a point a person could put a
+ *  finger or a cursor on. Kept inside the window so hit tests stay meaningful. */
+async function resultsPointer(page: Page) {
+  return page.evaluate(() => {
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((d) =>
+      d.querySelector("[data-radix-scroll-area-viewport]"),
+    ) as HTMLElement;
+    const v = dialog.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement;
+    const b = v.getBoundingClientRect();
+    return {
+      x: Math.round(b.x + b.width / 2),
+      y: Math.round(
+        (Math.max(b.top, 0) + Math.min(b.bottom, window.innerHeight)) / 2,
+      ),
+    };
+  });
+}
+
+/** Mouse wheel over the results region. No element API is touched. */
+async function wheelResults(page: Page, deltaY: number, ticks = 1) {
+  const pt = await resultsPointer(page);
+  await page.mouse.move(pt.x, pt.y);
+  for (let i = 0; i < ticks; i++) await page.mouse.wheel(0, deltaY);
+  await page.waitForTimeout(120);
+}
+
+/**
+ * A real touch drag, injected as raw input through CDP.
+ *
+ * Playwright's `touchscreen` only taps, and synthetic touch DOM events built
+ * with `dispatchEvent` do not drive Chromium's scrolling at all — a "touch
+ * works" claim built from those would prove nothing. `Input.dispatchTouchEvent`
+ * enters the same input pipeline a finger does (it is what `touchscreen.tap`
+ * itself uses), so the gesture recogniser sees a genuine drag.
+ *
+ * Deliberately NOT `Input.synthesizeScrollGesture`: it needs a synthetic-gesture
+ * target that headless Linux does not provide, and measured on CI it left
+ * `scrollTop` at 0 on all three attempts while working fine on macOS — an
+ * environment difference reported as a product failure.
+ *
+ * `dy` is the finger's movement: negative drags the content up, i.e. scrolls
+ * down. Every point stays inside the window so the gesture lands on the list.
+ */
+async function touchDragResults(page: Page, dy: number) {
+  const pt = await resultsPointer(page);
+  const client = await page.context().newCDPSession(page);
+  const at = (y: number) => [{ x: pt.x, y, radiusX: 5, radiusY: 5, force: 1 }];
+  const clamp = (y: number) => Math.max(1, Math.min(y, pt.y + Math.abs(dy)));
+
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: at(pt.y) });
+  const steps = 10;
+  for (let i = 1; i <= steps; i++) {
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: at(clamp(pt.y + Math.round((dy * i) / steps))),
+    });
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await client.detach();
+  await page.waitForTimeout(150);
+}
+
+/** The bounded-scrolling contract, asserted wherever the list overflows. */
+function expectBoundedScrollingList(g: VerticalGeometry, where: string) {
+  const cap = Math.round(g.window.height * RESULTS_CAP_VH);
+
+  expect(
+    g.viewport.scrollHeight,
+    `${where}: the results viewport has no scroll range — it sized to its content instead of scrolling`,
+  ).toBeGreaterThan(g.viewport.clientHeight);
+  expect(
+    g.viewport.clientHeight,
+    `${where}: the results region grew past its ${cap}px cap`,
+  ).toBeLessThanOrEqual(cap + 2);
+  expect(
+    g.viewport.containedByRoot,
+    `${where}: the root is clipping an oversized viewport again`,
+  ).toBe(true);
+  expect(
+    g.viewport.containedByWindow,
+    `${where}: the results viewport runs off the screen`,
+  ).toBe(true);
+  expect(
+    g.root.scrollHeight,
+    `${where}: the ScrollArea root is hiding overflow of its own`,
+  ).toBeLessThanOrEqual(g.root.clientHeight + 1);
+  expect(g.dialog.insideWindow, `${where}: the dialog runs off the screen`).toBe(true);
+
+  // PR #235's contract, re-asserted here: the vertical fix must not buy itself
+  // room on the axis this surface cannot scroll.
+  expect(g.viewport.overflowX, `${where}: horizontal overflow became scrollable`).toBe("hidden");
+  expect(
+    g.viewport.scrollWidth,
+    `${where}: the duplicate list overflows a viewport with no horizontal scrollbar`,
+  ).toBeLessThanOrEqual(g.viewport.clientWidth);
+  expect(g.viewport.scrollLeft, `${where}: the list scrolled sideways`).toBe(0);
+  expect(g.documentOverflowsX, `${where}: the page itself overflows sideways`).toBe(false);
+
+  // Every row, painted or not — the long unbreakable DOI in group 1 is exactly
+  // the shape PR #235 fixed, and it must stay contained now that the list is
+  // also taller than its box.
+  expect(g.rows.length, `${where}: nothing was measured`).toBeGreaterThan(0);
+  for (const row of g.rows) {
+    expect(
+      row.insideHorizontally,
+      `${where}: "${row.text}" sits ${row.rightOverhangPx}px outside on the axis the user cannot scroll`,
+    ).toBe(true);
+  }
+}
+
+for (const size of [
+  { name: "phone", width: 390, height: 844, mobile: true },
+  { name: "tablet", width: 1024, height: 800, mobile: false },
+  { name: "desktop", width: 1280, height: 900, mobile: false },
+]) {
+  test.describe(`DeduplicationDialog vertical reach @ ${size.name}`, () => {
+    test.use({
+      viewport: { width: size.width, height: size.height },
+      hasTouch: size.mobile,
+      isMobile: size.mobile,
+    });
+
+    async function openWith(page: Page, groups: unknown[]) {
+      await stubDuplicateScan(page, groups);
+      await page.goto("/", { waitUntil: "networkidle" });
+      await waitForDashboard(page);
+      await openDeduplicationDialog(page, size.mobile);
+      await expect(
+        page.getByRole("dialog").getByText(/duplicate group/i).first(),
+      ).toBeVisible({ timeout: 20_000 });
+      // Radix animates the dialog in; measuring mid-transform reads a rect that
+      // is real but transient.
+      await page.waitForTimeout(400);
+    }
+
+    test("a long duplicate list is capped and genuinely scrollable", async ({ page }) => {
+      await openWith(page, LONG_DUPLICATE_SET);
+      const g = await dedupVerticalGeometry(page);
+
+      // Pre-fix at this exact fixture: viewport 2602/1469 tall with
+      // scrollHeight === clientHeight, i.e. no scroll range whatsoever.
+      expect(g.viewport.scrollTop, "the list scrolled before it was measured").toBe(0);
+      expectBoundedScrollingList(g, `${size.name} long list`);
+
+      // The cap belongs to the element that scrolls, and to nothing else.
+      expect(
+        g.viewport.cssMaxHeight,
+        "the cap is no longer on the Radix viewport",
+      ).not.toBe("none");
+      expect(
+        g.root.cssMaxHeight,
+        "the cap moved back onto the ScrollArea root, which cannot scroll",
+      ).toBe("none");
+      expect(g.viewport.overflowY).toBe("scroll");
+
+      // The defect's signature, stated as a floor: content must exceed the box.
+      expect(g.wrapper.height).toBeGreaterThan(g.viewport.clientHeight);
+      expect(g.rows.length).toBe(9);
+      expect(g.groups.length).toBe(3);
+      expect(
+        g.rows.filter((r) => r.paintedAtAll).length,
+        "the whole list fits — this fixture is no longer a long one",
+      ).toBeLessThan(g.rows.length);
+
+      // Radix mounts the scrollbar on hover (`type="hover"` is the primitive's
+      // default), so hovering is part of the contract, not a workaround.
+      await wheelResults(page, 0);
+      const hovered = await dedupVerticalGeometry(page);
+      const vertical = hovered.scrollbars.find((b) => b.orientation === "vertical");
+      expect(vertical, "no vertical scrollbar was mounted for an overflowing list").toBeTruthy();
+      expect(vertical!.thumbs, "the scrollbar mounted without a thumb").toBeGreaterThan(0);
+    });
+
+    test("the wheel reaches every duplicate group and the last paper row", async ({ page }) => {
+      await openWith(page, LONG_DUPLICATE_SET);
+
+      const before = await dedupVerticalGeometry(page);
+      const lastRow = before.rows[before.rows.length - 1];
+      const lastGroup = before.groups[before.groups.length - 1];
+      // The acceptance is only meaningful if the target starts out of reach.
+      expect(
+        lastRow.paintedAtAll,
+        "the last paper row was already painted — nothing to prove",
+      ).toBe(false);
+      expect(lastRow.bottom).toBeGreaterThan(before.viewport.bottom);
+      expect(lastGroup.paintedAtAll).toBe(false);
+
+      /*
+       * Walk the list the way a person does: repeated wheel notches, measuring
+       * between them. Nothing here calls scrollIntoView or sets scrollTop.
+       *
+       * "Reached" is deliberately NOT "fully inside the box". A duplicate row is
+       * 200-370px tall at 390px wide depending on how its title wraps, and that
+       * depends on font metrics — macOS and CI's Linux renderer disagree, which
+       * is the same trap that made a row-count assertion fail in PR #235. A
+       * containment-only rule encodes the renderer rather than the contract:
+       * measured on CI, row 3 happened to fall between two sampled stops and the
+       * walk failed while the row was perfectly usable. What a person needs is
+       * that the row is substantially painted inside the scroller AND pressable
+       * where it is drawn, so that is the rule. Full containment is still
+       * demanded of the LAST row (below) and the FIRST row (at the end), where
+       * it is the real acceptance and the geometry is not in doubt.
+       *
+       * The notch is small and absolute for the same reason: a notch scaled to
+       * the viewport can step straight over a tall row.
+       */
+      const NOTCH = 80;
+      const reachedRows = new Set<number>();
+      const reachedGroups = new Set<number>();
+      for (let step = 0; step < 60; step++) {
+        const g = await dedupVerticalGeometry(page);
+        for (const r of g.rows) {
+          const substantiallyPainted =
+            r.visibleHeight >= 0.5 * Math.min(r.height, g.viewport.clientHeight);
+          if (substantiallyPainted && r.pressAtItsCentreLandsOnIt) reachedRows.add(r.index);
+        }
+        for (const c of g.groups) if (c.paintedAtAll) reachedGroups.add(c.index);
+        if (g.viewport.scrollTop >= g.viewport.maxScrollTop) break;
+        await wheelResults(page, NOTCH);
+      }
+
+      const after = await dedupVerticalGeometry(page);
+      expect(after.viewport.scrollTop, "the wheel did not move the results region").toBeGreaterThan(0);
+      expect(
+        after.viewport.scrollTop,
+        "the wheel could not drive the list to its end",
+      ).toBe(after.viewport.maxScrollTop);
+      expect(after.viewport.scrollLeft, "wheeling moved the list sideways").toBe(0);
+
+      const finalRow = after.rows[after.rows.length - 1];
+      expect(
+        finalRow.containedInViewport,
+        "the last paper row never came fully inside the results viewport",
+      ).toBe(true);
+      expect(
+        finalRow.pressAtItsCentreLandsOnIt,
+        "the last paper row cannot be pressed where it is drawn",
+      ).toBe(true);
+
+      expect(
+        [...reachedRows].length,
+        `only rows ${[...reachedRows].join(",")} of ${before.rows.length} could be reached`,
+      ).toBe(before.rows.length);
+      expect([...reachedGroups].length).toBe(before.groups.length);
+
+      // Header and footer are outside the scroller and must stay put.
+      for (const part of after.chrome) {
+        expect(part, "dialog chrome went missing").not.toBeNull();
+        expect(part!.insideWindow, `${part!.label} left the screen`).toBe(true);
+        expect(part!.centreHitLandsOnIt, `${part!.label} is not pressable`).toBe(true);
+      }
+
+      // And back up again: the first group is still reachable.
+      await wheelResults(page, -Math.round(before.viewport.clientHeight / 2), 12);
+      const back = await dedupVerticalGeometry(page);
+      expect(back.viewport.scrollTop).toBe(0);
+      expect(back.rows[0].containedInViewport).toBe(true);
+      expect(back.rows[0].pressAtItsCentreLandsOnIt).toBe(true);
+    });
+
+    if (size.mobile) {
+      test("a touch drag reaches the last paper row", async ({ page }) => {
+        await openWith(page, LONG_DUPLICATE_SET);
+        const before = await dedupVerticalGeometry(page);
+        expect(before.rows[before.rows.length - 1].paintedAtAll).toBe(false);
+
+        // Negative yDistance drags content upward, i.e. scrolls down.
+        for (let i = 0; i < 12; i++) await touchDragResults(page, -400);
+
+        const after = await dedupVerticalGeometry(page);
+        expect(
+          after.viewport.scrollTop,
+          "a touch drag did not scroll the duplicate list",
+        ).toBeGreaterThan(0);
+        expect(after.viewport.scrollTop).toBe(after.viewport.maxScrollTop);
+        expect(after.viewport.scrollLeft).toBe(0);
+        expect(
+          after.rows[after.rows.length - 1].containedInViewport,
+          "the last paper row is unreachable by touch",
+        ).toBe(true);
+        expect(after.documentOverflowsX, "the page moved sideways under the finger").toBe(false);
+      });
+    }
+
+    test("keyboard focus reaches a paper option that started below the fold", async ({ page }) => {
+      await openWith(page, LONG_DUPLICATE_SET);
+
+      const before = await page.evaluate(() => {
+        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((d) =>
+          d.querySelector("[data-radix-scroll-area-viewport]"),
+        ) as HTMLElement;
+        const v = dialog.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement;
+        const radios = [...v.querySelectorAll('[role="radio"]')] as HTMLElement[];
+        const last = radios[radios.length - 1].getBoundingClientRect();
+        const vb = v.getBoundingClientRect();
+        return {
+          count: radios.length,
+          lastStartsBelowTheFold: last.top > vb.bottom,
+          scrollTop: v.scrollTop,
+        };
+      });
+      expect(before.count).toBe(9);
+      expect(
+        before.lastStartsBelowTheFold,
+        "the final radio is already on screen — the keyboard journey proves nothing",
+      ).toBe(true);
+
+      /** Where focus is, in the list's own terms. */
+      const focus = () =>
+        page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          const dialog = [...document.querySelectorAll('[role="dialog"]')].find((d) =>
+            d.querySelector("[data-radix-scroll-area-viewport]"),
+          ) as HTMLElement;
+          const v = dialog.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement;
+          const radios = [...v.querySelectorAll('[role="radio"]')] as HTMLElement[];
+          const index = el ? radios.indexOf(el) : -1;
+          const vb = v.getBoundingClientRect();
+          const r = el?.getBoundingClientRect();
+          const style = el ? getComputedStyle(el) : null;
+          const centre =
+            r && document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2));
+          return {
+            index,
+            insideDialog: !!el && dialog.contains(el),
+            isTheScrollViewport: el === v,
+            tag: el?.tagName ?? null,
+            intersectsViewport: !!r && r.bottom > vb.top && r.top < vb.bottom,
+            containedInViewport: !!r && r.top >= vb.top - 1 && r.bottom <= vb.bottom + 1,
+            centreInsideDialog:
+              !!r &&
+              r.y + r.height / 2 >= dialog.getBoundingClientRect().top &&
+              r.y + r.height / 2 <= dialog.getBoundingClientRect().bottom,
+            centreHitLandsOnIt: !!centre && !!el && (el.contains(centre) || el === centre),
+            focusVisible: !!el && el.matches(":focus-visible"),
+            ring: style?.boxShadow ?? "none",
+            scrollTop: Math.round(v.scrollTop),
+            scrollLeft: v.scrollLeft,
+          };
+        });
+
+      /*
+       * Walk to the final option with real keys only — never `.focus()`.
+       *
+       * Radix gives each RadioGroup a roving tabindex, so Arrow keys move
+       * WITHIN a group and Tab crosses to the next one. With three papers per
+       * group that makes the rule: ArrowDown, unless focus is already on a
+       * group's last option (or outside the list), in which case Tab. The
+       * journey is recorded so a failure says where the keyboard actually went.
+       */
+      const journey: number[] = [];
+      let state = await focus();
+      journey.push(state.index);
+      for (let step = 0; step < 24 && state.index !== before.count - 1; step++) {
+        const atGroupEnd = state.index >= 0 && state.index % 3 === 2;
+        await page.keyboard.press(state.index < 0 || atGroupEnd ? "Tab" : "ArrowDown");
+        // Radix moves roving focus and React commits the resulting selection
+        // change before the next item is focusable; reading straight after the
+        // keyup samples the previous tab stop.
+        await page.waitForTimeout(80);
+        state = await focus();
+        journey.push(state.index);
+        expect(
+          state.insideDialog,
+          `keyboard focus left the modal (journey ${journey.join(" -> ")})`,
+        ).toBe(true);
+      }
+
+      expect(
+        state.index,
+        `the keyboard never reached the final paper option (journey ${journey.join(" -> ")})`,
+      ).toBe(before.count - 1);
+      expect(state.intersectsViewport, "the focused option is outside the results viewport").toBe(true);
+      expect(state.containedInViewport, "the focused option is only partly reachable").toBe(true);
+      expect(state.centreInsideDialog, "the focused option sits outside the dialog").toBe(true);
+      expect(state.centreHitLandsOnIt, "nothing is painted where the focused option is").toBe(true);
+      expect(state.focusVisible, "the focused option draws no focus indicator").toBe(true);
+      expect(state.ring, "the focus ring is not rendered").not.toBe("none");
+      expect(state.scrollTop, "reaching it did not scroll the results region").toBeGreaterThan(0);
+      expect(state.scrollLeft, "keyboard navigation moved the list sideways").toBe(0);
+
+      /*
+       * Focus trap, and no NEW tab stop.
+       *
+       * Chromium makes an overflowing scroller keyboard-focusable when it has
+       * no focusable children; this one has nine radios, so it must not become
+       * a tab stop of its own just because it now scrolls. Tab must keep
+       * cycling inside the modal and must never land on the viewport itself.
+       */
+      for (let i = 0; i < 14; i++) {
+        await page.keyboard.press("Tab");
+        const seen = await focus();
+        expect(seen.insideDialog, "Tab left the modal").toBe(true);
+        expect(seen.isTheScrollViewport, "the scroll viewport became its own tab stop").toBe(
+          false,
+        );
+      }
+    });
+
+    test("a paper below the fold can be selected, and scrolling changes no selection", async ({
+      page,
+    }) => {
+      await openWith(page, LONG_DUPLICATE_SET);
+
+      const keptBefore = await checkedStates(page);
+      expect(keptBefore.length, "the probe did not find the duplicate list").toBe(9);
+
+      await wheelResults(page, 300, 20);
+      const scrolled = await dedupVerticalGeometry(page);
+      // Scrolling alone must not touch the selection.
+      const keptAfterScroll = await checkedStates(page);
+      expect(keptAfterScroll, "scrolling changed which paper is kept").toEqual(keptBefore);
+      expect(scrolled.rows[scrolled.rows.length - 1].containedInViewport).toBe(true);
+
+      // Now select the last paper through the real UI.
+      const lastRadio = page
+        .getByRole("dialog")
+        .locator("[data-radix-scroll-area-viewport] [role='radio']")
+        .last();
+      await lastRadio.click();
+
+      const afterSelect = await page.evaluate(() => {
+        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((d) =>
+          d.querySelector("[data-radix-scroll-area-viewport]"),
+        ) as HTMLElement;
+        const v = dialog.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement;
+        const radios = [...v.querySelectorAll('[role="radio"]')] as HTMLElement[];
+        const lastRow = ([...v.querySelectorAll("label")] as HTMLElement[]).slice(-1)[0];
+        return {
+          checked: radios.map((r) => r.getAttribute("aria-checked")),
+          lastRowShowsKeep: /Keep$/.test((lastRow.textContent ?? "").trim()),
+          scrollLeft: v.scrollLeft,
+          dialogStillOpen: !!dialog,
+          mergeLabel:
+            [...dialog.querySelectorAll("button")]
+              .map((b) => (b.textContent ?? "").trim())
+              .find((t) => /^Merge All/.test(t)) ?? null,
+        };
+      });
+
+      expect(afterSelect.checked[8], "the last paper did not become the kept one").toBe("true");
+      // The other groups keep the selections they had.
+      expect(afterSelect.checked.slice(0, 3)).toEqual(keptBefore.slice(0, 3));
+      expect(afterSelect.checked.slice(3, 6)).toEqual(keptBefore.slice(3, 6));
+      expect(afterSelect.lastRowShowsKeep, "the Keep marker did not follow the selection").toBe(true);
+      expect(afterSelect.scrollLeft, "selecting scrolled the list sideways").toBe(0);
+      // Selecting must not have merged anything.
+      expect(afterSelect.dialogStillOpen).toBe(true);
+      expect(afterSelect.mergeLabel).toBe("Merge All (3 groups)");
+
+      // Scroll back up: the first group's selection survived the journey.
+      await wheelResults(page, -400, 20);
+      const back = await checkedStates(page);
+      const backGeometry = await dedupVerticalGeometry(page);
+      expect(backGeometry.viewport.scrollTop).toBe(0);
+      expect(back[8], "scrolling back up dropped the new selection").toBe("true");
+      expect(back.slice(0, 6)).toEqual(keptBefore.slice(0, 6));
+    });
+
+    test("a short duplicate list stays compact and does not scroll", async ({ page }) => {
+      await openWith(page, SHORT_DUPLICATE_SET);
+      const g = await dedupVerticalGeometry(page);
+      const cap = Math.round(g.window.height * RESULTS_CAP_VH);
+
+      expect(
+        g.viewport.scrollHeight,
+        "a list that fits was given a scroll range anyway",
+      ).toBe(g.viewport.clientHeight);
+      expect(g.viewport.maxScrollTop).toBe(0);
+      expect(
+        g.viewport.clientHeight,
+        `the results region padded itself out to the ${cap}px cap`,
+      ).toBeLessThan(cap);
+      expect(
+        g.root.height,
+        "the ScrollArea root is taller than the list it holds",
+      ).toBeLessThanOrEqual(g.viewport.height + 1);
+
+      for (const row of g.rows) {
+        expect(row.containedInViewport, `"${row.text}" is not fully visible`).toBe(true);
+        expect(row.pressAtItsCentreLandsOnIt, `"${row.text}" is not pressable`).toBe(true);
+      }
+      expect(g.groups[0].containedInViewport, "the only group is not fully visible").toBe(true);
+
+      // Hovering an unscrollable region must not conjure a misleading scrollbar.
+      await wheelResults(page, 200, 4);
+      const hovered = await dedupVerticalGeometry(page);
+      expect(hovered.viewport.scrollTop, "a list that fits scrolled").toBe(0);
+      expect(
+        hovered.scrollbars.filter((b) => b.state === "visible").length,
+        "a scrollbar was shown for content that fits",
+      ).toBe(0);
+
+      // Selection still behaves normally on a short list.
+      await page
+        .getByRole("dialog")
+        .locator("[data-radix-scroll-area-viewport] [role='radio']")
+        .last()
+        .click();
+      const checked = await checkedStates(page);
+      expect(checked.length).toBe(2);
+      expect(checked[checked.length - 1]).toBe("true");
+    });
+
+    test("the no-duplicates state renders no scrolling region at all", async ({ page }) => {
+      await stubDuplicateScan(page, []);
+      await page.goto("/", { waitUntil: "networkidle" });
+      await waitForDashboard(page);
+      await openDeduplicationDialog(page, size.mobile);
+      const dialog = page.getByRole("dialog").filter({ hasText: "No duplicates found" });
+      await expect(dialog).toBeVisible({ timeout: 20_000 });
+      await page.waitForTimeout(300);
+
+      const empty = await dialog.evaluate((node: HTMLElement) => {
+        const r = node.getBoundingClientRect();
+        return {
+          scrollAreas: node.querySelectorAll("[data-radix-scroll-area-viewport]").length,
+          height: Math.round(r.height),
+          insideWindow: r.top >= -1 && r.bottom <= window.innerHeight + 1,
+        };
+      });
+      expect(
+        empty.scrollAreas,
+        "the empty state mounted a scrolling region with nothing in it",
+      ).toBe(0);
+      expect(
+        empty.height,
+        "the empty state reserved the full capped height",
+      ).toBeLessThan(Math.round(size.height * RESULTS_CAP_VH));
+      expect(empty.insideWindow).toBe(true);
+    });
+
+    test("NEGATIVE CONTROL: capping the root instead of the viewport strands the last rows", async ({
+      page,
+    }) => {
+      await openWith(page, LONG_DUPLICATE_SET);
+
+      /*
+       * Restore the exact pre-fix ownership: cap on the ScrollArea ROOT, none on
+       * the Radix viewport. Specificity is deliberate — the production fix is a
+       * Tailwind arbitrary variant compiling to `.<class> [data-radix-…]`, i.e.
+       * (0,2,0), and an unqualified `[data-radix-…]` rule is (0,1,0) and LOSES
+       * even with `!important` on both sides. `html body … :not(#x)` clears it.
+       */
+      const control = await page.addStyleTag({
+        content:
+          'html body [role="dialog"] [data-radix-scroll-area-viewport]:not(#x)' +
+          " { max-height: none !important; }" +
+          ' html body [role="dialog"] div:has(> [data-radix-scroll-area-viewport]):not(#x)' +
+          " { max-height: 55vh !important; overflow: hidden !important; }",
+      });
+      await page.waitForTimeout(200);
+      const broken = await dedupVerticalGeometry(page);
+
+      // ── Prove the CAUSE is genuinely restored before claiming the defect is.
+      expect(
+        Math.round(parseFloat(broken.root.cssMaxHeight)),
+        "the control did not put the cap back on the root",
+      ).toBe(Math.round(broken.window.height * RESULTS_CAP_VH));
+      expect(broken.root.overflow, "the control did not restore the root's clipping").toBe("hidden");
+      expect(
+        broken.viewport.cssMaxHeight,
+        "the control did not take the cap off the viewport",
+      ).toBe("none");
+      expect(
+        broken.viewport.height,
+        "the viewport did not grow past the root — the old mechanism is not reproduced",
+      ).toBeGreaterThan(broken.root.height);
+      expect(
+        broken.viewport.scrollHeight,
+        "the viewport kept a scroll range — the old mechanism is not reproduced",
+      ).toBe(broken.viewport.clientHeight);
+      expect(broken.viewport.maxScrollTop).toBe(0);
+      expect(
+        broken.root.scrollHeight,
+        "the root is not clipping anything — the old mechanism is not reproduced",
+      ).toBeGreaterThan(broken.root.clientHeight);
+
+      // ── Now the defect itself: the last row is unreachable by any user action.
+      const strandedRow = broken.rows[broken.rows.length - 1];
+      expect(strandedRow.paintedAtAll, "the last row is still painted").toBe(false);
+      expect(strandedRow.top).toBeGreaterThan(broken.root.bottom);
+
+      await wheelResults(page, 400, 10);
+      const afterWheel = await dedupVerticalGeometry(page);
+      expect(afterWheel.viewport.scrollTop, "the broken viewport scrolled after all").toBe(0);
+      expect(afterWheel.root.scrollTop, "the clipping root scrolled after all").toBe(0);
+      expect(
+        afterWheel.rows[afterWheel.rows.length - 1].paintedAtAll,
+        "wheeling reached the last row on the broken baseline",
+      ).toBe(false);
+      expect(
+        afterWheel.scrollbars.filter((b) => b.state === "visible").length,
+        "the broken baseline mounted a scrollbar",
+      ).toBe(0);
+
+      // ── Remove the control; the real fix must be green again.
+      await control.evaluate((el) => el.remove());
+      await page.waitForTimeout(200);
+      const fixed = await dedupVerticalGeometry(page);
+      expectBoundedScrollingList(fixed, `${size.name} after control removal`);
+      await wheelResults(page, Math.round(fixed.viewport.clientHeight / 2), 12);
+      const reached = await dedupVerticalGeometry(page);
+      expect(reached.viewport.scrollTop).toBeGreaterThan(0);
+      expect(
+        reached.rows[reached.rows.length - 1].containedInViewport,
+        "the last row is unreachable once the control is gone",
+      ).toBe(true);
     });
   });
 }
