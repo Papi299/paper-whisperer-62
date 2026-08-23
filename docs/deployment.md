@@ -189,9 +189,8 @@ supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>
 supabase functions deploy delete-account --project-ref <project-ref>
 supabase functions deploy search-pubmed --project-ref <project-ref>
+supabase functions deploy suggest-paper-organization --project-ref <project-ref>
 ```
-
-`suggest-paper-organization` exists in this repository but is **not deployed** and is deliberately absent from the list above — see §7c before running any command for it.
 
 - Run one command per changed function. If a PR touches several, run each.
 - If a PR touches `supabase/functions/_shared/*` (e.g. `env.ts` from PR #139), every function that imports the shared module must be redeployed — the shared file is bundled into each function's deploy artifact.
@@ -284,13 +283,15 @@ The empty-query case is the informative one: it proves the worker boots, builds 
 
 ---
 
-### 7c. `suggest-paper-organization` — NOT deployed; deploy only under separate authorization
+### 7c. `suggest-paper-organization` — deployed; endpoint-before-UI gate satisfied
 
-**Current state: `suggest-paper-organization` exists in the repository and is NOT deployed to the linked project.** That is the intended state at the end of `AI-PROJECT-TAG-SUGGESTIONS-001A`, not an oversight. The backend contract landed first, on purpose, with **no frontend caller**; the Edit Paper experience that will call it is `001B`. Read the live function list back rather than trusting this paragraph: `supabase functions list --project-ref <project-ref>`.
+**Current state: `suggest-paper-organization` is deployed to the linked project and ACTIVE.** It is the Edge Function behind the future Edit Paper **Suggest Projects/Tags** experience (`AI-PROJECT-TAG-SUGGESTIONS-001`). The initial rollout completed and was verified on **2026-08-23** — its evidence (deployment identifiers, verification results, merge and Vercel provenance) is recorded in [migration-history.md](migration-history.md). Read the live version back rather than trusting any number written here: `supabase functions list --project-ref <project-ref>`.
+
+**Live does not mean shipped.** `001B` has not started, so **no frontend calls this endpoint** and users have no suggestion UI. What the deployment buys is that the endpoint-before-UI gate below is now satisfied: `001B` may be built against this contract.
 
 **What it is.** An advisory, non-mutating suggestion endpoint. It authenticates the caller in-function with `auth.getUser()`, verifies the requested paper belongs to that caller, reads that caller's own Projects and Tags, sends Gemini a bounded, allow-listed semantic payload, and returns four suggestion lists. It consumes **one unit of the existing AI quota** per successful generation through `consume_ai_quota`, and refunds through `refund_ai_quota` when the provider fails or returns an unusable result. It uses **no elevated key**.
 
-**What it is not.** It is not a mutation path. It performs no Project, Tag, `paper_projects`, `paper_tags` or `papers` write, and persists no suggestion — deploying it therefore changes nothing about how the library is stored, and cannot alter existing data. It is also not a second quota system: it records under the existing `ai_analysis` counter, so the owner/manager AI exemption keeps working unchanged. See [decisions-and-triggers.md](decisions-and-triggers.md) C32.
+**What it is not.** It is not a mutation path. It performs no Project, Tag, `paper_projects`, `paper_tags` or `papers` write, and persists no suggestion — its deployment therefore changed nothing about how the library is stored, and it cannot alter existing data. Production verification confirmed that empirically: a real generation left every Project, Tag, assignment and paper row byte-identical. It is also not a second quota system: it records under the existing `ai_analysis` counter, so the owner/manager AI exemption keeps working unchanged. See [decisions-and-triggers.md](decisions-and-triggers.md) C32.
 
 **Deployment artifact.** The function's complete closure is:
 
@@ -306,27 +307,30 @@ supabase/functions/_shared/geminiModel.ts                    # pre-existing, unc
 supabase/functions/_shared/providerError.ts                  # pre-existing, unchanged
 ```
 
-The three `_shared` modules were **not modified** by `001A`, so no other function needs redeploying and `analyze-paper` keeps its deployed version and bundle hash. Re-check that closure before any future deploy: if a change reaches one of those shared modules, every function bundling it must be redeployed too.
+The three `_shared` modules were **not modified** by `001A`, so no other function needed redeploying — and the rollout confirmed it: all five pre-existing functions kept their exact versions and bundle hashes. Re-check that closure before any future deploy: if a change reaches one of those shared modules, every function bundling it must be redeployed too.
 
 **No new secret is required.** It reuses the existing `GEMINI_API_KEY`, the optional `GEMINI_MODEL` override (resolved through the same `_shared/geminiModel.ts` as `analyze-paper`, so the two cannot silently disagree on the model), and the auto-injected `SUPABASE_URL` / `SUPABASE_ANON_KEY`. **No migration is required** — the feature adds no table, column, RPC or RLS policy.
 
-**Required ordering — the endpoint must not lag the UI that calls it.** Same durable rule as §7b, and it binds `001B`:
+**Required ordering for every FUTURE change — the endpoint must not lag the UI that calls it.** The initial deployment is done; this rule is durable and governs any later PR that changes this function, or any shared module inside its bundle, in a way that alters the request/response contract. Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge, so a frontend expecting a contract the deployed function does not serve yet would fail every request.
 
 ```text
 1. independent review approves the exact PR head
-2. obtain explicit owner authorization for the Production Edge deployment
-3. deploy that exact reviewed function from a worktree byte-identical to it:
+2. merge through the normal GitHub process
+3. obtain explicit owner authorization for the Production Edge deployment
+4. deploy the required named function(s) from a worktree byte-identical to the
+   approved code:
      supabase functions deploy suggest-paper-organization --project-ref <project-ref>
-4. verify the deployment: supabase functions list --project-ref <project-ref>
-   — confirm the new slug is ACTIVE, and confirm the other five functions kept
-     their versions and bundle hashes
-5. run the §9.3c verification below
-6. only after the endpoint is proven, merge and ship the 001B frontend
+5. verify live artifacts: supabase functions list --project-ref <project-ref>
+   — confirm the changed slug advanced and is ACTIVE, and confirm every function
+     you did NOT intend to change kept its version and bundle hash
+6. rerun the §9.3c smoke checklist
+7. if a `_shared` module changed, redeploy EVERY function whose bundle contains
+   it — not just this one
 ```
 
-On rollback the order reverses: revert the frontend **before** rolling the function back.
+A frontend-only change that uses the **already-deployed** contract needs no Edge deployment and merges normally. On rollback the order reverses: revert the frontend **before** rolling the function back.
 
-**A Vercel Preview cannot validate this function.** The frontend has no caller for it in `001A`, and a Preview build talks to the linked Supabase project, where the function does not exist. Preview state is evidence about the frontend only.
+**A Vercel Preview cannot validate this function.** A Preview build exercises frontend code only; the endpoint lives in Supabase and is deployed separately. Preview state is evidence about the frontend, never about this endpoint's deployed version.
 
 ---
 
@@ -516,7 +520,7 @@ Run after a `search-pubmed` deployment, or after a frontend change affecting Pub
 
 ### 9.3c AI organization suggestions (Edge Function: `suggest-paper-organization`)
 
-**Do not run this section until the function has actually been deployed under separate authorization (§7c).** Until then the endpoint does not exist remotely and every check below returns a 404 from the gateway, which says nothing about the code.
+Run after any deployment affecting `suggest-paper-organization` or a shared module inside its bundle. The initial rollout verification completed on **2026-08-23** and passed every check below, including one real generation; its evidence is in [migration-history.md](migration-history.md). The boxes stay unchecked because this is a reusable checklist, not a record of one run.
 
 Non-destructive checks first — each is refused before Gemini is contacted and before a quota unit is spent, so none of them costs a request or touches user data:
 
@@ -547,6 +551,8 @@ Then, one real generation (this **does** spend one AI request):
 Finally, confirm the boundary held elsewhere:
 
 - [ ] `analyze-paper` still returns its unchanged `tldr` / `studyType` / `statisticalMethods` contract, and its deployed version and bundle hash are unchanged.
+
+**A transient provider failure is not a failed check.** During the initial rollout the one real generation hit an upstream `503` on its first attempt, retried after 2 s and succeeded — the bounded retry budget absorbed it, the user-visible result was a normal 200, and no refund was issued because a result was delivered. If you see a `provider_status=` warning in the logs followed by `outcome=ok`, that is the retry policy working. A failure is a non-200 response, or a `502`/`500` with a provider class after the budget is exhausted.
 
 ### 9.5 Paper operations
 
