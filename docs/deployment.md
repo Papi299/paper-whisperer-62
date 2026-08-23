@@ -191,6 +191,8 @@ supabase functions deploy delete-account --project-ref <project-ref>
 supabase functions deploy search-pubmed --project-ref <project-ref>
 ```
 
+`suggest-paper-organization` exists in this repository but is **not deployed** and is deliberately absent from the list above — see §7c before running any command for it.
+
 - Run one command per changed function. If a PR touches several, run each.
 - If a PR touches `supabase/functions/_shared/*` (e.g. `env.ts` from PR #139), every function that imports the shared module must be redeployed — the shared file is bundled into each function's deploy artifact.
 - `supabase db push` is **not** needed for Edge-only PRs.
@@ -279,6 +281,52 @@ A frontend-only change that uses the **already-deployed** contract — a renderi
 The empty-query case is the informative one: it proves the worker boots, builds the caller-scoped client and validates the JWT, then stops at request validation **before** the `profiles.pubmed_api_key` lookup and before ESearch/ESummary — so it costs no upstream rate budget. All four passed at the initial rollout on 2026-08-23 ([migration-history.md](migration-history.md)); re-run them after any future deployment.
 
 **No new secret is required.** It uses the auto-injected `SUPABASE_URL` / `SUPABASE_ANON_KEY` and the already-existing per-user `profiles.pubmed_api_key`. **No migration is required** — the feature adds no table, column, RPC or RLS policy.
+
+---
+
+### 7c. `suggest-paper-organization` — NOT deployed; deploy only under separate authorization
+
+**Current state: `suggest-paper-organization` exists in the repository and is NOT deployed to the linked project.** That is the intended state at the end of `AI-PROJECT-TAG-SUGGESTIONS-001A`, not an oversight. The backend contract landed first, on purpose, with **no frontend caller**; the Edit Paper experience that will call it is `001B`. Read the live function list back rather than trusting this paragraph: `supabase functions list --project-ref <project-ref>`.
+
+**What it is.** An advisory, non-mutating suggestion endpoint. It authenticates the caller in-function with `auth.getUser()`, verifies the requested paper belongs to that caller, reads that caller's own Projects and Tags, sends Gemini a bounded, allow-listed semantic payload, and returns four suggestion lists. It consumes **one unit of the existing AI quota** per successful generation through `consume_ai_quota`, and refunds through `refund_ai_quota` when the provider fails or returns an unusable result. It uses **no elevated key**.
+
+**What it is not.** It is not a mutation path. It performs no Project, Tag, `paper_projects`, `paper_tags` or `papers` write, and persists no suggestion — deploying it therefore changes nothing about how the library is stored, and cannot alter existing data. It is also not a second quota system: it records under the existing `ai_analysis` counter, so the owner/manager AI exemption keeps working unchanged. See [decisions-and-triggers.md](decisions-and-triggers.md) C32.
+
+**Deployment artifact.** The function's complete closure is:
+
+```text
+supabase/functions/suggest-paper-organization/index.ts       # Deno shell only
+supabase/functions/suggest-paper-organization/handler.ts     # the whole request path
+supabase/functions/suggest-paper-organization/validation.ts  # request shape, bounds, eligibility
+supabase/functions/suggest-paper-organization/prompt.ts      # provider payload + ephemeral refs
+supabase/functions/suggest-paper-organization/parse.ts       # strict response validation
+supabase/functions/suggest-paper-organization/contract.ts    # bounds and types
+supabase/functions/_shared/env.ts                            # pre-existing, unchanged
+supabase/functions/_shared/geminiModel.ts                    # pre-existing, unchanged
+supabase/functions/_shared/providerError.ts                  # pre-existing, unchanged
+```
+
+The three `_shared` modules were **not modified** by `001A`, so no other function needs redeploying and `analyze-paper` keeps its deployed version and bundle hash. Re-check that closure before any future deploy: if a change reaches one of those shared modules, every function bundling it must be redeployed too.
+
+**No new secret is required.** It reuses the existing `GEMINI_API_KEY`, the optional `GEMINI_MODEL` override (resolved through the same `_shared/geminiModel.ts` as `analyze-paper`, so the two cannot silently disagree on the model), and the auto-injected `SUPABASE_URL` / `SUPABASE_ANON_KEY`. **No migration is required** — the feature adds no table, column, RPC or RLS policy.
+
+**Required ordering — the endpoint must not lag the UI that calls it.** Same durable rule as §7b, and it binds `001B`:
+
+```text
+1. independent review approves the exact PR head
+2. obtain explicit owner authorization for the Production Edge deployment
+3. deploy that exact reviewed function from a worktree byte-identical to it:
+     supabase functions deploy suggest-paper-organization --project-ref <project-ref>
+4. verify the deployment: supabase functions list --project-ref <project-ref>
+   — confirm the new slug is ACTIVE, and confirm the other five functions kept
+     their versions and bundle hashes
+5. run the §9.3c verification below
+6. only after the endpoint is proven, merge and ship the 001B frontend
+```
+
+On rollback the order reverses: revert the frontend **before** rolling the function back.
+
+**A Vercel Preview cannot validate this function.** The frontend has no caller for it in `001A`, and a Preview build talks to the linked Supabase project, where the function does not exist. Preview state is evidence about the frontend only.
 
 ---
 
@@ -465,6 +513,32 @@ Run after a `search-pubmed` deployment, or after a frontend change affecting Pub
 - [ ] Open a paper with an abstract → Analyze → confirm TLDR / study type / statistical methods populate.
 - [ ] Bulk-select 2 papers → Bulk Analyze → confirm the 3-second cooldown between calls and final summary toast (e.g., `2 succeeded, 0 failed`).
 - [ ] Confirm no `Missing required Edge Function environment variable: …` toast — that would indicate `GEMINI_API_KEY` is missing or one of the auto-injected vars isn't available (rare; would surface as a 500 from the function).
+
+### 9.3c AI organization suggestions (Edge Function: `suggest-paper-organization`)
+
+**Do not run this section until the function has actually been deployed under separate authorization (§7c).** Until then the endpoint does not exist remotely and every check below returns a 404 from the gateway, which says nothing about the code.
+
+Non-destructive checks first — each is refused before Gemini is contacted and before a quota unit is spent, so none of them costs a request or touches user data:
+
+- [ ] `OPTIONS` returns 200 with the CORS headers (preflight, answered before any auth).
+- [ ] `GET` returns `405 method_not_allowed`.
+- [ ] `POST` with no Authorization header returns `401 unauthenticated`.
+- [ ] `POST` with a valid token and `{}` returns `400 invalid_request` with `reason: "invalid_paper_id"`.
+- [ ] `POST` with a valid token and a well-formed but **foreign** `paperId` returns `404 paper_not_found`, and the message discloses nothing about the other account.
+- [ ] `POST` with a valid token, an owned `paperId` and a title-only draft returns `400 invalid_request` with `reason: "insufficient_evidence"`.
+
+The title-only case is the informative one: it proves the worker boots, builds the caller-scoped client, validates the JWT and verifies paper ownership, then stops at request validation **before** `consume_ai_quota` and before Gemini — so it costs no AI request.
+
+Then, one real generation (this **does** spend one AI request):
+
+- [ ] `POST` with an owned `paperId` and a draft carrying an abstract returns 200 with exactly the four keys `existingProjects`, `existingTags`, `newProjects`, `newTags`.
+- [ ] Every `existingProjects[].id` / `existingTags[].id` is a Project/Tag that account actually owns, and no `P1`/`T1`-style ref appears anywhere in the response.
+- [ ] Confirm in the Supabase dashboard that the account's `usage_counters` row for `ai_analysis` increased by exactly **one**, and that no `projects`, `tags`, `paper_projects`, `paper_tags` or `papers` row was created, changed or deleted by the call.
+- [ ] Confirm the function logs carry counts and outcome labels only — no abstract text, no Project/Tag names, no raw Gemini body.
+
+Finally, confirm the boundary held elsewhere:
+
+- [ ] `analyze-paper` still returns its unchanged `tldr` / `studyType` / `statisticalMethods` contract, and its deployed version and bundle hash are unchanged.
 
 ### 9.5 Paper operations
 

@@ -675,3 +675,23 @@ Specifically, and permanently:
 **Consequence:** PubMed Search adds a UI mode, a client wrapper and one read-only Edge Function. It adds **no** database object: no table, column, RPC, RLS policy or migration. The `e2e/pubmed-search.spec.ts` regression captures the `fetch-paper-metadata` request at the HTTP boundary and asserts its identifiers are exactly the selected PMIDs with no summary field present, so a future change that inserts ESummary objects directly fails that test rather than shipping.
 
 **Re-evaluation trigger:** only if the canonical importer stops being able to fetch a record the search surface can find — for example if NCBI withdrew EFetch, or PubMed began returning search-only records with no retrievable full metadata. Wanting fewer network round-trips is **not** a trigger; the round-trip is what buys the authoritative record.
+
+### C32. AI organization suggestions are advisory, spend the existing AI quota, and never mutate the library (2026-08-23)
+
+**Decision:** AI-assisted Project/Tag organization (`AI-PROJECT-TAG-SUGGESTIONS-001`) is an **advisory** surface. The `suggest-paper-organization` Edge Function compares one paper against the caller's own taxonomy and returns suggestions. It creates nothing, assigns nothing and persists nothing; the user accepts or rejects each suggestion, and the pre-existing Project/Tag mutation paths remain the sole authority for any change to the library.
+
+Specifically, and permanently:
+
+- the endpoint performs **no** Project, Tag, `paper_projects`, `paper_tags` or `papers` write, and stores no suggestion history — its only writes are the existing `consume_ai_quota` / `refund_ai_quota` RPCs;
+- there is **one** AI quota. The feature records under the existing `ai_analysis` usage counter rather than introducing a second quota system, a new column or a suggestion-specific allowance, so the owner/manager `ai_quota_exempt` grant (C28) keeps applying without the function knowing anything about internal roles;
+- a Google rate limit, 403 or 5xx is a **provider** failure (HTTP 500, neutral wording, machine-readable class from `_shared/providerError.ts`) and never a Paperlume `402 quota_exceeded` — the same distinction `analyze-paper` draws;
+- **no database identifier reaches Gemini.** Projects and Tags cross the boundary as request-local `P1`/`T1` refs, and the ref→id map exists only for the lifetime of one request. There is no name matching and no fuzzy fallback, so a ref the model invents resolves to nothing;
+- the provider sees only paper title, abstract, keywords and study type, plus Project name/description and Tag name. User id, email, plan, quota counters, internal role, authors, affiliations, ORCID, notes, PMID, DOI, every URL, attachments and other papers are excluded by construction — `prompt.ts` builds the payload by naming allowed fields, so a new column cannot silently widen the disclosure;
+- **the taxonomy comparison is complete or it does not happen.** A library larger than the supported bound fails honestly rather than sending an arbitrary subset, because a partial comparison produces confident "new Project" proposals for Projects the user already has — a wrong answer the user cannot detect;
+- a title-only paper is refused before a quota unit is spent: organizing a paper from its title alone is a guess the user would be charged for.
+
+**Rationale:** The suggestion is a *recommendation about the user's own filing system*, and filing systems are personal. Auto-assignment would make an AI guess indistinguishable from a deliberate curation decision, and the library is the product's durable asset. Keeping the endpoint read-only also means prompt injection has no mutation authority to redirect: the worst a hostile abstract can achieve is a bad suggestion the user declines.
+
+**Consequence:** The feature adds **no** database object — no table, column, RPC, RLS policy or migration. It ships in two parts: `001A` is the backend contract (this Edge Function, its bounds and its tests) with **no frontend caller**; `001B` adds the Edit Paper experience. Because the UI is useless without the endpoint, the `search-pubmed` endpoint-before-UI rule applies — see [deployment.md](deployment.md) §7c.
+
+**Re-evaluation trigger:** for the quota model, only a product decision that organization suggestions should be priced separately from analysis. For the taxonomy bound, only a retrieval/embedding design that can compare a paper against a large library without sending all of it — at which point "fail honestly" is replaced by a *complete* comparison, never by silent truncation. Wanting the feature to work for an over-sized library is **not** a trigger to start truncating.
