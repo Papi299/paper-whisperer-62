@@ -524,10 +524,18 @@ Non-destructive checks first — each is refused before Gemini is contacted and 
 - [ ] `GET` returns `405 method_not_allowed`.
 - [ ] `POST` with no Authorization header returns `401 unauthenticated`.
 - [ ] `POST` with a valid token and `{}` returns `400 invalid_request` with `reason: "invalid_paper_id"`.
-- [ ] `POST` with a valid token and a well-formed but **foreign** `paperId` returns `404 paper_not_found`, and the message discloses nothing about the other account.
 - [ ] `POST` with a valid token, an owned `paperId` and a title-only draft returns `400 invalid_request` with `reason: "insufficient_evidence"`.
+- [ ] `POST` with a valid token and a well-formed but **foreign** `paperId` (with an otherwise valid draft, so validation cannot short-circuit it) returns `404 paper_not_found`, and the message discloses nothing about the other account.
 
-The title-only case is the informative one: it proves the worker boots, builds the caller-scoped client, validates the JWT and verifies paper ownership, then stops at request validation **before** `consume_ai_quota` and before Gemini — so it costs no AI request.
+**These last two prove different things, and neither substitutes for the other.** The handler validates the request *before* it queries the paper:
+
+```text
+CORS → method → auth header → getUser() → request validation → paper ownership
+     → taxonomy → provider-input build → consume quota → Gemini
+```
+
+- The **title-only** case proves worker boot, the Authorization path, `getUser()`, body parsing, and the eligibility rule — and that the request stops at validation, **before** `consume_ai_quota` and before Gemini, so it costs no AI request. It does **not** prove ownership was enforced: validation rejects it before the `papers` query ever runs, and it would return the same `400` even if the `paperId` were not the caller's.
+- The **foreign-paper** case is the ownership proof, and only if its draft is otherwise valid. Give it a real title plus an abstract so it survives validation and actually reaches the ownership query; then the `404` shows the row was refused on ownership, and that no quota unit or provider call followed. A foreign paper sent with a title-only draft returns `400`, which tells you nothing about ownership.
 
 Then, one real generation (this **does** spend one AI request):
 
