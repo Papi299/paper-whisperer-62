@@ -136,11 +136,18 @@ export function usePaperAnalysisActions({
     queryClient.invalidateQueries({ queryKey: queryKeys.aiQuota.status(userId) });
   }, [queryClient, userId]);
 
-  /** Consistent, non-commercial quota-exhausted toast. */
+  /**
+   * Consistent, non-commercial quota-exhausted toast.
+   *
+   * The allowance is named "AI requests": the same `ai_analysis` counter is
+   * also spent by Edit Paper's organization suggestions, so the shared wall
+   * cannot be described as "analyses". The action-specific copy elsewhere in
+   * this hook ("AI analysis unavailable", "AI Analysis failed") is unchanged.
+   */
   const toastQuotaExhausted = useCallback(
     (info: { periodType: string | null; used: number; quota: number; resetAt: string | null }) => {
       toast({
-        title: "AI analyses used up",
+        title: "AI requests used up",
         description: formatQuotaExceededMessage(info),
         variant: "destructive",
       });
@@ -340,7 +347,7 @@ export function usePaperAnalysisActions({
       // allowance/reset detail from the parsed 402 plus the run accounting.
       const allowance = quotaInfo ? `${formatQuotaExceededMessage(quotaInfo)} ` : "";
       toast({
-        title: "AI analyses used up",
+        title: "AI requests used up",
         description: `${allowance}This run: ${successCount} analyzed, ${failCount} failed, ${unattempted} not attempted.`,
         variant: "destructive",
       });

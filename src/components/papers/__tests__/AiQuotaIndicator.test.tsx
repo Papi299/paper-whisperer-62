@@ -11,7 +11,7 @@ describe("AiQuotaIndicator", () => {
   it("renders remaining and total for a lifetime allowance", () => {
     render(<AiQuotaIndicator status={status()} isLoading={false} isError={false} />);
     const el = screen.getByRole("status");
-    expect(el).toHaveTextContent("AI analyses:");
+    expect(el).toHaveTextContent("AI requests:");
     expect(el).toHaveTextContent("12");
     expect(el).toHaveTextContent("15");
     expect(el).toHaveTextContent("Lifetime");
@@ -110,7 +110,7 @@ describe("AiQuotaIndicator", () => {
 
   it("renders a fixed-size loading placeholder (no content, no layout shift)", () => {
     render(<AiQuotaIndicator status={null} isLoading={true} isError={false} />);
-    expect(screen.getByLabelText("Loading AI analysis quota")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading AI request quota")).toBeInTheDocument();
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -136,8 +136,8 @@ describe("AiQuotaIndicator (compact)", () => {
     render(<AiQuotaIndicator status={status()} isLoading={false} isError={false} variant="compact" />);
     const el = screen.getByRole("status");
     expect(el).toHaveTextContent("12/15");
-    expect(el).not.toHaveTextContent("AI analyses:");
-    expect(el.getAttribute("aria-label")).toMatch(/Lifetime AI analysis allowance: 12 of 15 remaining/);
+    expect(el).not.toHaveTextContent("AI requests:");
+    expect(el.getAttribute("aria-label")).toMatch(/Lifetime AI request allowance: 12 of 15 remaining/);
     expect(el.getAttribute("title")).toMatch(/12 of 15 remaining/);
   });
 
@@ -153,7 +153,7 @@ describe("AiQuotaIndicator (compact)", () => {
     const el = screen.getByRole("status");
     expect(el).toHaveTextContent("∞");
     expect(el).not.toHaveTextContent("15");
-    expect(el.getAttribute("aria-label")).toMatch(/Unlimited AI analyses/);
+    expect(el.getAttribute("aria-label")).toMatch(/Unlimited AI requests/);
     expect(el.getAttribute("aria-label")).not.toMatch(/upgrade|pay|billing|checkout/i);
   });
 
@@ -168,7 +168,7 @@ describe("AiQuotaIndicator (compact)", () => {
     );
     const el = screen.getByRole("status");
     expect(el).toHaveTextContent(/unavailable/i);
-    expect(el.getAttribute("aria-label")).toBe("AI analyses unavailable");
+    expect(el.getAttribute("aria-label")).toBe("AI requests unavailable");
   });
 
   it("computes the same numbers as the full variant", () => {
@@ -187,6 +187,76 @@ describe("AiQuotaIndicator (compact)", () => {
     expect(container).toBeEmptyDOMElement();
     unmount();
     render(<AiQuotaIndicator status={null} isLoading={true} isError={false} variant="compact" />);
-    expect(screen.getByLabelText("Loading AI analysis quota")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading AI request quota")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The shared allowance is spent by paper analysis AND by Edit Paper's
+ * organization suggestions (one `ai_analysis` counter), so every surface that
+ * names it must say "AI requests". Action-specific wording elsewhere ("AI
+ * Analyze", "AI analysis complete") is deliberately untouched — these
+ * assertions are about the *allowance* only.
+ */
+describe("AiQuotaIndicator — allowance is named 'AI requests'", () => {
+  it("desktop: names the allowance in visible text and never says 'AI analyses'", () => {
+    render(<AiQuotaIndicator status={status()} isLoading={false} isError={false} />);
+    const el = screen.getByRole("status");
+    expect(el).toHaveTextContent("AI requests:");
+    expect(el.textContent).not.toMatch(/AI analys/i);
+    expect(el.getAttribute("aria-label")).not.toMatch(/AI analys/i);
+  });
+
+  it("compact: keeps the full AI-request allowance in the accessible name", () => {
+    render(<AiQuotaIndicator status={status()} isLoading={false} isError={false} variant="compact" />);
+    const el = screen.getByRole("status");
+    expect(el.getAttribute("aria-label")).toMatch(/AI request allowance/);
+    expect(el.getAttribute("aria-label")).not.toMatch(/AI analys/i);
+  });
+
+  it("exempt: 'Unlimited AI requests', never 'Unlimited AI analyses'", () => {
+    render(
+      <AiQuotaIndicator
+        status={status({ isExempt: true, allowed: true, reason: "quota_exempt" })}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    const el = screen.getByRole("status");
+    expect(el.getAttribute("aria-label")).toMatch(/Unlimited AI requests/);
+    expect(el.getAttribute("aria-label")).not.toMatch(/AI analys/i);
+    expect(el).toHaveTextContent("AI requests:");
+  });
+
+  it("unavailable: describes AI requests as unavailable", () => {
+    render(
+      <AiQuotaIndicator status={status({ periodType: null })} isLoading={false} isError={false} />,
+    );
+    const el = screen.getByRole("status");
+    expect(el).toHaveTextContent("AI requests: unavailable");
+    expect(el.getAttribute("aria-label")).toBe("AI requests unavailable");
+    expect(el.getAttribute("title")).not.toMatch(/AI analys/i);
+  });
+
+  it("loading: the busy label names AI requests", () => {
+    render(<AiQuotaIndicator status={null} isLoading={true} isError={false} />);
+    expect(screen.getByLabelText("Loading AI request quota")).toBeInTheDocument();
+  });
+
+  it("introduces no upgrade, checkout, pricing or paywall call to action", () => {
+    for (const variant of ["full", "compact"] as const) {
+      const { container, unmount } = render(
+        <AiQuotaIndicator
+          status={status({ remaining: 0, used: 15 })}
+          isLoading={false}
+          isError={false}
+          variant={variant}
+        />,
+      );
+      expect(container.textContent ?? "").not.toMatch(/upgrade|checkout|pricing|billing|buy|plan now/i);
+      expect(container.querySelector("a")).toBeNull();
+      expect(container.querySelector("button")).toBeNull();
+      unmount();
+    }
   });
 });

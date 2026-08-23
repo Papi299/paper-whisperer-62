@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseAnalyzeError, formatQuotaExceededMessage, formatResetDate } from "@/lib/analyzeError";
+import {
+  parseAnalyzeError,
+  parseAiEdgeError,
+  formatQuotaExceededMessage,
+  formatResetDate,
+} from "@/lib/analyzeError";
 
 /** Build a FunctionsHttpError-like object with a Response `.context`. */
 function httpError(status: number, body: string): unknown {
@@ -237,6 +242,100 @@ describe("formatQuotaExceededMessage", () => {
     const aug1 = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 1)));
     const msg = formatQuotaExceededMessage({ periodType: "monthly", used: 350, quota: 350, resetAt: "2026-08-01T00:00:00Z" });
     expect(msg).toContain(aug1);
+  });
+});
+
+describe("parseAiEdgeError — one parser, two functions, no cross-talk", () => {
+  const providerBody = (error: string) =>
+    JSON.stringify({ error, code: "provider_rate_limit", message: "temporarily unavailable" });
+
+  it("reads a suggestions_unavailable 500 when asked for that discriminator", async () => {
+    const result = await parseAiEdgeError(
+      httpError(500, providerBody("suggestions_unavailable")),
+      "suggestions_unavailable",
+    );
+    expect(result.kind).toBe("provider_failure");
+  });
+
+  it("does NOT read an analysis 500 as a suggestion provider failure", async () => {
+    const result = await parseAiEdgeError(
+      httpError(500, providerBody("analysis_unavailable")),
+      "suggestions_unavailable",
+    );
+    expect(result.kind).toBe("other");
+  });
+
+  it("does NOT read a suggestion 500 as an analysis provider failure", async () => {
+    const result = await parseAiEdgeError(
+      httpError(500, providerBody("suggestions_unavailable")),
+      "analysis_unavailable",
+    );
+    expect(result.kind).toBe("other");
+  });
+
+  it("shares the 402 quota branch across both functions", async () => {
+    for (const code of ["analysis_unavailable", "suggestions_unavailable"] as const) {
+      const result = await parseAiEdgeError(httpError(402, validQuotaBody), code);
+      expect(result.kind).toBe("quota_exceeded");
+    }
+  });
+});
+
+describe("shared allowance wording is 'AI requests'", () => {
+  // One `ai_analysis` counter is spent by paper analysis AND by organization
+  // suggestions, so the wall cannot be described as "analyses" — a user who
+  // ran out on suggestions would be told they were out of the wrong thing.
+  it("names the lifetime allowance 'AI requests', not 'AI analyses'", () => {
+    const msg = formatQuotaExceededMessage({
+      periodType: "lifetime",
+      used: 15,
+      quota: 15,
+      resetAt: null,
+    });
+    expect(msg).toContain("AI requests");
+    expect(msg).not.toContain("AI analyses");
+  });
+
+  it("names the monthly allowance 'AI requests' too", () => {
+    const msg = formatQuotaExceededMessage({
+      periodType: "monthly",
+      used: 350,
+      quota: 350,
+      resetAt: "2026-08-01T00:00:00Z",
+    });
+    expect(msg).toContain("AI requests");
+    expect(msg).not.toContain("AI analyses");
+  });
+
+  it("uses AI-request wording for a zero-quota allowance", () => {
+    const msg = formatQuotaExceededMessage({
+      periodType: "lifetime",
+      used: 0,
+      quota: 0,
+      resetAt: null,
+    });
+    expect(msg).toContain("AI requests");
+  });
+
+  it("uses AI-request wording for the no-bucket unavailable state", () => {
+    const msg = formatQuotaExceededMessage({
+      periodType: null,
+      used: 0,
+      quota: 0,
+      resetAt: null,
+    });
+    expect(msg).toContain("AI requests");
+    expect(msg).not.toContain("AI analysis");
+  });
+
+  it("still carries no upgrade or paywall language", () => {
+    const msg = formatQuotaExceededMessage({
+      periodType: "lifetime",
+      used: 15,
+      quota: 15,
+      resetAt: null,
+    });
+    expect(msg).not.toMatch(/upgrade|pay|billing|purchase|subscri|checkout/i);
   });
 });
 
