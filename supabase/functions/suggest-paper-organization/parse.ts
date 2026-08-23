@@ -38,16 +38,32 @@
  *      order) rather than rejected. Being one over a soft cap is ordinary model
  *      behaviour; being at twenty-five is not, and that is what the hard ceiling
  *      above catches.
- *   3. *New-name collisions.* See `resolveNewProjects` below.
+ *   3. *New-name collisions that identify exactly one existing entity.* See
+ *      `resolveNewProjects` below. A collision that identifies *more than one*
+ *      existing entity is neither promoted nor kept — it is dropped, because
+ *      choosing between the candidates would be a guess.
+ *
+ * ## Two mechanisms, deliberately kept apart
+ *
+ * **Reference resolution.** A `P#`/`T#` suggestion resolves *only* through the
+ * request-local ref map built in `prompt.ts`. There is no name-based fallback and
+ * no fuzzy matching for resolving an existing-entity suggestion, and the model
+ * never supplies an id. This is the mechanism that keeps existing-entity
+ * suggestions truthful.
+ *
+ * **New-name collision detection.** Separately, an exact *application-normalized*
+ * name comparison decides whether a proposal the model labelled "new" is already
+ * represented in the taxonomy. It never resolves a ref, and it never rescues a
+ * bad one; it only reclassifies a proposal the model itself said was new, and
+ * only when the comparison identifies exactly one existing entity.
  *
  * ## Why an unknown ref is fatal rather than dropped
  *
- * Both are safe — an unknown ref can never resolve to a row, because the only
- * ref→id path in this function is the map built in `prompt.ts`, and there is no
- * name matching, no fuzzy matching and no fallback anywhere. Rejecting the whole
- * response is chosen because a fabricated ref means the model is not honouring
- * the one contract term that keeps existing-entity suggestions truthful, and the
- * rest of that same response should not be trusted either. The user is refunded.
+ * Both are safe — an unknown ref can never resolve to a row, because of the
+ * reference-resolution rule above. Rejecting the whole response is chosen because
+ * a fabricated ref means the model is not honouring the one contract term that
+ * keeps existing-entity suggestions truthful, and the rest of that same response
+ * should not be trusted either. The user is refunded.
  */
 
 import {
@@ -86,6 +102,34 @@ const TOP_LEVEL_KEYS = ["existingProjects", "existingTags", "newProjects", "newT
 const EXISTING_ITEM_KEYS = new Set(["ref", "reason", "name"]);
 const NEW_PROJECT_ITEM_KEYS = new Set(["name", "description", "reason"]);
 const NEW_TAG_ITEM_KEYS = new Set(["name", "reason"]);
+
+/**
+ * Index of the caller's current taxonomy by **application-normalized** name,
+ * used only to decide whether a proposal the model labelled "new" is in fact
+ * already in the library.
+ *
+ * The value is an **array**, and that is the whole point. The application key is
+ * `trim + lower` while the database's uniqueness key is `lower(name)` alone (see
+ * `normalizeName` in `contract.ts`), so the application key is deliberately
+ * *broader*: `"Diabetes"` and `" Diabetes "` are two legal rows for one user and
+ * collapse to one key here. A single-valued map would silently drop one of them
+ * and then hand back the survivor's real id as though the match had been
+ * unambiguous. Keeping every candidate is what makes that impossible to express.
+ */
+type CollisionIndex = Map<string, Array<{ id: string; name: string }>>;
+
+function buildCollisionIndex(
+  entities: Iterable<{ id: string; name: string }>,
+): CollisionIndex {
+  const index: CollisionIndex = new Map();
+  for (const entity of entities) {
+    const key = normalizeName(entity.name);
+    const bucket = index.get(key);
+    if (bucket === undefined) index.set(key, [entity]);
+    else bucket.push(entity);
+  }
+  return index;
+}
 
 export type ParseFailureReason = "empty" | "parse";
 
@@ -202,18 +246,31 @@ function resolveExisting<T extends { id: string; name: string }>(
  *
  * **Collision behaviour.** The server knows the caller's complete current
  * taxonomy — that is the whole premise of the request — so a "new" Project whose
- * name case-insensitively matches an existing one is not a new Project. It is
- * converted into an existing-Project suggestion, carrying the model's own
- * rationale, because the mapping is unambiguous: the database's
- * `(user_id, lower(name))` unique index guarantees at most one row can match, so
- * the conversion resolves to exactly one entity without any fuzzy matching. If
- * that entity is already suggested, or the existing-Project cap is full, the
- * proposal is dropped instead. Either way it is never returned as "new", so the
- * future UI can never offer to create a duplicate the database would reject.
+ * application-normalized name matches an existing one is not a new Project.
+ * What happens next depends on how many existing Projects that comparison
+ * identifies:
+ *
+ *   - **none** → the proposal is genuinely new and is returned as such;
+ *   - **exactly one** → it is converted into an existing-Project suggestion
+ *     carrying the model's own rationale. The conversion is safe precisely
+ *     because the match is unique; if that entity is already suggested, or the
+ *     existing-Project cap is full, the proposal is dropped instead;
+ *   - **more than one** → the proposal is dropped, and no id is returned.
+ *
+ * The third case is possible because the application's comparison key
+ * (`trim + lower`) is deliberately broader than the database's uniqueness key
+ * (`lower(name)`, no trim): `"Diabetes"` and `" Diabetes "` are two rows the
+ * database is happy to keep, and they collapse to one key here. That breadth is
+ * wanted — it catches near-duplicates the database would cheerfully accept — but
+ * it means a match is not automatically unique, so uniqueness is checked rather
+ * than assumed.
+ *
+ * In every case the proposal is never returned as "new" once it collides, so the
+ * future UI cannot offer to create a duplicate the database would reject.
  */
 function resolveNewProjects(
   items: unknown[],
-  existingByName: Map<string, { id: string; name: string }>,
+  existingByName: CollisionIndex,
   alreadySuggested: ExistingProjectSuggestion[],
 ):
   | { ok: true; newProjects: NewProjectSuggestion[]; promoted: ExistingProjectSuggestion[] }
@@ -253,8 +310,22 @@ function resolveNewProjects(
     if (seenNames.has(normalized)) continue;
     seenNames.add(normalized);
 
-    const collision = existingByName.get(normalized);
-    if (collision !== undefined) {
+    const candidates = existingByName.get(normalized) ?? [];
+
+    if (candidates.length > 1) {
+      // Two or more of the caller's own Projects share this normalized name.
+      // Nothing here can tell which one the model meant, and every tie-break
+      // available — insertion order, id order, shortest name, first match — is a
+      // guess dressed up as a decision that would return one real id as if it
+      // were certain. Drop the proposal instead: it is not returned as new
+      // (which would offer to create a third near-duplicate) and it is not
+      // promoted (which would require choosing). The rest of the response is
+      // untouched and still useful.
+      continue;
+    }
+
+    if (candidates.length === 1) {
+      const collision = candidates[0];
       if (suggestedIds.has(collision.id)) continue;
       suggestedIds.add(collision.id);
       promoted.push({ id: collision.id, name: collision.name, reason });
@@ -274,7 +345,7 @@ function resolveNewProjects(
 /** Same contract as `resolveNewProjects`, for Tags, which carry no description. */
 function resolveNewTags(
   items: unknown[],
-  existingByName: Map<string, { id: string; name: string }>,
+  existingByName: CollisionIndex,
   alreadySuggested: ExistingTagSuggestion[],
 ):
   | { ok: true; newTags: NewTagSuggestion[]; promoted: ExistingTagSuggestion[] }
@@ -300,8 +371,13 @@ function resolveNewTags(
     if (seenNames.has(normalized)) continue;
     seenNames.add(normalized);
 
-    const collision = existingByName.get(normalized);
-    if (collision !== undefined) {
+    const candidates = existingByName.get(normalized) ?? [];
+
+    // Same ambiguity rule as Projects — see resolveNewProjects.
+    if (candidates.length > 1) continue;
+
+    if (candidates.length === 1) {
+      const collision = candidates[0];
       if (suggestedIds.has(collision.id)) continue;
       suggestedIds.add(collision.id);
       promoted.push({ id: collision.id, name: collision.name, reason });
@@ -374,16 +450,11 @@ export function parseSuggestionsResponse(
   );
 
   // Name → row indexes over the *complete* taxonomy that was shown to the model,
-  // used only for collision detection. Built from the ref map's values, so it is
-  // by construction the same set of caller-owned rows.
-  const projectsByName = new Map<string, { id: string; name: string }>();
-  for (const project of refMap.projects.values()) {
-    projectsByName.set(normalizeName(project.name), project);
-  }
-  const tagsByName = new Map<string, { id: string; name: string }>();
-  for (const tag of refMap.tags.values()) {
-    tagsByName.set(normalizeName(tag.name), tag);
-  }
+  // used ONLY for collision detection and never for resolving a P#/T# reference.
+  // Built from the ref map's values, so by construction they cover exactly the
+  // same set of caller-owned rows the model was given.
+  const projectsByName = buildCollisionIndex(refMap.projects.values());
+  const tagsByName = buildCollisionIndex(refMap.tags.values());
 
   const newProjects = resolveNewProjects(arrays.newProjects, projectsByName, projectSuggestions);
   if (!newProjects.ok) return invalid(newProjects.detail);

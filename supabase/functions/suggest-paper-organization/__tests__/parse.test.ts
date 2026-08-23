@@ -230,7 +230,10 @@ describe("parseSuggestionsResponse — reference integrity", () => {
 
   /**
    * The property that makes fabrication unrepresentable rather than unlikely:
-   * a real project name is not a ref, and there is no name-based fallback.
+   * a real project name is not a ref, and ref resolution has no name-based
+   * fallback. (Name comparison exists elsewhere in this module, but only to
+   * reclassify a proposal the model itself labelled "new" — never to resolve a
+   * `P#`/`T#`, as this asserts.)
    */
   it("does not resolve an existing entity by name under any circumstances", () => {
     expectUnusable(
@@ -443,6 +446,121 @@ describe("parseSuggestionsResponse — new-name collisions with the existing tax
       ),
     );
     expect(suggestions.existingProjects).toHaveLength(MAX_EXISTING_PROJECT_SUGGESTIONS);
+    expect(suggestions.newProjects).toEqual([]);
+  });
+
+  /**
+   * CORRECTION-01. The database's uniqueness key is `(user_id, lower(name))` with
+   * **no trim**, so "Diabetes" and " Diabetes " are two rows one user may legally
+   * hold. The application's collision key trims as well, so both collapse to
+   * "diabetes" — one key, two candidates.
+   *
+   * Before the fix, the collision index was a `Map<string, entity>`: the second
+   * row silently overwrote the first, and a later "DIABETES" proposal was
+   * promoted to whichever row happened to survive, returning that row's real
+   * UUID as though the match had been certain. These assert that no id is
+   * returned at all when the match is not unique.
+   */
+  const AMBIGUOUS_A = { id: "aaaaaaaa-0000-4000-8000-000000000001", name: "Diabetes", description: null };
+  const AMBIGUOUS_B = { id: "bbbbbbbb-0000-4000-8000-000000000002", name: " Diabetes ", description: null };
+
+  function ambiguousProjectMap(): TaxonomyRefMap {
+    return {
+      projects: new Map([["P1", AMBIGUOUS_A], ["P2", AMBIGUOUS_B]]),
+      tags: new Map(),
+    };
+  }
+
+  it("never resolves a new-Project proposal that matches two existing Projects", () => {
+    const suggestions = expectValid(
+      parse(
+        {
+          ...EMPTY,
+          newProjects: [{ name: "DIABETES", description: null, reason: "Fits." }],
+        },
+        ambiguousProjectMap(),
+      ),
+    );
+
+    // Not arbitrarily either candidate...
+    expect(suggestions.existingProjects).toEqual([]);
+    const serialized = JSON.stringify(suggestions);
+    expect(serialized).not.toContain(AMBIGUOUS_A.id);
+    expect(serialized).not.toContain(AMBIGUOUS_B.id);
+    // ...and not kept as "new" either, since it does collide with the library.
+    expect(suggestions.newProjects).toEqual([]);
+  });
+
+  it("never resolves a new-Tag proposal that matches two existing Tags", () => {
+    const TAG_X = { id: "cccccccc-0000-4000-8000-000000000003", name: "Protein" };
+    const TAG_Y = { id: "dddddddd-0000-4000-8000-000000000004", name: " Protein " };
+    const suggestions = expectValid(
+      parse(
+        { ...EMPTY, newTags: [{ name: "PROTEIN", reason: "Fits." }] },
+        { projects: new Map(), tags: new Map([["T1", TAG_X], ["T2", TAG_Y]]) },
+      ),
+    );
+
+    expect(suggestions.existingTags).toEqual([]);
+    const serialized = JSON.stringify(suggestions);
+    expect(serialized).not.toContain(TAG_X.id);
+    expect(serialized).not.toContain(TAG_Y.id);
+    expect(suggestions.newTags).toEqual([]);
+  });
+
+  it("drops only the ambiguous proposal, leaving the rest of a valid response usable", () => {
+    // The model did nothing wrong here — the ambiguity is in the user's own
+    // taxonomy — so the response stays valid and the other suggestions survive.
+    const suggestions = expectValid(
+      parse(
+        {
+          ...EMPTY,
+          existingProjects: [{ ref: "P1", reason: "By reference." }],
+          newProjects: [
+            { name: "DIABETES", reason: "Ambiguous." },
+            { name: "Sleep Science", reason: "Genuinely new." },
+          ],
+        },
+        ambiguousProjectMap(),
+      ),
+    );
+    // A direct P# reference is unaffected: it never went through name matching.
+    expect(suggestions.existingProjects).toEqual([
+      { id: AMBIGUOUS_A.id, name: "Diabetes", reason: "By reference." },
+    ]);
+    expect(suggestions.newProjects).toEqual([
+      { name: "Sleep Science", description: null, reason: "Genuinely new." },
+    ]);
+  });
+
+  it("is unaffected by the order the ambiguous rows appear in", () => {
+    const forward = expectValid(
+      parse({ ...EMPTY, newProjects: [{ name: "diabetes", reason: "r" }] }, ambiguousProjectMap()),
+    );
+    const reversed = expectValid(
+      parse(
+        { ...EMPTY, newProjects: [{ name: "diabetes", reason: "r" }] },
+        { projects: new Map([["P1", AMBIGUOUS_B], ["P2", AMBIGUOUS_A]]), tags: new Map() },
+      ),
+    );
+    // No tie-break exists, so row order cannot change the answer.
+    expect(forward).toEqual(reversed);
+    expect(forward.existingProjects).toEqual([]);
+    expect(forward.newProjects).toEqual([]);
+  });
+
+  it("still promotes when exactly one existing entity matches, despite a trim-only sibling elsewhere", () => {
+    // " Diabetes " alone is a unique match under the application key, so the
+    // promotion path is still available — the fix narrows nothing but ambiguity.
+    const suggestions = expectValid(
+      parse(
+        { ...EMPTY, newProjects: [{ name: "diabetes", reason: "Fits." }] },
+        { projects: new Map([["P1", AMBIGUOUS_B]]), tags: new Map() },
+      ),
+    );
+    expect(suggestions.existingProjects).toEqual([
+      { id: AMBIGUOUS_B.id, name: " Diabetes ", reason: "Fits." },
+    ]);
     expect(suggestions.newProjects).toEqual([]);
   });
 

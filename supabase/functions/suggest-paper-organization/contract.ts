@@ -160,7 +160,12 @@ export interface ProviderInput {
 /**
  * Server-side map from a request-local ref back to the real row. Built in the
  * same pass that builds `ProviderInput`, and the *only* way a ref becomes an
- * id — there is no name-based or fuzzy fallback anywhere in this function.
+ * id: there is no name-based fallback and no fuzzy matching for resolving a
+ * `P#`/`T#`, so an invented ref resolves to nothing.
+ *
+ * Name comparison does exist in `parse.ts`, but for a different question — is a
+ * proposal the model called *new* already in the taxonomy? — and it never
+ * rescues a bad ref. See `normalizeName` below and `CollisionIndex` there.
  */
 export interface TaxonomyRefMap {
   projects: Map<string, OwnedProject>;
@@ -224,10 +229,22 @@ export function isUuid(value: unknown): value is string {
 }
 
 /**
- * Normalize a name for identity comparison — the same normalization the
- * database's per-user unique indexes use (`(user_id, lower(name))`), plus a
- * trim, so "  Diabetes " and "diabetes" are one entity here exactly as they
- * would be one row there.
+ * Normalize a name for **application-level** collision comparison.
+ *
+ * This is NOT the database's identity key, and the difference matters. The
+ * per-user unique indexes are `(user_id, lower(name))` — lower-casing only, with
+ * **no trim**. This function additionally trims, so it is deliberately *broader*
+ * than the database key:
+ *
+ *   "Diabetes"    → DB key "diabetes"    → this key "diabetes"
+ *   " Diabetes "  → DB key " diabetes "  → this key "diabetes"
+ *
+ * Those are two rows the database will happily hold for one user, and they
+ * collapse to a single key here. The breadth is intentional — it catches
+ * near-duplicates the database would accept — but it means **one normalized key
+ * may correspond to several existing rows**. Any caller using this for identity
+ * must therefore handle the multi-candidate case explicitly rather than assuming
+ * a match is unique; see `CollisionIndex` in `parse.ts`.
  */
 export function normalizeName(value: string): string {
   return value.trim().toLowerCase();
