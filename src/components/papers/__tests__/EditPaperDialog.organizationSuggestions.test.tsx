@@ -592,6 +592,33 @@ describe("EditPaperDialog — Create & select", () => {
     );
   });
 
+  it("cannot start a second creation while one is pending", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    let release: (value: Project | null) => void = () => {};
+    const onCreateProject = vi.fn(
+      () =>
+        new Promise<Project | null>((resolve) => {
+          release = resolve;
+        }),
+    );
+    renderDialog({ onCreateProject });
+    await generate();
+
+    const button = await screen.findByRole("button", {
+      name: 'Create project "Resistance Training" and select it for this paper',
+    });
+    click(button);
+    click(button);
+    click(button);
+
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release({ ...PROJECT_A, id: "proj-new", name: "Resistance Training" });
+      await Promise.resolve();
+    });
+  });
+
   it("selects nothing when creation fails", async () => {
     mockSuggest.mockResolvedValue(FULL);
     const onSave = vi.fn(async () => true);

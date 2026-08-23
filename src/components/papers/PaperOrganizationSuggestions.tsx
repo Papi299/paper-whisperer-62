@@ -201,6 +201,17 @@ export function PaperOrganizationSuggestions({
   /** Monotonic generation counter — only the newest request may commit. */
   const requestSeqRef = useRef(0);
   const mountedRef = useRef(true);
+  /**
+   * Mirrors `creatingKey` synchronously.
+   *
+   * The rendered buttons disable themselves from state, but state is not
+   * readable until React re-renders — so two clicks dispatched inside the same
+   * tick could both pass a state-only check and both attempt a creation. The
+   * database's `(user_id, lower(name))` index would still refuse the duplicate,
+   * so the outcome was never wrong; this just stops the user seeing a spurious
+   * "Project exists" toast for a double-click they meant as one.
+   */
+  const creatingRef = useRef<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -220,6 +231,7 @@ export function PaperOrganizationSuggestions({
     setResultFingerprint(null);
     setError(null);
     setDismissed(new Set());
+    creatingRef.current = null;
     setCreatingKey(null);
     setNotice(null);
   }, [paperId]);
@@ -326,8 +338,12 @@ export function PaperOrganizationSuggestions({
     } finally {
       // The unit may have been consumed (success) or consumed-then-refunded
       // (provider failure), and a 402 is itself news about the counter. Refresh
-      // whenever the server was actually called — even for a response this
-      // component discarded as stale.
+      // whenever a call was attempted — including for a response this component
+      // discarded as stale, and including the narrow case where the wrapper
+      // threw before reaching the network (no usable session). Over-refreshing
+      // a read-only status query is harmless; under-refreshing leaves a wrong
+      // number on screen, so the flag is deliberately set before the call
+      // rather than after it.
       if (attempted) onQuotaRefresh?.();
       // Only the newest request owns the loading flag; an older one must not
       // clear the spinner a newer one is showing.
@@ -377,8 +393,9 @@ export function PaperOrganizationSuggestions({
 
   const handleCreateProject = useCallback(
     async (suggestion: NewProjectSuggestion) => {
-      if (!onCreateProject || disabled || stale || creatingKey) return;
+      if (!onCreateProject || disabled || stale || creatingRef.current) return;
       const key = newProjectKey(suggestion.name);
+      creatingRef.current = key;
       setCreatingKey(key);
       try {
         // Reconcile against the taxonomy as it is NOW, not as the server saw it.
@@ -406,16 +423,18 @@ export function PaperOrganizationSuggestions({
           `Created project "${created.name}" and selected it for this paper. Save to assign it.`,
         );
       } finally {
+        creatingRef.current = null;
         setCreatingKey(null);
       }
     },
-    [onCreateProject, disabled, stale, creatingKey, projects, onSelectProject],
+    [onCreateProject, disabled, stale, projects, onSelectProject],
   );
 
   const handleCreateTag = useCallback(
     async (suggestion: NewTagSuggestion) => {
-      if (!onCreateTag || disabled || stale || creatingKey) return;
+      if (!onCreateTag || disabled || stale || creatingRef.current) return;
       const key = newTagKey(suggestion.name);
+      creatingRef.current = key;
       setCreatingKey(key);
       try {
         const match = matchTaxonomyName(suggestion.name, tags);
@@ -437,10 +456,11 @@ export function PaperOrganizationSuggestions({
         onSelectTag(created.id);
         setNotice(`Created tag "${created.name}" and selected it for this paper. Save to assign it.`);
       } finally {
+        creatingRef.current = null;
         setCreatingKey(null);
       }
     },
-    [onCreateTag, disabled, stale, creatingKey, tags, onSelectTag],
+    [onCreateTag, disabled, stale, tags, onSelectTag],
   );
 
   // ── Visible (non-dismissed) result slices ────────────────────────────────
