@@ -116,11 +116,17 @@ export type AcceptedFileExtension = (typeof ACCEPTED_FILE_EXTENSIONS)[number];
  * One class for all four mode triggers.
  *
  * `min-h-10` is the load-bearing part. Releasing the tab list's fixed `h-10` for
- * the phone's two-row grid also released the triggers' height: measured at
- * 390×844 they collapsed to their 30.5px content box, below the 40px coarse-
- * pointer target this repository holds elsewhere. `sm:min-h-0` hands the height
- * back to the `sm:h-10` list above, so the desktop row is byte-identical to
- * what the three-tab layout produced.
+ * the phone's two-row grid also released the triggers' height: at 390×844 they
+ * collapse to their 32px content box, below the 40px coarse-pointer target this
+ * repository holds elsewhere. `sm:min-h-0` hands the height back to the
+ * `sm:h-10` list above, so the desktop row is byte-identical to what the
+ * three-tab layout produced.
+ *
+ * `e2e/pubmed-search.spec.ts` measures the settled height against 40 exactly,
+ * and a negative control there suppresses this minimum and proves the triggers
+ * fall to 32px without it. (An earlier note here recorded 30.5px; that reading
+ * was taken while the dialog was still running its `zoom-in-95` open animation,
+ * which scales every length inside it by 0.95 — 32 × 0.95 = 30.4.)
  */
 const TAB_TRIGGER_CLASS = "flex items-center gap-1.5 min-h-10 sm:min-h-0";
 

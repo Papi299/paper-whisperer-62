@@ -115,14 +115,42 @@ async function getFreshAccessToken(): Promise<string | null> {
   return refreshData.session.access_token;
 }
 
-/** Whether a function-invocation error looks like an authentication failure. */
-function isAuthError(message: string): boolean {
+/**
+ * Whether an invocation error *message* indicates an authentication failure.
+ *
+ * This is the fallback path only — see {@link isAuthFailure}. It matches
+ * transport- and gateway-level errors, which describe themselves in words
+ * because they never produced a `Response` this client can read a status from.
+ */
+function isAuthErrorMessage(message: string): boolean {
   return (
     message.includes("401") ||
     message.includes("Unauthorized") ||
     message.includes("Invalid JWT") ||
     message.toLowerCase().includes("jwt")
   );
+}
+
+/**
+ * Whether a failed `supabase.functions.invoke` is an authentication failure.
+ *
+ * The status is the authority when there is one. A real non-2xx from the
+ * function does NOT describe itself: `supabase-js` raises the same generic
+ * `Edge Function returned a non-2xx status code` for a 401, a 400 and a 502
+ * alike, and puts the actual `Response` on `error.context`. Deciding from the
+ * message alone therefore misses every genuine HTTP 401 that `search-pubmed`
+ * returns — the retry branch simply never runs, and the user is told to sign in
+ * again when a silent refresh would have worked.
+ *
+ * When a `Response` is present its status is the whole answer, deliberately: a
+ * 502 whose upstream body happens to contain the characters `401` is not an
+ * auth failure and must not spend a refresh.
+ */
+function isAuthFailure(error: { message?: string; context?: unknown }): boolean {
+  if (error.context instanceof Response) {
+    return error.context.status === 401;
+  }
+  return isAuthErrorMessage(error.message ?? "");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -225,7 +253,7 @@ async function describeFunctionError(
   }
 
   const raw = error.message ?? "";
-  if (isAuthError(raw)) {
+  if (isAuthErrorMessage(raw)) {
     return new PubMedSearchError("auth", "Your session has expired. Please sign in again.");
   }
   return new PubMedSearchError("unexpected", "PubMed search failed. Please try again.");
@@ -261,10 +289,11 @@ export async function searchPubMed(request: PubMedSearchRequest): Promise<PubMed
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 
-  // Exactly one refresh-and-retry on an auth failure. Never a loop: a second
-  // 401 after a successful refresh is a real authentication problem, and
-  // retrying it again would only delay telling the user.
-  if (response.error && isAuthError(response.error.message ?? "")) {
+  // Exactly one refresh-and-retry on an auth failure — recognised from the
+  // function's HTTP status, not from the generic invoke message. Never a loop:
+  // a second 401 after a successful refresh is a real authentication problem,
+  // and retrying it again would only delay telling the user.
+  if (response.error && isAuthFailure(response.error)) {
     const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
     if (refreshError || !refreshData.session) {
       throw new PubMedSearchError("auth", "Your session has expired. Please sign in again.");

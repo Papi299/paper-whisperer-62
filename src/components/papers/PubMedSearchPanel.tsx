@@ -51,9 +51,14 @@
  * The checkbox is the selection control and the only selection control. The row
  * is deliberately not a click target: a row-wide toggle that also contains an
  * external link is how a click meant for "Open in PubMed" ends up selecting a
- * paper instead. The checkbox carries a touch-sized padded hit area and an
- * accessible name that names the PMID first, so two records with identical
- * titles remain distinguishable by name alone.
+ * paper instead. Its accessible name names the PMID first, so two records with
+ * identical titles remain distinguishable by name alone.
+ *
+ * That decision has a cost, and {@link CHECKBOX_TOUCH_TARGET_CLASS} is what
+ * pays it: because the row is not a target, the checkbox is the *only* thing a
+ * finger can aim at, and the shared primitive is 16x16 - well under this
+ * repository's 40px coarse-pointer minimum (the same one `min-h-10` restores
+ * for the Add Papers tab triggers). See that constant for the mechanism.
  */
 
 import { useEffect, useRef } from "react";
@@ -114,6 +119,68 @@ function formatRange(offset: number, shown: number, total: number): string {
   return `${first.toLocaleString()}–${last.toLocaleString()} of ${total.toLocaleString()}`;
 }
 
+/**
+ * The selection control's real touch target: 44x44 CSS px, from a 16x16 box.
+ *
+ * `src/components/ui/checkbox.tsx` is `h-4 w-4`. Nothing about the row made
+ * that bigger, so before this the only affordance for selecting a PubMed result
+ * was a 16x16 square - a quarter of the area this repository already requires of
+ * a coarse-pointer target, and less than half of it in each axis.
+ *
+ * The fix is an absolutely positioned, transparent `::before` that extends the
+ * control's hit region 14px on every side: 16 + 14 + 14 = 44. A pseudo-element
+ * is hit-tested *as its originating element*, so `elementFromPoint` anywhere in
+ * that box returns the checkbox and a tap there dispatches to the checkbox.
+ * That buys the target without adding a DOM node, so there is no nested
+ * interactive control, no second click handler, and nothing new in the tab
+ * order: the checked state, the accessible name, Space activation and the
+ * focus ring all stay exactly where they were, on the same element.
+ *
+ * ### Why 44 and not exactly 40
+ *
+ * 12px each side is the arithmetic answer to a 40px minimum, and it was the
+ * first implementation: the row is `p-3` with a `gap-3`, so 12px landed exactly
+ * on the row's left edge and exactly on the text column's leading edge, bleeding
+ * into nothing. Measured in Chromium at 390x844, it delivered **38px**. A region
+ * whose edges coincide with a neighbouring box's edges loses about a pixel to
+ * rounding at each of them, so a target built exactly at the threshold never
+ * actually meets the threshold.
+ *
+ * 14px overshoots deliberately, and what it overshoots into is harmless. To the
+ * right it reaches 2px over the title's leading edge, which is text and not a
+ * control. To the left it reaches 2px past the list's content box; the list is
+ * `overflow-y-auto`, so `overflow-x` computes to `auto` and clips there - and
+ * because overflow to the *left* is never scrollable, that clip costs a couple
+ * of pixels off the far edge of the target and creates no horizontal scrollbar,
+ * which is the failure mode PRs #233-#236 exist to prevent. Measured in
+ * Chromium at 390x844, the delivered target is **41 x 43** - over a 40px
+ * assertion that carries no tolerance, where the arithmetically-exact 12px
+ * version delivered 38.
+ *
+ * Vertically the same 14px stays inside the row: the checkbox sits 14px below
+ * the row's top edge, and the target's bottom still lands well above the "Open
+ * in PubMed" link, which is why the link stays independently hit-testable.
+ *
+ * ### Why it is not behind the repository's `coarse:` variant
+ *
+ * `coarse:` is the right tool for something a finger needs and a mouse must not
+ * get - a bigger *drawn* control, a different focus target. This is neither: the
+ * pseudo-element is `position: absolute`, so it contributes no layout and
+ * changes nothing visible in any composition, and a more forgiving click target
+ * is not something a mouse user needs protecting from.
+ *
+ * Gating it would also open a hole rather than close one. `(pointer: coarse)`
+ * reports the *primary* pointer, so a touchscreen laptop with a mouse attached
+ * matches `fine` - and a finger on that screen would be back to aiming at 16px.
+ * An unconditional target has no such gap, and it is one behaviour to measure
+ * rather than two plus a media query that has to be proven to have matched.
+ *
+ * This is deliberately local. Widening the shared `Checkbox` primitive would
+ * change every checkbox in the application - including dense lists where a
+ * 12px halo would overlap a neighbouring control - to fix one row.
+ */
+const CHECKBOX_TOUCH_TARGET_CLASS = "relative before:absolute before:-inset-3.5 before:content-['']";
+
 function ResultRow({
   result,
   selected,
@@ -135,14 +202,14 @@ function ResultRow({
   return (
     <li className="border-b last:border-b-0">
       <div className="flex items-start gap-3 p-3">
-        {/* `shrink-0` + padded hit area: the control keeps its size and its
-            touch target no matter how long the text beside it is. */}
+        {/* `shrink-0` keeps the control its size no matter how long the text
+            beside it is; the touch class keeps it *tappable*. */}
         <Checkbox
           checked={selected}
           onCheckedChange={onToggle}
           disabled={disabled}
           aria-label={accessibleName}
-          className="mt-0.5 shrink-0"
+          className={`mt-0.5 shrink-0 ${CHECKBOX_TOUCH_TARGET_CLASS}`}
         />
 
         {/* `min-w-0` is what makes the text column shrinkable: without it a long

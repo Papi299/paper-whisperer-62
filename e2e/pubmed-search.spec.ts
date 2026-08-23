@@ -309,12 +309,67 @@ async function openDashboard(page: Page) {
   await waitForDashboard(page);
 }
 
+/**
+ * The coarse-pointer minimum this repository holds every touch target to.
+ *
+ * Asserted exactly, with no tolerance: every target measured here is built from
+ * whole-pixel rules (`min-h-10` = 40px; a 16px box plus 12px of hit region on
+ * each side = 40px), so a fractional result would itself be the bug.
+ */
+const COARSE_POINTER_TARGET_PX = 40;
+
 const dialogOf = (page: Page) => page.getByRole("dialog", { name: "Add Papers" });
+
+/**
+ * Wait until the Add Papers dialog has finished animating, before measuring
+ * anything inside it.
+ *
+ * This is not a politeness `waitForTimeout`; it is the difference between
+ * measuring the layout and measuring an animation frame. `DialogContent`
+ * carries `data-[state=open]:zoom-in-95 duration-200`, i.e. a CSS transform
+ * that scales the entire dialog subtree from 0.95 up to 1.
+ * `getBoundingClientRect()` reports the *transformed* box, so every length
+ * inside reads about 5% small until it lands: a 40px touch target measures
+ * 38.08, and a 16px checkbox measures 15.2.
+ *
+ * That artifact is why the thresholds this remediation replaced were able to
+ * pass. `>= 32` on a tab and `>= 14` on the checkbox both survive a 0.95 scale
+ * comfortably, so nothing ever forced the question of *when* the measurement
+ * was taken. Asserting the real 40px contract does force it — the first run of
+ * the corrected assertions failed at 38.0767 and 38 respectively, mid-zoom.
+ *
+ * The settled transform is a translate, not the identity: the dialog is centred
+ * with `translate-x-[-50%] translate-y-[-50%]`. Only the scale/skew components
+ * must be identity, which is what the matrix test below checks.
+ */
+async function waitForDialogSettled(page: Page) {
+  await page.waitForFunction(() => {
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement | null;
+    if (!dialog) return false;
+    // No keyframe animation still in flight anywhere in the dialog.
+    if (dialog.getAnimations({ subtree: true }).some((animation) => animation.playState === "running")) {
+      return false;
+    }
+    // …and no ancestor is still scaling it.
+    for (let node: Element | null = dialog; node; node = node.parentElement) {
+      const transform = getComputedStyle(node).transform;
+      if (transform !== "none" && !/^matrix\(1, 0, 0, 1[,)]/.test(transform)) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * The scale/skew part of a dialog's transform, as the measurement saw it.
+ * `"none"` or a pure translate means the geometry beside it is real.
+ */
+const DIALOG_SETTLED = /^(none|matrix\(1, 0, 0, 1[,)])/;
 
 async function openPubMedTab(page: Page) {
   await page.getByRole("button", { name: /add papers/i }).click();
   const dialog = dialogOf(page);
   await expect(dialog).toBeVisible();
+  await waitForDialogSettled(page);
   await dialog.getByRole("tab", { name: "PubMed Search" }).click();
   await expect(dialog.getByLabel("Search PubMed")).toBeVisible();
   return dialog;
@@ -483,6 +538,123 @@ async function probeCentreAfterVerticalScroll(page: Page, pmid: string, target: 
     },
     { targetPmid: pmid, which: target },
   );
+}
+
+/**
+ * Measure the selection control's REAL tappable region.
+ *
+ * `getBoundingClientRect()` is the wrong instrument here and that is the whole
+ * point of this helper. The visible checkbox is 16x16 and stays 16x16; the
+ * touch target is a transparent `::before` that extends the hit region to
+ * 40x40. A pseudo-element has no box of its own to measure — it is hit-tested
+ * as its originating element — so the only honest measurement is to ask the
+ * renderer what it would actually deliver a tap to.
+ *
+ * So: walk outwards from the control's centre one CSS pixel at a time and find
+ * the longest contiguous run in each direction that `elementFromPoint` still
+ * resolves to this checkbox. That is, by construction, the region a finger can
+ * land in. It would report ~16 for the bare primitive and ~40 for the fixed
+ * one, which is exactly the distinction the previous version of this test could
+ * not make.
+ */
+async function measureSelectionHitTarget(page: Page, pmid: string) {
+  return page.evaluate((targetPmid) => {
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) =>
+      element.querySelector('ul[aria-label="PubMed search results"]'),
+    );
+    if (!dialog) throw new Error("Add Papers dialog with a PubMed result list not found");
+    const list = dialog.querySelector('ul[aria-label="PubMed search results"]') as HTMLElement;
+    const checkbox = dialog.querySelector(
+      `[role="checkbox"][aria-label^="Select PMID ${targetPmid} "]`,
+    ) as HTMLElement | null;
+    if (!checkbox) throw new Error(`No checkbox for PMID ${targetPmid}`);
+    const row = checkbox.closest("li") as HTMLElement;
+    const link = row.querySelector("a[href^='https://pubmed.ncbi.nlm.nih.gov/']") as HTMLElement;
+
+    // Scroll it into view the way a user would before aiming at it. `nearest`
+    // keeps the list's own scroll offset honest instead of recentring it.
+    checkbox.scrollIntoView({ block: "nearest" });
+
+    const visual = checkbox.getBoundingClientRect();
+    const centreX = Math.round(visual.left + visual.width / 2);
+    const centreY = Math.round(visual.top + visual.height / 2);
+
+    /** Does a tap at this viewport point reach the checkbox? */
+    const owns = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return false;
+      const hit = document.elementFromPoint(x, y);
+      return Boolean(hit && (hit === checkbox || checkbox.contains(hit)));
+    };
+
+    // Bounded so a bug that makes the whole page hit-test to the checkbox
+    // cannot spin: no legitimate target here is anywhere near 120px.
+    const LIMIT = 120;
+    const reach = (dx: number, dy: number) => {
+      let steps = 0;
+      while (steps < LIMIT && owns(centreX + dx * (steps + 1), centreY + dy * (steps + 1))) steps++;
+      return steps;
+    };
+
+    const left = reach(-1, 0);
+    const right = reach(1, 0);
+    const up = reach(0, -1);
+    const down = reach(0, 1);
+
+    // Representative points spread across the enlarged region — deliberately
+    // OUTSIDE the 16x16 visual box (which reaches only 8px from the centre), so
+    // none of them can pass on the strength of the primitive alone.
+    const probes: Record<string, boolean> = {
+      centre: owns(centreX, centreY),
+      left12: owns(centreX - 12, centreY),
+      right12: owns(centreX + 12, centreY),
+      up12: owns(centreX, centreY - 12),
+      down12: owns(centreX, centreY + 12),
+      topLeft: owns(centreX - 11, centreY - 11),
+      topRight: owns(centreX + 11, centreY - 11),
+      bottomLeft: owns(centreX - 11, centreY + 11),
+      bottomRight: owns(centreX + 11, centreY + 11),
+    };
+
+    const hitBox = {
+      left: centreX - left,
+      right: centreX + right,
+      top: centreY - up,
+      bottom: centreY + down,
+    };
+
+    const linkRect = link.getBoundingClientRect();
+    const linkCentreX = linkRect.left + linkRect.width / 2;
+    const linkCentreY = linkRect.top + linkRect.height / 2;
+    const linkHit = document.elementFromPoint(linkCentreX, linkCentreY);
+
+    return {
+      // Proof the numbers below are layout, not an animation frame.
+      dialogTransform: getComputedStyle(dialog as HTMLElement).transform,
+      // The visible control is unchanged and deliberately still compact.
+      visualWidth: visual.width,
+      visualHeight: visual.height,
+      // The measured tappable region.
+      hitWidth: left + right + 1,
+      hitHeight: up + down + 1,
+      hitBox,
+      insideViewport:
+        hitBox.left >= 0 &&
+        hitBox.top >= 0 &&
+        hitBox.right <= window.innerWidth &&
+        hitBox.bottom <= window.innerHeight,
+      probes,
+      // Reaching it must never have required sideways movement.
+      listScrollLeft: list.scrollLeft,
+      dialogScrollLeft: (dialog as HTMLElement).scrollLeft,
+      // The enlarged target must not have swallowed the external link.
+      linkOwnsCentre: Boolean(linkHit && (linkHit === link || link.contains(linkHit))),
+      linkOverlapsHitBox:
+        linkRect.left < hitBox.right &&
+        linkRect.right > hitBox.left &&
+        linkRect.top < hitBox.bottom &&
+        linkRect.bottom > hitBox.top,
+    };
+  }, pmid);
 }
 
 /**
@@ -903,11 +1075,15 @@ test.describe("In-app PubMed discovery", () => {
       await page.getByRole("button", { name: /add papers/i }).click();
       const dialog = dialogOf(page);
       await expect(dialog).toBeVisible();
+      // Measure the layout, not the open animation — see waitForDialogSettled.
+      await waitForDialogSettled(page);
 
       const tabGeometry = await page.evaluate(() => {
         const list = document.querySelector('[role="tablist"]') as HTMLElement;
         const listRect = list.getBoundingClientRect();
+        const dialogEl = list.closest('[role="dialog"]') as HTMLElement;
         return {
+          dialogTransform: getComputedStyle(dialogEl).transform,
           listScrollWidth: list.scrollWidth,
           listClientWidth: list.clientWidth,
           tabs: [...list.querySelectorAll('[role="tab"]')].map((tab) => {
@@ -938,6 +1114,8 @@ test.describe("In-app PubMed discovery", () => {
         "Import File",
         "Manual",
       ]);
+      // The heights below are only meaningful if the dialog was not mid-zoom.
+      expect(tabGeometry.dialogTransform, "tabs were measured mid-animation").toMatch(DIALOG_SETTLED);
       // No hidden horizontal scroll is required to reach any mode.
       expect(tabGeometry.listScrollWidth).toBeLessThanOrEqual(tabGeometry.listClientWidth + 1);
       for (const tab of tabGeometry.tabs) {
@@ -945,8 +1123,15 @@ test.describe("In-app PubMed discovery", () => {
         expect(tab.insideViewport, `${tab.name} is outside the viewport`).toBe(true);
         expect(tab.ownsCentre, `${tab.name} does not own its own centre point`).toBe(true);
         expect(tab.labelFits, `${tab.name} label is truncated`).toBe(true);
-        // Comfortable touch targets in both axes.
-        expect(tab.height).toBeGreaterThanOrEqual(32);
+        // The repository's coarse-pointer minimum, asserted at its real value.
+        // `min-h-10` on the trigger is what holds this: releasing the tab
+        // list's fixed `h-10` for the 2x2 phone grid measured 30.46px here, and
+        // an earlier version of this assertion accepted >= 32 — which is exactly
+        // the height the triggers collapse to without the minimum, so it would
+        // have let the whole regression back in without failing.
+        expect(tab.height, `${tab.name} is below the 40px coarse-pointer target`).toBeGreaterThanOrEqual(
+          COARSE_POINTER_TARGET_PX,
+        );
         expect(tab.width).toBeGreaterThanOrEqual(120);
       }
 
@@ -988,6 +1173,82 @@ test.describe("In-app PubMed discovery", () => {
         expect(probe.listScrollLeft).toBe(0);
         expect(probe.dialogScrollLeft).toBe(0);
       }
+
+      // ── TOUCH USABILITY, which reachability does not imply ──
+      // Everything above proves the selection control is painted where it is
+      // drawn. None of it proves a finger can hit it: the shared primitive is
+      // 16x16, and a control can be perfectly reachable and still be a quarter
+      // of the area a coarse pointer needs. This measures the region the
+      // renderer would really deliver a tap to, not the visible box.
+      const touch = await measureSelectionHitTarget(page, pmidAt(1));
+
+      expect(touch.dialogTransform, "the target was measured mid-animation").toMatch(DIALOG_SETTLED);
+      expect(touch.hitWidth, "selection touch target is too narrow").toBeGreaterThanOrEqual(
+        COARSE_POINTER_TARGET_PX,
+      );
+      expect(touch.hitHeight, "selection touch target is too short").toBeGreaterThanOrEqual(
+        COARSE_POINTER_TARGET_PX,
+      );
+      expect(touch.insideViewport, "the selection touch target is not fully on screen").toBe(true);
+      expect(touch.listScrollLeft).toBe(0);
+      expect(touch.dialogScrollLeft).toBe(0);
+
+      // Every representative point across the enlarged region belongs to the
+      // checkbox — the target is one contiguous area, not a 16x16 box with a
+      // decorative halo. Each probe sits at least 11px from the centre, so the
+      // bare primitive (which reaches 8px) could not satisfy any of them.
+      for (const [where, owned] of Object.entries(touch.probes)) {
+        expect(owned, `a tap at the ${where} of the selection target misses the checkbox`).toBe(true);
+      }
+
+      // The visible control stays deliberately compact beside 240 characters of
+      // title: the target grew, the design did not.
+      expect(touch.visualWidth).toBeGreaterThanOrEqual(14);
+      expect(touch.visualWidth).toBeLessThanOrEqual(20);
+      expect(geometry.checkboxRect.width).toBeGreaterThanOrEqual(14);
+
+      // ── The two actions in a row stay independent ──
+      // The row is deliberately NOT one click target, because it contains an
+      // external link. Enlarging the selection target must not have quietly
+      // undone that.
+      expect(touch.linkOwnsCentre, "the enlarged target covers the PubMed link").toBe(true);
+      expect(touch.linkOverlapsHitBox, "the selection target overlaps the PubMed link").toBe(false);
+
+      // Activating the link must reach PubMed and nothing else. Routed at the
+      // context so the popup is served locally — CI never calls NCBI.
+      await context.route("**://pubmed.ncbi.nlm.nih.gov/**", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html", body: "<html><body>stand-in</body></html>" }),
+      );
+      let popupCount = 0;
+      page.on("popup", () => {
+        popupCount += 1;
+      });
+
+      const firstCheckbox = resultCheckbox(page, pmidAt(1));
+      await expect(firstCheckbox).not.toBeChecked();
+
+      // Tap the enlarged region well outside the visible 16x16 box. This is the
+      // tap that had nowhere to land before the fix.
+      await page.touchscreen.tap(
+        touch.hitBox.left + 2,
+        Math.round((touch.hitBox.top + touch.hitBox.bottom) / 2),
+      );
+      await expect(firstCheckbox, "a tap inside the enlarged target did not select").toBeChecked();
+      expect(popupCount, "selecting a result opened PubMed").toBe(0);
+
+      // …and activating the link leaves the selection exactly as it was.
+      const popup = await Promise.all([
+        page.waitForEvent("popup"),
+        dialog.getByRole("link", { name: /Open in PubMed/ }).nth(0).click(),
+      ]).then(([opened]) => opened);
+      expect(popup.url()).toContain(`/${pmidAt(1)}/`);
+      await popup.close();
+      await expect(firstCheckbox, "opening PubMed changed the selection").toBeChecked();
+      expect(popupCount).toBe(1);
+
+      // Restore the pre-probe selection state for the rest of the test.
+      await firstCheckbox.click();
+      await expect(firstCheckbox).not.toBeChecked();
 
       // ── The list really scrolls, with a real finger ──
       expect(geometry.listScrollHeight).toBeGreaterThan(geometry.listClientHeight);
@@ -1123,6 +1384,137 @@ test.describe("In-app PubMed discovery", () => {
       expect(before.link.insideHorizontally).toBe(true);
       expect(after.link.insideHorizontally).toBe(false);
       expect(after.link.centreX).toBeGreaterThan(390);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("negative control — removing the touch enlargements reproduces the sub-40px targets", async ({
+    browser,
+  }) => {
+    // The companion to the nowrap control above. That one guards a *layout*
+    // rule; this one guards two *touch* rules, and the previous version of this
+    // suite had no equivalent — it asserted only that a checkbox existed, was
+    // ~16px and was painted, all of which stayed true while the control was
+    // unusably small on a phone.
+    const context = await browser.newContext({
+      storageState: "e2e/.auth/user.json",
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+      isMobile: true,
+    });
+    const page = await context.newPage();
+
+    try {
+      await installStandIns(page);
+      await openDashboard(page);
+      const dialog = await openPubMedTab(page);
+      await runSearch(page);
+
+      // ── Part 1: the selection target ──
+
+      // Green with the real classes, so the assertion below is not vacuous.
+      const before = await measureSelectionHitTarget(page, pmidAt(1));
+      expect(before.dialogTransform, "measured mid-animation").toMatch(DIALOG_SETTLED);
+      expect(before.hitWidth).toBeGreaterThanOrEqual(COARSE_POINTER_TARGET_PX);
+      expect(before.hitHeight).toBeGreaterThanOrEqual(COARSE_POINTER_TARGET_PX);
+
+      // Remove ONLY the enlargement, leaving the otherwise-correct row alone:
+      // no layout rule, no class on the row, nothing about wrapping. `content:
+      // none` is what suppresses a pseudo-element outright, and `!important`
+      // is required — a Tailwind utility is a real rule that plain injected CSS
+      // does not automatically outrank.
+      const selectionControl = await page.addStyleTag({
+        content: `
+          ul[aria-label="PubMed search results"] [role="checkbox"]::before {
+            content: none !important;
+          }
+        `,
+      });
+
+      await waitForDialogSettled(page);
+
+      // Prove the control took effect before trusting the failure it should
+      // cause. A control that reproduces nothing proves nothing.
+      const suppressed = await page.evaluate(() => {
+        const list = document.querySelector('ul[aria-label="PubMed search results"]') as HTMLElement;
+        const checkbox = list.querySelector('[role="checkbox"]') as HTMLElement;
+        return getComputedStyle(checkbox, "::before").content;
+      });
+      expect(suppressed, "the negative control did not suppress the pseudo-element").toBe("none");
+
+      // …and the defect is back: the target falls all the way to the bare
+      // 16x16 primitive, in both axes.
+      const withoutTarget = await measureSelectionHitTarget(page, pmidAt(1));
+      expect(withoutTarget.hitWidth).toBeLessThan(COARSE_POINTER_TARGET_PX);
+      expect(withoutTarget.hitHeight).toBeLessThan(COARSE_POINTER_TARGET_PX);
+      expect(withoutTarget.hitWidth).toBeLessThanOrEqual(withoutTarget.visualWidth + 1);
+      expect(withoutTarget.hitHeight).toBeLessThanOrEqual(withoutTarget.visualHeight + 1);
+      // The visible box never changed — which is precisely why a
+      // `getBoundingClientRect()` assertion could not have caught this.
+      expect(withoutTarget.visualWidth).toBe(before.visualWidth);
+      expect(withoutTarget.visualHeight).toBe(before.visualHeight);
+      // Points a finger would land on are now dead.
+      expect(withoutTarget.probes.left12).toBe(false);
+      expect(withoutTarget.probes.up12).toBe(false);
+
+      // Restore the real implementation and re-prove green.
+      await selectionControl.evaluate((element) => element.remove());
+      await waitForDialogSettled(page);
+      const restored = await measureSelectionHitTarget(page, pmidAt(1));
+      expect(restored.hitWidth).toBeGreaterThanOrEqual(COARSE_POINTER_TARGET_PX);
+      expect(restored.hitHeight).toBeGreaterThanOrEqual(COARSE_POINTER_TARGET_PX);
+      for (const owned of Object.values(restored.probes)) expect(owned).toBe(true);
+
+      // ── Part 2: the tab minimum ──
+      // `min-h-10` on the trigger is load-bearing, not decoration: the 2x2
+      // phone grid released the tab list's fixed `h-10`, and without the
+      // minimum the triggers collapse to their content height.
+      const tabHeights = async () =>
+        page.evaluate(() => {
+          const dialogEl = document.querySelector('[role="dialog"]') as HTMLElement;
+          const list = dialogEl.querySelector('[role="tablist"]') as HTMLElement;
+          return [...list.querySelectorAll('[role="tab"]')].map((tab) => ({
+            name: tab.getAttribute("aria-label"),
+            height: tab.getBoundingClientRect().height,
+            minHeight: getComputedStyle(tab).minHeight,
+          }));
+        });
+
+      const tabsBefore = await tabHeights();
+      for (const tab of tabsBefore) {
+        expect(tab.height, `${tab.name} before the control`).toBeGreaterThanOrEqual(COARSE_POINTER_TARGET_PX);
+      }
+
+      const tabControl = await page.addStyleTag({
+        content: `[role="dialog"] [role="tablist"] [role="tab"] { min-height: 0 !important; }`,
+      });
+
+      // `TabsTrigger` carries `transition-all`, so `min-height` is an animated
+      // property: for ~150ms after the rule lands, `getComputedStyle` returns
+      // the interpolated value, which still reads 40px. Measuring immediately
+      // reported that the control had not taken effect when in fact it had —
+      // waiting for the transition is what makes this control honest.
+      await waitForDialogSettled(page);
+      const tabsWithout = await tabHeights();
+
+      // The control took effect…
+      for (const tab of tabsWithout) {
+        expect(tab.minHeight, `${tab.name} kept its minimum`).toBe("0px");
+      }
+      // …and every trigger drops to its 32px content box — the regression
+      // `min-h-10` was added to fix.
+      for (const tab of tabsWithout) {
+        expect(tab.height, `${tab.name} did not shrink`).toBeLessThan(COARSE_POINTER_TARGET_PX);
+      }
+
+      await tabControl.evaluate((element) => element.remove());
+      await waitForDialogSettled(page);
+      for (const tab of await tabHeights()) {
+        expect(tab.height, `${tab.name} after restoring`).toBeGreaterThanOrEqual(COARSE_POINTER_TARGET_PX);
+      }
+
+      await expect(dialog).toBeVisible();
     } finally {
       await context.close();
     }

@@ -319,9 +319,79 @@ describe("searchPubMedEdge — function errors", () => {
 // ══════════════════════════════════════════════════════════════════════════
 
 describe("searchPubMedEdge — auth retry", () => {
-  it("refreshes once and retries with the new token on a 401", async () => {
+  /**
+   * These cases use the same `functionError(...)` helper as the 400/500/502
+   * cases, and that is the point of them.
+   *
+   * A real HTTP 401 from `search-pubmed` does not announce itself: `supabase-js`
+   * raises the generic `Edge Function returned a non-2xx status code` and hangs
+   * the actual `Response` off `error.context`. An earlier version of this suite
+   * asserted the retry with `new Error("401 Unauthorized")` — a message shape
+   * the function never produces — so it proved "a message containing 401
+   * retries" while the real thing fell straight through to a sign-in prompt.
+   * Anything below that says "real 401" must therefore go through
+   * `functionError(401, ...)`, never a hand-written message.
+   */
+
+  /** The body `search-pubmed` actually returns when the bearer token is bad. */
+  const unauthenticated = {
+    error: "unauthenticated",
+    message: "You must be signed in to search PubMed.",
+  };
+
+  // ── B1 ────────────────────────────────────────────────────────────────
+  it("refreshes once and retries on a real HTTP 401 from the function", async () => {
     mockInvoke
-      .mockResolvedValueOnce({ data: null, error: new Error("401 Unauthorized") })
+      .mockResolvedValueOnce(functionError(401, unauthenticated))
+      .mockResolvedValueOnce({ data: page(), error: null });
+
+    const result = await searchPubMed({ query: "cancer", offset: 40 });
+
+    expect(result.total).toBe(2509);
+    expect(mockRefreshSession).toHaveBeenCalledTimes(1);
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    // The retry carries the token the refresh produced, not the stale one.
+    expect(mockInvoke.mock.calls[0][1].headers).toEqual({ Authorization: "Bearer valid-token" });
+    expect(mockInvoke.mock.calls[1][1].headers).toEqual({ Authorization: "Bearer refreshed-token" });
+    // The retry is the SAME request, not a re-derived one.
+    expect(mockInvoke.mock.calls[1][0]).toBe("search-pubmed");
+    expect(mockInvoke.mock.calls[1][1].body).toEqual(mockInvoke.mock.calls[0][1].body);
+    expect(mockInvoke.mock.calls[1][1].body).toEqual({ query: "cancer", offset: 40, limit: 20 });
+  });
+
+  // ── B2 ────────────────────────────────────────────────────────────────
+  it("does not call the function a second time when the refresh itself fails", async () => {
+    mockInvoke.mockResolvedValue(functionError(401, unauthenticated));
+    mockRefreshSession.mockResolvedValue({ data: { session: null }, error: new Error("refresh failed") });
+
+    await expect(searchPubMed({ query: "cancer" })).rejects.toBeInstanceOf(PubMedSearchError);
+    await expect(searchPubMed({ query: "cancer" })).rejects.toMatchObject({ kind: "auth" });
+
+    // Two searches were attempted above; each one must have invoked exactly
+    // once, because refreshing failed and there was nothing to retry with.
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(mockRefreshSession).toHaveBeenCalledTimes(2);
+  });
+
+  // ── B3 ────────────────────────────────────────────────────────────────
+  it("never loops: a second real 401 after a successful refresh is reported", async () => {
+    mockInvoke.mockResolvedValue(functionError(401, unauthenticated));
+
+    const failure = await searchPubMed({ query: "cancer" }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PubMedSearchError);
+    expect((failure as PubMedSearchError).kind).toBe("auth");
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(mockRefreshSession).toHaveBeenCalledTimes(1);
+  });
+
+  // ── B4 ────────────────────────────────────────────────────────────────
+  it("still refreshes once for a transport error that has no Response but names JWT", async () => {
+    // A gateway or network-layer failure never produced a `Response` this
+    // client can read a status from, so the message is all there is. That
+    // fallback is deliberately kept rather than replaced by the status check.
+    mockInvoke
+      .mockResolvedValueOnce({ data: null, error: new Error("Invalid JWT: token expired") })
       .mockResolvedValueOnce({ data: page(), error: null });
 
     const result = await searchPubMed({ query: "cancer" });
@@ -330,28 +400,10 @@ describe("searchPubMedEdge — auth retry", () => {
     expect(mockRefreshSession).toHaveBeenCalledTimes(1);
     expect(mockInvoke).toHaveBeenCalledTimes(2);
     expect(mockInvoke.mock.calls[1][1].headers).toEqual({ Authorization: "Bearer refreshed-token" });
-    // The retry is the SAME request, not a re-derived one.
-    expect(mockInvoke.mock.calls[1][1].body).toEqual(mockInvoke.mock.calls[0][1].body);
   });
 
-  it("gives up as an auth error when the refresh itself fails", async () => {
-    mockInvoke.mockResolvedValue({ data: null, error: new Error("Invalid JWT") });
-    mockRefreshSession.mockResolvedValue({ data: { session: null }, error: new Error("refresh failed") });
-
-    await expect(searchPubMed({ query: "cancer" })).rejects.toMatchObject({ kind: "auth" });
-    // Refreshing failed, so there was nothing to retry with.
-    expect(mockInvoke).toHaveBeenCalledTimes(1);
-  });
-
-  it("never loops: a second 401 after a successful refresh is reported, not retried again", async () => {
-    mockInvoke.mockResolvedValue({ data: null, error: new Error("401 Unauthorized") });
-
-    await expect(searchPubMed({ query: "cancer" })).rejects.toMatchObject({ kind: "auth" });
-    expect(mockInvoke).toHaveBeenCalledTimes(2);
-    expect(mockRefreshSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not treat a non-auth failure as a token problem", async () => {
+  // ── B5 ────────────────────────────────────────────────────────────────
+  it("does not treat a real 502 as a token problem", async () => {
     mockInvoke.mockResolvedValue(
       functionError(502, { error: "upstream_unavailable", message: "PubMed could not be reached right now. Please try again in a moment." }),
     );
@@ -359,5 +411,29 @@ describe("searchPubMedEdge — auth retry", () => {
     await expect(searchPubMed({ query: "cancer" })).rejects.toMatchObject({ kind: "upstream" });
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockRefreshSession).not.toHaveBeenCalled();
+  });
+
+  it("does not spend a refresh on a non-401 whose body merely contains '401'", async () => {
+    // The status is the authority when there is one: a message-based decision
+    // would have matched the digits in this upstream body and refreshed for a
+    // failure that has nothing to do with the session.
+    mockInvoke.mockResolvedValue(
+      functionError(502, { error: "upstream_unavailable", message: "PubMed returned 401 results but timed out." }),
+    );
+
+    await expect(searchPubMed({ query: "cancer" })).rejects.toMatchObject({ kind: "upstream" });
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockRefreshSession).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the function's own 401 copy rather than a transport detail", async () => {
+    mockInvoke.mockResolvedValue(functionError(401, unauthenticated));
+
+    const failure = (await searchPubMed({ query: "cancer" }).catch((error: unknown) => error)) as PubMedSearchError;
+
+    expect(failure.kind).toBe("auth");
+    expect(failure.message).toBe("You must be signed in to search PubMed.");
+    expect(failure.message).not.toContain("non-2xx");
+    expect(failure.message).not.toContain("Bearer");
   });
 });
