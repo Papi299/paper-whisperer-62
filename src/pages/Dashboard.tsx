@@ -862,6 +862,10 @@ function DashboardContent() {
         // show; the papers the user then selects are imported through
         // `onBulkImport` above — the same canonical path Import IDs uses.
         onPubMedSearch={searchPubMed}
+        // The SAME exclusion data the library table already uses — no second
+        // query, no second source of truth. Discovery badges hide what the user
+        // hid; what the importer later evaluates as `study_type` is untouched.
+        excludedStudyTypes={getExcludedStudyTypeSet()}
         projects={projects}
         tags={tags}
       />

@@ -109,6 +109,20 @@ function fixture(index: number, overrides: Partial<SearchFixture> = {}): SearchF
   };
 }
 
+/**
+ * The publication types the Production report actually saw on one card
+ * (PUBMED-SEARCH-STUDY-TYPE-EXCLUSION-001). Three of the four were already in
+ * that user's Study Type Exclusion Pool; `Randomized Controlled Trial` is the
+ * one they wanted. Deliberately includes a comma-bearing value, because the
+ * exclusion match is whole-value and must never split on commas.
+ */
+const REPORTED_PUBLICATION_TYPES = [
+  "Journal Article",
+  "Randomized Controlled Trial",
+  "Research Support, N.I.H., Extramural",
+  "Research Support, Non-U.S. Gov't",
+];
+
 /** Page 1 — a realistic full page of 20 results. */
 const PAGE_ONE: SearchFixture[] = [
   fixture(1, {
@@ -119,7 +133,10 @@ const PAGE_ONE: SearchFixture[] = [
     // Present on purpose: the import identifier must STILL be the PMID.
     doi: "10.5555/pms-e2e-long-row-record",
   }),
-  ...Array.from({ length: 19 }, (_, i) => fixture(i + 2)),
+  // The exclusion-regression card. Its raw types reach the browser in full;
+  // only the rendering is filtered.
+  fixture(2, { publicationTypes: REPORTED_PUBLICATION_TYPES }),
+  ...Array.from({ length: 18 }, (_, i) => fixture(i + 3)),
 ];
 
 /** Page 2 — the tail of the same 25-match query. */
@@ -381,6 +398,57 @@ async function runSearch(page: Page, query = COMMITTED_QUERY) {
   await dialog.getByRole("button", { name: "Search" }).click();
   await expect(dialog.getByRole("list", { name: "PubMed search results" })).toBeVisible();
   return dialog;
+}
+
+/**
+ * The publication-type badges rendered for one result, in order.
+ *
+ * Read through the labelled list rather than by text: a badge value like
+ * "Journal Article" is not otherwise distinguishable from a title, a journal
+ * name or an author, and asserting on loose text would pass for the wrong
+ * reason.
+ */
+async function renderedPublicationTypes(page: Page, pmid: string): Promise<string[]> {
+  return page.evaluate((targetPmid) => {
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) =>
+      element.querySelector('ul[aria-label="PubMed search results"]'),
+    );
+    if (!dialog) throw new Error("Add Papers dialog with a PubMed result list not found");
+    const checkbox = dialog.querySelector(
+      `[role="checkbox"][aria-label^="Select PMID ${targetPmid} "]`,
+    ) as HTMLElement | null;
+    if (!checkbox) throw new Error(`No checkbox for PMID ${targetPmid}`);
+    const row = checkbox.closest("li") as HTMLElement;
+    const list = row.querySelector('[role="list"][aria-label="Publication types"]');
+    if (!list) return [];
+    return [...list.querySelectorAll('[role="listitem"]')].map((item) => item.textContent ?? "");
+  }, pmid);
+}
+
+/** Add one value to the user's Study Type Exclusion Pool through its own UI. */
+async function addStudyTypeExclusion(page: Page, value: string) {
+  await page.getByRole("button", { name: "Manage exclusions" }).click();
+  const modal = page.getByRole("dialog").filter({ has: page.locator("#exclude-study-type-input") });
+  await expect(modal).toBeVisible();
+  await modal.locator("#exclude-study-type-input").fill(value);
+  await modal.getByRole("button", { name: "Add excluded study type" }).click();
+  await expect(modal.getByRole("button", { name: `Remove excluded study type ${value}` })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
+}
+
+/** Remove one value, so the test leaves the local user's pool as it found it. */
+async function removeStudyTypeExclusion(page: Page, value: string) {
+  await page.getByRole("button", { name: "Manage exclusions" }).click();
+  const modal = page.getByRole("dialog").filter({ has: page.locator("#exclude-study-type-input") });
+  await expect(modal).toBeVisible();
+  const remove = modal.getByRole("button", { name: `Remove excluded study type ${value}` });
+  if ((await remove.count()) > 0) {
+    await remove.first().click();
+    await expect(remove).toHaveCount(0);
+  }
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
 }
 
 const resultCheckbox = (page: Page, pmid: string) =>
@@ -1372,6 +1440,136 @@ test.describe("In-app PubMed discovery", () => {
       await openDashboard(page).catch(() => {});
       await removeFixturePapers(page).catch(() => {});
       await context.close();
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Study Type exclusions (PUBMED-SEARCH-STUDY-TYPE-EXCLUSION-001)
+  // ────────────────────────────────────────────────────────────────────────
+
+  test("hides publication types the user excluded, and only those", async ({ page }) => {
+    const SIMPLE = "Journal Article";
+    const COMMA_BEARING = "Research Support, N.I.H., Extramural";
+
+    const recorder = await installStandIns(page);
+    await openDashboard(page);
+
+    try {
+      // ── Phase A: with no exclusions, all four raw types reach the DOM ──
+      // This is what makes the phase-C assertion meaningful: it proves the
+      // fixture really carries these values through the network into the card,
+      // so their later absence can only be the exclusion filter.
+      await openPubMedTab(page);
+      await runSearch(page);
+      expect(await renderedPublicationTypes(page, pmidAt(2))).toEqual(REPORTED_PUBLICATION_TYPES);
+      await closeDialog(page);
+
+      // ── Phase B: the user excludes two of them, through the real UI ──
+      // One plain value and one comma-bearing value, configured independently,
+      // so a green result cannot come from a hard-coded rule about one string.
+      await addStudyTypeExclusion(page, SIMPLE);
+      await addStudyTypeExclusion(page, COMMA_BEARING);
+
+      // ── Phase C: exactly those two disappear ──
+      await openPubMedTab(page);
+      await runSearch(page);
+
+      const shown = await renderedPublicationTypes(page, pmidAt(2));
+      expect(shown).toEqual(["Randomized Controlled Trial", "Research Support, Non-U.S. Gov't"]);
+      expect(shown).not.toContain(SIMPLE);
+      expect(shown).not.toContain(COMMA_BEARING);
+      // The comma-bearing value was matched whole, never split: its sibling
+      // "Research Support, Non-U.S. Gov't" shares the "Research Support"
+      // prefix and is still there.
+      expect(shown).toContain("Research Support, Non-U.S. Gov't");
+
+      // The search request itself is untouched — filtering is presentation.
+      expect(recorder.searches.length).toBeGreaterThan(0);
+      for (const invocation of recorder.searches) {
+        expect(invocation.bodyKeys).toEqual(["limit", "offset", "query"]);
+      }
+
+      // ── A result whose badges were filtered stays fully usable ──
+      const checkbox = resultCheckbox(page, pmidAt(2));
+      await expect(checkbox).not.toBeChecked();
+      await checkbox.click();
+      await expect(checkbox).toBeChecked();
+      await expect(dialogOf(page).getByText("1 paper selected")).toBeVisible();
+
+      // …its PubMed link is still independently reachable…
+      const linkProbe = await probeCentreAfterVerticalScroll(page, pmidAt(2), "link");
+      expect(linkProbe.ownsCentre, "the PubMed link is not painted at its centre").toBe(true);
+
+      // …and nothing imported merely because badges were hidden.
+      expect(recorder.metadata).toHaveLength(0);
+
+      // ── A row with none of the excluded types is completely unaffected ──
+      expect(await renderedPublicationTypes(page, pmidAt(1))).toEqual([
+        "Randomized Controlled Trial",
+        "Multicenter Study",
+        "Research Support, Non-U.S. Gov't",
+      ]);
+
+      await closeDialog(page);
+    } finally {
+      // Leave the shared local user's pool exactly as it was found.
+      await openDashboard(page).catch(() => {});
+      await removeStudyTypeExclusion(page, SIMPLE).catch(() => {});
+      await removeStudyTypeExclusion(page, COMMA_BEARING).catch(() => {});
+    }
+  });
+
+  test("omits the badge row entirely when every type of a result is excluded", async ({ page }) => {
+    // The default fixtures carry exactly one type, so excluding it empties the
+    // card's badge set — which must render as nothing at all, not as an empty
+    // container or an "Unknown" placeholder.
+    const ONLY = "Journal Article";
+    const recorder = await installStandIns(page);
+    await openDashboard(page);
+
+    try {
+      await addStudyTypeExclusion(page, ONLY);
+      await openPubMedTab(page);
+      await runSearch(page);
+
+      expect(await renderedPublicationTypes(page, pmidAt(3))).toEqual([]);
+
+      const card = await page.evaluate((targetPmid) => {
+        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) =>
+          element.querySelector('ul[aria-label="PubMed search results"]'),
+        )!;
+        const checkbox = dialog.querySelector(
+          `[role="checkbox"][aria-label^="Select PMID ${targetPmid} "]`,
+        ) as HTMLElement;
+        const row = checkbox.closest("li") as HTMLElement;
+        return {
+          hasBadgeList: row.querySelector('[role="list"][aria-label="Publication types"]') !== null,
+          text: row.innerText,
+          hasCheckbox: Boolean(checkbox),
+          hasLink: Boolean(row.querySelector("a[href^='https://pubmed.ncbi.nlm.nih.gov/']")),
+        };
+      }, pmidAt(3));
+
+      expect(card.hasBadgeList, "an empty badge container was left behind").toBe(false);
+      for (const filler of ["No study type", "Unknown", "Excluded"]) {
+        expect(card.text).not.toContain(filler);
+      }
+      // Everything else about the card survives.
+      expect(card.hasCheckbox).toBe(true);
+      expect(card.hasLink).toBe(true);
+      expect(card.text).toContain(`PMID ${pmidAt(3)}`);
+
+      // Still selectable and importable — a display preference is not an
+      // import eligibility rule.
+      const checkbox = resultCheckbox(page, pmidAt(3));
+      await checkbox.click();
+      await expect(checkbox).toBeChecked();
+      expect(recorder.metadata).toHaveLength(0);
+
+      await closeDialog(page);
+    } finally {
+      await openDashboard(page).catch(() => {});
+      await removeStudyTypeExclusion(page, ONLY).catch(() => {});
     }
   });
 

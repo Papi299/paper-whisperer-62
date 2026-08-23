@@ -61,7 +61,7 @@
  * for the Add Papers tab triggers). See that constant for the mechanism.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -96,6 +96,14 @@ interface PubMedSearchPanelProps {
    * have its input changed underneath it.
    */
   importing: boolean;
+  /**
+   * The current user's Study Type Exclusion Pool, as `PoolsContext` already
+   * hands it to the library table. Publication types in it are not rendered as
+   * badges. Optional: absent (or empty) means show every raw PubMed type, which
+   * is the pre-existing behaviour and what a caller that does not wire pools
+   * still gets.
+   */
+  excludedStudyTypes?: ReadonlySet<string>;
 }
 
 /**
@@ -117,6 +125,47 @@ function formatRange(offset: number, shown: number, total: number): string {
   const first = offset + 1;
   const last = offset + shown;
   return `${first.toLocaleString()}–${last.toLocaleString()} of ${total.toLocaleString()}`;
+}
+
+/**
+ * The publication-type badges a result should actually show.
+ *
+ * PUBMED-SEARCH-STUDY-TYPE-EXCLUSION-001. PubMed returns every publication type
+ * it holds for a record, and for a typical trial that is four or five values of
+ * which the user considers one informative. `Journal Article`, `Research
+ * Support, N.I.H., Extramural` and `Research Support, Non-U.S. Gov't` say
+ * nothing about study design, and a user who has put them in their Study Type
+ * Exclusion Pool has already said so once. Discovery cards honour that.
+ *
+ * ## Display only
+ *
+ * This filters what is *rendered*, nothing else. `result.publicationTypes`
+ * keeps the complete raw list PubMed returned, the search response stays a
+ * faithful discovery representation, and a result whose every type is excluded
+ * remains fully selectable and importable — an exclusion is a display
+ * preference, never an import eligibility rule. What the canonical importer
+ * later stores as `study_type` is evaluated independently, from the full record
+ * it fetches itself.
+ *
+ * ## Whole-value equality, never substring
+ *
+ * `excluded` holds already-normalized (trimmed, lower-cased) values, and each
+ * type is normalized the same way before lookup. The comparison is whole-string
+ * equality on purpose: official PubMed publication types nest and share
+ * prefixes, so `Clinical Trial` must not hide `Clinical Trial, Phase II`, and
+ * `Research Support` must not hide `Research Support, N.I.H., Extramural`.
+ * Substring, prefix or word-boundary matching would silently delete real study
+ * design information the user never asked to hide.
+ *
+ * A comma inside a value is part of that value. `Research Support, N.I.H.,
+ * Extramural` is ONE publication type and is never split on its commas.
+ */
+function visiblePublicationTypes(
+  types: readonly string[],
+  excluded: ReadonlySet<string>,
+): string[] {
+  if (excluded.size === 0) return [...types];
+  return types.filter((type) => !excluded.has(type.trim().toLowerCase()));
 }
 
 /**
@@ -186,11 +235,14 @@ function ResultRow({
   selected,
   onToggle,
   disabled,
+  excludedStudyTypes,
 }: {
   result: PubMedSearchResult;
   selected: boolean;
   onToggle(): void;
   disabled: boolean;
+  /** Already normalized by the panel — see {@link visiblePublicationTypes}. */
+  excludedStudyTypes: ReadonlySet<string>;
 }) {
   const title = result.title ?? MISSING_TITLE_LABEL;
   const authors = formatAuthors(result.authors);
@@ -198,6 +250,9 @@ function ResultRow({
   // told apart by name alone — a screen-reader user must never have to rely on
   // visual ordering to know which paper a checkbox belongs to.
   const accessibleName = `Select PMID ${result.pmid} — ${title}`;
+  // Derived at render time, never written back onto `result`: the search page
+  // in state keeps PubMed's complete list.
+  const shownTypes = visiblePublicationTypes(result.publicationTypes, excludedStudyTypes);
 
   return (
     <li className="border-b last:border-b-0">
@@ -230,10 +285,21 @@ function ResultRow({
               .join(" · ")}
           </p>
 
-          {result.publicationTypes.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {result.publicationTypes.map((type) => (
-                <Badge key={type} variant="secondary" className="text-[10px] font-normal break-words">
+          {/* Omitted entirely when nothing survives the user's exclusions — no
+              empty container, and no "Unknown"/"None" filler, which would just
+              be a different piece of noise in place of the one they hid. The
+              list is labelled because otherwise these badges reach a screen
+              reader as bare words indistinguishable from the title or journal
+              beside them. */}
+          {shownTypes.length > 0 && (
+            <div role="list" aria-label="Publication types" className="flex flex-wrap gap-1">
+              {shownTypes.map((type) => (
+                <Badge
+                  key={type}
+                  role="listitem"
+                  variant="secondary"
+                  className="text-[10px] font-normal break-words"
+                >
                   {type}
                 </Badge>
               ))}
@@ -267,8 +333,18 @@ export function PubMedSearchPanel({
   actions,
   searchAvailable,
   importing,
+  excludedStudyTypes,
 }: PubMedSearchPanelProps) {
   const { page, selectedPmids, loading, error, committedQuery } = state;
+
+  // Normalized once per render rather than per badge. `getExcludedStudyTypeSet()`
+  // already lower-cases, and the write path trims, but neither is a contract
+  // this component can see — doing it here makes the comparison boundary
+  // deterministic no matter what the pool contains.
+  const exclusions = useMemo(
+    () => new Set(Array.from(excludedStudyTypes ?? [], (value) => value.trim().toLowerCase())),
+    [excludedStudyTypes],
+  );
 
   const previousRef = useRef<HTMLButtonElement>(null);
   const nextRef = useRef<HTMLButtonElement>(null);
@@ -453,6 +529,7 @@ export function PubMedSearchPanel({
                 selected={selectedSet.has(result.pmid)}
                 onToggle={() => actions.toggleSelection(result.pmid)}
                 disabled={importing}
+                excludedStudyTypes={exclusions}
               />
             ))}
           </ul>
