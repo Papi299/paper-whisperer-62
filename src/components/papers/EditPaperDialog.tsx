@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useAbstract } from "@/hooks/useAbstract";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,6 +33,9 @@ import { useAttachments, OnAttachmentsChange } from "@/hooks/useAttachments";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { PaperOrganizationSuggestions } from "@/components/papers/PaperOrganizationSuggestions";
+import { parseAnalyzeError, formatQuotaExceededMessage } from "@/lib/analyzeError";
+import type { AiQuotaStatus } from "@/hooks/useAiQuota";
 
 interface EditPaperDialogProps {
   paper: PaperWithTags | null;
@@ -51,6 +54,23 @@ interface EditPaperDialogProps {
   onSave: (paper: Partial<PaperWithTags> & { tagIds: string[]; projectIds: string[] }) => Promise<boolean>;
   userId?: string | null;
   onAttachmentsChange?: OnAttachmentsChange;
+  /**
+   * Read-only AI-request quota status. Advisory only: a known zero intercepts
+   * a click before it becomes a doomed request, and an exempt user is never
+   * intercepted. Unknown status (loading / failed) never blocks — the server's
+   * HTTP 402 is the enforcement boundary for both AI actions in this dialog.
+   */
+  aiQuotaStatus?: AiQuotaStatus | null;
+  /** Re-read the shared quota after an actual invocation (consume or refund). */
+  onAiQuotaRefresh?: () => void;
+  /**
+   * The existing Project/Tag creation mutations, threaded through so
+   * "Create & select" reuses the domain authority instead of inserting rows
+   * from a suggestion component. Resolve to the entity so the new id can enter
+   * this dialog's LOCAL selection; `null` means nothing was created.
+   */
+  onCreateProject?: (name: string, description?: string | null) => Promise<Project | null>;
+  onCreateTag?: (name: string) => Promise<Tag | null>;
 }
 
 export function EditPaperDialog({
@@ -62,6 +82,10 @@ export function EditPaperDialog({
   onSave,
   userId,
   onAttachmentsChange,
+  aiQuotaStatus,
+  onAiQuotaRefresh,
+  onCreateProject,
+  onCreateTag,
 }: EditPaperDialogProps) {
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
@@ -181,11 +205,56 @@ export function EditPaperDialog({
     }
   };
 
+  /**
+   * Positively known to have nothing left. Exempt internal users are NEVER
+   * known-zero — their commercial `remaining` can read 0 while the server still
+   * allows every request — and an unknown status (loading / failed) is not
+   * known-zero either. Shared by both AI actions in this dialog so they cannot
+   * disagree about the same allowance.
+   */
+  const knownZeroAiQuota =
+    !!aiQuotaStatus && !aiQuotaStatus.isExempt && aiQuotaStatus.remaining <= 0;
+
+  const toastAiQuotaExhausted = (info: {
+    periodType: string | null;
+    used: number;
+    quota: number;
+    resetAt: string | null;
+  }) => {
+    toast({
+      title: "AI requests used up",
+      description: formatQuotaExceededMessage(info),
+      variant: "destructive",
+    });
+  };
+
+  /**
+   * Local-draft AI analysis. The smart merge below is unchanged: a specific
+   * PubMed study type still wins over a generic AI guess, and statistical
+   * methods / TLDR still populate the form without saving.
+   *
+   * What AI-PROJECT-TAG-SUGGESTIONS-001B added is only quota coherence with
+   * the suggestion button that now sits in the same dialog and spends the same
+   * allowance — a known-zero intercept, a parsed 402, a provider failure kept
+   * distinct from a plan wall, and a refresh of the shared indicator after any
+   * actual invocation. It is deliberately NOT a rewrite of the analysis path.
+   */
   const handleAnalyze = async () => {
     if (!abstract.trim()) return;
+
+    // Known-zero convenience intercept: no request, and no quota refresh —
+    // nothing was spent. The server stays authoritative when status is unknown.
+    if (knownZeroAiQuota && aiQuotaStatus) {
+      toastAiQuotaExhausted(aiQuotaStatus);
+      return;
+    }
+
     setAnalyzing(true);
+    // Only a real invocation may have consumed or refunded a unit.
+    let attempted = false;
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      attempted = true;
       const { data, error } = await supabase.functions.invoke("analyze-paper", {
         body: { title, abstract },
         headers: { Authorization: `Bearer ${session?.access_token}` },
@@ -214,9 +283,23 @@ export function EditPaperDialog({
           : undefined,
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Analysis failed";
-      toast({ title: "AI analysis failed", description: msg, variant: "destructive" });
+      // Read the structured body rather than the generic non-2xx string, so an
+      // authoritative 402 and an upstream provider failure stay separable.
+      const parsed = await parseAnalyzeError(err);
+      if (parsed.kind === "quota_exceeded") {
+        toastAiQuotaExhausted(parsed.info);
+      } else if (parsed.kind === "provider_failure") {
+        // A Gemini 429/503 is NOT the user's plan running out.
+        toast({
+          title: "AI analysis unavailable",
+          description: parsed.message,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "AI analysis failed", description: parsed.message, variant: "destructive" });
+      }
     } finally {
+      if (attempted) onAiQuotaRefresh?.();
       setAnalyzing(false);
     }
   };
@@ -232,6 +315,35 @@ export function EditPaperDialog({
       prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]
     );
   };
+
+  // Add-only counterparts for accepting a suggestion. Deliberately not
+  // `toggleProject`: accepting a recommendation the user has already selected
+  // would otherwise *remove* it, turning "Select" into an unselect.
+  const addProject = (projectId: string) => {
+    setSelectedProjectIds((prev) => (prev.includes(projectId) ? prev : [...prev, projectId]));
+  };
+
+  const addTag = (tagId: string) => {
+    setSelectedTagIds((prev) => (prev.includes(tagId) ? prev : [...prev, tagId]));
+  };
+
+  // The keywords the suggestion request carries, parsed exactly as `handleSave`
+  // parses them, so what the model sees is what a save would store.
+  const parsedKeywords = useMemo(
+    () => keywords.split(",").map((k) => k.trim()).filter(Boolean),
+    [keywords],
+  );
+
+  /**
+   * The unsaved draft the suggestion surface reasons about — the four semantic
+   * fields the Edge contract accepts and nothing else. Memoized so the
+   * staleness fingerprint changes only when one of those four changes, not on
+   * every keystroke in Notes.
+   */
+  const organizationDraft = useMemo(
+    () => ({ title, abstract, keywords: parsedKeywords, studyType }),
+    [title, abstract, parsedKeywords, studyType],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -449,6 +561,31 @@ export function EditPaperDialog({
                 />
               </div>
             </div>
+
+            {/*
+              AI organization suggestions sit immediately above the Projects
+              selector — the categorization controls they feed. Deliberately
+              inside this column and inside `edit-paper-scroll`: it introduces
+              no second scroll owner, no nested dialog, and no Paper List row
+              action. Generation happens only on an explicit click.
+            */}
+            {paper && (
+              <PaperOrganizationSuggestions
+                paperId={paper.id}
+                draft={organizationDraft}
+                projects={projects}
+                tags={tags}
+                selectedProjectIds={selectedProjectIds}
+                selectedTagIds={selectedTagIds}
+                onSelectProject={addProject}
+                onSelectTag={addTag}
+                onCreateProject={onCreateProject}
+                onCreateTag={onCreateTag}
+                quotaStatus={aiQuotaStatus}
+                onQuotaRefresh={onAiQuotaRefresh}
+                disabled={loading}
+              />
+            )}
 
             {/* Projects — Searchable Combobox */}
             <div className="space-y-2 relative">

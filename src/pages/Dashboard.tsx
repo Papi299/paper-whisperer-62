@@ -549,6 +549,7 @@ function DashboardContent() {
     status: aiQuotaStatus,
     isLoading: aiQuotaLoading,
     isError: aiQuotaError,
+    refetch: refetchAiQuota,
   } = useAiQuota(userId);
 
   // The manager-facing Gemini provider-quota panel is deferred under owner
@@ -879,6 +880,10 @@ function DashboardContent() {
         onSave={handleSavePaper}
         userId={user?.id}
         onAttachmentsChange={handleAttachmentsChange}
+        aiQuotaStatus={aiQuotaStatus}
+        onAiQuotaRefresh={refetchAiQuota}
+        onCreateProject={createProject}
+        onCreateTag={createTag}
       />
 
       <EditProjectDialog
