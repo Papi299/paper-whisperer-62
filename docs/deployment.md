@@ -285,9 +285,9 @@ The empty-query case is the informative one: it proves the worker boots, builds 
 
 ### 7c. `suggest-paper-organization` — deployed; endpoint-before-UI gate satisfied
 
-**Current state: `suggest-paper-organization` is deployed to the linked project and ACTIVE.** It is the Edge Function behind the future Edit Paper **Suggest Projects/Tags** experience (`AI-PROJECT-TAG-SUGGESTIONS-001`). The initial rollout completed and was verified on **2026-08-23** — its evidence (deployment identifiers, verification results, merge and Vercel provenance) is recorded in [migration-history.md](migration-history.md). Read the live version back rather than trusting any number written here: `supabase functions list --project-ref <project-ref>`.
+**Current state: `suggest-paper-organization` is deployed to the linked project and ACTIVE.** It is the Edge Function behind the Edit Paper **Suggest Projects & Tags** experience (`AI-PROJECT-TAG-SUGGESTIONS-001`). The initial rollout completed and was verified on **2026-08-23** — its evidence (deployment identifiers, verification results, merge and Vercel provenance) is recorded in [migration-history.md](migration-history.md). Read the live version back rather than trusting any number written here: `supabase functions list --project-ref <project-ref>`.
 
-**Live does not mean shipped.** `001B` has not started, so **no frontend calls this endpoint** and users have no suggestion UI. What the deployment buys is that the endpoint-before-UI gate below is now satisfied: `001B` may be built against this contract.
+**The frontend now calls it.** `001B` shipped the Edit Paper surface against this exact contract. That PR was **frontend-only**: it changed no file under `supabase/functions/`, `supabase/config.toml` or `supabase/migrations/`, so it required no Edge deployment and no migration, and the deployed artifact it depends on is the one the `001A` rollout verified. The endpoint-before-UI gate was satisfied *before* `001B` was built, which is the ordering the rule exists to produce.
 
 **What it is.** An advisory, non-mutating suggestion endpoint. It authenticates the caller in-function with `auth.getUser()`, verifies the requested paper belongs to that caller, reads that caller's own Projects and Tags, sends Gemini a bounded, allow-listed semantic payload, and returns four suggestion lists. It consumes **one unit of the existing AI quota** per successful generation through `consume_ai_quota`, and refunds through `refund_ai_quota` when the provider fails or returns an unusable result. It uses **no elevated key**.
 
@@ -333,7 +333,9 @@ The three `_shared` modules were **not modified** by `001A`, so no other functio
 8. only after that succeeds may any dependent frontend PR merge
 ```
 
-`001A` took this path, and it was safe for the specific reason stated in step 1: the endpoint had **no frontend caller at all**, so merging before the first deployment could not expose a broken UI. That condition is what makes merge-first legitimate — it is not a general licence.
+`001A` took this path, and it was safe for the specific reason stated in the Path A precondition above the sequence — not in numbered step 1, which is only the review step: the endpoint had **no frontend caller at all**, so merging before the first deployment could not expose a broken UI. That condition is what makes merge-first legitimate — it is not a general licence.
+
+`001B` needed neither path, because it changed no Edge artifact: a frontend-only PR against an already-deployed, unchanged contract has no deployment to order. The next PR that touches this function's closure must pick a path again, using the question above.
 
 **Path B — the frontend depends on the changed Edge contract.** Use this when the same PR carries frontend code expecting the changed contract, or when merging the frontend first would put an incompatible caller in Production. **Here the deployment happens before the merge.**
 
@@ -576,6 +578,23 @@ Finally, confirm the boundary held elsewhere:
 - [ ] `analyze-paper` still returns its unchanged `tldr` / `studyType` / `statisticalMethods` contract, and its deployed version and bundle hash are unchanged.
 
 **A transient provider failure is not a failed check.** During the initial rollout the one real generation hit an upstream `503` on its first attempt, retried after 2 s and succeeded — the bounded retry budget absorbed it, the user-visible result was a normal 200, and no refund was issued because a result was delivered. If you see a `provider_status=` warning in the logs followed by `outcome=ok`, that is the retry policy working. A failure is a non-200 response, or a `502`/`500` with a provider class after the budget is exhausted.
+
+**Frontend acceptance (`001B`), for a release that changes the Edit Paper suggestion surface.** These checks are about the *client*, so run them against the deployed frontend with a real account. Note that the "one real generation" above already spends a request; plan for one more here, and prefer a throwaway Project/Tag name so the cleanup is trivial.
+
+- [ ] Open **Edit Paper**. The **AI organization** section renders above the Projects selector, states that it uses **1 AI request** and that nothing is assigned until you save, and **no request has been made** — confirm in the network panel that opening the dialog (and letting the abstract load) calls nothing.
+- [ ] With a title but no abstract, keywords or study type, the action is **disabled** and explains what to add. Confirm no request is sent.
+- [ ] Edit the abstract or study type **without saving**, then click Suggest. Confirm in the network panel that the request body carries the **unsaved** values, exactly the keys `paperId` / `draft` / `currentProjectIds` / `currentTagIds`, and no authors, notes, TLDR, PMID, DOI, URL, attachment, user id or quota field.
+- [ ] Results render per category with a short reason each. A valid all-empty response renders the honest empty state ("No strong Project or Tag suggestions for this paper.") and **not** an error.
+- [ ] Accept an existing Project and an existing Tag. Confirm the Projects/Tags selectors update, and that **no** `set_paper_projects` / `set_paper_tags` / `papers` request is made — acceptance must be local only.
+- [ ] **Cancel** without saving, reopen the paper, and confirm neither the Project nor the Tag was assigned.
+- [ ] Suggest again, press **Create & select** on a proposed new Project. Confirm the Project is created immediately (it appears in Manage Projects), the AI-proposed description was kept, and the paper is still **not** assigned until Save.
+- [ ] Close without saving and confirm the created Project **remains in the library** while the paper stays unassigned — this is intended, and the UI says so.
+- [ ] Reopen, accept suggestions, press **Save Changes**, and confirm the assignments now persist after a reload.
+- [ ] Rename an existing Project to match a proposed-new name, then press Create & select: the existing row is **selected**, not duplicated. With two rows whose names differ only by surrounding whitespace, confirm nothing is created and nothing is selected, and the UI asks the user to pick.
+- [ ] The **AI requests** indicator refreshes after a generation (success or provider failure). Confirm it does **not** refresh when the click was intercepted before any request — an ineligible draft, or a known-zero allowance.
+- [ ] An exhausted allowance shows AI-**request** wording ("You've used all N of your … AI requests"), never "AI analyses", and carries no upgrade/checkout copy. A provider failure shows the neutral "temporarily unavailable" wording instead — a Google rate limit must never be reported as the user's plan running out.
+- [ ] No **Paper List** row action, bulk suggest action, or suggestion column appeared anywhere.
+- [ ] On a phone-width viewport and with a finger: the section and every result action are reachable inside the Edit Paper scroll region, the dialog still has exactly one vertical scroll owner, the page behind the modal never scrolls, and the Select / Create & select / Dismiss targets are comfortably tappable.
 
 ### 9.5 Paper operations
 
