@@ -71,6 +71,16 @@ const AUTH_STATE_FILE = resolve(ROOT, "e2e/.auth/user.json");
  * deterministic fixture.
  */
 const DEFAULT_SPECS = [
+  // AI-PROJECT-TAG-SUGGESTIONS-001B Edit Paper acceptance flows. Mutating, but
+  // only within fixtures it owns: two disposable Projects and two disposable
+  // Tags, all deleted in afterAll — which cascades the `paper_projects` /
+  // `paper_tags` rows away, restoring the one seeded paper it assigns to. The
+  // only paper field it edits is Study Type, reverted to its seeded empty value
+  // before the save, so it is order-independent. The
+  // `suggest-paper-organization` request is fulfilled by Playwright with
+  // deterministic contract data: no Edge Function is served, no Gemini request
+  // is made, and no AI quota is spent.
+  "e2e/ai-organization-suggestions.spec.ts",
   "e2e/auth.spec.ts",
   // Reads the product name on the unauthenticated Auth card, the authenticated
   // sidebar, and the document title; mutates nothing.
