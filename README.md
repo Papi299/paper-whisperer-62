@@ -121,9 +121,11 @@ Requires Node.js 20.19+ or 22.12+. Supabase project config is in `supabase/confi
 
 ## Supabase Edge Functions
 
-Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`, `search-pubmed`). All five are deployed to the linked project. `get-gemini-provider-quota` is **deployed but intentionally unused** — its manager-facing dashboard is deferred under decision C29, and no frontend code calls or renders it.
+Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`, `search-pubmed`, `suggest-paper-organization`). All six are deployed to the linked project. `get-gemini-provider-quota` is **deployed but intentionally unused** — its manager-facing dashboard is deferred under decision C29, and no frontend code calls or renders it.
 
-`search-pubmed` is the newest and backs the PubMed Search tab. It is read-only (PubMed ESearch + ESummary), caller-authenticated, uses no elevated key, and reads the caller's optional `profiles.pubmed_api_key` server-side exactly as `fetch-paper-metadata` does. Because a frontend that calls it is useless without it, any future change to its request/response contract must be deployed **before** the frontend that depends on it merges — see [docs/deployment.md](docs/deployment.md) §7b.
+`suggest-paper-organization` is the newest. It backs the future Edit Paper **Suggest Projects/Tags** experience: it compares one owned paper against the caller's own Projects and Tags and returns suggestions. It is **advisory** — it creates, assigns and persists nothing — spends one unit of the existing AI quota per successful generation, is caller-authenticated, and uses no elevated key. It needed no migration and no new secret. **It is deployed and live but nothing calls it yet**: the frontend is `AI-PROJECT-TAG-SUGGESTIONS-001B` and has not been built, so users do not have this feature — see [docs/deployment.md](docs/deployment.md) §7c and decision C32.
+
+`search-pubmed` backs the PubMed Search tab. It is read-only (PubMed ESearch + ESummary), caller-authenticated, uses no elevated key, and reads the caller's optional `profiles.pubmed_api_key` server-side exactly as `fetch-paper-metadata` does. Because a frontend that calls it is useless without it, any future change to its request/response contract must be deployed **before** the frontend that depends on it merges — see [docs/deployment.md](docs/deployment.md) §7b.
 
 **Edge Function deploys are separate from frontend / Vercel deploys** — a GitHub merge alone does not update the deployed function. After any change under `supabase/functions/<name>/`, deploy each changed function explicitly:
 
@@ -133,6 +135,7 @@ supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>
 supabase functions deploy delete-account --project-ref <project-ref>
 supabase functions deploy search-pubmed --project-ref <project-ref>
+supabase functions deploy suggest-paper-organization --project-ref <project-ref>
 ```
 
 ### Required Edge Function secrets
@@ -152,11 +155,11 @@ supabase secrets set GEMINI_API_KEY=<your-gemini-api-key> --project-ref <project
 
 Every function **fails fast with an actionable error** if a required Edge env var is missing or empty — `supabase/functions/_shared/env.ts` validates each at the call site.
 
-**Caller-authenticated functions.** `fetch-paper-metadata`, `analyze-paper`, `get-gemini-provider-quota` and `search-pubmed` need **no** elevated key: each constructs its Supabase client with the **caller's** auth header and relies on RLS plus an in-function `auth.getUser()` check for ownership enforcement.
+**Caller-authenticated functions.** `fetch-paper-metadata`, `analyze-paper`, `get-gemini-provider-quota`, `search-pubmed` and `suggest-paper-organization` need **no** elevated key: each constructs its Supabase client with the **caller's** auth header and relies on RLS plus an in-function `auth.getUser()` check for ownership enforcement.
 
 **`delete-account` is different.** Deleting an Auth user is an administrative operation, and the account's private attachment binaries have to be removed through the Storage API, so this function additionally builds a **server-only elevated client**. It prefers the current secret-key mechanism (`SUPABASE_SECRET_KEYS`, a JSON dictionary keyed by key name, reading `default`) and falls back to the legacy `SUPABASE_SERVICE_ROLE_KEY`. **Both are supplied automatically by the Supabase Edge runtime, so no manual secret needs to be added.** That key is used only inside the function: it is never sent to the browser, never placed in a response body, never logged, and never exposed through any `VITE_*` variable. The function still authenticates the *caller* exactly like the others — the elevated client is used only after `auth.getUser(token)` has established who is asking, and the deleted user id comes from that result and nowhere else.
 
-`supabase/config.toml` sets `verify_jwt = false` on all five functions — intentional, so the in-function `auth.getUser()` check handles stale / refreshing tokens gracefully without a 401 at the gateway.
+`supabase/config.toml` sets `verify_jwt = false` on all six functions — intentional, so the in-function `auth.getUser()` check handles stale / refreshing tokens gracefully without a 401 at the gateway.
 
 Notable manual smoke case: PMID `41912805` ("GBD 2023 IHD & Dietary Risk Factors Collaborators") for `fetch-paper-metadata` — it exercises bounded `<Author>...</Author>` parsing and `<CollectiveName>` consortium author support.
 
@@ -197,6 +200,6 @@ pgTAP suites in `supabase/tests/database/` cover core and relational RLS isolati
 
 Branch protection requires the bare check names `validate` and `db-tests`; Vercel is **not** a required check. All three workflows run on pull requests to `main` and pushes to `main`, use a read-only token, and require no repository secret, variable, or Environment; `E2E (local)` and `DB Tests` skip fork-origin pull requests before executing anything. None of them contact Production or any cloud Supabase project — there is **no hosted staging environment**, and local-first is the accepted path.
 
-Edge Function tests executed by a **Deno** runtime do not exist. `delete-account` and `search-pubmed` are the partial exceptions: each keeps its whole request path in a runtime-agnostic `handler.ts` plus pure `_shared` modules, so the real handler — not a re-implementation — is covered by Vitest. `delete-account` is additionally invoked for real as a served local Edge Function under the local E2E lifecycle; `search-pubmed` is not, because its E2E stubs the request at the browser boundary to keep CI off the live NCBI network.
+Edge Function tests executed by a **Deno** runtime do not exist. `delete-account`, `search-pubmed` and `suggest-paper-organization` are the partial exceptions: each keeps its whole request path in a runtime-agnostic `handler.ts` plus pure sibling/`_shared` modules, so the real handler — not a re-implementation — is covered by Vitest. `delete-account` is additionally invoked for real as a served local Edge Function under the local E2E lifecycle; `search-pubmed` is not, because its E2E stubs the request at the browser boundary to keep CI off the live NCBI network.
 
 See [docs/start-here.md](docs/start-here.md) for the full testing and merge-safety baseline.
