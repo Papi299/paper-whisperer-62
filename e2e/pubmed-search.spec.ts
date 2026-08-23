@@ -631,10 +631,33 @@ async function measureSelectionHitTarget(page: Page, pmid: string) {
       bottom: centreY + down,
     };
 
+    // Whether the enlarged target sits on top of the link is a question about
+    // the row's internal layout, so it is answered here, from rects captured in
+    // the same layout pass as the hit box above.
     const linkRect = link.getBoundingClientRect();
-    const linkCentreX = linkRect.left + linkRect.width / 2;
-    const linkCentreY = linkRect.top + linkRect.height / 2;
-    const linkHit = document.elementFromPoint(linkCentreX, linkCentreY);
+    const linkOverlapsHitBox =
+      linkRect.left < hitBox.right &&
+      linkRect.right > hitBox.left &&
+      linkRect.top < hitBox.bottom &&
+      linkRect.bottom > hitBox.top;
+
+    // Whether the link is *hit-testable* is a different question, and it must be
+    // asked in the link's own scroll state. Asking it here, in the offset chosen
+    // to give the CHECKBOX clearance, measures nothing but whether the row
+    // happened to be short enough to show both at once — which is a font-metric
+    // coin flip, green on macOS and red on CI's headless Linux.
+    const targetScrollTop = list.scrollTop;
+    const linkOffset = linkRect.top - list.getBoundingClientRect().top + list.scrollTop;
+    list.scrollTop = Math.max(0, linkOffset - 24);
+    const scrolledLinkRect = link.getBoundingClientRect();
+    const linkHit = document.elementFromPoint(
+      scrolledLinkRect.left + scrolledLinkRect.width / 2,
+      scrolledLinkRect.top + scrolledLinkRect.height / 2,
+    );
+    const linkOwnsCentre = Boolean(linkHit && (linkHit === link || link.contains(linkHit)));
+    // Put the list back, so the hit-box coordinates returned below stay valid
+    // for a caller that wants to tap them.
+    list.scrollTop = targetScrollTop;
 
     return {
       // Proof the numbers below are layout, not an animation frame.
@@ -661,12 +684,8 @@ async function measureSelectionHitTarget(page: Page, pmid: string) {
       listScrollLeft: list.scrollLeft,
       dialogScrollLeft: (dialog as HTMLElement).scrollLeft,
       // The enlarged target must not have swallowed the external link.
-      linkOwnsCentre: Boolean(linkHit && (linkHit === link || link.contains(linkHit))),
-      linkOverlapsHitBox:
-        linkRect.left < hitBox.right &&
-        linkRect.right > hitBox.left &&
-        linkRect.top < hitBox.bottom &&
-        linkRect.bottom > hitBox.top,
+      linkOwnsCentre,
+      linkOverlapsHitBox,
     };
   }, pmid);
 }
@@ -1300,6 +1319,8 @@ test.describe("In-app PubMed discovery", () => {
         COARSE_POINTER_TARGET_PX,
       );
       expect(lastTouch.clippedByList, "the list clipped the last row's target").toBe(false);
+      expect(lastTouch.linkOwnsCentre, "row 20's PubMed link is not hit-testable").toBe(true);
+      expect(lastTouch.linkOverlapsHitBox, "row 20's target overlaps its PubMed link").toBe(false);
       expect(lastTouch.insideViewport).toBe(true);
       for (const [where, owned] of Object.entries(lastTouch.probes)) {
         expect(owned, `a tap at the ${where} of row 20's target misses the checkbox`).toBe(true);
