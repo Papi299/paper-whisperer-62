@@ -80,7 +80,7 @@ supabase secrets list --project-ref <project-ref>
 
 Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function surfaces an actionable error instead of crashing with an empty-string client.
 
-**About the elevated key (PFA-C04).** `delete-account` is the only function that needs one: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. The other three functions remain caller-authenticated and use no elevated key.
+**About the elevated key (PFA-C04).** `delete-account` is the only function that needs one: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. Every other function remains caller-authenticated and uses no elevated key.
 
 ---
 
@@ -88,8 +88,8 @@ Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_sh
 
 Before clicking **Merge** on the PR:
 
-- [ ] **The required `Validate` GitHub Actions check is green on the PR's latest head.** `main` is protected to require it: the `.github/workflows/validate.yml` workflow (`npm ci`, lint, `npm run typecheck`, Vitest, production build on Node 22) must pass before the **Merge** button is enabled — a PR cannot be merged while it is pending or failing, and pushing a new commit re-runs it against the new head under strict/up-to-date mode. This required check — **not** operator-attested local validation — is the authoritative merge gate. Zero human approvals are required, but unresolved PR conversations block the merge.
-- [ ] **Review the two non-required workflows as evidence, not as gates.** `E2E (local)` (`.github/workflows/e2e-local.yml`) and `DB Tests` (`.github/workflows/db-tests.yml`) also run on pull requests to `main`. Both execute against an **ephemeral local Supabase stack**, never Production, and neither is in `main` branch protection — a red or skipped run does not block the **Merge** button, so read them deliberately. Fork-origin pull requests skip both before any execution. Promoting either to a required check is an unresolved owner decision (D5) — do **not** describe them as required.
+- [ ] **The required `Validate` GitHub Actions check is green on the PR's latest head.** `main` is protected to require it: the `.github/workflows/validate.yml` workflow (`npm ci`, lint, `npm run typecheck`, Vitest, production build on Node 22) must pass before the **Merge** button is enabled — a PR cannot be merged while it is pending or failing, and pushing a new commit re-runs it against the new head under strict/up-to-date mode. This is one of the **two** authoritative hosted merge gates — `db-tests` is the other (see the next item) — and neither is satisfied by operator-attested local validation. Zero human approvals are required, but unresolved PR conversations block the merge.
+- [ ] **Know which workflows are gates.** `main` protection requires the bare check names `validate` and `db-tests`; a red `db-tests` blocks the **Merge** button, which is intended. `DB Tests` became required on **2026-08-16** when the owner resolved **D5** to `REQUIRE_DB_TESTS`. `E2E (local)` (`.github/workflows/e2e-local.yml`) was deliberately **not** promoted and remains evidence rather than a gate — read it deliberately, because a red or skipped run does not block merging. Both run against an **ephemeral local Supabase stack**, never Production, and fork-origin pull requests skip both before any execution. Vercel is **not** a required check.
 - [ ] PR scope matches the title and description — no surprise migration, no surprise Edge Function change, no commercial-doc edit smuggled in.
 - [ ] Docs are updated alongside the change, per [`docs/documentation-policy.md`](documentation-policy.md). The PR report ends with a "Documentation updates" section.
 - [ ] **If the PR adds a migration:**
@@ -111,7 +111,7 @@ Before clicking **Merge** on the PR:
 
 ## 5. Pre-deploy local checks
 
-These are **pre-deploy** checks on the merged `main` (and, run before pushing, useful pre-push evidence). They are no longer the authoritative merge gate — the required `Validate` GitHub Actions check (§4) is. Run them from the project root on the merged `main` (after `git pull --ff-only origin main`):
+These are **pre-deploy** checks on the merged `main` (and, run before pushing, useful pre-push evidence). They are **not** the protected-branch merge gates — the required hosted checks `validate` and `db-tests` are (§4). Run them from the project root on the merged `main` (after `git pull --ff-only origin main`):
 
 ```sh
 npm run lint                              # ESLint (0 errors)
@@ -233,9 +233,9 @@ Each of those is refused before any privileged client is constructed, so none ca
 
 ---
 
-### 7b. `search-pubmed` — NOT YET DEPLOYED; endpoint-before-UI ordering applies
+### 7b. `search-pubmed` — deployed; endpoint-before-UI ordering applies
 
-**Current state: `search-pubmed` exists in the repository and is NOT deployed to the linked project.** It is the Edge Function behind the Add Papers → **PubMed Search** tab (`PUBMED-IN-APP-SEARCH-001`).
+**Current state: `search-pubmed` is deployed to the linked project and live.** It is the Edge Function behind the Add Papers → **PubMed Search** tab (`PUBMED-IN-APP-SEARCH-001`). The initial rollout completed on **2026-08-23** — its evidence (deployment identifiers, verification results, merge and Vercel provenance) is recorded in [migration-history.md](migration-history.md). Read the live version back rather than trusting any number written here: `supabase functions list --project-ref <project-ref>`.
 
 **What it is.** A read-only discovery endpoint. It authenticates the caller in-function with `auth.getUser()`, reads that user's optional `profiles.pubmed_api_key` server-side, calls NCBI E-utilities **ESearch** then **ESummary** with a finite timeout and a one-retry budget, and returns an application-owned page of PubMed summaries. It performs **no** insert, update, Project/Tag mutation, AI call or quota consumption, and it uses **no** elevated key. The user's API key is never returned, never logged, and never reaches the browser; the raw search query is never logged either — only its length.
 
@@ -250,9 +250,9 @@ supabase/functions/_shared/pubmedSearch.ts     # validation, URL building, parsi
 supabase/functions/_shared/env.ts              # pre-existing, unchanged
 ```
 
-`_shared/env.ts` is the only shared module it imports, and **it is unchanged by this feature** — so no other function needs redeploying. `fetch-paper-metadata` in particular is untouched: keep its deployed version as it is.
+`_shared/env.ts` is the only shared module it imports, and it was **unchanged by the initial rollout** — so no other function needed redeploying, and `fetch-paper-metadata` kept its deployed version. Re-check that closure before any future deploy: if a change reaches `_shared/env.ts`, every function bundling it must be redeployed too.
 
-**Required ordering — the endpoint must not lag the UI that calls it.** Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge. A merged PubMed Search tab with no deployed endpoint would show every search as a PubMed-unavailable error.
+**Required ordering — the endpoint must not lag the UI that calls it.** This rule is durable, not a one-off: it governed the initial rollout and governs every future change that gives `search-pubmed` a new or altered request/response contract before frontend code can use it. Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge, so a frontend that expects a contract the deployed function does not serve yet would fail every search.
 
 ```text
 1. independent review approves the exact PR head
@@ -265,7 +265,9 @@ supabase/functions/_shared/env.ts              # pre-existing, unchanged
 7. run the §9.3b post-deploy smoke checklist
 ```
 
-On rollback the order reverses: revert the frontend **before** removing the function.
+On rollback the order reverses: revert the frontend **before** rolling the function back.
+
+A frontend-only change that uses the **already-deployed** contract — a rendering or wiring fix, for example — needs no Edge deployment and merges normally.
 
 **Verification, non-destructively.** Every check below is refused before any PubMed request is made, so none of them consumes upstream rate budget or touches user data:
 
@@ -273,6 +275,8 @@ On rollback the order reverses: revert the frontend **before** removing the func
 - `GET` returns `405 method_not_allowed`;
 - `POST` with no Authorization header returns `401 unauthenticated`;
 - `POST` with a valid token and `{"query": ""}` returns `400 invalid_request`.
+
+The empty-query case is the informative one: it proves the worker boots, builds the caller-scoped client and validates the JWT, then stops at request validation **before** the `profiles.pubmed_api_key` lookup and before ESearch/ESummary — so it costs no upstream rate budget. All four passed at the initial rollout on 2026-08-23 ([migration-history.md](migration-history.md)); re-run them after any future deployment.
 
 **No new secret is required.** It uses the auto-injected `SUPABASE_URL` / `SUPABASE_ANON_KEY` and the already-existing per-user `profiles.pubmed_api_key`. **No migration is required** — the feature adds no table, column, RPC or RLS policy.
 
@@ -286,7 +290,7 @@ The frontend deploys from `main` to Vercel. The repository ships [`vercel.json`]
 
 - Required client env vars (§3.1) must be configured in the Vercel project before any deploy that needs them.
 - A Vercel build with either `VITE_*` var missing will produce a bundle that throws the client-env fail-fast error at module load in the browser console.
-- Vercel is **not** a required GitHub status check — a failed or pending Vercel deployment does not block the **Merge** button. The `Validate` check (§4) is the only merge gate.
+- Vercel is **not** a required GitHub status check — a failed or pending Vercel deployment does not block the **Merge** button. The required GitHub merge gates are `validate` and `db-tests` (§4).
 
 What lives in the Vercel project settings rather than in this repository, and must be verified there rather than assumed:
 - Deployment protection, build/environment configuration, and domain assignment.
@@ -446,7 +450,7 @@ Run from a real browser session signed into the production app. Tick each item; 
 
 ### 9.3b In-app PubMed search (Edge Function: `search-pubmed`)
 
-Only after §7b's deployment step has actually happened.
+Run after a `search-pubmed` deployment, or after a frontend change affecting PubMed Search. The initial rollout completed on **2026-08-23**; its historical evidence is in [migration-history.md](migration-history.md). The boxes below stay unchecked because this is a reusable checklist, not a record of one run.
 
 - [ ] Add Papers → **PubMed Search** → query `resistance training hypertrophy` → press Search → results render with titles, authors, journal, date and PMID.
 - [ ] The result count distinguishes the records shown from PubMed's total (e.g. `1–20 of 2,509`).
@@ -568,7 +572,7 @@ No code redeploy needed; the next function invocation picks up the new secret.
 > - **Migrations applied:** `20260725090000` **and** the grant-hardening `20260726120000` (which `REVOKE`s direct `internal_user_access` privileges from `PUBLIC`/`anon`/`authenticated` as defense in depth atop FORCE RLS + no policy). Ledger aligned through `20260726120000` (68 rows).
 > - **Owner bootstrap complete and verified** (owner internal role + AI-quota exemption + Pro-baseline entitlement, confirmed via the read-only RPCs; usage history preserved; no subscription/billing identity created).
 > - **Google Monitoring configured:** `monitoring.googleapis.com` + `iam.googleapis.com` enabled on the Gemini project; a narrowly-privileged Monitoring service account holds **only** `roles/monitoring.viewer`; the three Google Edge secrets `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_MONITORING_CLIENT_EMAIL`, `GOOGLE_MONITORING_PRIVATE_KEY` are set (`GEMINI_MODEL` intentionally unset).
-> - **Deployed functions:** all four functions in `supabase/functions/` are deployed and ACTIVE. Deployed version numbers are volatile — read them back with `supabase functions list --project-ref <project-ref>` rather than trusting a snapshot recorded here.
+> - **Deployed functions:** all functions committed under `supabase/functions/` are deployed and ACTIVE. Deployed version numbers are volatile — read them back with `supabase functions list --project-ref <project-ref>` rather than trusting a snapshot recorded here.
 > - **Billing intentionally DISABLED** on the Gemini project; **provider monitoring is unavailable** (the deployed provider-quota function's Cloud Monitoring call returns HTTP 403 — see the read-only evidence in decision **C29**). Read-only investigation confirmed: billing disabled, **no** project-level IAM deny policy, **no** parent org/folder.
 > - **Frontend no longer calls or renders provider monitoring.** Under **C29** (scope normalization task 001Y) the frontend provider-quota card, fetch hook, client library, their tests, and the orphaned query key were removed. The deployed provider-quota function is **retained but intentionally unused** — deferred infrastructure, not active product functionality.
 > - **No Production rollback or deletion occurred in 001Y.** No migration, secret, Edge deploy/invocation, Google/billing/IAM, Vercel, or merge mutation was performed by the scope-normalization task.

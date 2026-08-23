@@ -17,7 +17,7 @@ The core application is **stable, hardened, and feature-complete at current scal
 - Server-side read path: filtering, sorting, pagination, lazy loading, on-demand abstract fetch.
 - Full-text search with server-driven "Matched in:" attribution (see below).
 - Imports (PMID / DOI / BibTeX / RIS / CSV), duplicate detection and merge (PMID/DOI-only), exports (CSV / RIS / BibTeX).
-- **In-app PubMed discovery** (Add Papers → PubMed Search): search PubMed with full PubMed syntax, browse paged results, multi-select records and import the selected PMIDs through the existing canonical identifier importer. Discovery never becomes a second import path — see below. *Requires the `search-pubmed` Edge Function; see [docs/deployment.md](docs/deployment.md) §7b for its rollout state.*
+- **In-app PubMed discovery** (Add Papers → PubMed Search): search PubMed with full PubMed syntax, browse paged results, multi-select records and import the selected PMIDs through the existing canonical identifier importer. Discovery never becomes a second import path — see below. Publication-type badges on a result honour the current user's Study Type Exclusion Pool; that is display-only and does not affect the study type recorded at import. Backed by the deployed `search-pubmed` Edge Function — [docs/deployment.md](docs/deployment.md) §7b covers its deployment rules.
 - Projects, tags, curation pools (keywords / synonyms / study types / exclusions), notes, saved searches / filter presets.
 - Private per-user attachments; AI analysis via Gemini (`analyze-paper` Edge Function).
 - **Full account export** (Settings → Account data): one ZIP holding every category of the signed-in user's own data — papers and notes, projects, tags and their relationships, saved searches, all four pools, attachment metadata **and** attachment binaries, plus a non-secret profile projection. API keys, tokens, and session material are excluded by construction.
@@ -121,9 +121,9 @@ Requires Node.js 20.19+ or 22.12+. Supabase project config is in `supabase/confi
 
 ## Supabase Edge Functions
 
-Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`, `search-pubmed`). The first four are deployed to the linked project. `get-gemini-provider-quota` is **deployed but intentionally unused** — its manager-facing dashboard is deferred under decision C29, and no frontend code calls or renders it.
+Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`, `search-pubmed`). All five are deployed to the linked project. `get-gemini-provider-quota` is **deployed but intentionally unused** — its manager-facing dashboard is deferred under decision C29, and no frontend code calls or renders it.
 
-`search-pubmed` is the newest and is **not yet deployed**: it backs the PubMed Search tab and must be deployed to the linked project **before** the frontend that calls it is merged, or the tab would be reachable with no endpoint behind it. See [docs/deployment.md](docs/deployment.md) §7b for the required ordering. It is read-only (PubMed ESearch + ESummary), uses no elevated key, and reads the caller's optional `profiles.pubmed_api_key` server-side exactly as `fetch-paper-metadata` does.
+`search-pubmed` is the newest and backs the PubMed Search tab. It is read-only (PubMed ESearch + ESummary), caller-authenticated, uses no elevated key, and reads the caller's optional `profiles.pubmed_api_key` server-side exactly as `fetch-paper-metadata` does. Because a frontend that calls it is useless without it, any future change to its request/response contract must be deployed **before** the frontend that depends on it merges — see [docs/deployment.md](docs/deployment.md) §7b.
 
 **Edge Function deploys are separate from frontend / Vercel deploys** — a GitHub merge alone does not update the deployed function. After any change under `supabase/functions/<name>/`, deploy each changed function explicitly:
 
@@ -132,6 +132,7 @@ supabase functions deploy analyze-paper --project-ref <project-ref>
 supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>
 supabase functions deploy delete-account --project-ref <project-ref>
+supabase functions deploy search-pubmed --project-ref <project-ref>
 ```
 
 ### Required Edge Function secrets
@@ -190,11 +191,11 @@ pgTAP suites in `supabase/tests/database/` cover core and relational RLS isolati
 
 | Workflow | Runs | Required to merge? |
 |---|---|---|
-| **`Validate`** (`.github/workflows/validate.yml`) | `npm ci`, lint, typecheck, Vitest, production build on Node 22 | **Yes** — the only required check on `main` |
-| **`E2E (local)`** (`.github/workflows/e2e-local.yml`) | The same local-first Playwright lifecycle on an ephemeral local stack | No |
-| **`DB Tests`** (`.github/workflows/db-tests.yml`) | The same `test:db:local` database lifecycle | No |
+| **`Validate`** (`.github/workflows/validate.yml`) | `npm ci`, lint, typecheck, Vitest, production build on Node 22 | **Yes** — required on `main` |
+| **`DB Tests`** (`.github/workflows/db-tests.yml`) | The same `test:db:local` database lifecycle | **Yes** — required on `main` |
+| **`E2E (local)`** (`.github/workflows/e2e-local.yml`) | The same local-first Playwright lifecycle on an ephemeral local stack | No — evidence, not a gate |
 
-All three run on pull requests to `main` and pushes to `main`, use a read-only token, and require no repository secret, variable, or Environment; the two non-required workflows skip fork-origin pull requests before executing anything. None of them contact Production or any cloud Supabase project — there is **no hosted staging environment**, and local-first is the accepted path.
+Branch protection requires the bare check names `validate` and `db-tests`; Vercel is **not** a required check. All three workflows run on pull requests to `main` and pushes to `main`, use a read-only token, and require no repository secret, variable, or Environment; `E2E (local)` and `DB Tests` skip fork-origin pull requests before executing anything. None of them contact Production or any cloud Supabase project — there is **no hosted staging environment**, and local-first is the accepted path.
 
 Edge Function tests executed by a **Deno** runtime do not exist. `delete-account` and `search-pubmed` are the partial exceptions: each keeps its whole request path in a runtime-agnostic `handler.ts` plus pure `_shared` modules, so the real handler — not a re-implementation — is covered by Vitest. `delete-account` is additionally invoked for real as a served local Edge Function under the local E2E lifecycle; `search-pubmed` is not, because its E2E stubs the request at the browser boundary to keep CI off the live NCBI network.
 
