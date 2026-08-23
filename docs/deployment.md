@@ -313,20 +313,43 @@ The three `_shared` modules were **not modified** by `001A`, so no other functio
 
 **Required ordering for every FUTURE change — the endpoint must not lag the UI that calls it.** The initial deployment is done; this rule is durable and governs any later PR that changes this function, or any shared module inside its bundle, in a way that alters the request/response contract. Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge, so a frontend expecting a contract the deployed function does not serve yet would fail every request.
 
+**Which path applies depends on one question: would merging this PR put a caller in Production that the deployed Edge artifact cannot serve?** Answer it before doing anything else — the two paths order the merge and the deployment differently, and picking the wrong one is exactly how the invariant gets broken.
+
+**Determining the deployment set (both paths).** Before deploying anything, inspect the changed function's dependency closure (§7c "Deployment artifact" above). A changed module under `supabase/functions/_shared/` is bundled into **every** function that imports it, so all of those functions belong to the authorized deployment set — not just the one the PR is "about". Deploy the complete set, and only then verify and smoke. Discovering a second affected function *after* the smoke checks would mean the Production state you verified was never the final one.
+
+**Path A — backend-only change.** Use this only when the PR contains no frontend that depends on the new contract, **and** the currently deployed frontend stays compatible with the currently deployed Edge artifact for the whole rollout interval.
+
+```text
+1. independent review approves the exact backend PR head
+2. merge that backend-only PR through the normal GitHub process
+3. obtain explicit owner authorization for the Production Edge deployment
+4. determine the COMPLETE affected Edge Function set (see above)
+5. deploy every required named function from the exact merged artifact:
+     supabase functions deploy <name> --project-ref <project-ref>
+6. verify live artifacts: supabase functions list --project-ref <project-ref>
+   — every intended function advanced and is ACTIVE, and every function you did
+     NOT intend to change kept its version and bundle hash
+7. run the §9.3c smoke checklist
+8. only after that succeeds may any dependent frontend PR merge
+```
+
+`001A` took this path, and it was safe for the specific reason stated in step 1: the endpoint had **no frontend caller at all**, so merging before the first deployment could not expose a broken UI. That condition is what makes merge-first legitimate — it is not a general licence.
+
+**Path B — the frontend depends on the changed Edge contract.** Use this when the same PR carries frontend code expecting the changed contract, or when merging the frontend first would put an incompatible caller in Production. **Here the deployment happens before the merge.**
+
 ```text
 1. independent review approves the exact PR head
-2. merge through the normal GitHub process
-3. obtain explicit owner authorization for the Production Edge deployment
-4. deploy the required named function(s) from a worktree byte-identical to the
-   approved code:
-     supabase functions deploy suggest-paper-organization --project-ref <project-ref>
-5. verify live artifacts: supabase functions list --project-ref <project-ref>
-   — confirm the changed slug advanced and is ACTIVE, and confirm every function
-     you did NOT intend to change kept its version and bundle hash
-6. rerun the §9.3c smoke checklist
-7. if a `_shared` module changed, redeploy EVERY function whose bundle contains
-   it — not just this one
+2. obtain explicit owner authorization for the Production Edge deployment
+3. determine the COMPLETE affected Edge Function set (see above)
+4. deploy the exact APPROVED Edge artifact(s) BEFORE merging the frontend change
+5. verify live artifacts — intended functions advanced, unaffected functions
+   unchanged (same check as Path A step 6)
+6. run the §9.3c smoke checklist
+7. re-read the PR head and confirm it is STILL the exact approved SHA
+8. only then merge that exact head through the normal GitHub process
 ```
+
+**If the PR head moves at any point after approval or deployment, stop.** The earlier approval no longer describes what would merge, and the changed head needs independent review before it can be merged. Never quietly deploy an artifact that was not the reviewed one.
 
 A frontend-only change that uses the **already-deployed** contract needs no Edge deployment and merges normally. On rollback the order reverses: revert the frontend **before** rolling the function back.
 
