@@ -44,3 +44,20 @@ verify_jwt = false
 # ESearch + ESummary) and uses no elevated key.
 [functions.search-pubmed]
 verify_jwt = false
+
+# suggest-paper-organization verifies auth inside the function body (getUser()),
+# exactly like the five functions above. Gateway JWT verification is disabled so
+# the CORS preflight is answered before any auth logic and a stale/refreshing
+# token is handled by the in-code path rather than being refused before the
+# function runs. This does NOT make the function unauthenticated: it requires the
+# Authorization header, validates the bearer token with an authoritative
+# auth.getUser() network call, and derives the caller — and therefore the paper
+# ownership check, the Project/Tag read and the AI-quota RPCs — solely from that
+# authenticated user. No user id is accepted from the request body, and no
+# owner/manager status or email comparison is used as an access shortcut.
+# The function is advisory: it reads the caller's own paper and taxonomy, asks
+# Gemini for suggestions, and returns them. It performs no Project, Tag,
+# assignment or paper mutation; its only writes are the pre-existing
+# consume_ai_quota / refund_ai_quota RPCs. It uses no elevated key.
+[functions.suggest-paper-organization]
+verify_jwt = false

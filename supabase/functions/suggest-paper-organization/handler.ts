@@ -1,0 +1,512 @@
+/**
+ * suggest-paper-organization — the complete request path, expressed without any
+ * runtime binding.
+ *
+ * AI-PROJECT-TAG-SUGGESTIONS-001A. `index.ts` supplies the real Supabase client,
+ * the real `fetch` and the real environment, and calls `Deno.serve`; every
+ * decision that matters lives here and in the four pure modules beside it, so
+ * Vitest exercises the actual shipped path — CORS-before-auth, method gating,
+ * the authoritative `auth.getUser()` check, paper ownership, taxonomy loading,
+ * quota consumption, the provider call, and refund on an unusable result — with
+ * fake clients and a fake `fetch`. No security-sensitive logic is re-implemented
+ * for testability. Same split as `search-pubmed/handler.ts` and
+ * `delete-account/handler.ts`.
+ *
+ * ## This endpoint is advisory. It mutates nothing in the application domain.
+ *
+ * It answers "where might this paper belong?" and returns suggestions. It never
+ * inserts, updates or deletes a Project, a Tag, a `paper_projects` row, a
+ * `paper_tags` row or a paper, and it never persists a suggestion. That is
+ * enforced structurally, not by convention: `CallerClient` below is the entire
+ * database surface this module can reach, and it exposes `select`, `rpc` and
+ * nothing else — there is no `insert`, `update`, `upsert` or `delete` to call.
+ * The only writes are the two pre-existing AI-quota RPCs.
+ *
+ * ## Order of operations, and why
+ *
+ *   1. CORS preflight        — before auth; a preflight carries no credentials.
+ *   2. Method gate           — before the token is read.
+ *   3. Authorization header  — required.
+ *   4. `auth.getUser()`      — authoritative; the ONLY source of caller identity.
+ *   5. Request validation    — shape, bounds, eligibility.
+ *   6. Paper ownership       — non-disclosing 404 for missing *or* foreign.
+ *   7. Taxonomy load         — caller-scoped; overflow fails honestly.
+ *   8. Provider input build  — allow-listed fields, ephemeral refs, size bound.
+ *   9. Consume quota         — one unit, and not before here.
+ *  10. Provider call         — bounded retries, finite timeout.
+ *  11. Strict parse          — unusable ⇒ refund + neutral 500.
+ *
+ * Steps 1–8 can only fail *before* a unit is spent, so a malformed request, a
+ * foreign paper, an oversized library and a stale client are all free. The
+ * Gemini key is checked at step 9's doorstep for the same reason: a
+ * misconfigured deployment must not bill the user.
+ *
+ * ## Provider failure is never a Paperlume paywall
+ *
+ * A Google 429/403/5xx is a provider-side limit on a shared project, not this
+ * user's plan being exhausted. It stays an HTTP 500 with a neutral message and a
+ * machine-readable class from `_shared/providerError.ts` — exactly as
+ * `analyze-paper` does — while an actual Paperlume quota wall is the structured
+ * 402. Conflating them would tell a paying user they were out of requests
+ * because Google was busy.
+ */
+
+import { classifyProviderError, type ProviderErrorClass } from "../_shared/providerError.ts";
+import {
+  NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE,
+  PAPER_NOT_FOUND_MESSAGE,
+  type OrganizationSuggestions,
+  type OwnedProject,
+  type OwnedTag,
+  MAX_PROJECTS,
+  MAX_TAGS,
+} from "./contract.ts";
+import { buildGeminiRequestBody, buildProviderInput } from "./prompt.ts";
+import { extractProviderText, parseSuggestionsResponse } from "./parse.ts";
+import { validateSuggestRequest } from "./validation.ts";
+
+export const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+
+/** Per-attempt provider timeout. Matches `analyze-paper`. */
+const PROVIDER_TIMEOUT_MS = 15_000;
+/** Retries *after* the first attempt, and the backoff base. Matches `analyze-paper`. */
+const PROVIDER_MAX_RETRIES = 2;
+const PROVIDER_BASE_DELAY_MS = 2_000;
+/** Ceiling applied to a `Retry-After` the provider asks for. */
+const PROVIDER_MAX_RETRY_AFTER_MS = 10_000;
+
+// ── Injected dependencies ─────────────────────────────────────────────────
+
+/**
+ * The minimal shape of the caller-scoped (anon key + caller bearer token)
+ * client — and deliberately the *entire* database surface this function has.
+ *
+ * There is no `insert`, `update`, `upsert` or `delete` here. A future edit that
+ * tried to write a Project, a Tag or an assignment would not type-check against
+ * this interface, which is a stronger guarantee than a comment asking it not to.
+ */
+export interface TableQuery {
+  eq(column: string, value: string): TableQuery;
+  limit(count: number): PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>;
+  maybeSingle(): PromiseLike<{ data: Record<string, unknown> | null; error: unknown }>;
+}
+
+export interface CallerClient {
+  auth: {
+    getUser(): Promise<{
+      data: { user: { id?: unknown } | null } | null;
+      error: unknown;
+    }>;
+  };
+  from(table: string): { select(columns: string): TableQuery };
+  rpc(
+    fn: string,
+    args: Record<string, unknown>,
+  ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
+}
+
+export interface SuggestOrganizationDeps {
+  /** Build a client bound to the caller's `Authorization` header. */
+  createCallerClient(authHeader: string): CallerClient;
+  /** Injected so the retry/backoff policy is exercised by tests, not mocked around. */
+  fetchImpl(url: string, init: RequestInit): Promise<Response>;
+  /** Injected so tests never spend real wall-clock time on backoff. */
+  sleep(ms: number): Promise<void>;
+  /** Read from Deno env by `index.ts`; `null`/empty means the function is misconfigured. */
+  getGeminiApiKey(): string | null;
+  /** Resolved through the shared `_shared/geminiModel.ts` so this cannot drift from `analyze-paper`. */
+  getGeminiModel(): string;
+  /** Injected so tests can assert exactly what is (and is not) logged. */
+  logger?: { log(message: string): void; warn(message: string): void; error(message: string): void };
+}
+
+function fail(status: number, error: string, message: string, extra?: Record<string, unknown>): Response {
+  return new Response(JSON.stringify({ error, message, ...extra }), { status, headers: jsonHeaders });
+}
+
+// ── Quota ─────────────────────────────────────────────────────────────────
+
+/**
+ * Best-effort refund of the one unit consumed for this attempt.
+ *
+ * Swallows every error, exactly as `analyze-paper` does, so a refund-side
+ * problem can never replace the provider failure the user actually needs to
+ * see. `refund_ai_quota` is itself tolerant (`GREATEST(used - 1, 0)`, and a
+ * no-op when the counter row is missing), so the two layers compose.
+ */
+async function safeRefund(
+  client: CallerClient,
+  userId: string,
+  logger: NonNullable<SuggestOrganizationDeps["logger"]>,
+): Promise<void> {
+  try {
+    const { error } = await client.rpc("refund_ai_quota", { p_user_id: userId });
+    if (error) logger.error("suggest-organization refund_failed rpc_error=1");
+  } catch {
+    logger.error("suggest-organization refund_failed threw=1");
+  }
+}
+
+// ── Provider transport ────────────────────────────────────────────────────
+
+type ProviderCallResult =
+  | { ok: true; payload: unknown }
+  | { ok: false; kind: "http" | "network" | "timeout" | "parse"; status?: number };
+
+/**
+ * Call Gemini with a finite per-attempt timeout and a bounded retry budget,
+ * retrying only 429 and 5xx (and network/abort failures). An ordinary 4xx is a
+ * statement about the request and is returned immediately.
+ *
+ * This mirrors `analyze-paper`'s `fetchWithRetry` deliberately rather than
+ * sharing it. Extracting that helper into `_shared/` would put a new module into
+ * `analyze-paper`'s deploy artifact and force the repository's most
+ * safety-critical existing function to be redeployed for a feature that does not
+ * change it — widening the rollout blast radius of 001A for no behavioural gain.
+ * The same trade-off, with the same reasoning, is recorded in
+ * `search-pubmed/handler.ts`. This copy is additionally injected with
+ * `fetchImpl`/`sleep`, so unlike the original it is genuinely unit-tested.
+ */
+async function callProvider(
+  url: string,
+  apiKey: string,
+  body: Record<string, unknown>,
+  deps: SuggestOrganizationDeps,
+  logger: NonNullable<SuggestOrganizationDeps["logger"]>,
+): Promise<ProviderCallResult> {
+  const init: RequestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify(body),
+  };
+
+  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt++) {
+    try {
+      const response = await deps.fetchImpl(url, {
+        ...init,
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      });
+
+      if (response.ok) {
+        try {
+          return { ok: true, payload: await response.json() };
+        } catch {
+          // A 200 whose body is not JSON is an unusable response, not a
+          // transport failure — retrying it is unlikely to help.
+          return { ok: false, kind: "parse" };
+        }
+      }
+
+      const retriable = response.status === 429 || response.status >= 500;
+      if (retriable && attempt < PROVIDER_MAX_RETRIES) {
+        let delay = PROVIDER_BASE_DELAY_MS * Math.pow(2, attempt);
+        if (response.status === 429) {
+          const retryAfter = Number(response.headers.get("Retry-After"));
+          if (Number.isFinite(retryAfter) && retryAfter > 0) {
+            delay = Math.min(Math.max(retryAfter * 1000, delay), PROVIDER_MAX_RETRY_AFTER_MS);
+          }
+        }
+        // Status and attempt only. The provider's body can echo request content
+        // and its error envelope can name the Google project, so neither is read
+        // here and neither is logged.
+        logger.warn(
+          `suggest-organization provider_status=${response.status} attempt=${attempt + 1} retry_in_ms=${delay}`,
+        );
+        await deps.sleep(delay);
+        continue;
+      }
+
+      return { ok: false, kind: "http", status: response.status };
+    } catch (error) {
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      if (attempt < PROVIDER_MAX_RETRIES) {
+        const delay = PROVIDER_BASE_DELAY_MS * Math.pow(2, attempt);
+        logger.warn(
+          `suggest-organization provider_${timedOut ? "timeout" : "network_error"} attempt=${attempt + 1} retry_in_ms=${delay}`,
+        );
+        await deps.sleep(delay);
+        continue;
+      }
+      return { ok: false, kind: timedOut ? "timeout" : "network" };
+    }
+  }
+
+  return { ok: false, kind: "network" };
+}
+
+// ── Taxonomy loading ──────────────────────────────────────────────────────
+
+/**
+ * Read the caller's own Projects/Tags.
+ *
+ * Two independent guards: the query is filtered on `user_id`, and it runs under
+ * the caller's own RLS through the anon-key client. No elevated key exists in
+ * this function, so a foreign row is unreachable even if the filter were wrong.
+ *
+ * `limit(max + 1)` is how overflow is *detected* rather than silently applied —
+ * one row past the supported size is enough to know, and the request then fails
+ * honestly instead of comparing the paper against part of the library.
+ */
+async function loadProjects(
+  client: CallerClient,
+  userId: string,
+): Promise<{ ok: true; projects: OwnedProject[] } | { ok: false }> {
+  const { data, error } = await client
+    .from("projects")
+    .select("id,name,description")
+    .eq("user_id", userId)
+    .limit(MAX_PROJECTS + 1);
+  if (error || !Array.isArray(data)) return { ok: false };
+
+  const projects: OwnedProject[] = [];
+  for (const row of data) {
+    if (typeof row.id !== "string" || typeof row.name !== "string") return { ok: false };
+    projects.push({
+      id: row.id,
+      name: row.name,
+      description: typeof row.description === "string" ? row.description : null,
+    });
+  }
+  return { ok: true, projects };
+}
+
+async function loadTags(
+  client: CallerClient,
+  userId: string,
+): Promise<{ ok: true; tags: OwnedTag[] } | { ok: false }> {
+  const { data, error } = await client
+    .from("tags")
+    .select("id,name")
+    .eq("user_id", userId)
+    .limit(MAX_TAGS + 1);
+  if (error || !Array.isArray(data)) return { ok: false };
+
+  const tags: OwnedTag[] = [];
+  for (const row of data) {
+    if (typeof row.id !== "string" || typeof row.name !== "string") return { ok: false };
+    tags.push({ id: row.id, name: row.name });
+  }
+  return { ok: true, tags };
+}
+
+// ── Handler ───────────────────────────────────────────────────────────────
+
+export async function handleSuggestOrganizationRequest(
+  req: Request,
+  deps: SuggestOrganizationDeps,
+): Promise<Response> {
+  const logger = deps.logger ?? console;
+
+  // 1. CORS preflight — answered before auth and before anything else.
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  // 2. POST only.
+  if (req.method !== "POST") {
+    return fail(405, "method_not_allowed", "This endpoint accepts POST only.");
+  }
+
+  try {
+    // 3. Bearer credential required.
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return fail(401, "unauthenticated", "You must be signed in to request suggestions.");
+    }
+
+    // 4. Authoritative validation of the caller. `getUser()` is a network check
+    //    against the Auth server, not a local decode, and the resulting id is
+    //    the only identity this function will ever use. No request field can
+    //    name a user: `validateSuggestRequest` reads exactly `paperId`,
+    //    `draft`, `currentProjectIds` and `currentTagIds`, and nothing below
+    //    consults the body for an identity.
+    const client = deps.createCallerClient(authHeader);
+    const { data: authData, error: authError } = await client.auth.getUser();
+    const userId = authData?.user?.id;
+    if (authError || typeof userId !== "string" || userId === "") {
+      return fail(401, "unauthenticated", "You must be signed in to request suggestions.");
+    }
+
+    // 5. Request validation — before any database read, any quota unit and any
+    //    provider work.
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return fail(400, "invalid_request", "A JSON request body is required.");
+    }
+
+    const validation = validateSuggestRequest(body);
+    if (!validation.ok) {
+      logger.log(`suggest-organization outcome=invalid_request reason=${validation.reason}`);
+      return fail(400, "invalid_request", validation.message, { reason: validation.reason });
+    }
+    const { paperId, draft, currentProjectIds, currentTagIds } = validation.request;
+
+    // 6. Paper ownership. Possession of a UUID is not ownership: the row must be
+    //    the caller's. Missing and foreign are answered identically so the
+    //    response never confirms that someone else's paper exists.
+    const { data: paperRow, error: paperError } = await client
+      .from("papers")
+      .select("id")
+      .eq("id", paperId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (paperError) {
+      logger.error("suggest-organization paper_lookup_failed");
+      return fail(500, "internal_error", "Something went wrong. Please try again.");
+    }
+    if (!paperRow || typeof paperRow.id !== "string") {
+      logger.log("suggest-organization outcome=paper_not_found");
+      return fail(404, "paper_not_found", PAPER_NOT_FOUND_MESSAGE);
+    }
+
+    // 7. The caller's complete taxonomy, read under their own identity.
+    const projectsResult = await loadProjects(client, userId);
+    if (!projectsResult.ok) {
+      logger.error("suggest-organization taxonomy_load_failed entity=projects");
+      return fail(500, "internal_error", "Something went wrong. Please try again.");
+    }
+    const tagsResult = await loadTags(client, userId);
+    if (!tagsResult.ok) {
+      logger.error("suggest-organization taxonomy_load_failed entity=tags");
+      return fail(500, "internal_error", "Something went wrong. Please try again.");
+    }
+
+    // 8. Provider input — allow-listed fields only, ephemeral refs, size bound,
+    //    and the fail-closed check of the client's "already selected" claims.
+    const built = buildProviderInput({
+      draft,
+      projects: projectsResult.projects,
+      tags: tagsResult.tags,
+      currentProjectIds: currentProjectIds ?? [],
+      currentTagIds: currentTagIds ?? [],
+    });
+    if (!built.ok) {
+      logger.log(
+        `suggest-organization outcome=input_rejected reason=${built.reason} ` +
+          `projects=${projectsResult.projects.length} tags=${tagsResult.tags.length}`,
+      );
+      return fail(400, "invalid_request", built.message, { reason: built.reason });
+    }
+
+    // 9a. Configuration. Checked before the quota unit is spent so a
+    //     misconfigured deployment costs the user nothing and needs no refund.
+    const apiKey = deps.getGeminiApiKey();
+    if (apiKey === null || apiKey.trim() === "") {
+      logger.error("suggest-organization provider_key_missing");
+      return fail(500, "internal_error", "Something went wrong. Please try again.");
+    }
+
+    // 9b. Consume exactly one unit of the EXISTING Paperlume AI quota, through
+    //     the caller-authenticated client so the RPC's `auth.uid()` guard sees
+    //     the right user. The RPC is the enforcement authority: this code reads
+    //     its `allowed` flag and does no quota arithmetic of its own, which is
+    //     also why the owner/manager `ai_quota_exempt` grant keeps working here
+    //     without this function knowing anything about internal roles.
+    const { data: quotaData, error: quotaError } = await client.rpc("consume_ai_quota", {
+      p_user_id: userId,
+    });
+    if (quotaError) {
+      logger.error("suggest-organization quota_rpc_error");
+      return fail(500, "internal_error", "Something went wrong. Please try again.");
+    }
+    const quotaRow = (Array.isArray(quotaData) ? quotaData[0] : quotaData) as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    if (!quotaRow || quotaRow.allowed !== true) {
+      const reason = (typeof quotaRow?.reason === "string" ? quotaRow.reason : "quota_exceeded");
+      logger.log(`suggest-organization outcome=quota_denied reason=${reason}`);
+      // 402 is the Paperlume paywall, and only the Paperlume paywall. A provider
+      // limit never reaches this branch — see the 500 path below.
+      return new Response(
+        JSON.stringify({
+          error: "quota_exceeded",
+          message: reason === "quota_exceeded"
+            ? "AI quota exceeded."
+            : `AI suggestions are not available (${reason}).`,
+          details: {
+            plan: quotaRow?.plan ?? null,
+            period_type: quotaRow?.period_type ?? null,
+            used: quotaRow?.used ?? 0,
+            quota: quotaRow?.quota ?? 0,
+            remaining: quotaRow?.remaining ?? 0,
+            reset_at: quotaRow?.reset_at ?? null,
+          },
+        }),
+        { status: 402, headers: jsonHeaders },
+      );
+    }
+
+    // 10. The provider call. From here on, every failure path refunds.
+    const model = deps.getGeminiModel();
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+    const call = await callProvider(url, apiKey, buildGeminiRequestBody(built.serialized), deps, logger);
+
+    let providerClass: ProviderErrorClass | null = null;
+    let suggestions: OrganizationSuggestions | null = null;
+    let failureDetail = "";
+
+    if (!call.ok) {
+      providerClass = classifyProviderError(
+        call.kind === "http" ? { kind: "http", status: call.status } : { kind: call.kind },
+      );
+      failureDetail = call.kind === "http" ? `http_${call.status}` : call.kind;
+    } else {
+      // 11. Strict parse. A structurally valid response with four empty arrays
+      //     is a SUCCESS, not a failure: "nothing here fits" is a real answer,
+      //     and refunding it would be paying users to ask about papers that do
+      //     not need organizing.
+      const text = extractProviderText(call.payload);
+      if (text === null) {
+        providerClass = classifyProviderError({ kind: "empty" });
+        failureDetail = "empty";
+      } else {
+        const parsed = parseSuggestionsResponse(text, built.refMap);
+        if (!parsed.ok) {
+          providerClass = classifyProviderError({ kind: "parse" });
+          failureDetail = parsed.detail;
+        } else {
+          suggestions = parsed.suggestions;
+        }
+      }
+    }
+
+    if (suggestions === null) {
+      // Best-effort refund — the user did not receive a usable result. Its own
+      // failure is logged separately and never replaces the provider outcome.
+      await safeRefund(client, userId, logger);
+      logger.error(
+        `suggest-organization outcome=provider_failure class=${providerClass} detail=${failureDetail} refund=attempted`,
+      );
+      return fail(500, "suggestions_unavailable", NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, {
+        code: providerClass,
+      });
+    }
+
+    logger.log(
+      `suggest-organization outcome=ok projects_in=${projectsResult.projects.length} ` +
+        `tags_in=${tagsResult.tags.length} existing_projects=${suggestions.existingProjects.length} ` +
+        `existing_tags=${suggestions.existingTags.length} new_projects=${suggestions.newProjects.length} ` +
+        `new_tags=${suggestions.newTags.length}`,
+    );
+    return new Response(JSON.stringify(suggestions), { status: 200, headers: jsonHeaders });
+  } catch (error) {
+    // The message originates in this function's own code paths; provider bodies
+    // and URLs are handled and discarded inside `callProvider` and never reach
+    // here.
+    logger.error(
+      `suggest-organization error: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
+    return fail(500, "internal_error", "Something went wrong. Please try again.");
+  }
+}
