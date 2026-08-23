@@ -88,7 +88,7 @@ Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_sh
 
 Before clicking **Merge** on the PR:
 
-- [ ] **The required `Validate` GitHub Actions check is green on the PR's latest head.** `main` is protected to require it: the `.github/workflows/validate.yml` workflow (`npm ci`, lint, `npm run typecheck`, Vitest, production build on Node 22) must pass before the **Merge** button is enabled — a PR cannot be merged while it is pending or failing, and pushing a new commit re-runs it against the new head under strict/up-to-date mode. This required check — **not** operator-attested local validation — is the authoritative merge gate. Zero human approvals are required, but unresolved PR conversations block the merge.
+- [ ] **The required `Validate` GitHub Actions check is green on the PR's latest head.** `main` is protected to require it: the `.github/workflows/validate.yml` workflow (`npm ci`, lint, `npm run typecheck`, Vitest, production build on Node 22) must pass before the **Merge** button is enabled — a PR cannot be merged while it is pending or failing, and pushing a new commit re-runs it against the new head under strict/up-to-date mode. This is one of the **two** authoritative hosted merge gates — `db-tests` is the other (see the next item) — and neither is satisfied by operator-attested local validation. Zero human approvals are required, but unresolved PR conversations block the merge.
 - [ ] **Know which workflows are gates.** `main` protection requires the bare check names `validate` and `db-tests`; a red `db-tests` blocks the **Merge** button, which is intended. `DB Tests` became required on **2026-08-16** when the owner resolved **D5** to `REQUIRE_DB_TESTS`. `E2E (local)` (`.github/workflows/e2e-local.yml`) was deliberately **not** promoted and remains evidence rather than a gate — read it deliberately, because a red or skipped run does not block merging. Both run against an **ephemeral local Supabase stack**, never Production, and fork-origin pull requests skip both before any execution. Vercel is **not** a required check.
 - [ ] PR scope matches the title and description — no surprise migration, no surprise Edge Function change, no commercial-doc edit smuggled in.
 - [ ] Docs are updated alongside the change, per [`docs/documentation-policy.md`](documentation-policy.md). The PR report ends with a "Documentation updates" section.
@@ -111,7 +111,7 @@ Before clicking **Merge** on the PR:
 
 ## 5. Pre-deploy local checks
 
-These are **pre-deploy** checks on the merged `main` (and, run before pushing, useful pre-push evidence). They are no longer the authoritative merge gate — the required `Validate` GitHub Actions check (§4) is. Run them from the project root on the merged `main` (after `git pull --ff-only origin main`):
+These are **pre-deploy** checks on the merged `main` (and, run before pushing, useful pre-push evidence). They are **not** the protected-branch merge gates — the required hosted checks `validate` and `db-tests` are (§4). Run them from the project root on the merged `main` (after `git pull --ff-only origin main`):
 
 ```sh
 npm run lint                              # ESLint (0 errors)
@@ -290,7 +290,7 @@ The frontend deploys from `main` to Vercel. The repository ships [`vercel.json`]
 
 - Required client env vars (§3.1) must be configured in the Vercel project before any deploy that needs them.
 - A Vercel build with either `VITE_*` var missing will produce a bundle that throws the client-env fail-fast error at module load in the browser console.
-- Vercel is **not** a required GitHub status check — a failed or pending Vercel deployment does not block the **Merge** button. The `Validate` check (§4) is the only merge gate.
+- Vercel is **not** a required GitHub status check — a failed or pending Vercel deployment does not block the **Merge** button. The required GitHub merge gates are `validate` and `db-tests` (§4).
 
 What lives in the Vercel project settings rather than in this repository, and must be verified there rather than assumed:
 - Deployment protection, build/environment configuration, and domain assignment.
