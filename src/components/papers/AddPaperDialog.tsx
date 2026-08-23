@@ -74,6 +74,14 @@ interface AddPaperDialogProps {
    * explains that search is unavailable — no other import mode is affected.
    */
   onPubMedSearch?: PubMedSearchFn;
+  /**
+   * The current user's Study Type Exclusion Pool, passed straight through to
+   * the PubMed tab so discovery cards stop showing publication types the user
+   * has already hidden. Data, like every other concern here, arrives as a prop:
+   * the dialog owns no Supabase access of its own. Absent means "no exclusions
+   * configured", which renders the raw PubMed types — the prior behaviour.
+   */
+  excludedStudyTypes?: ReadonlySet<string>;
   projects?: Project[];
   tags?: Tag[];
 }
@@ -275,7 +283,7 @@ function AssignmentSelector({
   );
 }
 
-export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, onPubMedSearch, projects = [], tags = [] }: AddPaperDialogProps) {
+export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, onPubMedSearch, excludedStudyTypes, projects = [], tags = [] }: AddPaperDialogProps) {
   // The default mode is unchanged by the addition of PubMed Search: a user who
   // opens Add Papers to paste identifiers still lands where they always did.
   const [activeTab, setActiveTab] = useState<"pubmed" | "import" | "file" | "manual">("import");
@@ -874,6 +882,7 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
               actions={pubmedActions}
               searchAvailable={Boolean(onPubMedSearch)}
               importing={pubmedRunning}
+              excludedStudyTypes={excludedStudyTypes}
             />
 
             {/* The SAME shared assign section every other tab renders, driven by

@@ -164,6 +164,8 @@ interface RenderOptions {
   onPubMedSearch?: ReturnType<typeof makeSearch>;
   onBulkImport?: ReturnType<typeof makeBulkImport>;
   startOnPubMed?: boolean;
+  /** The user's Study Type Exclusion Pool, as `PoolsContext` hands it over. */
+  excludedStudyTypes?: Set<string>;
 }
 
 function renderDialog(options: RenderOptions = {}) {
@@ -177,6 +179,7 @@ function renderDialog(options: RenderOptions = {}) {
       onOpenChange={onOpenChange}
       onPubMedSearch={onPubMedSearch}
       onBulkImport={onBulkImport}
+      excludedStudyTypes={options.excludedStudyTypes}
       projects={PROJECTS}
       tags={TAGS}
     />,
@@ -184,6 +187,30 @@ function renderDialog(options: RenderOptions = {}) {
 
   if (options.startOnPubMed !== false) switchTab(/PubMed Search/i);
   return { onPubMedSearch, onBulkImport, onOpenChange };
+}
+
+/**
+ * The publication-type badges actually rendered for one result, in order.
+ *
+ * Scoped to that result's own row and read through the labelled list rather
+ * than by text, because a badge value like "Journal Article" is not otherwise
+ * distinguishable from a title, a journal name or an author.
+ */
+function badgesFor(pmid: string): string[] {
+  const checkbox = screen.getByRole("checkbox", { name: new RegExp(`^Select PMID ${pmid} — `) });
+  const row = checkbox.closest("li") as HTMLElement;
+  const list = within(row).queryByRole("list", { name: "Publication types" });
+  if (!list) return [];
+  return within(list)
+    .getAllByRole("listitem")
+    .map((item) => item.textContent ?? "");
+}
+
+/** Whether the publication-type badge section exists at all for one result. */
+function hasBadgeSection(pmid: string): boolean {
+  const checkbox = screen.getByRole("checkbox", { name: new RegExp(`^Select PMID ${pmid} — `) });
+  const row = checkbox.closest("li") as HTMLElement;
+  return within(row).queryByRole("list", { name: "Publication types" }) !== null;
 }
 
 /** Search and wait for the first page to render. */
@@ -1175,5 +1202,213 @@ describe("PubMed Search — failure isolation", () => {
 
     switchTab(/Import IDs/i);
     expect(screen.getByLabelText("Paste PMIDs or DOIs, or drop a .txt/.csv file")).toBeEnabled();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Study Type exclusions (PUBMED-SEARCH-STUDY-TYPE-EXCLUSION-001)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("PubMed Search — the user's Study Type exclusions", () => {
+  /**
+   * The four types the Production report actually saw on one card, three of
+   * which the reporting user had already excluded. `Randomized Controlled
+   * Trial` is the one they wanted to see.
+   */
+  const REPORTED_TYPES = [
+    "Journal Article",
+    "Randomized Controlled Trial",
+    "Research Support, N.I.H., Extramural",
+    "Research Support, Non-U.S. Gov't",
+  ];
+
+  /** One result carrying `types`, searched for and awaited. */
+  async function searchWith(types: string[], excludedStudyTypes?: Set<string>) {
+    const handle = renderDialog({
+      excludedStudyTypes,
+      onPubMedSearch: makeSearch(async () =>
+        pageOf([result("11111111", { publicationTypes: types })], 0, 1),
+      ),
+    });
+    await search();
+    return handle;
+  }
+
+  // ── A ────────────────────────────────────────────────────────────────
+  it("hides an excluded publication type and keeps the rest", async () => {
+    await searchWith(
+      ["Journal Article", "Randomized Controlled Trial"],
+      new Set(["journal article"]),
+    );
+
+    expect(badgesFor("11111111")).toEqual(["Randomized Controlled Trial"]);
+  });
+
+  // ── B ────────────────────────────────────────────────────────────────
+  it("matches case-insensitively, whatever case the exclusion was stored in", async () => {
+    await searchWith(REPORTED_TYPES, new Set(["JOURNAL ARTICLE", "  research support, non-u.s. gov't  "]));
+
+    // Both excluded values are gone despite differing case and stray padding…
+    expect(badgesFor("11111111")).toEqual([
+      "Randomized Controlled Trial",
+      "Research Support, N.I.H., Extramural",
+    ]);
+  });
+
+  // ── C ────────────────────────────────────────────────────────────────
+  it("excludes whole values only — a broader name does not hide a narrower one", async () => {
+    // This is the load-bearing case. Substring or prefix matching would wipe
+    // out three real publication types the user never excluded.
+    await searchWith(
+      ["Clinical Trial, Phase II", "Clinical Trial, Phase III", "Randomized Controlled Trial"],
+      new Set(["clinical trial"]),
+    );
+
+    expect(badgesFor("11111111")).toEqual([
+      "Clinical Trial, Phase II",
+      "Clinical Trial, Phase III",
+      "Randomized Controlled Trial",
+    ]);
+  });
+
+  it("does not let a 'Research Support' exclusion hide the comma-bearing variants", async () => {
+    await searchWith(REPORTED_TYPES, new Set(["research support"]));
+
+    expect(badgesFor("11111111")).toEqual(REPORTED_TYPES);
+  });
+
+  // ── D ────────────────────────────────────────────────────────────────
+  it("hides a comma-bearing type when that exact whole value is excluded", async () => {
+    await searchWith(REPORTED_TYPES, new Set(["research support, n.i.h., extramural"]));
+
+    // The value is one publication type, never split on its commas.
+    expect(badgesFor("11111111")).toEqual([
+      "Journal Article",
+      "Randomized Controlled Trial",
+      "Research Support, Non-U.S. Gov't",
+    ]);
+  });
+
+  it("reproduces the reported Production card: three excluded, one left", async () => {
+    await searchWith(
+      REPORTED_TYPES,
+      new Set([
+        "journal article",
+        "research support, n.i.h., extramural",
+        "research support, non-u.s. gov't",
+      ]),
+    );
+
+    expect(badgesFor("11111111")).toEqual(["Randomized Controlled Trial"]);
+  });
+
+  // ── E ────────────────────────────────────────────────────────────────
+  it("omits the badge section entirely when every type is excluded", async () => {
+    await searchWith(
+      ["Journal Article", "Research Support, Non-U.S. Gov't"],
+      new Set(["journal article", "research support, non-u.s. gov't"]),
+    );
+
+    // No empty container, and no "Unknown"/"Excluded"/"No study type" filler.
+    expect(hasBadgeSection("11111111")).toBe(false);
+    for (const filler of [/no study type/i, /^unknown$/i, /excluded/i]) {
+      expect(screen.queryByText(filler)).toBeNull();
+    }
+
+    // …and the rest of the card is untouched.
+    expect(screen.getByText("Paper 11111111")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /^Select PMID 11111111 — / })).toBeInTheDocument();
+    expect(screen.getByText(/PMID 11111111/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open in PubMed/ })).toHaveAttribute(
+      "href",
+      "https://pubmed.ncbi.nlm.nih.gov/11111111/",
+    );
+  });
+
+  // ── F ────────────────────────────────────────────────────────────────
+  it("shows every raw PubMed type, in order, when nothing is excluded", async () => {
+    await searchWith(REPORTED_TYPES, new Set());
+    expect(badgesFor("11111111")).toEqual(REPORTED_TYPES);
+  });
+
+  it("degrades to the raw types when the Dashboard wires no exclusions at all", async () => {
+    // The prop is optional: a caller that never supplies it must not break the
+    // tab, which is what makes the existing AddPaperDialog suites still valid.
+    await searchWith(REPORTED_TYPES, undefined);
+    expect(badgesFor("11111111")).toEqual(REPORTED_TYPES);
+  });
+
+  // ── G ────────────────────────────────────────────────────────────────
+  it("keeps a result selectable and importable when all its types are excluded", async () => {
+    const { onBulkImport } = await searchWith(
+      ["Journal Article"],
+      new Set(["journal article"]),
+    );
+
+    expect(hasBadgeSection("11111111")).toBe(false);
+
+    const checkbox = screen.getByRole("checkbox", { name: /^Select PMID 11111111 — / });
+    expect(checkbox).not.toBeDisabled();
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText("1 paper selected")).toBeInTheDocument();
+
+    // A display preference is not an import eligibility rule: the PMID still
+    // crosses into the canonical importer exactly as it would have.
+    fireEvent.click(screen.getByRole("button", { name: /^Import( \d+)? Selected$/ }));
+    await waitFor(() => expect(onBulkImport).toHaveBeenCalledTimes(1));
+    expect(onBulkImport.mock.calls[0][0]).toEqual(["11111111"]);
+
+    // Deselection still works too.
+  });
+
+  it("keeps the raw types in state: clearing exclusions reveals them with no new search", async () => {
+    // Proves two things at once. The filter is derived at render time — the
+    // page in state still holds PubMed's complete list, so the hidden values
+    // are recoverable — and a change to the user's pool propagates by ordinary
+    // React rerendering, with no cache invalidation and no second network call.
+    const onPubMedSearch = makeSearch(async () =>
+      pageOf([result("11111111", { publicationTypes: REPORTED_TYPES })], 0, 1),
+    );
+    const props = (excluded: Set<string>) => (
+      <AddPaperDialog
+        open
+        onOpenChange={vi.fn()}
+        onPubMedSearch={onPubMedSearch}
+        onBulkImport={makeBulkImport()}
+        excludedStudyTypes={excluded}
+        projects={PROJECTS}
+        tags={TAGS}
+      />
+    );
+
+    const { rerender } = render(props(new Set(["journal article", "research support, non-u.s. gov't"])));
+    switchTab(/PubMed Search/i);
+    await search();
+
+    expect(badgesFor("11111111")).toEqual([
+      "Randomized Controlled Trial",
+      "Research Support, N.I.H., Extramural",
+    ]);
+    expect(onPubMedSearch).toHaveBeenCalledTimes(1);
+
+    rerender(props(new Set()));
+
+    expect(badgesFor("11111111")).toEqual(REPORTED_TYPES);
+    // The raw list was never destroyed, so nothing had to be re-fetched.
+    expect(onPubMedSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not change the selected count when badges are filtered", async () => {
+    await searchWith(REPORTED_TYPES, new Set(["journal article"]));
+
+    const checkbox = screen.getByRole("checkbox", { name: /^Select PMID 11111111 — / });
+    fireEvent.click(checkbox);
+    expect(screen.getByText("1 paper selected")).toBeInTheDocument();
+    // Deselecting removes the whole summary section, exactly as before — the
+    // panel only renders it while something is selected.
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+    expect(screen.queryByText(/papers? selected$/)).toBeNull();
   });
 });
