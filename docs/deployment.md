@@ -188,6 +188,7 @@ supabase functions deploy analyze-paper --project-ref <project-ref>
 supabase functions deploy fetch-paper-metadata --project-ref <project-ref>
 supabase functions deploy get-gemini-provider-quota --project-ref <project-ref>
 supabase functions deploy delete-account --project-ref <project-ref>
+supabase functions deploy search-pubmed --project-ref <project-ref>
 ```
 
 - Run one command per changed function. If a PR touches several, run each.
@@ -229,6 +230,51 @@ The same rule runs in reverse on rollback: redeploy the previous function versio
 - `POST` with a valid token and a *wrong* confirmation phrase returns `400 invalid_confirmation`.
 
 Each of those is refused before any privileged client is constructed, so none can delete anything. Correctness of the destructive path itself is established by the Vitest suites, the pgTAP cascade suite (`008_account_deletion_cascade`), and the destructive Playwright spec running against an ephemeral local stack — never by a Production deletion.
+
+---
+
+### 7b. `search-pubmed` — NOT YET DEPLOYED; endpoint-before-UI ordering applies
+
+**Current state: `search-pubmed` exists in the repository and is NOT deployed to the linked project.** It is the Edge Function behind the Add Papers → **PubMed Search** tab (`PUBMED-IN-APP-SEARCH-001`).
+
+**What it is.** A read-only discovery endpoint. It authenticates the caller in-function with `auth.getUser()`, reads that user's optional `profiles.pubmed_api_key` server-side, calls NCBI E-utilities **ESearch** then **ESummary** with a finite timeout and a one-retry budget, and returns an application-owned page of PubMed summaries. It performs **no** insert, update, Project/Tag mutation, AI call or quota consumption, and it uses **no** elevated key. The user's API key is never returned, never logged, and never reaches the browser; the raw search query is never logged either — only its length.
+
+**What it is not.** It is not an import path. The PMIDs a user selects are imported by the pre-existing canonical importer (`bulkImportPapers` → `fetchPaperMetadata` → `fetch-paper-metadata` → normalization → `safe_bulk_insert_papers`), which remains the sole authority for persisted paper metadata. Deploying `search-pubmed` therefore changes nothing about how papers are stored.
+
+**Deployment artifact.** The function's complete closure is:
+
+```text
+supabase/functions/search-pubmed/index.ts      # Deno shell only
+supabase/functions/search-pubmed/handler.ts    # the whole request path
+supabase/functions/_shared/pubmedSearch.ts     # validation, URL building, parsing
+supabase/functions/_shared/env.ts              # pre-existing, unchanged
+```
+
+`_shared/env.ts` is the only shared module it imports, and **it is unchanged by this feature** — so no other function needs redeploying. `fetch-paper-metadata` in particular is untouched: keep its deployed version as it is.
+
+**Required ordering — the endpoint must not lag the UI that calls it.** Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge. A merged PubMed Search tab with no deployed endpoint would show every search as a PubMed-unavailable error.
+
+```text
+1. independent review approves the exact PR head
+2. obtain explicit owner authorization for the Production Edge deployment
+3. deploy that exact reviewed function from a worktree byte-identical to it:
+     supabase functions deploy search-pubmed --project-ref <project-ref>
+4. verify the deployment (see below)
+5. merge the exact reviewed PR head
+6. verify merged-main CI + the automatic Vercel Production deployment
+7. run the §9.3b post-deploy smoke checklist
+```
+
+On rollback the order reverses: revert the frontend **before** removing the function.
+
+**Verification, non-destructively.** Every check below is refused before any PubMed request is made, so none of them consumes upstream rate budget or touches user data:
+
+- `OPTIONS` returns 200 with the CORS headers (preflight, before any auth);
+- `GET` returns `405 method_not_allowed`;
+- `POST` with no Authorization header returns `401 unauthenticated`;
+- `POST` with a valid token and `{"query": ""}` returns `400 invalid_request`.
+
+**No new secret is required.** It uses the auto-injected `SUPABASE_URL` / `SUPABASE_ANON_KEY` and the already-existing per-user `profiles.pubmed_api_key`. **No migration is required** — the feature adds no table, column, RPC or RLS policy.
 
 ---
 
@@ -397,6 +443,18 @@ Run from a real browser session signed into the production app. Tick each item; 
 - [ ] Add Paper → Bulk import → identifier `41912805` (the established post-deploy smoke PMID from PRs #120 / #121 — covers bounded `<Author>` parsing + `<CollectiveName>` consortium author support).
 - [ ] Confirm the paper imports, metadata appears (title, authors, year), and no Edge Function error toast surfaces.
 - [ ] Bonus: import a DOI to exercise the Crossref fallback path.
+
+### 9.3b In-app PubMed search (Edge Function: `search-pubmed`)
+
+Only after §7b's deployment step has actually happened.
+
+- [ ] Add Papers → **PubMed Search** → query `resistance training hypertrophy` → press Search → results render with titles, authors, journal, date and PMID.
+- [ ] The result count distinguishes the records shown from PubMed's total (e.g. `1–20 of 2,509`).
+- [ ] Next / Previous move between pages; a selection made on page 1 is still counted on page 2.
+- [ ] Select two results, optionally choose a Project/Tag, press **Import 2 Selected** → the papers import through the normal identifier path and the summary shows Added / Skipped — Duplicates / Failed.
+- [ ] Re-importing an already-imported PMID reports it as **Skipped — Duplicates**, and creates no second row.
+- [ ] A field-tagged query such as `("resistance training"[Title/Abstract]) AND muscle` returns sensibly different results from the plain-text one — proof the syntax reached PubMed unrewritten.
+- [ ] No Edge Function error toast, and the Function logs show `pubmed-search q_len=… outcome=ok` with **no query text**.
 
 ### 9.4 AI analysis (Edge Function: `analyze-paper`)
 

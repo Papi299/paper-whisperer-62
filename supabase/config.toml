@@ -31,3 +31,16 @@ verify_jwt = false
 # client.
 [functions.delete-account]
 verify_jwt = false
+
+# search-pubmed verifies auth inside the function body (getUser()), exactly like
+# the four functions above. Gateway JWT verification is disabled so the CORS
+# preflight is answered before any auth logic and a stale/refreshing token is
+# handled by the in-code retry rather than being refused before the function
+# runs. This does NOT make the function unauthenticated: it reads the bearer
+# token from the Authorization header, validates it with an authoritative
+# auth.getUser() network call, and derives the caller — and therefore the
+# server-side read of profiles.pubmed_api_key — solely from that user. No user
+# id is accepted from the request body. The function is read-only (PubMed
+# ESearch + ESummary) and uses no elevated key.
+[functions.search-pubmed]
+verify_jwt = false
