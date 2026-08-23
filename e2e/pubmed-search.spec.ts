@@ -571,9 +571,18 @@ async function measureSelectionHitTarget(page: Page, pmid: string) {
     const row = checkbox.closest("li") as HTMLElement;
     const link = row.querySelector("a[href^='https://pubmed.ncbi.nlm.nih.gov/']") as HTMLElement;
 
-    // Scroll it into view the way a user would before aiming at it. `nearest`
-    // keeps the list's own scroll offset honest instead of recentring it.
-    checkbox.scrollIntoView({ block: "nearest" });
+    // Put the row in a defined scroll state before measuring, by moving the
+    // LIST only — never `scrollIntoView`, which aligns the element's own 16x16
+    // box and knows nothing about the hit region hanging 14px above it. Aligned
+    // that way, the row ends up flush with the list's top edge and the list
+    // (an `overflow-y-auto` box) clips the top of the target: measured 43 on
+    // macOS, where the preceding probe happened not to scroll at all, and 36 on
+    // CI's headless Linux, where taller rows meant it did. Scrolling the list
+    // itself, with clearance, makes the measurement independent of both the
+    // renderer's font metrics and whatever ran before it.
+    const listTop = list.getBoundingClientRect().top;
+    const rowOffset = row.getBoundingClientRect().top - listTop + list.scrollTop;
+    list.scrollTop = Math.max(0, rowOffset - 24);
 
     const visual = checkbox.getBoundingClientRect();
     const centreX = Math.round(visual.left + visual.width / 2);
@@ -643,6 +652,11 @@ async function measureSelectionHitTarget(page: Page, pmid: string) {
         hitBox.right <= window.innerWidth &&
         hitBox.bottom <= window.innerHeight,
       probes,
+      // Whether the list's own clip edge trimmed the target. At rest the first
+      // row sits flush with the list's content top and the target still fits
+      // entirely inside the row, so this stays false.
+      clippedByList: hitBox.top < list.getBoundingClientRect().top - 1,
+      listScrollTop: list.scrollTop,
       // Reaching it must never have required sideways movement.
       listScrollLeft: list.scrollLeft,
       dialogScrollLeft: (dialog as HTMLElement).scrollLeft,
@@ -1190,6 +1204,7 @@ test.describe("In-app PubMed discovery", () => {
         COARSE_POINTER_TARGET_PX,
       );
       expect(touch.insideViewport, "the selection touch target is not fully on screen").toBe(true);
+      expect(touch.clippedByList, "the results list clipped the selection target").toBe(false);
       expect(touch.listScrollLeft).toBe(0);
       expect(touch.dialogScrollLeft).toBe(0);
 
@@ -1271,6 +1286,24 @@ test.describe("In-app PubMed discovery", () => {
       expect(lastRow.ownsCentre, "the last result's checkbox is not reachable").toBe(true);
       expect(lastRow.insideViewport).toBe(true);
       expect(lastRow.listScrollLeft).toBe(0);
+
+      // …and it is not merely reachable but tappable. The contract is "each
+      // result's selection control", not "the first one": this row exists only
+      // after scrolling, which is the state that exposed the clipping bug the
+      // measurement helper now controls for.
+      const lastTouch = await measureSelectionHitTarget(page, pmidAt(20));
+      expect(lastTouch.listScrollTop, "row 20 was measured without scrolling").toBeGreaterThan(0);
+      expect(lastTouch.hitWidth, "the last row's target is too narrow").toBeGreaterThanOrEqual(
+        COARSE_POINTER_TARGET_PX,
+      );
+      expect(lastTouch.hitHeight, "the last row's target is too short").toBeGreaterThanOrEqual(
+        COARSE_POINTER_TARGET_PX,
+      );
+      expect(lastTouch.clippedByList, "the list clipped the last row's target").toBe(false);
+      expect(lastTouch.insideViewport).toBe(true);
+      for (const [where, owned] of Object.entries(lastTouch.probes)) {
+        expect(owned, `a tap at the ${where} of row 20's target misses the checkbox`).toBe(true);
+      }
 
       // ── Select, then reach every control below the list ──
       await resultCheckbox(page, pmidAt(20)).click();
