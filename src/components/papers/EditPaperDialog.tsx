@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useAbstract } from "@/hooks/useAbstract";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,6 +33,9 @@ import { useAttachments, OnAttachmentsChange } from "@/hooks/useAttachments";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { PaperOrganizationSuggestions } from "@/components/papers/PaperOrganizationSuggestions";
+import { parseAnalyzeError, formatQuotaExceededMessage } from "@/lib/analyzeError";
+import type { AiQuotaStatus } from "@/hooks/useAiQuota";
 
 interface EditPaperDialogProps {
   paper: PaperWithTags | null;
@@ -51,6 +54,23 @@ interface EditPaperDialogProps {
   onSave: (paper: Partial<PaperWithTags> & { tagIds: string[]; projectIds: string[] }) => Promise<boolean>;
   userId?: string | null;
   onAttachmentsChange?: OnAttachmentsChange;
+  /**
+   * Read-only AI-request quota status. Advisory only: a known zero intercepts
+   * a click before it becomes a doomed request, and an exempt user is never
+   * intercepted. Unknown status (loading / failed) never blocks — the server's
+   * HTTP 402 is the enforcement boundary for both AI actions in this dialog.
+   */
+  aiQuotaStatus?: AiQuotaStatus | null;
+  /** Re-read the shared quota after an actual invocation (consume or refund). */
+  onAiQuotaRefresh?: () => void;
+  /**
+   * The existing Project/Tag creation mutations, threaded through so
+   * "Create & select" reuses the domain authority instead of inserting rows
+   * from a suggestion component. Resolve to the entity so the new id can enter
+   * this dialog's LOCAL selection; `null` means nothing was created.
+   */
+  onCreateProject?: (name: string, description?: string | null) => Promise<Project | null>;
+  onCreateTag?: (name: string) => Promise<Tag | null>;
 }
 
 export function EditPaperDialog({
@@ -62,6 +82,10 @@ export function EditPaperDialog({
   onSave,
   userId,
   onAttachmentsChange,
+  aiQuotaStatus,
+  onAiQuotaRefresh,
+  onCreateProject,
+  onCreateTag,
 }: EditPaperDialogProps) {
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
@@ -81,6 +105,32 @@ export function EditPaperDialog({
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  /**
+   * True while a Project/Tag the user asked the suggestion surface to create is
+   * still being inserted.
+   *
+   * It exists to serialize Save behind that insert. "Create & select" cannot add
+   * the new id to `selectedProjectIds` until the mutation resolves with a real
+   * row, so a Save dispatched inside that window would capture the selection as
+   * it was *before* the creation and persist a paper that is not assigned to the
+   * Project the user just made — with both clicks having happened in the right
+   * order. Network timing must not change what the user's actions meant.
+   */
+  const [creatingTaxonomy, setCreatingTaxonomy] = useState(false);
+  /**
+   * Which creation currently holds {@link creatingTaxonomy}.
+   *
+   * One boolean is shared by every creation the user starts, and this dialog
+   * outlives the suggestion surface — Edit Paper stays mounted across a
+   * close/reopen while that surface unmounts and remounts. So a creation
+   * started for a previous paper, by a previous instance, can still settle
+   * after a newer creation has taken the interlock. Without an owner recorded
+   * here its release would be indistinguishable from the current creation's,
+   * and Save would come back while the newer insert was still in flight —
+   * exactly the race the interlock exists to prevent, re-entering through the
+   * unlock path instead of the lock path.
+   */
+  const creationOwnerTokenRef = useRef<number | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -106,6 +156,34 @@ export function EditPaperDialog({
 
   // Fetch abstract on demand — only when dialog is open
   const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(open && paper ? paper.id : null, userId);
+
+  /**
+   * True while a *saved* abstract this paper is known to have has not yet been
+   * loaded into the draft.
+   *
+   * The AI organization request is built from the draft, and the effect below
+   * writes the fetched abstract into it — so a request dispatched during this
+   * window is sent without an abstract the paper actually has, and the arriving
+   * text then changes the semantic fingerprint and invalidates the answer. The
+   * user would have paid one AI request for a result the dialog itself knew it
+   * was about to discard. The eligibility rule cannot catch this on its own:
+   * keywords or a study type alone already satisfy it, so the action would look
+   * perfectly available.
+   *
+   * Deliberately three conditions, not one:
+   *   - `has_abstract` — a paper with no saved abstract has nothing to wait for,
+   *     so it is never gated by this (the query still runs and resolves to
+   *     `null`, and blocking on that would be waiting for nothing);
+   *   - `!paper.abstract` — when the text is already on the paper object the
+   *     draft was seeded with it, and the value that lands is the same column,
+   *     so there is nothing to wait for either;
+   *   - `abstractLoading` — the initial load only. A background refetch cannot
+   *     hold the action, and a failed fetch clears it rather than waiting
+   *     forever.
+   *
+   * This is draft hydration specifically — not Save, not generation, not quota.
+   */
+  const abstractHydrating = !!paper?.has_abstract && !paper?.abstract && abstractLoading;
 
   const { attachments, uploading, uploadAttachments, deleteAttachment } = useAttachments(
     paper?.id,
@@ -143,8 +221,34 @@ export function EditPaperDialog({
     }
   }, [fetchedAbstract, paper]);
 
+  /**
+   * Apply an interlock transition, but only from the creation entitled to make
+   * it.
+   *
+   * Acquiring is unconditional: a newer creation always takes ownership, which
+   * is what makes a superseded one's later release a no-op. Releasing is
+   * conditional on still being the owner — a stale `false` is dropped rather
+   * than obeyed.
+   *
+   * Stable by construction (no dependencies), so the child can hold it in a ref
+   * and call it straight from a click handler.
+   */
+  const handleCreationPendingChange = useCallback((pending: boolean, token: number) => {
+    if (pending) {
+      creationOwnerTokenRef.current = token;
+      setCreatingTaxonomy(true);
+      return;
+    }
+    if (creationOwnerTokenRef.current !== token) return;
+    creationOwnerTokenRef.current = null;
+    setCreatingTaxonomy(false);
+  }, []);
+
   const handleSave = async () => {
     if (!paper) return;
+    // The Save button is already disabled here; this keeps the invariant local
+    // to the function that persists, so no future caller can bypass it.
+    if (creatingTaxonomy) return;
 
     setLoading(true);
     try {
@@ -181,11 +285,56 @@ export function EditPaperDialog({
     }
   };
 
+  /**
+   * Positively known to have nothing left. Exempt internal users are NEVER
+   * known-zero — their commercial `remaining` can read 0 while the server still
+   * allows every request — and an unknown status (loading / failed) is not
+   * known-zero either. Shared by both AI actions in this dialog so they cannot
+   * disagree about the same allowance.
+   */
+  const knownZeroAiQuota =
+    !!aiQuotaStatus && !aiQuotaStatus.isExempt && aiQuotaStatus.remaining <= 0;
+
+  const toastAiQuotaExhausted = (info: {
+    periodType: string | null;
+    used: number;
+    quota: number;
+    resetAt: string | null;
+  }) => {
+    toast({
+      title: "AI requests used up",
+      description: formatQuotaExceededMessage(info),
+      variant: "destructive",
+    });
+  };
+
+  /**
+   * Local-draft AI analysis. The smart merge below is unchanged: a specific
+   * PubMed study type still wins over a generic AI guess, and statistical
+   * methods / TLDR still populate the form without saving.
+   *
+   * What AI-PROJECT-TAG-SUGGESTIONS-001B added is only quota coherence with
+   * the suggestion button that now sits in the same dialog and spends the same
+   * allowance — a known-zero intercept, a parsed 402, a provider failure kept
+   * distinct from a plan wall, and a refresh of the shared indicator after any
+   * actual invocation. It is deliberately NOT a rewrite of the analysis path.
+   */
   const handleAnalyze = async () => {
     if (!abstract.trim()) return;
+
+    // Known-zero convenience intercept: no request, and no quota refresh —
+    // nothing was spent. The server stays authoritative when status is unknown.
+    if (knownZeroAiQuota && aiQuotaStatus) {
+      toastAiQuotaExhausted(aiQuotaStatus);
+      return;
+    }
+
     setAnalyzing(true);
+    // Only a real invocation may have consumed or refunded a unit.
+    let attempted = false;
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      attempted = true;
       const { data, error } = await supabase.functions.invoke("analyze-paper", {
         body: { title, abstract },
         headers: { Authorization: `Bearer ${session?.access_token}` },
@@ -214,9 +363,23 @@ export function EditPaperDialog({
           : undefined,
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Analysis failed";
-      toast({ title: "AI analysis failed", description: msg, variant: "destructive" });
+      // Read the structured body rather than the generic non-2xx string, so an
+      // authoritative 402 and an upstream provider failure stay separable.
+      const parsed = await parseAnalyzeError(err);
+      if (parsed.kind === "quota_exceeded") {
+        toastAiQuotaExhausted(parsed.info);
+      } else if (parsed.kind === "provider_failure") {
+        // A Gemini 429/503 is NOT the user's plan running out.
+        toast({
+          title: "AI analysis unavailable",
+          description: parsed.message,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "AI analysis failed", description: parsed.message, variant: "destructive" });
+      }
     } finally {
+      if (attempted) onAiQuotaRefresh?.();
       setAnalyzing(false);
     }
   };
@@ -232,6 +395,35 @@ export function EditPaperDialog({
       prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]
     );
   };
+
+  // Add-only counterparts for accepting a suggestion. Deliberately not
+  // `toggleProject`: accepting a recommendation the user has already selected
+  // would otherwise *remove* it, turning "Select" into an unselect.
+  const addProject = (projectId: string) => {
+    setSelectedProjectIds((prev) => (prev.includes(projectId) ? prev : [...prev, projectId]));
+  };
+
+  const addTag = (tagId: string) => {
+    setSelectedTagIds((prev) => (prev.includes(tagId) ? prev : [...prev, tagId]));
+  };
+
+  // The keywords the suggestion request carries, parsed exactly as `handleSave`
+  // parses them, so what the model sees is what a save would store.
+  const parsedKeywords = useMemo(
+    () => keywords.split(",").map((k) => k.trim()).filter(Boolean),
+    [keywords],
+  );
+
+  /**
+   * The unsaved draft the suggestion surface reasons about — the four semantic
+   * fields the Edge contract accepts and nothing else. Memoized so the
+   * staleness fingerprint changes only when one of those four changes, not on
+   * every keystroke in Notes.
+   */
+  const organizationDraft = useMemo(
+    () => ({ title, abstract, keywords: parsedKeywords, studyType }),
+    [title, abstract, parsedKeywords, studyType],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -449,6 +641,33 @@ export function EditPaperDialog({
                 />
               </div>
             </div>
+
+            {/*
+              AI organization suggestions sit immediately above the Projects
+              selector — the categorization controls they feed. Deliberately
+              inside this column and inside `edit-paper-scroll`: it introduces
+              no second scroll owner, no nested dialog, and no Paper List row
+              action. Generation happens only on an explicit click.
+            */}
+            {paper && (
+              <PaperOrganizationSuggestions
+                paperId={paper.id}
+                draft={organizationDraft}
+                projects={projects}
+                tags={tags}
+                selectedProjectIds={selectedProjectIds}
+                selectedTagIds={selectedTagIds}
+                onSelectProject={addProject}
+                onSelectTag={addTag}
+                onCreateProject={onCreateProject}
+                onCreateTag={onCreateTag}
+                onCreationPendingChange={handleCreationPendingChange}
+                quotaStatus={aiQuotaStatus}
+                onQuotaRefresh={onAiQuotaRefresh}
+                draftHydrating={abstractHydrating}
+                disabled={loading}
+              />
+            )}
 
             {/* Projects — Searchable Combobox */}
             <div className="space-y-2 relative">
@@ -674,7 +893,17 @@ export function EditPaperDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={loading}>
+          {/*
+            Save waits for an in-flight "Create & select". Cancel deliberately
+            does not: creation is an explicit, immediate mutation the user has
+            already committed to, and trapping them in the dialog until a
+            network call returns would be worse than letting them leave. Nothing
+            can be persisted by leaving — `handleSave` is the only path that
+            writes the paper, and the creation's completion only touches this
+            dialog's local selection, which is re-seeded from the paper on the
+            next open.
+          */}
+          <Button onClick={handleSave} disabled={loading || creatingTaxonomy}>
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save Changes
           </Button>

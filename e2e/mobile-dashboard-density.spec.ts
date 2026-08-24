@@ -526,13 +526,13 @@ test.describe("MOBILE-DASHBOARD-DENSITY-001 — table is the primary mobile surf
 
     // Compact visible text — a bare ratio, glyph or state word, never the full
     // desktop sentence.
-    await expect(status).not.toContainText("AI analyses:");
+    await expect(status).not.toContainText("AI requests:");
 
     // …but the accessible name still carries the whole statement, so the number
     // is not the only carrier of the state.
     const label = await status.getAttribute("aria-label");
     expect(label, "compact status must keep a descriptive accessible name").toBeTruthy();
-    expect(label as string).toMatch(/AI analys|Unlimited/i);
+    expect(label as string).toMatch(/AI request|Unlimited/i);
     expect((label as string).length).toBeGreaterThan(20);
   });
 
@@ -596,7 +596,7 @@ test.describe("MOBILE-DASHBOARD-DENSITY-001 — table is the primary mobile surf
       await expect(page.getByRole("button", { name: /export/i })).toBeVisible();
 
       // The full AI quota presentation, not the compact one.
-      await expect(page.getByRole("status")).toContainText("AI analyses:");
+      await expect(page.getByRole("status")).toContainText("AI requests:");
 
       // No mobile-only control leaked into the desktop tree.
       await expect(page.getByRole("button", { name: "More library actions" })).toHaveCount(0);

@@ -20,19 +20,53 @@ export function useProjectMutations(
   } = usePaperCacheHelpers(userId, serverFilterParams, serverSortParams);
   const { toast } = useToast();
 
+  /**
+   * Create a Project, or resolve to the existing one under this hook's
+   * established duplicate rule.
+   *
+   * **Return contract (added for AI-PROJECT-TAG-SUGGESTIONS-001B).** Resolves
+   * to the Project a caller may now act on, or `null` when nothing was proven
+   * to exist. Every existing caller passes a name and ignores the result, and
+   * their behaviour — the two toasts, the cache update, the duplicate
+   * short-circuit — is unchanged. The new caller is Edit Paper's "Create &
+   * select", which needs the created row's `id` to add it to the dialog's
+   * LOCAL selection; without a returned entity it would have to guess an id or
+   * re-query, and guessing is how a selection points at the wrong row.
+   *
+   * `null` on the error paths is load-bearing: the caller must never locally
+   * select an id it cannot prove exists.
+   *
+   * `description` is optional and defaults to absent, so the column keeps its
+   * database default for every existing call site. It exists so an
+   * AI-proposed Project keeps the proposed description when the user accepts
+   * it — the reason they read is what gets saved. No schema change.
+   */
   const createProject = useCallback(
-    async (name: string) => {
-      if (!userId) return;
+    async (name: string, description?: string | null): Promise<Project | null> => {
+      if (!userId) return null;
 
       const existing = projects.find((p) => p.name.toLowerCase() === name.toLowerCase());
       if (existing) {
         toast({ title: "Project exists", description: `Using existing project "${existing.name}".` });
-        return;
+        // Deterministic under this hook's own rule: `find` returns the first
+        // case-insensitive match. Returning it lets a caller select the row
+        // the toast just named instead of leaving the user with a message and
+        // no selection. Callers that must not tolerate an ambiguous taxonomy
+        // reconcile BEFORE calling — see `src/lib/taxonomyNameMatch.ts`.
+        return existing;
       }
+
+      const insert: { user_id: string; name: string; description?: string | null } = {
+        user_id: userId,
+        name,
+      };
+      // Only send the column when the caller supplied one, so the insert an
+      // existing call site produces stays byte-identical.
+      if (description !== undefined) insert.description = description;
 
       const { data: newProject, error } = await supabase
         .from("projects")
-        .insert({ user_id: userId, name })
+        .insert(insert)
         .select()
         .single();
 
@@ -42,13 +76,14 @@ export function useProjectMutations(
         } else {
           toast({ title: "Error creating project", description: error.message, variant: "destructive" });
         }
-        return;
+        return null;
       }
 
       updateMetaCache((oldProjects, oldTags) => ({
         projects: [...oldProjects, newProject as Project],
         tags: oldTags,
       }));
+      return newProject as Project;
     },
     [userId, projects, updateMetaCache, toast],
   );

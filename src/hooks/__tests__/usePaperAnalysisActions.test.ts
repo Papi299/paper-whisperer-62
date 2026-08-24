@@ -570,10 +570,10 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     expect(updatePaper).not.toHaveBeenCalled();
     // Specific quota toast (NOT the generic non-2xx message).
     const titles = mockToast.mock.calls.map((c) => (c[0] as { title?: string }).title);
-    expect(titles).toContain("AI analyses used up");
+    expect(titles).toContain("AI requests used up");
     expect(titles).not.toContain("AI Analysis failed");
     // Message carries the authoritative allowance and no upgrade wording.
-    const quotaCall = mockToast.mock.calls.find((c) => (c[0] as { title?: string }).title === "AI analyses used up");
+    const quotaCall = mockToast.mock.calls.find((c) => (c[0] as { title?: string }).title === "AI requests used up");
     expect((quotaCall![0] as { description: string }).description).not.toMatch(/upgrade|pay|billing|purchase/i);
     // Quota query invalidated after the attempt.
     expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.aiQuota.status("user-1") });
@@ -603,7 +603,7 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     expect(mockFetchAbstract).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
     expect(updatePaper).not.toHaveBeenCalled();
-    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "AI analyses used up", variant: "destructive" }));
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "AI requests used up", variant: "destructive" }));
   });
 
   it("single: does NOT intercept an exempt user whose remaining reads 0 — proceeds to invoke", async () => {
@@ -637,7 +637,7 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     expect(updatePaper).toHaveBeenCalledTimes(1);
     // No "used up" toast for an exempt user.
     const titles = mockToast.mock.calls.map((c) => (c[0] as { title?: string }).title);
-    expect(titles).not.toContain("AI analyses used up");
+    expect(titles).not.toContain("AI requests used up");
   });
 
   it("single: does NOT block when quotaStatus is unknown (undefined) — server stays authoritative", async () => {
@@ -692,7 +692,7 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     expect(updatePaper).toHaveBeenCalledWith("p1", expect.objectContaining({ tldr: "t1" }));
 
     // EXACTLY ONE quota notification for the whole run.
-    const quotaToasts = mockToast.mock.calls.filter((c) => (c[0] as { title?: string }).title === "AI analyses used up");
+    const quotaToasts = mockToast.mock.calls.filter((c) => (c[0] as { title?: string }).title === "AI requests used up");
     expect(quotaToasts).toHaveLength(1);
     // It carries authoritative allowance detail plus complete run accounting:
     //   1 analyzed (p1), 1 failed (p2 quota-denied), 1 not attempted (p3).
@@ -740,7 +740,7 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     // Zero cooldowns (terminal break preceded the sleep).
     expect(sleep).not.toHaveBeenCalled();
 
-    const quotaToasts = mockToast.mock.calls.filter((c) => (c[0] as { title?: string }).title === "AI analyses used up");
+    const quotaToasts = mockToast.mock.calls.filter((c) => (c[0] as { title?: string }).title === "AI requests used up");
     expect(quotaToasts).toHaveLength(1);
     const desc = (quotaToasts[0][0] as { description: string }).description;
     expect(desc).toMatch(/0 analyzed/);
@@ -773,7 +773,7 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     const titles = mockToast.mock.calls.map((c) => (c[0] as { title?: string }).title);
     // Neutral provider message, NOT a quota-wall toast.
     expect(titles).toContain("AI analysis unavailable");
-    expect(titles).not.toContain("AI analyses used up");
+    expect(titles).not.toContain("AI requests used up");
     const call = mockToast.mock.calls.find((c) => (c[0] as { title?: string }).title === "AI analysis unavailable");
     const desc = (call![0] as { description: string }).description;
     expect(desc).toMatch(/temporarily unavailable/i);
@@ -812,7 +812,7 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
     const failToasts = mockToast.mock.calls.filter((c) => String((c[0] as { title?: string }).title).startsWith("Failed:"));
     expect(failToasts).toHaveLength(1);
     const titles = mockToast.mock.calls.map((c) => (c[0] as { title?: string }).title);
-    expect(titles).not.toContain("AI analyses used up");
+    expect(titles).not.toContain("AI requests used up");
     // Ends with the normal completion summary (1 succeeded, 1 failed).
     expect(mockToast).toHaveBeenLastCalledWith({
       title: "Bulk analysis complete",
@@ -842,6 +842,6 @@ describe("usePaperAnalysisActions — AI quota UX (PFA-C01)", () => {
 
     expect(mockFetchAbstractsBatch).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
-    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "AI analyses used up" }));
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "AI requests used up" }));
   });
 });

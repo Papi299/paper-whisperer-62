@@ -8,7 +8,7 @@ interface AiQuotaIndicatorProps {
   isLoading: boolean;
   isError: boolean;
   /**
-   * `full` — the desktop header presentation ("AI analyses: 7 of 15 · Lifetime").
+   * `full` — the desktop header presentation ("AI requests: 7 of 15 · Lifetime").
    * `compact` — the same information reduced to a glyph and a number
    * ("✨ 7/15") for the mobile utility row, where the full sentence consumed
    * roughly a third of a 390px line.
@@ -22,9 +22,9 @@ interface AiQuotaIndicatorProps {
 }
 
 /**
- * Compact, accessible AI-analysis quota indicator for the Dashboard header.
+ * Compact, accessible AI-request quota indicator for the Dashboard header.
  *
- * Shows remaining / total AI analyses before the user starts an analysis, the
+ * Shows remaining / total AI requests before the user spends one, the
  * lifetime-vs-monthly semantics, and (for monthly plans) the reset date —
  * all as accessible supporting text via `aria-label` + `title`, not color
  * alone. It renders a fixed-size skeleton while loading (no layout shift) and
@@ -34,6 +34,14 @@ interface AiQuotaIndicatorProps {
  * It contains NO upgrade / purchase / checkout / pricing / billing / paywall
  * call to action — quota transparency only. The server remains the
  * enforcement boundary; this display can be momentarily stale.
+ *
+ * **Why "AI requests" and not "AI analyses".** One counter (`ai_analysis`) is
+ * spent by paper analysis *and* by Edit Paper's organization suggestions, so
+ * naming the allowance after one of its two spenders would misdescribe it: a
+ * user who exhausted it on suggestions would be told they were out of
+ * "analyses". Only the visible noun changed — `ai_analysis`, `useAiQuota`,
+ * `AiQuotaStatus` and the RPCs are untouched, and action-specific wording
+ * ("AI Analyze", "AI analysis complete") stays as it was.
  */
 export function AiQuotaIndicator({
   status,
@@ -52,7 +60,7 @@ export function AiQuotaIndicator({
       <Skeleton
         className={compact ? "h-8 w-14" : "h-8 w-32"}
         aria-busy="true"
-        aria-label="Loading AI analysis quota"
+        aria-label="Loading AI request quota"
       />
     );
   }
@@ -68,7 +76,7 @@ export function AiQuotaIndicator({
   // Labs/Teams or checkout/upgrade copy.
   if (status.isExempt && status.allowed && status.reason === "quota_exempt") {
     const supporting =
-      "Unlimited AI analyses — internal AI quota exemption. Paperlume's commercial quota is not enforced for your account; analyses are still recorded for operational usage.";
+      "Unlimited AI requests — internal AI quota exemption. Paperlume's commercial quota is not enforced for your account; requests are still recorded for operational usage.";
     return (
       <div
         className={`${shellClass} text-muted-foreground`}
@@ -82,7 +90,7 @@ export function AiQuotaIndicator({
             <span className="font-medium">∞</span>
           ) : (
             <>
-              AI analyses: <span className="font-medium">Unlimited</span>
+              AI requests: <span className="font-medium">Unlimited</span>
             </>
           )}
         </span>
@@ -98,11 +106,11 @@ export function AiQuotaIndicator({
       <div
         className={`${shellClass} text-muted-foreground`}
         role="status"
-        aria-label="AI analyses unavailable"
-        title="AI analysis is not available on your current plan."
+        aria-label="AI requests unavailable"
+        title="AI requests are not available on your current plan."
       >
         <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span>{compact ? "Unavailable" : "AI analyses: unavailable"}</span>
+        <span>{compact ? "Unavailable" : "AI requests: unavailable"}</span>
       </div>
     );
   }
@@ -115,7 +123,7 @@ export function AiQuotaIndicator({
     if (reset) resetText = ` Resets ${reset}.`;
   }
 
-  const supporting = `${periodLabel} AI analysis allowance: ${status.remaining} of ${status.quota} remaining.${resetText}`;
+  const supporting = `${periodLabel} AI request allowance: ${status.remaining} of ${status.quota} remaining.${resetText}`;
 
   return (
     <div
@@ -134,7 +142,7 @@ export function AiQuotaIndicator({
       ) : (
         <>
           <span className="whitespace-nowrap">
-            AI analyses: <span className="font-medium tabular-nums">{status.remaining}</span> of{" "}
+            AI requests: <span className="font-medium tabular-nums">{status.remaining}</span> of{" "}
             <span className="tabular-nums">{status.quota}</span>
             {isEmpty ? " — none left" : ""}
           </span>

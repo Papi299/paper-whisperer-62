@@ -20,14 +20,28 @@ export function useTagMutations(
   } = usePaperCacheHelpers(userId, serverFilterParams, serverSortParams);
   const { toast } = useToast();
 
+  /**
+   * Create a Tag, or resolve to the existing one under this hook's established
+   * duplicate rule.
+   *
+   * **Return contract (added for AI-PROJECT-TAG-SUGGESTIONS-001B).** Mirrors
+   * `createProject`: resolves to the Tag a caller may act on, or `null` when
+   * nothing was proven to exist. Existing callers pass a name and ignore the
+   * result; their behaviour is unchanged. Edit Paper's "Create & select" needs
+   * the returned `id` to add it to the dialog's LOCAL selection, and `null` on
+   * the error paths is what stops it selecting an id that may not exist.
+   */
   const createTag = useCallback(
-    async (name: string) => {
-      if (!userId) return;
+    async (name: string): Promise<Tag | null> => {
+      if (!userId) return null;
 
       const existing = tags.find((t) => t.name.toLowerCase() === name.toLowerCase());
       if (existing) {
         toast({ title: "Tag exists", description: `Using existing tag "${existing.name}".` });
-        return;
+        // Deterministic under this hook's own rule — see `createProject` for
+        // why returning it is safe and why ambiguity is reconciled by the
+        // caller, before the call.
+        return existing;
       }
 
       const { data: newTag, error } = await supabase
@@ -42,13 +56,14 @@ export function useTagMutations(
         } else {
           toast({ title: "Error creating tag", description: error.message, variant: "destructive" });
         }
-        return;
+        return null;
       }
 
       updateMetaCache((oldProjects, oldTags) => ({
         projects: oldProjects,
         tags: [...oldTags, newTag as Tag],
       }));
+      return newTag as Tag;
     },
     [userId, tags, updateMetaCache, toast],
   );
