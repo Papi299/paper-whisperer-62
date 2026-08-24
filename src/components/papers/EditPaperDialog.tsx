@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useAbstract } from "@/hooks/useAbstract";
 import { Button } from "@/components/ui/button";
 import {
@@ -117,6 +117,20 @@ export function EditPaperDialog({
    * order. Network timing must not change what the user's actions meant.
    */
   const [creatingTaxonomy, setCreatingTaxonomy] = useState(false);
+  /**
+   * Which creation currently holds {@link creatingTaxonomy}.
+   *
+   * One boolean is shared by every creation the user starts, and this dialog
+   * outlives the suggestion surface — Edit Paper stays mounted across a
+   * close/reopen while that surface unmounts and remounts. So a creation
+   * started for a previous paper, by a previous instance, can still settle
+   * after a newer creation has taken the interlock. Without an owner recorded
+   * here its release would be indistinguishable from the current creation's,
+   * and Save would come back while the newer insert was still in flight —
+   * exactly the race the interlock exists to prevent, re-entering through the
+   * unlock path instead of the lock path.
+   */
+  const creationOwnerTokenRef = useRef<number | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +220,29 @@ export function EditPaperDialog({
       setAbstract(fetchedAbstract);
     }
   }, [fetchedAbstract, paper]);
+
+  /**
+   * Apply an interlock transition, but only from the creation entitled to make
+   * it.
+   *
+   * Acquiring is unconditional: a newer creation always takes ownership, which
+   * is what makes a superseded one's later release a no-op. Releasing is
+   * conditional on still being the owner — a stale `false` is dropped rather
+   * than obeyed.
+   *
+   * Stable by construction (no dependencies), so the child can hold it in a ref
+   * and call it straight from a click handler.
+   */
+  const handleCreationPendingChange = useCallback((pending: boolean, token: number) => {
+    if (pending) {
+      creationOwnerTokenRef.current = token;
+      setCreatingTaxonomy(true);
+      return;
+    }
+    if (creationOwnerTokenRef.current !== token) return;
+    creationOwnerTokenRef.current = null;
+    setCreatingTaxonomy(false);
+  }, []);
 
   const handleSave = async () => {
     if (!paper) return;
@@ -624,7 +661,7 @@ export function EditPaperDialog({
                 onSelectTag={addTag}
                 onCreateProject={onCreateProject}
                 onCreateTag={onCreateTag}
-                onCreationPendingChange={setCreatingTaxonomy}
+                onCreationPendingChange={handleCreationPendingChange}
                 quotaStatus={aiQuotaStatus}
                 onQuotaRefresh={onAiQuotaRefresh}
                 draftHydrating={abstractHydrating}

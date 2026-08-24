@@ -110,8 +110,17 @@ export interface PaperOrganizationSuggestionsProps {
    * dialog can hold Save until the created id has entered the selection.
    * Without it, Save could capture the selection as it was before the creation
    * and persist a paper that is not assigned to the entity the user just made.
+   *
+   * `token` identifies **which** creation is speaking. The dialog holds a
+   * single boolean, so it must be able to refuse a release from a creation
+   * that no longer owns it: a request started for a previous paper, by a
+   * previous instance of this surface, can still settle long after a newer
+   * creation has taken the interlock, and an unconditional release would hand
+   * Save back while that newer insert is still in flight. The parent stores
+   * the token that turned the interlock on and ignores any `false` that does
+   * not match it.
    */
-  onCreationPendingChange?: (pending: boolean) => void;
+  onCreationPendingChange?: (pending: boolean, token: number) => void;
   /**
    * True while a saved abstract this paper is known to have is still being
    * loaded into the draft. Generation is refused until it lands: the request is
@@ -125,6 +134,21 @@ export interface PaperOrganizationSuggestionsProps {
   /** True while the dialog is saving; the whole surface goes inert. */
   disabled?: boolean;
 }
+
+/**
+ * Monotonic id source for creation-ownership tokens.
+ *
+ * Module-scoped rather than instance-scoped because the two parties that must
+ * be told apart can be *different component instances*. Edit Paper stays
+ * mounted across a close/reopen while this surface unmounts and remounts, so a
+ * creation started for the previous paper and one started for the next are
+ * held by different instances that share one parent interlock. An instance ref
+ * cannot distinguish them; a token drawn from here can.
+ *
+ * This is an id generator, not shared state: nothing reads it back, and a
+ * token means nothing except "not equal to any other token".
+ */
+let nextCreationToken = 1;
 
 /** Copy shown when the draft cannot support a useful suggestion. */
 const INELIGIBLE_HINT =
@@ -274,9 +298,45 @@ export function PaperOrganizationSuggestions({
    * call this synchronously, on the click's own call stack, ahead of their
    * first `await`.
    */
-  const reportCreationPending = useCallback((pending: boolean) => {
-    onCreationPendingChangeRef.current?.(pending);
+  const reportCreationPending = useCallback((pending: boolean, token: number) => {
+    onCreationPendingChangeRef.current?.(pending, token);
   }, []);
+
+  /**
+   * The token of the creation that currently owns this surface, or `null`.
+   *
+   * It is what makes every teardown path safe. A creation is *superseded* the
+   * moment this stops equal to its token — by the paper changing, by the
+   * dialog closing, or by a newer creation taking over — and a superseded
+   * completion must not clear the local busy state a newer creation is relying
+   * on, nor stage a selection, nor release the parent interlock. Checking
+   * mounted state or the paper id catches some of those, but neither
+   * establishes *ownership* of a boolean shared with another instance.
+   */
+  const creationOwnerRef = useRef<number | null>(null);
+
+  /**
+   * Abandon whatever creation currently owns this surface and hand the
+   * interlock back.
+   *
+   * Invalidation happens *before* the release, and in that order for a reason:
+   * once the token is cleared, the in-flight continuation can no longer match
+   * on it, so it can neither clear the next creation's local state nor release
+   * the next creation's interlock when it eventually settles. The release
+   * itself carries the abandoned token, so the parent applies it only if that
+   * creation still holds the interlock.
+   *
+   * The underlying insert is deliberately NOT cancelled. Creation is an
+   * explicit mutation the user committed to, and closing Edit Paper is not a
+   * request to undo it — the entity stays in their library; only the paper
+   * assignment, which was never persisted, goes away.
+   */
+  const abandonCreationOwnership = useCallback(() => {
+    const owned = creationOwnerRef.current;
+    if (owned === null) return;
+    creationOwnerRef.current = null;
+    reportCreationPending(false, owned);
+  }, [reportCreationPending]);
 
   // Defensive only: the dialog closed mid-creation, so release the interlock
   // rather than leaving Save disabled for the next paper by a component that no
@@ -284,7 +344,10 @@ export function PaperOrganizationSuggestions({
   // not this.
   useEffect(
     () => () => {
-      onCreationPendingChangeRef.current?.(false);
+      const owned = creationOwnerRef.current;
+      if (owned === null) return;
+      creationOwnerRef.current = null;
+      onCreationPendingChangeRef.current?.(false, owned);
     },
     [],
   );
@@ -300,10 +363,13 @@ export function PaperOrganizationSuggestions({
     setResultFingerprint(null);
     setError(null);
     setDismissed(new Set());
+    // Abandon before clearing the local flags, so an in-flight creation for the
+    // previous paper cannot later clear the next paper's creation state.
+    abandonCreationOwnership();
     creatingRef.current = null;
     setCreatingKey(null);
     setNotice(null);
-  }, [paperId]);
+  }, [paperId, abandonCreationOwnership]);
 
   /**
    * Results are stale once the draft they describe has been edited. Derived
@@ -491,9 +557,13 @@ export function PaperOrganizationSuggestions({
       // this click's own call stack, BEFORE the insert starts — so there is no
       // instant at which the mutation is in flight and Save is still live.
       const key = newProjectKey(suggestion.name);
+      // This creation takes ownership of the surface and of the parent's
+      // interlock, and holds it until it settles or is superseded.
+      const token = nextCreationToken++;
+      creationOwnerRef.current = token;
       creatingRef.current = key;
       setCreatingKey(key);
-      reportCreationPending(true);
+      reportCreationPending(true, token);
 
       // Which paper this creation belongs to. Checked again on the far side of
       // the await, for the same reason a generation is: a selection must never
@@ -506,6 +576,10 @@ export function PaperOrganizationSuggestions({
         // exist must not enter the dialog's selection. The mutation has already
         // shown its own destructive toast.
         if (!created) return;
+        // Three independent facts, none of which implies the others: this
+        // creation still owns the surface, the surface still exists, and it
+        // still describes the paper this entity was created for.
+        if (creationOwnerRef.current !== token) return;
         if (!mountedRef.current || paperIdAtCreate !== paperIdRef.current) return;
         // Ordered deliberately: the id enters the selection in the same
         // synchronous continuation that then clears the interlock, so React
@@ -521,15 +595,27 @@ export function PaperOrganizationSuggestions({
         // visible message rather than an unhandled rejection from a floating
         // click handler — and so `finally` is never the only thing standing
         // between a throw and a permanently disabled Save button.
-        if (mountedRef.current && paperIdAtCreate === paperIdRef.current) {
+        if (
+          creationOwnerRef.current === token &&
+          mountedRef.current &&
+          paperIdAtCreate === paperIdRef.current
+        ) {
           setNotice(`"${suggestion.name}" could not be created. Please try again.`);
         }
       } finally {
-        creatingRef.current = null;
-        setCreatingKey(null);
-        // Always released, including on a throw, so a failing mutation can
-        // never strand Save disabled.
-        reportCreationPending(false);
+        // Only the creation that still owns the surface may clear its busy
+        // state. A superseded one clearing it would release a newer creation's
+        // spinner and its double-click guard.
+        if (creationOwnerRef.current === token) {
+          creationOwnerRef.current = null;
+          creatingRef.current = null;
+          setCreatingKey(null);
+        }
+        // Always reported — including on a throw, so a failing mutation can
+        // never strand Save disabled — and always with this creation's own
+        // token, so a superseded completion is refused by the parent instead of
+        // handing Save back while a newer insert is still in flight.
+        reportCreationPending(false, token);
       }
     },
     [onCreateProject, disabled, stale, projects, onSelectProject, reportCreationPending],
@@ -558,27 +644,37 @@ export function PaperOrganizationSuggestions({
       }
 
       const key = newTagKey(suggestion.name);
+      const token = nextCreationToken++;
+      creationOwnerRef.current = token;
       creatingRef.current = key;
       setCreatingKey(key);
-      reportCreationPending(true);
+      reportCreationPending(true, token);
 
       const paperIdAtCreate = paperIdRef.current;
 
       try {
         const created = await onCreateTag(suggestion.name);
         if (!created) return;
+        if (creationOwnerRef.current !== token) return;
         if (!mountedRef.current || paperIdAtCreate !== paperIdRef.current) return;
         onSelectTag(created.id);
         setNotice(`Created tag "${created.name}" and selected it for this paper. Save to assign it.`);
       } catch {
         // See `handleCreateProject` for why this branch exists.
-        if (mountedRef.current && paperIdAtCreate === paperIdRef.current) {
+        if (
+          creationOwnerRef.current === token &&
+          mountedRef.current &&
+          paperIdAtCreate === paperIdRef.current
+        ) {
           setNotice(`"${suggestion.name}" could not be created. Please try again.`);
         }
       } finally {
-        creatingRef.current = null;
-        setCreatingKey(null);
-        reportCreationPending(false);
+        if (creationOwnerRef.current === token) {
+          creationOwnerRef.current = null;
+          creatingRef.current = null;
+          setCreatingKey(null);
+        }
+        reportCreationPending(false, token);
       }
     },
     [onCreateTag, disabled, stale, tags, onSelectTag, reportCreationPending],

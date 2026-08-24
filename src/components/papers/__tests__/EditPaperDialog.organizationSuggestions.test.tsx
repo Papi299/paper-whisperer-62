@@ -234,15 +234,21 @@ function renderDialog(options: RenderOptions = {}) {
     </QueryClientProvider>,
   );
 
-  /** Re-render with a different paper, reusing the same tree. */
-  const rerenderWith = (next: Partial<RenderOptions>) =>
+  /**
+   * Re-render with a different paper — or with the dialog closed — reusing the
+   * same tree. `EditPaperDialog` stays mounted throughout, exactly as Dashboard
+   * keeps it mounted while `editingPaper` changes; closing unmounts only the
+   * suggestion surface inside it. That asymmetry is what the lifecycle-overlap
+   * regressions depend on.
+   */
+  const rerenderWith = (next: Partial<RenderOptions> & { open?: boolean }) =>
     view.rerender(
       <QueryClientProvider client={client}>
         <EditPaperDialog
           paper={next.paper === undefined ? props.paper : next.paper}
           projects={next.projects ?? props.projects}
           tags={next.tags ?? props.tags}
-          open
+          open={next.open ?? true}
           onOpenChange={props.onOpenChange}
           onSave={props.onSave}
           userId="u1"
@@ -859,13 +865,19 @@ describe("EditPaperDialog — Save is serialized behind Create & select", () => 
   const saveButton = () => screen.getByRole("button", { name: "Save Changes" });
   const cancelButton = () => screen.getByRole("button", { name: "Cancel" });
 
-  /** A creation the test resolves by hand. */
+  /** A creation the test settles by hand, so the in-flight window is explicit. */
   function deferred<T>() {
     let release: (value: T) => void = () => {};
-    const promise = new Promise<T>((resolve) => {
+    let reject: (reason: unknown) => void = () => {};
+    const promise = new Promise<T>((resolve, rej) => {
       release = resolve;
+      reject = rej;
     });
-    return { promise, release: (value: T) => release(value) };
+    return {
+      promise,
+      release: (value: T) => release(value),
+      reject: (reason: unknown) => reject(reason),
+    };
   }
 
   it("holds Save while a Project creation is in flight, then includes the new id", async () => {
@@ -998,6 +1010,213 @@ describe("EditPaperDialog — Save is serialized behind Create & select", () => 
     });
 
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The lifecycle-overlap regressions.
+   *
+   * `EditPaperDialog` outlives the suggestion surface: Dashboard keeps the
+   * dialog mounted and drives `editingPaper`, so closing unmounts the surface
+   * while the dialog — and its single `creatingTaxonomy` boolean — survives. A
+   * creation started for paper A can therefore settle long after paper B has
+   * been opened and started its own, and an unconditional release would hand
+   * Save back while B's insert is still in flight.
+   *
+   * The decisive assertion in each is the state **after old A settles but
+   * before B settles** — the intermediate unsafe window. Asserting the button
+   * only after every promise has completed would pass against the defect.
+   */
+  it("a stale Project creation from a closed paper cannot release the new paper's Save", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    const creationA = deferred<Project | null>();
+    const creationB = deferred<Project | null>();
+    const onCreateProject = vi
+      .fn<(name: string, description?: string | null) => Promise<Project | null>>()
+      .mockReturnValueOnce(creationA.promise)
+      .mockReturnValueOnce(creationB.promise);
+    const onSave = vi.fn(async () => true);
+
+    const view = renderDialog({ onCreateProject, onSave });
+
+    // ── A: start a creation on paper A and leave it unresolved ──
+    await generate();
+    click(
+      await screen.findByRole("button", {
+        name: 'Create project "Resistance Training" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+
+    // ── B: close Edit Paper. The surface unmounts; the dialog does not. ──
+    view.rerenderWith({ open: false });
+    await waitFor(() =>
+      expect(screen.queryByTestId("ai-organization-suggestions")).not.toBeInTheDocument(),
+    );
+
+    // ── C: reopen on a DIFFERENT paper and start its own creation ──
+    view.rerenderWith({ open: true, paper: makePaper({ id: "paper-2", title: "Second paper" }) });
+    await screen.findByTestId("ai-organization-suggestions");
+    await generate();
+    click(
+      await screen.findByRole("button", {
+        name: 'Create project "Resistance Training" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+    expect(onCreateProject).toHaveBeenCalledTimes(2);
+
+    // ── D: the OLD creation settles. THE DECISIVE WINDOW. ──
+    await act(async () => {
+      creationA.release({ ...PROJECT_A, id: "proj-A", name: "Resistance Training" });
+      await Promise.resolve();
+    });
+
+    // B is still in flight, so Save must still be held — by B, not by A.
+    expect(saveButton()).toBeDisabled();
+    click(saveButton());
+    expect(onSave).not.toHaveBeenCalled();
+    // And A's id must never reach paper B's selection.
+    expect(screen.queryByText("1 project selected")).not.toBeInTheDocument();
+
+    // ── E: now B settles, and only now does Save come back ──
+    await act(async () => {
+      creationB.release({ ...PROJECT_A, id: "proj-B", name: "Resistance Training" });
+      await Promise.resolve();
+    });
+
+    await screen.findByText("1 project selected");
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+
+    click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ projectIds: ["proj-B"] }));
+  });
+
+  it("a stale Tag creation from a closed paper cannot release the new paper's Save", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    const creationA = deferred<Tag | null>();
+    const creationB = deferred<Tag | null>();
+    const onCreateTag = vi
+      .fn<(name: string) => Promise<Tag | null>>()
+      .mockReturnValueOnce(creationA.promise)
+      .mockReturnValueOnce(creationB.promise);
+    const onSave = vi.fn(async () => true);
+
+    const view = renderDialog({ onCreateTag, onSave });
+
+    await generate();
+    click(
+      await screen.findByRole("button", {
+        name: 'Create tag "older-adults" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+
+    view.rerenderWith({ open: false });
+    await waitFor(() =>
+      expect(screen.queryByTestId("ai-organization-suggestions")).not.toBeInTheDocument(),
+    );
+
+    view.rerenderWith({ open: true, paper: makePaper({ id: "paper-2", title: "Second paper" }) });
+    await screen.findByTestId("ai-organization-suggestions");
+    await generate();
+    click(
+      await screen.findByRole("button", {
+        name: 'Create tag "older-adults" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+    expect(onCreateTag).toHaveBeenCalledTimes(2);
+
+    // THE DECISIVE WINDOW.
+    await act(async () => {
+      creationA.release({ ...TAG_A, id: "tag-A", name: "older-adults" });
+      await Promise.resolve();
+    });
+
+    expect(saveButton()).toBeDisabled();
+    click(saveButton());
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.queryByText("1 tag selected")).not.toBeInTheDocument();
+
+    await act(async () => {
+      creationB.release({ ...TAG_A, id: "tag-B", name: "older-adults" });
+      await Promise.resolve();
+    });
+
+    await screen.findByText("1 tag selected");
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+
+    click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ tagIds: ["tag-B"] }));
+  });
+
+  it.each([
+    ["a null result", null],
+    ["a thrown rejection", "throw" as const],
+  ])("a stale creation ending in %s still cannot release the new paper's Save", async (_label, outcome) => {
+    mockSuggest.mockResolvedValue(FULL);
+    const creationA = deferred<Project | null>();
+    const creationB = deferred<Project | null>();
+    const onCreateProject = vi
+      .fn<(name: string, description?: string | null) => Promise<Project | null>>()
+      .mockReturnValueOnce(creationA.promise)
+      .mockReturnValueOnce(creationB.promise);
+    const onSave = vi.fn(async () => true);
+
+    const view = renderDialog({ onCreateProject, onSave });
+
+    await generate();
+    click(
+      await screen.findByRole("button", {
+        name: 'Create project "Resistance Training" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+
+    view.rerenderWith({ open: false });
+    await waitFor(() =>
+      expect(screen.queryByTestId("ai-organization-suggestions")).not.toBeInTheDocument(),
+    );
+
+    view.rerenderWith({ open: true, paper: makePaper({ id: "paper-2", title: "Second paper" }) });
+    await screen.findByTestId("ai-organization-suggestions");
+    await generate();
+    click(
+      await screen.findByRole("button", {
+        name: 'Create project "Resistance Training" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+
+    // The old creation fails rather than succeeding. Ownership must apply to
+    // every exit path, not only the happy one.
+    await act(async () => {
+      if (outcome === "throw") {
+        creationA.reject(new Error("stale insert exploded"));
+        await creationA.promise.catch(() => undefined);
+      } else {
+        creationA.release(null);
+      }
+      await Promise.resolve();
+    });
+
+    expect(saveButton()).toBeDisabled();
+    click(saveButton());
+    expect(onSave).not.toHaveBeenCalled();
+
+    await act(async () => {
+      creationB.release({ ...PROJECT_A, id: "proj-B", name: "Resistance Training" });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+    click(saveButton());
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ projectIds: ["proj-B"] })),
+    );
   });
 
   it("does not hold Save when no creation was ever started", async () => {

@@ -88,6 +88,29 @@ const SUGGESTIONS: OrganizationSuggestions = {
   newTags: [{ name: PROPOSED_TAG, reason: "The cohort is 65+." }],
 };
 
+/**
+ * Replay a recorded transition stream through the interlock rule the dialog
+ * documents and implements: acquiring always takes ownership, releasing applies
+ * only if it carries the owning token.
+ *
+ * Asserting on this rather than only on the raw calls is what makes these
+ * component-level tests load-bearing. A child that emitted an unowned release —
+ * or no token at all — would leave a conforming parent unlocked here, which is
+ * exactly the production defect, without any dependence on how this particular
+ * dialog happens to be written.
+ */
+function effectivePending(calls: Array<{ pending: boolean; token: number }>): boolean {
+  let owner: number | null = null;
+  for (const call of calls) {
+    if (call.pending) {
+      owner = call.token;
+    } else if (owner === call.token) {
+      owner = null;
+    }
+  }
+  return owner !== null;
+}
+
 /** A promise the test resolves by hand, so the in-flight window is explicit. */
 function deferred<T>() {
   let release: (value: T) => void = () => {};
@@ -102,6 +125,7 @@ function deferred<T>() {
 interface Harness {
   projects?: Project[];
   tags?: Tag[];
+  paperId?: string;
   onCreateProject?: (name: string, description?: string | null) => Promise<Project | null>;
   onCreateTag?: (name: string) => Promise<Tag | null>;
 }
@@ -113,8 +137,11 @@ interface Harness {
 function renderSurface(harness: Harness = {}) {
   const order: string[] = [];
 
-  const onCreationPendingChange = vi.fn((pending: boolean) => {
+  /** Every interlock transition with its token, for the ownership assertions. */
+  const pendingCalls: Array<{ pending: boolean; token: number }> = [];
+  const onCreationPendingChange = vi.fn((pending: boolean, token: number) => {
     order.push(`pending:${pending}`);
+    pendingCalls.push({ pending, token });
   });
   const onSelectProject = vi.fn((id: string) => {
     order.push(`selectProject:${id}`);
@@ -131,9 +158,9 @@ function renderSurface(harness: Harness = {}) {
     return (harness.onCreateTag ?? (async () => null))(name);
   });
 
-  const view = render(
+  const renderTree = (paperId: string) => (
     <PaperOrganizationSuggestions
-      paperId="paper-1"
+      paperId={paperId}
       draft={{
         title: "Resistance training in older adults",
         abstract: "A randomised trial.",
@@ -149,12 +176,19 @@ function renderSurface(harness: Harness = {}) {
       onCreateProject={onCreateProject}
       onCreateTag={onCreateTag}
       onCreationPendingChange={onCreationPendingChange}
-    />,
+    />
   );
 
+  const view = render(renderTree(harness.paperId ?? "paper-1"));
+
+  /** Switch the surface to another paper without unmounting it. */
+  const changePaper = (paperId: string) => view.rerender(renderTree(paperId));
+
   return {
+    changePaper,
     ...view,
     order,
+    pendingCalls,
     onCreationPendingChange,
     onSelectProject,
     onSelectTag,
@@ -366,5 +400,191 @@ describe("PaperOrganizationSuggestions — non-insert paths never engage the int
       await Promise.resolve();
     });
     expect(surface.onSelectProject).not.toHaveBeenCalled();
+  });
+});
+
+// ── Ownership: a superseded creation may not release a newer one ───────
+
+/**
+ * The same component instance can be handed a different `paperId` — the prop
+ * is part of its contract, and the reset effect is written for exactly that.
+ * Production reaches the equivalent state by unmounting and remounting instead
+ * (Dashboard clears `editingPaper` on close, and the dialog is modal, so a
+ * second paper cannot be opened over the first), which the Edit Paper suite
+ * covers at the real Save boundary. These prove the *component's* ownership
+ * cannot be corrupted through its supported prop transition either.
+ */
+describe("PaperOrganizationSuggestions — a superseded creation owns nothing", () => {
+  it("a stale Project completion cannot release the newer creation's interlock", async () => {
+    const creationA = deferred<Project | null>();
+    const creationB = deferred<Project | null>();
+    const create = vi
+      .fn<(name: string, description?: string | null) => Promise<Project | null>>()
+      .mockReturnValueOnce(creationA.promise)
+      .mockReturnValueOnce(creationB.promise);
+
+    const surface = renderSurface({ onCreateProject: create });
+    await generate();
+
+    // ── A owns the interlock ──
+    fireEvent.click(createProjectButton());
+    const tokenA = surface.pendingCalls.at(-1)!.token;
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: true, token: tokenA });
+
+    // ── The paper changes: A is abandoned and its interlock handed back ──
+    surface.changePaper("paper-2");
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: false, token: tokenA });
+
+    // ── B takes the interlock ──
+    await generate();
+    fireEvent.click(createProjectButton());
+    const tokenB = surface.pendingCalls.at(-1)!.token;
+    expect(tokenB).not.toBe(tokenA);
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: true, token: tokenB });
+
+    // ── THE DECISIVE WINDOW: old A settles while B is still in flight ──
+    await act(async () => {
+      creationA.release({ ...PROJECT_A, id: "proj-A", name: PROPOSED_PROJECT });
+      await Promise.resolve();
+    });
+
+    // A may speak, but only ever about itself — never a release carrying B's
+    // token, which is the only thing the parent would obey.
+    expect(surface.pendingCalls.filter((c) => !c.pending && c.token === tokenB)).toEqual([]);
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: false, token: tokenA });
+    // The decisive property: a conforming parent is STILL LOCKED for B.
+    expect(effectivePending(surface.pendingCalls)).toBe(true);
+    // A's id must not be staged against the paper it does not belong to.
+    expect(surface.onSelectProject).not.toHaveBeenCalled();
+
+    // ── Only B's own completion releases B ──
+    await act(async () => {
+      creationB.release({ ...PROJECT_A, id: "proj-B", name: PROPOSED_PROJECT });
+      await Promise.resolve();
+    });
+    expect(surface.onSelectProject).toHaveBeenCalledWith("proj-B");
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: false, token: tokenB });
+    expect(effectivePending(surface.pendingCalls)).toBe(false);
+  });
+
+  it("a stale Tag completion cannot release the newer creation's interlock", async () => {
+    const creationA = deferred<Tag | null>();
+    const creationB = deferred<Tag | null>();
+    const create = vi
+      .fn<(name: string) => Promise<Tag | null>>()
+      .mockReturnValueOnce(creationA.promise)
+      .mockReturnValueOnce(creationB.promise);
+
+    const surface = renderSurface({ onCreateTag: create });
+    await generate();
+
+    fireEvent.click(createTagButton());
+    const tokenA = surface.pendingCalls.at(-1)!.token;
+
+    surface.changePaper("paper-2");
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: false, token: tokenA });
+
+    await generate();
+    fireEvent.click(createTagButton());
+    const tokenB = surface.pendingCalls.at(-1)!.token;
+    expect(tokenB).not.toBe(tokenA);
+
+    await act(async () => {
+      creationA.release({ ...TAG_A, id: "tag-A", name: PROPOSED_TAG });
+      await Promise.resolve();
+    });
+
+    expect(surface.pendingCalls.filter((c) => !c.pending && c.token === tokenB)).toEqual([]);
+    expect(effectivePending(surface.pendingCalls)).toBe(true);
+    expect(surface.onSelectTag).not.toHaveBeenCalled();
+
+    await act(async () => {
+      creationB.release({ ...TAG_A, id: "tag-B", name: PROPOSED_TAG });
+      await Promise.resolve();
+    });
+    expect(surface.onSelectTag).toHaveBeenCalledWith("tag-B");
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: false, token: tokenB });
+    expect(effectivePending(surface.pendingCalls)).toBe(false);
+  });
+
+  it.each([
+    ["a null result", "null" as const],
+    ["a thrown rejection", "throw" as const],
+  ])("a stale creation ending in %s releases only its own token", async (_label, outcome) => {
+    const creationA = deferred<Project | null>();
+    const creationB = deferred<Project | null>();
+    const create = vi
+      .fn<(name: string, description?: string | null) => Promise<Project | null>>()
+      .mockReturnValueOnce(creationA.promise)
+      .mockReturnValueOnce(creationB.promise);
+
+    const surface = renderSurface({ onCreateProject: create });
+    await generate();
+
+    fireEvent.click(createProjectButton());
+    const tokenA = surface.pendingCalls.at(-1)!.token;
+
+    surface.changePaper("paper-2");
+    await generate();
+    fireEvent.click(createProjectButton());
+    const tokenB = surface.pendingCalls.at(-1)!.token;
+
+    await act(async () => {
+      if (outcome === "throw") {
+        creationA.reject(new Error("stale insert exploded"));
+        await creationA.promise.catch(() => undefined);
+      } else {
+        creationA.release(null);
+      }
+      await Promise.resolve();
+    });
+
+    // Ownership applies to every `finally`, not only the successful one.
+    expect(surface.pendingCalls.filter((c) => !c.pending && c.token === tokenB)).toEqual([]);
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: false, token: tokenA });
+    expect(effectivePending(surface.pendingCalls)).toBe(true);
+
+    await act(async () => {
+      creationB.release({ ...PROJECT_A, id: "proj-B", name: PROPOSED_PROJECT });
+      await Promise.resolve();
+    });
+    expect(surface.pendingCalls.at(-1)).toEqual({ pending: false, token: tokenB });
+  });
+
+  it("a stale completion cannot clear the newer creation's local busy state", async () => {
+    const creationA = deferred<Project | null>();
+    const creationB = deferred<Project | null>();
+    const create = vi
+      .fn<(name: string, description?: string | null) => Promise<Project | null>>()
+      .mockReturnValueOnce(creationA.promise)
+      .mockReturnValueOnce(creationB.promise);
+
+    const surface = renderSurface({ onCreateProject: create });
+    await generate();
+
+    fireEvent.click(createProjectButton());
+    surface.changePaper("paper-2");
+    await generate();
+    fireEvent.click(createProjectButton());
+
+    // B is busy: its own control and the Tag create beside it are both locked,
+    // which is what `creatingKey` / `creatingRef` buy.
+    expect(createProjectButton()).toBeDisabled();
+    expect(createTagButton()).toBeDisabled();
+
+    await act(async () => {
+      creationA.release({ ...PROJECT_A, id: "proj-A", name: PROPOSED_PROJECT });
+      await Promise.resolve();
+    });
+
+    // A's completion must not unlock B's spinner or its double-click guard.
+    expect(createProjectButton()).toBeDisabled();
+    expect(createTagButton()).toBeDisabled();
+
+    await act(async () => {
+      creationB.release({ ...PROJECT_A, id: "proj-B", name: PROPOSED_PROJECT });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(createTagButton()).toBeEnabled());
   });
 });
