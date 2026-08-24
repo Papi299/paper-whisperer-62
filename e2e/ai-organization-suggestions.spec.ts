@@ -237,6 +237,27 @@ async function setField(page: Page, label: string, value: string) {
   await page.getByRole("dialog").getByLabel(label, { exact: true }).fill(value);
 }
 
+/**
+ * Wait for the on-demand abstract to reach the draft.
+ *
+ * The suggestion action is deliberately held while a saved abstract this paper
+ * is known to have is still loading — generating first would spend an AI
+ * request on a draft the arriving text is about to invalidate. Asserting the
+ * gate opens against the real query proves the guard releases rather than
+ * deadlocking, which a mocked unit test cannot show.
+ */
+async function waitForDraftHydrated(page: Page) {
+  await expect(page.getByRole("dialog").getByLabel("Abstract", { exact: true })).toHaveValue(
+    /Deterministic abstract/,
+  );
+  await expect(page.getByTestId("ai-organization-hydrating")).toBeHidden();
+  await expect(
+    suggestionSection(page).getByRole("button", {
+      name: /Suggest Projects & Tags|Suggest again/,
+    }),
+  ).toBeEnabled();
+}
+
 async function generateSuggestions(page: Page, recorder: Recorder) {
   const before = recorder.invocations.length;
   await suggestionSection(page)
@@ -332,6 +353,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
 
     await openEditPaperDialog(page, PAPER_TITLE);
     await expect(suggestionSection(page)).toBeVisible();
+    await waitForDraftHydrated(page);
 
     // ── The draft is changed but NOT saved ──────────────────────────────
     await setField(page, "Study Type", UNSAVED_STUDY_TYPE);
@@ -447,6 +469,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
 
     await openEditPaperDialog(page, PAPER_TITLE);
     const section = suggestionSection(page);
+    await waitForDraftHydrated(page);
 
     // Change the draft first, so the request is provably about unsaved text.
     await setField(page, "Study Type", UNSAVED_STUDY_TYPE);

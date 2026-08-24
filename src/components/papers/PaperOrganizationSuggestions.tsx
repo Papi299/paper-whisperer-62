@@ -105,6 +105,23 @@ export interface PaperOrganizationSuggestionsProps {
   quotaStatus?: AiQuotaStatus | null;
   /** Called after any actual invocation (success, provider failure, or 402). */
   onQuotaRefresh?: () => void;
+  /**
+   * Reports whether an explicit "Create & select" is still in flight, so the
+   * dialog can hold Save until the created id has entered the selection.
+   * Without it, Save could capture the selection as it was before the creation
+   * and persist a paper that is not assigned to the entity the user just made.
+   */
+  onCreationPendingChange?: (pending: boolean) => void;
+  /**
+   * True while a saved abstract this paper is known to have is still being
+   * loaded into the draft. Generation is refused until it lands: the request is
+   * built from the draft, and an abstract arriving afterwards changes the
+   * semantic fingerprint and invalidates the answer the user paid for.
+   *
+   * Deliberately distinct from `disabled` (saving), `loading` (generating) and
+   * the quota status — this is draft hydration alone.
+   */
+  draftHydrating?: boolean;
   /** True while the dialog is saving; the whole surface goes inert. */
   disabled?: boolean;
 }
@@ -112,6 +129,16 @@ export interface PaperOrganizationSuggestionsProps {
 /** Copy shown when the draft cannot support a useful suggestion. */
 const INELIGIBLE_HINT =
   "Add an abstract, keywords, or a study type to get useful suggestions.";
+
+/**
+ * Copy shown while a saved abstract is still loading.
+ *
+ * Deliberately not {@link INELIGIBLE_HINT}: telling someone to add an abstract
+ * to a paper that has one, and is fetching it right now, is simply untrue — and
+ * it would push them to type one instead of waiting a moment.
+ */
+const HYDRATING_HINT =
+  "Loading the paper abstract before suggestions can be generated…";
 
 /** One dismissible item's stable key. Names are normalized so case cannot resurrect a dismissal. */
 function existingProjectKey(id: string): string {
@@ -174,6 +201,8 @@ export function PaperOrganizationSuggestions({
   onCreateTag,
   quotaStatus,
   onQuotaRefresh,
+  onCreationPendingChange,
+  draftHydrating = false,
   disabled = false,
 }: PaperOrganizationSuggestionsProps) {
   const { toast } = useToast();
@@ -220,6 +249,26 @@ export function PaperOrganizationSuggestions({
     };
   }, []);
 
+  // Keep the callback in a ref so the unmount reporter below can stay a
+  // mount-only effect — depending on the prop directly would re-run it (and
+  // report `false` mid-creation) whenever the parent re-created the function.
+  const onCreationPendingChangeRef = useRef(onCreationPendingChange);
+  onCreationPendingChangeRef.current = onCreationPendingChange;
+
+  // Mirror the creation state to the dialog, which holds Save until it clears.
+  useEffect(() => {
+    onCreationPendingChangeRef.current?.(creatingKey !== null);
+  }, [creatingKey]);
+
+  // On unmount (the dialog closed mid-creation) report idle, so Save is not
+  // left disabled for the next paper by a component that no longer exists.
+  useEffect(
+    () => () => {
+      onCreationPendingChangeRef.current?.(false);
+    },
+    [],
+  );
+
   // Reset every transient suggestion value when the dialog switches papers, so
   // one paper's recommendations can never be read — or accepted — against
   // another's. The form's own state is the dialog's business, not this
@@ -262,7 +311,10 @@ export function PaperOrganizationSuggestions({
   );
 
   const handleGenerate = useCallback(async () => {
-    if (loading || disabled || !eligible) return;
+    // `draftHydrating` sits with the other pre-invoke refusals on purpose: like
+    // them it must cost nothing, so it returns before any request and before
+    // any quota refresh.
+    if (loading || disabled || draftHydrating || !eligible) return;
 
     // Known-zero convenience intercept: no request, and therefore no quota
     // refresh either — nothing was spent.
@@ -352,6 +404,7 @@ export function PaperOrganizationSuggestions({
   }, [
     loading,
     disabled,
+    draftHydrating,
     eligible,
     knownZeroQuota,
     quotaStatus,
@@ -494,7 +547,7 @@ export function PaperOrganizationSuggestions({
 
   /** Actions are inert while saving, while a generation is running, or once stale. */
   const actionsDisabled = disabled || loading || stale;
-  const generateDisabled = disabled || loading || !eligible;
+  const generateDisabled = disabled || loading || draftHydrating || !eligible;
 
   return (
     <section
@@ -533,7 +586,13 @@ export function PaperOrganizationSuggestions({
         Uses 1 AI request. Suggestions are optional and nothing is assigned until you save.
       </p>
 
-      {!eligible && <p className="text-xs text-muted-foreground">{INELIGIBLE_HINT}</p>}
+      {draftHydrating ? (
+        <p className="text-xs text-muted-foreground" data-testid="ai-organization-hydrating">
+          {HYDRATING_HINT}
+        </p>
+      ) : (
+        !eligible && <p className="text-xs text-muted-foreground">{INELIGIBLE_HINT}</p>
+      )}
 
       {/*
         One polite live region for every outcome — generation, acceptance,

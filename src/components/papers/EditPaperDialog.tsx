@@ -105,6 +105,18 @@ export function EditPaperDialog({
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  /**
+   * True while a Project/Tag the user asked the suggestion surface to create is
+   * still being inserted.
+   *
+   * It exists to serialize Save behind that insert. "Create & select" cannot add
+   * the new id to `selectedProjectIds` until the mutation resolves with a real
+   * row, so a Save dispatched inside that window would capture the selection as
+   * it was *before* the creation and persist a paper that is not assigned to the
+   * Project the user just made — with both clicks having happened in the right
+   * order. Network timing must not change what the user's actions meant.
+   */
+  const [creatingTaxonomy, setCreatingTaxonomy] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -130,6 +142,34 @@ export function EditPaperDialog({
 
   // Fetch abstract on demand — only when dialog is open
   const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(open && paper ? paper.id : null, userId);
+
+  /**
+   * True while a *saved* abstract this paper is known to have has not yet been
+   * loaded into the draft.
+   *
+   * The AI organization request is built from the draft, and the effect below
+   * writes the fetched abstract into it — so a request dispatched during this
+   * window is sent without an abstract the paper actually has, and the arriving
+   * text then changes the semantic fingerprint and invalidates the answer. The
+   * user would have paid one AI request for a result the dialog itself knew it
+   * was about to discard. The eligibility rule cannot catch this on its own:
+   * keywords or a study type alone already satisfy it, so the action would look
+   * perfectly available.
+   *
+   * Deliberately three conditions, not one:
+   *   - `has_abstract` — a paper with no saved abstract has nothing to wait for,
+   *     so it is never gated by this (the query still runs and resolves to
+   *     `null`, and blocking on that would be waiting for nothing);
+   *   - `!paper.abstract` — when the text is already on the paper object the
+   *     draft was seeded with it, and the value that lands is the same column,
+   *     so there is nothing to wait for either;
+   *   - `abstractLoading` — the initial load only. A background refetch cannot
+   *     hold the action, and a failed fetch clears it rather than waiting
+   *     forever.
+   *
+   * This is draft hydration specifically — not Save, not generation, not quota.
+   */
+  const abstractHydrating = !!paper?.has_abstract && !paper?.abstract && abstractLoading;
 
   const { attachments, uploading, uploadAttachments, deleteAttachment } = useAttachments(
     paper?.id,
@@ -169,6 +209,9 @@ export function EditPaperDialog({
 
   const handleSave = async () => {
     if (!paper) return;
+    // The Save button is already disabled here; this keeps the invariant local
+    // to the function that persists, so no future caller can bypass it.
+    if (creatingTaxonomy) return;
 
     setLoading(true);
     try {
@@ -581,8 +624,10 @@ export function EditPaperDialog({
                 onSelectTag={addTag}
                 onCreateProject={onCreateProject}
                 onCreateTag={onCreateTag}
+                onCreationPendingChange={setCreatingTaxonomy}
                 quotaStatus={aiQuotaStatus}
                 onQuotaRefresh={onAiQuotaRefresh}
+                draftHydrating={abstractHydrating}
                 disabled={loading}
               />
             )}
@@ -811,7 +856,17 @@ export function EditPaperDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={loading}>
+          {/*
+            Save waits for an in-flight "Create & select". Cancel deliberately
+            does not: creation is an explicit, immediate mutation the user has
+            already committed to, and trapping them in the dialog until a
+            network call returns would be worse than letting them leave. Nothing
+            can be persisted by leaving — `handleSave` is the only path that
+            writes the paper, and the creation's completion only touches this
+            dialog's local selection, which is re-seeded from the paper on the
+            next open.
+          */}
+          <Button onClick={handleSave} disabled={loading || creatingTaxonomy}>
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save Changes
           </Button>

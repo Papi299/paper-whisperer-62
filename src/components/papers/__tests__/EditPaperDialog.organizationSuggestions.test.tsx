@@ -26,10 +26,13 @@ import type { OrganizationSuggestions } from "@/lib/suggestPaperOrganizationEdge
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
-const { mockSuggest, mockInvoke, mockToast } = vi.hoisted(() => ({
+const { mockSuggest, mockInvoke, mockToast, abstractQuery } = vi.hoisted(() => ({
   mockSuggest: vi.fn(),
   mockInvoke: vi.fn(),
   mockToast: vi.fn(),
+  // Mutable so a test can drive the on-demand abstract fetch through its real
+  // states: still loading, then resolved. Read fresh on every render.
+  abstractQuery: { data: undefined as string | undefined, isLoading: false },
 }));
 
 vi.mock("@/lib/suggestPaperOrganizationEdge", async (importOriginal) => {
@@ -51,9 +54,9 @@ vi.mock("@/hooks/useAttachments", () => ({
 }));
 
 vi.mock("@/hooks/useAbstract", () => ({
-  // The dialog seeds the abstract from `paper.abstract`; the on-demand fetch
-  // stays quiet so nothing races the assertions.
-  useAbstract: () => ({ data: undefined, isLoading: false }),
+  // Default: quiet and already settled, so the on-demand fetch races nothing.
+  // The hydration tests below drive `abstractQuery` themselves.
+  useAbstract: () => ({ data: abstractQuery.data, isLoading: abstractQuery.isLoading }),
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -282,6 +285,8 @@ async function generate() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSuggest.mockResolvedValue(suggestions());
+  abstractQuery.data = undefined;
+  abstractQuery.isLoading = false;
 });
 
 // ── No automatic generation ────────────────────────────────────────────
@@ -332,6 +337,134 @@ describe("EditPaperDialog — eligibility", () => {
 
     appendField("Study Type", "RCT");
     await waitFor(() => expect(suggestButton()).toBeEnabled());
+  });
+});
+
+// ── Abstract hydration: never spend a request on a half-loaded draft ───
+
+describe("EditPaperDialog — a hydrating saved abstract blocks generation", () => {
+  /**
+   * The paper HAS a saved abstract that is still being fetched, and it also has
+   * a keyword — so the eligibility rule alone is already satisfied and the
+   * action would otherwise look perfectly available. Generating here would send
+   * a draft with no abstract, and the arriving text would then change the
+   * semantic fingerprint and invalidate the answer the user just paid for.
+   */
+  const hydratingPaper = () =>
+    makePaper({ has_abstract: true, abstract: null, keywords: ["sarcopenia"] });
+
+  it("refuses to invoke while a known saved abstract is still loading", () => {
+    abstractQuery.isLoading = true;
+    abstractQuery.data = undefined;
+
+    renderDialog({ paper: hydratingPaper() });
+
+    expect(suggestButton()).toBeDisabled();
+    expect(mockSuggest).not.toHaveBeenCalled();
+  });
+
+  it("says the abstract is loading rather than telling the user to add one", () => {
+    abstractQuery.isLoading = true;
+    abstractQuery.data = undefined;
+
+    renderDialog({ paper: hydratingPaper() });
+
+    expect(screen.getByTestId("ai-organization-hydrating")).toHaveTextContent(
+      "Loading the paper abstract before suggestions can be generated",
+    );
+    // The insufficient-evidence copy would be a lie: the paper has an abstract.
+    expect(
+      screen.queryByText(
+        "Add an abstract, keywords, or a study type to get useful suggestions.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("cannot be invoked by clicking through the hydrating state", () => {
+    abstractQuery.isLoading = true;
+    abstractQuery.data = undefined;
+    const onAiQuotaRefresh = vi.fn();
+
+    renderDialog({ paper: hydratingPaper(), onAiQuotaRefresh });
+
+    click(suggestButton());
+    expect(mockSuggest).not.toHaveBeenCalled();
+    // Refused before any request, so there is nothing to re-read either.
+    expect(onAiQuotaRefresh).not.toHaveBeenCalled();
+  });
+
+  it("becomes available once the abstract lands, and sends the hydrated text", async () => {
+    abstractQuery.isLoading = true;
+    abstractQuery.data = undefined;
+
+    const { rerenderWith } = renderDialog({ paper: hydratingPaper() });
+    expect(suggestButton()).toBeDisabled();
+
+    // The fetch resolves.
+    abstractQuery.isLoading = false;
+    abstractQuery.data = "Full saved abstract about resistance training.";
+    rerenderWith({});
+
+    // The draft receives it…
+    await waitFor(() =>
+      expect(screen.getByLabelText("Abstract")).toHaveValue(
+        "Full saved abstract about resistance training.",
+      ),
+    );
+    // …and only now is the action available.
+    await waitFor(() => expect(suggestButton()).toBeEnabled());
+
+    await generate();
+
+    expect(mockSuggest).toHaveBeenCalledTimes(1);
+    expect(mockSuggest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          abstract: "Full saved abstract about resistance training.",
+        }),
+      }),
+    );
+  });
+
+  it("does not gate a paper that has no saved abstract to wait for", async () => {
+    // The query still runs for any open paper and reports loading briefly; a
+    // paper with nothing to fetch must not be held by that.
+    abstractQuery.isLoading = true;
+    abstractQuery.data = undefined;
+
+    renderDialog({
+      paper: makePaper({ has_abstract: false, abstract: null, keywords: ["sarcopenia"] }),
+    });
+
+    expect(screen.queryByTestId("ai-organization-hydrating")).not.toBeInTheDocument();
+    expect(suggestButton()).toBeEnabled();
+
+    await generate();
+    expect(mockSuggest).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not gate a paper whose abstract is already in the draft", async () => {
+    // `paper.abstract` seeded the draft, and the value still in flight is the
+    // same column — there is nothing to wait for.
+    abstractQuery.isLoading = true;
+    abstractQuery.data = undefined;
+
+    renderDialog({ paper: makePaper({ has_abstract: true }) });
+
+    expect(screen.queryByTestId("ai-organization-hydrating")).not.toBeInTheDocument();
+    expect(suggestButton()).toBeEnabled();
+
+    await generate();
+    expect(mockSuggest).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses a genuinely ineligible draft with the insufficient-evidence copy", () => {
+    renderDialog({ paper: TITLE_ONLY });
+
+    expect(screen.queryByTestId("ai-organization-hydrating")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Add an abstract, keywords, or a study type to get useful suggestions."),
+    ).toBeInTheDocument();
   });
 });
 
@@ -709,6 +842,175 @@ describe("EditPaperDialog — Create & select", () => {
     await screen.findByText(
       "Creating adds it to your library now; this paper is assigned only when you save.",
     );
+  });
+});
+
+// ── Save must not outrun an explicit creation ──────────────────────────
+
+describe("EditPaperDialog — Save is serialized behind Create & select", () => {
+  /**
+   * "Create & select" cannot add the new id to the local selection until the
+   * insert resolves with a real row. If Save were allowed to run inside that
+   * window it would capture the selection as it was *before* the creation and
+   * persist a paper that is not assigned to the Project the user just made —
+   * with both clicks having happened in the order the user intended. Network
+   * timing must not change what those actions meant.
+   */
+  const saveButton = () => screen.getByRole("button", { name: "Save Changes" });
+  const cancelButton = () => screen.getByRole("button", { name: "Cancel" });
+
+  /** A creation the test resolves by hand. */
+  function deferred<T>() {
+    let release: (value: T) => void = () => {};
+    const promise = new Promise<T>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release: (value: T) => release(value) };
+  }
+
+  it("holds Save while a Project creation is in flight, then includes the new id", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    const creation = deferred<Project | null>();
+    const onCreateProject = vi.fn(() => creation.promise);
+    const onSave = vi.fn(async () => true);
+    renderDialog({ onCreateProject, onSave });
+    await generate();
+
+    click(
+      await screen.findByRole("button", {
+        name: 'Create project "Resistance Training" and select it for this paper',
+      }),
+    );
+
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+
+    // ── The window the race lived in ──
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+    click(saveButton());
+    expect(onSave).not.toHaveBeenCalled();
+
+    // ── The insert resolves ──
+    await act(async () => {
+      creation.release({ ...PROJECT_A, id: "proj-new", name: "Resistance Training" });
+      await Promise.resolve();
+    });
+
+    // The id is in the selection BEFORE Save becomes clickable again.
+    await screen.findByText("1 project selected");
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+
+    click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ projectIds: ["proj-new"] }),
+    );
+  });
+
+  it("holds Save while a Tag creation is in flight, then includes the new id", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    const creation = deferred<Tag | null>();
+    const onCreateTag = vi.fn(() => creation.promise);
+    const onSave = vi.fn(async () => true);
+    renderDialog({ onCreateTag, onSave });
+    await generate();
+
+    click(
+      await screen.findByRole("button", {
+        name: 'Create tag "older-adults" and select it for this paper',
+      }),
+    );
+
+    expect(onCreateTag).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+    click(saveButton());
+    expect(onSave).not.toHaveBeenCalled();
+
+    await act(async () => {
+      creation.release({ ...TAG_A, id: "tag-new", name: "older-adults" });
+      await Promise.resolve();
+    });
+
+    await screen.findByText("1 tag selected");
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+
+    click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ tagIds: ["tag-new"] }));
+  });
+
+  it("re-enables Save after a failed creation, without inventing an id", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    const creation = deferred<Project | null>();
+    const onCreateProject = vi.fn(() => creation.promise);
+    const onSave = vi.fn(async () => true);
+    renderDialog({ onCreateProject, onSave });
+    await generate();
+
+    click(
+      await screen.findByRole("button", {
+        name: 'Create project "Resistance Training" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+
+    // The mutation failed; it has already shown its own destructive toast.
+    await act(async () => {
+      creation.release(null);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(saveButton()).toBeEnabled());
+    expect(screen.queryByText("1 project selected")).not.toBeInTheDocument();
+
+    click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ projectIds: [] }));
+  });
+
+  it("lets the user Cancel during a creation, and persists nothing when it lands", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    const creation = deferred<Project | null>();
+    const onCreateProject = vi.fn(() => creation.promise);
+    const onSave = vi.fn(async () => true);
+    const onOpenChange = vi.fn();
+    renderDialog({ onCreateProject, onSave, onOpenChange });
+    await generate();
+
+    click(
+      await screen.findByRole("button", {
+        name: 'Create project "Resistance Training" and select it for this paper',
+      }),
+    );
+    await waitFor(() => expect(saveButton()).toBeDisabled());
+
+    // Cancel stays available on purpose: the creation is an explicit mutation
+    // the user already committed to, and trapping them until the network
+    // returns would be worse than letting them leave.
+    expect(cancelButton()).toBeEnabled();
+    click(cancelButton());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+
+    // The insert completes afterwards. The entity exists — that is the agreed
+    // contract — but no paper assignment may be persisted by its landing.
+    await act(async () => {
+      creation.release({ ...PROJECT_A, id: "proj-new", name: "Resistance Training" });
+      await Promise.resolve();
+    });
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("does not hold Save when no creation was ever started", async () => {
+    mockSuggest.mockResolvedValue(FULL);
+    const onSave = vi.fn(async () => true);
+    renderDialog({ onSave });
+    await generate();
+
+    await screen.findByText("Matches the cohort.");
+    expect(saveButton()).toBeEnabled();
+
+    click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
   });
 });
 
