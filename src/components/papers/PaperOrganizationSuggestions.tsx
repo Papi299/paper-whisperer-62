@@ -249,19 +249,39 @@ export function PaperOrganizationSuggestions({
     };
   }, []);
 
-  // Keep the callback in a ref so the unmount reporter below can stay a
-  // mount-only effect — depending on the prop directly would re-run it (and
-  // report `false` mid-creation) whenever the parent re-created the function.
+  /**
+   * The pending callback, held in a ref.
+   *
+   * The creation handlers call it **directly on the event path** rather than
+   * through an effect, so it must not be a `useCallback` dependency — a parent
+   * that re-created the function would otherwise churn the handlers' identity
+   * for no reason. The ref also lets the unmount reporter stay a mount-only
+   * effect.
+   */
   const onCreationPendingChangeRef = useRef(onCreationPendingChange);
   onCreationPendingChangeRef.current = onCreationPendingChange;
 
-  // Mirror the creation state to the dialog, which holds Save until it clears.
-  useEffect(() => {
-    onCreationPendingChangeRef.current?.(creatingKey !== null);
-  }, [creatingKey]);
+  /**
+   * Report the creation interlock to the dialog.
+   *
+   * **Never call this from an effect.** The dialog disables Save while it is
+   * true, and the invariant is that Save is impossible *before* the insert
+   * starts — not merely soon afterwards. A passive effect runs only after the
+   * next render commits, which leaves a window in which the mutation is
+   * already in flight while Save is still live: a Save dispatched there would
+   * capture the selection as it stood before the creation and persist a paper
+   * that is not assigned to the entity the user just made. So both handlers
+   * call this synchronously, on the click's own call stack, ahead of their
+   * first `await`.
+   */
+  const reportCreationPending = useCallback((pending: boolean) => {
+    onCreationPendingChangeRef.current?.(pending);
+  }, []);
 
-  // On unmount (the dialog closed mid-creation) report idle, so Save is not
-  // left disabled for the next paper by a component that no longer exists.
+  // Defensive only: the dialog closed mid-creation, so release the interlock
+  // rather than leaving Save disabled for the next paper by a component that no
+  // longer exists. The normal start/end propagation is the event path above,
+  // not this.
   useEffect(
     () => () => {
       onCreationPendingChangeRef.current?.(false);
@@ -447,73 +467,121 @@ export function PaperOrganizationSuggestions({
   const handleCreateProject = useCallback(
     async (suggestion: NewProjectSuggestion) => {
       if (!onCreateProject || disabled || stale || creatingRef.current) return;
+
+      // Reconcile against the taxonomy as it is NOW, not as the server saw it —
+      // and do it BEFORE any pending state exists. Neither of these two
+      // outcomes starts an insert, so neither may hold the dialog's Save
+      // button: they resolve entirely within this synchronous block.
+      const match = matchTaxonomyName(suggestion.name, projects);
+      if (match.kind === "ambiguous") {
+        setNotice(
+          `Several projects are already named "${suggestion.name}". Nothing was created — pick the one you meant in the Projects selector below.`,
+        );
+        return;
+      }
+      if (match.kind === "unique") {
+        onSelectProject(match.entity.id);
+        setNotice(
+          `"${match.entity.name}" already exists, so it was selected instead of creating a duplicate. Save to apply.`,
+        );
+        return;
+      }
+
+      // A genuinely new entity. The interlock closes here — synchronously, on
+      // this click's own call stack, BEFORE the insert starts — so there is no
+      // instant at which the mutation is in flight and Save is still live.
       const key = newProjectKey(suggestion.name);
       creatingRef.current = key;
       setCreatingKey(key);
+      reportCreationPending(true);
+
+      // Which paper this creation belongs to. Checked again on the far side of
+      // the await, for the same reason a generation is: a selection must never
+      // be staged against a paper the surface has since stopped describing.
+      const paperIdAtCreate = paperIdRef.current;
+
       try {
-        // Reconcile against the taxonomy as it is NOW, not as the server saw it.
-        const match = matchTaxonomyName(suggestion.name, projects);
-        if (match.kind === "ambiguous") {
-          setNotice(
-            `Several projects are already named "${suggestion.name}". Nothing was created — pick the one you meant in the Projects selector below.`,
-          );
-          return;
-        }
-        if (match.kind === "unique") {
-          onSelectProject(match.entity.id);
-          setNotice(
-            `"${match.entity.name}" already exists, so it was selected instead of creating a duplicate. Save to apply.`,
-          );
-          return;
-        }
         const created = await onCreateProject(suggestion.name, suggestion.description);
         // A failed creation selects nothing: an id that was never proven to
         // exist must not enter the dialog's selection. The mutation has already
         // shown its own destructive toast.
         if (!created) return;
+        if (!mountedRef.current || paperIdAtCreate !== paperIdRef.current) return;
+        // Ordered deliberately: the id enters the selection in the same
+        // synchronous continuation that then clears the interlock, so React
+        // batches both into one render and Save can never re-enable in a render
+        // where the new id is not already selected.
         onSelectProject(created.id);
         setNotice(
           `Created project "${created.name}" and selected it for this paper. Save to assign it.`,
         );
+      } catch {
+        // Unreachable for the domain mutations, which catch their own failures
+        // and resolve to `null`. It exists so an unexpected throw becomes a
+        // visible message rather than an unhandled rejection from a floating
+        // click handler — and so `finally` is never the only thing standing
+        // between a throw and a permanently disabled Save button.
+        if (mountedRef.current && paperIdAtCreate === paperIdRef.current) {
+          setNotice(`"${suggestion.name}" could not be created. Please try again.`);
+        }
       } finally {
         creatingRef.current = null;
         setCreatingKey(null);
+        // Always released, including on a throw, so a failing mutation can
+        // never strand Save disabled.
+        reportCreationPending(false);
       }
     },
-    [onCreateProject, disabled, stale, projects, onSelectProject],
+    [onCreateProject, disabled, stale, projects, onSelectProject, reportCreationPending],
   );
 
+  // Deliberately a mirror of `handleCreateProject`, step for step — see there
+  // for why the reconciliation precedes the interlock and why the interlock
+  // closes before the first `await`.
   const handleCreateTag = useCallback(
     async (suggestion: NewTagSuggestion) => {
       if (!onCreateTag || disabled || stale || creatingRef.current) return;
+
+      const match = matchTaxonomyName(suggestion.name, tags);
+      if (match.kind === "ambiguous") {
+        setNotice(
+          `Several tags are already named "${suggestion.name}". Nothing was created — pick the one you meant in the Tags selector below.`,
+        );
+        return;
+      }
+      if (match.kind === "unique") {
+        onSelectTag(match.entity.id);
+        setNotice(
+          `"${match.entity.name}" already exists, so it was selected instead of creating a duplicate. Save to apply.`,
+        );
+        return;
+      }
+
       const key = newTagKey(suggestion.name);
       creatingRef.current = key;
       setCreatingKey(key);
+      reportCreationPending(true);
+
+      const paperIdAtCreate = paperIdRef.current;
+
       try {
-        const match = matchTaxonomyName(suggestion.name, tags);
-        if (match.kind === "ambiguous") {
-          setNotice(
-            `Several tags are already named "${suggestion.name}". Nothing was created — pick the one you meant in the Tags selector below.`,
-          );
-          return;
-        }
-        if (match.kind === "unique") {
-          onSelectTag(match.entity.id);
-          setNotice(
-            `"${match.entity.name}" already exists, so it was selected instead of creating a duplicate. Save to apply.`,
-          );
-          return;
-        }
         const created = await onCreateTag(suggestion.name);
         if (!created) return;
+        if (!mountedRef.current || paperIdAtCreate !== paperIdRef.current) return;
         onSelectTag(created.id);
         setNotice(`Created tag "${created.name}" and selected it for this paper. Save to assign it.`);
+      } catch {
+        // See `handleCreateProject` for why this branch exists.
+        if (mountedRef.current && paperIdAtCreate === paperIdRef.current) {
+          setNotice(`"${suggestion.name}" could not be created. Please try again.`);
+        }
       } finally {
         creatingRef.current = null;
         setCreatingKey(null);
+        reportCreationPending(false);
       }
     },
-    [onCreateTag, disabled, stale, tags, onSelectTag],
+    [onCreateTag, disabled, stale, tags, onSelectTag, reportCreationPending],
   );
 
   // ── Visible (non-dismissed) result slices ────────────────────────────────
