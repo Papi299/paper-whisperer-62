@@ -147,7 +147,7 @@ supabase functions deploy suggest-paper-organization --project-ref <project-ref>
 | `SUPABASE_URL` | all | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
 | `SUPABASE_ANON_KEY` | all | **Auto-injected** by the Supabase Edge runtime — no manual setup. |
 | `SUPABASE_SECRET_KEYS` / `SUPABASE_SERVICE_ROLE_KEY` | `delete-account` only | **Auto-injected** by the Supabase Edge runtime — no manual setup. Server-only; see below. |
-| `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | **Must be set manually** via `supabase secrets set`. One key backs both functions' Gemini `generateContent` calls — `suggest-paper-organization` **reuses** it and introduced no new secret. Without it, `analyze-paper` fails fast with a clear error, and `suggest-paper-organization` returns a neutral `internal_error` — checked *before* a quota unit is spent, so a misconfigured deployment costs the user nothing. |
+| `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | **Must be set manually** via `supabase secrets set`. One key backs both functions' Gemini `generateContent` calls — `suggest-paper-organization` **reuses** it and introduced no new secret. Without it, both fail safely with a generic 500 before any provider call and name the secret only in the Edge log, never in the response — `analyze-paper` refunds the quota unit it already consumed, and `suggest-paper-organization` checks the key before consuming one. Operator detail: [docs/deployment.md](docs/deployment.md) §10.3. |
 
 Set the Gemini key once per project (placeholder shown — substitute your real key, never commit it):
 
