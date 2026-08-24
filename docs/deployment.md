@@ -48,8 +48,8 @@ For local dev, the same two values go in a local `.env.local` (or the existing `
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | `analyze-paper` | Required for the Gemini analysis call. Without it, `analyze-paper` fails fast with a clear in-source throw (preserved by PR #139). |
-| `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota` | **Optional.** Overrides the Gemini model alias. Both functions resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never silently disagree. Unset = fallback (current behavior). |
+| `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | Required. **One key serves both**, for their Gemini `generateContent` calls — `suggest-paper-organization` reuses the existing secret and introduced no new one, so rotating this value rotates it for both. Without it, each fails safely with a generic 500 **before** any provider call, naming the secret only in its Edge log — `analyze-paper` via its clear in-source throw (preserved by PR #139), which surfaces in the log rather than the response. `analyze-paper` refunds the unit it already consumed; `suggest-paper-organization` checks the key first and consumes nothing. Operator detail: §10.3. |
+| `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota`, `suggest-paper-organization` | **Optional.** Overrides the Gemini model alias. All three resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never silently disagree — the two runtime generation functions (`analyze-paper`, `suggest-paper-organization`) and the reporter that names the configured model. Unset = fallback (current behavior). |
 | `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated, and currently inert.** Google Cloud project that owns the Gemini API usage. Under C29 **no frontend surface calls this function**, so these three secrets affect nothing today; absent, the function's own response is a bounded "not configured" and ordinary analysis is unaffected. |
 | `GOOGLE_MONITORING_CLIENT_EMAIL` | `get-gemini-provider-quota` | Service-account email for the Monitoring reader (below). |
 | `GOOGLE_MONITORING_PRIVATE_KEY` | `get-gemini-provider-quota` | Service-account private key (PEM). Escaped `\n` newlines are normalized in-code. **Never** exposed to the browser, logged, or committed. |
@@ -287,7 +287,7 @@ The empty-query case is the informative one: it proves the worker boots, builds 
 
 **Current state: `suggest-paper-organization` is deployed to the linked project and ACTIVE.** It is the Edge Function behind the Edit Paper **Suggest Projects & Tags** experience (`AI-PROJECT-TAG-SUGGESTIONS-001`). The initial rollout completed and was verified on **2026-08-23** — its evidence (deployment identifiers, verification results, merge and Vercel provenance) is recorded in [migration-history.md](migration-history.md). Read the live version back rather than trusting any number written here: `supabase functions list --project-ref <project-ref>`.
 
-**The frontend now calls it.** `001B` shipped the Edit Paper surface against this exact contract. That PR was **frontend-only**: it changed no file under `supabase/functions/`, `supabase/config.toml` or `supabase/migrations/`, so it required no Edge deployment and no migration, and the deployed artifact it depends on is the one the `001A` rollout verified. The endpoint-before-UI gate was satisfied *before* `001B` was built, which is the ordering the rule exists to produce.
+**The frontend calls it in Production, and the feature is accepted.** `001B` shipped the Edit Paper surface against this exact contract (PR #242, merged as `8159d353f3cdb76b332d6a0266f00c4d4772c566`). That PR was **frontend-only**: it changed no file under `supabase/functions/`, `supabase/config.toml` or `supabase/migrations/`, so it required no Edge deployment and no migration, and the deployed artifact it depends on is the one the `001A` rollout verified. **`001B` Production acceptance completed on 2026-08-24** against that unchanged deployed function — a real generation returned 200, and both the existing-selection and **Create & select** paths persisted correctly through Save Changes; the chronology is in [migration-history.md](migration-history.md). The endpoint-before-UI gate was satisfied *before* `001B` was built, which is the ordering the rule exists to produce.
 
 **What it is.** An advisory, non-mutating suggestion endpoint. It authenticates the caller in-function with `auth.getUser()`, verifies the requested paper belongs to that caller, reads that caller's own Projects and Tags, sends Gemini a bounded, allow-listed semantic payload, and returns four suggestion lists. It consumes **one unit of the existing AI quota** per successful generation through `consume_ai_quota`, and refunds through `refund_ai_quota` when the provider fails or returns an unusable result. It uses **no elevated key**.
 
@@ -638,7 +638,14 @@ Finally, confirm the boundary held elsewhere:
 
 ### 10.3 Missing `GEMINI_API_KEY`
 
-**Symptom:** `analyze-paper` returns 500 with error body containing `GEMINI_API_KEY not configured in Supabase secrets`.
+**Symptom:** both Gemini consumers fail with a **generic HTTP 500**, and **neither names the secret in its response body** — that is deliberate, so the browser is never told which server-side configuration is missing. **Diagnose from the Edge Function logs, not from the response.**
+
+| Function | Client sees | Edge log line | Quota |
+|---|---|---|---|
+| `analyze-paper` | 500 `{"error": "Analysis failed. Please try again later."}` | `analyze-paper error: GEMINI_API_KEY not configured in Supabase secrets` | The unit is consumed **before** this check, so the missing-key path calls `refund_ai_quota` before throwing. The refund is **best-effort**: if it fails it is logged and swallowed so the original error still surfaces. |
+| `suggest-paper-organization` | 500 `{"error": "internal_error", "message": "Something went wrong. Please try again."}` | `suggest-organization provider_key_missing` | The key is checked **before** `consume_ai_quota`, so **no unit is consumed and no refund is required**. |
+
+Both fail before any Gemini provider call is made, so a missing key costs nothing upstream. The ordering difference is the useful diagnostic: if Analyze is failing you will also see a refund attempt in its log, whereas Suggest never reaches the quota RPC at all.
 
 **Fix:**
 
