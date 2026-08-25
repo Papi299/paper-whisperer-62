@@ -78,7 +78,7 @@ supabase secrets list --project-ref <project-ref>
 | `SUPABASE_SECRET_KEYS` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, JSON dictionary keyed by key name; the function reads `default`. Preferred over the legacy key below. |
 | `SUPABASE_SERVICE_ROLE_KEY` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, legacy plain string; used only as a compatibility fallback when the project has not created the newer secret keys. |
 
-Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function surfaces an actionable error instead of crashing with an empty-string client.
+Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function fails safely — a request that reaches the environment check is refused rather than served by an empty-string client — and the actionable message naming the variable goes to its **Edge log**. The caller receives a neutral generic 500 that does not name the variable; the body differs per function. Operator detail: §10.2.
 
 **About the elevated key (PFA-C04).** `delete-account` is the only function that needs one: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. Every other function remains caller-authenticated and uses no elevated key.
 
@@ -541,7 +541,7 @@ Run after a `search-pubmed` deployment, or after a frontend change affecting Pub
 
 - [ ] Open a paper with an abstract → Analyze → confirm TLDR / study type / statistical methods populate.
 - [ ] Bulk-select 2 papers → Bulk Analyze → confirm the 3-second cooldown between calls and final summary toast (e.g., `2 succeeded, 0 failed`).
-- [ ] Confirm no `Missing required Edge Function environment variable: …` toast — that would indicate `GEMINI_API_KEY` is missing or one of the auto-injected vars isn't available (rare; would surface as a 500 from the function).
+- [ ] Confirm no `AI Analysis failed` toast. A server-side configuration gap — a missing `GEMINI_API_KEY`, or an auto-injected var the runtime stopped supplying — surfaces exactly this way: a generic 500 whose toast reads *"Edge Function returned a non-2xx status code."* and **never names the variable**. Confirm which one from the Edge log: §10.3 for the key, §10.2 for the auto-injected vars.
 
 ### 9.3c AI organization suggestions (Edge Function: `suggest-paper-organization`)
 
@@ -630,7 +630,26 @@ Finally, confirm the boundary held elsewhere:
 
 ### 10.2 Missing Edge env vars
 
-**Symptom:** Edge Function 500 with error body `Missing required Edge Function environment variable: SUPABASE_URL. Set it in Supabase secrets or confirm it is auto-injected by the Supabase Edge runtime.` (or `SUPABASE_ANON_KEY`).
+**Symptom:** an Edge Function returns a **generic HTTP 500 that does not name the variable.** All six functions read `SUPABASE_URL` / `SUPABASE_ANON_KEY` through `requireEdgeEnv` **inside the request handler and inside that handler's outer `try`**, so the helper's actionable message is caught there, written to the Edge log, and replaced by the function's own neutral body. **Diagnose from the Edge Function logs, not from the response.**
+
+**For a request that reaches the environment check** (see the gates below), the neutral body differs per function; the log line is what names the variable:
+
+| Function | Client sees (HTTP 500) | Edge log line |
+|---|---|---|
+| `analyze-paper` | `{"error": "Analysis failed. Please try again later."}` | `analyze-paper error: Missing required Edge Function environment variable: …` |
+| `fetch-paper-metadata` | `{"error": "Internal server error"}` | `fetch-paper-metadata error: Missing required …` |
+| `search-pubmed` | `{"error": "internal_error", "message": "Something went wrong. Please try again."}` | `search-pubmed error: Missing required …` |
+| `suggest-paper-organization` | `{"error": "internal_error", "message": "Something went wrong. Please try again."}` | `suggest-organization error: Missing required …` |
+| `delete-account` | `{"error": "account_deletion_failed", "message": "Your account could not be deleted. Please try again."}` | `delete-account: unexpected error: Missing required …` |
+| `get-gemini-provider-quota` | `{"error": "Provider quota unavailable"}` | `get-gemini-provider-quota error: Missing required …` |
+
+`SUPABASE_URL` and `SUPABASE_ANON_KEY` behave identically in every function — only the variable name in the log differs. What the user sees in the app is generic in every case: each caller renders either the function's neutral `message` or its own fallback copy (Analyze falls back to supabase-js's *"Edge Function returned a non-2xx status code."*, since its body carries no `message` field). **No path renders the variable name.**
+
+**Nothing is left half-done.** In all six the check runs before any database read, quota RPC, provider call or deletion, so no quota unit is consumed and no refund, cleanup or rollback is required — `delete-account` in particular deletes nothing.
+
+**Not every request reaches the check.** Every function answers `OPTIONS` first, and `search-pubmed`, `suggest-paper-organization` and `delete-account` reject a non-`POST` method next. Five of the six then require an `Authorization` header to be **present** before constructing the Supabase client; `delete-account` instead requires that header to **parse** as `Bearer <token>`. A missing variable produces the 500s above only once those pre-env gates are passed. Preflight can still return 200, the three method gates can still return 405, and a **missing** `Authorization` header still returns 401 — as does malformed bearer syntax, for `delete-account`. **None of those responses is evidence that the variable is present.**
+
+**Presence is not validity.** Each pre-env gate tests only that a credential is *there*, never that it is good — `auth.getUser()` is what validates the token, and it runs *after* the client is constructed. A present-but-invalid or expired token therefore reaches the environment check and receives the generic 500, not a 401. Diagnose the missing-env condition with a genuine authenticated request; a preflight, a wrong-method probe, or a header-less `curl` cannot distinguish a missing variable from a healthy one.
 
 **Cause:** The Supabase Edge runtime stopped auto-injecting one of these (unusual). Or a future migration to a different runtime exposed a gap.
 
