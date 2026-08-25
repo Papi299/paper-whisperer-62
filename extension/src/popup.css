@@ -1,0 +1,124 @@
+/*
+ * Popup styling.
+ *
+ * Self-contained: no font host, no image, no remote resource of any kind, so the
+ * default Manifest V3 content security policy holds without exception and the
+ * popup makes no request when it opens. Colours follow the viewer's Chrome
+ * theme via `prefers-color-scheme`.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --pl-surface: #ffffff;
+  --pl-ink: #16201f;
+  --pl-ink-muted: #5c6b68;
+  --pl-accent: #0e6b68;
+  --pl-rule: #dfe5e3;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pl-surface: #171f1e;
+    --pl-ink: #e3eae8;
+    --pl-ink-muted: #94a3a0;
+    --pl-accent: #58c3b9;
+    --pl-rule: #2a3634;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--pl-surface);
+  color: var(--pl-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.popup {
+  width: 300px;
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.popup__brand {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--pl-accent);
+}
+
+.state {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.state[hidden] {
+  display: none;
+}
+
+.state__headline {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.state__headline--found {
+  color: var(--pl-accent);
+}
+
+.state__detail {
+  margin: 0;
+  color: var(--pl-ink-muted);
+}
+
+.record {
+  margin: 2px 0 0;
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: baseline;
+}
+
+.record__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pl-ink-muted);
+}
+
+.record__value {
+  margin: 0;
+  min-width: 0;
+}
+
+/*
+ * A DOI suffix is opaque and can be long, so it wraps rather than widening the
+ * popup or being clipped. `break-word` keeps a long unbroken suffix readable
+ * instead of pushing the layout sideways.
+ */
+.record__value--identifier {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.popup__footnote {
+  margin: 2px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--pl-rule);
+  font-size: 11px;
+  color: var(--pl-ink-muted);
+}

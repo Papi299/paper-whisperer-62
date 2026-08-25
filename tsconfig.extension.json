@@ -1,0 +1,51 @@
+{
+  /*
+   * TypeScript project for the Chrome extension.
+   *
+   * A third project alongside `tsconfig.app.json` and `tsconfig.node.json`,
+   * because the extension is a third compilation target: browser DOM like the
+   * app, but with no React and with the `chrome` namespace declared locally by
+   * `extension/src/chrome.d.ts`.
+   *
+   * The strictness settings deliberately mirror `tsconfig.app.json` rather than
+   * `tsconfig.node.json`. Extension source imports the application's identifier
+   * modules from `src/lib/`, so those files are part of this program too, and
+   * they must be checked under the same rules that `typecheck:app` checks them
+   * under — otherwise the same file could pass one project and fail the other.
+   */
+  "compilerOptions": {
+    "types": ["vitest/globals"],
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode — Vite resolves these imports, tsc only checks them. */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting — matched to tsconfig.app.json; see the note above. */
+    "strict": false,
+    "strictNullChecks": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitAny": false,
+    "noFallthroughCasesInSwitch": false,
+
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  /*
+   * `vite.extension.config.ts` is deliberately absent: it is a Node build
+   * script, not extension source, so it belongs to `tsconfig.node.json`
+   * alongside `vite.config.ts` — where `@types/node` is in scope and `fs` and
+   * `__dirname` resolve.
+   */
+  "include": ["extension"]
+}

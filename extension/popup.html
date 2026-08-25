@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PaperLume</title>
+  </head>
+  <body>
+    <!--
+      Every state is present in the markup and toggled with `hidden`, so the
+      popup script only ever flips visibility and writes `textContent`. It never
+      builds markup from a value that came from the page, and there is no
+      `innerHTML` anywhere in the extension — a rule the permission-boundary test
+      asserts rather than trusting to review.
+
+      The document opens in the "checking" state, which is what the user sees for
+      the one frame before `chrome.tabs.query` resolves.
+    -->
+    <main class="popup">
+      <h1 class="popup__brand">PaperLume</h1>
+
+      <section class="state" data-state="checking">
+        <p class="state__headline">Checking this page…</p>
+      </section>
+
+      <section class="state" data-state="pubmed" hidden>
+        <p class="state__headline state__headline--found">Paper detected</p>
+        <dl class="record">
+          <dt class="record__label">Source</dt>
+          <dd class="record__value">PubMed</dd>
+          <dt class="record__label">PMID</dt>
+          <dd class="record__value record__value--identifier" data-field="pmid"></dd>
+        </dl>
+      </section>
+
+      <section class="state" data-state="doi" hidden>
+        <p class="state__headline state__headline--found">Paper detected</p>
+        <dl class="record">
+          <dt class="record__label">Source</dt>
+          <dd class="record__value">DOI</dd>
+          <dt class="record__label">DOI</dt>
+          <dd class="record__value record__value--identifier" data-field="doi"></dd>
+        </dl>
+      </section>
+
+      <section class="state" data-state="unsupported" hidden>
+        <p class="state__headline">No paper identified</p>
+        <p class="state__detail">
+          PaperLume cannot yet identify a paper from this page&rsquo;s address. It
+          currently reads PubMed record and doi.org links.
+        </p>
+      </section>
+
+      <section class="state" data-state="restricted" hidden>
+        <p class="state__headline">Nothing to check here</p>
+        <p class="state__detail">
+          This tab isn&rsquo;t a web page PaperLume can read an address from. Open a
+          paper in a normal tab and try again.
+        </p>
+      </section>
+
+      <p class="popup__footnote">
+        Reads this tab&rsquo;s address only, and only when you open PaperLume.
+        Nothing is sent anywhere.
+      </p>
+    </main>
+
+    <script type="module" src="./src/popup.ts"></script>
+  </body>
+</html>

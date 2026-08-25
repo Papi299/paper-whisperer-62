@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "PaperLume",
+  "version": "0.1.0",
+  "description": "Identify the scientific paper on the page you are viewing.",
+  "permissions": ["activeTab"],
+  "action": {
+    "default_title": "PaperLume",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  }
+}

@@ -17,10 +17,16 @@ export default defineConfig({
     // lifecycle (e.g. the fail-closed backend-target guard). These are pure
     // unit tests with no Docker/Supabase/browser/network; the Playwright specs
     // themselves live in e2e/*.spec.ts and are excluded from Vitest.
+    // extension/**/__tests__ — the Chrome extension's URL classifier, its
+    // manifest permission contract, and its no-network boundary. All pure: the
+    // classifier is a string function, and the other two read committed source
+    // files. No browser, no `chrome` runtime, no network — the extension is
+    // exercised in a real browser by a later phase, not here.
     include: [
       "src/**/*.{test,spec}.{ts,tsx}",
       "supabase/functions/**/__tests__/**/*.{test,spec}.ts",
       "e2e/support/**/*.{test,spec}.ts",
+      "extension/**/__tests__/**/*.{test,spec}.ts",
     ],
   },
   resolve: {
