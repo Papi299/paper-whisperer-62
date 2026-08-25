@@ -78,7 +78,7 @@ supabase secrets list --project-ref <project-ref>
 | `SUPABASE_SECRET_KEYS` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, JSON dictionary keyed by key name; the function reads `default`. Preferred over the legacy key below. |
 | `SUPABASE_SERVICE_ROLE_KEY` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, legacy plain string; used only as a compatibility fallback when the project has not created the newer secret keys. |
 
-Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function fails safely — it refuses the request rather than building an empty-string client — and the actionable message naming the variable goes to its **Edge log**. The caller receives a neutral generic 500 that does not name the variable; the body differs per function. Operator detail: §10.2.
+Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function fails safely — a request that reaches the environment check is refused rather than served by an empty-string client — and the actionable message naming the variable goes to its **Edge log**. The caller receives a neutral generic 500 that does not name the variable; the body differs per function. Operator detail: §10.2.
 
 **About the elevated key (PFA-C04).** `delete-account` is the only function that needs one: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. Every other function remains caller-authenticated and uses no elevated key.
 
@@ -632,7 +632,7 @@ Finally, confirm the boundary held elsewhere:
 
 **Symptom:** an Edge Function returns a **generic HTTP 500 that does not name the variable.** All six functions read `SUPABASE_URL` / `SUPABASE_ANON_KEY` through `requireEdgeEnv` **inside the request handler and inside that handler's outer `try`**, so the helper's actionable message is caught there, written to the Edge log, and replaced by the function's own neutral body. **Diagnose from the Edge Function logs, not from the response.**
 
-The neutral body differs per function; the log line is what names the variable:
+**For a request that reaches the environment check** (see the gates below), the neutral body differs per function; the log line is what names the variable:
 
 | Function | Client sees (HTTP 500) | Edge log line |
 |---|---|---|
@@ -645,7 +645,9 @@ The neutral body differs per function; the log line is what names the variable:
 
 `SUPABASE_URL` and `SUPABASE_ANON_KEY` behave identically in every function — only the variable name in the log differs. What the user sees in the app is generic in every case: each caller renders either the function's neutral `message` or its own fallback copy (Analyze falls back to supabase-js's *"Edge Function returned a non-2xx status code."*, since its body carries no `message` field). **No path renders the variable name.**
 
-**Nothing is left half-done.** In all six the check runs before any database read, quota RPC, provider call or deletion, so no quota unit is consumed and no refund, cleanup or rollback is required — `delete-account` in particular deletes nothing. **CORS preflight is unaffected:** every function answers `OPTIONS` before the environment read, so a preflight still returns 200 while every real request 500s. `search-pubmed`, `suggest-paper-organization` and `delete-account` likewise still return their 405 for a non-`POST` method.
+**Nothing is left half-done.** In all six the check runs before any database read, quota RPC, provider call or deletion, so no quota unit is consumed and no refund, cleanup or rollback is required — `delete-account` in particular deletes nothing.
+
+**Not every request reaches the check.** Each function answers `OPTIONS` first; each requires its `Authorization` / bearer credential before constructing the Supabase client; and `search-pubmed`, `suggest-paper-organization` and `delete-account` reject a non-`POST` method before either. A missing variable therefore produces the 500s above **only for a request that gets past those gates**. Preflight still returns 200, the three method-gated functions still return 405, and a request carrying no usable credential still returns 401 — **none of which is evidence that the variable is present.** Reproduce with a genuine authenticated call, not with a preflight or an unauthenticated probe.
 
 **Cause:** The Supabase Edge runtime stopped auto-injecting one of these (unusual). Or a future migration to a different runtime exposed a gap.
 

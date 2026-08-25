@@ -155,7 +155,7 @@ Set the Gemini key once per project (placeholder shown — substitute your real 
 supabase secrets set GEMINI_API_KEY=<your-gemini-api-key> --project-ref <project-ref>
 ```
 
-Every function **fails fast** if a required Edge env var is missing or empty — `supabase/functions/_shared/env.ts` validates each at the call site. The actionable message naming the variable goes to the **Edge log**; the caller receives a neutral generic 500 that never names it. Operator detail: [docs/deployment.md](docs/deployment.md) §10.2.
+Every function **fails fast** if a required Edge env var is missing or empty — `supabase/functions/_shared/env.ts` validates each at the call site. The actionable message naming the variable goes to the **Edge log**; a caller that reaches the check receives a neutral generic 500 that never names it. Operator detail: [docs/deployment.md](docs/deployment.md) §10.2.
 
 **Caller-authenticated functions.** `fetch-paper-metadata`, `analyze-paper`, `get-gemini-provider-quota`, `search-pubmed` and `suggest-paper-organization` need **no** elevated key: each constructs its Supabase client with the **caller's** auth header and relies on RLS plus an in-function `auth.getUser()` check for ownership enforcement.
 
