@@ -119,6 +119,34 @@ npm run dev
 
 Requires Node.js 20.19+ or 22.12+. Supabase project config is in `supabase/config.toml`.
 
+## Chrome extension
+
+Source lives in `extension/`, inside this same repository and dependency graph — there is no second `package.json` and no workspace. It builds with its own Vite config to its own output directory, so the web build and the Vercel artefact are untouched.
+
+```sh
+npm run build:extension      # production build → dist-extension/
+npm run build:extension:dev  # same, development mode
+```
+
+Load the unpacked build:
+
+1. build it with the command above — `dist-extension/` is the unpacked directory;
+2. open `chrome://extensions`;
+3. turn on **Developer mode** (top right);
+4. click **Load unpacked** and select `dist-extension/`;
+5. rebuild and press **Reload** on the extension card after any source change.
+
+To check it by hand, open a tab and click the PaperLume toolbar action:
+
+| Open this | Expect |
+|---|---|
+| `https://pubmed.ncbi.nlm.nih.gov/12345678/` | Paper detected · PubMed · PMID `12345678` |
+| `https://doi.org/10.1056/NEJMoa2107934` | Paper detected · DOI · `10.1056/NEJMoa2107934` |
+| any ordinary publisher article page | No paper identified — and **not** a guess from the page title |
+| `chrome://extensions` | Nothing to check here |
+
+**What it does today.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. That is all. It makes no network request, holds no PaperLume or Supabase session, reads no page content, and cannot import anything — importing runs through the web application's existing importer, and connecting the two is a later phase. The only permission it requests is `activeTab`.
+
 ## Supabase Edge Functions
 
 Edge Functions live under `supabase/functions/<name>/index.ts` (`analyze-paper`, `fetch-paper-metadata`, `get-gemini-provider-quota`, `delete-account`, `search-pubmed`, `suggest-paper-organization`). All six are deployed to the linked project. `get-gemini-provider-quota` is **deployed but intentionally unused** — its manager-facing dashboard is deferred under decision C29, and no frontend code calls or renders it.
@@ -171,14 +199,15 @@ For the full deployment runbook — including pre-merge / pre-deploy / migration
 
 ```sh
 npm run lint                 # ESLint
-npm run typecheck            # TypeScript (application + Node projects)
+npm run typecheck            # TypeScript (application + Node + extension projects)
 npm test                     # Unit / integration tests (Vitest)
-npm run build                # Production build
+npm run build                # Production build (web app)
+npm run build:extension      # Production build (Chrome extension)
 npm run test:e2e:local       # Playwright E2E against an ephemeral local Supabase stack
 npm run test:db:local        # pgTAP database-security suites on an ephemeral local stack
 ```
 
-> Use `npm run typecheck` (not a bare `tsc --noEmit`): the root `tsconfig.json` has an empty file set, so it delegates to the `tsconfig.app.json` and `tsconfig.node.json` project references that the script checks.
+> Use `npm run typecheck` (not a bare `tsc --noEmit`): the root `tsconfig.json` has an empty file set, so it delegates to the `tsconfig.app.json`, `tsconfig.node.json` and `tsconfig.extension.json` project references that the script checks.
 
 ### Local-first end-to-end tests
 
@@ -196,7 +225,7 @@ pgTAP suites in `supabase/tests/database/` cover core and relational RLS isolati
 
 | Workflow | Runs | Required to merge? |
 |---|---|---|
-| **`Validate`** (`.github/workflows/validate.yml`) | `npm ci`, lint, typecheck, Vitest, production build on Node 22 | **Yes** — required on `main` |
+| **`Validate`** (`.github/workflows/validate.yml`) | `npm ci`, lint, typecheck, Vitest, web production build, Chrome extension production build on Node 22 | **Yes** — required on `main` |
 | **`DB Tests`** (`.github/workflows/db-tests.yml`) | The same `test:db:local` database lifecycle | **Yes** — required on `main` |
 | **`E2E (local)`** (`.github/workflows/e2e-local.yml`) | The same local-first Playwright lifecycle on an ephemeral local stack | No — evidence, not a gate |
 
