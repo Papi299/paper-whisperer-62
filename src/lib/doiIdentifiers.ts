@@ -1,18 +1,29 @@
 /**
- * Construction of canonical DOI resolver URLs from DOI names.
+ * Structural recognition of DOI resolver URLs, and construction of canonical
+ * DOI resolver URLs from DOI names.
  *
- * This is the *output* half of DOI handling, and it is deliberately separate
- * from the *input* half. Recognition — deciding whether untrusted text is a DOI
- * resolver URL and, if so, which DOI name it refers to — belongs to the
- * identifier classifier. This module does the reverse, and only the reverse:
+ * DOI handling has two directions and this module holds both, the way
+ * `src/lib/pubmedIdentifiers.ts` holds both directions for PubMed. They remain
+ * separate *functions*, because keeping them apart is what lets each side be
+ * strict:
  *
- *   resolver URL  --(structural classifier)-->  DOI name
- *   DOI name      --(this module)------------>  canonical resolver URL
+ *   resolver URL  --(extractDoiFromDoiUrl)-->  DOI name
+ *   DOI name      --(canonicalDoiUrl)------->  canonical resolver URL
  *
- * Keeping the directions apart is what lets each side be strict. The classifier
- * may refuse anything it cannot authenticate; this module may assume it was
- * handed a DOI *name* and never has to guess whether its input is already a URL
- * or already encoded.
+ * `extractDoiFromDoiUrl` refuses anything it cannot structurally authenticate;
+ * `canonicalDoiUrl` may then assume it was handed a DOI *name* and never has to
+ * guess whether its input is already a URL or already encoded. Neither calls
+ * the other, and `canonicalDoiUrl` still rejects a URL outright rather than
+ * unwrapping one.
+ *
+ * The recognition half is a second implementation of the classification that
+ * `supabase/functions/_shared/identifierDetection.ts` already performs inside
+ * the Edge Function's separate bundling domain — the same arrangement PubMed
+ * recognition has had since that module was written, and for the same reason:
+ * the deployed function and the bundled application are deployed by different
+ * commands, on different cadences. `__tests__/doiIdentifiers.parity.test.ts`
+ * pins the two to identical answers over a shared corpus, so a change to either
+ * that the other does not match fails the suite instead of drifting silently.
  *
  * ## Why string interpolation is wrong
  *
@@ -217,4 +228,126 @@ export function canonicalDoiUrl(doiName: string | null | undefined): string | nu
   if (prefix.includes(":")) return null;
 
   return `${DOI_RESOLVER_PREFIX}${percentEncodeDoiComponent(prefix)}/${percentEncodeDoiComponent(suffix)}`;
+}
+
+/**
+ * The DOI proxy hosts, compared exactly against the parsed hostname.
+ *
+ * `doi.org` is the form the DOI Foundation and Crossref both document as
+ * canonical. `dx.doi.org` is the earlier, no-longer-preferred proxy hostname;
+ * both organisations state it keeps resolving and it still appears in older
+ * published references, so a URL on one is a DOI reference exactly as much as a
+ * URL on the other. Nothing here *emits* `dx.doi.org` — see
+ * `DOI_RESOLVER_PREFIX` above — but recognition has to accept what exists.
+ */
+const DOI_RESOLVER_HOSTS: ReadonlySet<string> = new Set(["doi.org", "dx.doi.org"]);
+
+/** The only schemes an absolute resolver URL may use. Compared exactly. */
+const DOI_RESOLVER_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
+
+/**
+ * The shape a resolver path must have to be a DOI *name* rather than some other
+ * page on the proxy host: the `10.` directory indicator, a registrant code, the
+ * `/` that separates prefix from suffix, and a non-empty suffix.
+ *
+ * Deliberately the weakest check that distinguishes a DOI from
+ * `https://doi.org/`, `https://doi.org/about` and `https://doi.org/10.1000` —
+ * not a DOI grammar validator. The suffix is `.+` because a DOI suffix is
+ * opaque and may itself contain `/`; `[^/]+` for the registrant code stops the
+ * prefix from swallowing the separator. The `s` flag lets a suffix that
+ * contains a newline still match, because a decoded `%0A` is suffix data.
+ */
+const DOI_NAME_PATTERN = /^10\.[^/]+\/.+$/s;
+
+/**
+ * Parse a value into an absolute http(s) `URL`, or `null`.
+ *
+ * No base URL is supplied, so relative and scheme-relative values
+ * (`//doi.org/10.1000/example`) fail rather than resolving against the
+ * application origin. Input is never repaired — no scheme is prepended or
+ * guessed, because doing so would invent the very authority this function
+ * exists to verify.
+ */
+function parseResolverUrl(value: string | null | undefined): URL | null {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+
+  // `protocol` is lowercased by the parser, so this exact-match check also
+  // covers `HTTPS:` and `JaVaScRiPt:`.
+  return DOI_RESOLVER_PROTOCOLS.has(parsed.protocol) ? parsed : null;
+}
+
+/**
+ * Extract the DOI name a resolver URL refers to.
+ *
+ * Untrusted text cannot be recognised by substring: `"doi.org"` occurs in
+ * `https://notdoi.org/10.1000/example`, in
+ * `https://doi.org.evil.example/10.1000/example`, in
+ * `https://evil.example/?url=https://doi.org/10.1000/example`, and in
+ * `https://doi.org@evil.example/10.1000/example` — none of which is a DOI
+ * reference. A substring test grants that text an authority it has not earned,
+ * and the value that results is persisted: `doi` participates in the per-user
+ * deduplication domain.
+ *
+ * Recognition is therefore structural, and a decision is made only from the
+ * parsed `protocol`, `hostname` and `pathname`:
+ *
+ *   • `hostname` is compared for exact equality against an explicit host set.
+ *     The parser lowercases it, so `DOI.ORG` matches without a manual case
+ *     fold, while `notdoi.org` and `doi.org.evil.example` do not.
+ *   • `hostname` excludes user-info, so `https://doi.org@evil.example/…`
+ *     resolves to `evil.example` and is rejected.
+ *   • The DOI is read from `pathname` only, so neither a query nor a fragment
+ *     can supply or replace it.
+ *
+ * The DOI is taken as the *whole* path rather than its first segment: a DOI
+ * suffix is opaque and may contain further `/` characters, which
+ * `https://doi.org/10.1000/a/b` genuinely names. Nothing else is trimmed off
+ * either — the proxy treats the path verbatim as the DOI name (a trailing slash
+ * makes `10.1000/182/`, a different name, which is why the resolver answers 404
+ * for it), so silently repairing one here would name a DOI the user was not
+ * looking at.
+ *
+ * The path is percent-decoded exactly once. `pathname` is still URL-encoded
+ * while a DOI name is not, and every consumer encodes it again on the way out
+ * (`canonicalDoiUrl` for display, `encodeURIComponent` for Crossref, the
+ * `[doi]` term for PubMed E-utilities), so returning the encoded path would
+ * double-escape every reserved character a suffix contains. A malformed escape
+ * is not a DOI and fails closed rather than being passed on half-decoded.
+ *
+ * @returns The DOI name, or `null` when the value is not a DOI resolver URL.
+ */
+export function extractDoiFromDoiUrl(value: string | null | undefined): string | null {
+  const url = parseResolverUrl(value);
+  if (!url) return null;
+
+  if (!DOI_RESOLVER_HOSTS.has(url.hostname)) return null;
+
+  // `pathname` always begins with `/` on a hierarchical URL; everything after
+  // that first separator is the DOI name the proxy was asked to resolve.
+  const encodedDoi = url.pathname.slice(1);
+  if (!encodedDoi) return null;
+
+  let doi: string;
+  try {
+    doi = decodeURIComponent(encodedDoi);
+  } catch {
+    return null;
+  }
+
+  return DOI_NAME_PATTERN.test(doi) ? doi : null;
+}
+
+/** Whether a value is a DOI resolver URL naming a specific DOI. */
+export function isDoiResolverUrl(value: string | null | undefined): boolean {
+  return extractDoiFromDoiUrl(value) !== null;
 }
