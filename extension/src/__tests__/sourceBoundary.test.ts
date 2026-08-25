@@ -14,9 +14,12 @@
  * *does not contain*. A behavioural test can only show that the paths it
  * exercised made no request; this shows there is no request to make.
  *
- * Both checks skip comments before matching, so prose that names `fetch` or a
- * URL (and the module comments deliberately do name them, to explain why they
- * are absent) cannot fail the build, and cannot mask a real call either.
+ * Every check skips comments before matching, so prose that names `fetch` or a
+ * URL — and the module comments deliberately do name them, to explain why they
+ * are absent — cannot fail the build. What is skipped *besides* comments differs
+ * by what is being looked for, and getting that wrong is how the previous
+ * remote-reference check came to be ineffective: see `executableText` below and
+ * `support/remoteReferences.ts`.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -25,9 +28,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, it, expect } from "vitest";
 
+import { findRemoteReferences } from "./support/remoteReferences";
+
 const EXTENSION_DIR = fileURLToPath(new URL("../..", import.meta.url));
 
-/** Every committed extension file, excluding this test directory. */
+/** Every committed extension file, excluding this test directory and its support code. */
 function extensionSourceFiles(dir: string = EXTENSION_DIR): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const full = path.join(dir, entry);
@@ -45,6 +50,14 @@ function extensionSourceFiles(dir: string = EXTENSION_DIR): string[] {
  * of, and which the manifest test separately forbids — could not satisfy a
  * check here by hiding in one. The result is not valid syntax and is only ever
  * substring-matched.
+ *
+ * **Never use this on markup.** It is right for the checks below, which look
+ * for *code* — a `fetch(` call, a `chrome.` member, an `innerHTML` assignment —
+ * where a matching string literal would be a false positive. It is wrong for
+ * HTML and CSS, where the interesting value IS a quoted string: an earlier
+ * version of the remote-reference check ran markup through here first and could
+ * therefore never see `src="https://…"`. That check now lives in
+ * `support/remoteReferences.ts`, which removes comments and nothing else.
  */
 function executableText(source: string): string {
   return source
@@ -101,22 +114,32 @@ describe("extension source — no network behaviour", () => {
   });
 
   it("loads no remote script, stylesheet, font or image", () => {
+    // Detection lives in `support/remoteReferences.ts` and has its own suite.
+    // It used to be inline here, running markup through `executableText` first
+    // — which strips quoted string literals, and an HTML attribute value *is* a
+    // quoted string literal, so `src="https://evil.example/x.js"` became
+    // `src=""` and the assertion could never fail. Markup must be inspected
+    // with its attribute values intact; only comments are removed.
+    const inspected: string[] = [];
+
     for (const file of SOURCE_FILES) {
-      const source = readFileSync(file, "utf-8");
-      if (!/\.(html|css)$/.test(file)) continue;
-      // In HTML and CSS a URL is not a string literal, so the raw source is
-      // matched here — comments having already been removed for the HTML.
-      const markup = file.endsWith(".html") ? executableText(source) : source;
+      const kind = file.endsWith(".html") ? "html" : file.endsWith(".css") ? "css" : null;
+      if (!kind) continue;
+
+      inspected.push(file);
+      const findings = findRemoteReferences(readFileSync(file, "utf-8"), kind);
       expect(
-        /(?:src|href)\s*=\s*["']https?:/i.test(markup),
-        `${path.relative(EXTENSION_DIR, file)} references a remote origin`,
-      ).toBe(false);
-      expect(
-        /url\(\s*["']?https?:/i.test(markup),
-        `${path.relative(EXTENSION_DIR, file)} loads a remote asset`,
-      ).toBe(false);
-      expect(/@import/i.test(markup)).toBe(false);
+        findings,
+        `${path.relative(EXTENSION_DIR, file)} references ${findings
+          .map((finding) => `${finding.kind} ${finding.match}`)
+          .join(", ")}`,
+      ).toEqual([]);
     }
+
+    // The loop above skips every non-markup file, so without this the check
+    // would pass by inspecting nothing at all if the popup were ever renamed.
+    expect(inspected.some((file) => file.endsWith(".html"))).toBe(true);
+    expect(inspected.some((file) => file.endsWith(".css"))).toBe(true);
   });
 });
 
