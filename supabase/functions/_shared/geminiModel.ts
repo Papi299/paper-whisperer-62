@@ -14,7 +14,7 @@
 // concrete model label separately (see geminiMonitoring.ts observedModels).
 
 /** The exact model alias analyze-paper has always used. Behavioral fallback. */
-export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
 
 /**
  * Resolve the configured Gemini model from an optional env value, trimming
