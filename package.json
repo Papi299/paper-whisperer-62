@@ -9,6 +9,7 @@
     "build:dev": "vite build --mode development",
     "build:extension": "vite build --config vite.extension.config.ts",
     "build:extension:dev": "vite build --config vite.extension.config.ts --mode development",
+    "package:extension": "node scripts/package-extension.mjs",
     "lint": "eslint .",
     "typecheck:app": "tsc --noEmit -p tsconfig.app.json",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
