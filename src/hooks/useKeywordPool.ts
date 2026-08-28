@@ -20,6 +20,10 @@ export function useKeywordPool(userId: string | undefined) {
   const {
     data: poolKeywords = [],
     isLoading: loading,
+    // Additive: an exhausted query settles with `isLoading` false and `data`
+    // back at the default `[]`, which no consumer can tell from a genuinely
+    // empty pool. See `normalizationPoolsStatus` in `PoolsContext`.
+    isError,
   } = useQuery({
     queryKey: queryKeys.keywordPool.all(userId!),
     queryFn: async () => {
@@ -193,6 +197,7 @@ export function useKeywordPool(userId: string | undefined) {
   return {
     poolKeywords,
     loading,
+    isError,
     addKeyword,
     addMultipleKeywords,
     deleteKeyword,

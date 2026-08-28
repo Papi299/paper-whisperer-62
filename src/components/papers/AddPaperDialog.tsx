@@ -33,6 +33,7 @@ import { parseFile, FileParseResult } from "@/lib/importParsers";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileMultiSelectSheet } from "./MobileMultiSelectSheet";
+import { AssignOnImportSection } from "./AssignOnImportSection";
 import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { PubMedSearchPanel } from "./PubMedSearchPanel";
 import { usePubMedSearch, type PubMedSearchFn } from "@/hooks/usePubMedSearch";
@@ -137,151 +138,6 @@ export type AcceptedFileExtension = (typeof ACCEPTED_FILE_EXTENSIONS)[number];
  * which scales every length inside it by 0.95 — 32 × 0.95 = 30.4.)
  */
 const TAB_TRIGGER_CLASS = "flex items-center gap-1.5 min-h-10 sm:min-h-0";
-
-/** One assignable category (Projects or Tags) in the shared assign-on-import section. */
-interface AssignmentEntity {
-  id: string;
-  name: string;
-  color: string;
-}
-
-/**
- * The Projects / Tags picker in the shared assign-on-import section.
- *
- * One component for both categories and therefore for all three tabs — Import
- * IDs, Import File and Manual render the same section, so there is exactly one
- * selector implementation and no per-tab assignment state.
- *
- * Desktop keeps the compact `w-52` Command popover. Below 768px it becomes a
- * bottom sheet: the assign section sits low in an already-tall dialog, so the
- * anchored panel — then pinned with `avoidCollisions={false}` — opened straight
- * off the bottom of the phone viewport, and its `CommandInput` was autofocused,
- * so tapping "Projects" raised the software keyboard over what little of the
- * list was on screen. Selection semantics are untouched: the same toggle
- * handler and the same shared `selectedProjectIds` / `selectedTagIds` arrays.
- *
- * The popover that a tablet still gets inherited both halves of that problem
- * because a tablet is also a finger: it now declines initial autofocus on a
- * coarse pointer, and the collision pin is gone so a short landscape tablet
- * flips the panel above the trigger instead of off the bottom edge.
- */
-function AssignmentSelector({
-  items,
-  selectedIds,
-  onToggle,
-  icon,
-  triggerLabel,
-  mobileTitle,
-  searchPlaceholder,
-  searchLabel,
-  emptyMessage,
-}: {
-  items: AssignmentEntity[];
-  selectedIds: string[];
-  onToggle: (id: string) => void;
-  icon: React.ReactNode;
-  triggerLabel: string;
-  mobileTitle: string;
-  searchPlaceholder: string;
-  searchLabel: string;
-  emptyMessage: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const isMobile = useIsMobile();
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  // A tablet keeps the anchored popover but is driven by a finger: opening the
-  // selector must not autofocus the CommandInput and raise the keyboard over
-  // the options. Focus goes to the popover panel (Radix gives it
-  // `tabIndex={-1}`), so it is still inside the open surface.
-  const { focusRef: popoverRef, onOpenAutoFocus } =
-    useTouchSafeInitialFocus<HTMLDivElement>();
-
-  const triggerContent = (
-    <>
-      {icon}
-      {triggerLabel}
-      <ChevronsUpDown className="h-3 w-3 opacity-50" />
-    </>
-  );
-
-  if (isMobile) {
-    return (
-      <>
-        <Button
-          ref={triggerRef}
-          variant="outline"
-          size="sm"
-          className="h-8 justify-between gap-1"
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          onClick={() => setOpen(true)}
-        >
-          {triggerContent}
-        </Button>
-        <MobileMultiSelectSheet
-          open={open}
-          onOpenChange={setOpen}
-          title={mobileTitle}
-          triggerRef={triggerRef}
-          options={items.map((item) => ({
-            value: item.id,
-            label: item.name,
-            color: item.color,
-          }))}
-          selectedValues={selectedIds}
-          onToggle={onToggle}
-          searchPlaceholder={searchPlaceholder}
-          searchLabel={searchLabel}
-          emptyMessage={emptyMessage}
-        />
-      </>
-    );
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen} modal={true}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 justify-between gap-1">
-          {triggerContent}
-        </Button>
-      </PopoverTrigger>
-      {/* `avoidCollisions={false}` was dropped on measured evidence, not on
-          principle. The assign section sits low in a tall dialog, so with a
-          realistic 12-project list the pinned panel ran 67px past the bottom
-          edge at 1024×768 — a landscape tablet — leaving its last options
-          unreachable. With collision avoidance on, Radix flips it to
-          `side="top"` there (fully on screen), and 768×1024 and 834×1194 stay
-          byte-identical to the pinned placement, so nothing that already
-          worked moved. */}
-      <PopoverContent
-        ref={popoverRef}
-        onOpenAutoFocus={onOpenAutoFocus}
-        className="w-52 p-0"
-        side="bottom"
-        align="start"
-        sideOffset={4}
-        collisionPadding={8}
-        style={{ pointerEvents: 'auto' }}
-      >
-        <Command filter={(value, search) => value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0}>
-          <CommandInput placeholder={searchPlaceholder} aria-label={searchLabel} />
-          <CommandList>
-            <CommandEmpty>{emptyMessage}</CommandEmpty>
-            <CommandGroup>
-              {items.map((item) => (
-                <CommandItem key={item.id} value={item.name} onSelect={() => onToggle(item.id)}>
-                  <Check className={cn("mr-2 h-4 w-4", selectedIds.includes(item.id) ? "opacity-100" : "opacity-0")} />
-                  <span className="w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: item.color }} />
-                  {item.name}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
 
 export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImport, onFileImport, onPubMedSearch, excludedStudyTypes, projects = [], tags = [] }: AddPaperDialogProps) {
   // The default mode is unchanged by the addition of PubMed Search: a user who
@@ -733,99 +589,25 @@ export function AddPaperDialog({ open, onOpenChange, onSubmitManual, onBulkImpor
   // run while a completed run's summary is shown ("next-import"). The selector
   // implementation is identical in both cases — only the heading and helper copy
   // change — so the Project/Tag controls are never duplicated.
-  const renderAssignSection = (context: "current-import" | "next-import") => {
-    if (projects.length === 0 && tags.length === 0) return null;
-    const isNext = context === "next-import";
-    return (
-    <div className="space-y-3 rounded-md border border-dashed p-3">
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-        {isNext ? "Assignments for next import" : "Assign on Import"}
-      </p>
-      {isNext && (
-        <p className="text-xs text-muted-foreground">
-          These selections apply to the next batch, not the completed import.
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        {projects.length > 0 && (
-          <AssignmentSelector
-            items={projects}
-            selectedIds={selectedProjectIds}
-            onToggle={toggleProject}
-            icon={<FolderOpen className="h-3.5 w-3.5 mr-1" aria-hidden="true" />}
-            triggerLabel={
-              selectedProjectIds.length > 0
-                ? `${selectedProjectIds.length} project${selectedProjectIds.length !== 1 ? "s" : ""}`
-                : "Projects"
-            }
-            mobileTitle="Select projects"
-            searchPlaceholder="Search projects..."
-            searchLabel="Search projects"
-            emptyMessage="No projects found."
-          />
-        )}
-
-        {tags.length > 0 && (
-          <AssignmentSelector
-            items={tags}
-            selectedIds={selectedTagIds}
-            onToggle={toggleTag}
-            icon={<Tags className="h-3.5 w-3.5 mr-1" aria-hidden="true" />}
-            triggerLabel={
-              selectedTagIds.length > 0
-                ? `${selectedTagIds.length} tag${selectedTagIds.length !== 1 ? "s" : ""}`
-                : "Tags"
-            }
-            mobileTitle="Select tags"
-            searchPlaceholder="Search tags..."
-            searchLabel="Search tags"
-            emptyMessage="No tags found."
-          />
-        )}
-      </div>
-
-      {/* Show selected items as badges */}
-      {(selectedProjectIds.length > 0 || selectedTagIds.length > 0) && (
-        <div className="flex flex-wrap gap-1">
-          {selectedProjectIds.map((id) => {
-            const project = projects.find((p) => p.id === id);
-            return project ? (
-              <Badge key={id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: project.color }} />
-                {project.name}
-                <button
-                  type="button"
-                  onClick={() => toggleProject(id)}
-                  aria-label={`Remove project ${project.name}`}
-                  className="hover:bg-muted rounded p-0.5"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </Badge>
-            ) : null;
-          })}
-          {selectedTagIds.map((id) => {
-            const tag = tags.find((t) => t.id === id);
-            return tag ? (
-              <Badge key={id} variant="secondary" className="text-xs flex items-center gap-1 pr-1">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tag.color }} />
-                {tag.name}
-                <button
-                  type="button"
-                  onClick={() => toggleTag(id)}
-                  aria-label={`Remove tag ${tag.name}`}
-                  className="hover:bg-muted rounded p-0.5"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </Badge>
-            ) : null;
-          })}
-        </div>
-      )}
-    </div>
-    );
-  };
+  /**
+   * The shared assign-on-import section, rendered identically by all four tabs.
+   *
+   * The section itself now lives in `AssignOnImportSection.tsx` so the
+   * `/extension-import` handoff page renders the same selector — same desktop
+   * popover, same mobile sheet, same touch-safe focus, same selection
+   * semantics. This wrapper only supplies the dialog's own state.
+   */
+  const renderAssignSection = (context: "current-import" | "next-import") => (
+    <AssignOnImportSection
+      projects={projects}
+      tags={tags}
+      selectedProjectIds={selectedProjectIds}
+      selectedTagIds={selectedTagIds}
+      onToggleProject={toggleProject}
+      onToggleTag={toggleTag}
+      context={context}
+    />
+  );
 
   return (
     <Dialog open={open} onOpenChange={isAnyRunning ? undefined : resetAndClose}>

@@ -82,6 +82,15 @@ const DEFAULT_SPECS = [
   // is made, and no AI quota is spent.
   "e2e/ai-organization-suggestions.spec.ts",
   "e2e/auth.spec.ts",
+  // CHROME-EXTENSION-IMPORT-001C1 handoff-route coverage. Mutating, but only
+  // within fixtures it owns: three synthetic papers (nine-digit PMIDs and a
+  // reserved 10.5555 DOI, so none can collide with the seed), two disposable
+  // Projects and one disposable Tag, all removed again — papers first, so the
+  // junction rows cascade away before the taxonomy deletes. Order-independent:
+  // the sweep tolerates finding nothing and runs before creating anything.
+  // The `fetch-paper-metadata` request is fulfilled by Playwright, so no Edge
+  // Function is served and no PubMed/Crossref egress occurs.
+  "e2e/extension-import.spec.ts",
   // Reads the product name on the unauthenticated Auth card, the authenticated
   // sidebar, and the document title; mutates nothing.
   "e2e/branding.spec.ts",

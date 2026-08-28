@@ -18,6 +18,10 @@ export function useSynonymPool(userId: string | undefined) {
   const {
     data: synonymGroups = [],
     isLoading: loading,
+    // Additive: an exhausted query settles with `isLoading` false and `data`
+    // back at the default `[]`, which no consumer can tell from a genuinely
+    // empty pool. See `normalizationPoolsStatus` in `PoolsContext`.
+    isError,
   } = useQuery({
     queryKey: queryKeys.synonymPool.all(userId!),
     queryFn: async () => {
@@ -171,6 +175,7 @@ export function useSynonymPool(userId: string | undefined) {
   return {
     synonymGroups,
     loading,
+    isError,
     addSynonymGroup,
     updateSynonymGroup,
     deleteSynonymGroup,

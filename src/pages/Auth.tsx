@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { BookOpen, Loader2 } from "lucide-react";
 import { z } from "zod";
+import { DEFAULT_POST_AUTH_PATH, parseSafeReturnTo } from "@/lib/safeReturnTo";
 
 const authSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -22,20 +23,42 @@ const Auth = () => {
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
   const [forgotMode, setForgotMode] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
+
+  /**
+   * Where a successful sign-in goes.
+   *
+   * `returnTo` is attacker-reachable — anyone can send `/auth?returnTo=…` — so
+   * it is validated against a narrow allowlist and the destination is REBUILT
+   * from the validated parts rather than echoed back. An absent or rejected
+   * value falls through to the pre-existing `/` behaviour, so ordinary sign-in
+   * is unchanged. See `src/lib/safeReturnTo.ts`.
+   */
+  const postAuthPath = useMemo(
+    () =>
+      parseSafeReturnTo(new URLSearchParams(location.search).get("returnTo")) ??
+      DEFAULT_POST_AUTH_PATH,
+    [location.search],
+  );
+
+  // Held in a ref so the redirect effect does not re-subscribe to auth state
+  // when the query string is re-parsed; the value it needs is always current.
+  const postAuthPathRef = useRef(postAuthPath);
+  postAuthPathRef.current = postAuthPath;
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (session) {
-          navigate("/", { replace: true });
+          navigate(postAuthPathRef.current, { replace: true });
         }
       }
     );
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        navigate("/", { replace: true });
+        navigate(postAuthPathRef.current, { replace: true });
       }
     });
 
@@ -84,6 +107,12 @@ const Auth = () => {
     if (!validateForm()) return;
 
     setLoading(true);
+    // Sign-up confirmation deliberately still returns to `/`. Carrying the
+    // handoff through an emailed confirmation link would mean adding the
+    // parameterised URL to the Supabase Auth redirect allow-list, which is a
+    // dashboard configuration change outside this phase. A new user therefore
+    // lands on their library and can import from there; an existing user — the
+    // case the handoff is actually for — signs in and returns to the intent.
     const redirectUrl = `${window.location.origin}/`;
 
     const { error } = await supabase.auth.signUp({

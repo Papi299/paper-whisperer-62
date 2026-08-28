@@ -145,7 +145,26 @@ To check it by hand, open a tab and click the PaperLume toolbar action:
 | any ordinary publisher article page | No paper identified — and **not** a guess from the page title |
 | `chrome://extensions` | Nothing to check here |
 
-**What it does today.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. That is all. It makes no network request, holds no PaperLume or Supabase session, reads no page content, and cannot import anything — importing runs through the web application's existing importer, and connecting the two is a later phase. The only permission it requests is `activeTab`.
+**What it does today.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. That is all. It makes no network request, holds no PaperLume or Supabase session, reads no page content, and cannot import anything. The only permission it requests is `activeTab`.
+
+**It is not yet connected to PaperLume.** The web application now has the route that will receive a handoff (below), but the extension does not open it — wiring the two together is a later phase.
+
+## Extension import handoff
+
+`/extension-import` is the authenticated PaperLume route that accepts one already-detected identifier:
+
+```
+/extension-import?kind=pmid&value=12345678
+/extension-import?kind=doi&value=10.1056%2FNEJMoa2107934
+```
+
+It carries an identifier and nothing else — no token, no session material, no user id, no Project or Tag id, no paper metadata. The value is untrusted regardless of who sent it: a PMID must already be in normalized form and a DOI must round-trip through the application's canonical DOI handling, so anything else renders as an unrecognised link. There is no title fallback.
+
+Opening the route imports nothing. It shows the identifier, lets you pick from your existing Projects and Tags, and runs the same importer the Add Papers dialog uses only after you choose **Import to PaperLume** — so a link, a bookmark or a refresh can never write to your library. A paper you already have is reported as already in your library, and any Project or Tag you had selected is explicitly *not* applied to it.
+
+If your projects, tags or keyword settings cannot be loaded, the route says so and offers a retry instead of importing: saving a paper without those settings would file it incorrectly, so importing is unavailable until they load.
+
+Signing in first preserves the intent: `/auth?returnTo=…` accepts only this one route with a valid identifier, and rebuilds the destination from the validated parts rather than redirecting to the supplied text.
 
 ## Supabase Edge Functions
 

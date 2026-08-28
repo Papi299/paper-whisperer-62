@@ -150,7 +150,11 @@ export function usePapers(
   });
 
   // ── Projects (single query, not per-page) ──
-  const { data: projectsData, isLoading: projectsLoading } = useQuery({
+  // `isError` is surfaced alongside `isLoading` for the same reason the pools
+  // surface theirs: `data` falls back to `[]`, so a failed read is otherwise
+  // indistinguishable from a user who owns no projects. A surface that offers
+  // taxonomy as import context has to be able to tell those apart.
+  const { data: projectsData, isLoading: projectsLoading, isError: projectsError } = useQuery({
     queryKey: queryKeys.projects.all(userId!),
     queryFn: timedQueryFn("projects", async () => {
       const { data, error } = await supabase
@@ -166,7 +170,7 @@ export function usePapers(
   });
 
   // ── Tags (single query, not per-page) ──
-  const { data: tagsData, isLoading: tagsLoading } = useQuery({
+  const { data: tagsData, isLoading: tagsLoading, isError: tagsError } = useQuery({
     queryKey: queryKeys.tags.all(userId!),
     queryFn: timedQueryFn("tags", async () => {
       const { data, error } = await supabase
@@ -385,6 +389,8 @@ export function usePapers(
     loading,
     tagsLoading,
     projectsLoading,
+    tagsError,
+    projectsError,
     allKeywords: allKeywords ?? [],
     allStudyTypes: allStudyTypes ?? [],
     totalCount: totalCount ?? papers.length,
