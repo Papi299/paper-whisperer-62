@@ -18,6 +18,20 @@ import {
 } from "@/hooks/useExclusionPools";
 
 export interface PoolsContextValue {
+  /**
+   * Whether the three pools that feed `NormalizationConfig` are still loading.
+   *
+   * Exposed because "empty" and "not loaded yet" are indistinguishable in the
+   * pool arrays, and the difference is load-bearing: an import that runs against
+   * a not-yet-loaded config silently stores an unnormalized row rather than
+   * failing. A surface that imports must wait for this to be `false`; the
+   * Dashboard, whose import is behind several deliberate clicks, never had to.
+   *
+   * Only the keyword, study-type and synonym pools count. The exclusion pools
+   * are display filters and contribute nothing to normalization.
+   */
+  normalizationPoolsLoading: boolean;
+
   // Keyword Pool
   poolKeywords: PoolKeyword[];
   addKeyword: (keyword: string) => Promise<boolean>;
@@ -84,6 +98,11 @@ export function PoolsProvider({ userId, children }: PoolsProviderProps) {
   const exclusionPools = useExclusionPools(userId);
 
   const value: PoolsContextValue = {
+    // `isLoading` is false for a disabled query, so a signed-out tree reports
+    // "not loading" rather than hanging — the pools genuinely are not coming.
+    normalizationPoolsLoading:
+      keywordPool.loading || studyTypePool.loading || synonymPool.loading,
+
     // Keyword Pool
     poolKeywords: keywordPool.poolKeywords,
     addKeyword: keywordPool.addKeyword,

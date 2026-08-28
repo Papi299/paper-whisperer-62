@@ -36,7 +36,6 @@ import { DeduplicationDialog } from "@/components/papers/DeduplicationDialog";
 import { Button } from "@/components/ui/button";
 import { PaperWithTags, PaperAttachment, Project, Tag } from "@/types/database";
 import { Plus, Loader2, Layers } from "lucide-react";
-import { NormalizationConfig } from "@/lib/normalizePaperData";
 import { usePaperAnalysisActions } from "@/hooks/usePaperAnalysisActions";
 import { useAiQuota } from "@/hooks/useAiQuota";
 import { AnalyticsPanel } from "@/components/papers/AnalyticsPanel";
@@ -45,6 +44,7 @@ import { MobileDashboardControls } from "@/components/papers/MobileDashboardCont
 import { MobileAnalyticsSheet } from "@/components/papers/MobileAnalyticsSheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
+import { useNormalizationConfig } from "@/hooks/useNormalizationConfig";
 
 /**
  * Outer Dashboard shell: handles auth redirect and provides PoolsProvider.
@@ -99,7 +99,6 @@ function DashboardContent() {
   const {
     poolKeywords,
     findMatchingKeywords,
-    synonymGroups,
     normalizeKeyword,
     synonymLookup,
     poolStudyTypes,
@@ -112,20 +111,11 @@ function DashboardContent() {
     getExcludedStudyTypeSet,
   } = usePools();
 
-  // Build normalization config from pool data
-  const normalizationConfig = useMemo<NormalizationConfig>(() => ({
-    synonymLookup: synonymLookup || {},
-    poolStudyTypes: poolStudyTypes.map(st => ({
-      study_type: st.study_type,
-      specificity_weight: st.specificity_weight,
-      hierarchy_rank: st.hierarchy_rank,
-    })),
-    poolKeywords: poolKeywords.map(pk => pk.keyword),
-    synonymGroups: synonymGroups.map(sg => ({
-      canonical_term: sg.canonical_term,
-      synonyms: sg.synonyms,
-    })),
-  }), [synonymLookup, poolStudyTypes, poolKeywords, synonymGroups]);
+  // Build normalization config from pool data. Shared with the
+  // `/extension-import` handoff page, which imports through the same canonical
+  // importer and must therefore hand it the identical configuration — see
+  // `useNormalizationConfig`.
+  const normalizationConfig = useNormalizationConfig();
 
   // ── Step 1: Filter state (no papers dependency) ──
   const {
