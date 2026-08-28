@@ -170,6 +170,10 @@ describe("package contract — manifest", () => {
     ["1.", "trailing dot"],
     [".1", "leading dot"],
     ["1..2", "empty component"],
+    // Rejected twice over — the pattern refuses the padded `00`, and the
+    // all-zero rule refuses the value — so it is a control for neither rule
+    // and belongs in this general block rather than under either heading.
+    ["0.00", "padded and all zero"],
   ])("rejects invalid Chrome version syntax %j (%s)", (version) => {
     expectViolation(buildPackage({ manifest: { version } }), "not valid Chrome manifest version syntax");
   });
@@ -194,7 +198,7 @@ describe("package contract — manifest", () => {
   // Each of these is structurally well-formed and in range, so only the
   // explicit all-zero check rejects them. Removing that check makes this block
   // fail and nothing else.
-  it.each(["0", "0.0", "0.0.0", "0.0.0.0", "0.00"])(
+  it.each(["0", "0.0", "0.0.0", "0.0.0.0"])(
     "rejects %j — a version may not be all zero",
     (version) => {
       expectViolation(buildPackage({ manifest: { version } }), "not valid Chrome manifest version syntax");
