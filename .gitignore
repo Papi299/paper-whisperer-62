@@ -18,6 +18,9 @@ dist
 dist-ssr
 *.local
 
+# Chrome extension build output (`npm run build:extension`)
+dist-extension
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -2,9 +2,11 @@ name: Validate
 
 # Deterministic required validation baseline for `main`.
 # Runs the repository's real lint, TypeScript, unit/integration test and
-# production-build gates. No secrets, no deployment, no Supabase access, no
-# Playwright — the build uses inert public placeholders for the two required
-# VITE_ variables so it never touches a real project.
+# production-build gates for both build targets in this repository — the web
+# application and the Chrome extension. No secrets, no deployment, no Supabase
+# access, no Playwright — the web build uses inert public placeholders for the
+# two required VITE_ variables so it never touches a real project, and the
+# extension build reads no configuration at all.
 
 on:
   pull_request:
@@ -70,3 +72,12 @@ jobs:
 
       - name: Production build
         run: npm run build
+
+      - name: Chrome extension production build
+        # The extension is built by the same required check as the web app, so it
+        # can never become a second application that CI does not execute. It is a
+        # separate Vite config with its own output directory (`dist-extension/`),
+        # so the Vercel artefact produced by the step above is untouched. No
+        # secret and no environment variable is involved: the extension reads no
+        # configuration and contacts nothing.
+        run: npm run build:extension
