@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Page, type Route } from "@playwright/test";
 import { getPaperCount, waitForDashboard, createProject, createTag, deleteProject, deleteTag } from "./helpers";
 
 /**
@@ -20,10 +20,16 @@ import { getPaperCount, waitForDashboard, createProject, createTag, deleteProjec
  *   • the import intent survives a real sign-in, and the `returnTo` that carries
  *     it cannot become an open redirect;
  *   • a confirmed import goes through the canonical importer and its Project and
- *     Tag selection really lands on the new row;
+ *     Tag selection really lands on the new row — both asserted independently
+ *     against persisted state;
  *   • a duplicate is reported as such and the selection is really NOT applied to
  *     the paper already in the library — asserted against the row, not the copy;
- *   • two rapid clicks cannot start two imports.
+ *   • two rapid clicks cannot start two imports;
+ *   • an assignment RPC that fails after a successful insert never produces copy
+ *     claiming the assignment succeeded (CORRECTION-01, finding 1);
+ *   • a normalization-pool read that fails blocks the import entirely rather
+ *     than importing against the empty array it left behind, and a pool that is
+ *     genuinely empty still imports (CORRECTION-01, finding 2).
  *
  * Every paper and junction row this spec creates is removed again, and the
  * sweeps tolerate finding nothing so they double as pre-flight cleanup after an
@@ -63,8 +69,20 @@ const DOI = "10.5555/c1-e2e-extension-import-delta";
 const DOI_TITLE = "C1-E2E-Extension-Import-Delta";
 const RETRY_PMID = "900000102";
 const RETRY_TITLE = "C1-E2E-Extension-Import-Echo";
+const ASSIGN_FAIL_PMID = "900000103";
+const ASSIGN_FAIL_TITLE = "C1-E2E-Extension-Import-Foxtrot";
+const CONTEXT_FAIL_PMID = "900000104";
+const CONTEXT_FAIL_TITLE = "C1-E2E-Extension-Import-Golf";
 
-const FIXTURE_TITLES = [PMID_TITLE, DOI_TITLE, RETRY_TITLE];
+const FIXTURE_TITLES = [
+  PMID_TITLE,
+  DOI_TITLE,
+  RETRY_TITLE,
+  ASSIGN_FAIL_TITLE,
+  // Never imported by a passing run — swept anyway so that a regression which
+  // DOES import it is cleaned up rather than leaked into a later spec.
+  CONTEXT_FAIL_TITLE,
+];
 
 /** Disposable taxonomy. The seed ships none, and the assign section needs some. */
 const PROJECT_NAME = "C1-E2E-Ext-Project";
@@ -121,6 +139,40 @@ const METADATA_BY_IDENTIFIER: Record<string, Record<string, unknown>> = {
     substances: [],
     study_type: null,
     pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${RETRY_PMID}/`,
+    journal_url: null,
+    source: "pubmed",
+  },
+  [ASSIGN_FAIL_PMID]: {
+    identifier: ASSIGN_FAIL_PMID,
+    title: ASSIGN_FAIL_TITLE,
+    authors: ["Foxtrot, F"],
+    year: 2024,
+    journal: "Journal of Deterministic E2E Handoff",
+    pmid: ASSIGN_FAIL_PMID,
+    doi: null,
+    abstract: null,
+    keywords: [],
+    mesh_terms: [],
+    substances: [],
+    study_type: null,
+    pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${ASSIGN_FAIL_PMID}/`,
+    journal_url: null,
+    source: "pubmed",
+  },
+  [CONTEXT_FAIL_PMID]: {
+    identifier: CONTEXT_FAIL_PMID,
+    title: CONTEXT_FAIL_TITLE,
+    authors: ["Golf, G"],
+    year: 2025,
+    journal: "Journal of Deterministic E2E Handoff",
+    pmid: CONTEXT_FAIL_PMID,
+    doi: null,
+    abstract: null,
+    keywords: [],
+    mesh_terms: [],
+    substances: [],
+    study_type: null,
+    pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${CONTEXT_FAIL_PMID}/`,
     journal_url: null,
     source: "pubmed",
   },
@@ -209,6 +261,119 @@ async function installMetadataStandIn(page: Page): Promise<MetadataStandIn> {
   };
 }
 
+/**
+ * Fail one PostgREST RPC and count the attempts.
+ *
+ * The injection point is the HTTP boundary, so everything else in the run stays
+ * real: the real importer still fetches metadata, still calls
+ * `safe_bulk_insert_papers`, and still inserts the row. Only the one assignment
+ * RPC named here answers 500, which is exactly the partial success the canonical
+ * importer is designed to tolerate — the paper is inserted and stays in
+ * `addedIds` while its taxonomy never lands.
+ */
+async function failRpc(page: Page, rpcName: string): Promise<{ attempts: number }> {
+  const state = { attempts: 0 };
+  const suffix = `/rpc/${rpcName}`;
+
+  await page.route(
+    (url) => url.pathname.endsWith(suffix),
+    async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: STAND_IN_CORS_HEADERS, body: "" });
+        return;
+      }
+      state.attempts++;
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        headers: STAND_IN_CORS_HEADERS,
+        body: JSON.stringify({
+          code: "XX000",
+          message: `Deterministic C1 failure of ${rpcName}`,
+          details: null,
+          hint: null,
+        }),
+      });
+    },
+  );
+
+  return state;
+}
+
+/** The PostgREST tables that back the three normalization pools. */
+const NORMALIZATION_POOL_TABLES = ["keyword_pool", "study_type_pool", "synonym_pool"];
+
+/**
+ * Answer one normalization-pool table with `mode`, and count the reads.
+ *
+ * Two modes, because the correction has two halves to prove and they differ
+ * only in the status code:
+ *
+ *   "fail"  → 500. React Query exhausts its retries and settles with
+ *             `isLoading` false and `data` back at its default `[]` — the exact
+ *             state that used to read as a loaded, merely empty, pool.
+ *   "empty" → 200 `[]`. A successful read of a pool the user genuinely left
+ *             empty, which must remain importable.
+ *
+ * Returns a handle whose `mode` is mutable, so one test can prove the failure
+ * blocks the import and then prove the explicit retry recovers.
+ */
+async function interceptPoolTable(
+  page: Page,
+  table: string,
+): Promise<{
+  setMode: (mode: "fail" | "empty") => void;
+  reads: number;
+  dispose: () => Promise<void>;
+}> {
+  const state = { reads: 0, mode: "fail" as "fail" | "empty" };
+  const pathname = `/rest/v1/${table}`;
+
+  // Held as named references so the interception can be lifted again: Playwright
+  // matches `unroute` by identity, and a freshly written arrow would remove
+  // nothing while appearing to succeed.
+  const matcher = (url: URL) => url.pathname === pathname;
+  const handler = async (route: Route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: STAND_IN_CORS_HEADERS, body: "" });
+      return;
+    }
+    state.reads++;
+    if (state.mode === "empty") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: STAND_IN_CORS_HEADERS,
+        body: "[]",
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      headers: STAND_IN_CORS_HEADERS,
+      body: JSON.stringify({
+        code: "XX000",
+        message: `Deterministic C1 failure reading ${table}`,
+        details: null,
+        hint: null,
+      }),
+    });
+  };
+
+  await page.route(matcher, handler);
+
+  return {
+    setMode: (mode) => {
+      state.mode = mode;
+    },
+    get reads() {
+      return state.reads;
+    },
+    dispose: () => page.unroute(matcher, handler),
+  };
+}
+
 /** Build the handoff path exactly as the future extension will. */
 function handoffPath(kind: "pmid" | "doi", value: string): string {
   return `/extension-import?${new URLSearchParams({ kind, value }).toString()}`;
@@ -218,6 +383,8 @@ function handoffPath(kind: "pmid" | "doi", value: string): string {
 const identifierValue = (page: Page) => page.getByTestId("handoff-identifier");
 const importButton = (page: Page) => page.getByTestId("handoff-import");
 const retryButton = (page: Page) => page.getByTestId("handoff-retry");
+const contextError = (page: Page) => page.getByTestId("handoff-context-error");
+const contextRetryButton = (page: Page) => page.getByTestId("handoff-context-retry");
 
 /** Open the handoff route and wait for the confirm control to become usable. */
 async function openReadyHandoff(page: Page, kind: "pmid" | "doi", value: string) {
@@ -437,7 +604,12 @@ test.describe("Extension import handoff", () => {
     await importButton(page).click();
 
     await expect(page.getByText("Added to your library")).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText(/Assigned to 1 project and 1 tag/i)).toBeVisible();
+
+    // The page states the insertion, which the progress snapshot proves, and
+    // never that the assignment succeeded, which it cannot know — Phase 5 runs
+    // after that snapshot and is allowed to fail without disowning the paper.
+    await expect(page.getByText(/selection was sent with the import/i)).toBeVisible();
+    await expect(page.getByText(/Assigned to/i)).toHaveCount(0);
 
     // ── The canonical importer really ran, once, authenticated ─────────────
     expect(standIn.invocations).toHaveLength(1);
@@ -445,12 +617,136 @@ test.describe("Extension import handoff", () => {
     expect(standIn.invocations[0].authorizationIsBearer).toBe(true);
     expect(standIn.providerRequests).toEqual([]);
 
-    // ── The assignment really landed, asserted against the row ─────────────
+    // ── Both assignments really landed, each asserted independently ────────
+    // Proving only the Project would leave a broken Tag path green, and the two
+    // are separate RPCs that fail separately.
     await page.goto("/", { waitUntil: "networkidle" });
     await waitForDashboard(page);
     const row = paperRow(page, PMID_TITLE);
     await expect(row).toHaveCount(1, { timeout: 30_000 });
     await expect(row.getByText(PROJECT_NAME)).toBeVisible();
+    await expect(row.getByText(TAG_NAME)).toBeVisible();
+  });
+
+  test("never claims an assignment succeeded when its RPC failed", async ({ page }) => {
+    // CORRECTION-01, finding 1. `addedIds` proves the paper was inserted in
+    // Phase 4; it proves nothing about the Phase 5 assignment that runs after
+    // the progress snapshot and is permitted to fail non-fatally. Before the
+    // correction this exact run rendered "Assigned to 1 project and 1 tag"
+    // while the project assignment had failed outright.
+    const standIn = await installMetadataStandIn(page);
+    const projectRpc = await failRpc(page, "bulk_set_paper_projects");
+
+    await openReadyHandoff(page, "pmid", ASSIGN_FAIL_PMID);
+
+    await page.getByRole("button", { name: /^Projects/ }).click();
+    await page.getByRole("option", { name: PROJECT_NAME }).click();
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: /^Tags/ }).click();
+    await page.getByRole("option", { name: TAG_NAME }).click();
+    await page.keyboard.press("Escape");
+
+    await importButton(page).click();
+
+    // 1. The paper is still recognised as successfully added — a failed
+    //    assignment must not be reported as a failed import.
+    await expect(page.getByText("Added to your library")).toBeVisible({ timeout: 60_000 });
+
+    // 2. And the page does NOT say the assignment succeeded.
+    await expect(page.getByText(/Assigned to/i)).toHaveCount(0);
+
+    // 3. The importer's own warning is still surfaced, not suppressed.
+    await expect(page.getByText(/project assignment failed/i)).toBeVisible({ timeout: 30_000 });
+
+    // 4. One import attempt. 5. One assignment attempt — the page invents no
+    //    second call of its own to "fix" or verify the failure.
+    expect(standIn.invocations).toHaveLength(1);
+    expect(standIn.invocations[0].identifiers).toEqual([ASSIGN_FAIL_PMID]);
+    expect(projectRpc.attempts).toBe(1);
+
+    // The reality the old copy misdescribed, asserted against the row: the
+    // paper is there, the tag landed, the project did not.
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const row = paperRow(page, ASSIGN_FAIL_TITLE);
+    await expect(row).toHaveCount(1, { timeout: 30_000 });
+    await expect(row.getByText(TAG_NAME)).toBeVisible();
+    await expect(row.getByText(PROJECT_NAME)).toHaveCount(0);
+  });
+
+  test("blocks the import when a normalization pool read fails, and recovers on retry", async ({
+    page,
+  }) => {
+    // CORRECTION-01, finding 2. A pool query that has exhausted its retries
+    // settles at `isLoading === false` with `data` back at its default `[]` —
+    // indistinguishable from a pool the user genuinely left empty. Readiness
+    // used to be `!loading`, so this state enabled the confirm button and let
+    // the canonical importer run with an incomplete configuration, which it
+    // treats as "skip normalization" rather than as an error.
+    const standIn = await installMetadataStandIn(page);
+    const keywordPool = await interceptPoolTable(page, "keyword_pool");
+    keywordPool.setMode("fail");
+
+    await page.goto(handoffPath("pmid", CONTEXT_FAIL_PMID), { waitUntil: "networkidle" });
+    await expect(page.getByText("Paper detected")).toBeVisible({ timeout: 20_000 });
+
+    // 1. The route reaches an explicit error state rather than a ready one.
+    await expect(contextError(page)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/couldn.t load your import settings/i)).toBeVisible();
+
+    // 2. The Import control is not usable — it does not exist at all, so there
+    //    is nothing to press rather than something pressed that does nothing.
+    await expect(importButton(page)).toHaveCount(0);
+    await expect(retryButton(page)).toHaveCount(0);
+
+    // 3. No metadata call, and 4. therefore nothing inserted. The read really
+    //    was attempted — this is a failure, not a query that never ran.
+    expect(keywordPool.reads).toBeGreaterThan(0);
+    expect(standIn.invocations).toHaveLength(0);
+    expect(standIn.providerRequests).toEqual([]);
+
+    // 5. The empty array the failed query left behind was never treated as a
+    //    successfully loaded empty pool: flipping the SAME endpoint to a 200
+    //    with the SAME empty body — the only difference being that it
+    //    succeeded — makes the route importable again.
+    keywordPool.setMode("empty");
+    await contextRetryButton(page).click();
+
+    await expect(importButton(page)).toBeEnabled({ timeout: 30_000 });
+    await expect(contextError(page)).toHaveCount(0);
+
+    // Recovery is a re-read, not an import: still nothing fetched or written.
+    expect(standIn.invocations).toHaveLength(0);
+
+    // And the fixture never entered the library.
+    await keywordPool.dispose();
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    await expect(paperRow(page, CONTEXT_FAIL_TITLE)).toHaveCount(0);
+  });
+
+  test("still imports when every normalization pool loads and is genuinely empty", async ({
+    page,
+  }) => {
+    // The guardrail against over-correcting finding 2. A user who has added no
+    // keywords, study types or synonyms has a valid — if minimal —
+    // configuration, and must keep being able to import. All three pools answer
+    // 200 with an empty body, so the arrays are identical to the failure case
+    // above and only the outcome of the read differs.
+    const standIn = await installMetadataStandIn(page);
+    for (const table of NORMALIZATION_POOL_TABLES) {
+      const pool = await interceptPoolTable(page, table);
+      pool.setMode("empty");
+    }
+
+    await openReadyHandoff(page, "pmid", CONTEXT_FAIL_PMID);
+
+    await expect(contextError(page)).toHaveCount(0);
+    await expect(importButton(page)).toBeEnabled();
+
+    // Ready, and still inert until asked.
+    expect(standIn.invocations).toHaveLength(0);
   });
 
   test("reports a duplicate and does not assign the selection to the existing paper", async ({ page }) => {

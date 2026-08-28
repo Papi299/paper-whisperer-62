@@ -162,6 +162,8 @@ It carries an identifier and nothing else — no token, no session material, no 
 
 Opening the route imports nothing. It shows the identifier, lets you pick from your existing Projects and Tags, and runs the same importer the Add Papers dialog uses only after you choose **Import to PaperLume** — so a link, a bookmark or a refresh can never write to your library. A paper you already have is reported as already in your library, and any Project or Tag you had selected is explicitly *not* applied to it.
 
+If your projects, tags or keyword settings cannot be loaded, the route says so and offers a retry instead of importing: saving a paper without those settings would file it incorrectly, so importing is unavailable until they load.
+
 Signing in first preserves the intent: `/auth?returnTo=…` accepts only this one route with a valid identifier, and rebuilds the destination from the validated parts rather than redirecting to the supplied text.
 
 ## Supabase Edge Functions

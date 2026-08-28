@@ -26,11 +26,30 @@
  *
  * The importer must therefore receive this user's real `NormalizationConfig`.
  * It treats a missing one as "skip normalization" rather than as an error, so an
- * import that ran before the pools loaded would quietly store an unnormalized
- * row: entities undecoded, keywords un-enriched, no Winner-Takes-All study type.
- * The confirm button stays disabled until the pools and taxonomy have loaded —
- * `normalizationPoolsLoading` exists so this page can tell "empty" from "not
- * loaded yet", which the arrays themselves cannot express.
+ * import that ran without the pools would quietly store an unnormalized row:
+ * entities undecoded, keywords un-enriched, no Winner-Takes-All study type.
+ *
+ * ## Import context fails closed, and `!loading` is not readiness
+ *
+ * Every pool and taxonomy query defaults its data to `[]`, so a read that has
+ * exhausted React Query's retries settles at exactly the shape of a successful
+ * read of an empty pool. Treating "not loading" as "ready" therefore turns a
+ * failed read into an apparently valid configuration and lets the import run
+ * against it. `PoolsContext` reports `normalizationPoolsStatus` — `loading`,
+ * `ready` or `error` — and only `ready` permits an import here; `error` renders
+ * a recoverable failure with no usable confirm control at all. The same applies
+ * to Projects and Tags, which this route offers as import context.
+ *
+ * ## What this page can and cannot claim about assignment
+ *
+ * The importer assigns Projects and Tags in its Phase 5, *after* the Phase 4
+ * progress callback this page reads, and a Phase 5 RPC failure is deliberately
+ * non-fatal: it becomes a warning toast and leaves the identifier in `addedIds`.
+ * So `addedIds` proves the paper was inserted and proves nothing whatsoever
+ * about assignment. The success copy states only the insertion, which is
+ * authoritative, and points at the library for the rest. Claiming assignment
+ * would need post-Phase-5 evidence this page does not have and must not invent
+ * by re-running a lookup the importer already owns.
  *
  * ## Duplicates are reported, not resolved
  *
@@ -44,6 +63,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   CheckCircle2,
@@ -72,6 +92,7 @@ import {
   parseExtensionImportIntent,
   type ExtensionImportIntent,
 } from "@/lib/extensionImportHandoff";
+import { queryKeys } from "@/lib/queryKeys";
 import { buildAuthPathWithReturnTo } from "@/lib/safeReturnTo";
 
 /**
@@ -221,16 +242,24 @@ function ExtensionImportContent({
   intent: ExtensionImportIntent;
   userId: string;
 }) {
-  const { normalizationPoolsLoading } = usePools();
+  const queryClient = useQueryClient();
+  const { normalizationPoolsStatus, retryNormalizationPools } = usePools();
   const normalizationConfig = useNormalizationConfig();
 
-  const { projects, tags, projectsLoading, tagsLoading, bulkImportPapers } =
-    usePapers(
-      userId,
-      NEUTRAL_FILTER_PARAMS,
-      NEUTRAL_SORT_PARAMS,
-      normalizationConfig,
-    );
+  const {
+    projects,
+    tags,
+    projectsLoading,
+    tagsLoading,
+    projectsError,
+    tagsError,
+    bulkImportPapers,
+  } = usePapers(
+    userId,
+    NEUTRAL_FILTER_PARAMS,
+    NEUTRAL_SORT_PARAMS,
+    normalizationConfig,
+  );
 
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
@@ -255,8 +284,34 @@ function ExtensionImportContent({
     tags: 0,
   });
 
+  /**
+   * The import context: this user's normalization pools and their taxonomy.
+   *
+   * Three states, not two. `contextReady` is a positive fact about every one of
+   * those reads, never `!contextLoading` — each query defaults to `[]`, so a
+   * failed read is byte-identical to a successful read of nothing, and only
+   * `contextFailed` separates them. An import is permitted on `contextReady`
+   * alone.
+   */
   const contextLoading =
-    normalizationPoolsLoading || projectsLoading || tagsLoading;
+    normalizationPoolsStatus === "loading" || projectsLoading || tagsLoading;
+  const contextFailed =
+    !contextLoading &&
+    (normalizationPoolsStatus === "error" || projectsError || tagsError);
+  const contextReady = !contextLoading && !contextFailed;
+
+  /**
+   * Retry the context reads that failed.
+   *
+   * Bounded to exactly the queries this page depends on, and it mutates
+   * nothing — a failed read is recovered by reading again, not by importing
+   * anyway.
+   */
+  const retryContext = useCallback(() => {
+    retryNormalizationPools();
+    void queryClient.refetchQueries({ queryKey: queryKeys.projects.all(userId) });
+    void queryClient.refetchQueries({ queryKey: queryKeys.tags.all(userId) });
+  }, [queryClient, retryNormalizationPools, userId]);
 
   const toggleProject = useCallback((id: string) => {
     setSelectedProjectIds((prev) =>
@@ -271,9 +326,10 @@ function ExtensionImportContent({
   }, []);
 
   const runImport = useCallback(async () => {
-    // Never import against a configuration that has not arrived: the importer
-    // would silently skip normalization rather than refuse.
-    if (importInFlight.current || contextLoading) return;
+    // Never import against a configuration that has not arrived — or that
+    // failed to arrive and left an empty array behind: the importer would
+    // silently skip normalization rather than refuse.
+    if (importInFlight.current || !contextReady) return;
 
     importInFlight.current = true;
     setPhase("importing");
@@ -330,7 +386,7 @@ function ExtensionImportContent({
     importInFlight.current = false;
   }, [
     bulkImportPapers,
-    contextLoading,
+    contextReady,
     intent.identifier,
     selectedProjectIds,
     selectedTagIds,
@@ -357,7 +413,7 @@ function ExtensionImportContent({
         {/* ── Pre-import: taxonomy selection ─────────────────────────────── */}
         {phase !== "imported" && phase !== "duplicate" && (
           <>
-            {contextLoading ? (
+            {contextLoading && (
               <p
                 className="flex items-center gap-2 text-sm text-muted-foreground"
                 role="status"
@@ -366,7 +422,27 @@ function ExtensionImportContent({
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 Loading your projects, tags and keyword settings…
               </p>
-            ) : (
+            )}
+
+            {contextFailed && (
+              <div
+                role="alert"
+                className="space-y-1 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"
+                data-testid="handoff-context-error"
+              >
+                <p className="flex items-center gap-2 font-medium text-destructive">
+                  <XCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  We couldn&apos;t load your import settings
+                </p>
+                <p className="text-muted-foreground">
+                  Nothing has been imported. PaperLume needs your projects, tags
+                  and keyword settings to file this paper correctly, so importing
+                  stays unavailable until they load.
+                </p>
+              </div>
+            )}
+
+            {contextReady && (
               <AssignOnImportSection
                 projects={projects}
                 tags={tags}
@@ -391,9 +467,15 @@ function ExtensionImportContent({
               <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
               Added to your library
             </p>
+            {/* Deliberately NOT "Assigned to …". The importer's Phase 5 runs
+                after the progress snapshot above and is allowed to fail without
+                removing the paper from `addedIds`, so a successful insertion is
+                no evidence at all that the assignment landed. It reports its own
+                outcome, including assignment warnings, in its toast. */}
             {(assignmentAtImport.projects > 0 || assignmentAtImport.tags > 0) && (
               <p className="text-muted-foreground">
-                Assigned to {describeAssignment(assignmentAtImport)}.
+                Your {describeAssignment(assignmentAtImport)} selection was sent
+                with the import. Open the paper in your library to confirm it.
               </p>
             )}
           </div>
@@ -439,7 +521,10 @@ function ExtensionImportContent({
 
         {/* ── Actions ────────────────────────────────────────────────────── */}
         <div className="flex flex-wrap gap-2">
-          {!isTerminal && (
+          {/* No confirm control exists at all while the context is unusable —
+              there is nothing to press, rather than something pressed that
+              quietly does nothing. */}
+          {!isTerminal && !contextFailed && (
             <Button
               onClick={runImport}
               disabled={phase === "importing" || contextLoading}
@@ -453,12 +538,22 @@ function ExtensionImportContent({
             </Button>
           )}
 
-          {phase === "failed" && (
+          {phase === "failed" && !contextFailed && (
             <Button
               onClick={runImport}
-              disabled={contextLoading}
+              disabled={!contextReady}
               className="flex-1"
               data-testid="handoff-retry"
+            >
+              Try again
+            </Button>
+          )}
+
+          {contextFailed && !isTerminal && (
+            <Button
+              onClick={retryContext}
+              className="flex-1"
+              data-testid="handoff-context-retry"
             >
               Try again
             </Button>
@@ -478,7 +573,7 @@ function ExtensionImportContent({
           </Button>
         </div>
 
-        {!isTerminal && !contextLoading && (
+        {!isTerminal && contextReady && (
           <p className="text-xs text-muted-foreground">
             {assignmentRequested
               ? "Nothing is added until you choose Import."
