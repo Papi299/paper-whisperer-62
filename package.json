@@ -20,6 +20,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
+    "test:extension:browser": "npm run build:extension && playwright test --config playwright.extension.config.ts",
     "test:e2e:local": "node scripts/e2e-local.mjs run",
     "test:e2e:local:verify-guards": "node scripts/e2e-local.mjs verify-guards",
     "test:e2e:local:stop": "node scripts/e2e-local.mjs stop",

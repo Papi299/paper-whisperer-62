@@ -42,4 +42,21 @@ export default tseslint.config(
       "react-refresh/only-export-components": "off",
     },
   },
+  // The real-browser extension lane is Playwright test code, and Playwright's
+  // fixture API hands each fixture a function named `use`. The React Hooks
+  // plugin matches hooks by name, so it reads that call as a misplaced React
+  // hook — in a file with no React in it. The rules are switched off for the
+  // same reason as the block above: this is not React code, and the plugin has
+  // nothing true to say about it.
+  {
+    files: ["e2e-extension/**/*.ts"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node, ...globals.webextensions },
+    },
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+      "react-hooks/exhaustive-deps": "off",
+      "react-refresh/only-export-components": "off",
+    },
+  },
 );
