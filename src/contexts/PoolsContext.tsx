@@ -7,30 +7,64 @@
  * consume from this single context.
  */
 
-import { createContext, useContext, ReactNode } from "react";
+import { createContext, useCallback, useContext, ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useKeywordPool, PoolKeyword } from "@/hooks/useKeywordPool";
 import { useStudyTypePool, PoolStudyType } from "@/hooks/useStudyTypePool";
 import { useSynonymPool, Synonym } from "@/hooks/useSynonymPool";
+import { queryKeys } from "@/lib/queryKeys";
 import {
   useExclusionPools,
   ExcludedKeyword,
   ExcludedStudyType,
 } from "@/hooks/useExclusionPools";
 
+/**
+ * How far along the three pools that feed `NormalizationConfig` are.
+ *
+ * Three states rather than a boolean, because `!loading` is not readiness. Each
+ * pool query defaults its data to `[]`, so once React Query has exhausted its
+ * retries a *failed* read settles at exactly the shape of a *successful* read of
+ * an empty pool: `isLoading === false`, `data === []`. Collapsing those two into
+ * one flag is how a read failure turns into an apparently valid configuration.
+ *
+ *   loading — at least one pool has not settled yet
+ *   error   — every pool has settled and at least one failed
+ *   ready   — every pool loaded, however few rows it returned
+ *
+ * `ready` is a positive fact about all three queries, never the absence of
+ * loading, and an errored pool is never mistaken for an intentionally empty one.
+ * A genuinely empty pool is `ready`: a user who has added no keywords has a
+ * valid — if minimal — normalization configuration.
+ */
+export type NormalizationPoolsStatus = "loading" | "ready" | "error";
+
 export interface PoolsContextValue {
   /**
-   * Whether the three pools that feed `NormalizationConfig` are still loading.
+   * Readiness of the three pools that feed `NormalizationConfig`.
    *
-   * Exposed because "empty" and "not loaded yet" are indistinguishable in the
-   * pool arrays, and the difference is load-bearing: an import that runs against
-   * a not-yet-loaded config silently stores an unnormalized row rather than
-   * failing. A surface that imports must wait for this to be `false`; the
-   * Dashboard, whose import is behind several deliberate clicks, never had to.
+   * Exposed because "empty", "not loaded yet" and "the read failed" are all the
+   * same array, and the difference is load-bearing: the canonical importer
+   * treats a missing configuration as *skip normalization* rather than as an
+   * error, so an import that runs against an unloaded or failed config silently
+   * stores an unnormalized row. A surface that imports must require `"ready"`;
+   * the Dashboard, whose import is behind several deliberate clicks, never had
+   * to.
    *
    * Only the keyword, study-type and synonym pools count. The exclusion pools
    * are display filters and contribute nothing to normalization.
    */
-  normalizationPoolsLoading: boolean;
+  normalizationPoolsStatus: NormalizationPoolsStatus;
+
+  /**
+   * Refetch the three normalization pools.
+   *
+   * The recovery path for `"error"`, so a transient read failure costs a click
+   * rather than a full page reload. `refetchQueries` rather than
+   * `invalidateQueries` because the queries being retried are the ones that
+   * failed, and refetching them is the whole intent.
+   */
+  retryNormalizationPools: () => void;
 
   // Keyword Pool
   poolKeywords: PoolKeyword[];
@@ -92,16 +126,33 @@ interface PoolsProviderProps {
 }
 
 export function PoolsProvider({ userId, children }: PoolsProviderProps) {
+  const queryClient = useQueryClient();
   const keywordPool = useKeywordPool(userId);
   const studyTypePool = useStudyTypePool(userId);
   const synonymPool = useSynonymPool(userId);
   const exclusionPools = useExclusionPools(userId);
 
+  // Loading is checked before failure so a pool still in flight can never be
+  // reported as an error, and neither state can ever be reported as ready.
+  // `isLoading` is false for a disabled query, so a signed-out tree settles
+  // rather than hanging — the pools genuinely are not coming.
+  const normalizationPoolsStatus: NormalizationPoolsStatus =
+    keywordPool.loading || studyTypePool.loading || synonymPool.loading
+      ? "loading"
+      : keywordPool.isError || studyTypePool.isError || synonymPool.isError
+        ? "error"
+        : "ready";
+
+  const retryNormalizationPools = useCallback(() => {
+    if (!userId) return;
+    void queryClient.refetchQueries({ queryKey: queryKeys.keywordPool.all(userId) });
+    void queryClient.refetchQueries({ queryKey: queryKeys.studyTypePool.all(userId) });
+    void queryClient.refetchQueries({ queryKey: queryKeys.synonymPool.all(userId) });
+  }, [queryClient, userId]);
+
   const value: PoolsContextValue = {
-    // `isLoading` is false for a disabled query, so a signed-out tree reports
-    // "not loading" rather than hanging — the pools genuinely are not coming.
-    normalizationPoolsLoading:
-      keywordPool.loading || studyTypePool.loading || synonymPool.loading,
+    normalizationPoolsStatus,
+    retryNormalizationPools,
 
     // Keyword Pool
     poolKeywords: keywordPool.poolKeywords,

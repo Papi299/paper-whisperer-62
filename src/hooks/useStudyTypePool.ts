@@ -21,6 +21,10 @@ export function useStudyTypePool(userId: string | undefined) {
   const {
     data: poolStudyTypes = [],
     isLoading: loading,
+    // Additive: an exhausted query settles with `isLoading` false and `data`
+    // back at the default `[]`, which no consumer can tell from a genuinely
+    // empty pool. See `normalizationPoolsStatus` in `PoolsContext`.
+    isError,
   } = useQuery({
     queryKey: queryKeys.studyTypePool.all(userId!),
     queryFn: async () => {
@@ -204,6 +208,7 @@ export function useStudyTypePool(userId: string | undefined) {
   return {
     poolStudyTypes,
     loading,
+    isError,
     addStudyType,
     addMultipleStudyTypes,
     updateStudyType,
