@@ -17,6 +17,7 @@ Each document below is the single authority for its area. When a change makes on
 | [deployment.md](deployment.md) | Deployment and operational procedures (env vars, migration/Edge Function deploys, domains, smoke checks) |
 | [architecture-read-path.md](architecture-read-path.md) (and future topic docs) | Subsystem architecture detail |
 | [commercial-architecture.md](commercial-architecture.md), [quotas-and-pricing.md](quotas-and-pricing.md), [store-launch-checklist.md](store-launch-checklist.md) | Pricing, entitlement, billing, and launch planning |
+| [chrome-web-store-readiness.md](chrome-web-store-readiness.md) | Chrome extension distribution: Store policy audit, privacy/data-flow record, packaging contract, real-browser verification and its limits, the mandatory manual release gate, and the outstanding listing/brand gaps |
 | [migration-history.md](migration-history.md) | Historical chronology of schema/database/security/operational changes. **History, not a second current-state handoff** |
 | Git history, merged PRs, `supabase/migrations/` | Authoritative historical implementation evidence — never duplicated into active docs to "preserve" it |
 
