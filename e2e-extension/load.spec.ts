@@ -9,7 +9,10 @@
  * invisible to a file read and visible here.
  */
 
-import { test, expect } from "./support/extensionHarness";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import { test, expect, BUILD_DIR } from "./support/extensionHarness";
 
 test("loads as an unpacked MV3 extension and serves its popup document", async ({ extension }) => {
   const page = await extension.openPopup();
@@ -63,23 +66,27 @@ test("differs from the shipped package by the harness key and nothing else", asy
   // The staged copy exists only to give the ID derivation something to work
   // from. If it ever diverged further, this lane would be testing a browser
   // nobody runs — so the divergence is asserted, not assumed.
-  const page = await extension.openPopup();
-  const parsed = await page.evaluate(() => chrome.runtime.getManifest());
-
-  // Same-origin read of the package's own manifest — this is the file Chrome
-  // loaded, fetched from the extension origin rather than from disk.
+  //
+  // The comparison has to reach outside the browser to mean anything. Reading
+  // the manifest from the extension's own origin would read the STAGED copy,
+  // and comparing the staged copy against itself proves nothing about how far
+  // it has drifted from the artefact that ships. So the reference side is read
+  // from `dist-extension/` on disk — the directory `npm run package:extension`
+  // archives.
   const shipped = JSON.parse(
-    await page.evaluate(async () => (await fetch("./manifest.json")).text()),
+    readFileSync(path.join(BUILD_DIR, "manifest.json"), "utf-8"),
   ) as Record<string, unknown>;
 
-  // `key` is the one addition. Chrome also does not echo it back in
-  // getManifest() on every version, so compare the file the package contains.
-  expect(shipped).toHaveProperty("key");
-  delete shipped.key;
-  const parsedWithoutKey = { ...parsed };
-  delete parsedWithoutKey.key;
+  const page = await extension.openPopup();
+  const loaded = await page.evaluate(() => chrome.runtime.getManifest());
 
-  expect(parsedWithoutKey).toEqual(shipped);
+  expect(shipped, "the shipped manifest must never carry a key").not.toHaveProperty("key");
+  expect(loaded, "the staged copy must carry the harness key").toHaveProperty("key");
+
+  const loadedWithoutKey = { ...loaded };
+  delete loadedWithoutKey.key;
+
+  expect(loadedWithoutKey).toEqual(shipped);
 });
 
 test("runs no background context in the real browser", async ({ extension }) => {

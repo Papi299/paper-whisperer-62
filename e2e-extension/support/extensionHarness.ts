@@ -83,7 +83,8 @@ import { fileURLToPath } from "node:url";
 import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const BUILD_DIR = path.join(REPO_ROOT, "dist-extension");
+/** The built, unstaged artefact — what `npm run package:extension` archives. */
+export const BUILD_DIR = path.join(REPO_ROOT, "dist-extension");
 
 /** The origin the extension is allowed to hand off to. Pinned, not derived. */
 export const PAPERLUME_ORIGIN = "https://app.paperlume.app";
