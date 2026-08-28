@@ -1,0 +1,138 @@
+name: Extension (package + real browser)
+
+# Chrome extension distribution lane for CHROME-EXTENSION-IMPORT-001E1.
+#
+# Two things this repository cannot check anywhere else:
+#
+#   1. the Chrome-Web-Store-ready package — built, validated as an unpacked
+#      directory, archived, and re-validated by unzipping what was written; and
+#   2. the built MV3 extension actually loading in a real Chromium, with the
+#      permission set Chrome grants it read back from the browser.
+#
+# It is deliberately NOT part of `Validate` (the required merge gate) and NOT
+# part of `E2E (local)`. `Validate` runs on every PR and already builds the
+# extension; adding a browser download and a persistent-context Chromium launch
+# to it would make every unrelated PR pay for extension runtime. `E2E (local)`
+# owns a Docker Supabase stack, signs a user in, and writes rows — none of which
+# this lane needs or may do. So it is its own narrowly scoped, non-required
+# check, and it neither weakens nor replaces either existing gate.
+#
+# ## Network
+#
+# The extension specs black-hole DNS for every non-loopback name inside the
+# browser they launch (see `e2e-extension/support/extensionHarness.ts`), so this
+# job cannot reach PaperLume Production, authenticate anyone, or create a paper.
+# It needs no secret, no GitHub Environment, and only the read-only default
+# token.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    # Path-scoped so unrelated application PRs do not pay for a browser download.
+    # The list deliberately reaches past `extension/**`: the extension imports
+    # the application's own identifier grammar and the shared handoff contract,
+    # so a change to those is an extension change even though no file under
+    # `extension/` moved. Each entry below is a real input to the artefact this
+    # job validates.
+    paths:
+      # The extension itself, its build config, and its TypeScript project.
+      - "extension/**"
+      - "vite.extension.config.ts"
+      - "tsconfig.extension.json"
+      # Shared web modules the extension bundles directly. `detectPaperFromUrl`
+      # composes the two identifier grammars; `paperLumeHandoff` builds its URL
+      # with the same builder `/extension-import` parses with. A change to any
+      # of them can alter what the extension detects or where it hands off.
+      - "src/lib/pubmedIdentifiers.ts"
+      - "src/lib/doiIdentifiers.ts"
+      - "src/lib/extensionImportHandoff.ts"
+      # The packaging contract and the real-browser lane.
+      - "scripts/package-extension.mjs"
+      - "scripts/lib/**"
+      - "e2e-extension/**"
+      - "playwright.extension.config.ts"
+      # The dependency graph: this lane's archiver (fflate) and browser
+      # (Playwright) both come from it, and a lockfile change can move either.
+      - "package.json"
+      - "package-lock.json"
+      # This file.
+      - ".github/workflows/extension.yml"
+  push:
+    branches:
+      - main
+
+# Read-only token: the job never mutates GitHub state.
+permissions:
+  contents: read
+
+# Distinct from the `Validate` and `E2E (local)` groups so the three gates never
+# cancel or serialise one another.
+concurrency:
+  group: extension-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
+    name: extension
+    # Same-repository restriction, matching `E2E (local)`: a fork-origin pull
+    # request is skipped before any dependency or browser installation.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      CI: true
+
+    steps:
+      - name: Checkout
+        # Pinned to the exact SHA used by the required `Validate` workflow.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        # Pinned to the exact SHA used by the required `Validate` workflow.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Report tool versions
+        run: |
+          node --version
+          npm --version
+          npx --no-install playwright --version
+
+      - name: Install Playwright Chromium
+        # Chromium only. Playwright's own extension documentation requires the
+        # bundled Chromium: Google Chrome and Microsoft Edge no longer honour the
+        # side-loading flags an unpacked extension needs. Firefox and WebKit are
+        # irrelevant to a Chrome extension and are intentionally excluded.
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Real-browser extension lane
+        # Builds the extension and loads the BUILT artefact — never the
+        # TypeScript source — into a real Chromium with a throwaway profile.
+        run: npm run test:extension:browser
+
+      - name: Build and validate the release-candidate package
+        # Clean → build → validate dist-extension/ → write ZIP → unzip and
+        # re-validate. Fails the job on any package-contract violation. Produces
+        # release/paperlume-extension-<version>-rc.zip, which is gitignored,
+        # uploaded nowhere, and published nowhere.
+        run: npm run package:extension
+
+      - name: Upload failure screenshots
+        # Failure PNGs only, and only on failure. No traces, no logs, no profile
+        # directories, no archives.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: extension-failure-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7

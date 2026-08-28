@@ -21,6 +21,12 @@ dist-ssr
 # Chrome extension build output (`npm run build:extension`)
 dist-extension
 
+# Chrome Web Store release-candidate packages (`npm run package:extension`).
+# Generated, reproducible, and never committed: the ZIP is a build artefact for
+# local review and upload, not a source of truth. Rebuild it rather than
+# fetching one from the repository.
+release/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

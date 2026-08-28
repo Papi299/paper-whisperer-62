@@ -24,12 +24,19 @@ export default defineConfig({
     // manifest and boundary suites read committed source files, and the popup
     // suite drives the committed `popup.html` under jsdom against a stub of the
     // two `chrome.tabs` members the extension is allowed to call. A real
-    // unpacked-MV3 harness belongs to the later distribution phase, not here.
+    // unpacked-MV3 harness lives in `e2e-extension/`, driven by its own
+    // Playwright config, because it needs a real browser.
+    // scripts/lib/**/__tests__ — the Chrome Web Store package contract
+    // (`scripts/lib/extension-package.mjs`), exercised against in-memory
+    // fixtures. Plain `.mjs` because `scripts/` is Node tooling and
+    // `scripts/package-extension.mjs` imports the same module with no loader;
+    // the suite builds every package it inspects, so it needs no build output.
     include: [
       "src/**/*.{test,spec}.{ts,tsx}",
       "supabase/functions/**/__tests__/**/*.{test,spec}.ts",
       "e2e/support/**/*.{test,spec}.ts",
       "extension/**/__tests__/**/*.{test,spec}.ts",
+      "scripts/lib/**/__tests__/**/*.{test,spec}.mjs",
     ],
   },
   resolve: {

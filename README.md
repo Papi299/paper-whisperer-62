@@ -124,8 +124,10 @@ Requires Node.js 20.19+ or 22.12+. Supabase project config is in `supabase/confi
 Source lives in `extension/`, inside this same repository and dependency graph — there is no second `package.json` and no workspace. It builds with its own Vite config to its own output directory, so the web build and the Vercel artefact are untouched.
 
 ```sh
-npm run build:extension      # production build → dist-extension/
-npm run build:extension:dev  # same, development mode
+npm run build:extension        # production build → dist-extension/
+npm run build:extension:dev    # same, development mode
+npm run package:extension      # build + validate + Store-ready ZIP → release/
+npm run test:extension:browser # load the built extension in a real Chromium
 ```
 
 Load the unpacked build:
@@ -158,7 +160,11 @@ toolbar click → activeTab URL read → PubMed/DOI detection → Continue in Pa
 
 Everything from the new tab onwards belongs to the web application: authentication, Projects and Tags, duplicate handling, and the explicit confirmation that actually writes. The identifier is the only thing that travels — no title, no page URL, no referrer, no ids, no analytics parameter — and the receiving route treats it as untrusted regardless of who sent it.
 
-The extension is still loaded unpacked for development. It is **not** published to the Chrome Web Store.
+**Packaging and Store readiness.** `npm run package:extension` cleans, builds, validates `dist-extension/`, writes `release/paperlume-extension-<version>-rc.zip` with `manifest.json` at the archive root, then unzips what it wrote and validates that too. It exits non-zero on any contract violation — a widened permission, a remote origin, a source map, a stray test file — and the archive is byte-identical between runs. `release/` is gitignored; nothing is uploaded.
+
+`npm run test:extension:browser` loads the **built** extension into a real Chromium (Playwright's bundled channel, a throwaway profile, DNS black-holed to loopback) and asserts what the browser reports: the permissions Chrome actually granted, that no background context exists, that the popup classifies and renders, and that pressing Continue calls the real `chrome.tabs.create` exactly once at the exact handoff URL. One step it cannot automate is the toolbar click that grants `activeTab`, so that is a mandatory manual gate before submission.
+
+The extension is still loaded unpacked for development. It is **not** published to the Chrome Web Store, and no listing exists. Policy audit, privacy data flow, the manual release checklist and the outstanding Store gaps — including the missing brand icons — are in [docs/chrome-web-store-readiness.md](docs/chrome-web-store-readiness.md).
 
 ## Extension import handoff
 
@@ -233,6 +239,8 @@ npm run typecheck            # TypeScript (application + Node + extension projec
 npm test                     # Unit / integration tests (Vitest)
 npm run build                # Production build (web app)
 npm run build:extension      # Production build (Chrome extension)
+npm run package:extension    # Chrome Web Store release-candidate ZIP + package validation
+npm run test:extension:browser  # Real-Chromium unpacked-extension lane (no backend, no network)
 npm run test:e2e:local       # Playwright E2E against an ephemeral local Supabase stack
 npm run test:db:local        # pgTAP database-security suites on an ephemeral local stack
 ```
@@ -258,8 +266,9 @@ pgTAP suites in `supabase/tests/database/` cover core and relational RLS isolati
 | **`Validate`** (`.github/workflows/validate.yml`) | `npm ci`, lint, typecheck, Vitest, web production build, Chrome extension production build on Node 22 | **Yes** — required on `main` |
 | **`DB Tests`** (`.github/workflows/db-tests.yml`) | The same `test:db:local` database lifecycle | **Yes** — required on `main` |
 | **`E2E (local)`** (`.github/workflows/e2e-local.yml`) | The same local-first Playwright lifecycle on an ephemeral local stack | No — evidence, not a gate |
+| **`Extension`** (`.github/workflows/extension.yml`) | `npm run test:extension:browser` and `npm run package:extension` — the real-Chromium extension lane and the Store package contract | No — evidence, not a gate |
 
-Branch protection requires the bare check names `validate` and `db-tests`; Vercel is **not** a required check. All three workflows run on pull requests to `main` and pushes to `main`, use a read-only token, and require no repository secret, variable, or Environment; `E2E (local)` and `DB Tests` skip fork-origin pull requests before executing anything. None of them contact Production or any cloud Supabase project — there is **no hosted staging environment**, and local-first is the accepted path.
+Branch protection requires the bare check names `validate` and `db-tests`; Vercel is **not** a required check. All four workflows run on pushes to `main`, use a read-only token, and require no repository secret, variable, or Environment; `E2E (local)`, `DB Tests` and `Extension` skip fork-origin pull requests before executing anything. `Extension` is additionally **path-scoped on pull requests** — a PR runs it only when the extension, its build config, the shared identifier/handoff modules it bundles, its packaging or its browser lane change, so an unrelated application PR does not pay for a browser download. Its `main`-push trigger is deliberately **not** path-filtered: every push to `main` runs it, so a bad merge cannot land unverified. None of them contact Production or any cloud Supabase project — there is **no hosted staging environment**, and local-first is the accepted path.
 
 Edge Function tests executed by a **Deno** runtime do not exist. `delete-account`, `search-pubmed` and `suggest-paper-organization` are the partial exceptions: each keeps its whole request path in a runtime-agnostic `handler.ts` plus pure sibling/`_shared` modules, so the real handler — not a re-implementation — is covered by Vitest. `delete-account` is additionally invoked for real as a served local Edge Function under the local E2E lifecycle; `search-pubmed` is not, because its E2E stubs the request at the browser boundary to keep CI off the live NCBI network.
 
