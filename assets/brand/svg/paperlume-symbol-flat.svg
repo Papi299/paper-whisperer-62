@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="pl-flat-title">
+  <title id="pl-flat-title">PaperLume</title>
+  <defs>
+    <clipPath id="pl-flat-aperture">
+      <path d="M12 8 A3 3 0 0 1 15 5 H39 L52 18 V56 A3 3 0 0 1 49 59 H15 A3 3 0 0 1 12 56 Z" transform="translate(32,32) scale(0.88) translate(-32,-32)"/>
+    </clipPath>
+  </defs>
+  <path d="M12 8 A3 3 0 0 1 15 5 H39 L52 18 V56 A3 3 0 0 1 49 59 H15 A3 3 0 0 1 12 56 Z" fill="#0B1220"/>
+  <g clip-path="url(#pl-flat-aperture)">
+    <path d="M39 18 L12 41 V59 H29 Z" fill="#7B5CFF"/>
+  </g>
+  <path d="M39 5 L52 18 H39 Z" fill="#FFFFFF"/>
+</svg>
