@@ -33,6 +33,23 @@ export const BEAM_PATH = "M39 18 L12 41 V59 H29 Z";
  */
 export const BEAM_INSET_SCALE = "0.88";
 
+/**
+ * The beam gradient, in the direction light actually travels.
+ *
+ * Order is the whole point. The fold opens an aperture, the light is brightest
+ * where it comes through, and it cools outward into the blue-violet family.
+ * Reversed, the mark reads as a page *absorbing* light — the same four colours,
+ * the opposite idea — and nothing about the file looks wrong, which is exactly
+ * why it is pinned here rather than left to review.
+ */
+export const BEAM_GRADIENT_STOPS = ["#FFFFFF", "#B7C6FF", "#7B5CFF", "#4F66FF"];
+
+/** The brightest stop belongs at the beam's apex, not merely somewhere in the run. */
+export const BEAM_APEX = { x: "39", y: "18" };
+
+/** The wordmark's two-tone treatment. */
+export const WORDMARK_COLORS = { paper: "#0B1220", lume: "#7B5CFF" };
+
 /** Every SVG in the pack, and whether it carries the full mark geometry. */
 export const SVG_FILES = [
   "paperlume-symbol.svg",
@@ -87,4 +104,24 @@ export function readPngHeader(bytes) {
     /** 6 === RGBA, the only type that carries an alpha channel per-pixel. */
     colorType: bytes[25],
   };
+}
+
+/**
+ * The `<stop>` colours of a named gradient, in document order.
+ *
+ * Document order is what matters: a gradient carrying all four approved colours
+ * in the wrong sequence passes any "are the brand colours present?" check while
+ * inverting the mark's meaning.
+ */
+export function gradientStops(svg, id) {
+  const block = svg.match(new RegExp(`<linearGradient[^>]*id="${id}"[\\s\\S]*?</linearGradient>`))?.[0];
+  if (!block) return null;
+  return [...block.matchAll(/stop-color="(#[0-9a-fA-F]{6})"/g)].map((m) => m[1].toUpperCase());
+}
+
+/** The `x1`/`y1` of a named gradient — the end that `offset="0"` is anchored to. */
+export function gradientOrigin(svg, id) {
+  const block = svg.match(new RegExp(`<linearGradient[^>]*id="${id}"[^>]*>`))?.[0];
+  if (!block) return null;
+  return { x: block.match(/x1="([^"]+)"/)?.[1], y: block.match(/y1="([^"]+)"/)?.[1] };
 }

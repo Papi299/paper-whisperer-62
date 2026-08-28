@@ -55,21 +55,30 @@ four marks that quietly diverge are worse than one mark.
 | White | `#FFFFFF` | 255, 255, 255 |
 | Charcoal | `#1A1F2B` | 26, 31, 43 |
 
-> Transcribed from the approved brand board. Where the board's hex label and its
-> RGB triplet disagreed (Indigo, Periwinkle), **the RGB triplet was taken as
-> authoritative** and the hex recomputed from it. Confirm both against the
-> original design source before any print run.
+> These are the **canonical PaperLume v1 palette**, derived from the approved
+> A1.3 reference. Where that reference's hex label and its RGB triplet disagreed
+> (Indigo, Periwinkle), the RGB triplet was taken as authoritative and the hex
+> recomputed from it. The resulting values are settled for v1 — build against
+> them.
 
 ### Gradients
 
-**Beam** (apex → aperture mouth), the signature gradient:
+**Beam** — the signature gradient. It runs **from the aperture outward**, and
+that direction is the whole idea: the fold opens a gap, the light is brightest
+where it comes through, and it cools into the blue-violet family as it spreads.
+Reversing it turns the mark from a page emitting light into a page absorbing it.
 
-| Stop | Colour |
-|---|---|
-| 0% | `#4F66FF` |
-| 45% | `#7B5CFF` |
-| 75% | `#B7C6FF` |
-| 100% | `#FFFFFF` |
+| Stop | Colour | Where |
+|---|---|---|
+| 0% | `#FFFFFF` | **the aperture** — highest luminance, at the fold's inner corner |
+| 25% | `#B7C6FF` | |
+| 55% | `#7B5CFF` | |
+| 100% | `#4F66FF` | the far, wide end of the beam |
+
+The gradient vector starts at the beam's apex (`39 18`) — the same point the
+beam path starts from — so the white stop is anchored to the aperture rather
+than merely being somewhere in the run. `scripts/lib/__tests__/brand-assets.test.mjs`
+asserts both the endpoint colours and that anchoring, so a reversal fails.
 
 **Page** `#20294A` → `#0B1220`.  **Fold** `#FFFFFF` → `#C9D3FF`.
 
@@ -126,6 +135,25 @@ the silhouette in two.
 Everything else — silhouette, page/fold geometry, beam direction, proportion,
 wordmark relationship, colour family — is as approved.
 
+## 5a. Typeface
+
+The wordmark is set in **Inter SemiBold (weight 600)**, the approved PaperLume
+wordmark typeface for v1. Inter is licensed under the
+[SIL Open Font License](https://openfontlicense.org/).
+
+`paperlume-logo-horizontal.svg` contains **no live text**: the wordmark is
+converted to vector outlines, so the file renders identically on every machine
+and needs no font installed, downloaded, or embedded. There is no font binary in
+this repository and no runtime font dependency.
+
+Set at 32 units against the 64-unit symbol, tracking `-0.005em`, with the cap
+height straddling the symbol's vertical centre. Changing the wording means
+re-setting it in Inter SemiBold and re-outlining — not editing path data by
+hand.
+
+`Paper` is Deep Navy `#0B1220`; `Lume` is Violet `#7B5CFF`. On dark backgrounds
+`Paper` becomes `#FFFFFF` and `Lume` stays `#7B5CFF`.
+
 ## 6. Regenerating the PNGs
 
 ```sh
@@ -140,21 +168,14 @@ PNG**: edit the SVG and re-run. See
 
 ## 7. Known gaps
 
-These are real and must be closed before the assets are used commercially:
+The pack is canonical and usable as it stands. Two pieces of the original brand
+board were simply not in scope, and remain to be produced:
 
-1. **The wordmark is live `<text>`, not outlines.** PaperLume has no licensed
-   brand typeface yet, and outlining a proprietary system font into a committed
-   asset would be a licensing problem. `paperlume-logo-horizontal.svg` therefore
-   carries a font stack (`Inter, 'SF Pro Display', 'Helvetica Neue', Arial,
-   sans-serif`) and **will render differently where none of those resolve**.
-   Convert to outlines once the brand typeface is chosen and licensed.
-2. **No stacked lockup.** The board shows one; it was out of scope here.
-3. **No tiled app-icon PNG.** The board's "Master App Icon" is the symbol on a
+1. **No stacked lockup.** The board shows one.
+2. **No tiled app-icon PNG.** The board's "Master App Icon" is the symbol on a
    rounded navy tile. Composing it is trivial from these files, but every PNG
    here is transparent-background by requirement, so the tiled composition was
    not produced.
-4. **Colour values need confirmation against the original design source** — see
-   the note under §2.
 
 ## 8. Out of scope for these files
 

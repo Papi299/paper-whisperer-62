@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
 import {
+  BEAM_APEX,
+  BEAM_GRADIENT_STOPS,
   BEAM_INSET_SCALE,
   BEAM_PATH,
   FOLD_PATH,
@@ -27,6 +29,9 @@ import {
   SVG_FILES,
   hexColors,
   pathData,
+  WORDMARK_COLORS,
+  gradientOrigin,
+  gradientStops,
   readPngHeader,
 } from "../brand-assets.mjs";
 
@@ -153,6 +158,76 @@ describe("brand pack — PNG exports", () => {
   it("exports every Chrome icon size", () => {
     for (const chromeSize of [16, 32, 48, 128]) {
       expect(PNG_SIZES).toContain(chromeSize);
+    }
+  });
+});
+
+describe("brand pack — illumination direction", () => {
+  // The mark is "illuminated paper". Light leaves through the aperture the fold
+  // opens; it does not pour into it. All four approved colours are present
+  // either way, so only their ORDER distinguishes the right mark from its
+  // inverse — and nothing about a reversed file looks broken.
+  it.each([
+    ["paperlume-symbol.svg", "pl-symbol-beam"],
+    ["paperlume-logo-horizontal.svg", "pl-logo-beam"],
+  ])("%s runs bright→cool from the aperture outward", (name, id) => {
+    const stops = gradientStops(readSvg(name), id);
+    expect(stops, `${name}: no gradient #${id}`).not.toBeNull();
+    expect(stops).toEqual(BEAM_GRADIENT_STOPS);
+  });
+
+  it.each([
+    ["paperlume-symbol.svg", "pl-symbol-beam"],
+    ["paperlume-logo-horizontal.svg", "pl-logo-beam"],
+  ])("%s puts the brightest stop at the aperture, not merely first", (name, id) => {
+    const stops = gradientStops(readSvg(name), id);
+    // Endpoint semantics, stated as such: white at the aperture end, luminous
+    // blue at the far end.
+    expect(stops.at(0)).toBe("#FFFFFF");
+    expect(stops.at(-1)).toBe("#4F66FF");
+    // …and the offset-0 end of the gradient vector is the beam's apex, so the
+    // white stop is anchored to the aperture rather than to whichever end of an
+    // arbitrary line. Reversing the vector *and* the stops would preserve the
+    // picture; reversing only one would not, and this catches that.
+    expect(gradientOrigin(readSvg(name), id)).toEqual(BEAM_APEX);
+    expect(pathData(readSvg(name))).toContain(BEAM_PATH);
+    expect(BEAM_PATH.startsWith(`M${BEAM_APEX.x} ${BEAM_APEX.y}`)).toBe(true);
+  });
+
+  it("keeps periwinkle before violet, travelling outward", () => {
+    const stops = gradientStops(readSvg("paperlume-symbol.svg"), "pl-symbol-beam");
+    expect(stops.indexOf("#B7C6FF")).toBeLessThan(stops.indexOf("#7B5CFF"));
+  });
+});
+
+describe("brand pack — the wordmark is deterministic", () => {
+  const LOGO = "paperlume-logo-horizontal.svg";
+
+  it("contains no live text", () => {
+    // Live text renders differently per machine, which disqualifies a file from
+    // being a canonical master however good it looks locally.
+    expect(markupOf(LOGO)).not.toMatch(/<text\b/);
+    expect(markupOf(LOGO)).not.toMatch(/<tspan\b/);
+  });
+
+  it("names no font and depends on none at runtime", () => {
+    const svg = markupOf(LOGO);
+    expect(svg).not.toMatch(/font-family/);
+    expect(svg).not.toMatch(/font-size/);
+    expect(svg).not.toMatch(/@font-face/);
+    expect(svg).not.toMatch(/\.(ttf|otf|woff2?)\b/);
+    expect(svg).not.toMatch(/data:font/);
+  });
+
+  it("carries the wordmark as path geometry in both brand colours", () => {
+    const svg = readSvg(LOGO);
+    for (const [part, color] of Object.entries(WORDMARK_COLORS)) {
+      const filled = [...svg.matchAll(new RegExp(`<path fill="${color}" d="([^"]+)"`, "g"))];
+      expect(filled.length, `${LOGO}: no path filled ${color} for "${part}"`).toBe(1);
+      // A wordmark is many contours; a single short path would mean something
+      // other than outlined letterforms landed here.
+      expect(filled[0][1].length).toBeGreaterThan(300);
+      expect(filled[0][1]).toMatch(/^M/);
     }
   });
 });

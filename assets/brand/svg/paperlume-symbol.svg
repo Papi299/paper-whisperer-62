@@ -6,10 +6,10 @@
       <stop offset="1" stop-color="#0B1220"/>
     </linearGradient>
     <linearGradient id="pl-symbol-beam" x1="39" y1="18" x2="14" y2="57" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#4F66FF"/>
-      <stop offset="0.45" stop-color="#7B5CFF"/>
-      <stop offset="0.75" stop-color="#B7C6FF"/>
-      <stop offset="1" stop-color="#FFFFFF"/>
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.25" stop-color="#B7C6FF"/>
+      <stop offset="0.55" stop-color="#7B5CFF"/>
+      <stop offset="1" stop-color="#4F66FF"/>
     </linearGradient>
     <linearGradient id="pl-symbol-fold" x1="39" y1="5" x2="49" y2="18" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FFFFFF"/>

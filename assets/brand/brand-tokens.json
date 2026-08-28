@@ -20,23 +20,27 @@
   },
   "gradient": {
     "beam": {
-      "description": "Primary symbol beam. Apex (blue) to aperture mouth (white).",
+      "description": "Primary symbol beam. Runs from the aperture (brightest) outward into the blue-violet family; the direction is load-bearing.",
+      "from": "aperture",
+      "to": "outward",
       "stops": [
         {
           "offset": 0,
-          "color": "#4F66FF"
+          "color": "#FFFFFF",
+          "at": "aperture"
         },
         {
-          "offset": 0.45,
-          "color": "#7B5CFF"
-        },
-        {
-          "offset": 0.75,
+          "offset": 0.25,
           "color": "#B7C6FF"
         },
         {
+          "offset": 0.55,
+          "color": "#7B5CFF"
+        },
+        {
           "offset": 1,
-          "color": "#FFFFFF"
+          "color": "#4F66FF",
+          "at": "outward"
         }
       ]
     },
@@ -69,6 +73,12 @@
   },
   "wordmark": {
     "text": "PaperLume",
+    "typeface": "Inter SemiBold",
+    "weight": 600,
+    "license": "SIL Open Font License",
+    "outlined": true,
+    "liveText": false,
+    "runtimeFontDependency": false,
     "split": {
       "paper": "#0B1220",
       "lume": "#7B5CFF"
@@ -77,10 +87,8 @@
       "paper": "#FFFFFF",
       "lume": "#7B5CFF"
     },
-    "weight": 600,
     "letterSpacing": "-0.005em",
-    "fontStack": "Inter, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif",
-    "outlined": false
+    "sizeInSymbolUnits": 32
   },
   "geometry": {
     "viewBox": "0 0 64 64",
