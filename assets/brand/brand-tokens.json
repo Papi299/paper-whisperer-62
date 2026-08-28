@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json.schemastore.org/base.json",
+  "brand": "PaperLume",
+  "direction": "A1.3 — Illuminated Paper",
+  "canonical": true,
+  "note": "Canonical PaperLume brand tokens. Generated from the approved A1.3 brand board. brand-spec.md is the prose authority; this file is the machine-readable form of the same values.",
+  "color": {
+    "primary": {
+      "deepNavy": "#0B1220",
+      "indigo": "#2A2A8F",
+      "luminousBlue": "#4F66FF",
+      "violet": "#7B5CFF",
+      "periwinkle": "#B7C6FF"
+    },
+    "neutral": {
+      "lightGray": "#F2F4FB",
+      "white": "#FFFFFF",
+      "charcoal": "#1A1F2B"
+    }
+  },
+  "gradient": {
+    "beam": {
+      "description": "Primary symbol beam. Apex (blue) to aperture mouth (white).",
+      "stops": [
+        {
+          "offset": 0,
+          "color": "#4F66FF"
+        },
+        {
+          "offset": 0.45,
+          "color": "#7B5CFF"
+        },
+        {
+          "offset": 0.75,
+          "color": "#B7C6FF"
+        },
+        {
+          "offset": 1,
+          "color": "#FFFFFF"
+        }
+      ]
+    },
+    "page": {
+      "description": "Symbol page body.",
+      "stops": [
+        {
+          "offset": 0,
+          "color": "#20294A"
+        },
+        {
+          "offset": 1,
+          "color": "#0B1220"
+        }
+      ]
+    },
+    "fold": {
+      "description": "Folded corner.",
+      "stops": [
+        {
+          "offset": 0,
+          "color": "#FFFFFF"
+        },
+        {
+          "offset": 1,
+          "color": "#C9D3FF"
+        }
+      ]
+    }
+  },
+  "wordmark": {
+    "text": "PaperLume",
+    "split": {
+      "paper": "#0B1220",
+      "lume": "#7B5CFF"
+    },
+    "onDark": {
+      "paper": "#FFFFFF",
+      "lume": "#7B5CFF"
+    },
+    "weight": 600,
+    "letterSpacing": "-0.005em",
+    "fontStack": "Inter, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif",
+    "outlined": false
+  },
+  "geometry": {
+    "viewBox": "0 0 64 64",
+    "page": "M12 8 A3 3 0 0 1 15 5 H39 L52 18 V56 A3 3 0 0 1 49 59 H15 A3 3 0 0 1 12 56 Z",
+    "fold": "M39 5 L52 18 H39 Z",
+    "beam": "M39 18 L12 41 V59 H29 Z",
+    "beamInsetScale": 0.88
+  },
+  "sizes": {
+    "iconPx": [
+      16,
+      32,
+      48,
+      128,
+      1024
+    ],
+    "minimumPx": 16,
+    "recommendedMinimumPx": 24
+  },
+  "clearSpace": {
+    "unit": "foldHeight",
+    "unitsInViewBox": 13,
+    "fractionOfMarkHeight": 0.24
+  }
+}

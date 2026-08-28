@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 238 64" width="238" height="64" role="img" aria-labelledby="pl-logo-title">
+  <title id="pl-logo-title">PaperLume</title>
+  <!--
+    Horizontal lockup for LIGHT backgrounds. On dark backgrounds set the
+    "Paper" tspan to #FFFFFF and keep "Lume" on #7B5CFF (or #B7C6FF for more
+    lift); see assets/brand/brand-spec.md.
+
+    NOTE: the wordmark is live <text>, not outlines. PaperLume has no licensed
+    brand typeface yet, and outlining a proprietary system font into a
+    committed asset would be a licensing problem. This renders correctly
+    wherever the stack resolves, and MUST be converted to outlines once the
+    brand typeface is chosen. Tracked in brand-spec.md § Known gaps.
+  -->
+  <defs>
+    <linearGradient id="pl-logo-page" x1="14" y1="5" x2="52" y2="59" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20294A"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <linearGradient id="pl-logo-beam" x1="39" y1="18" x2="14" y2="57" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4F66FF"/>
+      <stop offset="0.45" stop-color="#7B5CFF"/>
+      <stop offset="0.75" stop-color="#B7C6FF"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+    <linearGradient id="pl-logo-fold" x1="39" y1="5" x2="49" y2="18" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C9D3FF"/>
+    </linearGradient>
+    <clipPath id="pl-logo-aperture">
+      <path d="M12 8 A3 3 0 0 1 15 5 H39 L52 18 V56 A3 3 0 0 1 49 59 H15 A3 3 0 0 1 12 56 Z" transform="translate(32,32) scale(0.88) translate(-32,-32)"/>
+    </clipPath>
+  </defs>
+  <path d="M12 8 A3 3 0 0 1 15 5 H39 L52 18 V56 A3 3 0 0 1 49 59 H15 A3 3 0 0 1 12 56 Z" fill="url(#pl-logo-page)"/>
+  <g clip-path="url(#pl-logo-aperture)">
+    <path d="M39 18 L12 41 V59 H29 Z" fill="url(#pl-logo-beam)"/>
+  </g>
+  <path d="M39 5 L52 18 H39 Z" fill="url(#pl-logo-fold)"/>
+  <text x="61" y="32" font-family="Inter, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="32" font-weight="600" letter-spacing="-0.005em" dominant-baseline="central">
+    <tspan fill="#0B1220">Paper</tspan><tspan fill="#7B5CFF">Lume</tspan>
+  </text>
+</svg>
