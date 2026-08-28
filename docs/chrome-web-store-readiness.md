@@ -430,7 +430,19 @@ Safeguards, all of which 001E1 §7.2 requires:
 
 The double-activation test was validated as a **negative control**: with the
 in-flight latch removed from `popupView.ts` and the extension rebuilt, it fails
-with two recorded tabs. It is testing the latch, not passing by accident.
+with two recorded tabs. It is testing the latch, not passing by accident. The
+staged-copy comparison was validated the same way — injecting `storage` into the
+staged permissions fails it with the extra entry named.
+
+**What the lane does not check.** It does **not** read Chrome's per-extension
+warning text from `chrome://extensions`. That page is Polymer shadow DOM with no
+stable API, and scraping it would be exactly the brittle automation 001E1 rules
+out. What is asserted instead is the observable consequence: Chrome loaded the
+extension, granted the exact declared permission set with zero host origins, and
+retained every declared manifest key — a manifest Chrome had rejected or partly
+ignored could not produce that result. A warning that is purely advisory and
+changes none of those would not be caught here, so item 1 of the manual gate
+checks the extensions page by eye.
 
 ### What is REAL and what is a test double
 
