@@ -58,9 +58,41 @@
         </p>
       </section>
 
+      <!--
+        The continuation control. Deliberately outside the state sections — it
+        carries no `data-state`, so the script's state switch never touches it —
+        because it belongs to exactly two of them and duplicating it per state
+        would mean two buttons, two latches and two chances to disagree.
+
+        It is hidden until a supported detection reveals it, so an unsupported
+        or restricted page has no control to press. The label says *Continue*,
+        not *Import*: pressing it opens PaperLume, and PaperLume asks for its own
+        explicit confirmation before anything is written.
+      -->
+      <div class="handoff" data-handoff hidden>
+        <button type="button" class="handoff__action" data-handoff-action>
+          Continue in PaperLume
+        </button>
+        <p class="handoff__note">
+          Opens PaperLume in a new tab. Projects, Tags and the final import
+          confirmation happen there.
+        </p>
+        <p class="handoff__status" role="status" data-handoff-status hidden>Opening PaperLume…</p>
+        <!--
+          Fixed copy, written here rather than assembled by the script: the
+          failure it reports is Chrome refusing to open a tab, and Chrome's
+          reason for that is about the user's browsing, so it is never read and
+          never displayed.
+        -->
+        <p class="handoff__error" role="alert" data-handoff-error hidden>
+          PaperLume couldn&rsquo;t be opened. Try again.
+        </p>
+      </div>
+
       <p class="popup__footnote">
-        Reads this tab&rsquo;s address only, and only when you open PaperLume.
-        Nothing is sent anywhere.
+        Reads this tab&rsquo;s address only when you open PaperLume, never the page
+        itself. Nothing leaves the extension unless you choose Continue in
+        PaperLume, which passes on the identifier above and nothing else.
       </p>
     </main>
 

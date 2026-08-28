@@ -122,3 +122,70 @@ body {
   font-size: 11px;
   color: var(--pl-ink-muted);
 }
+
+/*
+ * The continuation control.
+ *
+ * Hidden until a supported detection reveals it, so an unsupported or
+ * restricted page shows nothing to press. Colours come from the same tokens as
+ * everything else, so the button follows the viewer's Chrome theme without a
+ * second palette.
+ */
+.handoff {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.handoff[hidden] {
+  display: none;
+}
+
+.handoff__action {
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--pl-accent);
+  color: var(--pl-surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.handoff__action:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.handoff__action:focus-visible {
+  outline: 2px solid var(--pl-ink);
+  outline-offset: 2px;
+}
+
+/*
+ * The disabled state is what the user sees while `chrome.tabs.create` is in
+ * flight. It is normally momentary — the new tab takes focus and closes the
+ * popup — so it reads as "working", not as "unavailable".
+ */
+.handoff__action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.handoff__note,
+.handoff__status,
+.handoff__error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--pl-ink-muted);
+}
+
+.handoff__status[hidden],
+.handoff__error[hidden] {
+  display: none;
+}
+
+.handoff__error {
+  color: var(--pl-ink);
+  font-weight: 600;
+}

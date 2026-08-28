@@ -6,13 +6,28 @@
 // guarded for the no-`window` case.
 /**
  * The extension's source-level boundaries: no network, and no Chrome API beyond
- * the one this phase declared.
+ * the two this phase declared.
  *
  * These read the committed extension source and assert properties of it. That is
  * a coarse instrument — it inspects text, not behaviour — but it is the right
  * instrument for these two claims, because both are claims about what the code
  * *does not contain*. A behavioural test can only show that the paths it
  * exercised made no request; this shows there is no request to make.
+ *
+ * ## What CHROME-EXTENSION-IMPORT-001C2 did *not* change
+ *
+ * The extension can now open `https://app.paperlume.app/extension-import` in a
+ * new tab. That is a browser navigating a tab, not the extension reaching the
+ * network, so nothing below is relaxed for it: `fetch`, XHR, `WebSocket`,
+ * `EventSource` and `sendBeacon` are as absent as they were, and the extension
+ * still cannot see a response.
+ *
+ * The origin itself is deliberately *not* pinned here. `executableText` strips
+ * string literals, so a check written in this file would be inspecting text with
+ * the very string removed from it — the same shape of vacuous assertion that
+ * `support/remoteReferences.ts` exists to document. It is pinned instead by a
+ * direct unit assertion on the exported constant, in
+ * `paperLumeHandoff.test.ts`, where the value can actually be compared.
  *
  * Every check skips comments before matching, so prose that names `fetch` or a
  * URL — and the module comments deliberately do name them, to explain why they
@@ -86,10 +101,17 @@ const NETWORK_PRIMITIVES = [
 /**
  * The complete set of Chrome APIs this phase is allowed to call.
  *
- * Kept in step with `extension/src/chrome.d.ts`, which declares the same single
- * member. Adding an API means editing both, which is the point.
+ * Kept in step with `extension/src/chrome.d.ts`, which declares the same two
+ * members. Adding an API means editing both, which is the point.
+ *
+ * `chrome.tabs.create` joined the list in CHROME-EXTENSION-IMPORT-001C2, which
+ * is the whole of what "the popup can now open PaperLume" cost in privilege:
+ * neither member needs the `tabs` permission, and the manifest is unchanged.
+ * The assertion is an exact set comparison rather than a deny-list, so the next
+ * API — `storage`, `scripting`, `identity`, anything — fails here until someone
+ * writes it down.
  */
-const ALLOWED_CHROME_APIS = ["chrome.tabs.query"] as const;
+const ALLOWED_CHROME_APIS = ["chrome.tabs.query", "chrome.tabs.create"] as const;
 
 describe("extension source — files under test", () => {
   it("finds the extension source", () => {
@@ -97,7 +119,9 @@ describe("extension source — files under test", () => {
     // assertion below iterating an empty list — a green suite proving nothing.
     expect(SOURCE_FILES.length).toBeGreaterThan(0);
     expect(SOURCE_FILES.some((file) => file.endsWith("popup.ts"))).toBe(true);
+    expect(SOURCE_FILES.some((file) => file.endsWith("popupView.ts"))).toBe(true);
     expect(SOURCE_FILES.some((file) => file.endsWith("detectPaperFromUrl.ts"))).toBe(true);
+    expect(SOURCE_FILES.some((file) => file.endsWith("paperLumeHandoff.ts"))).toBe(true);
     expect(SOURCE_FILES.some((file) => file.endsWith("popup.html"))).toBe(true);
   });
 });

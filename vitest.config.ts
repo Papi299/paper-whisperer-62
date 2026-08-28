@@ -18,10 +18,13 @@ export default defineConfig({
     // unit tests with no Docker/Supabase/browser/network; the Playwright specs
     // themselves live in e2e/*.spec.ts and are excluded from Vitest.
     // extension/**/__tests__ — the Chrome extension's URL classifier, its
-    // manifest permission contract, and its no-network boundary. All pure: the
-    // classifier is a string function, and the other two read committed source
-    // files. No browser, no `chrome` runtime, no network — the extension is
-    // exercised in a real browser by a later phase, not here.
+    // PaperLume handoff URL builder, its popup behaviour, its manifest
+    // permission contract, and its no-network boundary. Still no browser and no
+    // network: the classifier and the URL builder are string functions, the
+    // manifest and boundary suites read committed source files, and the popup
+    // suite drives the committed `popup.html` under jsdom against a stub of the
+    // two `chrome.tabs` members the extension is allowed to call. A real
+    // unpacked-MV3 harness belongs to the later distribution phase, not here.
     include: [
       "src/**/*.{test,spec}.{ts,tsx}",
       "supabase/functions/**/__tests__/**/*.{test,spec}.ts",

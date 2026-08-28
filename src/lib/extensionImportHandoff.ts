@@ -1,9 +1,10 @@
 /**
  * The `/extension-import` handoff contract.
  *
- * A Chrome extension will one day open this route with one already-detected
- * identifier. That fact does not make the URL trustworthy. Anyone — a web page,
- * an email, a bookmark, an attacker — can construct
+ * The PaperLume Chrome extension opens this route with one already-detected
+ * identifier. That fact does not make the URL trustworthy, and the extension is
+ * not treated as a privileged sender: anyone — a web page, an email, a bookmark,
+ * an attacker — can construct
  * `https://app.paperlume.app/extension-import?…`, so every value that arrives
  * here is untrusted text and this module fails closed on all of it.
  *
