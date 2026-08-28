@@ -9,12 +9,27 @@
  * added here first, which turns "what can this extension actually do?" into a
  * question the diff answers.
  *
- * `chrome.tabs.query` is the only member declared, and only the members of
- * `Tab` this phase reads. Reading `Tab.url` requires either the `tabs`
- * permission or a host permission for that tab; the extension declares neither
- * and instead relies on `activeTab`, which grants temporary host permission for
- * the current tab in response to the user's click on the toolbar action. The
- * grant is revoked when the user navigates away or closes the tab.
+ * Two members are declared — `chrome.tabs.query` and `chrome.tabs.create` — and
+ * only the properties of each that this extension actually uses. Neither needs
+ * the `tabs` permission:
+ *
+ *   • `query` is used to name the tab the user is looking at. Reading `Tab.url`
+ *     from the result requires either the `tabs` permission or a host
+ *     permission for that tab; the extension declares neither and instead
+ *     relies on `activeTab`, which grants temporary host permission for the
+ *     current tab in response to the user's click on the toolbar action. The
+ *     grant is revoked when the user navigates away or closes the tab.
+ *
+ *   • `create` opens a new tab, which the Chrome documentation lists among the
+ *     features that "don't require any permissions to use". The `tabs`
+ *     permission is not a gate on the namespace at all — it grants reading the
+ *     four sensitive `Tab` properties (`url`, `pendingUrl`, `title`,
+ *     `favIconUrl`) — so adding it merely to open a tab would widen what the
+ *     extension may *read* in exchange for nothing.
+ *
+ * The returned `Tab` is deliberately not read anywhere: the extension opens the
+ * PaperLume handoff and its responsibility ends, so it learns nothing about the
+ * tab it created.
  *
  * @see https://developer.chrome.com/docs/extensions/reference/api/tabs
  * @see https://developer.chrome.com/docs/extensions/develop/concepts/activeTab
@@ -44,5 +59,17 @@ declare namespace chrome {
       readonly active?: boolean;
       readonly currentWindow?: boolean;
     }): Promise<Tab[]>;
+
+    /**
+     * Open a new tab. Returns a promise in Manifest V3 (Chrome 88+).
+     *
+     * `url` only. The platform accepts `active`, `index`, `windowId`,
+     * `openerTabId` and `pinned` too, and none is declared: the extension has no
+     * business placing a tab in the user's window, and a property that cannot be
+     * named cannot be passed by mistake. Chrome's own defaults — a new
+     * foreground tab in the current window — are what the accepted product
+     * decision asked for.
+     */
+    function create(createProperties: { readonly url?: string }): Promise<Tab>;
   }
 }

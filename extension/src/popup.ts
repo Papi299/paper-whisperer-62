@@ -1,22 +1,27 @@
 /**
  * The popup entry point.
  *
- * The complete behaviour of CHROME-EXTENSION-IMPORT-001B: read the active tab's
- * URL, classify it, show the result. It runs only because the user clicked the
- * toolbar action — which is also what grants `activeTab` — so there is no
- * background page and no service worker. Nothing observes browsing, nothing runs
- * on navigation, and nothing persists between openings.
+ * Read the active tab's URL, classify it, hand the result to the popup. It runs
+ * only because the user clicked the toolbar action — which is also what grants
+ * `activeTab` — so there is no background page and no service worker. Nothing
+ * observes browsing, nothing runs on navigation, and nothing persists between
+ * openings.
  *
- * There is deliberately no import control. The PaperLume web handoff route does
- * not exist yet, so a button here could only lie about what it would do.
+ * This file is the bootstrap and nothing else: the behaviour it starts lives in
+ * `popupView.ts`, and the classification in `detectPaperFromUrl.ts`. Both are
+ * importable without starting the extension, which is what lets them be tested
+ * as functions rather than as a browser.
+ *
+ * The popup can now offer a continuation into PaperLume, which
+ * CHROME-EXTENSION-IMPORT-001C1 gave a real route to open. It is still not an
+ * import: the extension opens a tab and its responsibility ends there. See the
+ * `popupView.ts` module comment for what one press can and cannot do.
  */
 
 import "./popup.css";
 
 import { detectPaperFromUrl, type PaperDetection } from "./detectPaperFromUrl";
-
-/** Every section the popup can show, including the initial one. */
-type PopupState = PaperDetection["state"] | "checking";
+import { createPopup } from "./popupView";
 
 /**
  * Read the URL of the tab the user is looking at.
@@ -32,34 +37,9 @@ async function readActiveTabUrl(): Promise<string | undefined> {
   return tab?.url;
 }
 
-/** Reveal exactly one state section and hide the rest. */
-function showState(root: ParentNode, state: PopupState): void {
-  for (const section of root.querySelectorAll<HTMLElement>("[data-state]")) {
-    section.hidden = section.dataset.state !== state;
-  }
-}
-
-/**
- * Write an identifier into its field.
- *
- * `textContent` rather than `innerHTML`, always. The value is structurally
- * authenticated — a PMID is bare digits, a DOI came from a proven resolver path
- * — but it still originated in a URL the user navigated to, and a rule that
- * holds only while the value happens to be safe is not a rule.
- */
-function setField(root: ParentNode, field: string, value: string): void {
-  const target = root.querySelector<HTMLElement>(`[data-field="${field}"]`);
-  if (target) target.textContent = value;
-}
-
-/** Apply a classification to the document. Pure DOM work; no I/O. */
-export function render(root: ParentNode, detection: PaperDetection): void {
-  if (detection.state === "pubmed") setField(root, "pmid", detection.pmid);
-  if (detection.state === "doi") setField(root, "doi", detection.doi);
-  showState(root, detection.state);
-}
-
 async function main(): Promise<void> {
+  const popup = createPopup(document);
+
   let detection: PaperDetection;
   try {
     detection = detectPaperFromUrl(await readActiveTabUrl());
@@ -72,7 +52,7 @@ async function main(): Promise<void> {
     detection = { state: "restricted" };
   }
 
-  render(document, detection);
+  popup.show(detection);
 }
 
 void main();
