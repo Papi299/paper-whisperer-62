@@ -656,8 +656,12 @@ test.describe("Extension import handoff", () => {
     // 2. And the page does NOT say the assignment succeeded.
     await expect(page.getByText(/Assigned to/i)).toHaveCount(0);
 
-    // 3. The importer's own warning is still surfaced, not suppressed.
-    await expect(page.getByText(/project assignment failed/i)).toBeVisible({ timeout: 30_000 });
+    // 3. The importer's own warning is still surfaced, not suppressed. `.first()`
+    //    because the toast renders its description and an aria-live announcement
+    //    of the same text, and both matching is the correct outcome.
+    await expect(page.getByText(/project assignment failed/i).first()).toBeVisible({
+      timeout: 30_000,
+    });
 
     // 4. One import attempt. 5. One assignment attempt — the page invents no
     //    second call of its own to "fix" or verify the failure.
