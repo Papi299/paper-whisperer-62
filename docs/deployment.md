@@ -18,7 +18,7 @@ Different PRs require different deploy actions. The table below maps PR scope to
 
 | PR type | Examples | Required deploy action |
 |---|---|---|
-| **Frontend-only / client code** | React hooks, components, client lib, `src/lib/clientEnv.ts` (PR #138) | Merge → Vercel rebuild from `main`. No `supabase` commands. |
+| **Frontend-only / client code** | React hooks, components, client lib, `src/lib/clientEnv.ts` (PR #138), the `/extension-import` handoff route | Merge → Vercel rebuild from `main`. No `supabase` commands. A new client route needs no server configuration: `vercel.json` already rewrites everything outside `/assets/` to `index.html`, so a deep link and a hard refresh both resolve. |
 | **Docs-only** | README, `docs/*.md` (including this file) | Merge only. No runtime deploy. Vercel may rebuild but nothing user-visible changes unless the README is shipped as a docs site (not the case in this repo today). |
 | **Chrome extension** | Files under `extension/`, `vite.extension.config.ts`, `tsconfig.extension.json` | **No deploy action exists today.** The extension is built by the required `Validate` check (`npm run build:extension` → `dist-extension/`) and is loaded unpacked for development; it is not published to the Chrome Web Store, and its output directory is gitignored and excluded from the Vercel artefact. A merge deploys nothing. Store packaging and submission belong to a later phase and will get their own row. |
 | **Supabase migration** | Files under `supabase/migrations/` | Merge → run the [Supabase migration deployment](#6-supabase-migration-deployment) sequence. Vercel deploy not blocked by migration but should happen after the DB is in the expected state. |
