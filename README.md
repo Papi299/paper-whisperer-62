@@ -140,14 +140,25 @@ To check it by hand, open a tab and click the PaperLume toolbar action:
 
 | Open this | Expect |
 |---|---|
-| `https://pubmed.ncbi.nlm.nih.gov/12345678/` | Paper detected · PubMed · PMID `12345678` |
-| `https://doi.org/10.1056/NEJMoa2107934` | Paper detected · DOI · `10.1056/NEJMoa2107934` |
-| any ordinary publisher article page | No paper identified — and **not** a guess from the page title |
-| `chrome://extensions` | Nothing to check here |
+| `https://pubmed.ncbi.nlm.nih.gov/12345678/` | Paper detected · PubMed · PMID `12345678` · **Continue in PaperLume** |
+| `https://doi.org/10.1056/NEJMoa2107934` | Paper detected · DOI · `10.1056/NEJMoa2107934` · **Continue in PaperLume** |
+| any ordinary publisher article page | No paper identified — and **not** a guess from the page title. No continuation button |
+| `chrome://extensions` | Nothing to check here. No continuation button |
 
-**What it does today.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. That is all. It makes no network request, holds no PaperLume or Supabase session, reads no page content, and cannot import anything. The only permission it requests is `activeTab`.
+**What it does.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. For a recognised paper it offers **Continue in PaperLume**, which opens one new tab at the handoff route below. That is the whole of it: the extension makes no network or API request of its own, holds no PaperLume or Supabase session, reads no page content, stores nothing, and imports nothing. The only permission it requests is `activeTab` — opening a tab needs no `tabs` permission and no host permission.
 
-**It is not yet connected to PaperLume.** The web application now has the route that will receive a handoff (below), but the extension does not open it — wiring the two together is a later phase.
+**The extension hands over, it does not import.** One press does this and stops:
+
+```
+toolbar click → activeTab URL read → PubMed/DOI detection → Continue in PaperLume
+    → new tab at https://app.paperlume.app/extension-import?kind=…&value=…
+    → PaperLume signs you in if needed → you choose Projects and Tags
+    → you press Import to PaperLume
+```
+
+Everything from the new tab onwards belongs to the web application: authentication, Projects and Tags, duplicate handling, and the explicit confirmation that actually writes. The identifier is the only thing that travels — no title, no page URL, no referrer, no ids, no analytics parameter — and the receiving route treats it as untrusted regardless of who sent it.
+
+The extension is still loaded unpacked for development. It is **not** published to the Chrome Web Store.
 
 ## Extension import handoff
 
@@ -158,7 +169,7 @@ To check it by hand, open a tab and click the PaperLume toolbar action:
 /extension-import?kind=doi&value=10.1056%2FNEJMoa2107934
 ```
 
-It carries an identifier and nothing else — no token, no session material, no user id, no Project or Tag id, no paper metadata. The value is untrusted regardless of who sent it: a PMID must already be in normalized form and a DOI must round-trip through the application's canonical DOI handling, so anything else renders as an unrecognised link. There is no title fallback.
+It carries an identifier and nothing else — no token, no session material, no user id, no Project or Tag id, no paper metadata. The Chrome extension above is one sender of these links; it is not a privileged one. The value is untrusted regardless of who sent it: a PMID must already be in normalized form and a DOI must round-trip through the application's canonical DOI handling, so anything else renders as an unrecognised link. There is no title fallback.
 
 Opening the route imports nothing. It shows the identifier, lets you pick from your existing Projects and Tags, and runs the same importer the Add Papers dialog uses only after you choose **Import to PaperLume** — so a link, a bookmark or a refresh can never write to your library. A paper you already have is reported as already in your library, and any Project or Tag you had selected is explicitly *not* applied to it.
 
