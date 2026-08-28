@@ -109,13 +109,81 @@ export const MAX_PACKAGE_BYTES = 2 * 1024 * 1024;
 
 const decoder = new TextDecoder("utf-8", { fatal: false });
 
-/** Chrome accepts one to four dot-separated integers, each 0–65535. */
-function isValidChromeVersion(value) {
+/**
+ * Chrome's manifest `version` grammar, in full.
+ *
+ * Four rules, all of them load-bearing, and the last two are the ones a
+ * "one-to-four numbers" reading silently drops:
+ *
+ *   1. one to four dot-separated integers;
+ *   2. each integer between 0 and 65535 inclusive;
+ *   3. *"Non-zero integers can't start with 0. For example, 032 is invalid
+ *      because it begins with a zero."*
+ *   4. *"They must not be all zero. For example, 0 and 0.0.0.0 are invalid
+ *      while 0.1.0.0 is valid."*
+ *
+ * Rules 3 and 4 matter because a version Chrome rejects is not a cosmetic
+ * problem: the Store refuses the upload, and an installed copy compares
+ * versions to decide whether an update is newer. `032` parses as the number 32
+ * under a `Number()` check, so a validator that only range-checks accepts a
+ * string Chrome will not — which is exactly the failure this package contract
+ * exists to catch before an upload does.
+ *
+ * The regex enforces rules 1–3 structurally: each component is either a bare
+ * `0` or a non-zero leading digit followed by any digits. Rule 2's upper bound
+ * and rule 4 are checked separately, because neither is expressible as a
+ * readable pattern.
+ *
+ * One corner the published rules do not settle: a *zero* component written with
+ * padding, as in `1.00`. Rule 3 is worded about non-zero integers, so it does
+ * not name this case, and Chrome's documentation gives no example of it. The
+ * pattern above rejects it — a zero component must be exactly `0`.
+ *
+ * That is deliberately the strict reading. The cost of being wrong is
+ * asymmetric: accepting a version Chrome rejects means discovering it at
+ * upload, while rejecting `1.00` means declining a version string nobody
+ * writes and which no released extension has ever needed. If Chrome is ever
+ * shown to accept it, the fix is one alternation in
+ * `CHROME_VERSION_COMPONENT`. Note that the all-zero padded forms (`0.00`) are
+ * invalid regardless, by rule 4.
+ *
+ * @see https://developer.chrome.com/docs/extensions/reference/manifest/version
+ */
+const CHROME_VERSION_COMPONENT = String.raw`(?:0|[1-9]\d*)`;
+const CHROME_VERSION_PATTERN = new RegExp(
+  `^${CHROME_VERSION_COMPONENT}(?:\\.${CHROME_VERSION_COMPONENT}){0,3}$`,
+);
+
+export function isValidChromeVersion(value) {
   if (typeof value !== "string") return false;
-  const parts = value.split(".");
-  if (parts.length < 1 || parts.length > 4) return false;
-  return parts.every((part) => /^\d+$/.test(part) && Number(part) <= 65535);
+
+  // Rules 1 and 3: shape, component count, and no leading zero on a non-zero
+  // component. `032`, `00.1` and `01.2.3` fail here.
+  if (!CHROME_VERSION_PATTERN.test(value)) return false;
+
+  const parts = value.split(".").map(Number);
+
+  // Rule 2: upper bound. The lower bound and non-negativity come free from the
+  // pattern, which admits no sign and no non-digit.
+  if (parts.some((part) => part > 65535)) return false;
+
+  // Rule 4: not all zero. `0`, `0.0` and `0.0.0.0` fail here; `0.1.0.0` passes.
+  if (parts.every((part) => part === 0)) return false;
+
+  return true;
 }
+
+/**
+ * Chrome's manifest `description` limit.
+ *
+ * *"A plain text string (no HTML or other formatting; no more than 132
+ * characters)"*. Chrome truncates or rejects past this, and the same string is
+ * what the Store listing shows, so an over-long description is a listing defect
+ * as well as a manifest one.
+ *
+ * @see https://developer.chrome.com/docs/extensions/reference/manifest/description
+ */
+export const MAX_DESCRIPTION_LENGTH = 132;
 
 /** Absolute `http(s)` URLs, scanned from raw text; see the module comment. */
 const ABSOLUTE_URL_PATTERN = /https?:\/\/[^\s"'`)<>\\]+/gi;
@@ -231,6 +299,11 @@ export function findPackageViolations(files) {
     }
     if (typeof manifest.description !== "string" || manifest.description.length === 0) {
       violations.push("description is missing or empty");
+    } else if (manifest.description.length > MAX_DESCRIPTION_LENGTH) {
+      violations.push(
+        `description is ${manifest.description.length} characters, over Chrome's ` +
+          `${MAX_DESCRIPTION_LENGTH}-character manifest limit`,
+      );
     }
 
     const permissions = manifest.permissions;

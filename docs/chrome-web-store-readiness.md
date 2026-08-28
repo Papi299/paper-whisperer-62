@@ -545,7 +545,11 @@ directories · `.git*` · `node_modules/` · `package.json` / lockfiles ·
 profile directories · `.pem`/`.key`/`.crx` · `.DS_Store` · any `key` manifest
 field · entries with absolute or `..` paths · empty files.
 
-Plus: `manifest_version === 3` · exact name · valid Chrome version syntax ·
+Plus: `manifest_version === 3` · exact name · **Chrome's full `version` grammar**
+(one to four integers, each 0–65535, no leading zero on a non-zero integer, and
+not all zero — so `032`, `0` and `0.0.0.0` are refused where a range check alone
+would accept them, each rule carrying its own negative control) · **`description`
+present, non-empty and within Chrome's 132-character limit** ·
 permissions exactly `["activeTab"]` · no host permissions · no forbidden manifest
 key · every manifest-referenced file present · no origin other than
 `https://app.paperlume.app` in any packaged file · no remote `src`/`href`/`url()`/
@@ -558,7 +562,7 @@ deliberate and is the opposite of the right answer for a *source* scan (see
 which documents a real defect caused by stripping the very text being searched
 for). In a **package**, a comment ships; a remote origin written in one is a
 remote origin in the artefact a reviewer downloads. There is no exempt text in a
-package. 79 fixture tests exercise every check against a deliberately broken
+package. 105 fixture tests exercise every check against a deliberately broken
 package, so a check that stopped firing fails loudly rather than passing quietly.
 
 ---
@@ -648,14 +652,25 @@ Package format from [Publish in the Chrome Web Store](https://developer.chrome.c
 
 ### VISUAL ASSET REQUIRED
 
-- **128×128 store icon** — required; does not exist (§10)
-- **Manifest icons** at 16/32/48/128 — do not exist (§10)
-- **At least one 1280×800 screenshot**, up to 5 — must show the real popup;
-  produce from the release candidate, not a mockup
-- **440×280 small promo tile** — PNG or JPEG
-- **1400×560 marquee promo tile** — optional
-- **Promotional YouTube video** — optional; verify at submission whether it is
-  still optional for this listing type
+Current first-party guidance states that the listed graphic assets **must be
+provided**, *"except the Marquee promo tile, which is optional."* The marquee
+tile is therefore the only one of these treated as optional here.
+
+- **128×128 store icon** — **REQUIRED**; does not exist (§10)
+- **Manifest icons** at 16/32/48/128 — do not exist (§10). Distinct from the
+  store icon above: no manifest key can satisfy the Store's, and the Store
+  listing cannot satisfy Chrome's
+- **At least one 1280×800 screenshot**, up to 5 — **REQUIRED**. Must show the
+  real popup; produce from the release candidate, not a mockup
+- **440×280 small promo tile** — **REQUIRED**; PNG or JPEG
+- **YouTube promotional video** — **REQUIRED** by the current Chrome Developer
+  Dashboard listing documentation, which lists it among the assets that must be
+  provided. Re-verify against the live Developer Dashboard immediately before
+  submission, because Store requirements change without notice. This is the
+  largest unstarted listing item: it needs a script, a recording of the real
+  extension, and a hosted YouTube URL, none of which exist
+- **1400×560 marquee promo tile** — **optional**, and the only asset on this
+  list that is
 
 ### DEVELOPER DASHBOARD ONLY
 

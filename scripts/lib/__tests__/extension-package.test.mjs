@@ -21,6 +21,7 @@ import {
   manifestReferencedPaths,
   MAX_PACKAGE_ENTRIES,
   MAX_PACKAGE_BYTES,
+  MAX_DESCRIPTION_LENGTH,
   FORBIDDEN_MANIFEST_KEYS,
 } from "../extension-package.mjs";
 
@@ -158,22 +159,100 @@ describe("package contract — manifest", () => {
     expectViolation(buildPackage({ manifest: { name: "Paper Whisperer" } }), "expected \"PaperLume\"");
   });
 
-  it.each(["", "1.2.3.4.5", "1.x", "1.-1", "70000", "v1.0"])(
-    "rejects invalid Chrome version syntax %s",
+  it.each([
+    ["", "empty"],
+    ["1.2.3.4.5", "five components"],
+    ["1.x", "non-numeric component"],
+    ["1.-1", "negative component"],
+    ["70000", "over 65535"],
+    ["1.70000", "over 65535 in a later component"],
+    ["v1.0", "prefixed"],
+    ["1.", "trailing dot"],
+    [".1", "leading dot"],
+    ["1..2", "empty component"],
+  ])("rejects invalid Chrome version syntax %j (%s)", (version) => {
+    expectViolation(buildPackage({ manifest: { version } }), "not valid Chrome manifest version syntax");
+  });
+
+  // NEGATIVE CONTROL for Chrome's leading-zero rule: "Non-zero integers can't
+  // start with 0. For example, 032 is invalid because it begins with a zero."
+  //
+  // Every one of these passes a naive `/^\d+$/` + `Number(part) <= 65535`
+  // check — `Number("032")` is 32 — so this block is precisely what fails if
+  // the rule is dropped from `isValidChromeVersion`. It is the reason the
+  // helper cannot go back to range-checking alone.
+  it.each(["032", "1.032", "00.1", "01.2.3", "0001", "1.00", "1.0.01"])(
+    "rejects %j — a non-zero integer may not begin with 0",
     (version) => {
       expectViolation(buildPackage({ manifest: { version } }), "not valid Chrome manifest version syntax");
     },
   );
 
-  it.each(["1", "1.0", "1.0.0", "0.1.0", "65535.65535.65535.65535"])(
-    "accepts valid Chrome version syntax %s",
+  // NEGATIVE CONTROL for Chrome's all-zero rule: "They must not be all zero.
+  // For example, 0 and 0.0.0.0 are invalid while 0.1.0.0 is valid."
+  //
+  // Each of these is structurally well-formed and in range, so only the
+  // explicit all-zero check rejects them. Removing that check makes this block
+  // fail and nothing else.
+  it.each(["0", "0.0", "0.0.0", "0.0.0.0", "0.00"])(
+    "rejects %j — a version may not be all zero",
     (version) => {
-      expect(findPackageViolations(buildPackage({ manifest: { version } }))).toEqual([]);
+      expectViolation(buildPackage({ manifest: { version } }), "not valid Chrome manifest version syntax");
     },
   );
 
+  it.each([
+    "1",
+    "1.0",
+    "1.0.0",
+    "0.1",
+    "0.1.0",
+    // Chrome's own counter-example to the all-zero rule: zero components are
+    // fine as long as they are not *all* zero.
+    "0.1.0.0",
+    "65535.65535.65535.65535",
+    "2.10.2",
+    "3.1.2.4567",
+  ])("accepts valid Chrome version syntax %j", (version) => {
+    expect(findPackageViolations(buildPackage({ manifest: { version } }))).toEqual([]);
+  });
+
+  it("accepts the version the extension currently ships", () => {
+    expect(findPackageViolations(buildPackage({ manifest: { version: "0.1.0" } }))).toEqual([]);
+  });
+
   it("rejects a missing description", () => {
     expectViolation(buildPackage({ manifest: { description: undefined } }), "description is missing");
+  });
+
+  it("rejects an empty description", () => {
+    expectViolation(buildPackage({ manifest: { description: "" } }), "description is missing or empty");
+  });
+
+  it("rejects a non-string description", () => {
+    expectViolation(buildPackage({ manifest: { description: 42 } }), "description is missing or empty");
+  });
+
+  it("accepts the description the extension currently ships", () => {
+    // Guards against the limit being set below what already ships, which would
+    // fail the real package rather than a hypothetical one.
+    expect(VALID_MANIFEST.description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_LENGTH);
+    expect(findPackageViolations(buildPackage())).toEqual([]);
+  });
+
+  it(`accepts a description of exactly ${MAX_DESCRIPTION_LENGTH} characters`, () => {
+    const description = "d".repeat(MAX_DESCRIPTION_LENGTH);
+    expect(findPackageViolations(buildPackage({ manifest: { description } }))).toEqual([]);
+  });
+
+  it(`rejects a description of ${MAX_DESCRIPTION_LENGTH + 1} characters`, () => {
+    // The boundary is asserted from both sides, one character apart, so an
+    // off-by-one in either direction fails rather than passing silently.
+    const description = "d".repeat(MAX_DESCRIPTION_LENGTH + 1);
+    expectViolation(
+      buildPackage({ manifest: { description } }),
+      `description is ${MAX_DESCRIPTION_LENGTH + 1} characters, over Chrome's ${MAX_DESCRIPTION_LENGTH}-character manifest limit`,
+    );
   });
 
   it.each([
