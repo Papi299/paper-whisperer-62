@@ -145,7 +145,7 @@ To check it by hand, open a tab and click the PaperLume toolbar action:
 | any ordinary publisher article page | No paper identified — and **not** a guess from the page title. No continuation button |
 | `chrome://extensions` | Nothing to check here. No continuation button |
 
-**What it does.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. For a recognised paper it offers **Continue in PaperLume**, which opens one new tab at the handoff route below. That is the whole of it: the extension makes no network or API request of its own, holds no PaperLume or Supabase session, reads no page content, stores nothing, and imports nothing. The only permission it requests is `activeTab` — opening a tab needs no `tabs` permission and no host permission.
+**What it does.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. For a recognised paper it offers **Continue in PaperLume**, which opens one new tab at the handoff route below. That is the whole of it: the extension makes no network or API request of its own, holds no PaperLume or Supabase session, reads no page content, stores nothing, and imports nothing. The only permission it requests is `activeTab`, which grants temporary access to the one tab you invoked it on — that grant is what lets it read that tab's address. Opening the new tab itself requires neither the `tabs` permission nor a host permission.
 
 **The extension hands over, it does not import.** One press does this and stops:
 
