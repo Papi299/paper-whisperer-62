@@ -9,6 +9,7 @@ import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import ExtensionImport from "./pages/ExtensionImport";
 import ResetPassword from "./pages/ResetPassword";
+import Privacy from "./pages/Privacy";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -37,6 +38,10 @@ const App = () => (
                 navigation — it imports only after an explicit confirmation. */}
             <Route path="/extension-import" element={<ExtensionImport />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            {/* Public legal surface. Unauthenticated by design — it carries no
+                guard and reads no session, so it renders identically signed in
+                or out, on direct URL entry and after a refresh. */}
+            <Route path="/privacy" element={<Privacy />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
