@@ -51,14 +51,28 @@
  *   it returns there is Chrome's genuine answer for an extension holding no
  *   grant, which is a `Tab` with no `url` at all.
  *
- *   TEST DOUBLE — the *return value* of `chrome.tabs.query` in
- *   `openPopup({ activeTabUrl })`. Chrome only populates `Tab.url` after the
+ *   REAL — `chrome.scripting.executeScript` in every `openPopup` call that does
+ *   **not** pass `pageHtml`. It is invoked, against a real tab id, and Chrome
+ *   really refuses it — *"Cannot access contents of the page. Extension
+ *   manifest must request permission to access the respective host."* — because
+ *   no toolbar click ever granted `activeTab`. That refusal is the fail-closed
+ *   path, exercised for real rather than simulated.
+ *
+ *   PARTIAL TEST DOUBLE — the `url` of the `Tab` `chrome.tabs.query` returns in
+ *   `openPopup({ activeTabUrl })`. Chrome populates `Tab.url` only after the
  *   user clicks the toolbar action, which grants `activeTab`; Playwright drives
  *   page content and cannot click browser chrome, and there is no supported API
- *   to simulate that grant. So the URL is injected, and the toolbar click that
- *   produces it in production is covered by the manual gate in
- *   `docs/chrome-web-store-readiness.md`. Nothing else about the popup is
- *   replaced: the injected string is fed to the real built classifier.
+ *   to simulate that grant. So that one property is overwritten on the real
+ *   `Tab` Chrome returned — the `id` the injection targets is Chrome's own — and
+ *   the toolbar click that produces the URL in production is covered by the
+ *   manual gate in `docs/chrome-web-store-readiness.md`. Nothing else about the
+ *   popup is replaced: the injected string is fed to the real built classifier.
+ *
+ *   TEST DOUBLE — `chrome.scripting.executeScript` in `openPopup({ pageHtml })`,
+ *   and it is a double of the **grant**, not of the read. See
+ *   `PopupOptions.pageHtml` below: the extension's own injected function is
+ *   taken as it was built, serialized exactly as Chrome serializes it, and
+ *   executed in a real page's realm.
  *
  *   PASS-THROUGH SPY — `chrome.tabs.create` records the URL it was called with
  *   and then calls the real API. It is not replaced, so the assertions still
@@ -114,6 +128,35 @@ export interface PopupOptions {
    * grant. See the module comment.
    */
   readonly activeTabUrl?: string;
+  /**
+   * Markup to serve at `activeTabUrl`, in a real tab, as the page the DOI
+   * metadata read runs against.
+   *
+   * Passing it turns on the one double this harness has for the `activeTab`
+   * grant, and it is worth being precise about what that double replaces.
+   * Chrome refuses `chrome.scripting.executeScript` outright without a grant —
+   * verified, not assumed: the rejection is *"Cannot access contents of the
+   * page. Extension manifest must request permission to access the respective
+   * host."* — so the grant is the one thing that has to be supplied.
+   *
+   * What is supplied is **only** the permission to reach the page. The harness
+   * takes the `func` the built extension passed, serializes it with
+   * `String(func)` exactly as Chrome does before injection, and evaluates it in
+   * the realm of a real tab that really navigated to `activeTabUrl` and really
+   * parsed this markup. So the function under test is the built one, it runs
+   * against a real `document.head` with real `<meta>` elements, and what comes
+   * back is what it really returned — which is then handed to the real built
+   * normalizer in the real popup.
+   *
+   * That also makes the harness sensitive to the mistake most worth catching
+   * here: an injected function that reads anything from module scope survives
+   * bundling, passes every jsdom test, and throws `ReferenceError` in the page.
+   * It throws here too, for the same reason.
+   *
+   * The markup is served by route interception, so nothing is fetched: the
+   * browser's DNS is black-holed and `activeTabUrl` never resolves.
+   */
+  readonly pageHtml?: string;
   /** Make `chrome.tabs.create` reject, to exercise the popup's failure path. */
   readonly failTabCreate?: boolean;
 }
@@ -149,7 +192,27 @@ function instrumentation(options: PopupOptions): void {
 
   if (typeof options.activeTabUrl === "string") {
     const url = options.activeTabUrl;
-    chrome.tabs.query = async () => [{ url }];
+    // `chrome.tabs.query` still runs, and the `Tab` Chrome returned is still the
+    // one that comes back — with `url` overwritten, because Chrome leaves it
+    // absent without a toolbar grant. Everything else, `id` in particular, is
+    // Chrome's own, so the injection below targets a tab that really exists.
+    const realQuery = chrome.tabs.query.bind(chrome.tabs);
+    chrome.tabs.query = async (queryInfo) => {
+      const tabs = await realQuery(queryInfo);
+      return tabs.map((tab) => ({ ...tab, url }));
+    };
+  }
+
+  if (options.pageHtml !== undefined) {
+    // The grant double. `executeScript` is replaced; the function it was given
+    // is not — it is serialized the way Chrome serializes it and run, by
+    // Playwright, in the real target page. See `PopupOptions.pageHtml`.
+    chrome.scripting.executeScript = async ({ func }) => {
+      const harness = window as unknown as {
+        __harnessInjectIntoPage(source: string): Promise<string[]>;
+      };
+      return [{ result: await harness.__harnessInjectIntoPage(String(func)) }];
+    };
   }
 }
 
@@ -203,7 +266,29 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
       extensionId,
 
       async openPopup(options: PopupOptions = {}) {
+        // The target page first, so the popup's injection has somewhere real to
+        // land by the time the popup script runs.
+        let target: Page | null = null;
+        if (options.pageHtml !== undefined) {
+          const targetUrl = options.activeTabUrl;
+          if (targetUrl === undefined) {
+            throw new Error("openPopup({ pageHtml }) needs activeTabUrl — the page has to have an address");
+          }
+          target = await context.newPage();
+          const html = options.pageHtml;
+          await target.route(targetUrl, (route) =>
+            route.fulfill({ contentType: "text/html; charset=utf-8", body: html }),
+          );
+          await target.goto(targetUrl);
+        }
+
         const page = await context.newPage();
+        if (target !== null) {
+          const targetPage = target;
+          await page.exposeFunction("__harnessInjectIntoPage", (source: string) =>
+            targetPage.evaluate<string[]>(`(${source})()`),
+          );
+        }
         await page.addInitScript(instrumentation, options);
         await page.goto(`chrome-extension://${extensionId}/popup.html`);
         return page;

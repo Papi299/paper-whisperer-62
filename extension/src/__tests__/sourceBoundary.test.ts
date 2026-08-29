@@ -14,13 +14,21 @@
  * *does not contain*. A behavioural test can only show that the paths it
  * exercised made no request; this shows there is no request to make.
  *
- * ## What CHROME-EXTENSION-IMPORT-001C2 did *not* change
+ * ## What the two behaviour changes did *not* change
  *
- * The extension can now open `https://app.paperlume.app/extension-import` in a
- * new tab. That is a browser navigating a tab, not the extension reaching the
- * network, so nothing below is relaxed for it: `fetch`, XHR, `WebSocket`,
+ * The extension can open `https://app.paperlume.app/extension-import` in a new
+ * tab (001C2). That is a browser navigating a tab, not the extension reaching
+ * the network, so nothing below is relaxed for it: `fetch`, XHR, `WebSocket`,
  * `EventSource` and `sendBeacon` are as absent as they were, and the extension
  * still cannot see a response.
+ *
+ * The extension can read a page's DOI metadata (001E2-CORRECTION-01). That
+ * widens exactly one line in this file — `ALLOWED_CHROME_APIS` gains
+ * `chrome.scripting.executeScript` — and nothing else. In particular the
+ * markup-sink rule matters *more* now, not less: a DOI can arrive from a
+ * publisher's `<meta>` tag rather than only from a URL the user navigated to,
+ * so "the popup never builds markup from a value" is now a rule about
+ * third-party page content.
  *
  * The origin itself is deliberately *not* pinned here. `executableText` strips
  * string literals, so a check written in this file would be inspecting text with
@@ -99,19 +107,32 @@ const NETWORK_PRIMITIVES = [
 ] as const;
 
 /**
- * The complete set of Chrome APIs this phase is allowed to call.
+ * The complete set of Chrome APIs this extension is allowed to call.
  *
- * Kept in step with `extension/src/chrome.d.ts`, which declares the same two
+ * Kept in step with `extension/src/chrome.d.ts`, which declares the same three
  * members. Adding an API means editing both, which is the point.
  *
  * `chrome.tabs.create` joined the list in CHROME-EXTENSION-IMPORT-001C2, which
  * is the whole of what "the popup can now open PaperLume" cost in privilege:
- * neither member needs the `tabs` permission, and the manifest is unchanged.
+ * neither `tabs` member needs the `tabs` permission, and the manifest was
+ * unchanged.
+ *
+ * `chrome.scripting.executeScript` joined in
+ * CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 and did cost something: the
+ * `scripting` permission, asserted in `manifest.test.ts`. It is the whole of
+ * what the DOI metadata read cost, and it is worth noting what it did *not*
+ * cost — no host permission, no content script, no background context, so the
+ * injection can still only happen for a tab the user invoked the action on.
+ *
  * The assertion is an exact set comparison rather than a deny-list, so the next
- * API — `storage`, `scripting`, `identity`, anything — fails here until someone
- * writes it down.
+ * API — `storage`, `identity`, `chrome.scripting.insertCSS`, anything — fails
+ * here until someone writes it down.
  */
-const ALLOWED_CHROME_APIS = ["chrome.tabs.query", "chrome.tabs.create"] as const;
+const ALLOWED_CHROME_APIS = [
+  "chrome.tabs.query",
+  "chrome.tabs.create",
+  "chrome.scripting.executeScript",
+] as const;
 
 describe("extension source — files under test", () => {
   it("finds the extension source", () => {
@@ -121,6 +142,8 @@ describe("extension source — files under test", () => {
     expect(SOURCE_FILES.some((file) => file.endsWith("popup.ts"))).toBe(true);
     expect(SOURCE_FILES.some((file) => file.endsWith("popupView.ts"))).toBe(true);
     expect(SOURCE_FILES.some((file) => file.endsWith("detectPaperFromUrl.ts"))).toBe(true);
+    expect(SOURCE_FILES.some((file) => file.endsWith("detectPaperFromMetadata.ts"))).toBe(true);
+    expect(SOURCE_FILES.some((file) => file.endsWith("classifyActiveTab.ts"))).toBe(true);
     expect(SOURCE_FILES.some((file) => file.endsWith("paperLumeHandoff.ts"))).toBe(true);
     expect(SOURCE_FILES.some((file) => file.endsWith("popup.html"))).toBe(true);
   });
@@ -186,9 +209,10 @@ describe("extension source — Chrome API surface", () => {
   });
 
   it("never builds markup from a value", () => {
-    // Every value shown in the popup originated in a URL the user navigated to.
-    // `textContent` is the only way one reaches the document, and this keeps it
-    // that way without relying on review.
+    // Every value shown in the popup originated either in a URL the user
+    // navigated to or, since 001E2-CORRECTION-01, in a publisher's `<meta>`
+    // content. `textContent` is the only way one reaches the document, and this
+    // keeps it that way without relying on review.
     for (const file of SOURCE_FILES) {
       const code = executableText(readFileSync(file, "utf-8"));
       for (const sink of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"]) {

@@ -10,10 +10,14 @@
       popup script only ever flips visibility and writes `textContent`. It never
       builds markup from a value that came from the page, and there is no
       `innerHTML` anywhere in the extension — a rule the permission-boundary test
-      asserts rather than trusting to review.
+      asserts rather than trusting to review. That rule matters more since a DOI
+      can now come out of a publisher's `<meta>` tag rather than only out of a
+      URL the user navigated to.
 
-      The document opens in the "checking" state, which is what the user sees for
-      the one frame before `chrome.tabs.query` resolves.
+      The document opens in the "checking" state, which is what the user sees
+      until classification resolves — one frame for an address the classifier
+      answers on its own, and slightly longer on the ordinary page where the DOI
+      metadata read runs.
     -->
     <main class="popup">
       <h1 class="popup__brand">PaperLume</h1>
@@ -45,8 +49,9 @@
       <section class="state" data-state="unsupported" hidden>
         <p class="state__headline">No paper identified</p>
         <p class="state__detail">
-          PaperLume cannot yet identify a paper from this page&rsquo;s address. It
-          currently reads PubMed record and doi.org links.
+          PaperLume found no PubMed ID or DOI in this page&rsquo;s address, and no
+          standard DOI metadata in the page itself. Not every publisher
+          publishes one.
         </p>
       </section>
 
@@ -89,10 +94,21 @@
         </p>
       </div>
 
+      <!--
+        The privacy footnote. It has to stay exactly true of what the code does:
+        CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 made the extension able to
+        read standard DOI metadata from the page, so the previous sentence
+        (&ldquo;never the page itself&rdquo;) became false and was replaced rather
+        than softened. Five claims, each of which a test pins:
+        inspection happens only on opening; the address is checked first; page
+        access is limited to DOI metadata and only when it is needed; nothing is
+        stored; and Continue transmits the identifier alone.
+      -->
       <p class="popup__footnote">
-        Reads this tab&rsquo;s address only when you open PaperLume, never the page
-        itself. Nothing leaves the extension unless you choose Continue in
-        PaperLume, which passes on the identifier above and nothing else.
+        PaperLume checks this tab only when you open it. It reads the address
+        first and, when needed, standard DOI metadata in the page. Nothing is
+        stored. Nothing leaves the extension unless you choose Continue in
+        PaperLume, which passes only the identified PMID or DOI.
       </p>
     </main>
 

@@ -71,7 +71,7 @@ const VALID_MANIFEST = {
   version: "0.1.0",
   description: "Identify the scientific paper on the page you are viewing.",
   icons: VALID_ICON_MAP,
-  permissions: ["activeTab"],
+  permissions: ["activeTab", "scripting"],
   action: { default_title: "PaperLume", default_popup: "popup.html", default_icon: VALID_ICON_MAP },
   content_security_policy: { extension_pages: "script-src 'self'; object-src 'self';" },
 };
@@ -91,7 +91,13 @@ function buildPackage({ manifest = {}, files = {} } = {}) {
   const entries = new Map([
     ["manifest.json", encoder.encode(JSON.stringify(merged, null, 2))],
     ["popup.html", encoder.encode('<!doctype html><html><body><script type="module" src="./popup.js"></script></body></html>')],
-    ["popup.js", encoder.encode('const u="https://app.paperlume.app";chrome.tabs.query({});chrome.tabs.create({url:u});')],
+    [
+      "popup.js",
+      encoder.encode(
+        'const u="https://app.paperlume.app";chrome.tabs.query({});chrome.tabs.create({url:u});' +
+          "chrome.scripting.executeScript({});",
+      ),
+    ],
     ["popup.css", encoder.encode(".popup{color:#111}")],
     ...Object.entries(VALID_ICON_FILES),
   ]);
@@ -299,13 +305,19 @@ describe("package contract — manifest", () => {
   });
 
   it.each([
-    [["activeTab", "tabs"], "an added permission"],
+    [["activeTab", "scripting", "tabs"], "an added permission"],
     [["tabs"], "a substituted permission"],
+    [["activeTab"], "a dropped permission"],
+    [["scripting"], "activeTab dropped, which would leave scripting looking for a host permission"],
     [[], "an empty permission list"],
-    [["storage", "activeTab"], "a reordered widened list"],
+    [["scripting", "activeTab"], "a reordered list"],
+    [["activeTab", "scripting", "activeTab"], "a duplicated permission"],
     ["activeTab", "a non-array permissions value"],
   ])("rejects %j — %s", (permissions) => {
-    expectViolation(buildPackage({ manifest: { permissions } }), "expected exactly [\"activeTab\"]");
+    expectViolation(
+      buildPackage({ manifest: { permissions } }),
+      'expected exactly ["activeTab","scripting"]',
+    );
   });
 
   it.each(FORBIDDEN_MANIFEST_KEYS)("rejects the forbidden manifest key %s", (key) => {
@@ -483,21 +495,33 @@ describe("package contract — file contents", () => {
 
   it.each([
     "chrome.storage.local",
-    "chrome.scripting",
     "chrome.cookies",
     "chrome.identity",
     "chrome.runtime.sendMessage",
     "chrome.webRequest",
     "chrome.tabs.executeScript",
     "chrome.tabs.update",
+    // The neighbours of the one `scripting` member that is allowed. Adding
+    // `scripting` to the manifest did not open the namespace: injecting CSS and
+    // registering a persistent content script are both reachable through it and
+    // both remain contract changes.
+    "chrome.scripting.insertCSS",
+    "chrome.scripting.registerContentScripts",
+    "chrome.scripting.getRegisteredContentScripts",
   ])("rejects the out-of-contract Chrome API %s", (member) => {
     expectViolation(buildPackage({ files: { "popup.js": `${member}({});` } }), "outside the declared surface");
   });
 
-  it("accepts the two declared Chrome members and the namespace itself", () => {
+  it("accepts the three declared Chrome members and the namespaces themselves", () => {
     expect(
       findPackageViolations(
-        buildPackage({ files: { "popup.js": "const t=chrome.tabs;chrome.tabs.query({});chrome.tabs.create({});" } }),
+        buildPackage({
+          files: {
+            "popup.js":
+              "const t=chrome.tabs;chrome.tabs.query({});chrome.tabs.create({});" +
+              "const s=chrome.scripting;chrome.scripting.executeScript({});",
+          },
+        }),
       ),
     ).toEqual([]);
   });

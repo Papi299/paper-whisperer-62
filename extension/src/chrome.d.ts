@@ -9,9 +9,9 @@
  * added here first, which turns "what can this extension actually do?" into a
  * question the diff answers.
  *
- * Two members are declared — `chrome.tabs.query` and `chrome.tabs.create` — and
- * only the properties of each that this extension actually uses. Neither needs
- * the `tabs` permission:
+ * Three members are declared — `chrome.tabs.query`, `chrome.tabs.create` and
+ * `chrome.scripting.executeScript` — and only the properties of each that this
+ * extension actually uses. Neither `tabs` member needs the `tabs` permission:
  *
  *   • `query` is used to name the tab the user is looking at. Reading `Tab.url`
  *     from the result requires either the `tabs` permission or a host
@@ -27,11 +27,25 @@
  *     `favIconUrl`) — so adding it merely to open a tab would widen what the
  *     extension may *read* in exchange for nothing.
  *
- * The returned `Tab` is deliberately not read anywhere: the extension opens the
- * PaperLume handoff and its responsibility ends, so it learns nothing about the
- * tab it created.
+ * The `Tab` returned by `create` is deliberately not read anywhere: the
+ * extension opens the PaperLume handoff and its responsibility ends, so it
+ * learns nothing about the tab it created.
+ *
+ * `chrome.scripting.executeScript` joined this file in
+ * CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01, together with the `scripting`
+ * permission it requires. It is what lets the extension read a publisher page's
+ * DOI metadata after a DOI resolver has redirected — see
+ * `detectPaperFromMetadata.ts` for why that read exists and how narrow it is.
+ * It is the one member here that needs a permission of its own, and it still
+ * needs *host* access on top of that: the extension declares no host permission
+ * and relies entirely on the temporary grant the user's toolbar click produces,
+ * so the call succeeds for exactly the tab they invoked it on and fails
+ * everywhere else. That is a deliberately smaller surface than a
+ * `host_permissions` entry, which would grant standing access to every matching
+ * page whether the user asked for anything or not.
  *
  * @see https://developer.chrome.com/docs/extensions/reference/api/tabs
+ * @see https://developer.chrome.com/docs/extensions/reference/api/scripting
  * @see https://developer.chrome.com/docs/extensions/develop/concepts/activeTab
  */
 
@@ -47,6 +61,15 @@ declare namespace chrome {
      */
     interface Tab {
       readonly url?: string;
+      /**
+       * The tab's own identifier, named as the injection target.
+       *
+       * Optional in the platform type and optional here: Chrome omits it for a
+       * tab that does not exist in a tab strip (a devtools window, a prerender).
+       * Unlike `url` it is not a sensitive property and needs no permission to
+       * read — it identifies a tab without describing what is in it.
+       */
+      readonly id?: number;
     }
 
     /**
@@ -71,5 +94,41 @@ declare namespace chrome {
      * decision asked for.
      */
     function create(createProperties: { readonly url?: string }): Promise<Tab>;
+  }
+
+  /**
+   * Programmatic injection, reached only through the `activeTab` grant.
+   *
+   * @see https://developer.chrome.com/docs/extensions/reference/api/scripting
+   */
+  namespace scripting {
+    /**
+     * One frame's outcome.
+     *
+     * `result` is optional in the platform type and must stay optional: a frame
+     * whose injected function threw produces an entry with no result, and the
+     * value is `undefined` for a function that returned nothing. The extension's
+     * injected function returns `string[]`, so that is the only shape declared —
+     * narrowing this is what stops a future injection from quietly returning
+     * something richer out of a page.
+     */
+    interface InjectionResult {
+      readonly result?: string[];
+    }
+
+    /**
+     * Inject a function into a tab and return what it evaluated to.
+     *
+     * Only the three properties this extension passes are declared. In
+     * particular there is no `allFrames`, no `files`, no `args`, no `world` and
+     * no `injectImmediately`: the default is the main frame, which is what the
+     * DOI metadata read wants, and a property that cannot be named cannot be
+     * passed by mistake. `func` is serialized by Chrome and loses its execution
+     * context, so the function it names must be self-contained.
+     */
+    function executeScript(injection: {
+      readonly target: { readonly tabId: number };
+      readonly func: () => string[];
+    }): Promise<InjectionResult[]>;
   }
 }

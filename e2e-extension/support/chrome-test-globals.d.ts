@@ -31,8 +31,24 @@ declare namespace chrome {
   namespace tabs {
     interface Tab {
       readonly url?: string;
+      readonly id?: number;
     }
     function query(queryInfo: { readonly active?: boolean; readonly currentWindow?: boolean }): Promise<Tab[]>;
     function create(createProperties: { readonly url?: string }): Promise<Tab>;
+  }
+
+  /**
+   * Declared here only so the harness can *replace* `executeScript` for the
+   * grant double. The specs never call it themselves; the built extension does,
+   * and what it passes is what the double forwards into a real page.
+   */
+  namespace scripting {
+    interface InjectionResult {
+      readonly result?: string[];
+    }
+    function executeScript(injection: {
+      readonly target: { readonly tabId: number };
+      readonly func: () => string[];
+    }): Promise<InjectionResult[]>;
   }
 }

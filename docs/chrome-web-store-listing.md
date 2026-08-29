@@ -27,6 +27,23 @@
 > the **store icon** is a separate upload field or is read from the package
 > (§9). Both are recorded as unresolved rather than guessed.
 
+> **Amended by CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 (2026-08-29).** The
+> extension now reads standard bibliographic DOI metadata from a page when — and
+> only when — the address identified no paper. Three fields below change as a
+> result: the **permission justification** (§6) covers `scripting` as well as
+> `activeTab`, the **detailed description** (§4) no longer says the page is never
+> read, and the drafted **Website content** privacy answer (§7) changes from
+> **No** to **Yes**. Web history stays **Yes**. Nothing else about the listing
+> moves — the name, the summary, the single purpose and the image set are
+> unchanged, and the screenshot captions were revised only where they had become
+> false.
+>
+> **Blocking, and not fixable here:** the published Privacy Policy states the
+> extension does not read the page or its DOM, which is no longer true. That text
+> is owner-approved and under separate control. See
+> [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6, *BLOCKING
+> GATE*.
+
 **Companion document.** [chrome-web-store-readiness.md](chrome-web-store-readiness.md)
 is the policy audit, the data-flow evidence, the packaging contract, the
 real-browser verification record and the mandatory manual release gate. This
@@ -37,9 +54,10 @@ them and linked from the other, never duplicated.
 
 ## 1. What is being listed
 
-The extension shipped by CHROME-EXTENSION-IMPORT-001B/C1/C2, unchanged in
-behaviour. 001E2 added the production icon set and these listing materials; it
-changed **no permission**, no detection rule, no route, and no product logic.
+The extension shipped by CHROME-EXTENSION-IMPORT-001B/C1/C2, as amended by
+001E2-CORRECTION-01. 001E2 added the production icon set and these listing
+materials and changed no behaviour; CORRECTION-01 added the DOI metadata fallback
+and the one permission it requires.
 
 ```text
 user clicks the toolbar action  →  activeTab is granted by that click
@@ -47,6 +65,12 @@ user clicks the toolbar action  →  activeTab is granted by that click
 the extension reads the active tab's URL
     ↓
 a local structural classifier: PubMed record, doi.org, or neither
+    │
+    ├── PubMed or doi.org → the identifier, and the page is never touched
+    ├── not a web page    → nothing to check
+    └── an ordinary page the address did not identify:
+            read four standard DOI <meta> keys from that one tab's head
+            → one valid DOI, or nothing
     ↓
 the popup shows the source and the identifier — or says there is none
     ↓  (a second, separate user decision)
@@ -132,14 +156,23 @@ statement of functionality and contains no keyword list.
 >   `www.ncbi.nlm.nih.gov/pubmed/<PMID>` form. The PMID is read from the address.
 > - DOI resolver links — `doi.org/<DOI>`, and the older `dx.doi.org` form. The
 >   DOI is read from the address.
+> - Publisher article pages that publish a standard DOI tag. A DOI link
+>   redirects to the publisher before you can click PaperLume, so when the
+>   address names no paper, PaperLume looks for the DOI the page itself
+>   publishes — `citation_doi`, `dc.identifier`, `dc.identifier.doi` or
+>   `prism.doi`. Many journals include one; not all do.
 >
 > On any other page, PaperLume tells you it did not identify a paper and offers
-> no Continue button. It does not guess from the page title, and it does not
-> read publisher pages.
+> no Continue button. It does not guess from the page title or the text.
 >
 > **What it does not do**
 >
-> - It does not read the page. No text, no abstract, no DOM, no title.
+> - It does not read the page except for those four DOI tags, and only when the
+>   address identified nothing. No article text, no abstract, no title, no
+>   authors, no links, no other part of the page.
+> - It does not look at any page until you open PaperLume on it. Chrome gives
+>   the extension access to a tab only when you click the toolbar button, and
+>   only for that tab.
 > - It does not run in the background. There is no service worker and no content
 >   script; the extension runs only while its popup is open.
 > - It does not store anything. It has no storage permission and keeps no
@@ -157,9 +190,11 @@ statement of functionality and contains no keyword list.
 > Privacy policy: https://app.paperlume.app/privacy
 
 **Claims deliberately not made**, because they would be false: automatic import ·
-one-click import · works on any publisher · full-text capture · AI in the
-extension · PDF download · reference management inside the popup · Projects or
-Tags chosen in the popup · browsing history features.
+one-click import · **works on any publisher** (it works where the publisher emits
+one of four standard tags, which is a real limit and is stated as one) · full-text
+capture · AI in the extension · PDF download · reference management inside the
+popup · Projects or Tags chosen in the popup · browsing history features · **that
+the page is never read**, which CORRECTION-01 removed rather than softened.
 
 ---
 
@@ -173,17 +208,21 @@ focus of your extension"*
 ([privacy practices](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy)).
 
 > PaperLume identifies a supported scholarly-paper identifier — a PubMed PMID or
-> a DOI — from the URL of the tab the user is on, and hands that identifier to
-> the PaperLume web application for a user-confirmed import. It has no other
-> feature: no options page, no context menu, no keyboard command, no background
-> task, and no capability unrelated to recognising and handing over that one
-> identifier.
+> a DOI — from the tab the user is on, and hands that identifier to the PaperLume
+> web application for a user-confirmed import. The identifier is taken from the
+> tab's URL where the URL contains one, and otherwise from the standard
+> bibliographic DOI metadata the page publishes. It has no other feature: no
+> options page, no context menu, no keyboard command, no background task, and no
+> capability unrelated to recognising and handing over that one identifier.
 
 The behaviour-by-behaviour inventory backing this, and the minimum-functionality
 risk assessment it has to survive, are in
 [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §2 and §3. That
-assessment is unchanged by 001E2: no feature was added to make the extension
-look more substantial, and none was removed.
+assessment is unchanged by 001E2. 001E2-CORRECTION-01 changed the *source* the
+identifier may come from and nothing else — no feature was added to make the
+extension look more substantial, and none was removed. If anything it
+strengthens the minimum-functionality case, because more of the work now happens
+locally in the extension before any navigation.
 
 ---
 
@@ -192,16 +231,17 @@ look more substantial, and none was removed.
 The Dashboard requires a justification *"for each permission"* and an
 explanation of *"why your extension needs to use each permission"*
 ([privacy practices](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy)).
-The manifest declares exactly one.
+The manifest declares exactly two.
 
-### `activeTab` — the only permission
+### `activeTab`
 
 > PaperLume reads the URL of the active tab to recognise a PubMed PMID or a DOI
-> in it. `activeTab` is the narrowest way to do that: Chrome grants it only in
-> response to the user clicking the extension's toolbar action, it covers only
-> the tab the user was looking at when they clicked, it is revoked when they
-> navigate away, and it shows no install-time warning because it grants nothing
-> until the user asks.
+> in it, and — when the URL contains neither — reads the standard DOI metadata
+> the page publishes. `activeTab` is the narrowest way to do both: Chrome grants
+> it only in response to the user clicking the extension's toolbar action, it
+> covers only the tab the user was looking at when they clicked, it is revoked
+> when they navigate away, and it shows no install-time warning because it grants
+> nothing until the user asks.
 >
 > The URL is read into a local function, classified, and discarded when the popup
 > closes. It is not stored — the extension has no `storage` permission and no
@@ -209,42 +249,97 @@ The manifest declares exactly one.
 > extension makes no network request at all. If the user presses Continue, only
 > the extracted identifier is carried into a PaperLume URL, never the source URL.
 >
-> Without `activeTab` the extension cannot see any URL and has no function.
+> Without `activeTab` the extension cannot see any URL, cannot reach any page,
+> and has no function.
 
-**Evidence that the grant is genuinely gesture-bound.** With no toolbar click,
-Chrome returns a `Tab` object with **no `url` property at all** — verified in a
-real browser by `e2e-extension/popup.spec.ts`, *"holds no grant, so Chrome
-reports no tab URL at all"*. The limit is Chrome's behaviour, not a promise
-this extension makes about itself.
+### `scripting`
+
+> A DOI link (`https://doi.org/10.1038/s41586-020-2649-2`) redirects to the
+> publisher almost immediately, so by the time a user clicks PaperLume the
+> address bar shows the publisher's URL, which contains no DOI. Without this
+> permission PaperLume cannot identify a paper for the most ordinary way people
+> follow a DOI.
+>
+> `scripting` lets PaperLume run one small function in the tab the user just
+> invoked it on, which reads the DOI the publisher already publishes in the
+> page's metadata — `citation_doi`, `dc.identifier`, `dc.identifier.doi` or
+> `prism.doi`, from the document head, in the main frame only. It reads nothing
+> else: no article text, no abstract, no title, no authors, no links, no scripts,
+> no cookies, no storage. The values are used to identify one DOI and are
+> discarded when the popup closes. If a page publishes two genuinely different
+> DOIs, PaperLume identifies neither and offers nothing.
+>
+> It runs only when the URL already failed to identify a paper. On a PubMed
+> record or a doi.org link the page is never touched at all.
+>
+> **`scripting` grants no access to any page by itself.** Injection additionally
+> requires host access, and PaperLume declares **no host permissions**: the host
+> access comes entirely from `activeTab`, the temporary grant the user's own
+> click produces. That is deliberately narrower than requesting host permissions,
+> which would give PaperLume standing access to every matching page for as long
+> as it is installed, whether or not the user ever asked for anything.
+
+**Evidence that both grants are genuinely gesture-bound**, read from the browser
+rather than promised by the extension:
+
+- With no toolbar click, Chrome returns a `Tab` object with **no `url` property
+  at all** — `e2e-extension/popup.spec.ts`, *"holds no grant, so Chrome reports
+  no tab URL at all"*.
+- With no toolbar click, `chrome.scripting.executeScript` against a real tab is
+  **refused**: *"Cannot access contents of the page. Extension manifest must
+  request permission to access the respective host."* —
+  `e2e-extension/load.spec.ts`, *"cannot inject into any page without a toolbar
+  grant"*.
+
+**First-party basis for this pairing.** The `activeTab` page states the
+permission allows an extension to *"call `scripting.insertCSS()` or
+`scripting.executeScript()` on that tab if the `"scripting"` permission is also
+declared"*; the scripting reference states injection needs the
+*"`host_permissions` key or the `activeTab` permission, which grants temporary
+host permissions"*, and that *"by default, an injection will inject into the main
+frame of the specified tab"*.
+— [activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)
+· [chrome.scripting](https://developer.chrome.com/docs/extensions/reference/api/scripting)
+(both re-read 2026-08-29)
 
 ### Privileged APIs used
 
-Two, and the packaged artefact is scanned to prove there is no third
+Three, and the packaged artefact is scanned to prove there is no fourth
 (`scripts/lib/extension-package.mjs`, `ALLOWED_CHROME_MEMBERS`).
 
 | API | Where | Why |
 |---|---|---|
-| `chrome.tabs.query({active:true,currentWindow:true})` | `extension/src/popup.ts` | Read the active tab's URL. Reading `Tab.url` is what `activeTab` is for; the `tabs` permission is **not** requested and is not needed for this |
+| `chrome.tabs.query({active:true,currentWindow:true})` | `extension/src/classifyActiveTab.ts` | Read the active tab's URL and id. Reading `Tab.url` is what `activeTab` is for; the `tabs` permission is **not** requested and is not needed for this |
+| `chrome.scripting.executeScript({target,func})` | `extension/src/detectPaperFromMetadata.ts` | Read four standard DOI `<meta>` values, once, from the invoked tab's main frame — and only when the URL identified no paper. No `allFrames`, no `files`, no `args`, no `world` |
 | `chrome.tabs.create({url})` | `extension/src/popupView.ts` | Open PaperLume in a new tab when the user presses Continue. One press, at most one tab |
 
 ### Not requested, and asserted absent
 
-`tabs` · `storage` · `scripting` · `identity` · `cookies` · `webRequest` ·
+`tabs` · `storage` · `identity` · `cookies` · `webRequest` ·
 `declarativeNetRequest` · `contextMenus` · `notifications` · `alarms` ·
 `sidePanel` · `history` · `bookmarks` · `downloads` · `nativeMessaging` · any
 host permission · any optional permission · content scripts · a background
 service worker · `web_accessible_resources` · `externally_connectable`.
 
+The `scripting` **namespace** is not opened either — only
+`chrome.scripting.executeScript` is permitted, so `insertCSS`,
+`registerContentScripts` and `getRegisteredContentScripts` each fail the package
+contract with their own hostile fixture.
+
 Asserted three times over, because each catches a different failure: on the
 committed manifest (`extension/src/__tests__/manifest.test.ts`), on the packaged
 artefact (`scripts/lib/extension-package.mjs`), and on **what Chrome actually
 granted**, read back from the browser (`e2e-extension/load.spec.ts`, *"is granted
-exactly activeTab, and no host origin"*).
+exactly activeTab and scripting, and no host origin"* — `origins: []`).
 
 ### Remote code
 
 **None.** The package is self-contained: no remote script, stylesheet, font,
-image, `url()`, `@import`, `eval`, or `new Function`. The manifest pins the
+image, `url()`, `@import`, `eval`, or `new Function`. The function
+`chrome.scripting.executeScript` injects ships **inside the package** — Chrome
+serializes it out of `popup.js` at call time — so nothing is fetched, nothing is
+evaluated from a string, and no code from the page runs with extension
+privilege. The manifest pins the
 default MV3 content security policy, and the package scanner rejects any origin
 other than `https://app.paperlume.app` appearing in any packaged file — including
 in a comment, because a comment ships. See
@@ -267,6 +362,7 @@ over-disclose on Google's form while under-describing PaperLume's own policy.
 | | The extension | The PaperLume web app, after the tab opens |
 |---|---|---|
 | Reads the active tab's URL | Yes, on toolbar click only | No |
+| Reads DOI metadata from the page | Yes, on toolbar click only, and only when the URL identified nothing | No |
 | Authenticates a user | No — it cannot | Yes |
 | Stores anything | No | Yes — the user's library |
 | Makes a network request | **Never** | Yes |
@@ -280,8 +376,14 @@ processing is described in the Privacy Policy (§8) and inventoried in
 ### Data the extension handles
 
 - **Read** — the active tab's URL, and only after the user clicks the toolbar
-  action. Nothing else: no DOM, no `<meta>`, no title, no page text, no cookies,
-  no storage, no other tab.
+  action. Then, **only where that URL identified no paper**, four `<meta>`
+  `content` values from that one tab's `document.head`, in the main frame:
+  `citation_doi`, `dc.identifier`, `dc.identifier.doi`, `prism.doi`. Nothing
+  else: no document title, no article title, no abstract, no authors, no journal,
+  no body text, no headings, no links, no `data-` attributes, no JSON-LD, no
+  inline scripts, no sub-frames, no cookies, no page storage, no other tab.
+  Processed locally and transiently — reduced to at most one DOI name and gone
+  when the popup closes.
 - **Retained** — nothing. No `storage` permission, no background context, and no
   `localStorage` / `sessionStorage` / `indexedDB` / `chrome.storage` /
   `document.cookie` / Cache API reference in the built bundle.
@@ -294,9 +396,16 @@ processing is described in the Privacy Policy (§8) and inventoried in
   real browser, including that the parameter set is precisely `["kind","value"]`
   (`e2e-extension/handoff.spec.ts`).
 - **Never transmitted** — the source page URL · the page title · the abstract ·
-  any DOM · cookies · any PaperLume or Supabase session token · the user id ·
-  any Project id · any Tag id · any analytics identifier · the extension id · a
-  timestamp.
+  authors · the journal · any metadata value other than the resulting DOI · any
+  DOM · cookies · any PaperLume or Supabase session token · the user id · any
+  Project id · any Tag id · any analytics identifier · the extension id · a
+  timestamp. The `kind`/`value` contract has no third parameter to put any of
+  them in, and a real-browser test asserts the publisher host, article title and
+  author name appear nowhere in a metadata-detected handoff URL
+  (`e2e-extension/metadata.spec.ts`)
+- **Never looked up** — the DOI read from a page is **not resolved**. The
+  extension does not ask doi.org, Crossref or PubMed whether it exists; it has no
+  request API to ask with.
 
 ### Category answers
 
@@ -311,9 +420,9 @@ Category definitions quoted from the
 | Authentication information | **No** | *"logins, password, and authentication cookies"* — the extension has no auth, reads no cookie, and cannot see PaperLume's session, which lives in its own tab |
 | Personal communications | **No** | None accessed |
 | Location | **No** | None accessed. No geolocation API, no IP handling — the extension makes no request |
-| **Web history** | **Yes** | Web browsing activity is *"any information about the websites or other web resources a user requests or interacts with, **including the domains or URLs the browser interacts with**"*. The extension reads the active tab's URL. See the note below |
+| **Web history** | **Yes** | Web browsing activity is *"any information about the websites or other web resources a user requests or interacts with, **including the domains or URLs the browser interacts with**"*. The extension reads the active tab's URL. **Unchanged** by CORRECTION-01. See the note below |
 | User activity | **No** | No clicks, mouse position, keystrokes, scroll or interaction telemetry is recorded or sent |
-| Website content | **No** | No DOM, text, image or media is read. The address only |
+| **Website content** | **Yes** — *changed from No by CORRECTION-01* | The extension reads `<meta>` element content from the page. It is four bibliographic DOI keys, in the head, in the main frame, only when the URL identified nothing — and it is processed locally and transiently, with neither the content nor the page URL transmitted. But content **is** read, and the question asks what is accessed, not what is kept. See the note below |
 
 ### Certifications
 
@@ -322,6 +431,49 @@ Category definitions quoted from the
 | *I do not sell or transfer user data to third parties, apart from the approved use cases* | **Certify** | Nothing is sold or transferred. The identifier goes only to PaperLume, at the user's request, as the feature the user invoked |
 | *I do not use or transfer user data for purposes unrelated to my item's single purpose* | **Certify** | The identifier **is** the single purpose |
 | *I do not use or transfer user data to determine creditworthiness or for lending purposes* | **Certify** | Not applicable |
+
+### Why "Website content" became Yes
+
+**This answer changed in CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01, and the
+change is the honest one rather than a cautious one.** Before that correction the
+extension read the tab's address and nothing else, and "No" was accurate. It now
+reads four `<meta>` values from the page, which is website content by any
+reading, so the answer follows the behaviour.
+
+Three arguments that must **not** be used to keep answering "No", each of them
+true and each of them irrelevant to what the category asks:
+
+- that only four bibliographic keys are read, never the article text;
+- that the read happens only after an explicit gesture, and only where the URL
+  identified nothing;
+- that nothing read is retained or transmitted — only a derived public identifier
+  travels, and only on a second gesture.
+
+All three belong in the *justification*, and they are stated there. None of them
+changes the fact that page content is accessed.
+
+**What the disclosure should make clear**, and what the permission justification
+in §6 says:
+
+- the metadata is processed **locally and transiently** — reduced to at most one
+  DOI name, held for as long as the popup is open, and gone when it closes;
+- **neither the page content nor the source page URL is transmitted**, ever, by
+  any path;
+- after the user explicitly presses Continue, **only the normalized identifier**
+  is handed to PaperLume, as `kind` and `value`;
+- **`scripting` does not give standing access to websites.** It has to be paired
+  with host access, and this extension declares none — the access comes from
+  `activeTab` and lasts for one tab until the user navigates away. Chrome's own
+  answer confirms it: `chrome.permissions.getAll()` returns `origins: []`.
+
+**No other category was changed.** In particular nothing was moved to Yes
+"to be safe": there is no personally identifiable information, health
+information, financial information, authentication material, personal
+communication, location data or interaction telemetry read by the extension, and
+inventing a Yes where the behaviour does not support one would misdescribe the
+product as surely as a wrong No.
+
+**Google has approved nothing.** These remain drafts for a human to enter.
 
 ### Why "Web history = Yes" stays Yes
 
@@ -345,8 +497,9 @@ definition.
 
 What the limits do buy is the [Limited Use](https://developer.chrome.com/docs/webstore/program-policies/limited-use)
 exception: *"Collection and use of web browsing activity is prohibited, except to
-the extent required for a user-facing feature."* Reading the URL is the entirety
-of the user-facing feature, it happens only on a gesture, and nothing is kept.
+the extent required for a user-facing feature."* Reading the URL, and reading the
+DOI the page publishes when the URL names none, is the entirety of the
+user-facing feature; both happen only on a gesture, and nothing is kept.
 
 If a future reading of first-party policy materially changes this category, that
 is a **stop-and-report** event, not an edit.
@@ -388,12 +541,27 @@ committed under [`assets/store/`](../assets/store), and held to their contract b
 [Chrome Web Store images](https://developer.chrome.com/docs/webstore/images) on
 2026-08-29.
 
+**Regenerated by 001E2-CORRECTION-01 — the three screenshots only.** A screenshot
+caption is a factual claim, and two of them had become false: the PubMed panel
+said the extension reads the address *"— nothing else —"* and that *"no page
+content is read"*, and the unsupported panel described the address as the only
+thing consulted. Both were rewritten rather than hedged, and the DOI panel gained
+a line about the redirect case this correction exists for. The captured popups
+also changed, because the popup's own footnote and unsupported copy did.
+
+No visual design changed: same layout, same brand ground, same lockup, same type
+scale, same crop. `store-icon-128.png` and `promo-tile-small-440x280.png` are
+**byte-identical** to before — they carry no UI and no feature claim, so there
+was nothing in them to correct, and they were left alone rather than churned. Two
+consecutive runs of the generator produce byte-identical output for all five
+files, which is how the change was confined to the three that had to move.
+
 | Asset | File | Size | Source | Method | Deterministic? | Hand-edited? | Depicts real behaviour? |
 |---|---|---|---|---|---|---|---|
 | Store-icon **candidate** | `assets/store/store-icon-128.png` | 128×128 | `assets/brand/svg/paperlume-symbol.svg` | Vector render, uniform scale to the documented content box | Yes — pure vector, no type | No | n/a — brand mark, makes no claim |
 | Packaged 128 icon (**guaranteed**) | `icons/icon-128.png`, in the RC ZIP | 128×128 | `assets/brand/png/paperlume-128.png` | Byte copy at build time | Yes — byte copy | No | n/a — brand mark |
 | Small promo tile | `assets/store/promo-tile-small-440x280.png` | 440×280 | `paperlume-logo-horizontal.svg` on a brand gradient | Composition; wordmark recoloured for dark ground per brand spec §5a | Vector yes; the one text line uses the host UI font | No | n/a — brand composition, no UI shown |
-| Screenshot 1 | `assets/store/screenshot-1-pubmed-1280x800.png` | 1280×800 | **Real popup**, `dist-extension/` in real Chromium | Captured at 2×, composed onto a caption panel | Layout yes; type uses the host UI font | No | **Yes** — real PubMed detection |
+| Screenshot 1 | `assets/store/screenshot-1-pubmed-1280x800.png` | 1280×800 | **Real popup**, `dist-extension/` in real Chromium | Captured at 2×, composed onto a caption panel | Layout yes; type uses the host UI font | No | **Yes** — real PubMed detection, from the URL alone with no page access |
 | Screenshot 2 | `assets/store/screenshot-2-doi-1280x800.png` | 1280×800 | **Real popup**, same lane | Same | Same | No | **Yes** — real DOI detection |
 | Screenshot 3 | `assets/store/screenshot-3-unsupported-1280x800.png` | 1280×800 | **Real popup**, same lane | Same | Same | No | **Yes** — real unsupported state |
 | Marquee promo tile | — | 1400×560 | — | Not produced | — | — | **Optional** on every first-party reading; deliberately skipped |
@@ -420,6 +588,15 @@ The URLs the three captures classify:
 | 1 | `https://pubmed.ncbi.nlm.nih.gov/33301246/` | Paper detected · PubMed · PMID 33301246 |
 | 2 | `https://doi.org/10.1038/s41586-020-2649-2` | Paper detected · DOI · `10.1038/s41586-020-2649-2` |
 | 3 | `https://www.nature.com/articles/s41586-020-2649-2` | No paper identified · **no Continue control** |
+
+Screenshot 3 remains accurate after CORRECTION-01, and the reason is worth
+recording. The capture harness supplies the tab URL but no `activeTab` grant, so
+the real `chrome.scripting.executeScript` the popup now attempts is refused by
+Chrome exactly as it would be on any ungranted tab — and the popup falls closed
+to *No paper identified*, which is the state the screenshot is of. The image
+therefore still shows a real popup reaching a real state by a real code path; it
+is simply not a picture of the metadata fallback succeeding. That case is
+covered by the automated lane and by the manual gate, not by a listing image.
 
 Screenshot 3 exists on purpose. The unsupported state is not a failure to hide;
 it is the extension declining to guess, and it is the clearest available answer

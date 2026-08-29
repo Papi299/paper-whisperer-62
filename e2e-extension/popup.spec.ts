@@ -49,13 +49,29 @@ test("classifies a doi.org URL and shows its DOI", async ({ extension }) => {
   await expect(page.locator("[data-handoff]")).toBeVisible();
 });
 
-test("offers nothing for a publisher page it cannot identify", async ({ extension }) => {
-  // Deliberately a real article page on a publisher this phase does not read.
-  // No title fallback, no scraping, no "let PaperLume have a look".
+test("offers nothing when the address names no paper and the injection is refused", async ({
+  extension,
+}) => {
+  // A real publisher article URL, and — because `pageHtml` is not passed — the
+  // **real** `chrome.scripting.executeScript`, which Chrome refuses for want of
+  // a toolbar grant (`load.spec.ts` measures that refusal directly). So this is
+  // the genuine fail-closed path: the address identified nothing, the page read
+  // was refused, and the user is told plainly that nothing was found.
   const page = await extension.openPopup({ activeTabUrl: "https://www.nature.com/articles/s41586-020-2649-2" });
 
   await expect.poll(() => visibleStates(page)).toEqual(["unsupported"]);
   await expect(page.locator("[data-handoff]")).toBeHidden();
+
+  // Chrome's refusal is about a page the user is on. It is never read, so it can
+  // never be shown — the popup must not turn a permission failure into a browser
+  // error the user cannot act on.
+  const shown = (await page.evaluate(() => document.body.textContent)) ?? "";
+  expect(shown).not.toContain("Cannot access contents");
+  expect(shown).not.toContain("manifest must request permission");
+  expect(shown).not.toContain("nature.com");
+
+  // And no title fallback, no scraping, no "let PaperLume have a look".
+  expect(await extension.createdTabUrls(page)).toEqual([]);
 });
 
 test("offers nothing on a restricted browser page", async ({ extension }) => {

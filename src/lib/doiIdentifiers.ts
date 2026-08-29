@@ -16,6 +16,17 @@
  * the other, and `canonicalDoiUrl` still rejects a URL outright rather than
  * unwrapping one.
  *
+ * A third entry point, `extractDoiFromMetadataValue`, was added by
+ * CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 for one specific untrusted input:
+ * the `content` of a bibliographic `<meta>` element on a publisher page.
+ *
+ *   metadata value --(extractDoiFromMetadataValue)--> DOI name
+ *
+ * It is a *boundary*, not a fourth grammar — it composes `extractDoiFromDoiUrl`
+ * and this module's own `DOI_NAME_PATTERN` — and it is the only function here
+ * that trims its input, because it is the only one that receives a value which
+ * has not already been authenticated as a DOI name. Its own comment says why.
+ *
  * The recognition half is a second implementation of the classification that
  * `supabase/functions/_shared/identifierDetection.ts` already performs inside
  * the Edge Function's separate bundling domain — the same arrangement PubMed
@@ -55,12 +66,19 @@
  * would collapse two distinct DOI names onto one URL.
  *
  * It also never alters the DOI name it was given. The Handbook's algorithm
- * serializes the prefix and suffix "without any normalization", and DOI names
- * are equivalent only when their code point sequences are identical, so
- * trimming, collapsing, lower-casing or decoding any part of the input would
- * emit a link for a *different* DOI. A space is ordinary DOI data — the Graphic
- * type the syntax is drawn from includes spaces — so `10.1000/example ` encodes
- * to `…/example%20` rather than losing its final code point.
+ * serializes the prefix and suffix "without any normalization", so trimming,
+ * collapsing or decoding any part of the input emits a link for a *different*
+ * DOI. A space is ordinary DOI data — the Graphic type the syntax is drawn from
+ * includes spaces — so `10.1000/example ` encodes to `…/example%20` rather than
+ * losing its final code point.
+ *
+ * Nor does it lower-case. ASCII case *is* insensitive when two DOI names are
+ * compared (§4.3.4, and `doiEquivalenceKey` below), but that rule is explicitly
+ * scoped to comparison: *"It does not restrict DOI names to containing only
+ * uppercase or lowercase letters."* The registered spelling is what a publisher
+ * displays and what the proxy is handed, so folding it here would rewrite the
+ * name to make a *comparison* convenient — which is what the equivalence key
+ * exists to do without touching the name.
  *
  * It also performs no network resolution and does not check that the DOI is
  * registered. Whether a DOI exists is the resolver's answer to give.
@@ -350,4 +368,223 @@ export function extractDoiFromDoiUrl(value: string | null | undefined): string |
 /** Whether a value is a DOI resolver URL naming a specific DOI. */
 export function isDoiResolverUrl(value: string | null | undefined): boolean {
   return extractDoiFromDoiUrl(value) !== null;
+}
+
+/**
+ * The `doi:` scheme prefix, as it appears in a bibliographic presentation form.
+ *
+ * Matched case-insensitively and only at the *start* of the value, with any
+ * whitespace that follows the colon consumed — `doi:10.1000/x`, `DOI: 10.1000/x`
+ * and `Doi:\n10.1000/x` are the same reference written three ways. Anchored, so
+ * a sentence that merely mentions a DOI (`See doi:10.1000/x for details`) is not
+ * a DOI reference and gets no authority from containing one.
+ */
+const DOI_PRESENTATION_PREFIX = /^doi:\s*/i;
+
+/**
+ * Extract the DOI name from a bibliographic **metadata value** — the `content`
+ * of a `citation_doi` / `dc.identifier` / `prism.doi` style `<meta>` element.
+ *
+ * ## Why this exists next to the other two, rather than as a third grammar
+ *
+ * `extractDoiFromDoiUrl` authenticates a *resolver URL*; `canonicalDoiUrl`
+ * formats a *DOI name*. Neither describes the third thing the Chrome extension
+ * has to read since CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01: a value a
+ * publisher wrote into a `<meta>` tag, which by convention is one of several
+ * *presentation forms* of the same DOI name. This function is that boundary,
+ * and it is deliberately built from the pieces already in this module —
+ * `extractDoiFromDoiUrl` for the resolver form and `DOI_NAME_PATTERN` for the
+ * bare form — so there is no fourth notion of what a DOI is anywhere in the
+ * repository.
+ *
+ * ## It is narrower than the importer's classifier, on purpose
+ *
+ * `supabase/functions/_shared/identifierDetection.ts` classifies text a *person
+ * pasted*, and its direct-DOI rule takes any value beginning `10.` at its word:
+ * the person is asserting it is a DOI, and no URL it recognises can also look
+ * like that. Publisher metadata carries no such assertion — it is untrusted
+ * markup from a page the user merely happened to open — so a value is accepted
+ * here only when it structurally *is* a DOI name (`DOI_NAME_PATTERN`), not when
+ * it merely starts with `10.` or contains one. `doi:` with anything unparseable
+ * after it is likewise refused rather than forwarded.
+ *
+ * That divergence is only ever in the narrowing direction, which is why it is
+ * safe: every value this accepts, the classifier would also accept.
+ *
+ * ## Whitespace, and the one place trimming is correct
+ *
+ * `canonicalDoiUrl` and `extractDoiFromDoiUrl` never trim, because a space is
+ * ordinary DOI data (Handbook §3.3) and trimming a name would silently emit a
+ * link for a *different* DOI. Both of those functions receive a value that has
+ * already been authenticated as a DOI name.
+ *
+ * This function is the input boundary itself, which is exactly where this
+ * module's own rule says normalizing belongs — *"Normalizing an identifier
+ * belongs at the input boundary, where the value is first taken in, not in the
+ * encoder that formats it."* Surrounding whitespace in a `content` attribute is
+ * markup indentation, not DOI data: publishers routinely wrap the value across
+ * lines. So the outer whitespace is removed here, once, and nothing else about
+ * the value is touched — no case folding, no percent-decoding, no unescaping,
+ * and no alteration of the opaque suffix. Interior whitespace is preserved,
+ * because that genuinely could be part of the name.
+ *
+ * Not case-folding here is a statement about *parsing*, not about equivalence.
+ * `10.1000/AB` and `10.1000/ab` are the same DOI (§4.3.4), and a caller that
+ * needs to know that asks `doiEquivalenceKey`; what this function returns is the
+ * spelling the publisher actually wrote, which is what should be displayed and
+ * handed on.
+ *
+ * ## What this never does
+ *
+ * It does not repair. A scheme-less `doi.org/10.1000/x` acquires no resolver
+ * authority, a bare `10.1000` with no suffix is refused, and a URL on any other
+ * host is refused however DOI-shaped its path looks. It performs no network
+ * resolution: whether the DOI is registered is the resolver's answer to give,
+ * not this function's.
+ *
+ * @param value One metadata `content` value, untrusted.
+ * @returns The DOI name, or `null` when the value is not a DOI in any accepted
+ *   presentation form.
+ *
+ * @example
+ * extractDoiFromMetadataValue("10.1038/s41586-020-2649-2");
+ * extractDoiFromMetadataValue("doi:10.1038/s41586-020-2649-2");
+ * extractDoiFromMetadataValue("DOI: 10.1038/s41586-020-2649-2");
+ * extractDoiFromMetadataValue("https://doi.org/10.1038/s41586-020-2649-2");
+ * // all four → "10.1038/s41586-020-2649-2"
+ */
+export function extractDoiFromMetadataValue(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // The resolver form first, and through the existing authenticator rather than
+  // a host check written again here. It parses, so `https://doi.org.evil.example
+  // /10.1000/x` and `https://evil.example/?u=https://doi.org/10.1000/x` are
+  // refused for the same structural reasons they are refused everywhere else.
+  const fromResolverUrl = extractDoiFromDoiUrl(trimmed);
+  if (fromResolverUrl !== null) return fromResolverUrl;
+
+  // Not a resolver URL. Whatever remains must be a DOI *name*, optionally
+  // written with the `doi:` presentation prefix. A value carrying any other
+  // scheme fails the pattern below rather than being unwrapped: `doi:https://…`
+  // does not become a URL this function is willing to resolve.
+  const bare = trimmed.replace(DOI_PRESENTATION_PREFIX, "").trim();
+
+  return DOI_NAME_PATTERN.test(bare) ? bare : null;
+}
+
+/**
+ * The ASCII letters DOI equivalence folds, as a code-point range pair.
+ *
+ * `A`–`Z` is U+0041..U+005A and `a`–`z` is U+0061..U+007A, exactly the two
+ * ranges DOI Handbook §4.3.4 names. Written as code points rather than as a
+ * call to `toLowerCase()` because those are not the same operation: `String
+ * .prototype.toLowerCase` performs full Unicode case mapping, which folds
+ * `Á`→`á`, `İ`→`i̇`, `Σ`→`σ` and much else the DOI rule explicitly leaves
+ * alone — and one of those, in a suffix, would silently merge two DOI names the
+ * Handbook says are different.
+ */
+const ASCII_UPPER_A = 0x41;
+const ASCII_UPPER_Z = 0x5a;
+const ASCII_CASE_OFFSET = 0x61 - 0x41;
+
+/**
+ * The equivalence key of a DOI name: two DOI names name the same DOI exactly
+ * when their keys are `===`.
+ *
+ * ## The rule, and why it is not `toLowerCase()`
+ *
+ * DOI Handbook §4.3.4 "Case Insensitivity of the DOI Name":
+ *
+ * > *"When comparing two DOI names for equivalence, no normalization, as
+ * > defined in ISO/IEC 10646, is performed and the DOI names are equivalent if,
+ * > and only if, their code point sequences are identical, except that a code
+ * > point in the range U+0041..U+005A (corresponding to LATIN CAPITAL LETTER A
+ * > to LATIN CAPITAL LETTER Z) is considered identical to the corresponding
+ * > code point in the range U+0061..U+007A (corresponding to characters LATIN
+ * > SMALL LETTER A to LATIN SMALL LETTER Z)."*
+ *
+ * > *"The rule above has the effect of making DOI names case-insensitive only
+ * > when testing for equivalence and only with respect to the Basic Latin
+ * > Unicode block."*
+ *
+ * So the fold is **ASCII only**, and it is deliberately narrower than any
+ * general-purpose lowercasing. The Handbook's own second example is the reason:
+ *
+ * ```text
+ * 10.26321/Á.GUTIÉRREZ.ZARZA.02.2018.03
+ * 10.26321/á.gutiérrez.zarza.02.2018.03      ← NOT the same DOI
+ * ```
+ *
+ * `toLowerCase()` would collapse those two, because U+00C1 lowercases to
+ * U+00E1. The Handbook says they are different DOI names, so this function
+ * leaves every code point outside U+0041..U+005A exactly as it found it. That
+ * also rules out `toLocaleLowerCase`, whose result depends on the host locale —
+ * in Turkish, `I` becomes `ı`, which is not `i`, so the same DOI would compare
+ * unequal to itself on a Turkish machine.
+ *
+ * Crossref documents the same rule for the suffixes it issues: *"Suffixes are
+ * case insensitive, so `10.1006/abc` is the same in the system as
+ * `10.1006/ABC`."*
+ *
+ * ## It is a key, not a name
+ *
+ * The value returned here is for **comparison only**. It is not a DOI name, is
+ * not what should be displayed, is not what should be handed to
+ * `/extension-import`, and is not what should be stored: the Handbook's rule is
+ * scoped to equivalence testing and explicitly does not restrict what a DOI name
+ * may contain. Callers that group by this key must keep one of the original
+ * spellings as the representative, and `resolveDoiFromMetadata` in the extension
+ * does exactly that.
+ *
+ * Nothing else is normalized — no trimming, no percent-decoding, no whitespace
+ * collapsing — because the Handbook's rule has exactly one exception in it and
+ * this function implements exactly that one.
+ *
+ * @param doiName A DOI name, unencoded.
+ * @returns The comparison key, or `null` when the value is not a string.
+ *
+ * @example
+ * doiEquivalenceKey("10.1000/AB") === doiEquivalenceKey("10.1000/ab"); // true
+ * doiEquivalenceKey("10.26321/Á") === doiEquivalenceKey("10.26321/á"); // false
+ *
+ * @see DOI Handbook (2025), §4.3.4 "Case Insensitivity of the DOI Name".
+ * @see Crossref, "Constructing your DOIs" — suffix case insensitivity.
+ */
+export function doiEquivalenceKey(doiName: string | null | undefined): string | null {
+  if (typeof doiName !== "string") return null;
+
+  let key = "";
+  // Iterated by code point rather than by UTF-16 code unit. Every code point the
+  // rule touches is in the BMP, so a surrogate pair can never be altered — but
+  // iterating units and rebuilding would still be a needless chance to split
+  // one, and `for…of` over a string yields code points.
+  for (const character of doiName) {
+    const code = character.codePointAt(0) as number;
+    key +=
+      code >= ASCII_UPPER_A && code <= ASCII_UPPER_Z
+        ? String.fromCodePoint(code + ASCII_CASE_OFFSET)
+        : character;
+  }
+
+  return key;
+}
+
+/**
+ * Whether two DOI names name the same DOI, per Handbook §4.3.4.
+ *
+ * The predicate form of `doiEquivalenceKey`, for callers comparing a pair rather
+ * than grouping a list. A non-string on either side is not a DOI name and is
+ * equivalent to nothing, including to another non-string.
+ */
+export function doiNamesAreEquivalent(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const keyA = doiEquivalenceKey(a);
+  const keyB = doiEquivalenceKey(b);
+
+  return keyA !== null && keyB !== null && keyA === keyB;
 }

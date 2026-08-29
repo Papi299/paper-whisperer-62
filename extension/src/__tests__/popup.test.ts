@@ -125,7 +125,7 @@ describe("popup — the committed markup", () => {
     expect(handoff()?.hidden).toBe(true);
   });
 
-  it("tells the truth about what leaves the extension", () => {
+  it("tells the truth about what is read and what leaves the extension", () => {
     mountPopup();
     // Collapsed, because the assertions below are about the sentence and the
     // markup wraps it — a line break must not be able to fail a copy check.
@@ -133,12 +133,49 @@ describe("popup — the committed markup", () => {
       .replace(/\s+/g, " ")
       .trim();
 
-    // The old copy said "Nothing is sent anywhere", which stopped being true the
-    // moment the user could hand an identifier over.
+    // Two claims this copy has already had to abandon, kept as negatives so
+    // neither can quietly come back:
+    //
+    //   "Nothing is sent anywhere" stopped being true the moment the user could
+    //   hand an identifier over (001C2).
+    //
+    //   "never the page itself" stopped being true when the DOI metadata read
+    //   landed (001E2-CORRECTION-01). It was replaced rather than softened —
+    //   a footnote that hedges about page access is worse than one that states
+    //   the access plainly and bounds it.
     expect(footnote).not.toMatch(/nothing is sent anywhere/i);
-    expect(footnote).toMatch(/only when you open PaperLume/i);
-    expect(footnote).toMatch(/never the page itself/i);
+    expect(footnote).not.toMatch(/never the page itself/i);
+    expect(footnote).not.toMatch(/address only/i);
+
+    // Inspection is gesture-bound…
+    expect(footnote).toMatch(/only when you open it/i);
+    // …the address is what is read first…
+    expect(footnote).toMatch(/reads the address first/i);
+    // …page access exists, is limited to DOI metadata, and is conditional…
+    expect(footnote).toMatch(/when needed, standard DOI metadata in the page/i);
+    // …nothing is retained…
+    expect(footnote).toMatch(/nothing is stored/i);
+    // …and Continue carries the identifier alone.
     expect(footnote).toMatch(/unless you choose Continue in PaperLume/i);
+    expect(footnote).toMatch(/only the identified PMID or DOI/i);
+  });
+
+  it("no longer tells an unsupported page that publisher pages are unreadable", () => {
+    mountPopup();
+    const detail = (section("unsupported")?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+    // The old copy said detection was a matter of the address alone, which is
+    // now only half the story: the metadata read has already run by the time
+    // this state is shown, and saying otherwise would misdescribe what the
+    // extension just did on the user's page.
+    expect(detail).not.toMatch(/from this page.s address\.? It currently reads/i);
+    expect(detail).toMatch(/address/i);
+    expect(detail).toMatch(/metadata/i);
+
+    // And it must still not promise that every publisher page works — the
+    // fallback reads published metadata, and plenty of pages publish none.
+    expect(detail).not.toMatch(/(reads|works on|supports|handles)\s+(any|every|all)\b/i);
+    expect(detail).toMatch(/not every publisher/i);
   });
 });
 

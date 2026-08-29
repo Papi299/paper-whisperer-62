@@ -293,31 +293,47 @@ function promoTileHtml() {
  * terms. Nothing implies automatic import, page scraping, background
  * monitoring, or in-popup library management, because the extension does none
  * of those.
+ *
+ * ## Two captions were rewritten by 001E2-CORRECTION-01
+ *
+ * A screenshot caption is a factual claim, and two of these stopped being true
+ * when the extension gained the DOI metadata fallback. The PubMed panel said the
+ * extension reads the tab's address *"— nothing else —"* and that *"no page
+ * content is read"*; the unsupported panel described the address as the only
+ * thing consulted before the popup gives up. Both were replaced rather than
+ * hedged, and both are now written to be true of the PubMed and no-paper cases
+ * *specifically*, which is what those two screenshots actually show — on a
+ * PubMed record the page genuinely is never touched.
+ *
+ * The DOI panel needed no change: it depicts a `doi.org` address, which is still
+ * classified from the URL alone. What it gains is a line saying the DOI is still
+ * found after the resolver redirects, because that is the case this correction
+ * exists for and the one a reviewer is most likely to try.
  */
 const SCREENSHOT_PANELS = {
   pubmed: {
     eyebrow: "PubMed record",
     headline: "Reads the PMID from the page you are on",
     body:
-      "Click PaperLume in the Chrome toolbar. The extension reads that tab’s address — nothing else — " +
-      "and shows you the PMID it recognised.",
-    note: "No page content is read. Nothing is sent anywhere until you choose Continue.",
+      "Click PaperLume in the Chrome toolbar. The extension reads that tab’s address and shows you " +
+      "the PMID it recognised — on a PubMed record the page itself is never read.",
+    note: "Nothing is stored. Nothing is sent anywhere until you choose Continue.",
   },
   doi: {
     eyebrow: "DOI link",
     headline: "Recognises a doi.org address too",
     body:
-      "The same single click shows the DOI. Continue in PaperLume opens PaperLume in a new tab, " +
-      "carrying only that identifier.",
+      "The same single click shows the DOI — and still finds it after doi.org redirects you to the " +
+      "publisher, by reading the standard DOI tag the page publishes.",
     note: "PaperLume asks you to sign in and to confirm the import. The extension imports nothing itself.",
   },
   unsupported: {
     eyebrow: "Anywhere else",
     headline: "Says so when there is no paper to send",
     body:
-      "On a page whose address names no identifier PaperLume supports, it tells you plainly — " +
-      "and offers no Continue button at all.",
-    note: "No guessing from page titles, no page scraping, and nothing sent.",
+      "When a page’s address names no identifier and the page publishes no standard DOI, PaperLume " +
+      "tells you plainly — and offers no Continue button at all.",
+    note: "No guessing from page titles or article text, and nothing sent.",
   },
 };
 
