@@ -503,8 +503,10 @@ thing.
 
 ### What this phase can and cannot conclude
 
-**Can:** the store icon, at least one screenshot, and the small promo tile are
-required on every reading of all three pages. Those are produced (§9).
+**Can:** three assets are required on every reading that speaks to them — the
+store icon, at least one screenshot, and the small promo tile. Sources A and B
+both name all three; Source C speaks only to screenshots, and requires one. No
+page contradicts any of the three. All are produced (§9).
 
 **Cannot:** whether the Dashboard's video field is enforced. That is a property
 of the live form, not of the documentation, and the two are different artefacts.

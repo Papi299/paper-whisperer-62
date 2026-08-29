@@ -843,8 +843,9 @@ says the listed images and video **must be provided** *"with the exception of th
 Marquee promo tile, which is optional"*, while
 [Image guidelines](https://developer.chrome.com/docs/webstore/images) says
 *"**Only** the extension icon, a small promotional image, and a screenshot are
-**mandatory**"* and never mentions a video. The three assets both pages agree on
-are produced; the disputed one is recorded as unresolved.
+**mandatory**"* and never mentions a video. The three assets both pages name —
+store icon, at least one screenshot, small promo tile — are produced; the
+disputed one is recorded as unresolved.
 
 | Asset | Requirement | Status |
 |---|---|---|
