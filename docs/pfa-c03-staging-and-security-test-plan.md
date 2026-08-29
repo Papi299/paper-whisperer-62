@@ -207,7 +207,7 @@ Do **not** describe the publishable client key as a private credential. For **Mo
 - **Least privilege:** `permissions: contents: read` plus only what a step needs. `[REC]`
 - **Fork-PR protection:** any secret-using job triggers on `workflow_dispatch` and/or same-repo `push`/`pull_request` only, and/or is gated behind a protected GitHub **Environment** with required reviewers — **no** fork PR receives secrets. (Model A's local path needs no cloud secret, shrinking this surface to `TEST_USER_*`.) `[REC]`
 - **Concurrency:** one run at a time (`concurrency` + `cancel-in-progress`) so count-sensitive specs never overlap. `[REC]`
-- **Timeout:** explicit `timeout-minutes` ≤ 20. **Artifacts:** Playwright `trace`/`screenshot` with bounded retention (~7 days); **never** upload env files or secrets. `[REC]`
+- **Timeout:** an explicit bounded `timeout-minutes` on every job — originally recommended as ≤ 20, and raised to 30 for `e2e-local` alone under CI-E2E-TIMEOUT-HARDENING-001 once that lane's normal runtime approached the 20-minute cap. The bound is a ceiling for infrastructure variance, never a target runtime. **Artifacts:** Playwright `trace`/`screenshot` with bounded retention (~7 days); **never** upload env files or secrets. `[REC]`
 - **Two-layer Production-ref guard** (§5). `[REC]`
 
 ### 6.5 What no test backend replicates
@@ -258,7 +258,7 @@ Choose one: **local-first** (Model A only, recommended); **cloud-first** (Model 
 - **Steps (Model A shape):** checkout → setup Node 22 + npm cache → `npm ci` → `npx playwright install --with-deps chromium` → start local Supabase stack → replay migrations → seed → **Layer 1 guard** (materialize `VITE_` for the local host; reject blanks/Production/remote) → run the **initial subset** with **Layer 2 guard** active in `global-setup.ts` → upload artifacts → tear down the stack. `[REC]`
 - **Environment/variable names (no values):** Model A needs only public client config for the local stack (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` — the local stack's URL + anon key, typically emitted by `supabase start`), plus `TEST_USER_EMAIL`, `TEST_USER_PASSWORD` (seeded locally), optional `BASE_URL`, and the guard constant naming the Production ref to reject. **No cloud reset credential, access token, or service credential is required for Model A.** Model B additionally needs a staging ref + a reset credential **by name only** (e.g. `STAGING_SUPABASE_DB_PASSWORD` or `STAGING_SUPABASE_ACCESS_TOKEN`). `[REC]`
 - **Initial subset (green first):** the 6 **read-only** specs — `auth`, `bulk-actions`, `eager-load`, `filters`, `paper-import`, `pools`. **Wave 2:** `filter-presets`, `file-import-order` (count-sensitive → isolation lane). **Wave 3:** `mutations`, `notes`, `search-attribution` (disposable-paper fixture), `attachments`. **Wave 4 — resolved (D4, 2026-08-16 → `DETERMINISTIC_STAND_IN`, §12):** `import-order`, now a member of the supported default local lane. Its metadata comes from a deterministic stand-in fulfilled at the `fetch-paper-metadata` HTTP boundary, so it needs no live PubMed/Crossref, no provider egress and no served metadata Edge Function. *(It was planned here as a gated external-provider wave; that gate no longer exists.)* `[REC]`
-- **Serial/concurrency/timeout:** keep `workers: 1`, serial; one run at a time; `retries: 2` in CI; `timeout-minutes` ≤ 20; per-test `timeout: 30_000`. `[REC]`
+- **Serial/concurrency/timeout:** keep `workers: 1`, serial; one run at a time; `retries: 2` in CI; an explicit bounded `timeout-minutes` (≤ 20 as first recommended; **30** as implemented today — see §6.4); per-test `timeout: 30_000`. `[REC]`
 - **Evidence before "stable":** the initial subset passes green ≥ 3 consecutive runs; the Layer 1 + Layer 2 guards are proven to abort on a deliberately-wrong (Production) URL; no secret appears in logs/artifacts; `Validate` untouched. `[REC]`
 
 ### 8.1 C03A2-L implementation status `[FACT]`
@@ -701,7 +701,7 @@ Consequences if a candidate were promoted: a fork-origin pull request would stil
 
 - **≥ 40 further eligible pull-request runs** after 2026-08-16 with **zero same-SHA re-runs** required to reach green;
 - **zero ephemeral-stack bring-up transients** (`supabase/setup-cli` or `supabase start`) over that window;
-- **p90 successful duration ≤ 7m00s and maximum ≤ 12m00s** (≤ 60% of the declared 20-minute timeout), with **no upward p90 trend across two consecutive windows** — this is the criterion it currently fails, at p90 8m49s and rising;
+- **p90 successful duration ≤ 7m00s and maximum ≤ 12m00s** (≤ 60% of the then-declared 20-minute timeout; these absolute thresholds stand as written and were deliberately **not** rescaled when that ceiling was raised to 30 minutes), with **no upward p90 trend across two consecutive windows** — this is the criterion it currently fails, at p90 8m49s and rising;
 - **≥ 1 legitimate unique catch whose root cause is application or database code** (candidate red / `Validate` green), as opposed to a defect in its own spec.
 
 Should the repository begin accepting fork-origin contributions, the vacuous-green fork behaviour in §16.7 must be resolved for **any** promoted candidate before its required status can be trusted.

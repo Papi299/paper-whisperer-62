@@ -43,7 +43,13 @@ jobs:
     # execution). `pull_request_target` is intentionally NOT used.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # A ceiling, not a target. This lane normally completes in the high teens, so
+    # a 20-minute cap left almost no margin for ordinary GitHub-hosted variance
+    # (dependency install, Docker and Supabase bring-up, Playwright browser and
+    # system-dependency install, migration replay, transient runner load). The
+    # extra headroom exists to absorb that variance; it is not licence for the
+    # suite to grow into it.
+    timeout-minutes: 30
 
     env:
       CI: true
