@@ -28,11 +28,20 @@
 export const STORE_ASSET_DIR = "assets/store";
 
 /**
- * The Store icon canvas, and the box the mark must fit inside it.
+ * The Store-icon *candidate* canvas, and the box the mark must fit inside it.
  *
  * *"You must provide a 128x128-pixel extension icon image… The actual icon size
  * should be 96x96 (for square icons); an additional 16 pixels per side should be
  * transparent padding, adding up to 128x128 total image size."*
+ *
+ * **This is a candidate, not a confirmed upload.** The same sentence says the
+ * 128px icon is supplied *"in the ZIP file of your extension"*, and
+ * `icons/icon-128.png` in the release package already is that file. Whether the
+ * Developer Dashboard additionally takes a separately uploaded store icon is
+ * unresolved — nobody in this phase is authorised to open the Dashboard and
+ * look. So this asset is generated because it is cheap, deterministic and ready
+ * if such a field exists; nothing here claims it is the image the Store will
+ * use. See `docs/chrome-web-store-listing.md` §9.
  *
  * The PaperLume mark is not square — it is a portrait page, 40 × 54 on the
  * 64-unit grid — so "96×96" is read as the content box it must fit *within*,
@@ -77,6 +86,12 @@ export const STORE_ASSETS = [
     transparent: true,
     role: "Store icon",
     depicts: "vector render of the canonical PaperLume symbol — no UI, no claim",
+    /**
+     * Whether first-party documentation guarantees this file is what the Store
+     * uses. It does not: the guaranteed 128px icon is the one in the package.
+     * See the `STORE_ICON` comment above.
+     */
+    submissionPath: "candidate — the packaged icons/icon-128.png is the guaranteed one",
   },
   {
     file: "promo-tile-small-440x280.png",
@@ -123,6 +138,16 @@ export const STORE_ASSETS = [
  * @see https://developer.chrome.com/docs/webstore/images
  */
 export const SCREENSHOT = { width: 1280, height: 800, min: 1, max: 5 };
+
+/**
+ * The promotional video is deliberately absent from `STORE_ASSETS`.
+ *
+ * Not because it was judged optional — because Google's own pages disagree about
+ * whether it is required at all, and this repository cannot settle that without
+ * the live Developer Dashboard. `docs/chrome-web-store-listing.md` §10 records
+ * the conflict verbatim. Generating filler media to retire a row that may not
+ * exist would be worse than the gap.
+ */
 
 /** The tab URLs each screenshot's popup capture is taken against. */
 export const CAPTURE_URLS = {

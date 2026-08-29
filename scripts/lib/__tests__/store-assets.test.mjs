@@ -65,8 +65,16 @@ describe("store assets — every declared image is present and correctly sized",
   });
 });
 
-describe("store assets — the Store icon", () => {
+describe("store assets — the Store-icon candidate", () => {
   const icon = STORE_ASSETS.find((asset) => asset.role === "Store icon");
+
+  it("is recorded as a candidate, not as the guaranteed store icon", () => {
+    // The 128px icon first-party documentation guarantees is used ships inside
+    // the package. Whether the Dashboard also takes a separate upload is
+    // unresolved, and this file must not start implying that it does.
+    expect(icon.submissionPath).toContain("candidate");
+    expect(icon.submissionPath).toContain("icons/icon-128.png");
+  });
 
   it("is the canvas size Chrome documents", () => {
     expect([icon.width, icon.height]).toEqual([STORE_ICON.canvas, STORE_ICON.canvas]);

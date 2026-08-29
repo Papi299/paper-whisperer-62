@@ -212,8 +212,8 @@ const dataUri = (png) => `data:image/png;base64,${png.toString("base64")}`;
 /**
  * Render one HTML document to a PNG of an exact size.
  *
- * `omitBackground` is passed through so the Store icon keeps its alpha channel
- * while the full-bleed images stay opaque.
+ * `omitBackground` is passed through so the Store-icon candidate keeps its
+ * alpha channel while the full-bleed images stay opaque.
  */
 async function render(browser, { html, width, height, omitBackground = false }) {
   const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
@@ -224,7 +224,10 @@ async function render(browser, { html, width, height, omitBackground = false }) 
 }
 
 /**
- * The Store icon: the canonical symbol, fitted to the documented content box.
+ * The Store-icon *candidate*: the canonical symbol, fitted to the documented
+ * content box. Whether the Dashboard takes a separate store-icon upload is
+ * unresolved; the guaranteed 128px icon ships inside the package. See
+ * `lib/store-assets.mjs`.
  *
  * The mark is scaled so its taller axis is exactly `contentBox` px, then
  * centred. Because the mark is centred within its own 64-unit viewBox, centring

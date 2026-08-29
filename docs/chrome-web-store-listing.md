@@ -19,6 +19,13 @@
 > primary source before submitting**, the same standing rule
 > [chrome-web-store-readiness.md](chrome-web-store-readiness.md) applies to its
 > policy citations.
+>
+> **Two questions are deliberately left open**, because they cannot be answered
+> from documentation alone and the Developer Dashboard has not been — and in
+> this phase may not be — opened: whether a **promotional video** is actually
+> required (§10, where Google's own pages contradict each other), and whether
+> the **store icon** is a separate upload field or is read from the package
+> (§9). Both are recorded as unresolved rather than guessed.
 
 **Companion document.** [chrome-web-store-readiness.md](chrome-web-store-readiness.md)
 is the policy audit, the data-flow evidence, the packaging contract, the
@@ -318,8 +325,11 @@ Category definitions quoted from the
 
 ### Why "Web history = Yes" stays Yes
 
-This answer is **locked**, and re-verified against first-party policy on
-2026-08-29 with no material change found.
+This answer is **locked**. The category definition it rests on was re-read
+against first-party policy on 2026-08-29 and is unchanged. (The unresolved
+first-party conflicts recorded in §9 and §10 are about *listing assets*, not
+about the data-use categories; nothing in the user-data documentation
+contradicts itself here.)
 
 > The extension accesses the active-tab URL only after explicit user invocation
 > and does not retain or transmit the full URL — only a derived public
@@ -380,12 +390,14 @@ committed under [`assets/store/`](../assets/store), and held to their contract b
 
 | Asset | File | Size | Source | Method | Deterministic? | Hand-edited? | Depicts real behaviour? |
 |---|---|---|---|---|---|---|---|
-| Store icon | `assets/store/store-icon-128.png` | 128×128 | `assets/brand/svg/paperlume-symbol.svg` | Vector render, uniform scale to the documented content box | Yes — pure vector, no type | No | n/a — brand mark, makes no claim |
+| Store-icon **candidate** | `assets/store/store-icon-128.png` | 128×128 | `assets/brand/svg/paperlume-symbol.svg` | Vector render, uniform scale to the documented content box | Yes — pure vector, no type | No | n/a — brand mark, makes no claim |
+| Packaged 128 icon (**guaranteed**) | `icons/icon-128.png`, in the RC ZIP | 128×128 | `assets/brand/png/paperlume-128.png` | Byte copy at build time | Yes — byte copy | No | n/a — brand mark |
 | Small promo tile | `assets/store/promo-tile-small-440x280.png` | 440×280 | `paperlume-logo-horizontal.svg` on a brand gradient | Composition; wordmark recoloured for dark ground per brand spec §5a | Vector yes; the one text line uses the host UI font | No | n/a — brand composition, no UI shown |
 | Screenshot 1 | `assets/store/screenshot-1-pubmed-1280x800.png` | 1280×800 | **Real popup**, `dist-extension/` in real Chromium | Captured at 2×, composed onto a caption panel | Layout yes; type uses the host UI font | No | **Yes** — real PubMed detection |
 | Screenshot 2 | `assets/store/screenshot-2-doi-1280x800.png` | 1280×800 | **Real popup**, same lane | Same | Same | No | **Yes** — real DOI detection |
 | Screenshot 3 | `assets/store/screenshot-3-unsupported-1280x800.png` | 1280×800 | **Real popup**, same lane | Same | Same | No | **Yes** — real unsupported state |
-| Marquee promo tile | — | 1400×560 | — | Not produced | — | — | **Optional** per first-party docs; deliberately skipped |
+| Marquee promo tile | — | 1400×560 | — | Not produced | — | — | **Optional** on every first-party reading; deliberately skipped |
+| Promotional video | — | — | — | Not produced | — | — | **Requirement unresolved** — see §10 |
 
 ### What "real popup" means, precisely
 
@@ -413,59 +425,121 @@ Screenshot 3 exists on purpose. The unsupported state is not a failure to hide;
 it is the extension declining to guess, and it is the clearest available answer
 to a reviewer asking whether this is merely a link to a website.
 
-### Why the Store icon is a separate file from the manifest's 128px icon
+### The two 128px icons, and which one is guaranteed
 
-Chrome documents the two differently, so they are two files.
+There are two 128×128 PaperLume files in this repository, and it matters which
+claim is made about each.
 
-- **Manifest icons** (`icons/icon-{16,32,48,128}.png` in the package) are the
-  canonical brand exports, byte for byte. The brand system deliberately gives the
-  mark a 5-unit margin on a 64-unit grid — *"a toolbar icon that floats in the
-  middle of its box reads as smaller than its neighbours"* (`brand-spec.md` §3) —
-  and that is the right treatment for a toolbar and an extensions page.
-- **The Store icon** follows the Store's own rule: *"The actual icon size should
-  be 96x96 (for square icons); an additional 16 pixels per side should be
-  transparent padding, adding up to 128x128 total image size."* The PaperLume
-  mark is a portrait page, not a square, so 96×96 is read as the box it must fit
-  *within*: the mark is scaled so its taller axis is exactly 96 px, giving 16 px
-  of transparent padding top and bottom and 28 px left and right. Both exceed the
-  documented minimum.
+**`icons/icon-128.png` inside the RC ZIP is the guaranteed one.** First-party
+documentation is unambiguous that the 128px extension icon travels in the
+package: *"You must provide a 128x128-pixel extension icon image **in the ZIP
+file of your extension**"*
+([images](https://developer.chrome.com/docs/webstore/images)), and the
+[upload preparation](https://developer.chrome.com/docs/webstore/prepare) page
+treats `icons` as manifest metadata that must be correct **before** upload —
+*"After uploading your item, you won't be able to edit the metadata of your
+manifest in the developer dashboard."* So the packaged icon is the one the
+documentation guarantees is used. It is the canonical brand export, byte for
+byte.
 
-The difference is **one uniform scale and one offset**. No path data, colour,
-proportion or gradient differs; the Store icon is the same mark, not a second
-one. Measured on the produced files: manifest 128 → mark 80×108 with 24/10 px
-margins; Store 128 → mark 72×96 with 28/16 px padding.
+**`assets/store/store-icon-128.png` is a Store-optimised candidate**, not a
+confirmed upload. It applies the Store's own documented framing to the identical
+locked geometry: *"The actual icon size should be 96x96 (for square icons); an
+additional 16 pixels per side should be transparent padding, adding up to
+128x128 total image size."* The PaperLume mark is a portrait page rather than a
+square, so 96×96 is read as the box it must fit *within* — the mark is scaled so
+its taller axis is exactly 96 px, giving 16 px of transparent padding top and
+bottom and 28 px left and right, both at or above the documented minimum.
+
+**What is NOT claimed.** This document does not assert that the candidate is
+uploaded through a separate Dashboard field, that it overrides the packaged
+icon, or that the Chrome Web Store will display it rather than the manifest
+icon. The Dashboard has not been inspected — 001E2 and this correction are not
+authorised to open it — and
+[Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)
+lists *"A 128x128 px to use as your store icon"* among the graphic assets
+without settling whether that field is a separate upload or is read from the
+package. Until someone looks at the live form, that is unresolved.
+
+**Consequence for 001E3.** If the live Dashboard exposes a distinct store-icon
+upload field, the candidate is ready to use. If it does not, the packaged icon
+is already correct and the candidate costs nothing but a tracked file. Either
+way no action is needed now, and the asset is kept rather than deleted for an
+unresolved submission path.
+
+The difference between the two files is **one uniform scale and one offset**. No
+path data, colour, proportion or gradient differs; the candidate is the same
+mark, not a second one. Measured on the produced files: packaged 128 → mark
+80×108 with 24/10 px margins; candidate 128 → mark 72×96 with 28/16 px padding.
+The brand system's own 5-unit margin — *"a toolbar icon that floats in the
+middle of its box reads as smaller than its neighbours"* (`brand-spec.md` §3) —
+is why the packaged set is not simply re-padded to match.
 
 ---
 
-## 10. Promotional video — `OPEN OWNER CONTENT GATE`
+## 10. Promotional video — `FIRST-PARTY DOCUMENTATION CONFLICT`
 
-**First-party determination, read on 2026-08-29.**
-[Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)
-states: *"In this section, you must provide the following promotional images and
-video, with the exception of the Marquee promo tile, which is optional."* The
-list it introduces contains the store icon, screenshots, the small promo tile,
-the marquee promo tile and a **YouTube video**.
+**Classification:**
+`PROMOTIONAL VIDEO REQUIREMENT — FIRST-PARTY DOCUMENTATION CONFLICT; LIVE DASHBOARD VERIFICATION REQUIRED BEFORE SUBMISSION`
 
-**Classification: required, and not distribution-dependent.** The visibility
-documentation states that *"All visibility settings have the same policy
-requirements and will go through the same review process"*
-([distribution](https://developer.chrome.com/docs/webstore/cws-dashboard-distribution)),
-and names no promotional-asset exemption for unlisted or private items. So
-launching unlisted does not remove this.
+**Not "required". Not "optional".** Google's own documentation says both, on
+different pages, and 001E2 cannot resolve which one the submission form actually
+enforces without opening the Developer Dashboard — which this phase is not
+authorised to do.
 
-**Status: not produced, and deliberately not faked.** It needs a script, a
-recording of the real extension, and a hosted YouTube URL. None exists, this
-repository contains no approved video-production workflow, and nothing was
-uploaded to YouTube. A filler video made only to clear a checklist row would be
-worse than an honest gap.
+### The three first-party pages, read verbatim on 2026-08-29
 
-**This is an owner content gate on submission.** It is the largest remaining
-listing item. Before submission the owner must either produce and host the
-video, or confirm against the live Dashboard that the field is not enforced for
-the chosen visibility — the published documentation and the form's actual
-validation are not the same artefact, and only the owner can look at the form.
+| Source | What it says about a video |
+|---|---|
+| [Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing) | *"In this section, you **must provide** the following promotional images and video, with the exception of the Marquee promo tile, which is optional:"* — and the list it introduces contains *"A link to a **YouTube video** that showcases your extension features."*, carrying **no** optional marker |
+| [Image guidelines](https://developer.chrome.com/docs/webstore/images) | *"**Only** the extension icon, a small promotional image, and a screenshot are **mandatory**."* A video is **not mentioned anywhere on the page** |
+| [Best listing practices](https://developer.chrome.com/docs/webstore/best-listing) | *"You must provide at least one—and preferably the maximum allowed five—screenshots of your item to be displayed in the store."* and *"Use screenshots (**or videos**) to convey the capabilities, look and feel, and experience of your item to users."* — a video appears as an **alternative** means, never as a required asset |
 
-**Marquee promo tile (1400×560)** is explicitly optional in the same sentence
+These cannot all be true at once. The Image-guidelines sentence is exhaustive
+("**only** … are mandatory") and excludes a video; the Dashboard-listing
+sentence includes one among things you "must provide". The Best-listing page
+requires a screenshot and treats a video as an alternative way to show the same
+thing.
+
+### What this phase can and cannot conclude
+
+**Can:** the store icon, at least one screenshot, and the small promo tile are
+required on every reading of all three pages. Those are produced (§9).
+
+**Cannot:** whether the Dashboard's video field is enforced. That is a property
+of the live form, not of the documentation, and the two are different artefacts.
+**No Dashboard access is authorised in 001E2 or in this correction**, so the
+question is left open rather than answered by guessing.
+
+**Do not read an exemption into visibility either.** The distribution
+documentation states *"All visibility settings have the same policy requirements
+and will go through the same review process"*
+([distribution](https://developer.chrome.com/docs/webstore/cws-dashboard-distribution)).
+That means unlisted and private do not get a *lighter policy review* — it does
+**not** settle whether this particular listing field is mandatory, in either
+direction. Earlier drafting of this document used that sentence to argue the
+video is required for all visibilities; that inference does not hold and has
+been removed.
+
+### The gate, stated as an owner action for 001E3
+
+Before any submission, the owner verifies against the **live Developer
+Dashboard** whether the promotional-video field is required for the chosen
+visibility, and then:
+
+- **if the live form requires it** — producing and hosting a YouTube video
+  becomes an owner **content gate** at that point. It needs a script, a
+  recording of the real extension, and a hosted URL, none of which exist here;
+- **if the live form does not require it** — it stays deferred, and no video is
+  produced.
+
+**Nothing was produced either way, and nothing was uploaded to YouTube.** No
+filler video was made to clear an unresolved question: a video created only to
+retire a checklist row would be worse than an honest gap, and the row is not
+even known to exist.
+
+**Marquee promo tile (1400×560)** is optional on both readings — Source A names
+it as the explicit exception, and Source B omits it from the mandatory three —
 and is not produced.
 
 ---
@@ -493,7 +567,7 @@ Load `dist-extension/` unpacked at `chrome://extensions` with Developer mode on,
 or install the RC ZIP's contents the same way.
 
 - No Store account, no registration fee, no review, no listing assets, no
-  promotional video, no privacy questionnaire.
+  privacy questionnaire, and no video question to answer.
 - Chrome shows a developer-mode warning, and the extension is not distributed to
   anyone else.
 - **Legal/provider gates: none beyond what already applies to the owner using
@@ -505,8 +579,10 @@ or install the RC ZIP's contents the same way.
 
 - **Same review, same policy requirements.** *"All visibility settings have the
   same policy requirements and will go through the same review process."* So the
-  full listing package, the privacy questionnaire, the privacy-policy URL, the
-  registration fee and — per §10 — the promotional video all apply.
+  full listing package, the privacy questionnaire, the privacy-policy URL and
+  the registration fee all apply. That sentence is about *policy review*, and it
+  does **not** settle whether the promotional-video listing field is required —
+  see §10; do not read either a requirement or an exemption into it.
 - Private limits installation to named testers and Google Groups the owner
   manages; unlisted creates no browse-able listing but anyone with the URL can
   install.
