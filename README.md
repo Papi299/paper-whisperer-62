@@ -147,12 +147,14 @@ To check it by hand, open a tab and click the PaperLume toolbar action:
 | any ordinary publisher article page | No paper identified — and **not** a guess from the page title. No continuation button |
 | `chrome://extensions` | Nothing to check here. No continuation button |
 
-**What it does.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. For a recognised paper it offers **Continue in PaperLume**, which opens one new tab at the handoff route below. That is the whole of it: the extension makes no network or API request of its own, holds no PaperLume or Supabase session, reads no page content, stores nothing, and imports nothing. The only permission it requests is `activeTab`, which grants temporary access to the one tab you invoked it on — that grant is what lets it read that tab's address. Opening the new tab itself requires neither the `tabs` permission nor a host permission.
+**What it does.** It reads the active tab's address after you click the toolbar action, and says whether that address structurally identifies a PubMed record or a DOI. If the address identifies neither and the tab is an ordinary web page, it then reads four standard bibliographic `<meta>` keys — `citation_doi`, `dc.identifier`, `dc.identifier.doi`, `prism.doi` — from that one page's `<head>`, because a `doi.org` link redirects to the publisher before you can reach the toolbar. For a recognised paper it offers **Continue in PaperLume**, which opens one new tab at the handoff route below. That is the whole of it: the extension makes no network or API request of its own (it never resolves the DOI), holds no PaperLume or Supabase session, stores nothing, sends no page content or source URL, and imports nothing. It reads no other part of a page — not the title, the abstract, the authors, the body text or the links — and a page publishing two conflicting DOIs is refused rather than resolved to either. It requests `activeTab` and `scripting` and no host permission: `activeTab` grants temporary access to the one tab you invoked it on, which is what lets it read that tab's address *and* inject there, while `scripting` merely enables the injection API and reaches no page by itself. Opening the new tab requires neither the `tabs` permission nor a host permission.
 
 **The extension hands over, it does not import.** One press does this and stops:
 
 ```
-toolbar click → activeTab URL read → PubMed/DOI detection → Continue in PaperLume
+toolbar click → activeTab URL read → PubMed/DOI detection
+              → (only if the URL identified nothing) page DOI metadata
+              → Continue in PaperLume
     → new tab at https://app.paperlume.app/extension-import?kind=…&value=…
     → PaperLume signs you in if needed → you choose Projects and Tags
     → you press Import to PaperLume
@@ -162,7 +164,7 @@ Everything from the new tab onwards belongs to the web application: authenticati
 
 **Packaging and Store readiness.** `npm run package:extension` cleans, builds, validates `dist-extension/`, writes `release/paperlume-extension-<version>-rc.zip` with `manifest.json` at the archive root, then unzips what it wrote and validates that too. It exits non-zero on any contract violation — a widened permission, a remote origin, a source map, a stray test file — and the archive is byte-identical between runs. `release/` is gitignored; nothing is uploaded.
 
-`npm run test:extension:browser` loads the **built** extension into a real Chromium (Playwright's bundled channel, a throwaway profile, DNS black-holed to loopback) and asserts what the browser reports: the permissions Chrome actually granted, that no background context exists, that the popup classifies and renders, and that pressing Continue calls the real `chrome.tabs.create` exactly once at the exact handoff URL. One step it cannot automate is the toolbar click that grants `activeTab`, so that is a mandatory manual gate before submission.
+`npm run test:extension:browser` loads the **built** extension into a real Chromium (Playwright's bundled channel, a throwaway profile, DNS black-holed to loopback) and asserts what the browser reports: the permissions Chrome actually granted (`["activeTab","scripting"]` with zero host origins), that a real `chrome.scripting.executeScript` is refused without a toolbar grant, that no background context exists, that the popup classifies and renders, that a real publisher page's `citation_doi` is read while its title, body and links are not, and that pressing Continue calls the real `chrome.tabs.create` exactly once at the exact handoff URL. One step it cannot automate is the toolbar click that grants `activeTab`, so that is a mandatory manual gate before submission.
 
 The extension is still loaded unpacked for development. It is **not** published to the Chrome Web Store, and no listing exists. Policy audit, privacy data flow, the manual release checklist and the outstanding Store gaps — including the missing brand icons — are in [docs/chrome-web-store-readiness.md](docs/chrome-web-store-readiness.md).
 

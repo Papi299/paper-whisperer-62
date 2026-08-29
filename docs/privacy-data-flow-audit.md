@@ -42,7 +42,7 @@
 3. **Four external services receive data today**: Supabase (all storage/auth), Google Gemini (title/abstract, or title/abstract/keywords/study-type plus Project and Tag *names*), NCBI E-utilities (identifiers and search queries), Crossref (DOI or title). Two more receive no user content: Google Cloud Monitoring (aggregate provider metrics, owner/manager only) and Vercel (static hosting).
 4. **A fifth processor is live but configured outside this repository**: **Resend**, as Supabase Auth's custom SMTP, which handles transactional auth email and therefore the user's email address.
 5. **There is no application analytics, telemetry, error-reporting, advertising or fingerprinting of any kind.** See §10.
-6. **The Chrome extension is exceptionally narrow**: `activeTab` only, no storage, no content scripts, no network capability at all. Re-verified against merged source in §11.
+6. **The Chrome extension is exceptionally narrow**: `activeTab` only, no storage, no content scripts, no network capability at all. Re-verified against merged source in §11. *(Amended 2026-08-29 — the extension now also declares `scripting` and reads four bibliographic `<meta>` values from an invoked tab. It remains narrow: still no storage, still no content scripts, still no network capability, still no host permission. See §24.)*
 7. **Account deletion is implemented and is a hard delete**, with two evidenced exceptions (§12.4) and one class of external record it cannot reach (§12.5).
 8. **No retention period is defined anywhere in source.** Data is retained until the user deletes it or deletes their account.
 9. **No privacy policy, terms, cookie policy, age gate, legal entity, or privacy contact exists in the repository or the running app.** All are owner input.
@@ -300,6 +300,15 @@ These are ordinary server-side operational logs, not application analytics. A po
 ---
 
 ## 11. Chrome extension privacy flow
+
+> **HISTORICAL SNAPSHOT — superseded in part. See [§24](#24-addendum--2026-08-29--chrome-extension-import-001e2-correction-01).**
+>
+> Everything in this section was true of the extension at the commit named in §1
+> and is left exactly as it was audited. It is **no longer a description of
+> current behaviour**: on 2026-08-29 the extension gained a narrow DOI metadata
+> read and the `scripting` permission. §24 is the dated delta. Nothing here has
+> been rewritten to make the old statements read as though they were never true —
+> they were true, and the date they stopped being true is recorded.
 
 Re-verified against the merged source at the audited commit, not copied from `docs/chrome-web-store-readiness.md`. The complete extension is five source files plus a manifest and a popup document.
 
@@ -582,6 +591,8 @@ Exhaustive search of the repository and the application's routes.
 
 Based **only** on the extension behaviour verified in §11. This is a factual draft for a human to review against the live Developer Dashboard. **Nothing here has been or may be submitted, and selecting these answers does not guarantee policy compliance** — Google's form wording and policies change, and only the live form is authoritative.
 
+> **SUPERSEDED IN PART on 2026-08-29.** One answer below is now wrong for the current extension: **Website content** is **Yes**, not No. Every other row still holds. The corrected mapping, and why only that one row moved, is in §24.
+
 ### 19.1 Data-type questions
 
 | Dashboard category | Factual answer | Repository evidence | Ambiguity |
@@ -746,7 +757,7 @@ Location is `Supabase (ap-south-1, India)` unless stated. "Until account deletio
 
 ## 23. Maintenance
 
-This document describes the commit in §1. It stops being true when any of the following change, and must be revised in the same PR that changes them:
+This document describes the commit in §1, plus the dated addenda that follow it. It stops being true when any of the following change, and must be revised in the same PR that changes them — **as an addendum, not as an edit to the snapshot**, so that the record of what was true when remains readable:
 
 - a new Edge Function, or a change to what an existing one sends to a provider;
 - a new table or column holding user data, or a change to a `ON DELETE` rule;
@@ -755,3 +766,178 @@ This document describes the commit in §1. It stops being true when any of the f
 - a change to the extension's manifest, permissions or handoff contract;
 - a billing integration reaching `subscriptions` / `subscription_events`;
 - a change to the Supabase region or hosting arrangement.
+
+---
+
+## 24. Addendum — 2026-08-29 — CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01
+
+> **This is a dated delta, not a rewrite.** §11 and §19 above record the
+> extension as it was at the commit in §1, and they are left intact: those
+> statements were accurate when they were made, and this section records what
+> changed, when, and why — rather than editing history so that every old sentence
+> reads like current state. Where the two disagree, **this section is current**.
+
+| Item | Value |
+|---|---|
+| Change | `CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01` |
+| Date | 2026-08-29 |
+| Base commit | `89a7c247db55b3b1ee062ddb434b9501253662ac` |
+| Scope | The Chrome extension only. No application, Edge Function, migration, schema, RLS, provider, or Production change of any kind |
+| Method | Read of the changed source, the built `dist-extension/` bundle, and the release-candidate ZIP; plus first-party re-reading of Chrome's `activeTab` and `chrome.scripting` documentation. No Production access, no Dashboard access |
+
+### 24.1 Why the change happened
+
+Owner manual acceptance of the 001E2 release candidate failed on the DOI case. A
+DOI resolver redirects almost immediately — `https://doi.org/10.1038/s41586-020-2649-2`
+becomes `https://www.nature.com/articles/s41586-020-2649-2` — so by the time an
+ordinary user clicks the toolbar action, the active tab's URL is the publisher's
+and contains no DOI. The URL-only classifier answered *unsupported* for the most
+ordinary way anyone navigates by DOI. The behaviour was correct by its own rules
+and unusable in practice.
+
+### 24.2 The behaviour delta, stated as before and after
+
+| | Before (§11, at the audited commit) | After (2026-08-29) |
+|---|---|---|
+| Manifest permissions | `["activeTab"]` | `["activeTab", "scripting"]` |
+| Host permissions | None | **None** — unchanged |
+| Privileged Chrome API surface | `chrome.tabs.query`, `chrome.tabs.create` | those two plus `chrome.scripting.executeScript` |
+| Page access | **None.** No DOM, no `<meta>`, no title, no text | Four `<meta>` `content` values, in `document.head`, main frame only, on an invoked tab whose URL identified no paper |
+| Content scripts | None | **None** — unchanged |
+| Background context | None | **None** — unchanged |
+| Storage | None | **None** — unchanged |
+| Network capability | None | **None** — unchanged |
+| What the handoff carries | `kind` + `value` | **`kind` + `value`** — unchanged |
+| Title fallback | None | **None** — unchanged |
+| Source files | 5 | 7 (`detectPaperFromMetadata.ts`, `classifyActiveTab.ts` added) |
+| Shipping package files | 8 | **8** — unchanged; the new code bundles into `popup.js` |
+
+### 24.3 What is accessed now
+
+**The active tab's URL**, as before, only after the user clicks the toolbar
+action.
+
+**And, only where that URL identified no paper**, the `content` of `<meta>`
+elements in `document.head` whose `name` or `property` — case-normalized —
+is one of exactly four keys:
+
+```text
+citation_doi · dc.identifier · dc.identifier.doi · prism.doi
+```
+
+The read is bounded on three independent axes:
+
+- **When.** Only for the `unsupported` outcome of the URL classifier, which means
+  only on an ordinary `http(s)` page. A PubMed record and a `doi.org` link are
+  answered from the address and the page is never touched; a `chrome://` page, a
+  `file://` URL or a tab with no readable address is `restricted` and no
+  injection is attempted at all. Asserted in
+  [`classifyActiveTab.test.ts`](../extension/src/__tests__/classifyActiveTab.test.ts),
+  where those cases assert `executeScript` was **not called**.
+- **What.** Four keys, from the head, main frame only (`allFrames` is not passed,
+  so Chrome's documented default applies). Not read: the document title, article
+  title, abstract, authors, journal, headings, body text, anchor `href`s,
+  `data-` attributes, JSON-LD, inline scripts, JavaScript variables, sub-frames,
+  PDFs, forms, cookies, page storage, the selection, or any other tab.
+- **By whose permission.** `scripting` enables the API and grants access to no
+  page; the host access comes from `activeTab`, which exists only for the tab the
+  user invoked the action on and only until they navigate away. **VERIFIED**
+  against the browser: `chrome.permissions.getAll()` returns
+  `{ permissions: ["activeTab","scripting"], origins: [] }`, and a real
+  `executeScript` call with no toolbar grant is refused by Chrome with *"Cannot
+  access contents of the page. Extension manifest must request permission to
+  access the respective host."* ([`load.spec.ts`](../e2e-extension/load.spec.ts)).
+
+### 24.4 Local processing, retention and transmission
+
+**Local and transient.** The collected strings are normalized by the
+application's own DOI boundary (`extractDoiFromMetadataValue` in
+[`src/lib/doiIdentifiers.ts`](../src/lib/doiIdentifiers.ts)), reduced to a set of
+distinct DOI names, and used to produce at most one DOI. They live in the popup's
+page for as long as the popup is open and are gone when it closes.
+
+**Retention: none.** Unchanged from §11.7. No `storage` permission, no
+`chrome.storage`, `localStorage`, `sessionStorage`, `indexedDB`,
+`document.cookie` or Cache API reference exists in the source or the built
+bundle, and there is no background context. Asserted in a real browser *after* a
+metadata read has occurred ([`metadata.spec.ts`](../e2e-extension/metadata.spec.ts),
+*"stores nothing, having read a page"*).
+
+**Automatic transmission: none.** Unchanged from §11.4. No network primitive
+exists in the bundle. In particular the DOI read from a page is **not resolved** —
+doi.org, Crossref and PubMed are not contacted to check that it exists.
+
+**After the user presses Continue:** `kind` and `value`, exactly as before. The
+page URL, page content, title, authors and journal do not travel, and the handoff
+grammar has no third parameter to carry them in. Asserted on a metadata-detected
+DOI in a real browser, including that the publisher host, article title and
+author name appear nowhere in the URL.
+
+**Fail-closed on ambiguity.** A page publishing two *different* valid DOIs
+produces `unsupported` — never a choice between them. `doi` is a per-user
+deduplication key, so offering the wrong paper is a data-integrity problem rather
+than a display one.
+
+### 24.5 Corrected Chrome Web Store disclosure mapping
+
+Only one row of §19.1 changes:
+
+| Dashboard category | §19.1 answer | Current answer | Basis |
+|---|---|---|---|
+| **Website content** | No | **Yes** | The extension reads `<meta>` element content from the page. Four bibliographic keys, processed locally and transiently, with neither the content nor the page URL transmitted — but content **is** accessed, and the category asks what is accessed |
+| Web history | Yes | **Yes** — unchanged | The active tab's URL is still read on invocation |
+| All other categories | No | **No** — unchanged | No PII, health, financial, authentication, communications, location or interaction telemetry is read. None was moved to Yes without evidence |
+
+The three certifications in §19.2 are unaffected: nothing is sold or transferred,
+the identifier is still the single purpose, and creditworthiness remains
+inapplicable.
+
+The permission justification in §19.3 now needs a second half covering
+`scripting`: it is required because a DOI resolver redirects before the user can
+invoke the extension, it grants no page access on its own, and pairing it with
+`activeTab` is narrower than any `host_permissions` entry — which would grant
+standing access to every matching page regardless of user action. Drafted text is
+in [chrome-web-store-listing.md](chrome-web-store-listing.md) §6.
+
+§19.4 (remote code) is unchanged. The injected function ships inside the package
+and is serialized out of `popup.js` by Chrome at call time; nothing is fetched and
+nothing is evaluated from a string.
+
+### 24.6 Consequence for the public Privacy Policy — OWNER/LEGAL ACTION REQUIRED
+
+`src/pages/Privacy.tsx` §4 currently states, in a list of things the extension
+does **not** do:
+
+> read the contents of the webpage or its DOM;
+
+**That is now inaccurate.** It was accurate for every version up to and including
+001E2, and it became inaccurate on 2026-08-29.
+
+The rest of §4 remains accurate: the extension still does not maintain a
+browsing-history database, does not read website cookies or authentication
+tokens, does not store the active-tab URL, does not use background content
+scripts, and does not directly transmit the active-tab URL to PaperLume.
+
+CORRECTION-01 **did not edit that file**. The public Privacy Policy is
+owner-approved legal text under separate control, and amending it is an owner and
+legal decision. The amendment needed is narrow — replace that bullet with an
+accurate statement of the bounded metadata read, and extend the paragraph about
+reading the active tab's URL to mention it.
+
+**Classification: OWNER INPUT REQUIRED, blocking.** No Chrome Web Store
+submission should proceed while the disclosed *Website content = Yes* contradicts
+a posted policy saying the page is never read. Recorded as a blocking gate in
+[chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6 and as an item
+in its manual acceptance checklist.
+
+### 24.7 What this addendum does not change
+
+Nothing outside the extension. No new table, column, `ON DELETE` rule, Edge
+Function, external endpoint, analytics or error-reporting dependency, billing
+integration, Supabase region or hosting arrangement. The retention matrix (§13),
+the deletion analysis (§12), the AI data flows (§8) and the processor list (§9)
+are untouched. Row 29 of the §20 fact matrix — *"Extension: active tab URL"* —
+gains a sibling: **extension: page DOI metadata · Yes, on click, only where the
+URL identified nothing · Chrome `activeTab` + `scripting` · identifying a paper
+after a DOI redirect · Stored: No · Read into memory only · No processor ·
+Not retained · Nothing to delete · VERIFIED · Owner input: no**.
