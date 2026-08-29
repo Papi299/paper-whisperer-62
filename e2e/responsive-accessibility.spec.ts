@@ -195,6 +195,111 @@ test.describe("PFA-C09 responsive shell", () => {
     await expect(trigger).toBeFocused();
   });
 
+  test("drawer hands focus to the Account dialog and gets it back on a stable control", async ({
+    page,
+  }) => {
+    // PAPERLUME-PRIVACY-001C. The Account dialog is reached through one more
+    // layer than the taxonomy modals — the Account menu sits between the drawer
+    // and the dialog — so the Sheet → Menu → Dialog handoff gets its own case.
+    await page.setViewportSize(NARROW);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const trigger = page.getByRole("button", { name: "Open navigation menu" });
+
+    // 1. Open the drawer from the keyboard.
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    const drawer = page.getByRole("dialog", { name: /PaperLume navigation/i });
+    await expect(drawer).toBeVisible();
+
+    // 2. Open the Account menu from inside it, by keyboard.
+    const accountTrigger = drawer.getByRole("button", { name: /^Account menu for / });
+    await accountTrigger.focus();
+    await page.keyboard.press("Enter");
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+
+    // 3. Choose Account.
+    const accountItem = menu.getByRole("menuitem", { name: "Account" });
+    await accountItem.focus();
+    await page.keyboard.press("Enter");
+
+    // 4. The drawer and the menu are both gone before the dialog is usable —
+    //    exactly one modal layer at a time, never a Dialog trap stacked on a
+    //    Sheet trap.
+    const account = page.getByRole("dialog", { name: "Account" });
+    await expect(account).toBeVisible();
+    await expect(drawer).toBeHidden();
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+
+    // 5. Both account sections are present, and only here.
+    await expect(account.getByRole("heading", { name: "Account data" })).toBeVisible();
+    await expect(account.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+
+    // 6. Focus is inside the dialog.
+    const focusInside = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]');
+      return !!d && !!document.activeElement && d.contains(document.activeElement);
+    });
+    expect(focusInside, "focus should move into the Account dialog").toBe(true);
+
+    // 7. Escape returns focus to a visible, connected control — not <body>, and
+    //    not the email button inside the drawer that no longer exists.
+    await page.keyboard.press("Escape");
+    await expect(account).toBeHidden();
+
+    const landing = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null;
+      return {
+        isBody: el === document.body,
+        connected: !!el?.isConnected,
+        label: el?.getAttribute("aria-label") ?? null,
+      };
+    });
+    expect(landing.isBody, "focus must not fall back to <body>").toBe(false);
+    expect(landing.connected, "focus must not land on a detached element").toBe(true);
+    expect(landing.label).toBe("Open navigation menu");
+    await expect(trigger).toBeFocused();
+
+    // 8. The page is still interactive: the drawer reopens from there.
+    await page.keyboard.press("Enter");
+    await expect(drawer).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const d = document.querySelector('[role="dialog"]');
+          return !!d && !!document.activeElement && d.contains(document.activeElement);
+        }),
+      )
+      .toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(drawer).toBeHidden();
+
+    // 9. And the drawer never introduced page overflow on the way through.
+    await expectNoHorizontalOverflow(page, "dashboard @390 after Account dialog");
+  });
+
+  test("Settings keeps only the application-configuration surfaces", async ({ page }) => {
+    // PAPERLUME-PRIVACY-001C moved account export and deletion out of Settings.
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await expect(settings).toBeVisible();
+
+    await expect(settings.getByLabel("PubMed API Key (NCBI)")).toBeVisible();
+    await expect(settings.getByRole("heading", { name: "Storage" })).toBeVisible();
+
+    await expect(settings.getByRole("heading", { name: "Account data" })).toHaveCount(0);
+    await expect(settings.getByRole("heading", { name: "Danger zone" })).toHaveCount(0);
+    await expect(settings.getByRole("button", { name: "Export account data" })).toHaveCount(0);
+    await expect(settings.getByRole("button", { name: "Delete account" })).toHaveCount(0);
+  });
+
   test("no body-level horizontal overflow on Auth or Dashboard", async ({ page, browser }) => {
     // Authenticated dashboard, at both required viewports.
     for (const vp of [NARROW, DESKTOP]) {

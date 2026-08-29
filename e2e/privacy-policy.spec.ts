@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
+import { openAccountMenu, waitForDashboard } from "./helpers";
 
 /**
  * PAPERLUME-PRIVACY-001B — `/privacy` is a public route.
@@ -14,6 +15,10 @@ import { test, expect, type Browser, type Page } from "@playwright/test";
  * The Playwright project signs every test in through `storageState`, so the
  * signed-out cases build their own context with no stored session rather than
  * signing out — a shared sign-out would race the other specs.
+ *
+ * PAPERLUME-PRIVACY-001C added the authenticated half of that reachability:
+ * Account menu → Privacy Policy, on both the desktop rail and the narrow-screen
+ * drawer. The signed-out `/auth` link is unchanged and still covered above.
  */
 
 const POLICY_HEADING = "PaperLume Privacy Policy";
@@ -130,5 +135,77 @@ test.describe("Public privacy policy", () => {
     await expectPolicyRendered(page);
     // A signed-in visitor is not redirected into the dashboard either.
     await expect(page).not.toHaveURL(/\/dashboard/);
+  });
+});
+
+test.describe("Authenticated privacy entry point (Account menu)", () => {
+  test("reaches /privacy from the Account menu without signing the user out", async ({ page }) => {
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const menu = await openAccountMenu(page);
+    const item = menu.getByRole("menuitem", { name: "Privacy Policy" });
+    // An in-app route, not the canonical absolute URL: the same control has to
+    // resolve on localhost, on a Vercel Preview and in Production.
+    await expect(item).toHaveAttribute("href", "/privacy");
+
+    await item.click();
+    await expectPolicyRendered(page);
+
+    // Still signed in — the session survived the navigation, and going back to
+    // the dashboard needs no new sign-in.
+    await page.goto("/dashboard", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+  });
+
+  test("is keyboard-operable end to end", async ({ page }) => {
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const trigger = page.getByRole("button", { name: /^Account menu for / });
+    await trigger.focus();
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+
+    const item = menu.getByRole("menuitem", { name: "Privacy Policy" });
+    await item.focus();
+    await expect(item).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    await expectPolicyRendered(page);
+  });
+
+  test("reaches /privacy cleanly from the narrow-screen drawer", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    const navTrigger = page.getByRole("button", { name: "Open navigation menu" });
+    await navTrigger.click();
+    const drawer = page.getByRole("dialog", { name: /PaperLume navigation/i });
+    await expect(drawer).toBeVisible();
+
+    await drawer.getByRole("button", { name: /^Account menu for / }).click();
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+    await menu.getByRole("menuitem", { name: "Privacy Policy" }).click();
+
+    await expectPolicyRendered(page);
+
+    // Nothing modal survived the trip: no drawer, no menu, and — the failure
+    // this guards — no `pointer-events: none` left on <body> by a layer that
+    // was torn down mid-navigation instead of dismissed.
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    expect(
+      await page.evaluate(() => getComputedStyle(document.body).pointerEvents),
+    ).not.toBe("none");
+
+    // And the page is genuinely interactive: a link on it responds.
+    await page.getByRole("banner").getByRole("link", { name: "PaperLume", exact: true }).click();
+    await expect(page).not.toHaveURL(/\/privacy$/);
   });
 });

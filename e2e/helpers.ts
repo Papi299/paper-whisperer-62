@@ -14,6 +14,35 @@ export async function waitForDashboard(page: Page, timeout = 20_000) {
   await expect(paperCountLocator(page)).toBeVisible({ timeout });
 }
 
+/**
+ * Opens the Account menu — the authenticated email dropdown in the sidebar.
+ *
+ * The trigger's accessible name carries the signed-in address, which differs
+ * per fixture, so it is matched by prefix rather than pinned to one account.
+ */
+export async function openAccountMenu(page: Page) {
+  const trigger = page.getByRole("button", { name: /^Account menu for / });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/**
+ * Opens Account menu → Account and returns the Account dialog.
+ *
+ * Account export and account deletion moved out of Settings in
+ * PAPERLUME-PRIVACY-001C; Settings keeps the PubMed key and the storage gauge.
+ */
+export async function openAccountDialog(page: Page) {
+  const menu = await openAccountMenu(page);
+  await menu.getByRole("menuitem", { name: "Account" }).click();
+  const dialog = page.getByRole("dialog", { name: "Account" });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
 /** Extract the paper count number from the dashboard header. */
 export async function getPaperCount(page: Page): Promise<number> {
   const text = await paperCountLocator(page).textContent();

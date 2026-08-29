@@ -1,14 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { unzipSync, strFromU8 } from "fflate";
-import { waitForDashboard } from "./helpers";
+import { openAccountDialog, waitForDashboard } from "./helpers";
 
 /**
- * Settings → Account data: full account export (PFA-C02).
+ * Account → Account data: full account export (PFA-C02).
  *
  * Read-only end to end. The spec signs in as the deterministic local primary
- * fixture, opens Settings, triggers the export, and inspects the ZIP the
- * browser actually downloaded. It never writes a row, uploads an object, or
+ * fixture, opens Account menu → Account, triggers the export, and inspects the
+ * ZIP the browser actually downloaded. It never writes a row, uploads an object, or
  * mutates any backend state — every assertion is about data the seed already
  * created.
  *
@@ -63,10 +63,7 @@ test.describe("Account data export", () => {
     await page.goto("/", { waitUntil: "networkidle" });
     await waitForDashboard(page);
 
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
+    const dialog = await openAccountDialog(page);
     await expect(dialog.getByRole("heading", { name: "Account data" })).toBeVisible();
 
     const exportButton = dialog.getByRole("button", { name: "Export account data" });
@@ -78,7 +75,7 @@ test.describe("Account data export", () => {
     // Note: the in-progress disabled/spinner state is deliberately not asserted
     // here. A fixture with no attachments can complete before Playwright polls,
     // which would make the assertion racy; that behaviour is covered
-    // deterministically by the Vitest Settings tests instead.
+    // deterministically by the Vitest Account dialog tests instead.
     const download = await downloadPromise;
 
     // Deterministic, product-prefixed, UTC filename with no personal identifier.
@@ -162,10 +159,17 @@ test.describe("Account data export", () => {
       expect(path.startsWith("/")).toBe(false);
     }
 
-    // The UI settles back to a usable state, with the other sections intact.
+    // The UI settles back to a usable state, with the Danger zone beside it
+    // untouched — an export neither arms nor disables the destructive action.
     await expect(exportButton).toBeEnabled({ timeout: 30_000 });
-    await expect(dialog.getByLabel("PubMed API Key (NCBI)")).toBeEnabled();
-    await expect(dialog.getByRole("heading", { name: "Storage" })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Delete account" })).toBeEnabled();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    // Application settings are a separate surface now, not a section of this
+    // dialog. Asserted here so the split cannot silently regress.
+    await expect(dialog.getByLabel("PubMed API Key (NCBI)")).toHaveCount(0);
+    await expect(dialog.getByRole("heading", { name: "Storage" })).toHaveCount(0);
 
     // Closed via the dialog's own Close control rather than Escape: triggering
     // a browser download moves keyboard focus out of the page, so a synthetic
@@ -173,5 +177,13 @@ test.describe("Account data export", () => {
     // is both robust and closer to what a user does.
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5_000 });
+
+    // Settings still has both of them, and neither account action.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await expect(settings.getByLabel("PubMed API Key (NCBI)")).toBeEnabled();
+    await expect(settings.getByRole("heading", { name: "Storage" })).toBeVisible();
+    await expect(settings.getByRole("button", { name: "Export account data" })).toHaveCount(0);
+    await expect(settings.getByRole("heading", { name: "Danger zone" })).toHaveCount(0);
   });
 });
