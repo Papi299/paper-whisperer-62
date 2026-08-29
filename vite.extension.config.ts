@@ -16,6 +16,17 @@ import { defineConfig, type Plugin } from "vite";
 
 const EXTENSION_ROOT = path.resolve(__dirname, "extension");
 const MANIFEST_PATH = path.resolve(EXTENSION_ROOT, "manifest.json");
+const BRAND_PNG_DIR = path.resolve(__dirname, "assets", "brand", "png");
+
+/**
+ * The Chrome `icons` sizes, and where each one comes from.
+ *
+ * Key is the packaged path the manifest names; value is the canonical brand
+ * export it is copied from, byte for byte.
+ */
+const ICON_SOURCES: ReadonlyMap<string, string> = new Map(
+  [16, 32, 48, 128].map((size) => [`icons/icon-${size}.png`, path.join(BRAND_PNG_DIR, `paperlume-${size}.png`)]),
+);
 
 /**
  * Copy `extension/manifest.json` into the build output verbatim.
@@ -37,6 +48,38 @@ function copyExtensionManifest(): Plugin {
       const source = readFileSync(MANIFEST_PATH, "utf-8");
       JSON.parse(source);
       this.emitFile({ type: "asset", fileName: "manifest.json", source });
+    },
+  };
+}
+
+/**
+ * Copy the production icon set into the build output from the brand pack.
+ *
+ * The icons are **not** committed under `extension/`. `assets/brand/png/` is the
+ * canonical source of the PaperLume mark — generated from
+ * `assets/brand/svg/paperlume-symbol.svg` by `npm run brand:png`, and held to
+ * the mark's geometry by `scripts/lib/__tests__/brand-assets.test.mjs` — and a
+ * second committed copy of the same four PNGs beside the manifest would be a
+ * binary that can silently stop being the logo. Chrome reads icons from the
+ * *package*, and the package is a build output, so the copy is made here, at
+ * the one moment it is actually needed.
+ *
+ * Bytes only: nothing is resized, recompressed, or recoloured. What ships is
+ * the canonical export, so every assertion the brand suite makes about
+ * `paperlume-128.png` is also true of `icons/icon-128.png`.
+ *
+ * A missing source fails the build rather than producing a package whose
+ * manifest names an icon that is not there — which Chrome loads with a warning
+ * and a blank toolbar button, and which no amount of reading the manifest
+ * reveals.
+ */
+function copyExtensionIcons(): Plugin {
+  return {
+    name: "paperlume-extension-icons",
+    generateBundle() {
+      for (const [fileName, source] of ICON_SOURCES) {
+        this.emitFile({ type: "asset", fileName, source: readFileSync(source) });
+      }
     },
   };
 }
@@ -70,5 +113,5 @@ export default defineConfig({
       },
     },
   },
-  plugins: [copyExtensionManifest()],
+  plugins: [copyExtensionManifest(), copyExtensionIcons()],
 });

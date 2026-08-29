@@ -53,6 +53,10 @@ on:
       - "scripts/lib/**"
       - "e2e-extension/**"
       - "playwright.extension.config.ts"
+      # The production icon set. It is not committed under `extension/`:
+      # `vite.extension.config.ts` copies it out of the brand pack at build
+      # time, so a change to the brand PNGs changes what ships in the package.
+      - "assets/brand/png/**"
       # The dependency graph: this lane's archiver (fflate) and browser
       # (Playwright) both come from it, and a lockfile change can move either.
       - "package.json"

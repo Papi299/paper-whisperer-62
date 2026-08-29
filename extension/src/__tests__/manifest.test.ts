@@ -131,12 +131,54 @@ describe("manifest — no page access and no background execution", () => {
   });
 });
 
+/**
+ * The production icon set.
+ *
+ * The four sizes are declared in **both** `icons` and `action.default_icon`,
+ * pointing at the same files. Chrome falls back to `icons` when
+ * `action.default_icon` is absent, so an extension missing the action map still
+ * shows an icon in the toolbar — which is precisely why the omission is easy to
+ * ship and hard to notice, and why it is asserted rather than reviewed.
+ *
+ * The files themselves are not committed under `extension/`.
+ * `vite.extension.config.ts` copies them out of `assets/brand/png/` at build
+ * time, byte for byte, so the packaged icon is the canonical brand export and
+ * cannot drift from it. Their real dimensions and alpha channel are asserted on
+ * the packaged artefact by `scripts/lib/extension-package.mjs` — the only place
+ * the files actually exist.
+ */
+const EXPECTED_ICONS = {
+  "16": "icons/icon-16.png",
+  "32": "icons/icon-32.png",
+  "48": "icons/icon-48.png",
+  "128": "icons/icon-128.png",
+} as const;
+
 describe("manifest — user interaction surface", () => {
   it("uses a toolbar action with a popup", () => {
     expect(manifest.action).toEqual({
       default_title: "PaperLume",
       default_popup: "popup.html",
+      default_icon: EXPECTED_ICONS,
     });
+  });
+});
+
+describe("manifest — icons", () => {
+  it("declares the four Chrome icon sizes", () => {
+    expect(manifest.icons).toEqual(EXPECTED_ICONS);
+  });
+
+  it("gives the toolbar action the same icon set", () => {
+    expect((manifest.action as Record<string, unknown>).default_icon).toEqual(EXPECTED_ICONS);
+  });
+
+  it("names only PNG files, in the package's own icons/ directory", () => {
+    // WebP and SVG are not supported by Chrome, and a leading `/` or a `../`
+    // would name something outside the package.
+    for (const value of Object.values(EXPECTED_ICONS)) {
+      expect(value).toMatch(/^icons\/[a-z0-9-]+\.png$/);
+    }
   });
 });
 

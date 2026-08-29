@@ -17,6 +17,7 @@ declare namespace chrome {
   namespace runtime {
     const id: string;
     function getManifest(): Record<string, unknown>;
+    function getURL(path: string): string;
   }
 
   namespace permissions {

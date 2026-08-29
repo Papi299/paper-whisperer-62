@@ -14,6 +14,14 @@ import path from "node:path";
 
 import { test, expect, BUILD_DIR } from "./support/extensionHarness";
 
+/** The production icon set, as Chrome must read it back out of the manifest. */
+const EXPECTED_ICONS = {
+  16: "icons/icon-16.png",
+  32: "icons/icon-32.png",
+  48: "icons/icon-48.png",
+  128: "icons/icon-128.png",
+};
+
 test("loads as an unpacked MV3 extension and serves its popup document", async ({ extension }) => {
   const page = await extension.openPopup();
 
@@ -47,7 +55,12 @@ test("is parsed by Chrome with the permission contract intact", async ({ extensi
   expect(parsed.manifest_version).toBe(3);
   expect(parsed.name).toBe("PaperLume");
   expect(parsed.permissions).toEqual(["activeTab"]);
-  expect(parsed.action).toEqual({ default_title: "PaperLume", default_popup: "popup.html" });
+  expect(parsed.action).toEqual({
+    default_title: "PaperLume",
+    default_popup: "popup.html",
+    default_icon: EXPECTED_ICONS,
+  });
+  expect(parsed.icons).toEqual(EXPECTED_ICONS);
 
   for (const forbidden of [
     "host_permissions",
@@ -96,4 +109,29 @@ test("runs no background context in the real browser", async ({ extension }) => 
   // extension code running when the user asked for nothing.
   expect(extension.context.serviceWorkers()).toHaveLength(0);
   expect(extension.context.backgroundPages()).toHaveLength(0);
+});
+
+test("serves every declared icon from its own origin, at the declared size", async ({ extension }) => {
+  // The manifest naming a file and the package containing one are both already
+  // asserted elsewhere. Neither answers the question this does: does the browser
+  // decode the bytes at that path into an image of the size the manifest
+  // promised? A 16px file copied into the 128px slot passes every check that
+  // does not decode it, and produces a blurred install dialogue.
+  const page = await extension.openPopup();
+
+  for (const [size, path] of Object.entries(EXPECTED_ICONS)) {
+    const decoded = await page.evaluate(
+      ([iconPath]) =>
+        new Promise<{ width: number; height: number } | null>((resolve) => {
+          const image = new Image();
+          image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+          image.onerror = () => resolve(null);
+          image.src = chrome.runtime.getURL(iconPath);
+        }),
+      [path],
+    );
+
+    expect(decoded, `Chrome could not decode ${path}`).not.toBeNull();
+    expect(decoded).toEqual({ width: Number(size), height: Number(size) });
+  }
 });
