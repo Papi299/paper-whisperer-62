@@ -1,24 +1,16 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-const {
-  mockUseSettings,
-  mockUseStorageUsage,
-  mockUseAccountExport,
-  mockUseAccountDeletion,
-  mockToast,
-} = vi.hoisted(() => ({
+const { mockUseSettings, mockUseStorageUsage, mockToast } = vi.hoisted(() => ({
   mockUseSettings: vi.fn(),
   mockUseStorageUsage: vi.fn(),
-  mockUseAccountExport: vi.fn(),
-  mockUseAccountDeletion: vi.fn(),
   mockToast: vi.fn(),
 }));
 
 vi.mock("@/hooks/useSettings", () => ({ useSettings: mockUseSettings }));
 vi.mock("@/hooks/useStorageUsage", () => ({ useStorageUsage: mockUseStorageUsage }));
-vi.mock("@/hooks/useAccountExport", () => ({ useAccountExport: mockUseAccountExport }));
-vi.mock("@/hooks/useAccountDeletion", () => ({ useAccountDeletion: mockUseAccountDeletion }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: mockToast }) }));
 
 import { SettingsDialog } from "../SettingsDialog";
@@ -50,17 +42,6 @@ beforeEach(() => {
     isError: false,
     refetch: vi.fn(),
   });
-  mockUseAccountExport.mockReturnValue({
-    exportAccountData: vi.fn(),
-    isExporting: false,
-    progress: null,
-    canExport: true,
-  });
-  mockUseAccountDeletion.mockReturnValue({
-    deleteAccount: vi.fn(),
-    isDeleting: false,
-    canDelete: true,
-  });
 });
 
 /**
@@ -71,14 +52,6 @@ beforeEach(() => {
 function pubmedSection() {
   const field = screen.getByLabelText("PubMed API Key (NCBI)");
   const section = field.closest("section");
-  expect(section).not.toBeNull();
-  return section as HTMLElement;
-}
-
-/** The Danger-zone container, reached the same way from its heading. */
-function dangerZone() {
-  const heading = screen.getByRole("heading", { name: "Danger zone" });
-  const section = heading.closest("section");
   expect(section).not.toBeNull();
   return section as HTMLElement;
 }
@@ -142,35 +115,63 @@ describe("Settings → PubMed action grouping", () => {
   });
 });
 
-describe("Settings → Danger zone contains only account deletion", () => {
-  it("does not render Remove Key inside the Danger zone", () => {
+describe("Settings holds application settings only", () => {
+  it("renders the two configuration surfaces it owns", () => {
     withKey();
     render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
-    expect(within(dangerZone()).queryByRole("button", { name: "Remove Key" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByLabelText("PubMed API Key (NCBI)")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
   });
 
-  it("does not render Save inside the Danger zone", () => {
+  it("no longer renders the Account data section", () => {
     withKey();
     render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
-    expect(within(dangerZone()).queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Account data" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /export account data/i })).toBeNull();
   });
 
-  it("still renders its own Delete account action", () => {
+  it("no longer renders the Danger zone", () => {
     withKey();
     render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
-    expect(within(dangerZone()).getByRole("button", { name: "Delete account" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Danger zone" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete account" })).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("is a different container from the PubMed section", () => {
+  it("owns no account-lifecycle state, not merely no account UI", () => {
+    // A rendered-DOM assertion cannot see a hook that is mounted but renders
+    // nothing, and that is exactly what would remain if only the JSX had been
+    // deleted. So this reads the committed component instead — the same
+    // source-inspection convention the extension boundary suites use.
+    const source = readFileSync(
+      resolve(process.cwd(), "src/components/settings/SettingsDialog.tsx"),
+      "utf-8",
+    );
+
+    // Self-check: the read is real and the file is the one under test.
+    expect(source).toContain("useStorageUsage");
+
+    for (const account of [
+      "useAccountExport",
+      "useAccountDeletion",
+      "AccountDataSection",
+      "DeleteAccountSection",
+    ]) {
+      expect(source).not.toContain(account);
+    }
+  });
+
+  it("keeps Remove Key as a PubMed action, not an account action", () => {
     withKey();
     render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
-    expect(dangerZone()).not.toBe(pubmedSection());
-    expect(dangerZone().contains(pubmedSection())).toBe(false);
-    expect(pubmedSection().contains(dangerZone())).toBe(false);
+    // The only destructive-looking control left in Settings clears one API key.
+    const remove = within(pubmedSection()).getByRole("button", { name: "Remove Key" });
+    expect(remove.closest("section")).toBe(pubmedSection());
   });
 });
 
@@ -289,13 +290,10 @@ describe("Settings → PubMed loading state", () => {
     expect(screen.queryByRole("button", { name: "Remove Key" })).toBeNull();
   });
 
-  it("keeps the other sections mounted while the PubMed settings load", () => {
+  it("keeps the Storage section mounted while the PubMed settings load", () => {
     mockUseSettings.mockReturnValue(settingsState({ loading: true }));
     render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Account data" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Danger zone" })).toBeInTheDocument();
-    expect(within(dangerZone()).getByRole("button", { name: "Delete account" })).toBeInTheDocument();
   });
 });

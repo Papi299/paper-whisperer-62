@@ -1,40 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const { mockUseSettings, mockUseStorageUsage, mockUseAccountExport, mockUseAccountDeletion } =
-  vi.hoisted(() => ({
-    mockUseSettings: vi.fn(),
-    mockUseStorageUsage: vi.fn(),
-    mockUseAccountExport: vi.fn(),
-    mockUseAccountDeletion: vi.fn(),
-  }));
+const { mockUseAccountExport, mockUseAccountDeletion } = vi.hoisted(() => ({
+  mockUseAccountExport: vi.fn(),
+  mockUseAccountDeletion: vi.fn(),
+}));
 
-vi.mock("@/hooks/useSettings", () => ({ useSettings: mockUseSettings }));
-vi.mock("@/hooks/useStorageUsage", () => ({ useStorageUsage: mockUseStorageUsage }));
 vi.mock("@/hooks/useAccountExport", () => ({ useAccountExport: mockUseAccountExport }));
 vi.mock("@/hooks/useAccountDeletion", () => ({ useAccountDeletion: mockUseAccountDeletion }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
-import { SettingsDialog } from "../SettingsDialog";
-
-const MB = 1024 * 1024;
-
-const NORMAL_STORAGE = {
-  usedBytes: 124 * MB,
-  quotaBytes: 500 * MB,
-  remainingBytes: 376 * MB,
-  percentUsed: 25,
-  isAtOrOverQuota: false,
-};
-
-function settingsState(loading = false) {
-  return {
-    settings: { pubmedApiKey: null },
-    loading,
-    setPubmedApiKey: vi.fn(),
-    clearPubmedApiKey: vi.fn(),
-  };
-}
+import { AccountDialog } from "../AccountDialog";
 
 function exportState(overrides: Record<string, unknown> = {}) {
   return {
@@ -48,13 +24,6 @@ function exportState(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockUseSettings.mockReturnValue(settingsState());
-  mockUseStorageUsage.mockReturnValue({
-    status: NORMAL_STORAGE,
-    isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
-  });
   mockUseAccountExport.mockReturnValue(exportState());
   mockUseAccountDeletion.mockReturnValue({
     deleteAccount: vi.fn(),
@@ -63,9 +32,9 @@ beforeEach(() => {
   });
 });
 
-describe("SettingsDialog — Account data section (PFA-C02)", () => {
+describe("AccountDialog — Account data section (PFA-C02)", () => {
   it("renders the Account data section", () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.getByRole("heading", { name: "Account data" })).toBeInTheDocument();
     expect(
@@ -76,7 +45,7 @@ describe("SettingsDialog — Account data section (PFA-C02)", () => {
   });
 
   it("enables the export action for an authenticated user", () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.getByRole("button", { name: /export account data/i })).toBeEnabled();
     expect(mockUseAccountExport).toHaveBeenLastCalledWith("user-1");
@@ -85,7 +54,7 @@ describe("SettingsDialog — Account data section (PFA-C02)", () => {
   it("starts an export on click", async () => {
     const exportAccountData = vi.fn();
     mockUseAccountExport.mockReturnValue(exportState({ exportAccountData }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /export account data/i }));
 
@@ -97,7 +66,7 @@ describe("SettingsDialog — Account data section (PFA-C02)", () => {
     mockUseAccountExport.mockReturnValue(
       exportState({ exportAccountData, canExport: false }),
     );
-    render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    render(<AccountDialog open onOpenChange={vi.fn()} />);
 
     expect(mockUseAccountExport).toHaveBeenLastCalledWith(undefined);
     const button = screen.getByRole("button", { name: /export account data/i });
@@ -112,7 +81,7 @@ describe("SettingsDialog — Account data section (PFA-C02)", () => {
     mockUseAccountExport.mockReturnValue(
       exportState({ exportAccountData, isExporting: true, progress: { stage: "collecting" } }),
     );
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     const button = screen.getByRole("button", { name: /export account data/i });
     expect(button).toBeDisabled();
@@ -127,14 +96,14 @@ describe("SettingsDialog — Account data section (PFA-C02)", () => {
     mockUseAccountExport.mockReturnValue(
       exportState({ isExporting: true, progress: { stage: "attachments", current: 2, total: 12 } }),
     );
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Downloading attachments 3 of 12…");
   });
 
   it("hides the progress status when idle", () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -142,14 +111,14 @@ describe("SettingsDialog — Account data section (PFA-C02)", () => {
     const exportAccountData = vi.fn();
     // A failed run resets the hook to idle; the section must be usable again.
     mockUseAccountExport.mockReturnValue(exportState({ exportAccountData }));
-    const { rerender } = render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    const { rerender } = render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     mockUseAccountExport.mockReturnValue(exportState({ exportAccountData, isExporting: true }));
-    rerender(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    rerender(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     expect(screen.getByRole("button", { name: /export account data/i })).toBeDisabled();
 
     mockUseAccountExport.mockReturnValue(exportState({ exportAccountData }));
-    rerender(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    rerender(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     const button = screen.getByRole("button", { name: /export account data/i });
     await waitFor(() => expect(button).toBeEnabled());
@@ -158,48 +127,32 @@ describe("SettingsDialog — Account data section (PFA-C02)", () => {
   });
 });
 
-describe("SettingsDialog — section independence", () => {
-  it("keeps the PubMed API-key controls independent of an export in progress", () => {
+describe("AccountDialog — section independence", () => {
+  it("keeps the Danger zone rendered and usable during an export", () => {
     mockUseAccountExport.mockReturnValue(exportState({ isExporting: true }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
-    expect(screen.getByLabelText("PubMed API Key (NCBI)")).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "Danger zone" })).toBeInTheDocument();
+    // Neither section gates the other: the export is not a prerequisite for
+    // deletion and an in-flight export does not disable it.
+    expect(screen.getByRole("button", { name: "Delete account" })).toBeEnabled();
   });
 
-  it("keeps the Storage section independent of an export in progress", () => {
-    mockUseAccountExport.mockReturnValue(exportState({ isExporting: true }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
-
-    expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
-    expect(screen.getByText("124 MB of 500 MB used")).toBeInTheDocument();
-  });
-
-  it("renders Account data even when the PubMed settings are still loading", () => {
-    mockUseSettings.mockReturnValue(settingsState(true));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
-
-    expect(screen.queryByLabelText("PubMed API Key (NCBI)")).toBeNull();
-    expect(screen.getByRole("heading", { name: "Account data" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /export account data/i })).toBeEnabled();
-  });
-
-  it("renders Account data even when the Storage gauge is unavailable", () => {
-    mockUseStorageUsage.mockReturnValue({
-      status: null,
-      isLoading: false,
-      isError: true,
-      refetch: vi.fn(),
+  it("keeps the export available while a deletion request is in flight", () => {
+    mockUseAccountDeletion.mockReturnValue({
+      deleteAccount: vi.fn(),
+      isDeleting: true,
+      canDelete: true,
     });
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
-    expect(screen.getByText("Storage usage unavailable.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /export account data/i })).toBeEnabled();
   });
 });
 
-describe("SettingsDialog — PFA-C02 scope boundaries", () => {
+describe("AccountDialog — PFA-C02 scope boundaries", () => {
   it("shows no upgrade, checkout or paywall path", () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(
       screen.queryByRole("button", { name: /upgrade|buy|subscribe|checkout|plan/i }),
@@ -211,16 +164,48 @@ describe("SettingsDialog — PFA-C02 scope boundaries", () => {
     // PFA-C04 added account deletion, but it lives in its own Danger zone with
     // its own typed confirmation — the export action must never acquire
     // destructive semantics or a destructive confirmation of its own.
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     const exportButton = screen.getByRole("button", { name: /export account data/i });
     expect(exportButton).toBeEnabled();
     expect(exportButton).not.toHaveAccessibleName(/delete|remove|erase/i);
 
     // The destructive action is a separate control in a separate section, and
-    // no confirmation dialog is open merely because Settings is open.
+    // no confirmation dialog is open merely because Account is open.
     const deleteButton = screen.getByRole("button", { name: "Delete account" });
     expect(deleteButton).not.toBe(exportButton);
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("reads the non-destructive section before the destructive one", () => {
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
+
+    const accountData = screen.getByRole("heading", { name: "Account data" });
+    const dangerZone = screen.getByRole("heading", { name: "Danger zone" });
+
+    // Node.DOCUMENT_POSITION_FOLLOWING — the export the Danger zone tells the
+    // user to run first is also the one they reach first.
+    expect(
+      accountData.compareDocumentPosition(dangerZone) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
+describe("AccountDialog — dialog semantics", () => {
+  it("gives the dialog an accessible title and description", () => {
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
+
+    const dialog = screen.getByRole("dialog", { name: "Account" });
+    expect(dialog).toHaveAccessibleDescription(
+      /export or permanently delete your paperlume account/i,
+    );
+  });
+
+  it("renders nothing while closed, so neither hook holds live state", () => {
+    render(<AccountDialog open={false} onOpenChange={vi.fn()} userId="user-1" />);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Account data" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Danger zone" })).toBeNull();
   });
 });
