@@ -10,24 +10,42 @@ name: E2E (local)
 # stack, never touches Production or any cloud/linked project, requires no GitHub
 # secret / variable / Environment, and uses only the read-only default token.
 #
-# It is intentionally independent of `Validate` (.github/workflows/validate.yml),
-# which remains the sole required merge gate for `main`.
+# It is intentionally independent of the two required merge gates for `main` —
+# `Validate` (.github/workflows/validate.yml) and `DB Tests`
+# (.github/workflows/db-tests.yml). This lane is evidence, never a gate.
 
+# Trigger policy (CI-E2E-EXECUTION-POLICY-001): the full suite runs BEFORE merge
+# on same-repository pull requests, on demand, and once a day against `main`.
+# There is deliberately NO `push` trigger. Re-running the identical, already-green
+# integration candidate immediately after it lands as a content-equivalent merge
+# commit costs another ~19 minutes and adds no product confidence beyond the
+# pre-merge run. The daily run supplies a materially different kind of evidence:
+# the same suite against current `main` on a fresh runner, so drift that is not
+# tied to a repository change — runner images, Docker/runtime variability, local
+# Supabase bring-up, browser/system dependencies, timing — still surfaces.
 on:
   workflow_dispatch:
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - main
+  schedule:
+    # 02:17 UTC, daily. GitHub interprets `schedule` cron in UTC and runs
+    # scheduled workflows from the latest commit on the default branch (`main`),
+    # which is exactly the ref this health check is meant to cover. The
+    # off-the-hour minute avoids the top-of-hour contention GitHub documents for
+    # scheduled runs. A scheduled run is informational, like every other run of
+    # this workflow; it is not a merge gate.
+    - cron: '17 2 * * *'
 
 # Read-only token: the job never mutates GitHub state.
 permissions:
   contents: read
 
-# One E2E run per PR (or branch); superseded runs are cancelled. This group is
-# deliberately distinct from the `Validate` concurrency group so the two gates
+# One E2E run per PR, and otherwise one per ref: `github.ref` is
+# `refs/heads/main` for both a scheduled run and a `main` `workflow_dispatch`, so
+# the two share a group and a superseded `main` health run is cancelled rather
+# than stacking concurrent ephemeral Supabase stacks on the same ref. This group
+# is deliberately distinct from the `Validate` concurrency group so the two lanes
 # never cancel or serialise one another.
 concurrency:
   group: e2e-local-${{ github.event.pull_request.number || github.ref }}
@@ -36,8 +54,9 @@ concurrency:
 jobs:
   e2e-local:
     name: e2e-local
-    # Same-repository restriction: the job executes for pushes and dispatches,
-    # and for pull requests ONLY when the head repository is this repository.
+    # Same-repository restriction: the job executes for scheduled and manual
+    # (`workflow_dispatch`) runs, and for pull requests ONLY when the head
+    # repository is this repository.
     # A fork-origin pull request is skipped entirely (before any dependency
     # installation, Docker/Supabase use, browser installation, or application
     # execution). `pull_request_target` is intentionally NOT used.
