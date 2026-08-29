@@ -12,14 +12,18 @@ interface AccountDataSectionProps {
 }
 
 /**
- * Settings → Account data (PFA-C02).
+ * Account → Account data (PFA-C02).
+ *
+ * Rendered by `AccountDialog`; it lived under Settings until the account
+ * actions were split out of it. The file stays here so the move costs no
+ * rename churn in the history and the tests that pin it.
  *
  * A read-only, user-initiated, local download of the account's own data. It is
  * not an email export, not a background job, and not a commercial feature —
  * there is no upgrade, checkout, or paywall path here. It is also not account
  * deletion: nothing in this section destroys data, so it carries no
- * destructive-style confirmation (account deletion remains PFA-C04, separate
- * and unimplemented).
+ * destructive-style confirmation — that is PFA-C04, the separate Danger zone
+ * below it.
  *
  * While a run is in progress the button is disabled and reports a bounded
  * stage — preparing, per-attachment progress, then archiving — rather than an

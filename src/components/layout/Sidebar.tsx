@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -22,12 +23,15 @@ import {
   BookOpen,
   LogOut,
   User,
+  UserCog,
+  ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ManageSynonymsModal } from "@/components/synonyms/ManageSynonymsModal";
@@ -37,6 +41,7 @@ import { ManageStudyTypePoolModal } from "@/components/study-types/ManageStudyTy
 import { ManageProjectsModal } from "@/components/projects/ManageProjectsModal";
 import { ManageTagsModal } from "@/components/tags/ManageTagsModal";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { AccountDialog } from "@/components/account/AccountDialog";
 import { usePools } from "@/contexts/PoolsContext";
 
 /**
@@ -106,8 +111,11 @@ interface SidebarProps {
 /** Counts shown on the taxonomy rows, resolved once per render. */
 type NavCounts = Record<ManageKey, number>;
 
+/** Every dialog the sidebar owns: the six taxonomy modals, Settings, Account. */
+type ModalKey = ManageKey | "settings" | "account";
+
 /**
- * The navigation body itself — brand, taxonomy rows, Settings and the account
+ * The navigation body itself — brand, taxonomy rows, Settings and the Account
  * menu. Rendered by both the desktop rail and the narrow-screen drawer so the
  * two never drift; all state (including which modal is open) lives in the
  * parent `Sidebar`, which renders the modals outside both containers.
@@ -116,12 +124,46 @@ function SidebarNav({
   counts,
   onManage,
   onOpenSettings,
+  onOpenAccount,
+  onOpenPrivacy,
 }: {
   counts: NavCounts;
   onManage: (key: ManageKey) => void;
   onOpenSettings: () => void;
+  onOpenAccount: () => void;
+  onOpenPrivacy: () => void;
 }) {
   const { user, signOut } = useAuth();
+
+  /**
+   * An Account-menu item that opens a dialog or leaves the page runs only once
+   * the menu itself has finished closing.
+   *
+   * Radix returns focus to the menu's trigger from `onCloseAutoFocus`, and it
+   * runs this consumer handler *first*, so a state update scheduled here is
+   * flushed after that restore. Acting immediately instead would mount the
+   * dialog while `document.activeElement` was still the menu item — an element
+   * about to be unmounted — so the dialog would record a detached opener and
+   * have nowhere to return focus to when it closed.
+   *
+   * Escape or an outside click leaves nothing parked, so dismissing the menu
+   * performs no action.
+   */
+  const pendingMenuActionRef = useRef<(() => void) | null>(null);
+  // Controlled so the Privacy item can close the menu itself: its click default
+  // has to be prevented (see below), and a prevented default also suppresses
+  // Radix's own "select closes the menu" handler.
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+
+  const runAfterMenuClose = useCallback((action: () => void) => {
+    pendingMenuActionRef.current = action;
+  }, []);
+
+  const handleMenuCloseAutoFocus = useCallback(() => {
+    const pending = pendingMenuActionRef.current;
+    pendingMenuActionRef.current = null;
+    pending?.();
+  }, []);
 
   return (
     <>
@@ -175,15 +217,67 @@ function SidebarNav({
         </div>
       </ScrollArea>
 
+      {/* Account menu. The visible trigger stays the signed-in email address —
+          it is what identifies *which* account these items act on. */}
       <div className="mt-auto border-t px-4 py-3">
-        <DropdownMenu>
+        <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="w-full justify-start gap-2 text-sm">
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2 text-sm"
+              aria-label={user?.email ? `Account menu for ${user.email}` : "Account menu"}
+            >
               <User className="h-4 w-4" aria-hidden="true" />
               <span className="truncate">{user?.email}</span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
+          <DropdownMenuContent align="start" onCloseAutoFocus={handleMenuCloseAutoFocus}>
+            <DropdownMenuItem onSelect={() => runAfterMenuClose(onOpenAccount)}>
+              <UserCog className="mr-2 h-4 w-4" aria-hidden="true" />
+              Account
+            </DropdownMenuItem>
+            {/*
+              A real <Link>, so the item carries an href — right-click, middle
+              click and "open in new tab" all work, and the destination is
+              resolved by the router rather than hard-coded to the canonical
+              origin, so it is correct on localhost, on a Vercel Preview and in
+              Production alike.
+
+              A plain left click is intercepted so the navigation runs only
+              after the menu — and, on a narrow screen, the drawer behind it —
+              has closed, rather than tearing a modal layer down mid-navigation.
+              Preventing the click default also suppresses Radix's own
+              select-closes-the-menu handler (it is composed with
+              `checkForDefaultPrevented`), which is why the menu is controlled
+              and closed explicitly here.
+            */}
+            <DropdownMenuItem asChild>
+              <Link
+                to="/privacy"
+                onClick={(event) => {
+                  // A modified click (new tab/window) is left entirely alone —
+                  // the browser handles it and Radix closes the menu as usual.
+                  if (
+                    event.defaultPrevented ||
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  ) {
+                    return;
+                  }
+                  event.preventDefault();
+                  runAfterMenuClose(onOpenPrivacy);
+                  setAccountMenuOpen(false);
+                }}
+              >
+                <ShieldCheck className="mr-2 h-4 w-4" aria-hidden="true" />
+                Privacy Policy
+              </Link>
+            </DropdownMenuItem>
+            {/* Everything above this line is non-session-ending. */}
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={signOut}>
               <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />
               Sign out
@@ -216,6 +310,7 @@ export function Sidebar({
 }: SidebarProps) {
   const { user } = useAuth();
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
 
   // Pool data from context (eliminates 24+ props)
   const {
@@ -251,6 +346,7 @@ export function Sidebar({
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
   const [tagsModalOpen, setTagsModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
 
   const totalExclusions = excludedKeywords.length + excludedStudyTypes.length;
 
@@ -263,7 +359,7 @@ export function Sidebar({
     exclusions: totalExclusions,
   };
 
-  const openModal = useCallback((key: ManageKey | "settings") => {
+  const openModal = useCallback((key: ModalKey) => {
     switch (key) {
       case "projects":
         setProjectsModalOpen(true);
@@ -286,51 +382,85 @@ export function Sidebar({
       case "settings":
         setSettingsModalOpen(true);
         break;
+      case "account":
+        setAccountModalOpen(true);
+        break;
     }
   }, []);
 
   /**
-   * A modal opened from the narrow-screen drawer is deferred until the drawer
-   * has actually finished closing.
+   * An action triggered from inside the narrow-screen drawer is deferred until
+   * the drawer has actually finished closing.
    *
-   * Opening it immediately would stack a Dialog focus trap on top of a Sheet
-   * focus trap, and — worse — the Dialog would capture its "opener" while that
-   * opener was a button inside the closing drawer. Once the drawer unmounted,
-   * that element was detached, so closing the Dialog had nowhere to return
-   * focus to and it fell to `<body>`.
+   * Opening a dialog immediately would stack a Dialog focus trap on top of a
+   * Sheet focus trap, and — worse — the Dialog would capture its "opener" while
+   * that opener was a button inside the closing drawer. Once the drawer
+   * unmounted, that element was detached, so closing the Dialog had nowhere to
+   * return focus to and it fell to `<body>`. Navigating away immediately has
+   * the mirror-image problem: the drawer is torn down mid-close rather than
+   * dismissed, leaving a modal layer that was never cleanly closed behind the
+   * destination page.
    *
    * Instead the action is parked here and run from the Sheet's own
    * `onCloseAutoFocus` — a public Radix event fired at unmount, not a guessed
    * delay. Our `SheetContent` wrapper runs this consumer handler *before* it
    * restores focus, and the state update it schedules is flushed after that
-   * restore, so by the time the Dialog mounts and records its opener the
-   * focused element is the Dashboard navigation trigger: visible, connected,
-   * and still mounted when the Dialog later closes.
+   * restore, so by the time a Dialog mounts and records its opener the focused
+   * element is the Dashboard navigation trigger: visible, connected, and still
+   * mounted when the Dialog later closes.
+   *
+   * It holds a thunk rather than a modal key so that the one mechanism covers
+   * every deferred outcome — the six taxonomy modals, Settings, the Account
+   * dialog, and the client-side navigation to `/privacy`.
    */
-  const pendingModalRef = useRef<ManageKey | "settings" | null>(null);
+  const pendingActionRef = useRef<(() => void) | null>(null);
 
-  const requestModal = useCallback(
-    (key: ManageKey | "settings") => {
+  const runOrDefer = useCallback(
+    (action: () => void) => {
       if (isMobile && mobileNavOpen) {
-        pendingModalRef.current = key;
+        pendingActionRef.current = action;
         onMobileNavOpenChange?.(false);
         return;
       }
-      openModal(key);
+      action();
     },
-    [isMobile, mobileNavOpen, onMobileNavOpenChange, openModal],
+    [isMobile, mobileNavOpen, onMobileNavOpenChange],
   );
 
   const handleDrawerCloseAutoFocus = useCallback(() => {
-    const pending = pendingModalRef.current;
-    pendingModalRef.current = null;
-    if (pending) openModal(pending);
-  }, [openModal]);
+    const pending = pendingActionRef.current;
+    pendingActionRef.current = null;
+    pending?.();
+  }, []);
 
-  const handleManage = useCallback((key: ManageKey) => requestModal(key), [requestModal]);
-  const handleOpenSettings = useCallback(() => requestModal("settings"), [requestModal]);
+  const handleManage = useCallback(
+    (key: ManageKey) => runOrDefer(() => openModal(key)),
+    [openModal, runOrDefer],
+  );
+  const handleOpenSettings = useCallback(
+    () => runOrDefer(() => openModal("settings")),
+    [openModal, runOrDefer],
+  );
+  const handleOpenAccount = useCallback(
+    () => runOrDefer(() => openModal("account")),
+    [openModal, runOrDefer],
+  );
+  // Router navigation, not a hard-coded absolute URL: the same control has to
+  // resolve `/privacy` on localhost, on a Vercel Preview and in Production.
+  const handleOpenPrivacy = useCallback(
+    () => runOrDefer(() => navigate("/privacy")),
+    [navigate, runOrDefer],
+  );
 
-  const nav = <SidebarNav counts={counts} onManage={handleManage} onOpenSettings={handleOpenSettings} />;
+  const nav = (
+    <SidebarNav
+      counts={counts}
+      onManage={handleManage}
+      onOpenSettings={handleOpenSettings}
+      onOpenAccount={handleOpenAccount}
+      onOpenPrivacy={handleOpenPrivacy}
+    />
+  );
 
   return (
     <>
@@ -434,6 +564,11 @@ export function Sidebar({
       <SettingsDialog
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
+        userId={user?.id}
+      />
+      <AccountDialog
+        open={accountModalOpen}
+        onOpenChange={setAccountModalOpen}
         userId={user?.id}
       />
     </>

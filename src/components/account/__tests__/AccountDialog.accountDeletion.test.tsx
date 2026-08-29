@@ -1,41 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-const { mockUseSettings, mockUseStorageUsage, mockUseAccountExport, mockUseAccountDeletion } =
-  vi.hoisted(() => ({
-    mockUseSettings: vi.fn(),
-    mockUseStorageUsage: vi.fn(),
-    mockUseAccountExport: vi.fn(),
-    mockUseAccountDeletion: vi.fn(),
-  }));
+const { mockUseAccountExport, mockUseAccountDeletion } = vi.hoisted(() => ({
+  mockUseAccountExport: vi.fn(),
+  mockUseAccountDeletion: vi.fn(),
+}));
 
-vi.mock("@/hooks/useSettings", () => ({ useSettings: mockUseSettings }));
-vi.mock("@/hooks/useStorageUsage", () => ({ useStorageUsage: mockUseStorageUsage }));
 vi.mock("@/hooks/useAccountExport", () => ({ useAccountExport: mockUseAccountExport }));
 vi.mock("@/hooks/useAccountDeletion", () => ({ useAccountDeletion: mockUseAccountDeletion }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
-import { SettingsDialog } from "../SettingsDialog";
+import { AccountDialog } from "../AccountDialog";
 import { ACCOUNT_DELETION_CONFIRMATION } from "@/lib/accountDeletion";
-
-const MB = 1024 * 1024;
-
-const NORMAL_STORAGE = {
-  usedBytes: 124 * MB,
-  quotaBytes: 500 * MB,
-  remainingBytes: 376 * MB,
-  percentUsed: 25,
-  isAtOrOverQuota: false,
-};
-
-function settingsState(loading = false) {
-  return {
-    settings: { pubmedApiKey: null },
-    loading,
-    setPubmedApiKey: vi.fn(),
-    clearPubmedApiKey: vi.fn(),
-  };
-}
 
 function deletionState(overrides: Record<string, unknown> = {}) {
   return { deleteAccount: vi.fn(), isDeleting: false, canDelete: true, ...overrides };
@@ -43,13 +19,6 @@ function deletionState(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockUseSettings.mockReturnValue(settingsState());
-  mockUseStorageUsage.mockReturnValue({
-    status: NORMAL_STORAGE,
-    isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
-  });
   mockUseAccountExport.mockReturnValue({
     exportAccountData: vi.fn(),
     isExporting: false,
@@ -59,7 +28,7 @@ beforeEach(() => {
   mockUseAccountDeletion.mockReturnValue(deletionState());
 });
 
-/** The Danger-zone trigger inside the Settings dialog (not the final action). */
+/** The Danger-zone trigger inside the Account dialog (not the final action). */
 function dangerZoneButton() {
   return screen.getByRole("button", { name: "Delete account" });
 }
@@ -75,23 +44,23 @@ async function openConfirmDialog() {
   return confirmDialog();
 }
 
-describe("Settings → Danger zone", () => {
+describe("Account → Danger zone", () => {
   it("renders a clearly separated Danger zone", () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.getByRole("heading", { name: "Danger zone" })).toBeInTheDocument();
     expect(dangerZoneButton()).toBeEnabled();
   });
 
   it("warns about permanence and recommends exporting first", () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
     expect(screen.getByText(/exporting your account data first/i)).toBeInTheDocument();
   });
 
   it("keeps deletion separate from the export action", () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     // Two distinct sections, two distinct actions — never one ambiguous group.
     expect(screen.getByRole("heading", { name: "Account data" })).toBeInTheDocument();
@@ -103,7 +72,7 @@ describe("Settings → Danger zone", () => {
   it("does not delete anything on the first click — it only opens a dialog", async () => {
     const deleteAccount = vi.fn();
     mockUseAccountDeletion.mockReturnValue(deletionState({ deleteAccount }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await openConfirmDialog();
@@ -113,7 +82,7 @@ describe("Settings → Danger zone", () => {
 
   it("stays disabled during an auth transition", () => {
     mockUseAccountDeletion.mockReturnValue(deletionState({ canDelete: false }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    render(<AccountDialog open onOpenChange={vi.fn()} />);
 
     expect(mockUseAccountDeletion).toHaveBeenLastCalledWith(undefined);
     expect(dangerZoneButton()).toBeDisabled();
@@ -122,7 +91,7 @@ describe("Settings → Danger zone", () => {
 
 describe("Delete-account confirmation dialog", () => {
   it("states exactly what is removed and that it is irreversible", async () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     expect(within(dialog).getByRole("heading", { name: /delete your account\?/i })).toBeInTheDocument();
@@ -142,7 +111,7 @@ describe("Delete-account confirmation dialog", () => {
   });
 
   it("points the user at the export before deleting", async () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     expect(within(dialog).getByText(/export account data/i)).toBeInTheDocument();
@@ -152,7 +121,7 @@ describe("Delete-account confirmation dialog", () => {
   });
 
   it("disables the final action until the phrase is typed", async () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     expect(within(dialog).getByRole("button", { name: "Delete my account" })).toBeDisabled();
@@ -165,7 +134,7 @@ describe("Delete-account confirmation dialog", () => {
     "DELETE MY ACCOUNT ",
     "DELETE  MY ACCOUNT",
   ])("keeps the final action disabled for the wrong phrase %j", async (phrase) => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: phrase } });
@@ -174,7 +143,7 @@ describe("Delete-account confirmation dialog", () => {
   });
 
   it("enables the final action only for the exact phrase", async () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     fireEvent.change(within(dialog).getByRole("textbox"), {
@@ -187,7 +156,7 @@ describe("Delete-account confirmation dialog", () => {
   it("invokes deletion with the typed phrase", async () => {
     const deleteAccount = vi.fn();
     mockUseAccountDeletion.mockReturnValue(deletionState({ deleteAccount }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     fireEvent.change(within(dialog).getByRole("textbox"), {
@@ -201,7 +170,7 @@ describe("Delete-account confirmation dialog", () => {
   it("cancels without invoking deletion", async () => {
     const deleteAccount = vi.fn();
     mockUseAccountDeletion.mockReturnValue(deletionState({ deleteAccount }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     fireEvent.change(within(dialog).getByRole("textbox"), {
@@ -214,7 +183,7 @@ describe("Delete-account confirmation dialog", () => {
   });
 
   it("forgets a previously typed phrase when reopened", async () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     let dialog = await openConfirmDialog();
 
     fireEvent.change(within(dialog).getByRole("textbox"), {
@@ -231,7 +200,7 @@ describe("Delete-account confirmation dialog", () => {
   it("blocks duplicate submissions while the request is in flight", async () => {
     const deleteAccount = vi.fn();
     mockUseAccountDeletion.mockReturnValue(deletionState({ deleteAccount }));
-    const { rerender } = render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    const { rerender } = render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     const dialog = await openConfirmDialog();
     fireEvent.change(within(dialog).getByRole("textbox"), {
@@ -240,7 +209,7 @@ describe("Delete-account confirmation dialog", () => {
 
     // Transition to the in-flight state the way the real hook does.
     mockUseAccountDeletion.mockReturnValue(deletionState({ deleteAccount, isDeleting: true }));
-    rerender(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    rerender(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     const action = within(confirmDialog()).getByRole("button", { name: /deleting account/i });
     expect(action).toBeDisabled();
@@ -257,7 +226,7 @@ describe("Delete-account confirmation dialog", () => {
   it("keeps the account UI usable after a failed deletion", async () => {
     const deleteAccount = vi.fn();
     mockUseAccountDeletion.mockReturnValue(deletionState({ deleteAccount }));
-    const { rerender } = render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    const { rerender } = render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     const dialog = await openConfirmDialog();
 
     fireEvent.change(within(dialog).getByRole("textbox"), {
@@ -266,18 +235,23 @@ describe("Delete-account confirmation dialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete my account" }));
 
     // The hook resolves back to idle after a failure; the dialog and the
-    // Settings sections behind it stay interactive.
+    // Account sections behind it stay interactive.
     mockUseAccountDeletion.mockReturnValue(deletionState({ deleteAccount, isDeleting: false }));
-    rerender(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    rerender(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(within(confirmDialog()).getByRole("button", { name: "Delete my account" })).toBeEnabled();
-    expect(screen.getByLabelText("PubMed API Key (NCBI)")).toBeEnabled();
+    // `hidden: true` because the open alertdialog marks the Account dialog
+    // behind it `aria-hidden` — the section is still mounted and enabled, it is
+    // simply inert while a modal confirmation sits on top of it.
+    expect(
+      screen.getByRole("button", { name: /export account data/i, hidden: true }),
+    ).toBeEnabled();
   });
 
   it("never renders raw backend error text", async () => {
     // The section renders no error surface of its own; failures reach the user
     // only through the toast, whose copy the hook normalizes.
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     await openConfirmDialog();
 
     expect(screen.queryByText(/permission denied|storage_cleanup_failed|sb_secret|service_role/i))
@@ -286,38 +260,25 @@ describe("Delete-account confirmation dialog", () => {
 });
 
 describe("Danger zone — section independence", () => {
-  it("keeps the PubMed controls usable while a deletion is in flight", () => {
-    mockUseAccountDeletion.mockReturnValue(deletionState({ isDeleting: true }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
-
-    expect(screen.getByLabelText("PubMed API Key (NCBI)")).toBeEnabled();
-  });
-
-  it("keeps the Storage gauge rendered while a deletion is in flight", () => {
-    mockUseAccountDeletion.mockReturnValue(deletionState({ isDeleting: true }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
-
-    expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
-    expect(screen.getByText("124 MB of 500 MB used")).toBeInTheDocument();
-  });
-
   it("keeps the full account export available while a deletion is in flight", () => {
     mockUseAccountDeletion.mockReturnValue(deletionState({ isDeleting: true }));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.getByRole("button", { name: /export account data/i })).toBeEnabled();
   });
 
-  it("renders the Danger zone even when the PubMed settings are still loading", () => {
-    mockUseSettings.mockReturnValue(settingsState(true));
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+  it("carries no application-settings surface of its own", () => {
+    // The Account dialog acts on the account; configuring the app stayed in
+    // Settings. Neither surface may grow a copy of the other.
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.queryByLabelText("PubMed API Key (NCBI)")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Storage" })).toBeNull();
     expect(screen.getByRole("heading", { name: "Danger zone" })).toBeInTheDocument();
   });
 
   it("adds no upgrade, checkout, or paywall path", async () => {
-    render(<SettingsDialog open onOpenChange={vi.fn()} userId="user-1" />);
+    render(<AccountDialog open onOpenChange={vi.fn()} userId="user-1" />);
     await openConfirmDialog();
 
     expect(

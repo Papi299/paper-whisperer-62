@@ -1,8 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { assertLocalSupabaseUrl, assertOriginsMatch } from "./support/backend-guard";
+import { openAccountDialog } from "./helpers";
 
 /**
- * Settings → Danger zone: self-service account deletion (PFA-C04).
+ * Account → Danger zone: self-service account deletion (PFA-C04).
  *
  * The only destructive spec in the suite. It signs in as a **disposable**
  * local-only account provisioned for this run alone
@@ -87,15 +88,15 @@ test.describe("Account deletion (destructive, disposable local account)", () => 
     await expect(page.getByText(/\d+\s+paper/i)).toBeVisible({ timeout: 20_000 });
 
     // ── Danger zone ─────────────────────────────────────────────────────────
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const settings = page.getByRole("dialog");
-    await expect(settings).toBeVisible();
-    await expect(settings.getByRole("heading", { name: "Danger zone" })).toBeVisible();
-    await expect(settings.getByText(/cannot be undone/i).first()).toBeVisible();
+    // Reached from the Account menu, not from Settings: PAPERLUME-PRIVACY-001C
+    // left Settings with the PubMed key and the storage gauge only.
+    const account = await openAccountDialog(page);
+    await expect(account.getByRole("heading", { name: "Danger zone" })).toBeVisible();
+    await expect(account.getByText(/cannot be undone/i).first()).toBeVisible();
     // The export-before-delete path is still offered next to it.
-    await expect(settings.getByRole("button", { name: "Export account data" })).toBeEnabled();
+    await expect(account.getByRole("button", { name: "Export account data" })).toBeEnabled();
 
-    await settings.getByRole("button", { name: "Delete account" }).click();
+    await account.getByRole("button", { name: "Delete account" }).click();
 
     // ── Confirmation gate ───────────────────────────────────────────────────
     const confirm = page.getByRole("alertdialog");

@@ -208,7 +208,7 @@ The Supabase CLI runs Deno bundling at deploy time and surfaces compile errors b
 
 ### 7a. `delete-account` — endpoint-before-UI ordering, and never smoke-test it destructively
 
-**Current state: `delete-account` is deployed and live**, and the Settings → Danger zone flow calls it in Production. The two rules below are durable and apply to every future change to this function.
+**Current state: `delete-account` is deployed and live**, and the Account → Danger zone flow calls it in Production. The two rules below are durable and apply to every future change to this function.
 
 **Rule 1 — the endpoint must never lag the UI that calls it.** Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge. So for any change that makes a *new* destructive surface reachable, deploy the function first:
 
