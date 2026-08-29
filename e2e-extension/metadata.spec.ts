@@ -38,6 +38,10 @@ import { test, expect, PAPERLUME_ORIGIN } from "./support/extensionHarness";
 const PUBLISHER_URL = "https://www.nature.com/articles/s41586-020-2649-2";
 const DOI = "10.1038/s41586-020-2649-2";
 
+/** A real DOI with capitals in its suffix, for the ASCII-case equivalence case. */
+const MIXED_CASE_DOI = "10.1056/NEJMoa2107934";
+const NEJM_URL = "https://www.nejm.org/doi/full/10.1056/NEJMoa2107934";
+
 /**
  * A publisher-like article page.
  *
@@ -73,6 +77,51 @@ const DUPLICATE_METADATA_PAGE = `<!doctype html>
     <meta property="prism.doi" content="https://doi.org/${DOI}">
   </head>
   <body><h1>One paper</h1></body>
+</html>`;
+
+/**
+ * A page whose only approved keys are on `property`, each behind a `name` that is
+ * present but not approved.
+ *
+ * Written so that the two failure modes cannot mask each other. There is exactly
+ * one DOI here, in one spelling, so the *ambiguity* rule has nothing to decide —
+ * the only question is whether `property` is consulted at all. Under a
+ * `name ?? property` read, `getAttribute("name")` returns `"og:type"` on the
+ * first element and `""` on the second; neither is `null`, so the `??` never
+ * falls through and both approved `property` values are invisible. The page then
+ * publishes nothing and the popup says so.
+ *
+ * Both shapes are ordinary in RDFa-flavoured publisher markup.
+ */
+const PROPERTY_ONLY_METADATA_PAGE = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta name="og:type" property="citation_doi" content="${MIXED_CASE_DOI}">
+    <meta name="" property="prism.doi" content="${MIXED_CASE_DOI}">
+  </head>
+  <body><h1>Approved key on property only</h1></body>
+</html>`;
+
+/**
+ * One paper whose DOI is published in three ASCII-case variants.
+ *
+ * Every approved key here is on `name`, so the `name`/`property` rule has
+ * nothing to decide and this page tests the *equivalence* rule alone. Under an
+ * exact-string ambiguity check these are three different DOI names and the page
+ * is refused; under DOI Handbook §4.3.4 they are one DOI.
+ *
+ * The mixture is what real markup looks like: the registered DOI keeps its
+ * capitals in `citation_doi`, while display guidance encourages the lower-cased
+ * resolver URL that appears in `dc.identifier`.
+ */
+const CASE_VARIANT_METADATA_PAGE = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta name="citation_doi" content="${MIXED_CASE_DOI}">
+    <meta name="dc.identifier" content="https://doi.org/${MIXED_CASE_DOI.toLowerCase()}">
+    <meta name="prism.doi" content="doi:${MIXED_CASE_DOI.toUpperCase()}">
+  </head>
+  <body><h1>One paper, three spellings</h1></body>
 </html>`;
 
 /** A page that publishes two genuinely different DOIs. */
@@ -162,6 +211,52 @@ test("collapses one DOI written three ways into a single detection", async ({ ex
   await expect.poll(() => visibleStates(page)).toEqual(["doi"]);
   // Trimmed, un-prefixed, and reduced from a resolver URL to the DOI name.
   await expect(page.locator('[data-field="doi"]')).toHaveText(DOI);
+});
+
+test("reads an approved property even when an unhelpful name sits beside it", async ({
+  extension,
+}) => {
+  // The `name ?? property` defect, in a real browser against a real DOM. Every
+  // approved key on this page is on `property`, behind a `name` that is present
+  // but not approved — `"og:type"` on one element, `""` on the other. Under `??`
+  // neither `property` is ever consulted and this page identifies nothing.
+  const page = await extension.openPopup({
+    activeTabUrl: NEJM_URL,
+    pageHtml: PROPERTY_ONLY_METADATA_PAGE,
+  });
+
+  await expect.poll(() => visibleStates(page)).toEqual(["doi"]);
+  await expect(page.locator('[data-field="doi"]')).toHaveText(MIXED_CASE_DOI);
+  await expect(page.locator("[data-handoff]")).toBeVisible();
+});
+
+test("collapses ASCII case variants of one DOI, keeping the registered spelling", async ({
+  extension,
+}) => {
+  // DOI Handbook §4.3.4: ASCII `A`–`Z` compares identical to `a`–`z` when DOI
+  // names are compared, so three spellings of `10.1056/NEJMoa2107934` are one
+  // paper, not an ambiguity. What is shown, and what is handed off, is the
+  // spelling the page published first — not a lower-cased rewrite.
+  const page = await extension.openPopup({
+    activeTabUrl: NEJM_URL,
+    pageHtml: CASE_VARIANT_METADATA_PAGE,
+  });
+
+  await expect.poll(() => visibleStates(page)).toEqual(["doi"]);
+  await expect(page.locator('[data-field="doi"]')).toHaveText(MIXED_CASE_DOI);
+  await expect(page.locator("[data-handoff]")).toBeVisible();
+
+  const opened = extension.context.waitForEvent("page");
+  await page.locator("[data-handoff-action]").click();
+  await opened;
+
+  const [handoffUrl] = await extension.createdTabUrls(page);
+  const handoff = new URL(handoffUrl);
+  expect(handoff.searchParams.get("kind")).toBe("doi");
+  // The capitals survive: one valid DOI name, not a normalization artefact.
+  expect(handoff.searchParams.get("value")).toBe(MIXED_CASE_DOI);
+  expect(handoff.searchParams.get("value")).not.toBe(MIXED_CASE_DOI.toLowerCase());
+  expect([...handoff.searchParams.keys()].sort()).toEqual(["kind", "value"]);
 });
 
 test("fails closed on a page that publishes two different DOIs", async ({ extension }) => {

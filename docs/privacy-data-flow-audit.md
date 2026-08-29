@@ -873,10 +873,19 @@ grammar has no third parameter to carry them in. Asserted on a metadata-detected
 DOI in a real browser, including that the publisher host, article title and
 author name appear nowhere in the URL.
 
-**Fail-closed on ambiguity.** A page publishing two *different* valid DOIs
+**Fail-closed on ambiguity.** A page publishing two *non-equivalent* valid DOIs
 produces `unsupported` — never a choice between them. `doi` is a per-user
 deduplication key, so offering the wrong paper is a data-integrity problem rather
 than a display one.
+
+Equivalence is DOI Handbook §4.3.4, not string equality: ASCII `A`–`Z` compares
+identical to `a`–`z`, so `10.1000/AB` and `10.1000/ab` are one DOI and one
+detection. The fold is ASCII-only and deliberately not `toLowerCase()` — the
+Handbook's own counterexample, `10.26321/Á.GUTIÉRREZ…` against
+`10.26321/á.gutiérrez…`, is two *different* DOI names, so a page carrying both is
+still refused. The comparison key never leaves the resolver: what is displayed,
+handed off and stored is one of the DOI names the page actually published, so
+this changes nothing about the values that reach the application.
 
 ### 24.5 Corrected Chrome Web Store disclosure mapping
 

@@ -266,7 +266,8 @@ The manifest declares exactly two.
 > `prism.doi`, from the document head, in the main frame only. It reads nothing
 > else: no article text, no abstract, no title, no authors, no links, no scripts,
 > no cookies, no storage. The values are used to identify one DOI and are
-> discarded when the popup closes.
+> discarded when the popup closes. If a page publishes two genuinely different
+> DOIs, PaperLume identifies neither and offers nothing.
 >
 > It runs only when the URL already failed to identify a paper. On a PubMed
 > record or a doi.org link the page is never touched at all.

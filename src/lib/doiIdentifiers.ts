@@ -66,12 +66,19 @@
  * would collapse two distinct DOI names onto one URL.
  *
  * It also never alters the DOI name it was given. The Handbook's algorithm
- * serializes the prefix and suffix "without any normalization", and DOI names
- * are equivalent only when their code point sequences are identical, so
- * trimming, collapsing, lower-casing or decoding any part of the input would
- * emit a link for a *different* DOI. A space is ordinary DOI data — the Graphic
- * type the syntax is drawn from includes spaces — so `10.1000/example ` encodes
- * to `…/example%20` rather than losing its final code point.
+ * serializes the prefix and suffix "without any normalization", so trimming,
+ * collapsing or decoding any part of the input emits a link for a *different*
+ * DOI. A space is ordinary DOI data — the Graphic type the syntax is drawn from
+ * includes spaces — so `10.1000/example ` encodes to `…/example%20` rather than
+ * losing its final code point.
+ *
+ * Nor does it lower-case. ASCII case *is* insensitive when two DOI names are
+ * compared (§4.3.4, and `doiEquivalenceKey` below), but that rule is explicitly
+ * scoped to comparison: *"It does not restrict DOI names to containing only
+ * uppercase or lowercase letters."* The registered spelling is what a publisher
+ * displays and what the proxy is handed, so folding it here would rewrite the
+ * name to make a *comparison* convenient — which is what the equivalence key
+ * exists to do without touching the name.
  *
  * It also performs no network resolution and does not check that the DOI is
  * registered. Whether a DOI exists is the resolver's answer to give.
@@ -421,6 +428,12 @@ const DOI_PRESENTATION_PREFIX = /^doi:\s*/i;
  * and no alteration of the opaque suffix. Interior whitespace is preserved,
  * because that genuinely could be part of the name.
  *
+ * Not case-folding here is a statement about *parsing*, not about equivalence.
+ * `10.1000/AB` and `10.1000/ab` are the same DOI (§4.3.4), and a caller that
+ * needs to know that asks `doiEquivalenceKey`; what this function returns is the
+ * spelling the publisher actually wrote, which is what should be displayed and
+ * handed on.
+ *
  * ## What this never does
  *
  * It does not repair. A scheme-less `doi.org/10.1000/x` acquires no resolver
@@ -460,4 +473,118 @@ export function extractDoiFromMetadataValue(value: string | null | undefined): s
   const bare = trimmed.replace(DOI_PRESENTATION_PREFIX, "").trim();
 
   return DOI_NAME_PATTERN.test(bare) ? bare : null;
+}
+
+/**
+ * The ASCII letters DOI equivalence folds, as a code-point range pair.
+ *
+ * `A`–`Z` is U+0041..U+005A and `a`–`z` is U+0061..U+007A, exactly the two
+ * ranges DOI Handbook §4.3.4 names. Written as code points rather than as a
+ * call to `toLowerCase()` because those are not the same operation: `String
+ * .prototype.toLowerCase` performs full Unicode case mapping, which folds
+ * `Á`→`á`, `İ`→`i̇`, `Σ`→`σ` and much else the DOI rule explicitly leaves
+ * alone — and one of those, in a suffix, would silently merge two DOI names the
+ * Handbook says are different.
+ */
+const ASCII_UPPER_A = 0x41;
+const ASCII_UPPER_Z = 0x5a;
+const ASCII_CASE_OFFSET = 0x61 - 0x41;
+
+/**
+ * The equivalence key of a DOI name: two DOI names name the same DOI exactly
+ * when their keys are `===`.
+ *
+ * ## The rule, and why it is not `toLowerCase()`
+ *
+ * DOI Handbook §4.3.4 "Case Insensitivity of the DOI Name":
+ *
+ * > *"When comparing two DOI names for equivalence, no normalization, as
+ * > defined in ISO/IEC 10646, is performed and the DOI names are equivalent if,
+ * > and only if, their code point sequences are identical, except that a code
+ * > point in the range U+0041..U+005A (corresponding to LATIN CAPITAL LETTER A
+ * > to LATIN CAPITAL LETTER Z) is considered identical to the corresponding
+ * > code point in the range U+0061..U+007A (corresponding to characters LATIN
+ * > SMALL LETTER A to LATIN SMALL LETTER Z)."*
+ *
+ * > *"The rule above has the effect of making DOI names case-insensitive only
+ * > when testing for equivalence and only with respect to the Basic Latin
+ * > Unicode block."*
+ *
+ * So the fold is **ASCII only**, and it is deliberately narrower than any
+ * general-purpose lowercasing. The Handbook's own second example is the reason:
+ *
+ * ```text
+ * 10.26321/Á.GUTIÉRREZ.ZARZA.02.2018.03
+ * 10.26321/á.gutiérrez.zarza.02.2018.03      ← NOT the same DOI
+ * ```
+ *
+ * `toLowerCase()` would collapse those two, because U+00C1 lowercases to
+ * U+00E1. The Handbook says they are different DOI names, so this function
+ * leaves every code point outside U+0041..U+005A exactly as it found it. That
+ * also rules out `toLocaleLowerCase`, whose result depends on the host locale —
+ * in Turkish, `I` becomes `ı`, which is not `i`, so the same DOI would compare
+ * unequal to itself on a Turkish machine.
+ *
+ * Crossref documents the same rule for the suffixes it issues: *"Suffixes are
+ * case insensitive, so `10.1006/abc` is the same in the system as
+ * `10.1006/ABC`."*
+ *
+ * ## It is a key, not a name
+ *
+ * The value returned here is for **comparison only**. It is not a DOI name, is
+ * not what should be displayed, is not what should be handed to
+ * `/extension-import`, and is not what should be stored: the Handbook's rule is
+ * scoped to equivalence testing and explicitly does not restrict what a DOI name
+ * may contain. Callers that group by this key must keep one of the original
+ * spellings as the representative, and `resolveDoiFromMetadata` in the extension
+ * does exactly that.
+ *
+ * Nothing else is normalized — no trimming, no percent-decoding, no whitespace
+ * collapsing — because the Handbook's rule has exactly one exception in it and
+ * this function implements exactly that one.
+ *
+ * @param doiName A DOI name, unencoded.
+ * @returns The comparison key, or `null` when the value is not a string.
+ *
+ * @example
+ * doiEquivalenceKey("10.1000/AB") === doiEquivalenceKey("10.1000/ab"); // true
+ * doiEquivalenceKey("10.26321/Á") === doiEquivalenceKey("10.26321/á"); // false
+ *
+ * @see DOI Handbook (2025), §4.3.4 "Case Insensitivity of the DOI Name".
+ * @see Crossref, "Constructing your DOIs" — suffix case insensitivity.
+ */
+export function doiEquivalenceKey(doiName: string | null | undefined): string | null {
+  if (typeof doiName !== "string") return null;
+
+  let key = "";
+  // Iterated by code point rather than by UTF-16 code unit. Every code point the
+  // rule touches is in the BMP, so a surrogate pair can never be altered — but
+  // iterating units and rebuilding would still be a needless chance to split
+  // one, and `for…of` over a string yields code points.
+  for (const character of doiName) {
+    const code = character.codePointAt(0) as number;
+    key +=
+      code >= ASCII_UPPER_A && code <= ASCII_UPPER_Z
+        ? String.fromCodePoint(code + ASCII_CASE_OFFSET)
+        : character;
+  }
+
+  return key;
+}
+
+/**
+ * Whether two DOI names name the same DOI, per Handbook §4.3.4.
+ *
+ * The predicate form of `doiEquivalenceKey`, for callers comparing a pair rather
+ * than grouping a list. A non-string on either side is not a DOI name and is
+ * equivalent to nothing, including to another non-string.
+ */
+export function doiNamesAreEquivalent(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const keyA = doiEquivalenceKey(a);
+  const keyB = doiEquivalenceKey(b);
+
+  return keyA !== null && keyB !== null && keyA === keyB;
 }

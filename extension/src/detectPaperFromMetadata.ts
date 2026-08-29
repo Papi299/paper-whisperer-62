@@ -46,8 +46,14 @@
  * `citation_doi` and a `dc.identifier` that disagree mean the page is describing
  * more than one work, or is describing one work wrongly — and picking either
  * would offer the user the wrong paper to import under a confident-looking
- * "Paper detected". Duplicates of the *same* DOI, in any mixture of accepted
- * presentation forms, are one DOI and are accepted.
+ * "Paper detected".
+ *
+ * "Different" means *not equivalent under DOI Handbook §4.3.4*, which is a
+ * weaker test than "not identical": ASCII case is insensitive when DOI names are
+ * compared, so `10.1000/AB` and `10.1000/ab` are one DOI and one detection.
+ * Duplicates of the same DOI, in any mixture of accepted presentation forms and
+ * any mixture of ASCII case, are accepted. `doiEquivalenceKey` implements the
+ * rule and explains why it is not `toLowerCase()`.
  *
  * @see https://developer.chrome.com/docs/extensions/develop/concepts/activeTab
  *   — *"Call `scripting.insertCSS()` or `scripting.executeScript()` on that tab
@@ -59,7 +65,7 @@
  *   inject into the main frame of the specified tab"*.
  */
 
-import { extractDoiFromMetadataValue } from "@/lib/doiIdentifiers";
+import { doiEquivalenceKey, extractDoiFromMetadataValue } from "@/lib/doiIdentifiers";
 
 import type { PaperDetection } from "./detectPaperFromUrl";
 
@@ -90,6 +96,18 @@ import type { PaperDetection } from "./detectPaperFromUrl";
  * for these keys: Google Scholar's tags and Dublin Core are conventionally
  * `name`, while PRISM and Dublin Core in RDFa-flavoured markup appear as
  * `property`. Nothing else is consulted — not `http-equiv`, not `itemprop`.
+ *
+ * They are tested **independently**, and an element qualifies if *either* one
+ * matches. An earlier draft read `name ?? property`, which is a different rule
+ * with a real failure mode: a `<meta name="" property="prism.doi" …>` — or one
+ * whose `name` carries some unrelated vendor key — has a present-but-unhelpful
+ * `name`, so the `??` never falls through and the approved `property` beside it
+ * is never looked at. Both attributes appearing on one element is ordinary in
+ * RDFa-flavoured markup, so this was not a hypothetical.
+ *
+ * An element still contributes its `content` **once**, even when both attributes
+ * are approved: what is being collected is one page's claim about its DOI, and
+ * counting one element twice would turn a single tag into a duplicate.
  */
 export function readDoiMetadataFromPage(): string[] {
   // Declared here, not at module scope: see the self-containment note above.
@@ -97,10 +115,15 @@ export function readDoiMetadataFromPage(): string[] {
   const values: string[] = [];
 
   for (const element of document.head.querySelectorAll("meta")) {
-    const key = (element.getAttribute("name") ?? element.getAttribute("property") ?? "")
-      .trim()
-      .toLowerCase();
-    if (keys.indexOf(key) === -1) continue;
+    // `name` OR `property`, tested independently — not `name ?? property`,
+    // which lets a present-but-unrelated `name` hide an approved `property`
+    // on the same element. `some` also stops at the first match, so an
+    // element with both approved contributes its content once.
+    const approved = ["name", "property"].some((attribute) => {
+      const key = (element.getAttribute(attribute) ?? "").trim().toLowerCase();
+      return keys.indexOf(key) !== -1;
+    });
+    if (!approved) continue;
 
     const content = element.getAttribute("content");
     if (typeof content === "string" && content.length > 0) values.push(content);
@@ -126,22 +149,49 @@ export function readDoiMetadataFromPage(): string[] {
  *   • two or more *different* DOIs are `unsupported`, never a choice between
  *     them.
  *
- * Distinctness is compared on the normalized DOI name, exactly, with no case
- * folding: DOI names are equivalent only when their code point sequences are
- * identical, so treating `10.1000/AB` and `10.1000/ab` as one would merge two
- * names the resolver considers different.
+ * ## What "different" means
+ *
+ * Not "not identical" — *not equivalent*, per DOI Handbook §4.3.4, which the
+ * application's `doiEquivalenceKey` implements. ASCII `A`–`Z` compares equal to
+ * `a`–`z` when DOI names are compared, so a page whose `citation_doi` reads
+ * `10.1000/AB` and whose `dc.identifier` reads `10.1000/ab` is describing **one**
+ * paper and gets one detection. Treating those as an ambiguity would refuse a
+ * perfectly unambiguous page, which is the defect this replaced.
+ *
+ * The fold is ASCII-only and is not `toLowerCase()`. Non-ASCII case is *not*
+ * folded, because the Handbook says those code points are not equivalent — its
+ * own example is `10.26321/Á.GUTIÉRREZ…` versus `10.26321/á.gutiérrez…`, which
+ * are two different DOIs. A page carrying both of those is still an ambiguity
+ * and is still refused.
+ *
+ * ## The DOI that comes out is a name, not a key
+ *
+ * Grouping is by equivalence key; what is *returned* is one of the original DOI
+ * names — the first spelling the page offered, in document order. The key is a
+ * comparison artefact and never leaves this function: it is not displayed, not
+ * handed to `/extension-import`, and not stored. So a publisher writing
+ * `10.1056/NEJMoa2107934` gets that back, with its capitals, rather than a
+ * lower-cased rewrite of the DOI they registered.
  */
 export function resolveDoiFromMetadata(values: readonly string[]): PaperDetection {
-  const dois = new Set<string>();
+  // Key → the first DOI name seen for it. A `Map` rather than a `Set` because
+  // both halves are needed: the key decides how many distinct DOIs the page
+  // published, and the value preserves a real spelling to hand on.
+  const byEquivalence = new Map<string, string>();
 
   for (const value of values) {
     const doi = extractDoiFromMetadataValue(value);
-    if (doi !== null) dois.add(doi);
+    if (doi === null) continue;
+
+    const key = doiEquivalenceKey(doi);
+    // `doi` is a non-empty string here, so the key is never null; the guard is
+    // for the type rather than for a case that can occur.
+    if (key !== null && !byEquivalence.has(key)) byEquivalence.set(key, doi);
   }
 
-  if (dois.size !== 1) return { state: "unsupported" };
+  if (byEquivalence.size !== 1) return { state: "unsupported" };
 
-  const [doi] = dois;
+  const [doi] = byEquivalence.values();
   return { state: "doi", doi };
 }
 

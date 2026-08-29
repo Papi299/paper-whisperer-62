@@ -674,7 +674,7 @@ Safeguards, all of which 001E1 §7.2 requires:
 | Metadata detection | A real tab at a publisher URL, serving real markup, parsed by Chrome: `citation_doi` → the DOI, shown in the popup, where the URL identified nothing |
 | Metadata scope | The same page's document title, `description`, body text and anchor `href` carry four decoy DOIs. **None** reaches the popup — nor does the article title, journal or author |
 | Metadata duplicates | One DOI written as a padded bare name, a `doi:` form and a resolver URL collapses to **one** detection |
-| Metadata ambiguity | Two different valid DOIs on one page → `unsupported`, with **neither** shown |
+| Metadata ambiguity | Two *non-equivalent* valid DOIs on one page → `unsupported`, with **neither** shown. ASCII-case variants of one DOI are **not** an ambiguity (DOI Handbook §4.3.4) and collapse to one detection, keeping the spelling the page published |
 | Metadata control | The same publisher URL with no `citation_doi` behind it stays `unsupported` — so the detection above is the extension's, not the harness's |
 | Metadata handoff | Continue opens **one real tab** carrying exactly `kind=doi` and the normalized `value`; the publisher host, title and author appear nowhere in the URL |
 | Metadata privacy | Zero off-origin requests during the read (the DOI is never resolved), and afterwards `chrome.storage` is `undefined`, `localStorage`/`sessionStorage` empty, `document.cookie` empty |
@@ -1237,7 +1237,10 @@ or embedded**, and none should be.
 > `citation_doi`, `dc.identifier`, `dc.identifier.doi`, `prism.doi` — in the main
 > frame only. No document title, no body text, no links, no JSON-LD, no cookies,
 > no storage, no other tab. Nothing is retained, nothing is transmitted, and a
-> page publishing two conflicting DOIs is refused rather than resolved to either.
+> page publishing two genuinely different DOIs is refused rather than resolved to
+> either. "Different" is the DOI specification's equivalence test rather than
+> string equality: ASCII case is insensitive when DOI names are compared, so one
+> DOI written once with capitals and once without is one DOI, not an ambiguity.
 >
 > **Optional, and requires an account:** pressing **Continue in PaperLume** opens
 > `https://app.paperlume.app/extension-import` in a new tab with only

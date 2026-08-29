@@ -82,6 +82,60 @@ describe("readDoiMetadataFromPage — the approved keys", () => {
     expect(headMetadata(`<meta property="dc.identifier" content="${DOI}">`)).toEqual([DOI]);
   });
 
+  describe("name OR property, evaluated independently", () => {
+    // The contract is *either* attribute, not `name ?? property`. An earlier
+    // draft used the `??` form, which reads `property` only when `name` is
+    // **absent** — so a present-but-unhelpful `name` on the same element hid an
+    // approved `property` behind it. Both attributes on one element is ordinary
+    // in RDFa-flavoured markup, so each row below is a real page shape.
+    it.each([
+      ["property only, no name at all", `<meta property="prism.doi" content="${DOI}">`],
+      ["an empty name beside an approved property", `<meta name="" property="prism.doi" content="${DOI}">`],
+      ["a whitespace-only name beside an approved property", `<meta name="   " property="citation_doi" content="${DOI}">`],
+      ["an unrelated name beside an approved property", `<meta name="og:type" property="citation_doi" content="${DOI}">`],
+      ["a vendor name beside an approved property", `<meta name="twitter:label1" property="dc.identifier" content="${DOI}">`],
+      ["an approved name beside an empty property", `<meta name="citation_doi" property="" content="${DOI}">`],
+      ["an approved name beside an unrelated property", `<meta name="citation_doi" property="og:url" content="${DOI}">`],
+      ["name only, no property at all", `<meta name="citation_doi" content="${DOI}">`],
+      ["both approved, in different cases", `<meta name="Citation_DOI" property="PRISM.doi" content="${DOI}">`],
+    ])("detects %s", (_label, markup) => {
+      expect(headMetadata(markup)).toEqual([DOI]);
+    });
+
+    it("collects the content once when both attributes are approved", () => {
+      // One element is one claim about the page's DOI. Counting it twice would
+      // turn a single tag into a duplicate — harmless for the ambiguity check,
+      // which collapses equivalents, but still a miscount of what the page said.
+      expect(headMetadata(`<meta name="citation_doi" property="prism.doi" content="${DOI}">`)).toEqual([
+        DOI,
+      ]);
+    });
+
+    it("ignores an element where neither attribute is approved", () => {
+      expect(
+        headMetadata(`
+          <meta name="og:type" property="og:url" content="${DOI}">
+          <meta name="" property="" content="${DOI}">
+          <meta content="${DOI}">
+        `),
+      ).toEqual([]);
+    });
+
+    it("still reads nothing from any other attribute", () => {
+      // Widening `name ?? property` to `name` OR `property` widened the two
+      // attributes that were always meant to be consulted, and nothing else.
+      expect(
+        headMetadata(`
+          <meta itemprop="citation_doi" content="${DOI}">
+          <meta http-equiv="citation_doi" content="${DOI}">
+          <meta data-name="citation_doi" content="${DOI}">
+          <meta rel="citation_doi" content="${DOI}">
+          <meta id="citation_doi" content="${DOI}">
+        `),
+      ).toEqual([]);
+    });
+  });
+
   it("tolerates whitespace around the key itself", () => {
     expect(headMetadata(`<meta name="  citation_doi " content="${DOI}">`)).toEqual([DOI]);
   });
@@ -227,6 +281,62 @@ describe("resolveDoiFromMetadata — normalization and duplicates", () => {
     ).toEqual({ state: "doi", doi: DOI });
   });
 
+  it("collapses ASCII case variants of one DOI", () => {
+    // DOI Handbook §4.3.4: `A`–`Z` compares identical to `a`–`z` when DOI names
+    // are compared, so this page published one DOI twice, not two DOIs. An
+    // earlier revision refused it as an ambiguity, which was the defect.
+    expect(resolveDoiFromMetadata(["10.1000/AB", "10.1000/ab"])).toEqual({
+      state: "doi",
+      doi: "10.1000/AB",
+    });
+    // The Handbook's own EXAMPLE 1.
+    expect(
+      resolveDoiFromMetadata([
+        "10.5594/SMPTE.ST2067-21.2020",
+        "10.5594/sMPTE.sT2067-21.2020",
+      ]),
+    ).toEqual({ state: "doi", doi: "10.5594/SMPTE.ST2067-21.2020" });
+  });
+
+  it("collapses case variants spread across different accepted forms", () => {
+    // Presentation form and ASCII case varying at the same time — a publisher
+    // writing `citation_doi` in the registered capitals and `dc.identifier` as a
+    // lower-cased resolver URL, which is what display guidelines encourage.
+    // One paper.
+    expect(
+      resolveDoiFromMetadata([
+        "10.1056/NEJMoa2107934",
+        "https://doi.org/10.1056/nejmoa2107934",
+        "doi:10.1056/NEJMOA2107934",
+        "DOI: 10.1056/nejmoa2107934",
+        "  http://dx.doi.org/10.1056/NejMoa2107934  ",
+      ]),
+    ).toEqual({ state: "doi", doi: "10.1056/NEJMoa2107934" });
+  });
+
+  it("hands back a real spelling, never the comparison key", () => {
+    // Grouping is by equivalence key; what comes out is one of the DOI names the
+    // page actually published — the first, in document order. The key is a
+    // lower-cased artefact and must never reach the popup or the handoff.
+    const detection = resolveDoiFromMetadata([
+      "10.1056/NEJMoa2107934",
+      "10.1056/nejmoa2107934",
+    ]);
+
+    expect(detection).toEqual({ state: "doi", doi: "10.1056/NEJMoa2107934" });
+    // Not the folded form, which is what a lowercase-everything fix would emit.
+    expect((detection as { doi: string }).doi).not.toBe("10.1056/nejmoa2107934");
+  });
+
+  it("takes the first spelling even when a later one is lower-cased", () => {
+    // Deterministic, and deterministic in document order, so two runs over the
+    // same page never disagree about which spelling is handed on.
+    expect(resolveDoiFromMetadata(["10.1000/ab", "10.1000/AB"])).toEqual({
+      state: "doi",
+      doi: "10.1000/ab",
+    });
+  });
+
   it("ignores unusable values alongside one good one", () => {
     expect(
       resolveDoiFromMetadata(["", "   ", "not-a-doi", "10.1038", DOI]),
@@ -260,16 +370,44 @@ describe("resolveDoiFromMetadata — failing closed", () => {
     ).toEqual({ state: "unsupported" });
   });
 
+  it("refuses two DOIs that differ by more than ASCII case", () => {
+    // The fold must not become a general "close enough" comparison. Each pair
+    // differs by one character, and each pair is two different papers.
+    //
+    // Note what is deliberately *not* in this list: a pair differing only by
+    // surrounding whitespace. `extractDoiFromMetadataValue` trims at the
+    // metadata boundary — markup indentation is not DOI data — so
+    // `"10.1000/ab "` has already become `"10.1000/ab"` before equivalence is
+    // ever consulted, and the two are one DOI here for a reason that has
+    // nothing to do with case. The whitespace distinction belongs to
+    // `doiEquivalenceKey`, where it is asserted directly.
+    for (const [a, b] of [
+      ["10.1000/ab", "10.1000/abc"],
+      ["10.1000/ab", "10.1001/ab"],
+      ["10.1000/a-b", "10.1000/a_b"],
+      ["10.1000/a b", "10.1000/ab"],
+    ]) {
+      expect(resolveDoiFromMetadata([a, b]), `${a} vs ${b}`).toEqual({ state: "unsupported" });
+    }
+  });
+
   it("refuses three conflicting DOIs, including when one of them repeats", () => {
     expect(
       resolveDoiFromMetadata([DOI, DOI, OTHER_DOI, "10.9999/third"]),
     ).toEqual({ state: "unsupported" });
   });
 
-  it("treats DOIs differing only in case as different, and so refuses them", () => {
-    // DOI names are equivalent only when their code points are identical.
-    // Folding case here would merge two names the resolver keeps apart.
-    expect(resolveDoiFromMetadata(["10.1000/AB", "10.1000/ab"])).toEqual({ state: "unsupported" });
+  it("refuses a page whose DOIs differ by non-ASCII case", () => {
+    // The Handbook's own EXAMPLE 2: U+00C1 LATIN CAPITAL LETTER A WITH ACUTE and
+    // U+00E1 LATIN SMALL LETTER A WITH ACUTE are *not* considered identical, so
+    // these are two different DOI names and the page is genuinely ambiguous.
+    // A `toLowerCase()` fold would collapse them and offer one of two papers.
+    expect(
+      resolveDoiFromMetadata([
+        "10.26321/\u00C1.GUTI\u00C9RREZ.ZARZA.02.2018.03",
+        "10.26321/\u00E1.guti\u00E9rrez.zarza.02.2018.03",
+      ]),
+    ).toEqual({ state: "unsupported" });
   });
 
   it("never produces a title, a URL or anything but a DOI", () => {

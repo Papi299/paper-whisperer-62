@@ -20,7 +20,11 @@
 
 import { describe, it, expect } from "vitest";
 
-import { extractDoiFromMetadataValue } from "@/lib/doiIdentifiers";
+import {
+  doiEquivalenceKey,
+  doiNamesAreEquivalent,
+  extractDoiFromMetadataValue,
+} from "@/lib/doiIdentifiers";
 
 /** The DOI used throughout, and the one the manual acceptance case turns on. */
 const DOI = "10.1038/s41586-020-2649-2";
@@ -67,8 +71,12 @@ describe("extractDoiFromMetadataValue — accepted presentation forms", () => {
   });
 
   it("leaves the opaque suffix exactly as written", () => {
-    // DOI names are equivalent only when their code points are identical, so
-    // nothing may case-fold, collapse or repair the suffix.
+    // A statement about *parsing*, not about equivalence. ASCII case is
+    // insensitive when two DOI names are compared (§4.3.4, and
+    // `doiEquivalenceKey` below), but the Handbook scopes that rule to
+    // comparison — *"It does not restrict DOI names to containing only
+    // uppercase or lowercase letters"* — so what comes back here is the
+    // spelling the publisher wrote, which is what gets displayed and handed on.
     expect(extractDoiFromMetadataValue("10.1000/AbC-XyZ_1")).toBe("10.1000/AbC-XyZ_1");
     expect(extractDoiFromMetadataValue("10.1000/a/b/c")).toBe("10.1000/a/b/c");
     expect(extractDoiFromMetadataValue("10.1000/a b")).toBe("10.1000/a b");
@@ -145,8 +153,18 @@ describe("extractDoiFromMetadataValue — the same DOI written differently", () 
 
   it("keeps two genuinely different DOIs different", () => {
     expect(extractDoiFromMetadataValue("10.1000/a")).not.toBe(extractDoiFromMetadataValue("10.1000/b"));
-    // Case is not folded, because the resolver does not fold it either.
-    expect(extractDoiFromMetadataValue("10.1000/AB")).not.toBe(extractDoiFromMetadataValue("10.1000/ab"));
+  });
+
+  it("does not fold ASCII case when parsing — but the two are still one DOI", () => {
+    // Both halves matter, and they are not in tension. Parsing preserves the
+    // spelling; equivalence testing folds ASCII case. A previous revision of
+    // this suite asserted only the first half and drew the wrong conclusion
+    // from it — that `10.1000/AB` and `10.1000/ab` are different DOIs. They are
+    // not: Handbook §4.3.4 makes them the same DOI, and Crossref documents the
+    // same rule for the suffixes it issues.
+    expect(extractDoiFromMetadataValue("10.1000/AB")).toBe("10.1000/AB");
+    expect(extractDoiFromMetadataValue("10.1000/ab")).toBe("10.1000/ab");
+    expect(doiNamesAreEquivalent("10.1000/AB", "10.1000/ab")).toBe(true);
   });
 });
 
@@ -172,5 +190,110 @@ describe("extractDoiFromMetadataValue — it is never wider than the accepted gr
       // A DOI name, by the same shape rule the resolver-URL recogniser applies.
       expect(doi).toMatch(/^10\.[^/]+\/[\s\S]+$/);
     }
+  });
+});
+
+describe("doiEquivalenceKey — DOI Handbook §4.3.4", () => {
+  it("makes ASCII case-variant DOI names equivalent", () => {
+    // *"a code point in the range U+0041..U+005A … is considered identical to
+    // the corresponding code point in the range U+0061..U+007A"*.
+    expect(doiEquivalenceKey("10.1000/AB")).toBe(doiEquivalenceKey("10.1000/ab"));
+    expect(doiEquivalenceKey("10.1000/AbC")).toBe(doiEquivalenceKey("10.1000/aBc"));
+    // The prefix folds too — the rule is about the DOI name, not about the
+    // suffix alone — though a registrant code is digits and dots in practice.
+    expect(doiEquivalenceKey("10.1000A/x")).toBe(doiEquivalenceKey("10.1000a/x"));
+  });
+
+  it("reproduces the Handbook's own equivalent example", () => {
+    // EXAMPLE 1: equivalent, because U+0053 and U+0073 are considered identical.
+    expect(
+      doiNamesAreEquivalent(
+        "10.5594/SMPTE.ST2067-21.2020",
+        "10.5594/sMPTE.sT2067-21.2020",
+      ),
+    ).toBe(true);
+  });
+
+  it("reproduces the Handbook's own NON-equivalent example", () => {
+    // EXAMPLE 2: not equivalent, because U+00C1 LATIN CAPITAL LETTER A WITH
+    // ACUTE and U+00E1 LATIN SMALL LETTER A WITH ACUTE are not considered
+    // identical. This is the case a `toLowerCase()` implementation gets wrong,
+    // and it is the reason the fold is written out by code point.
+    expect(
+      doiNamesAreEquivalent(
+        "10.26321/\u00C1.GUTI\u00C9RREZ.ZARZA.02.2018.03",
+        "10.26321/\u00E1.guti\u00E9rrez.zarza.02.2018.03",
+      ),
+    ).toBe(false);
+  });
+
+  it("folds no code point outside U+0041..U+005A", () => {
+    // Every one of these is folded by `String.prototype.toLowerCase` and must
+    // NOT be folded here. If this test ever fails, the implementation has
+    // reached for a general-purpose lowercasing.
+    for (const [upper, lower] of [
+      ["\u00C1", "\u00E1"], // Á / á — the Handbook's own counterexample
+      ["\u00D6", "\u00F6"], // Ö / ö
+      ["\u0130", "i"], // İ — lowercases to "i̇" (two code points) under Unicode
+      ["\u03A3", "\u03C3"], // Σ / σ — Greek
+      ["\u0410", "\u0430"], // А / а — Cyrillic, and visually identical to ASCII A
+      ["\u00DF", "ss"], // ß — case-folds to "ss" under full Unicode folding
+    ]) {
+      expect(
+        doiNamesAreEquivalent(`10.1000/${upper}`, `10.1000/${lower}`),
+        `10.1000/${upper} was folded onto 10.1000/${lower}`,
+      ).toBe(false);
+    }
+  });
+
+  it("is not String.prototype.toLowerCase", () => {
+    // Stated directly, because the two agree on every ASCII input and the
+    // difference only shows on the inputs above.
+    const withAcute = "10.26321/\u00C1.X";
+    expect(doiEquivalenceKey(withAcute)).not.toBe(withAcute.toLowerCase());
+    expect(doiEquivalenceKey(withAcute)).toBe("10.26321/\u00C1.x");
+  });
+
+  it("changes nothing else about the name", () => {
+    // The Handbook's rule has exactly one exception in it. No trimming, no
+    // percent-decoding, no whitespace collapsing, no separator handling.
+    expect(doiEquivalenceKey(" 10.1000/a b ")).toBe(" 10.1000/a b ");
+    expect(doiEquivalenceKey("10.1000/a%23b")).toBe("10.1000/a%23b");
+    expect(doiEquivalenceKey("10.1000/a/b/c")).toBe("10.1000/a/b/c");
+  });
+
+  it("leaves surrogate pairs intact", () => {
+    // Iterating by code point rather than by UTF-16 code unit. No code point the
+    // rule touches is outside the BMP, so nothing here should change at all.
+    const astral = "10.1000/\u{1F4C4}-A";
+    expect(doiEquivalenceKey(astral)).toBe("10.1000/\u{1F4C4}-a");
+    expect([...(doiEquivalenceKey(astral) as string)]).toHaveLength([...astral].length);
+  });
+
+  it("returns null for a non-string, and calls nothing equivalent to it", () => {
+    expect(doiEquivalenceKey(null)).toBeNull();
+    expect(doiEquivalenceKey(undefined)).toBeNull();
+    expect(doiEquivalenceKey(10.1038 as unknown as string)).toBeNull();
+
+    // Two non-DOI-names are not "the same DOI" merely by both being unusable.
+    expect(doiNamesAreEquivalent(null, null)).toBe(false);
+    expect(doiNamesAreEquivalent(undefined, "10.1000/a")).toBe(false);
+    expect(doiNamesAreEquivalent("10.1000/a", null)).toBe(false);
+  });
+
+  it("is reflexive, symmetric and stable", () => {
+    for (const name of ["10.1000/AbC", "10.1000/x", "10.26321/\u00C1.X", "10.1000/a b"]) {
+      expect(doiNamesAreEquivalent(name, name)).toBe(true);
+      expect(doiEquivalenceKey(name)).toBe(doiEquivalenceKey(name));
+    }
+    expect(doiNamesAreEquivalent("10.1000/AB", "10.1000/ab")).toBe(
+      doiNamesAreEquivalent("10.1000/ab", "10.1000/AB"),
+    );
+  });
+
+  it("still separates DOIs that differ by more than case", () => {
+    expect(doiNamesAreEquivalent("10.1000/a", "10.1000/b")).toBe(false);
+    expect(doiNamesAreEquivalent("10.1000/a", "10.1001/a")).toBe(false);
+    expect(doiNamesAreEquivalent("10.1000/a", "10.1000/a ")).toBe(false);
   });
 });
