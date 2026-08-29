@@ -530,16 +530,40 @@ Exhaustive search of the repository and the application's routes.
 
 | Document | Exists? | Detail |
 |---|---|---|
-| Privacy Policy | **Present** | Owner-approved copy published by the application itself at the public, unauthenticated route `/privacy` ([`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx)), canonical `https://app.paperlume.app/privacy` (PAPERLUME-PRIVACY-001B). That page — not this audit — is the authority for the published wording; this audit remains the authority for the data-flow facts behind it. Reaching the canonical URL still requires the branch to be merged and deployed |
+| Privacy Policy | **Absent** | No file, no route, no draft. Named as an unmet launch blocker in `commercial-architecture.md` §6 item 6, `store-launch-checklist.md` §2, and `chrome-web-store-readiness.md` §6 ("Status: OWNER INPUT REQUIRED — the URL does not exist yet") |
 | Terms of Service | **Absent** | Same blockers |
 | Cookie policy | **Absent** | Listed as conditional on a future marketing site |
 | AI disclosure page | **Absent** | Required by C16; the only in-app AI wording is the placeholder text `"AI-generated summary..."` in [`EditPaperDialog.tsx:605`](../src/components/papers/EditPaperDialog.tsx#L605). **No AI disclaimer is surfaced where AI output is shown** |
 | Data-processing disclosures | **Absent as a legal document.** The engineering facts exist in `docs/chrome-web-store-readiness.md` §6 and now in this file | |
 | Deletion documentation | **Present, engineering-facing only** — `store-launch-checklist.md` §3, `commercial-architecture.md` §6 item 7. No user-facing page | |
 | Support / legal page | **Absent** | Blocked on the unchosen marketing site |
-| App routes | `/`, `/auth`, `/dashboard`, `/extension-import`, `/reset-password`, `/privacy`, `*` — `/privacy` is the one **public, unauthenticated** route; still **no `/terms`, `/support` or `/ai-disclosure`** ([`src/App.tsx`](../src/App.tsx)) | |
+| App routes | `/`, `/auth`, `/dashboard`, `/extension-import`, `/reset-password`, `*` — **no `/privacy`, `/terms`, `/support` or `/ai-disclosure`** ([`src/App.tsx:33-41`](../src/App.tsx#L33-L41)) | |
 
-**Decision C16 (2026-05-21)** put legal pages on an external marketing site at `paperlume.app/privacy`, `/terms`, etc., with the repository linking to HTTPS URLs. For the **Privacy Policy** that has been superseded by the owner (2026-08-29): it is served by the application at `https://app.paperlume.app/privacy`. The marketing-site provider remains an unmade owner decision, so Terms of Service, Support and the AI-disclosure page still have **no publication target**.
+**Decision C16 (2026-05-21)** puts legal pages on an external marketing site at `paperlume.app/privacy`, `/terms`, etc., with the repository linking to HTTPS URLs. The marketing-site provider is still an unmade owner decision, so **no publication target currently exists**.
+
+> ### Post-audit implementation note — PAPERLUME-PRIVACY-001B
+>
+> **This note is outside the audited snapshot above.** The table and the C16
+> paragraph in this section describe the repository at the audited commit named
+> in §1 (`eaa4b9bfd475caafc032625f47b0c4e6b2b6c9fd`) and are left exactly as the
+> audit found them. Nothing in this note was re-audited: **no re-inspection of
+> source, schema, configuration or Production was performed for it**, and no
+> other statement, matrix, provider disclosure or finding in this document has
+> been revisited.
+>
+> What changed *after* that commit: PAPERLUME-PRIVACY-001B added an
+> owner-approved Privacy Policy to the application as a public, unauthenticated
+> route, `/privacy` ([`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx)),
+> canonical `https://app.paperlume.app/privacy`. It is served by the application
+> rather than by the still-unchosen marketing site, which supersedes C16 **for
+> the Privacy Policy only** — Terms of Service, Support and the AI-disclosure
+> page are unchanged by it and still have no publication target.
+>
+> **Authority boundary.** That page is the authority for the *published policy
+> wording*; this document remains the authority for the *data-flow facts* behind
+> it. If the two ever disagree, raise the discrepancy — do not reword the policy
+> page to match an implementation, and do not edit this audit to match the
+> policy.
 
 ---
 

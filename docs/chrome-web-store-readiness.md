@@ -342,17 +342,22 @@ answer below should be pasted without being re-read against the live form.**
 **Required.** Google requires a posted privacy policy whenever an extension
 handles user data, and "Web history = Yes" makes that unambiguous here.
 
-**Status: written, not yet reachable.** PAPERLUME-PRIVACY-001B added the
-owner-approved Privacy Policy to the application as the public, unauthenticated
-route `/privacy`, canonical **`https://app.paperlume.app/privacy`**. Its §4 is
-the extension section and covers all seven points below. It is served by the app
+**Implemented.** PAPERLUME-PRIVACY-001B added the owner-approved Privacy Policy
+to the application as the public, unauthenticated route `/privacy`. Its §4 is the
+extension section and covers all seven points below. It is served by the app
 rather than the still-unchosen marketing site (see C16 in
 [decisions-and-triggers.md](decisions-and-triggers.md)).
 
-**Still gating submission:** the canonical URL only resolves once that work is
-merged and deployed to Production. Re-verify it is publicly reachable — signed
-out, from a clean browser — before entering it in the Developer Dashboard
-(§8 item 12).
+**Privacy policy URL to enter in the Developer Dashboard:**
+`https://app.paperlume.app/privacy`
+
+**Submission gate — open until verified, and this is a standing requirement, not
+a one-off.** Publishing the route is not the same as proving it is reachable.
+Before any Store submission, confirm that URL loads the policy **in Production,
+signed out, from a clean browser** with no cached session (§8 item 12). Deployment
+protection, a routing regression, or a rewrite change can each break it without
+breaking anything else, so re-verify on every submission rather than trusting a
+previous check. Until that verification is recorded, this gate stays open.
 
 The content the extension section must cover, and which the published §4 does:
 
@@ -640,9 +645,9 @@ Package format from [Publish in the Chrome Web Store](https://developer.chrome.c
 
 ### OWNER INPUT REQUIRED
 
-- **Privacy policy URL** — `https://app.paperlume.app/privacy`. The copy is
-  written and the route exists (§6.7); it must be **deployed and confirmed
-  publicly reachable** before submission
+- **Privacy policy URL** — `https://app.paperlume.app/privacy`. The policy is
+  implemented in the application (§6.7); what remains is **confirming it loads in
+  Production, signed out, from a clean browser** before each submission
 - **Support URL / contact email**
 - **Detailed description** — marketing copy. Must open with a concise statement
   of functionality and avoid keyword spam
