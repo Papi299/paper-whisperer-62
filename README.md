@@ -20,7 +20,7 @@ The core application is **stable, hardened, and feature-complete at current scal
 - **In-app PubMed discovery** (Add Papers → PubMed Search): search PubMed with full PubMed syntax, browse paged results, multi-select records and import the selected PMIDs through the existing canonical identifier importer. Discovery never becomes a second import path — see below. Publication-type badges on a result honour the current user's Study Type Exclusion Pool; that is display-only and does not affect the study type recorded at import. Backed by the deployed `search-pubmed` Edge Function — [docs/deployment.md](docs/deployment.md) §7b covers its deployment rules.
 - Projects, tags, curation pools (keywords / synonyms / study types / exclusions), notes, saved searches / filter presets.
 - Private per-user attachments; AI analysis via Gemini (`analyze-paper` Edge Function).
-- **Full account export** (Settings → Account data): one ZIP holding every category of the signed-in user's own data — papers and notes, projects, tags and their relationships, saved searches, all four pools, attachment metadata **and** attachment binaries, plus a non-secret profile projection. API keys, tokens, and session material are excluded by construction.
+- **Full account export** (Account menu → Account → Account data): one ZIP holding every category of the signed-in user's own data — papers and notes, projects, tags and their relationships, saved searches, all four pools, attachment metadata **and** attachment binaries, plus a non-secret profile projection. API keys, tokens, and session material are excluded by construction.
 - Security layer: RLS on all user tables, `auth.uid()`-guarded SECURITY DEFINER RPCs, explicit client-side `user_id` scoping, fail-fast env validation.
 
 **Implemented commercial enforcement foundations** (schema and enforcement are live; billing is not):
@@ -32,10 +32,10 @@ The core application is **stable, hardened, and feature-complete at current scal
 **Not implemented** (planned; see the commercial docs below):
 
 - Paddle billing integration (checkout, webhook ingestion, customer portal, subscription sync) — Paddle is the selected Merchant-of-Record provider, gated on owner-side setup.
-- Paywall / upgrade UX, Free-tier feature gating, Terms of Service / AI-disclosure / support pages, marketing site. (The **Privacy Policy** is live in-app at the public `/privacy` route.)
+- Paywall / upgrade UX, Free-tier feature gating, Terms of Service / AI-disclosure / support pages, marketing site. (The **Privacy Policy** is live in-app at the public `/privacy` route, linked from the sign-in page and from the authenticated Account menu.)
 - The product is **not commercially launched**.
 
-Self-serve **account deletion** is live: **Settings → Danger zone** permanently deletes the signed-in account after the user types `DELETE MY ACCOUNT`. It runs through the privileged `delete-account` Edge Function — deployed to the linked project — which derives the target user from the authenticated bearer token, deletes the account's private attachment binaries through the Storage API, and then hard-deletes the Auth user; the user's database rows are removed by the existing `ON DELETE CASCADE` foreign keys. Account *export* is the separate export-before-delete path.
+Self-serve **account deletion** is live: **Account menu → Account → Danger zone** permanently deletes the signed-in account after the user types `DELETE MY ACCOUNT`. It runs through the privileged `delete-account` Edge Function — deployed to the linked project — which derives the target user from the authenticated bearer token, deletes the account's private attachment binaries through the Storage API, and then hard-deletes the Auth user; the user's database rows are removed by the existing `ON DELETE CASCADE` foreign keys. Account *export* is the separate export-before-delete path.
 
 For the full current-state handoff, see [docs/start-here.md](docs/start-here.md).
 

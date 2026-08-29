@@ -564,6 +564,17 @@ Exhaustive search of the repository and the application's routes.
 > it. If the two ever disagree, raise the discrepancy — do not reword the policy
 > page to match an implementation, and do not edit this audit to match the
 > policy.
+>
+> **Navigation changed again (PAPERLUME-PRIVACY-001C).** Also outside the audited
+> snapshot, and likewise not re-audited. Two UI paths this document names are no
+> longer where it says: **Settings → Danger zone** (§12.1) and **Settings →
+> Account data** (§12.7) both moved into a dedicated **Account** dialog, opened
+> from the Account menu — the authenticated email dropdown — which now also
+> carries a **Privacy Policy** item pointing at `/privacy`. Settings keeps the
+> PubMed API key and the storage gauge. **This is a navigation change only.** No
+> data flow, no retention behaviour, no deletion or export mechanism, and no
+> third-party recipient changed, so every factual row in this document stands as
+> audited; only the menu path a user follows to reach two of them differs.
 
 ---
 
