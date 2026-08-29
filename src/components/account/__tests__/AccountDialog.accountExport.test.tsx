@@ -201,7 +201,7 @@ describe("AccountDialog — dialog semantics", () => {
     );
   });
 
-  it("renders nothing while closed, so neither hook holds live state", () => {
+  it("renders no dialog or account sections while closed", () => {
     render(<AccountDialog open={false} onOpenChange={vi.fn()} userId="user-1" />);
 
     expect(screen.queryByRole("dialog")).toBeNull();
