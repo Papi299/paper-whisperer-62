@@ -449,7 +449,7 @@ Only claims supportable by implementation. Each is safe to state; nothing below 
 | Measure | Evidence | Class |
 |---|---|---|
 | Transport encryption | All endpoints are HTTPS: Supabase, Vercel (`app.paperlume.app`), Gemini, NCBI, Crossref. No `http://` endpoint is contacted in application code | VERIFIED |
-| Row Level Security | **Enabled on all 22 public tables** in Production (read-only verification). Owner-scoped policies key on `auth.uid()` | VERIFIED |
+| Row Level Security | **Enabled on every public application table present at audit time: 24/24 regular tables** in schema `public` (read-only `pg_class` verification; 0 with RLS disabled, 22 of the 24 additionally `FORCE`). That is the same 24-table set this audit inventories in §4 and §5. Owner-scoped policies key on `auth.uid()` | VERIFIED |
 | Server-only tables | `subscriptions`, `subscription_events`, `usage_counters`, `internal_user_access` have **no client policy at all**; `internal_user_access` additionally has direct privileges revoked from `PUBLIC`, `anon` and `authenticated` | VERIFIED |
 | Private Storage with owner-scoped authorization | Bucket `public = false`; four path-prefix RLS policies; reads only via 1-hour signed URLs | VERIFIED |
 | Authenticated Edge Functions | All six require an `Authorization` header and validate it with an authoritative `auth.getUser()` **network** call. None accepts a user id from a request body | VERIFIED |
