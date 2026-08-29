@@ -11,7 +11,11 @@ interface DeleteAccountSectionProps {
 }
 
 /**
- * Settings → Danger zone (PFA-C04).
+ * Account → Danger zone (PFA-C04).
+ *
+ * Rendered by `AccountDialog`; it lived under Settings until the account
+ * actions were split out of it. The file stays here so the move costs no
+ * rename churn in the history and the tests that pin it.
  *
  * Visually and structurally separated from the sections above it so the
  * destructive action can never be mistaken for the adjacent, read-only

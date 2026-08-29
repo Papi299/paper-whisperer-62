@@ -14,11 +14,7 @@ import { useTouchSafeInitialFocus } from "@/hooks/useCoarsePointer";
 import { useSettings } from "@/hooks/useSettings";
 import { useToast } from "@/hooks/use-toast";
 import { useStorageUsage } from "@/hooks/useStorageUsage";
-import { useAccountExport } from "@/hooks/useAccountExport";
-import { useAccountDeletion } from "@/hooks/useAccountDeletion";
 import { StorageUsageSection } from "@/components/settings/StorageUsageSection";
-import { AccountDataSection } from "@/components/settings/AccountDataSection";
-import { DeleteAccountSection } from "@/components/settings/DeleteAccountSection";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -37,20 +33,13 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
   // Only queried while the dialog is open; refetched on reopen so the gauge
   // reflects attachment activity since the last visit.
   const storage = useStorageUsage(userId, { enabled: open });
-  // Independent of the PubMed and Storage sections: an export in progress
-  // never blocks them, and neither of them gates an export.
-  const accountExport = useAccountExport(userId);
-  // PFA-C04. `userId` is used only for local UI/auth-state sanity — the hook
-  // never sends it, and the Edge Function derives the deleted account solely
-  // from the authenticated bearer token.
-  const accountDeletion = useAccountDeletion(userId);
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
-  // Settings is opened to read it — the storage gauge, the export and delete
-  // sections — far more often than to type an API key. The PubMed field is
-  // simply the first tabbable element, so Radix focused it and the software
-  // keyboard covered most of the dialog on a tablet. On a coarse pointer the
-  // heading takes initial focus instead; on a mouse the field still does.
+  // Settings is opened to read it — the storage gauge — at least as often as
+  // to type an API key. The PubMed field is simply the first tabbable element,
+  // so Radix focused it and the software keyboard covered most of the dialog on
+  // a tablet. On a coarse pointer the heading takes initial focus instead; on a
+  // mouse the field still does.
   const { focusRef, onOpenAutoFocus } = useTouchSafeInitialFocus<HTMLHeadingElement>();
 
   const hasKey = !!settings.pubmedApiKey;
@@ -106,10 +95,9 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
         </DialogHeader>
 
         {/*
-          Scroll container: Settings now carries four sections plus the Danger
-          zone, which can exceed a short viewport. Bounding the height here keeps
-          the header and footer fixed and every section reachable, without
-          changing the dialog width or any existing section's layout.
+          Scroll container: bounding the height keeps the header fixed and every
+          section reachable on a short viewport, without changing the dialog
+          width or any section's layout.
         */}
         <div className="max-h-[60vh] space-y-4 overflow-y-auto py-2 pr-1">
           {loading ? (
@@ -153,11 +141,11 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
 
               {/*
                 Both actions are PubMed-only: handleSave writes just the PubMed
-                key and handleRemove clears just the PubMed key. They previously
-                sat in the dialog-level DialogFooter, which rendered after the
-                Danger zone and made Remove Key read as an account-deletion
-                control. Wrapping instead of a footer, so the row degrades by
-                stacking at narrow widths rather than overflowing.
+                key and handleRemove clears just the PubMed key, so they belong
+                inside this section rather than in a dialog-level DialogFooter
+                that would read as acting on the whole dialog. Wrapping instead
+                of a footer, so the row degrades by stacking at narrow widths
+                rather than overflowing.
               */}
               <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
                 {hasKey && (
@@ -178,19 +166,6 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
             status={storage.status}
             isLoading={storage.isLoading}
             isError={storage.isError}
-          />
-
-          <AccountDataSection
-            onExport={accountExport.exportAccountData}
-            isExporting={accountExport.isExporting}
-            progress={accountExport.progress}
-            canExport={accountExport.canExport}
-          />
-
-          <DeleteAccountSection
-            onDelete={accountDeletion.deleteAccount}
-            isDeleting={accountDeletion.isDeleting}
-            canDelete={accountDeletion.canDelete}
           />
         </div>
       </DialogContent>
