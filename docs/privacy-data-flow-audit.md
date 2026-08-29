@@ -530,16 +530,16 @@ Exhaustive search of the repository and the application's routes.
 
 | Document | Exists? | Detail |
 |---|---|---|
-| Privacy Policy | **Absent** | No file, no route, no draft. Named as an unmet launch blocker in `commercial-architecture.md` §6 item 6, `store-launch-checklist.md` §2, and `chrome-web-store-readiness.md` §6 ("Status: OWNER INPUT REQUIRED — the URL does not exist yet") |
+| Privacy Policy | **Present** | Owner-approved copy published by the application itself at the public, unauthenticated route `/privacy` ([`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx)), canonical `https://app.paperlume.app/privacy` (PAPERLUME-PRIVACY-001B). That page — not this audit — is the authority for the published wording; this audit remains the authority for the data-flow facts behind it. Reaching the canonical URL still requires the branch to be merged and deployed |
 | Terms of Service | **Absent** | Same blockers |
 | Cookie policy | **Absent** | Listed as conditional on a future marketing site |
 | AI disclosure page | **Absent** | Required by C16; the only in-app AI wording is the placeholder text `"AI-generated summary..."` in [`EditPaperDialog.tsx:605`](../src/components/papers/EditPaperDialog.tsx#L605). **No AI disclaimer is surfaced where AI output is shown** |
 | Data-processing disclosures | **Absent as a legal document.** The engineering facts exist in `docs/chrome-web-store-readiness.md` §6 and now in this file | |
 | Deletion documentation | **Present, engineering-facing only** — `store-launch-checklist.md` §3, `commercial-architecture.md` §6 item 7. No user-facing page | |
 | Support / legal page | **Absent** | Blocked on the unchosen marketing site |
-| App routes | `/`, `/auth`, `/dashboard`, `/extension-import`, `/reset-password`, `*` — **no `/privacy`, `/terms`, `/support` or `/ai-disclosure`** ([`src/App.tsx:33-41`](../src/App.tsx#L33-L41)) | |
+| App routes | `/`, `/auth`, `/dashboard`, `/extension-import`, `/reset-password`, `/privacy`, `*` — `/privacy` is the one **public, unauthenticated** route; still **no `/terms`, `/support` or `/ai-disclosure`** ([`src/App.tsx`](../src/App.tsx)) | |
 
-**Decision C16 (2026-05-21)** puts legal pages on an external marketing site at `paperlume.app/privacy`, `/terms`, etc., with the repository linking to HTTPS URLs. The marketing-site provider is still an unmade owner decision, so **no publication target currently exists**.
+**Decision C16 (2026-05-21)** put legal pages on an external marketing site at `paperlume.app/privacy`, `/terms`, etc., with the repository linking to HTTPS URLs. For the **Privacy Policy** that has been superseded by the owner (2026-08-29): it is served by the application at `https://app.paperlume.app/privacy`. The marketing-site provider remains an unmade owner decision, so Terms of Service, Support and the AI-disclosure page still have **no publication target**.
 
 ---
 

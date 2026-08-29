@@ -357,6 +357,8 @@ The decisions below capture the owner-approved commercial pivot from a B2C-only 
 
 **Re-evaluation trigger:** owner decision to host legal pages in-repo as Markdown (would require routing + privacy-page React component); not currently planned.
 
+**Superseded in part (2026-08-29, PAPERLUME-PRIVACY-001B).** The trigger above fired for the **Privacy Policy** only. The owner approved publication copy and decided to serve it from the application rather than the unbuilt marketing site: the public, unauthenticated route `/privacy` renders it, canonical `https://app.paperlume.app/privacy`, and that page is the authoritative published copy. **Terms of Service, AI disclosure and Support are unchanged by this** — C16 still governs them, and they remain launch blockers with no publication target.
+
 ### C17. Merchant of Record (MoR)-first replaces Stripe-first for web billing (2026-05-21)
 
 **Decision:** **Supersedes C8.** The web MVP billing provider is **a Merchant of Record (MoR) service**, not Stripe directly. Final MoR provider selection (Paddle vs Lemon Squeezy is the current candidate set) is **pending a short provider-selection audit**. The internal entitlement model, the `subscriptions` / `subscription_events` ingestion shape, and the AI-quota / storage-quota server-side enforcement landed in PRs #143 / #144 are **all unchanged** — those were always designed to be provider-neutral (see C4).

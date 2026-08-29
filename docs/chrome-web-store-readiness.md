@@ -342,15 +342,19 @@ answer below should be pasted without being re-read against the live form.**
 **Required.** Google requires a posted privacy policy whenever an extension
 handles user data, and "Web history = Yes" makes that unambiguous here.
 
-**Status: OWNER INPUT REQUIRED — the URL does not exist yet.** A public privacy
-policy is already an open web-launch blocker in
-[commercial-architecture.md §6](commercial-architecture.md) and
-[store-launch-checklist.md §2](store-launch-checklist.md); the extension does not
-add a new obligation, it inherits the existing one and needs it *published*
-before submission.
+**Status: written, not yet reachable.** PAPERLUME-PRIVACY-001B added the
+owner-approved Privacy Policy to the application as the public, unauthenticated
+route `/privacy`, canonical **`https://app.paperlume.app/privacy`**. Its §4 is
+the extension section and covers all seven points below. It is served by the app
+rather than the still-unchosen marketing site (see C16 in
+[decisions-and-triggers.md](decisions-and-triggers.md)).
 
-001E1 deliberately does **not** draft or publish legal text. Content the
-extension section must cover, for whoever writes it:
+**Still gating submission:** the canonical URL only resolves once that work is
+merged and deployed to Production. Re-verify it is publicly reachable — signed
+out, from a clean browser — before entering it in the Developer Dashboard
+(§8 item 12).
+
+The content the extension section must cover, and which the published §4 does:
 
 1. that the extension reads the active tab's URL, only on toolbar invocation;
 2. that it stores nothing and transmits nothing automatically;
@@ -636,8 +640,9 @@ Package format from [Publish in the Chrome Web Store](https://developer.chrome.c
 
 ### OWNER INPUT REQUIRED
 
-- **Privacy policy URL** — publicly reachable, covering §6.7. Already an open
-  web-launch blocker; must be *published* before submission
+- **Privacy policy URL** — `https://app.paperlume.app/privacy`. The copy is
+  written and the route exists (§6.7); it must be **deployed and confirmed
+  publicly reachable** before submission
 - **Support URL / contact email**
 - **Detailed description** — marketing copy. Must open with a concise statement
   of functionality and avoid keyword spam
