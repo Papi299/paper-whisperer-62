@@ -539,8 +539,9 @@ log(
     "",
     `  Wrote ${produced.size} files to ${STORE_ASSET_DIR}/.`,
     "",
-    "  Not uploaded and not submitted. A human uploads these in the Chrome Web Store",
-    "  Developer Dashboard; see docs/chrome-web-store-listing.md.",
+    "  Not uploaded and not submitted. These are submission-preparation assets;",
+    "  see docs/chrome-web-store-listing.md for which files are confirmed Dashboard",
+    "  inputs and which remain candidates.",
     "",
   ].join("\n"),
 );

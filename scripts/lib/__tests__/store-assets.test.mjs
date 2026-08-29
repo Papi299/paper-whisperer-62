@@ -2,12 +2,14 @@
 /**
  * The committed Chrome Web Store listing images are what they claim to be.
  *
- * These five PNGs are uploaded by hand into a form that accepts them, tells you
- * nothing, and then shows them to every visitor of the listing. Nothing else in
- * the repository looks at them: they are not imported, not built, not served,
- * and not covered by any other suite. A wrong-sized promo tile, a screenshot
- * regenerated at the wrong scale, or an icon whose transparent padding was lost
- * would all sit in the tree indefinitely looking exactly like a correct one.
+ * These five PNGs are prepared for a submission a human performs by hand — some
+ * of them as confirmed Developer Dashboard inputs, and the Store-icon candidate
+ * on a submission path that is still unresolved (`docs/chrome-web-store-listing.md`
+ * §9, §10). Whichever of them is eventually used, nothing else in the repository
+ * looks at any of them: they are not imported, not built, not served, and not
+ * covered by any other suite. A wrong-sized promo tile, a screenshot regenerated
+ * at the wrong scale, or an icon whose transparent padding was lost would all
+ * sit in the tree indefinitely looking exactly like a correct one.
  *
  * The assertions are structural, like the brand suite's. They cannot tell you
  * the images look good; they tell you the files still satisfy the dimensions
@@ -59,8 +61,10 @@ describe("store assets — every declared image is present and correctly sized",
   });
 
   it("contains exactly the declared set, and nothing else", () => {
-    // An orphaned image left behind by a renamed asset is uploaded by whoever
-    // reads the directory rather than the contract.
+    // An orphaned image left behind by a renamed asset is indistinguishable, in
+    // the directory listing, from a current one — so it survives as a stale
+    // listing asset that anyone reading the directory rather than the contract
+    // would take for the real thing.
     expect(readdirSync(ASSET_DIR).sort()).toEqual(STORE_ASSETS.map((asset) => asset.file).sort());
   });
 });

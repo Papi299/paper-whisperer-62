@@ -1,11 +1,14 @@
 /**
  * The Chrome Web Store listing asset contract.
  *
- * `assets/store/` holds the images a human uploads to the Developer Dashboard.
- * Unlike the extension package, nothing validates them at upload time except
- * Google, and a listing image is the one artefact where "it looked fine when I
- * made it" is the whole of the usual quality process. So the sizes, the sources
- * and the *claims* each image makes are stated here once, and
+ * `assets/store/` holds the generated Chrome Web Store listing-image set:
+ * assets intended for Developer Dashboard use, plus the Store-icon candidate
+ * whose exact submission path remains unresolved (see `STORE_ICON` below).
+ *
+ * Unlike the extension package, nothing validates any of them at upload time
+ * except Google, and a listing image is the one artefact where "it looked fine
+ * when I made it" is the whole of the usual quality process. So the sizes, the
+ * sources and the *claims* each image makes are stated here once, and
  * `scripts/lib/__tests__/store-assets.test.mjs` holds the committed files to
  * them.
  *
