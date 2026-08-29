@@ -14,10 +14,20 @@
  * surface a visible, deliberate line in a diff instead of something that slips
  * through with the feature that wanted it.
  *
- * The individual "no `storage`", "no `scripting`" assertions below are therefore
+ * The individual "no `storage`", "no `tabs`" assertions below are therefore
  * redundant with the exact comparison. They are kept because they name the
- * specific permissions CHROME-EXTENSION-IMPORT-001B rules out, so a failure says
- * *which* boundary moved rather than only that one did.
+ * specific permissions this extension rules out, so a failure says *which*
+ * boundary moved rather than only that one did.
+ *
+ * `scripting` moved off that list in
+ * CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 and onto the expected set. It is
+ * the permission the DOI metadata read needs, and it is deliberately the *only*
+ * thing that changed: `scripting` on its own grants no access to any page. It
+ * has to be paired with host access, and the extension still declares none —
+ * the host side comes from `activeTab`, which exists only for the tab the user
+ * invoked the action on and only until they navigate away. The host-permission
+ * assertions below are therefore load-bearing in a way they were not before,
+ * because they are now the whole of what keeps the injection gesture-bound.
  *
  * `vite.extension.config.ts` copies this file into the build output byte for
  * byte and never edits it, so everything asserted here is also true of what
@@ -33,20 +43,29 @@ const MANIFEST_PATH = fileURLToPath(new URL("../../manifest.json", import.meta.u
 const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as Record<string, unknown>;
 
 /**
- * The complete permission set for this phase.
+ * The complete permission set, in the order the manifest lists them.
  *
- * `activeTab` and nothing else. It is granted only in response to the user
- * clicking the toolbar action, it covers only the tab they were looking at, it
- * is revoked when they navigate away, and it displays no install-time warning.
- * Reading `Tab.url` is exactly what it is for.
+ * `activeTab` is granted only in response to the user clicking the toolbar
+ * action, covers only the tab they were looking at, is revoked when they
+ * navigate away, and displays no install-time warning. Reading `Tab.url` is
+ * exactly what it is for, and so — per Chrome's own documentation — is calling
+ * `scripting.executeScript()` on that tab *"if the `scripting` permission is
+ * also declared"*.
+ *
+ * `scripting` is that second half. On its own it is inert: it enables the API
+ * but grants access to no page, so the pair is strictly narrower than any
+ * `host_permissions` entry, which would grant standing access to every matching
+ * page whether the user asked for anything or not.
+ *
+ * @see https://developer.chrome.com/docs/extensions/develop/concepts/activeTab
+ * @see https://developer.chrome.com/docs/extensions/reference/api/scripting
  */
-const EXPECTED_PERMISSIONS = ["activeTab"] as const;
+const EXPECTED_PERMISSIONS = ["activeTab", "scripting"] as const;
 
-/** Permissions this phase's behaviour does not need, and must not request. */
+/** Permissions this extension's behaviour does not need, and must not request. */
 const FORBIDDEN_PERMISSIONS = [
   "storage",
   "tabs",
-  "scripting",
   "identity",
   "cookies",
   "webRequest",
@@ -91,8 +110,10 @@ describe("manifest — permission contract", () => {
 
   it("declares no host permissions, optional or otherwise", () => {
     // A host permission is what would let the extension read or alter pages
-    // without a user gesture. `activeTab` covers this phase's one read, so
-    // there is nothing for a host pattern to add.
+    // without a user gesture — and with `scripting` declared, it is now the only
+    // thing standing between this extension and standing access to every page a
+    // pattern matched. `activeTab` supplies the host half instead, for one tab,
+    // because of one click, until the user navigates away.
     expect(manifest).not.toHaveProperty("host_permissions");
     expect(manifest).not.toHaveProperty("optional_host_permissions");
   });
@@ -106,17 +127,21 @@ describe("manifest — permission contract", () => {
   });
 });
 
-describe("manifest — no page access and no background execution", () => {
+describe("manifest — no standing page access and no background execution", () => {
   it("registers no content scripts", () => {
-    // Nothing is injected into any page in this phase. Detection reads the tab's
-    // address, which needs no code running in the page at all.
+    // The DOI metadata read is a *programmatic* injection, made once, in
+    // response to the user opening the popup, into the one tab they opened it
+    // on. A `content_scripts` entry is the opposite arrangement: code Chrome
+    // runs on every matching page automatically, whether or not the user asked
+    // for anything, for the whole time the extension is installed.
     expect(manifest).not.toHaveProperty("content_scripts");
   });
 
   it("registers no background service worker", () => {
-    // The popup performs the whole phase behaviour, and it runs only when the
-    // user opens it. A service worker would be code that exists to run when the
-    // user did not ask for anything.
+    // The popup performs the whole behaviour, and it runs only when the user
+    // opens it. A service worker would be code that exists to run when the user
+    // did not ask for anything — which, with `scripting` declared, would also be
+    // code in a position to inject without a gesture.
     expect(manifest).not.toHaveProperty("background");
   });
 

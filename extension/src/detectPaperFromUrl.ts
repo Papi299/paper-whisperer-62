@@ -1,11 +1,17 @@
 /**
  * The extension's URL-only paper classifier.
  *
- * This is the whole of what CHROME-EXTENSION-IMPORT-001B detects. It reads one
- * string — the active tab's URL, obtained only after the user explicitly opened
- * the popup — and decides whether that URL *structurally* names a PubMed record
- * or a DOI. It never touches the page: no DOM, no `<meta>` tag, no document
- * title, no page text. Those belong to a later, separately audited phase.
+ * It reads one string — the active tab's URL, obtained only after the user
+ * explicitly opened the popup — and decides whether that URL *structurally*
+ * names a PubMed record or a DOI. It never touches the page: no DOM, no
+ * `<meta>` tag, no document title, no page text.
+ *
+ * This module is still tried first, always, and three of its four answers are
+ * final. Since CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 the fourth is not:
+ * `unsupported` on an ordinary http(s) page is what `popup.ts` follows with the
+ * narrow DOI metadata read in `detectPaperFromMetadata.ts`. `pubmed`, `doi` and
+ * `restricted` end here, so a recognised address — and a browser page that is
+ * no web page at all — is still answered without the page being touched.
  *
  * ## Why this does not call `detectIdentifier()`
  *
@@ -47,9 +53,10 @@ import { extractPmidFromPubMedUrl } from "@/lib/pubmedIdentifiers";
  * Deliberately four cases, and deliberately no fifth:
  *
  *   • `pubmed` / `doi` — a structurally authenticated record, with its value.
- *   • `unsupported` — an ordinary web page that names no paper this phase can
- *     identify. Not an error; the user is simply somewhere PaperLume cannot yet
- *     read an identifier from the address alone.
+ *   • `unsupported` — an ordinary web page whose *address* names no paper. Not
+ *     an error, and — since CORRECTION-01 — not always the last word: `popup.ts`
+ *     follows this one state, and only this one, with the DOI metadata read.
+ *     It is the final answer when that read finds nothing either.
  *   • `restricted` — there is no inspectable web page at all: a `chrome://`
  *     page, a local file, a `view-source:` view, or a tab whose URL Chrome did
  *     not expose. Kept separate from `unsupported` so the popup can say
@@ -110,7 +117,8 @@ export function detectPaperFromUrl(tabUrl: string | null | undefined): PaperDete
   const doi = extractDoiFromDoiUrl(tabUrl);
   if (doi !== null) return { state: "doi", doi };
 
-  // No title fallback. See the module comment: a URL that identifies no paper
-  // is unsupported, never a search term.
+  // No title fallback, here or in the metadata read that may follow. See the
+  // module comment: a URL that identifies no paper is unsupported, never a
+  // search term.
   return { state: "unsupported" };
 }

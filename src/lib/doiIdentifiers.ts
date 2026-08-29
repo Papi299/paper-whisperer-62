@@ -16,6 +16,17 @@
  * the other, and `canonicalDoiUrl` still rejects a URL outright rather than
  * unwrapping one.
  *
+ * A third entry point, `extractDoiFromMetadataValue`, was added by
+ * CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 for one specific untrusted input:
+ * the `content` of a bibliographic `<meta>` element on a publisher page.
+ *
+ *   metadata value --(extractDoiFromMetadataValue)--> DOI name
+ *
+ * It is a *boundary*, not a fourth grammar — it composes `extractDoiFromDoiUrl`
+ * and this module's own `DOI_NAME_PATTERN` — and it is the only function here
+ * that trims its input, because it is the only one that receives a value which
+ * has not already been authenticated as a DOI name. Its own comment says why.
+ *
  * The recognition half is a second implementation of the classification that
  * `supabase/functions/_shared/identifierDetection.ts` already performs inside
  * the Edge Function's separate bundling domain — the same arrangement PubMed
@@ -350,4 +361,103 @@ export function extractDoiFromDoiUrl(value: string | null | undefined): string |
 /** Whether a value is a DOI resolver URL naming a specific DOI. */
 export function isDoiResolverUrl(value: string | null | undefined): boolean {
   return extractDoiFromDoiUrl(value) !== null;
+}
+
+/**
+ * The `doi:` scheme prefix, as it appears in a bibliographic presentation form.
+ *
+ * Matched case-insensitively and only at the *start* of the value, with any
+ * whitespace that follows the colon consumed — `doi:10.1000/x`, `DOI: 10.1000/x`
+ * and `Doi:\n10.1000/x` are the same reference written three ways. Anchored, so
+ * a sentence that merely mentions a DOI (`See doi:10.1000/x for details`) is not
+ * a DOI reference and gets no authority from containing one.
+ */
+const DOI_PRESENTATION_PREFIX = /^doi:\s*/i;
+
+/**
+ * Extract the DOI name from a bibliographic **metadata value** — the `content`
+ * of a `citation_doi` / `dc.identifier` / `prism.doi` style `<meta>` element.
+ *
+ * ## Why this exists next to the other two, rather than as a third grammar
+ *
+ * `extractDoiFromDoiUrl` authenticates a *resolver URL*; `canonicalDoiUrl`
+ * formats a *DOI name*. Neither describes the third thing the Chrome extension
+ * has to read since CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01: a value a
+ * publisher wrote into a `<meta>` tag, which by convention is one of several
+ * *presentation forms* of the same DOI name. This function is that boundary,
+ * and it is deliberately built from the pieces already in this module —
+ * `extractDoiFromDoiUrl` for the resolver form and `DOI_NAME_PATTERN` for the
+ * bare form — so there is no fourth notion of what a DOI is anywhere in the
+ * repository.
+ *
+ * ## It is narrower than the importer's classifier, on purpose
+ *
+ * `supabase/functions/_shared/identifierDetection.ts` classifies text a *person
+ * pasted*, and its direct-DOI rule takes any value beginning `10.` at its word:
+ * the person is asserting it is a DOI, and no URL it recognises can also look
+ * like that. Publisher metadata carries no such assertion — it is untrusted
+ * markup from a page the user merely happened to open — so a value is accepted
+ * here only when it structurally *is* a DOI name (`DOI_NAME_PATTERN`), not when
+ * it merely starts with `10.` or contains one. `doi:` with anything unparseable
+ * after it is likewise refused rather than forwarded.
+ *
+ * That divergence is only ever in the narrowing direction, which is why it is
+ * safe: every value this accepts, the classifier would also accept.
+ *
+ * ## Whitespace, and the one place trimming is correct
+ *
+ * `canonicalDoiUrl` and `extractDoiFromDoiUrl` never trim, because a space is
+ * ordinary DOI data (Handbook §3.3) and trimming a name would silently emit a
+ * link for a *different* DOI. Both of those functions receive a value that has
+ * already been authenticated as a DOI name.
+ *
+ * This function is the input boundary itself, which is exactly where this
+ * module's own rule says normalizing belongs — *"Normalizing an identifier
+ * belongs at the input boundary, where the value is first taken in, not in the
+ * encoder that formats it."* Surrounding whitespace in a `content` attribute is
+ * markup indentation, not DOI data: publishers routinely wrap the value across
+ * lines. So the outer whitespace is removed here, once, and nothing else about
+ * the value is touched — no case folding, no percent-decoding, no unescaping,
+ * and no alteration of the opaque suffix. Interior whitespace is preserved,
+ * because that genuinely could be part of the name.
+ *
+ * ## What this never does
+ *
+ * It does not repair. A scheme-less `doi.org/10.1000/x` acquires no resolver
+ * authority, a bare `10.1000` with no suffix is refused, and a URL on any other
+ * host is refused however DOI-shaped its path looks. It performs no network
+ * resolution: whether the DOI is registered is the resolver's answer to give,
+ * not this function's.
+ *
+ * @param value One metadata `content` value, untrusted.
+ * @returns The DOI name, or `null` when the value is not a DOI in any accepted
+ *   presentation form.
+ *
+ * @example
+ * extractDoiFromMetadataValue("10.1038/s41586-020-2649-2");
+ * extractDoiFromMetadataValue("doi:10.1038/s41586-020-2649-2");
+ * extractDoiFromMetadataValue("DOI: 10.1038/s41586-020-2649-2");
+ * extractDoiFromMetadataValue("https://doi.org/10.1038/s41586-020-2649-2");
+ * // all four → "10.1038/s41586-020-2649-2"
+ */
+export function extractDoiFromMetadataValue(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // The resolver form first, and through the existing authenticator rather than
+  // a host check written again here. It parses, so `https://doi.org.evil.example
+  // /10.1000/x` and `https://evil.example/?u=https://doi.org/10.1000/x` are
+  // refused for the same structural reasons they are refused everywhere else.
+  const fromResolverUrl = extractDoiFromDoiUrl(trimmed);
+  if (fromResolverUrl !== null) return fromResolverUrl;
+
+  // Not a resolver URL. Whatever remains must be a DOI *name*, optionally
+  // written with the `doi:` presentation prefix. A value carrying any other
+  // scheme fails the pattern below rather than being unwrapped: `doi:https://…`
+  // does not become a URL this function is willing to resolve.
+  const bare = trimmed.replace(DOI_PRESENTATION_PREFIX, "").trim();
+
+  return DOI_NAME_PATTERN.test(bare) ? bare : null;
 }

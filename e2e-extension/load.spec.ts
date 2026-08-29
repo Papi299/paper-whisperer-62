@@ -35,7 +35,7 @@ test("is assigned the extension ID the harness derived", async ({ extension }) =
   await extension.assertDerivedIdMatchesBrowser(await extension.openPopup());
 });
 
-test("is granted exactly activeTab, and no host origin", async ({ extension }) => {
+test("is granted exactly activeTab and scripting, and no host origin", async ({ extension }) => {
   const page = await extension.openPopup();
 
   const granted = await page.evaluate(
@@ -44,8 +44,41 @@ test("is granted exactly activeTab, and no host origin", async ({ extension }) =
 
   // Chrome's own answer to "what does this extension hold?" — not a re-read of
   // the file that asked for it.
-  expect(granted.permissions).toEqual(["activeTab"]);
+  expect(granted.permissions).toEqual(["activeTab", "scripting"]);
+
+  // The assertion that matters most after CORRECTION-01. `scripting` enables
+  // the injection API; it grants access to no page. **Zero host origins** is
+  // Chrome confirming that the extension holds no standing access to anything —
+  // so the DOI metadata read can only ever reach a tab the user's own toolbar
+  // click temporarily granted.
   expect(granted.origins).toEqual([]);
+});
+
+test("cannot inject into any page without a toolbar grant", async ({ extension }) => {
+  // The floor, measured rather than asserted. Nothing is stubbed: this is the
+  // real `chrome.scripting.executeScript`, against a real tab id, from an
+  // extension that holds `scripting` and no host permission. Chrome refuses it.
+  //
+  // Every "the page is only read after you invoke PaperLume" claim in the Store
+  // documentation rests on this being Chrome's behaviour rather than the
+  // extension's promise.
+  const page = await extension.openPopup();
+
+  const outcome = await page.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id as number },
+        func: () => [document.documentElement.outerHTML],
+      });
+      return "injected";
+    } catch (error) {
+      return String(error);
+    }
+  });
+
+  expect(outcome).not.toBe("injected");
+  expect(outcome).toContain("Cannot access contents of the page");
 });
 
 test("is parsed by Chrome with the permission contract intact", async ({ extension }) => {
@@ -54,7 +87,7 @@ test("is parsed by Chrome with the permission contract intact", async ({ extensi
 
   expect(parsed.manifest_version).toBe(3);
   expect(parsed.name).toBe("PaperLume");
-  expect(parsed.permissions).toEqual(["activeTab"]);
+  expect(parsed.permissions).toEqual(["activeTab", "scripting"]);
   expect(parsed.action).toEqual({
     default_title: "PaperLume",
     default_popup: "popup.html",

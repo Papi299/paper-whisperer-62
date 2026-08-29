@@ -38,8 +38,22 @@
 
 import { ALPHA_COLOR_TYPES, readPngHeader } from "./png.mjs";
 
-/** The complete permission set the extension may ship with. */
-export const EXPECTED_PERMISSIONS = ["activeTab"];
+/**
+ * The complete permission set the extension may ship with, in manifest order.
+ *
+ * `activeTab` is granted only by a user gesture on the toolbar action and covers
+ * only the tab they used it on. `scripting` is what
+ * CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 added so that the DOI metadata
+ * read can happen at all — Chrome's `activeTab` documentation is explicit that
+ * `executeScript` on the granted tab requires *"the `scripting` permission"* to
+ * be declared as well.
+ *
+ * The pair is checked as an exact ordered list rather than a membership test,
+ * for the same reason it always was: widening it has to be a line in a diff.
+ * Note that `scripting` alone reaches no page — the host half still comes from
+ * `activeTab`, and `host_permissions` stays on the forbidden-key list below.
+ */
+export const EXPECTED_PERMISSIONS = ["activeTab", "scripting"];
 
 /** The name Chrome must show, matching the committed manifest. */
 export const EXPECTED_NAME = "PaperLume";
@@ -54,8 +68,20 @@ export const EXPECTED_NAME = "PaperLume";
  */
 export const ALLOWED_EXTERNAL_ORIGINS = ["https://app.paperlume.app"];
 
-/** The complete privileged Chrome API surface, matching `extension/src/chrome.d.ts`. */
-export const ALLOWED_CHROME_MEMBERS = ["chrome.tabs.create", "chrome.tabs.query"];
+/**
+ * The complete privileged Chrome API surface, matching `extension/src/chrome.d.ts`.
+ *
+ * Scanned on the *packaged* bundle, so this is what a reviewer downloading the
+ * ZIP would find rather than what the source says. `chrome.scripting.executeScript`
+ * joined the list in CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01; nothing else
+ * did, and in particular `chrome.scripting.insertCSS`, `chrome.scripting.
+ * registerContentScripts` and every `chrome.storage` member remain outside it.
+ */
+export const ALLOWED_CHROME_MEMBERS = [
+  "chrome.scripting.executeScript",
+  "chrome.tabs.create",
+  "chrome.tabs.query",
+];
 
 /**
  * The icon sizes the package must ship, and the path each must live at.
@@ -474,9 +500,11 @@ export function findPackageViolations(files) {
 
     if (/\.(js|mjs|cjs)$/i.test(p)) {
       for (const match of text.match(CHROME_MEMBER_PATTERN) ?? []) {
-        // `chrome.tabs` on its own is the namespace both allowed calls are
-        // reached through, so it is not itself a widening.
-        if (match === "chrome.tabs") continue;
+        // A bare namespace is not itself a widening: it is how each allowed
+        // member is reached, and a minifier may leave one standing alone where
+        // it bound a method. What matters is that no *member* outside the list
+        // above appears.
+        if (match === "chrome.tabs" || match === "chrome.scripting") continue;
         if (!ALLOWED_CHROME_MEMBERS.includes(match)) {
           violations.push(`${p} references a Chrome API outside the declared surface: ${match}`);
         }
