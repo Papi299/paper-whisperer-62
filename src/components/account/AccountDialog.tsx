@@ -34,11 +34,16 @@ interface AccountDialogProps {
  * either behaviour changed in the move — the same two sections, driven by the
  * same two hooks, with the same typed-phrase deletion gate.
  *
- * Ownership note: `useAccountExport` and `useAccountDeletion` are now mounted
+ * Ownership note: `useAccountExport` and `useAccountDeletion` are now owned
  * *here*, so Settings no longer instantiates account-lifecycle state at all.
- * Both hooks are single-flight and idle when the dialog is closed, and this
- * dialog mounts them only while it is open, so a closed Account dialog holds no
- * export or deletion state.
+ * Ownership is not the same as a shorter lifetime: the Sidebar renders this
+ * component unconditionally, and `open` gates the Radix dialog surface rather
+ * than the mount, so both hooks stay mounted for as long as the Sidebar does.
+ * That is deliberate, and it is exactly what they did under Settings, which was
+ * rendered the same way — closing the dialog does not cancel or reset an export
+ * or deletion that is already in flight. Both hooks are single-flight, and with
+ * nothing running they are passive: they read no data and issue no request
+ * until an action is invoked.
  *
  * Section order is Account data first, Danger zone last: the export is the
  * offered export-before-delete path, so the non-destructive action must be read
