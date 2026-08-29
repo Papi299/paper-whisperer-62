@@ -13,7 +13,7 @@
 
 ## 2. Current architecture
 
-- **Frontend:** React 18 + TypeScript + Vite SPA; shadcn/ui (Radix + Tailwind); TanStack Query for server state; React Router with five routes (`/`, `/auth`, `/dashboard`, `/extension-import`, `/reset-password`). Route guarding is a client-side redirect for UX only — **RLS is the real security boundary**.
+- **Frontend:** React 18 + TypeScript + Vite SPA; shadcn/ui (Radix + Tailwind); TanStack Query for server state; React Router with six routes (`/`, `/auth`, `/dashboard`, `/extension-import`, `/reset-password`, `/privacy`). Route guarding is a client-side redirect for UX only — **RLS is the real security boundary** — and `/privacy` deliberately carries no guard at all: it is the one public, unauthenticated route.
 - **Backend:** Supabase — Postgres 17, Auth (JWT, localStorage-persisted sessions), Storage, PostgREST, and Edge Functions (see §5 — all six deployed).
 - **Read path:** all filtering, sorting, pagination, keyword matching, and full-text search happen in Postgres; the client holds one page at a time. Detail: [architecture-read-path.md](architecture-read-path.md).
 - **Search:** four mutually exclusive modes (empty / short ILIKE for 1–2 chars / prefix-aware FTS for 3+ chars / quoted literal phrase), across six fields (title, abstract, authors, journal, notes, keywords) with a server-driven "Matched in:" attribution line.
@@ -123,7 +123,7 @@ Operational procedures, secrets, migration sequence, smoke checklists: [deployme
 - Paddle integration: checkout, webhook ingestion, subscription synchronization, customer portal.
 - Billing / paywall / upgrade UI of any kind. The AI-quota and storage indicators are **transparency only** and expose no upgrade, checkout, or purchase path.
 - Free-tier feature gating of the Synonyms and Exclusions pools (launch blocker per [quotas-and-pricing.md](quotas-and-pricing.md)).
-- Legal pages (privacy / terms / AI disclosure / support), marketing site, paid launch. **The product is not commercially launched.**
+- Terms of Service, AI-disclosure page, support page, marketing site, paid launch. **The product is not commercially launched.** (The **Privacy Policy** is the one legal page that does exist — public at `/privacy`.)
 
 **Direction (decided, not started):** Merchant-of-Record-first billing (C17); **Paddle** selected for the web MVP (C18), gated on owner-side Paddle setup; Free → Pro two-tier MVP with baselines in [quotas-and-pricing.md](quotas-and-pricing.md) (C9–C11); web-first, mobile deferred (C7); Paperlume brand + domain (C19).
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -181,153 +181,166 @@ const Auth = () => {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1 text-center">
-          <div className="flex justify-center mb-4">
-            <div className="rounded-full bg-primary/10 p-3">
-              <BookOpen className="h-8 w-8 text-primary" />
+      <div className="flex w-full max-w-md flex-col items-center">
+        <Card className="w-full">
+          <CardHeader className="space-y-1 text-center">
+            <div className="flex justify-center mb-4">
+              <div className="rounded-full bg-primary/10 p-3">
+                <BookOpen className="h-8 w-8 text-primary" />
+              </div>
             </div>
-          </div>
-          <CardTitle className="text-2xl font-bold">PaperLume</CardTitle>
-          <CardDescription>
-            Manage your scientific paper collections
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="signin" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="signin">Sign In</TabsTrigger>
-              <TabsTrigger value="signup">Sign Up</TabsTrigger>
-            </TabsList>
-            <TabsContent value="signin">
-              {forgotMode ? (
-                <form onSubmit={handleForgotPassword} className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    Enter your email address and we'll send you a link to reset your password.
-                  </p>
+            <CardTitle className="text-2xl font-bold">PaperLume</CardTitle>
+            <CardDescription>
+              Manage your scientific paper collections
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Tabs defaultValue="signin" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="signin">Sign In</TabsTrigger>
+                <TabsTrigger value="signup">Sign Up</TabsTrigger>
+              </TabsList>
+              <TabsContent value="signin">
+                {forgotMode ? (
+                  <form onSubmit={handleForgotPassword} className="space-y-4">
+                    <p className="text-sm text-muted-foreground">
+                      Enter your email address and we'll send you a link to reset your password.
+                    </p>
+                    <div className="space-y-2">
+                      <Label htmlFor="forgot-email">Email</Label>
+                      <Input
+                        id="forgot-email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        disabled={loading}
+                        aria-invalid={!!errors.email}
+                        aria-describedby={errors.email ? "forgot-email-error" : undefined}
+                      />
+                      {errors.email && (
+                        <p id="forgot-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
+                      )}
+                    </div>
+                    <Button type="submit" className="w-full" disabled={loading}>
+                      {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Send Reset Link
+                    </Button>
+                    <div className="text-center">
+                      <button
+                        type="button"
+                        onClick={() => { setForgotMode(false); setErrors({}); }}
+                        className="text-sm text-muted-foreground hover:text-primary underline"
+                      >
+                        Back to Sign In
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleSignIn} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="signin-email">Email</Label>
+                      <Input
+                        id="signin-email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        disabled={loading}
+                        aria-invalid={!!errors.email}
+                        aria-describedby={errors.email ? "signin-email-error" : undefined}
+                      />
+                      {errors.email && (
+                        <p id="signin-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="signin-password">Password</Label>
+                      <Input
+                        id="signin-password"
+                        type="password"
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        disabled={loading}
+                        aria-invalid={!!errors.password}
+                        aria-describedby={errors.password ? "signin-password-error" : undefined}
+                      />
+                      {errors.password && (
+                        <p id="signin-password-error" role="alert" className="text-sm text-destructive">{errors.password}</p>
+                      )}
+                    </div>
+                    <Button type="submit" className="w-full" disabled={loading}>
+                      {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Sign In
+                    </Button>
+                    <div className="text-center">
+                      <button
+                        type="button"
+                        onClick={() => { setForgotMode(true); setErrors({}); }}
+                        className="text-sm text-muted-foreground hover:text-primary underline"
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </TabsContent>
+              <TabsContent value="signup">
+                <form onSubmit={handleSignUp} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="forgot-email">Email</Label>
+                    <Label htmlFor="signup-email">Email</Label>
                     <Input
-                      id="forgot-email"
+                      id="signup-email"
                       type="email"
                       placeholder="you@example.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={loading}
                       aria-invalid={!!errors.email}
-                      aria-describedby={errors.email ? "forgot-email-error" : undefined}
+                      aria-describedby={errors.email ? "signup-email-error" : undefined}
                     />
                     {errors.email && (
-                      <p id="forgot-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
-                    )}
-                  </div>
-                  <Button type="submit" className="w-full" disabled={loading}>
-                    {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Send Reset Link
-                  </Button>
-                  <div className="text-center">
-                    <button
-                      type="button"
-                      onClick={() => { setForgotMode(false); setErrors({}); }}
-                      className="text-sm text-muted-foreground hover:text-primary underline"
-                    >
-                      Back to Sign In
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <form onSubmit={handleSignIn} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="signin-email">Email</Label>
-                    <Input
-                      id="signin-email"
-                      type="email"
-                      placeholder="you@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      disabled={loading}
-                      aria-invalid={!!errors.email}
-                      aria-describedby={errors.email ? "signin-email-error" : undefined}
-                    />
-                    {errors.email && (
-                      <p id="signin-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
+                      <p id="signup-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
                     )}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="signin-password">Password</Label>
+                    <Label htmlFor="signup-password">Password</Label>
                     <Input
-                      id="signin-password"
+                      id="signup-password"
                       type="password"
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       disabled={loading}
                       aria-invalid={!!errors.password}
-                      aria-describedby={errors.password ? "signin-password-error" : undefined}
+                      aria-describedby={errors.password ? "signup-password-error" : undefined}
                     />
                     {errors.password && (
-                      <p id="signin-password-error" role="alert" className="text-sm text-destructive">{errors.password}</p>
+                      <p id="signup-password-error" role="alert" className="text-sm text-destructive">{errors.password}</p>
                     )}
                   </div>
                   <Button type="submit" className="w-full" disabled={loading}>
                     {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Sign In
+                    Create Account
                   </Button>
-                  <div className="text-center">
-                    <button
-                      type="button"
-                      onClick={() => { setForgotMode(true); setErrors({}); }}
-                      className="text-sm text-muted-foreground hover:text-primary underline"
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
                 </form>
-              )}
-            </TabsContent>
-            <TabsContent value="signup">
-              <form onSubmit={handleSignUp} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="signup-email">Email</Label>
-                  <Input
-                    id="signup-email"
-                    type="email"
-                    placeholder="you@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    disabled={loading}
-                    aria-invalid={!!errors.email}
-                    aria-describedby={errors.email ? "signup-email-error" : undefined}
-                  />
-                  {errors.email && (
-                    <p id="signup-email-error" role="alert" className="text-sm text-destructive">{errors.email}</p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-password">Password</Label>
-                  <Input
-                    id="signup-password"
-                    type="password"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    disabled={loading}
-                    aria-invalid={!!errors.password}
-                    aria-describedby={errors.password ? "signup-password-error" : undefined}
-                  />
-                  {errors.password && (
-                    <p id="signup-password-error" role="alert" className="text-sm text-destructive">{errors.password}</p>
-                  )}
-                </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Create Account
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+        {/* Legal footer. The Privacy Policy is public, so this is the surface a
+            signed-out visitor — or a Chrome Web Store reviewer following the
+            listing's privacy URL — can reach it from. */}
+        <footer className="mt-6">
+          <Link
+            to="/privacy"
+            className="text-sm text-muted-foreground underline underline-offset-4 hover:text-primary"
+          >
+            Privacy Policy
+          </Link>
+        </footer>
+      </div>
     </div>
   );
 };

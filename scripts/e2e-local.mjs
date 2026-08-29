@@ -94,6 +94,11 @@ const DEFAULT_SPECS = [
   // Reads the product name on the unauthenticated Auth card, the authenticated
   // sidebar, and the document title; mutates nothing.
   "e2e/branding.spec.ts",
+  // PAPERLUME-PRIVACY-001B public-route coverage. Strictly read-only: it never
+  // signs in, never reaches Supabase at all in its signed-out cases, and writes
+  // nothing. Most of its tests build their own session-free context, so they do
+  // not consume or disturb the seeded primary fixture.
+  "e2e/privacy-policy.spec.ts",
   // PFA-C09 responsive/accessibility regression coverage. Read-only: resizes
   // the viewport, opens and closes dialogs, sorts, resizes a column and scrolls
   // the table. It never activates the badge "exclude" action (the one real

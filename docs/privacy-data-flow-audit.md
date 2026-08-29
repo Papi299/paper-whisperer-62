@@ -541,6 +541,30 @@ Exhaustive search of the repository and the application's routes.
 
 **Decision C16 (2026-05-21)** puts legal pages on an external marketing site at `paperlume.app/privacy`, `/terms`, etc., with the repository linking to HTTPS URLs. The marketing-site provider is still an unmade owner decision, so **no publication target currently exists**.
 
+> ### Post-audit implementation note — PAPERLUME-PRIVACY-001B
+>
+> **This note is outside the audited snapshot above.** The table and the C16
+> paragraph in this section describe the repository at the audited commit named
+> in §1 (`eaa4b9bfd475caafc032625f47b0c4e6b2b6c9fd`) and are left exactly as the
+> audit found them. Nothing in this note was re-audited: **no re-inspection of
+> source, schema, configuration or Production was performed for it**, and no
+> other statement, matrix, provider disclosure or finding in this document has
+> been revisited.
+>
+> What changed *after* that commit: PAPERLUME-PRIVACY-001B added an
+> owner-approved Privacy Policy to the application as a public, unauthenticated
+> route, `/privacy` ([`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx)),
+> canonical `https://app.paperlume.app/privacy`. It is served by the application
+> rather than by the still-unchosen marketing site, which supersedes C16 **for
+> the Privacy Policy only** — Terms of Service, Support and the AI-disclosure
+> page are unchanged by it and still have no publication target.
+>
+> **Authority boundary.** That page is the authority for the *published policy
+> wording*; this document remains the authority for the *data-flow facts* behind
+> it. If the two ever disagree, raise the discrepancy — do not reword the policy
+> page to match an implementation, and do not edit this audit to match the
+> policy.
+
 ---
 
 ## 19. Chrome Web Store disclosure mapping

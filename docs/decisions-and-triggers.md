@@ -347,6 +347,8 @@ The decisions below capture the owner-approved commercial pivot from a B2C-only 
 
 ### C16. Legal pages on external marketing site; repo drafts may be versioned later (2026-05-21)
 
+> **Partly superseded — read the supersession note at the end of this entry before relying on anything below it.** The text that follows records the decision **as made on 2026-05-21** and is preserved as written; for the **Privacy Policy** it no longer describes the product. Terms of Service, AI disclosure and Support are unaffected.
+
 **Decision:** Public-facing legal pages — **Privacy Policy**, **Terms of Service**, **AI disclosure**, **Support / contact** — live on an **external marketing site** (Webflow, Framer, or another dedicated marketing-site platform; owner choice). The app links to HTTPS URLs hosted on that site; it does not serve legal text from the repo.
 
 **Rationale:** Legal pages are owned by the marketing surface, not the application repo. They are subject to copy / SEO / design iteration on the marketing team's cadence and benefit from a CMS workflow. The app's responsibility is to link out to authoritative URLs and to surface the AI-disclosure line at the relevant in-app action.
@@ -356,6 +358,8 @@ The decisions below capture the owner-approved commercial pivot from a B2C-only 
 **Hard constraint:** the in-app surface (Settings → Privacy / Terms / Support / AI disclosure links + the at-Analyze AI disclosure) is a **launch blocker** for the web paid beta. The external URLs must exist and be linked before charging users.
 
 **Re-evaluation trigger:** owner decision to host legal pages in-repo as Markdown (would require routing + privacy-page React component); not currently planned.
+
+**Superseded in part (2026-08-29, PAPERLUME-PRIVACY-001B).** The trigger above fired for the **Privacy Policy** only. The owner approved publication copy and decided to serve it from the application rather than the unbuilt marketing site: the public, unauthenticated route `/privacy` renders it, canonical `https://app.paperlume.app/privacy`, and that page is the authoritative published copy. **Terms of Service, AI disclosure and Support are unchanged by this** — C16 still governs them, and they remain launch blockers with no publication target.
 
 ### C17. Merchant of Record (MoR)-first replaces Stripe-first for web billing (2026-05-21)
 

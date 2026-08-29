@@ -32,7 +32,7 @@ The core application is **stable, hardened, and feature-complete at current scal
 **Not implemented** (planned; see the commercial docs below):
 
 - Paddle billing integration (checkout, webhook ingestion, customer portal, subscription sync) — Paddle is the selected Merchant-of-Record provider, gated on owner-side setup.
-- Paywall / upgrade UX, Free-tier feature gating, legal pages, marketing site.
+- Paywall / upgrade UX, Free-tier feature gating, Terms of Service / AI-disclosure / support pages, marketing site. (The **Privacy Policy** is live in-app at the public `/privacy` route.)
 - The product is **not commercially launched**.
 
 Self-serve **account deletion** is live: **Settings → Danger zone** permanently deletes the signed-in account after the user types `DELETE MY ACCOUNT`. It runs through the privileged `delete-account` Edge Function — deployed to the linked project — which derives the target user from the authenticated bearer token, deletes the account's private attachment binaries through the Storage API, and then hard-deletes the Auth user; the user's database rows are removed by the existing `ON DELETE CASCADE` foreign keys. Account *export* is the separate export-before-delete path.
@@ -54,7 +54,7 @@ Deeper DB optimization is evidence-deferred until the library grows past ~2,000�
 
 ## Commercialization
 
-**Commercial-launch implementation is currently paused** (owner decision C27, 2026-07-24): the active priority is product feature and workflow development, and Paddle/billing/launch work is off the active critical path until a new explicit owner decision. Commercialization is **paused, not cancelled**. The provider-neutral entitlement schema and server-side AI + storage quota enforcement listed under Current status are already implemented and live and remain part of the architecture. Billing itself is not implemented: **Paddle** remains the selected future Merchant-of-Record provider (decision C18), gated on owner-side Paddle setup whenever launch work resumes. There is no checkout, webhook ingestion, customer portal, paywall UX, legal page set, or store listing today, and no mobile packaging.
+**Commercial-launch implementation is currently paused** (owner decision C27, 2026-07-24): the active priority is product feature and workflow development, and Paddle/billing/launch work is off the active critical path until a new explicit owner decision. Commercialization is **paused, not cancelled**. The provider-neutral entitlement schema and server-side AI + storage quota enforcement listed under Current status are already implemented and live and remain part of the architecture. Billing itself is not implemented: **Paddle** remains the selected future Merchant-of-Record provider (decision C18), gated on owner-side Paddle setup whenever launch work resumes. There is no checkout, webhook ingestion, customer portal, paywall UX, or store listing today, and no mobile packaging. Of the legal page set only the **Privacy Policy** exists, at the public `/privacy` route.
 
 | Doc | Purpose |
 |---|---|
