@@ -4,7 +4,9 @@
 >
 > Nothing here states or implies that Google has reviewed, accepted, or will
 > accept this extension. Every policy claim below was read from Google's own
-> first-party documentation on **2026-08-28** and is cited inline. Chrome Web
+> first-party documentation on **2026-08-28**, and every listing and image
+> requirement was re-read on **2026-08-29** with no material change found. All
+> of it is cited inline. Chrome Web
 > Store policy changes without notice: **re-verify every citation in this
 > document against the primary source within 30 days of submission**, the same
 > rule [store-launch-checklist.md](store-launch-checklist.md) applies to the
@@ -13,14 +15,23 @@
 > **Nothing has been published.** No Store listing exists, no package has been
 > uploaded, no GitHub Release has been created, and no version has been bumped.
 > The artefact this document describes is a local, gitignored release candidate.
+>
+> **Companion document.** [chrome-web-store-listing.md](chrome-web-store-listing.md)
+> holds the submission package itself — listing copy, single-purpose text,
+> permission justifications, the drafted privacy-practices answers, the listing
+> images and their provenance, and the distribution paths. This document is the
+> policy audit, the packaging contract, the verification record and the manual
+> release gate. Neither restates the other.
 
 ---
 
 ## 1. What is being assessed
 
 The extension shipped by CHROME-EXTENSION-IMPORT-001B/C1/C2, unchanged. 001E1
-added distribution tooling, real-browser tests and this audit; it changed **no
-product behaviour**, no permission, and no manifest key.
+added distribution tooling, real-browser tests and this audit; 001E2 added the
+production icon set, the Store listing materials and the deterministic listing
+images. Neither changed **any product behaviour**, any permission, any detection
+rule, or any manifest key beyond `icons` / `action.default_icon`.
 
 The complete user-visible flow:
 
@@ -322,6 +333,13 @@ gesture; this is Chrome's behaviour, not the extension's promise.
 human in the Developer Dashboard; nothing in this repository can set them, and no
 answer below should be pasted without being re-read against the live form.**
 
+The same answers, with the extension-versus-web-application boundary they depend
+on spelled out and each category definition quoted from the
+[user data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq),
+are in [chrome-web-store-listing.md](chrome-web-store-listing.md) §7. The two
+agree; that document is the one to paste from, because it is organised as the
+form is.
+
 | Dashboard question | Drafted answer | Basis |
 |---|---|---|
 | Personally identifiable information | **No** | No name, address, email, phone, username or ID number is read or sent |
@@ -501,20 +519,53 @@ exercised.
 
 Build the candidate first: `npm run package:extension`.
 
-- [ ] 1. Load `dist-extension/` unpacked at `chrome://extensions` (Developer mode on) in a **clean Chrome profile**. Confirm it loads with **no error and no warning**.
-- [ ] 2. Open a real PubMed record, e.g. `https://pubmed.ncbi.nlm.nih.gov/33301246/`.
-- [ ] 3. **Click the toolbar action.** This is the step no automated test performs.
-- [ ] 4. Confirm the popup shows **Paper detected**, source **PubMed**, and the **correct PMID** for that record.
-- [ ] 5. Press **Continue in PaperLume**. Confirm **exactly one** new tab opens, at `https://app.paperlume.app/extension-import?kind=pmid&value=<PMID>`.
-- [ ] 6. Repeat 2–5 with a real `https://doi.org/…` URL; confirm source **DOI**, the correct DOI, and `kind=doi` with the value percent-encoded.
-- [ ] 7. Open an unsupported publisher article page. Confirm **No paper identified** and that **no Continue control is present**.
-- [ ] 8. Open a restricted page (`chrome://settings/`, a `file://` URL, and the Chrome Web Store). Confirm **Nothing to check here** and no Continue control. Confirm no error dialog and no crash.
-- [ ] 9. Confirm **no permission prompt** appeared at any point, and that `chrome://extensions` still lists no host access for the extension.
-- [ ] 10. Confirm the popup's footnote text is accurate for what you just observed.
-- [ ] 11. Re-verify every policy citation in this document against the live primary source (see the header).
-- [ ] 12. Confirm the privacy policy URL is **published and publicly reachable** before entering it in the Dashboard.
+### Load and icons
+
+- [ ] 1. Load `dist-extension/` unpacked at `chrome://extensions` (Developer mode on) in a **clean Chrome profile**. Confirm it loads with **no error and no warning** — in particular no "could not load icon" warning.
+- [ ] 2. Confirm the **PaperLume mark appears in the toolbar**, is recognisable, and is not a generic puzzle-piece placeholder. Check it on both a light and a dark Chrome theme.
+- [ ] 3. Confirm the mark on the `chrome://extensions` card (the 48 px icon) and in the install/details dialogue (the 128 px icon) are the same mark, not blurred and not clipped.
+
+### PubMed case
+
+- [ ] 4. Open a real PubMed record, e.g. `https://pubmed.ncbi.nlm.nih.gov/33301246/`.
+- [ ] 5. **Click the toolbar action.** This is the step no automated test performs — it is the only place the real `activeTab` grant is exercised.
+- [ ] 6. Confirm the popup shows **Paper detected**, source **PubMed**, and the **correct PMID** for that record.
+- [ ] 7. Press **Continue in PaperLume**. Confirm **exactly one** new tab opens, at `https://app.paperlume.app/extension-import?kind=pmid&value=<PMID>`.
+
+### DOI case
+
+- [ ] 8. Repeat 4–7 with a real `https://doi.org/…` URL; confirm source **DOI**, the correct DOI **name** (not a resolver URL), and `kind=doi` with the value percent-encoded.
+
+### Unsupported and restricted pages
+
+- [ ] 9. Open an unsupported publisher article page. Confirm **No paper identified**, that **no Continue control is present**, and that **no identifier was guessed from the page title**.
+- [ ] 10. Open a restricted page (`chrome://settings/`, a `file://` URL, and the Chrome Web Store). Confirm **Nothing to check here** and no Continue control. Confirm no error dialog and no crash.
+- [ ] 11. Confirm that in cases 9 and 10 **no tab was opened and no navigation occurred** without a press.
+
+### Authentication handoff
+
+- [ ] 12. **Signed out.** With no PaperLume session, press Continue from a supported page. Confirm PaperLume asks you to sign in, and that **nothing is imported** before you do.
+- [ ] 13. **Signed in.** With a session, press Continue. Confirm PaperLume shows the identifier, offers Projects and Tags, and **still requires an explicit confirmation** before writing. Confirm nothing was added to the library merely by the tab opening.
+- [ ] 14. Confirm the extension itself never asked for credentials, and that closing the PaperLume tab without confirming leaves the library unchanged.
+
+### Permissions and copy
+
+- [ ] 15. Confirm **no permission prompt** appeared at any point, and that `chrome://extensions` still lists no host access for the extension.
+- [ ] 16. Confirm the popup's footnote text is accurate for what you just observed.
+
+### Before entering anything in the Dashboard
+
+- [ ] 17. Re-verify every policy citation in this document **and in [chrome-web-store-listing.md](chrome-web-store-listing.md)** against the live primary source (see the header).
+- [ ] 18. Confirm the privacy policy URL is **published and publicly reachable in Production, signed out, from a clean browser**.
+- [ ] 19. Review the five committed listing images in [`assets/store/`](../assets/store) and confirm each is accurate and acceptable to publish.
+- [ ] 20. Resolve the **promotional video** gate (§11) — produce and host it, or confirm against the live Dashboard that the field is not enforced for the chosen visibility.
 
 Record the date, the Chrome version, and the tester for each submission.
+
+**Nothing in steps 12–14 requires a destructive change.** Confirming an import is
+optional: the gate is that the import is *offered explicitly*, not that one is
+performed. If an import is performed to check the whole path, it may be deleted
+afterwards through the normal application UI.
 
 ---
 
@@ -525,8 +576,8 @@ Record the date, the Chrome version, and the tester for each submission.
 | Command | `npm run package:extension` |
 | Build output | `dist-extension/` (gitignored) |
 | Archive | `release/paperlume-extension-<version>-rc.zip` (gitignored) |
-| Archive root | `manifest.json`, `popup.html`, `popup.js`, `popup.css` — **manifest at the root**, not under `dist-extension/` |
-| Entries | 4 |
+| Archive root | `manifest.json`, `popup.html`, `popup.js`, `popup.css`, `icons/icon-{16,32,48,128}.png` — **manifest at the root**, not under `dist-extension/` |
+| Entries | 8, and the inventory is an **exact set**, not a bound (see below) |
 | Determinism | Fixed archive timestamps; two runs of the same input produce a **byte-identical** ZIP |
 | Dependencies added | **None.** `fflate` is already a runtime dependency (the account data export uses it) and both writes and reads ZIPs |
 | Second `package.json` / lockfile | None |
@@ -541,6 +592,14 @@ and a check that runs on the input cannot see any of them.
 Any violation exits non-zero and no upload-ready file is presented. Verified: a
 manifest widened to `["activeTab","tabs"]` fails the script with exit code 1.
 
+**The inventory is exact.** Every other check answers "is this file allowed?";
+the inventory check answers "is this *the* package?", which is the only one that
+notices a file nobody thought to forbid — a bundler-emitted licence banner, an
+icon left behind by a size removed from the manifest, a stray chunk. Adding a
+shipping file means editing one line in
+[`extension-package.mjs`](../scripts/lib/extension-package.mjs), in a diff a
+reviewer reads. That is the same bargain the permission list makes.
+
 **Not done, deliberately:** nothing is uploaded, no GitHub Release is created,
 no tag is pushed, and the version is **not** bumped merely because a package was
 built locally. `release/` is gitignored.
@@ -553,6 +612,15 @@ directories · `.git*` · `node_modules/` · `package.json` / lockfiles ·
 `tsconfig*.json` · `.env*` · Markdown/docs · Playwright artefacts · browser
 profile directories · `.pem`/`.key`/`.crx` · `.DS_Store` · any `key` manifest
 field · entries with absolute or `..` paths · empty files.
+
+**Icons, on the packaged files themselves.** Both `icons` and
+`action.default_icon` must declare exactly 16/32/48/128 and point at
+`icons/icon-<size>.png`; each named file must be present, be a real PNG, decode
+to *exactly* the declared square dimensions, and carry an alpha channel. The
+dimension check is what catches one file copied into every slot — which resolves,
+loads, and renders a blurred install dialogue — and the colour-type check is what
+catches transparency flattened onto white at export, which is invisible until
+Chrome draws it on a dark theme. Each has its own hostile fixture.
 
 Plus: `manifest_version === 3` · exact name · **Chrome's full `version` grammar**
 (one to four integers, each 0–65535, no leading zero on a non-zero integer, and
@@ -571,66 +639,122 @@ deliberate and is the opposite of the right answer for a *source* scan (see
 which documents a real defect caused by stripping the very text being searched
 for). In a **package**, a comment ships; a remote origin written in one is a
 remote origin in the artefact a reviewer downloads. There is no exempt text in a
-package. 105 fixture tests exercise every check against a deliberately broken
-package, so a check that stopped firing fails loudly rather than passing quietly.
+package. The fixture suite exercises every check against a deliberately broken
+package — including a 16×16 file in the 128 slot, a non-square icon, a
+non-PNG icon, an icon with its alpha flattened, an icon map missing a size, an
+absent `action.default_icon`, and an unexpected extra file — so a check that
+stopped firing fails loudly rather than passing quietly.
 
 ---
 
 ## 10. Brand and icons
 
-### `BRAND ASSET REQUIRED BEFORE STORE SUBMISSION`
+**Resolved by 001E2.** The gap this section recorded — no approved visual
+identity, and therefore no icons — closed in two steps:
+`PAPERLUME-BRAND-ASSET-PACK-001` produced the canonical PaperLume mark in
+[`assets/brand/`](../assets/brand/brand-spec.md), and 001E2 wired it into the
+extension and the Store listing.
 
-**No approved PaperLume visual identity exists in this repository.** The audit
-found only:
+### The manifest icon set
 
-- `public/placeholder.svg` — the generic grey scaffold placeholder, not a brand mark;
-- `e2e/fixtures/*.png|svg` — test fixtures;
-- the favicon in `index.html` — an inline emoji (📄), not a designed mark;
-- no logo, wordmark, app icon, source vector, or brand guidelines anywhere.
+| Size | Used for | Packaged path | Source |
+|---|---|---|---|
+| 16×16 | Favicon for the extension's pages | `icons/icon-16.png` | `assets/brand/png/paperlume-16.png` |
+| 32×32 | Commonly picked on Windows | `icons/icon-32.png` | `assets/brand/png/paperlume-32.png` |
+| 48×48 | Extensions management page | `icons/icon-48.png` | `assets/brand/png/paperlume-48.png` |
+| 128×128 | Installation, and the Chrome Web Store | `icons/icon-128.png` | `assets/brand/png/paperlume-128.png` |
 
-Per 001E1 §13, **no icon was invented.** Deriving extension icons from a grey
-placeholder or an emoji would be inventing a visual identity, and that is a
-design decision with owner and trademark implications ("Paperlume" is
-[not a registered trademark](store-launch-checklist.md)), not an engineering one.
+Declared in **both** `icons` and `action.default_icon`. Chrome falls back to
+`icons` when the action map is absent, so a missing `action.default_icon` still
+shows *an* icon — which is exactly why its absence is easy to ship and hard to
+notice, and why both maps are pinned by
+[`manifest.test.ts`](../extension/src/__tests__/manifest.test.ts) and again on
+the packaged artefact.
 
-**Consequence.** The extension currently ships with **no `icons` key**, so Chrome
-uses its generic fallback icon. That is acceptable for unpacked development use
-and it does **not** block merging 001E1 — the technical and policy hardening is
-independent of it — but it is **not acceptable for public distribution**, and the
-Store additionally requires a 128×128 store icon that no manifest key can
-satisfy.
+PNG, as Chrome requires: *"Icons should generally be in PNG format, because PNG
+has the best support for transparency… WebP and SVG files are not supported."*
+— [icons reference](https://developer.chrome.com/docs/extensions/reference/manifest/icons)
 
-**Required once an approved source asset exists** (verified against
-[Chrome's icons reference](https://developer.chrome.com/docs/extensions/reference/manifest/icons)):
+### The files are not committed under `extension/`
 
-| Size | Used for | Status |
-|---|---|---|
-| 16×16 | Favicon for the extension's pages | Missing |
-| 32×32 | Windows systems commonly require it | Missing |
-| 48×48 | Extensions management page | Missing |
-| 128×128 | Installation **and the Chrome Web Store** | Missing |
+`vite.extension.config.ts` copies them out of the brand pack at build time,
+**byte for byte** — verified: `cmp` reports the four packaged icons identical to
+their brand sources. A second committed copy beside the manifest would be a
+binary that can silently stop being the logo, and `assets/brand/png/` is already
+generated from the master SVG by `npm run brand:png` and held to the mark's
+geometry by
+[`brand-assets.test.mjs`](../scripts/lib/__tests__/brand-assets.test.mjs).
+Chrome reads icons from the *package*, and the package is a build output, so the
+copy happens at the one moment it is needed.
 
-PNG (best transparency support). **WebP and SVG are not supported.** Both the
-general `icons` key and the `action.default_icon` key should be registered.
+This does not make `extension/` unloadable that was not already: the source
+directory has never been loadable unpacked, because `popup.html` there points at
+`popup.ts`. Load `dist-extension/`, as §8 says.
 
-**Ready for that work:** the package validator already asserts that every
-manifest-referenced file exists in the package, with a passing test for a
-correctly-registered `icons/icon-128.png` and a failing one for a missing file.
-Adding icons therefore lands with its packaging assertion already in place. The
-dimension/squareness/non-empty tests 001E1 §13 describes should be added in the
-same change as the assets themselves — a test asserting the dimensions of a file
-that does not exist can only be skipped, and a skipped test is not a test.
+### Icon quality — measured, not eyeballed
 
-**This is an input to 001E2.**
+Every icon was decoded in a browser and its pixels measured, because "the PNG
+header says 48×48" is not the same claim as "the mark is legible and nothing is
+clipped".
+
+| Size | Mark bounding box | Margins (L/R, T/B) | Coverage | Corner alpha | Touching the canvas edge |
+|---|---|---|---|---|---|
+| 16 | 10×14 | 3 / 1 | 53.5% | 0, 0, 0, 0 | none |
+| 32 | 20×28 | 6 / 2 | 52.6% | 0, 0, 0, 0 | none |
+| 48 | 31×42 | 9,8 / 3 | 52.6% | 0, 0, 0, 0 | none |
+| 128 | 80×108 | 24 / 10 | 50.7% | 0, 0, 0, 0 | none |
+
+- **No clipping.** Zero pixels touch any canvas edge at any size.
+- **No opaque background.** All four corners are fully transparent at every size,
+  and the PNGs are colour type 6 (RGBA) — asserted on the packaged artefact, so
+  an icon flattened onto white at export fails the package rather than shipping.
+- **No geometry drift.** The mark's bounding box is 40×54 on the 64-unit grid.
+  At 128 the measured box is 80×108 — exactly 2× — and at 1024 it is 640×864,
+  exactly 16×. At 16 and 32 the box differs by at most one pixel of
+  anti-aliasing spill, which is quantisation, not drift.
+- **Optical balance preserved.** Margins scale linearly with size (24 = 12/64 ×
+  128; 10 = 5/64 × 128), so the mark sits where the brand system put it rather
+  than where a resize left it.
+- **Legible at 16 px.** The 16×16 export carries 57 distinct luminance values
+  spanning 18→232. A page that had lost its fold and beam to resizing would
+  collapse toward a flat silhouette of two or three values; it has not.
+
+**No size-optimised re-draw was needed**, and none was made. Every icon is a
+clean uniform vector scale of `paperlume-symbol.svg` — never a resample of a
+larger bitmap — because each canonical size divides the 64-unit viewBox evenly.
+
+### The Store icon is a deliberately distinct file
+
+`assets/store/store-icon-128.png` is **not** the manifest's 128 px icon, because
+Chrome documents the two differently: *"The actual icon size should be 96x96 (for
+square icons); an additional 16 pixels per side should be transparent padding"*
+([images](https://developer.chrome.com/docs/webstore/images)). The manifest icon
+carries the brand system's own 5-unit margin, which is right for a toolbar; the
+Store icon carries the Store's. The difference is one uniform scale and one
+offset — the same paths, colours and proportions. Measured: manifest 128 → mark
+80×108, margins 24/10; Store 128 → mark 72×96, padding 28/16, both at or above
+the documented 16 px minimum.
+
+Full provenance for every listing image is in
+[chrome-web-store-listing.md](chrome-web-store-listing.md) §9.
 
 ---
 
 ## 11. Store listing readiness
 
-Requirements read from
-[Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing).
-Package format from [Publish in the Chrome Web Store](https://developer.chrome.com/docs/webstore/publish)
-(ZIP; 2 GB maximum — this package is ~4 KB).
+Requirements re-read from
+[Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)
+and [Image guidelines](https://developer.chrome.com/docs/webstore/images) on
+**2026-08-29**, with no material change from the 2026-08-28 reading. Package
+format from [Publish in the Chrome Web Store](https://developer.chrome.com/docs/webstore/publish)
+(ZIP; 2 GB maximum — this package is ~15 KB).
+
+**The listing itself lives in
+[chrome-web-store-listing.md](chrome-web-store-listing.md)** — the name, summary,
+detailed description, single-purpose text, permission justifications, the
+privacy-practices answers, the image inventory with provenance, and the
+distribution paths. This section is the *status board* for it, and does not
+restate its contents.
 
 ### READY NOW
 
@@ -638,60 +762,88 @@ Package format from [Publish in the Chrome Web Store](https://developer.chrome.c
 - Manifest V3 compliance
 - Permission contract (`activeTab` only, zero host permissions)
 - Remote-code compliance (self-contained package)
+- **Production icon set** at 16/32/48/128, in both manifest icon maps, measured
+  for legibility and transparency (§10)
+- **128×128 Store icon** with the documented transparent padding (§10)
+- **Three 1280×800 screenshots** built from real popup captures of the built
+  extension, covering PubMed detection, DOI detection, and the unsupported state
+- **440×280 small promo tile**
 - Single-purpose statement (§2, drafted)
-- Data-flow facts behind every privacy answer (§6, code-verified)
+- Permission justification and remote-code statement (listing doc §6)
+- Data-flow facts behind every privacy answer (§6, code-verified) and the
+  drafted Dashboard answers (listing doc §7)
+- Privacy policy URL, and the standing gate that re-verifies it (listing doc §8)
+- Detailed description and summary drafts (listing doc §3, §4)
 - Reviewer test instructions (§12)
 - Real-browser regression coverage and a mandatory manual gate
 
 ### OWNER INPUT REQUIRED
 
-- **Privacy policy URL** — `https://app.paperlume.app/privacy`. The policy is
-  implemented in the application (§6.7); what remains is **confirming it loads in
-  Production, signed out, from a clean browser** before each submission
-- **Support URL / contact email**
-- **Detailed description** — marketing copy. Must open with a concise statement
-  of functionality and avoid keyword spam
-- **Category** selection
-- **Language** declaration
+- **Privacy policy URL reachability** — `https://app.paperlume.app/privacy`. The
+  policy is implemented and its extension section was re-read against the
+  shipping code on 2026-08-29 with no mismatch. What remains is **confirming it
+  loads in Production, signed out, from a clean browser**, before *each*
+  submission
+- **YouTube promotional video** — see below; the largest remaining item
+- **Support URL / contact email** — PaperLume publishes no Support page. C16 in
+  [decisions-and-triggers.md](decisions-and-triggers.md) still governs Terms and
+  Support, and both remain unimplemented launch blockers
+- **Category** selection and **language** declaration (listing doc §11)
 - **Publisher account** — verified developer, 2SV enabled, one-time registration
   fee paid
 - **Distribution** — public vs unlisted vs private, and region availability
-- **Whether to launch unlisted first**, given the §3 minimum-functionality risk.
-  Recommended: it lets the listing be exercised end-to-end with a smaller
-  blast radius if a policy question comes back
+  (listing doc §12 documents the three paths and their differing gates without
+  choosing between them)
+- **Final visual approval** of the five committed listing images
+- **Whether to adopt the alternative Store summary** in the manifest as well as
+  the Dashboard (listing doc §3)
+- **Whether the popup's own palette should follow the brand pack.** The popup
+  ships a teal accent (`#0e6b68`) predating the brand system, so the screenshots
+  show a teal control on a navy/violet brand ground. It is a cosmetic product
+  decision, not a Store requirement, and was deliberately **not** changed here:
+  restyling shipped UI to make a listing image tidier is not release-candidate
+  work
 
-### VISUAL ASSET REQUIRED
+### VISUAL ASSETS
 
-Current first-party guidance states that the listed graphic assets **must be
-provided**, *"except the Marquee promo tile, which is optional."* The marquee
-tile is therefore the only one of these treated as optional here.
+First-party guidance states the listed graphic assets **must be provided**,
+*"with the exception of the Marquee promo tile, which is optional."*
 
-- **128×128 store icon** — **REQUIRED**; does not exist (§10)
-- **Manifest icons** at 16/32/48/128 — do not exist (§10). Distinct from the
-  store icon above: no manifest key can satisfy the Store's, and the Store
-  listing cannot satisfy Chrome's
-- **At least one 1280×800 screenshot**, up to 5 — **REQUIRED**. Must show the
-  real popup; produce from the release candidate, not a mockup
-- **440×280 small promo tile** — **REQUIRED**; PNG or JPEG
-- **YouTube promotional video** — **REQUIRED** by the current Chrome Developer
-  Dashboard listing documentation, which lists it among the assets that must be
-  provided. Re-verify against the live Developer Dashboard immediately before
-  submission, because Store requirements change without notice. This is the
-  largest unstarted listing item: it needs a script, a recording of the real
-  extension, and a hosted YouTube URL, none of which exist
-- **1400×560 marquee promo tile** — **optional**, and the only asset on this
-  list that is
+| Asset | Requirement | Status |
+|---|---|---|
+| 128×128 store icon | Required | **Done** — `assets/store/store-icon-128.png` |
+| Manifest icons 16/32/48/128 | Required in the ZIP | **Done** — emitted from the brand pack (§10) |
+| 1280×800 screenshot, 1–5 | Required | **Done** — three, from real popup captures |
+| 440×280 small promo tile | Required | **Done** — `assets/store/promo-tile-small-440x280.png` |
+| YouTube promotional video | **Required** by current first-party listing documentation | **OPEN OWNER CONTENT GATE** — not produced, and deliberately not faked |
+| 1400×560 marquee promo tile | Optional | Not produced |
+
+**On the video.** The requirement was re-verified on 2026-08-29 and is
+*not* distribution-dependent: *"All visibility settings have the same policy
+requirements and will go through the same review process"*
+([distribution](https://developer.chrome.com/docs/webstore/cws-dashboard-distribution)),
+with no promotional-asset exemption named for unlisted or private items. It
+needs a script, a recording of the real extension and a hosted YouTube URL; this
+repository contains no approved video-production workflow, nothing was uploaded
+to YouTube, and no filler media was produced to clear the row. Before
+submission the owner must either produce and host it, or confirm against the
+live Dashboard whether the field is enforced for the chosen visibility — the
+published documentation and the form's actual validation are different
+artefacts, and only the owner can look at the form.
 
 ### DEVELOPER DASHBOARD ONLY
 
 Nothing in this repository can set these; a human enters them:
 
-- Every privacy-practices answer and certification (§6 drafts)
-- The single-purpose field (§2 draft)
+- Every privacy-practices answer and certification (listing doc §7)
+- The single-purpose field (listing doc §5)
 - Permission justification for `activeTab`, and the remote-code declaration
-- Privacy policy URL
+  (listing doc §6)
+- Privacy policy URL (listing doc §8)
 - Reviewer test instructions (§12)
+- Category, language, support contact
 - Pricing / distribution / region configuration
+- Every image upload
 - Package upload
 
 ---
@@ -765,11 +917,17 @@ while the installed base is zero. Worth deciding at submission time, not after.
 
 ---
 
-## 14. Out of scope for 001E1
+## 14. Out of scope for 001E1 and 001E2
 
-Unchanged, and deliberately so: `/extension-import` behaviour · authentication ·
+Unchanged by both phases, and deliberately so: `/extension-import` behaviour · authentication ·
 the importer · Project/Tag selection · normalisation · duplicate semantics
 (*"Already in your library"*, with no Project/Tag assignment to the existing row
 — 001D remains separate and optional) · any PaperLume business logic · anything
 under `supabase/**` (no migration, Edge Function, RLS, RPC, secret, or Production
 SQL) · the extension's detection surface, permissions, and architecture.
+
+001E2 additionally did **not** change: the Privacy Policy's wording; the
+manifest `description`; the popup's markup, styling or behaviour; any provider
+tier or plan (Gemini, Vercel, Supabase); or the real-browser harness's safety
+properties. It added the `icons` and `action.default_icon` keys and nothing
+else to the manifest.
