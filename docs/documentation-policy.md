@@ -18,6 +18,7 @@ Each document below is the single authority for its area. When a change makes on
 | [architecture-read-path.md](architecture-read-path.md) (and future topic docs) | Subsystem architecture detail |
 | [commercial-architecture.md](commercial-architecture.md), [quotas-and-pricing.md](quotas-and-pricing.md), [store-launch-checklist.md](store-launch-checklist.md) | Pricing, entitlement, billing, and launch planning |
 | [chrome-web-store-readiness.md](chrome-web-store-readiness.md) | Chrome extension distribution: Store policy audit, privacy/data-flow record, packaging contract, real-browser verification and its limits, the mandatory manual release gate, and the outstanding listing/brand gaps |
+| [privacy-data-flow-audit.md](privacy-data-flow-audit.md) | Product-wide privacy and data-flow inventory: what is collected, where it is stored and processed, which third parties receive it, retention and deletion evidence, and the classified list of owner/legal inputs a Privacy Policy still needs |
 | [migration-history.md](migration-history.md) | Historical chronology of schema/database/security/operational changes. **History, not a second current-state handoff** |
 | Git history, merged PRs, `supabase/migrations/` | Authoritative historical implementation evidence — never duplicated into active docs to "preserve" it |
 
