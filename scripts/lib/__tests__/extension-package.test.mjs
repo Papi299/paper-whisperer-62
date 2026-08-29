@@ -23,9 +23,46 @@ import {
   MAX_PACKAGE_BYTES,
   MAX_DESCRIPTION_LENGTH,
   FORBIDDEN_MANIFEST_KEYS,
+  EXPECTED_PACKAGE_ENTRIES,
+  REQUIRED_ICON_SIZES,
+  iconPathForSize,
 } from "../extension-package.mjs";
 
 const encoder = new TextEncoder();
+
+/**
+ * A PNG carrying a real IHDR and nothing else.
+ *
+ * The icon checks read the 26-byte header and stop, so a fixture only has to be
+ * truthful about that header — and a *header-only* fixture is what lets a test
+ * claim "this file says it is 16×16" without shipping a real 128×128 image into
+ * the suite to say the opposite. The genuine artefact is validated against the
+ * genuine PNGs by `scripts/package-extension.mjs`, which reads them off disk.
+ *
+ * @param {number} width
+ * @param {number} height
+ * @param {number} colorType 6 is RGBA; 2 (truecolour, no alpha) is the flattened case.
+ */
+function pngHeader(width, height, colorType = 6) {
+  const bytes = new Uint8Array(26);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(8, 13); // IHDR length
+  bytes.set(encoder.encode("IHDR"), 12);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  bytes[24] = 8; // bit depth
+  bytes[25] = colorType;
+  return bytes;
+}
+
+/** The icon set a valid package ships, keyed by packaged path. */
+const VALID_ICON_FILES = Object.fromEntries(
+  REQUIRED_ICON_SIZES.map((size) => [iconPathForSize(size), pngHeader(size, size)]),
+);
+
+/** The icon map both `icons` and `action.default_icon` must carry. */
+const VALID_ICON_MAP = Object.fromEntries(REQUIRED_ICON_SIZES.map((size) => [String(size), iconPathForSize(size)]));
 
 /** The manifest the extension actually ships, as an object to vary from. */
 const VALID_MANIFEST = {
@@ -33,8 +70,9 @@ const VALID_MANIFEST = {
   name: "PaperLume",
   version: "0.1.0",
   description: "Identify the scientific paper on the page you are viewing.",
+  icons: VALID_ICON_MAP,
   permissions: ["activeTab"],
-  action: { default_title: "PaperLume", default_popup: "popup.html" },
+  action: { default_title: "PaperLume", default_popup: "popup.html", default_icon: VALID_ICON_MAP },
   content_security_policy: { extension_pages: "script-src 'self'; object-src 'self';" },
 };
 
@@ -55,6 +93,7 @@ function buildPackage({ manifest = {}, files = {} } = {}) {
     ["popup.html", encoder.encode('<!doctype html><html><body><script type="module" src="./popup.js"></script></body></html>')],
     ["popup.js", encoder.encode('const u="https://app.paperlume.app";chrome.tabs.query({});chrome.tabs.create({url:u});')],
     ["popup.css", encoder.encode(".popup{color:#111}")],
+    ...Object.entries(VALID_ICON_FILES),
   ]);
 
   for (const [path, content] of Object.entries(files)) {
@@ -276,19 +315,116 @@ describe("package contract — manifest", () => {
 
   it("rejects a manifest that names a file the package does not contain", () => {
     expectViolation(
-      buildPackage({ manifest: { icons: { 128: "icons/icon-128.png" } } }),
+      buildPackage({ files: { [iconPathForSize(128)]: null } }),
       "manifest references a file the package does not contain: icons/icon-128.png",
     );
   });
 
-  it("accepts a manifest whose referenced icon is present", () => {
+  it("accepts a manifest whose referenced files are all present", () => {
+    expect(findPackageViolations(buildPackage())).toEqual([]);
+  });
+});
+
+describe("package contract — the exact inventory", () => {
+  it("rejects a file nobody thought to forbid", () => {
+    // Deliberately innocuous, and deliberately not matched by any excluded-path
+    // pattern: a licence banner a bundler decided to emit. Only the inventory
+    // check can see it.
+    expectViolation(buildPackage({ files: { "popup.js.LICENSE.txt": "/* MIT */" } }), "an unexpected file");
+  });
+
+  it("rejects an icon at a size the manifest does not declare", () => {
+    expectViolation(buildPackage({ files: { "icons/icon-64.png": pngHeader(64, 64) } }), "an unexpected file");
+  });
+
+  it.each(["popup.css", "popup.js", "popup.html"])("rejects a package missing %s", (path) => {
+    expectViolation(buildPackage({ files: { [path]: null } }), `missing a required file: ${path}`);
+  });
+
+  it("lists exactly the entries the real package ships", () => {
+    expect([...buildPackage().keys()].sort()).toEqual(EXPECTED_PACKAGE_ENTRIES);
+  });
+});
+
+describe("package contract — icons", () => {
+  it.each(REQUIRED_ICON_SIZES)("rejects a package with no %ipx icon file", (size) => {
+    expectViolation(buildPackage({ files: { [iconPathForSize(size)]: null } }), `missing a required file: ${iconPathForSize(size)}`);
+  });
+
+  it.each([
+    ["icons", (map) => ({ icons: map })],
+    ["action.default_icon", (map) => ({ action: { ...VALID_MANIFEST.action, default_icon: map } })],
+  ])("rejects a manifest whose %s map is missing a size", (label, build) => {
+    const incomplete = { ...VALID_ICON_MAP };
+    delete incomplete["32"];
+    expectViolation(buildPackage({ manifest: build(incomplete) }), `${label}["32"] is undefined`);
+  });
+
+  it.each([
+    ["icons", () => ({ icons: undefined })],
+    ["action.default_icon", () => ({ action: { default_title: "PaperLume", default_popup: "popup.html" } })],
+  ])("rejects a manifest with no %s map at all", (label, build) => {
+    // Chrome falls back to `icons` when `action.default_icon` is absent, so a
+    // package missing the action map still shows an icon — which is exactly why
+    // its absence has to be a violation rather than something review catches.
+    expectViolation(buildPackage({ manifest: build() }), `${label} is missing or is not an object`);
+  });
+
+  it("rejects an icon map that declares a size outside the contract", () => {
+    expectViolation(
+      buildPackage({
+        manifest: { icons: { ...VALID_ICON_MAP, 512: "icons/icon-512.png" } },
+        files: { "icons/icon-512.png": pngHeader(512, 512) },
+      }),
+      "icons declares an unexpected size: 512",
+    );
+  });
+
+  it("rejects an icon map pointing at a path outside icons/", () => {
+    expectViolation(
+      buildPackage({ manifest: { icons: { ...VALID_ICON_MAP, 48: "logo.png" } } }),
+      'icons["48"] is "logo.png"',
+    );
+  });
+
+  it("rejects an icon whose real dimensions are not the declared size", () => {
+    // The failure this catches: one file copied into every slot. Every path
+    // exists, every reference resolves, and Chrome renders a blurred toolbar
+    // button from a 16px source scaled to 128.
+    expectViolation(
+      buildPackage({ files: { [iconPathForSize(128)]: pngHeader(16, 16) } }),
+      "icons/icon-128.png is 16×16, expected 128×128",
+    );
+  });
+
+  it("rejects a non-square icon of the right nominal width", () => {
+    expectViolation(
+      buildPackage({ files: { [iconPathForSize(48)]: pngHeader(48, 32) } }),
+      "icons/icon-48.png is 48×32, expected 48×48",
+    );
+  });
+
+  it("rejects an icon file that is not a PNG", () => {
+    expectViolation(
+      buildPackage({ files: { [iconPathForSize(32)]: "GIF89a not really a png" } }),
+      "icons/icon-32.png is not a PNG file",
+    );
+  });
+
+  it("rejects an icon whose transparency was flattened at export", () => {
+    // Colour type 2 is truecolour with no alpha. It is a perfectly valid PNG of
+    // exactly the right size, and it puts a white rectangle behind the mark on
+    // every dark Chrome theme.
+    expectViolation(
+      buildPackage({ files: { [iconPathForSize(16)]: pngHeader(16, 16, 2) } }),
+      "icons/icon-16.png has PNG colour type 2, which carries no alpha channel",
+    );
+  });
+
+  it("accepts greyscale-plus-alpha as well as RGBA", () => {
+    // The contract is "carries alpha", not "is RGBA". Colour type 4 does.
     expect(
-      findPackageViolations(
-        buildPackage({
-          manifest: { icons: { 128: "icons/icon-128.png" } },
-          files: { "icons/icon-128.png": new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
-        }),
-      ),
+      findPackageViolations(buildPackage({ files: { [iconPathForSize(16)]: pngHeader(16, 16, 4) } })),
     ).toEqual([]);
   });
 });

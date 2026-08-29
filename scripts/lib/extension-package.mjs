@@ -36,6 +36,8 @@
  * depends on a build having run.
  */
 
+import { ALPHA_COLOR_TYPES, readPngHeader } from "./png.mjs";
+
 /** The complete permission set the extension may ship with. */
 export const EXPECTED_PERMISSIONS = ["activeTab"];
 
@@ -54,6 +56,46 @@ export const ALLOWED_EXTERNAL_ORIGINS = ["https://app.paperlume.app"];
 
 /** The complete privileged Chrome API surface, matching `extension/src/chrome.d.ts`. */
 export const ALLOWED_CHROME_MEMBERS = ["chrome.tabs.create", "chrome.tabs.query"];
+
+/**
+ * The icon sizes the package must ship, and the path each must live at.
+ *
+ * Chrome asks for 128 ("used during installation and by the Chrome Web Store"),
+ * 48 ("used in the extensions management page") and 16 ("the favicon for an
+ * extension's pages"); 32 is the size Windows commonly picks and Chrome's
+ * scaling of a neighbouring size to reach it is visibly worse than shipping it.
+ * All four are declared in both `icons` and `action.default_icon`, so a toolbar
+ * button and an installation dialogue can never disagree about what the mark
+ * is.
+ *
+ * @see https://developer.chrome.com/docs/extensions/reference/manifest/icons
+ */
+export const REQUIRED_ICON_SIZES = [16, 32, 48, 128];
+
+/** The packaged path for an icon size, as both manifest icon maps must name it. */
+export const iconPathForSize = (size) => `icons/icon-${size}.png`;
+
+/**
+ * The complete file list of a valid package — an exact set, not a floor.
+ *
+ * Every other check here answers "is this file allowed?". This one answers "is
+ * this the package?", which is a different and stricter question: it is the only
+ * check that notices a file nobody thought to forbid. A build plugin that starts
+ * emitting a stray chunk, a licence banner written to disk, or an icon left
+ * behind by a size that was removed from the manifest all pass every pattern
+ * above and fail here.
+ *
+ * The cost is that adding a shipping file means editing this line, in a diff a
+ * reviewer reads. That is the intended cost — it is the same bargain the
+ * permission list makes.
+ */
+export const EXPECTED_PACKAGE_ENTRIES = [
+  ...REQUIRED_ICON_SIZES.map(iconPathForSize),
+  "manifest.json",
+  "popup.css",
+  "popup.html",
+  "popup.js",
+].sort();
 
 /**
  * Manifest keys that would grant power this extension does not have.
@@ -254,6 +296,14 @@ export function findPackageViolations(files) {
     violations.push(`package has ${paths.length} entries, over the ${MAX_PACKAGE_ENTRIES} bound`);
   }
 
+  // The exact inventory. Reported as two lists rather than one diff so a
+  // failure says which way the package moved.
+  const sortedPaths = [...paths].sort();
+  const unexpected = sortedPaths.filter((p) => !EXPECTED_PACKAGE_ENTRIES.includes(p));
+  const missing = EXPECTED_PACKAGE_ENTRIES.filter((p) => !files.has(p));
+  for (const p of unexpected) violations.push(`package contains an unexpected file: ${p}`);
+  for (const p of missing) violations.push(`package is missing a required file: ${p}`);
+
   let totalBytes = 0;
   for (const [p, bytes] of files) {
     totalBytes += bytes.byteLength;
@@ -330,6 +380,61 @@ export function findPackageViolations(files) {
       if (!files.has(referenced)) {
         violations.push(`manifest references a file the package does not contain: ${referenced}`);
       }
+    }
+
+    // Both icon maps, and they must agree. Chrome falls back to `icons` when
+    // `action.default_icon` is absent, so a package missing the action map
+    // still shows *an* icon — which is exactly why its absence is easy to ship
+    // and hard to notice.
+    for (const [label, declared] of [
+      ["icons", manifest.icons],
+      ["action.default_icon", manifest.action?.default_icon],
+    ]) {
+      if (declared === null || typeof declared !== "object" || Array.isArray(declared)) {
+        violations.push(`${label} is missing or is not an object`);
+        continue;
+      }
+      for (const size of REQUIRED_ICON_SIZES) {
+        const declaredPath = declared[String(size)];
+        if (declaredPath !== iconPathForSize(size)) {
+          violations.push(
+            `${label}["${size}"] is ${JSON.stringify(declaredPath)}, expected ${JSON.stringify(iconPathForSize(size))}`,
+          );
+        }
+      }
+      for (const size of Object.keys(declared)) {
+        if (!REQUIRED_ICON_SIZES.includes(Number(size))) {
+          violations.push(`${label} declares an unexpected size: ${size}`);
+        }
+      }
+    }
+  }
+
+  // ---- Icon files ----------------------------------------------------------
+
+  // The manifest promises a 48×48 at `icons/icon-48.png`; nothing above reads
+  // the file to find out whether it is one. A 16×16 copied into every slot, a
+  // JPEG renamed `.png`, or an icon flattened onto white all satisfy every
+  // check so far — and the first two produce a blurred toolbar button while the
+  // third puts a white rectangle on a dark Chrome theme.
+  for (const size of REQUIRED_ICON_SIZES) {
+    const iconPath = iconPathForSize(size);
+    const bytes = files.get(iconPath);
+    if (!bytes) continue; // Already reported as missing above.
+
+    const header = readPngHeader(bytes);
+    if (header === null) {
+      violations.push(`${iconPath} is not a PNG file`);
+      continue;
+    }
+    if (header.width !== size || header.height !== size) {
+      violations.push(`${iconPath} is ${header.width}×${header.height}, expected ${size}×${size}`);
+    }
+    if (!ALPHA_COLOR_TYPES.includes(header.colorType)) {
+      violations.push(
+        `${iconPath} has PNG colour type ${header.colorType}, which carries no alpha channel — ` +
+          "the transparent background was flattened at export",
+      );
     }
   }
 

@@ -12,6 +12,12 @@
  * renderer, a browser, or the PNGs to have been generated.
  */
 
+// `readPngHeader` used to live here. It moved to `png.mjs` when the Chrome Web
+// Store package contract needed the same 26 bytes read for a different reason
+// (see that module); two byte-offset parsers that both keep returning *a*
+// number is how they quietly stop agreeing.
+export { readPngHeader } from "./png.mjs";
+
 /** The shared 64-unit design grid. Every canonical raster size divides it evenly. */
 export const VIEWBOX = "0 0 64 64";
 
@@ -84,26 +90,6 @@ export function pathData(svg) {
 /** Every hex colour in an SVG, uppercased and de-duplicated. */
 export function hexColors(svg) {
   return [...new Set([...svg.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => m[0].toUpperCase()))];
-}
-
-/**
- * Read a PNG's dimensions and colour type from its IHDR chunk.
- *
- * Header-only on purpose: the pixel data is filtered and would need inflating
- * and un-filtering to read, which is a decoder, not an assertion. Alpha is
- * verified by actually decoding the image in a browser — see the export
- * script's validation and `brand-spec.md` §6.
- */
-export function readPngHeader(bytes) {
-  const signature = Buffer.from(bytes.subarray(0, 8)).toString("hex");
-  if (signature !== "89504e470d0a1a0a") return null;
-  return {
-    width: Buffer.from(bytes).readUInt32BE(16),
-    height: Buffer.from(bytes).readUInt32BE(20),
-    bitDepth: bytes[24],
-    /** 6 === RGBA, the only type that carries an alpha channel per-pixel. */
-    colorType: bytes[25],
-  };
 }
 
 /**
