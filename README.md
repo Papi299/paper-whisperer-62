@@ -169,7 +169,7 @@ Everything from the new tab onwards belongs to the web application: authenticati
 
 `npm run test:extension:browser` loads the **built** extension into a real Chromium (Playwright's bundled channel, a throwaway profile, DNS black-holed to loopback) and asserts what the browser reports: the permissions Chrome actually granted (`["activeTab","scripting"]` with zero host origins), that a real `chrome.scripting.executeScript` is refused without a toolbar grant, that no background context exists, that the popup classifies and renders, that a real publisher page's `citation_doi` is read while its title, body and links are not, and that pressing Continue calls the real `chrome.tabs.create` exactly once at the exact handoff URL. One step it cannot automate is the toolbar click that grants `activeTab`, so that is a mandatory manual gate before submission.
 
-The extension is still loaded unpacked for development. It is **not** published to the Chrome Web Store, and no listing exists. Policy audit, privacy data flow, the manual release checklist and the outstanding Store gaps — including the missing brand icons — are in [docs/chrome-web-store-readiness.md](docs/chrome-web-store-readiness.md).
+The extension is still loaded unpacked for development. It is **not** published to the Chrome Web Store. As of **2026-08-30** a **draft** Store item exists (`cfanjbamcemoeglgkpbidnclkomaocmo`) with the `0.1.0` package uploaded, but **no listing content has been entered or saved, nothing has been submitted for review, and nothing is published**. Policy audit, privacy data flow, the manual release checklist and the outstanding Store gates are in [docs/chrome-web-store-readiness.md](docs/chrome-web-store-readiness.md).
 
 ## Extension import handoff
 
