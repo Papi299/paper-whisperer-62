@@ -600,7 +600,7 @@ and is live in Production.
 **Reachability gate — STANDING, and it does not close permanently.** Publishing
 the route is not the same as proving it is reachable. Before any Store submission,
 confirm that URL loads the policy **in Production, signed out, from a clean
-browser** with no cached session (§8 item 12). Deployment protection, a routing
+browser** with no cached session (§8 items 23–24). Deployment protection, a routing
 regression, or a rewrite change can each break it without breaking anything else,
 so re-verify on every submission rather than trusting a previous check.
 
@@ -946,6 +946,7 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 - [ ] 30. **Provision and verify a dedicated low-privilege reviewer account** for the Dashboard's separate **`Test instructions`** page (Username ≤ 100, Password ≤ 100, Additional instructions ≤ 500). The extension can be checked signed out, but `Continue in PaperLume` → Projects/Tags → confirm import **requires PaperLume authentication**, and a reviewer without an account hits a login wall. Requirements: Production account, **no owner/admin privileges**, no sensitive real-user data, minimal seeded state. **Credentials go only into the Store form — never into Git, a PR description, a report, or chat.** Non-secret steps are drafted in §12.
 - [ ] 31. **Confirm each permission justification fits the live 1,000-character cap.** The full drafts in [chrome-web-store-listing.md](chrome-web-store-listing.md) §6 are **over** it (1,071 and 1,470); that document carries measured 981- and 996-character variants to enter instead. Re-measure if either is edited.
 - [ ] 32. **Confirm visibility and regions deliberately.** The live Distribution form displays `Public` and all regions **by default**. Those defaults are not decisions, and publishing worldwide by failing to look at them would be an accident, not a choice.
+- [ ] 33. **Confirm the trader/non-trader declaration is accurate — before submitting, not before charging.** The account is currently configured **Non-trader**; that is an observed setting, not a vetted classification. Chrome's test is **purpose-based**: a trader is *"acting for purposes relating to his trade, business, craft or profession"*, a non-trader *"for purposes which are outside"* of them, and *"it is the developer's responsibility to accurately self-declare"* ([trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure), re-read 2026-08-30). **Being pre-commercial is not on its own a basis for declaring Non-trader.** Weigh the actual purpose against the then-current policy — noting that the published Privacy Policy describes PaperLume as operated by an individual **sole proprietor** under the **business name MutriSport** while also calling the service a pre-commercial beta. **If Trader applies, complete trader verification and the required public trader information before submission**; Chrome makes verified trader information public to Store users, so this is a disclosure decision, not just a form field. Do not treat this as a post-launch task.
 
 Record the date, the Chrome version, and the tester for each submission.
 
@@ -1165,7 +1166,7 @@ inspect it;
 [Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)
 lists *"A 128x128 px to use as your store icon"* without settling whether that
 field is a separate upload or is read from the package. **That stayed unresolved
-until someone opened the live form** — §8 item 21 is where it was checked.
+until someone opened the live form** — §8 item 28 is where it was checked.
 
 The candidate is kept rather than deleted: a distinct field does exist, so the
 separately authorized `001E3C` uses it, and the file costs one
@@ -1239,12 +1240,18 @@ restate its contents.
   all regions by **default**. That is not an owner decision, and must not be read
   as one (listing doc §0.8)
 - **Reviewer account for Test instructions** — a new, concrete pre-submission
-  gate; see §8 item 22
+  gate; see §8 item 30
 - ~~**Publisher account** — verified developer, 2SV enabled, one-time
   registration fee paid~~ **DONE 2026-08-30:** registration complete, **$5 fee
-  paid**, Dashboard accessible, classification intentionally **non-trader** for
-  the current non-commercial phase. **Trader reassessment before commercial
-  launch remains a future gate** (listing doc §0.10)
+  paid**, Dashboard accessible. **Classification is currently configured
+  Non-trader — an observed Dashboard setting, not a confirmed classification.**
+  Chrome defines trader status by whether the developer acts for purposes
+  relating to a trade, business, craft or profession, **not** by whether the item
+  is currently paid, so being pre-commercial is not on its own a basis for the
+  declaration. **The owner must reassess and confirm the classification against
+  the then-current facts and policy before any Store submission; if Trader
+  applies, complete trader verification and the required public trader
+  information before submission.** See §8 item 33 and listing doc §0.10
 - **Distribution** — public vs unlisted vs private, and region availability
   (listing doc §12 documents the three paths and their differing gates without
   choosing between them)

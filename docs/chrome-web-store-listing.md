@@ -282,20 +282,67 @@ documentation-only.
 - Chrome Web Store developer registration **completed**;
 - the one-time **$5 developer fee is paid**;
 - Developer Dashboard **accessible**;
-- publisher classification **intentionally NON-TRADER** for the present
-  non-commercial phase;
+- publisher classification **currently configured as NON-TRADER** — this records
+  the **observed Dashboard setting only** (see the gate below);
 - trader verification **not completed**; **no public trader address added**.
 
 This supersedes the "Publisher account — not done" row in §11 and the
 "no fee paid" statements in the banner and §13.2.
 
-**FUTURE COMMERCIAL-LAUNCH GATE.** Before PaperLume is operated commercially,
-the owner intends to reassess and, if the then-current facts and policy require
-it, switch the publisher account to **Trader** and complete the corresponding
-verification **before** commercial launch. **Nothing here asserts that
-non-trader status is permanently appropriate** — it is correct for the current
-non-commercial phase and is a decision with an expiry condition, not a settled
-fact.
+### Trader/non-trader — an OBSERVED SETTING, not a settled classification
+
+**`TRADER STATUS — UNRESOLVED COMPLIANCE JUDGMENT; CONFIRM BEFORE ANY STORE
+SUBMISSION`**
+
+**Observed fact.** The publisher account is currently configured as
+**Non-trader**.
+
+**What that is not.** It records the observed Dashboard setting only. **It is not
+a legal or policy conclusion that Non-trader is correct**, and nothing in this
+repository adjudicates the question.
+
+**Why the earlier framing was wrong, stated plainly.** An earlier revision of
+this section called Non-trader *"correct for the current non-commercial phase"*
+and treated the reassessment as a **future commercial-launch** gate. **Both
+claims are withdrawn.** They rested on the assumption that trader status follows
+from whether the item is paid. It does not. Chrome's own definitions are
+**purpose-based**, re-read first-party on **2026-08-30**:
+
+> **Trader** — *"Any natural person or any legal person, who is acting for
+> purposes relating to his trade, business, craft or profession in relation to
+> contracts on this marketplace."*
+>
+> **Non-trader** — *"Any natural person or any legal person, who is acting for
+> purposes which are outside of his trade, business, craft or profession in
+> relation to contracts on this marketplace."*
+>
+> *"It is the developer's responsibility to accurately self-declare their
+> trader/non-trader status."*
+> — [Trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure)
+
+Being pre-commercial is therefore **not** on its own a basis for declaring
+Non-trader, and "it isn't paid yet" is not the test.
+
+**There is a fact here that has to be weighed, not ignored.** The published
+Privacy Policy states that PaperLume *"is operated by **Maor Pichadza**, an
+individual sole proprietor in Israel operating under the business name
+**MutriSport**"*, while also describing the service as a *"pre-commercial beta
+service"*. Those two statements pull in opposite directions against a
+purpose-based test. **This document does not resolve that tension and must not
+be read as doing so** — it records that the question is live, so that nobody
+treats the current setting as already vetted.
+
+**GATE — confirm before any Store submission, not before commercial launch.**
+The owner must reassess and confirm the classification against the actual
+business or professional purpose and the then-current Chrome Web Store policy
+**before any actual Store submission**. **If Trader applies, trader verification
+and the required public trader information must be completed before
+submission** — and note that Chrome makes verified trader information *"available
+to users of the Chrome Web Store"*, so this is a disclosure decision, not only a
+form field.
+
+**No live account setting was changed by any task in this series**, and none
+should be until that confirmation is made.
 
 ### 0.11 What is still an owner decision
 
@@ -311,7 +358,7 @@ these choices:
 | **Homepage / Official / Support URLs** | All optional; none chosen. Official URL additionally needs Search Console ownership |
 | **Optional marketing assets** | Small promo tile, marquee tile, promo video — all optional, none required |
 | **Reviewer account** | §0.9 gate; not provisioned |
-| **Trader transition** | §0.10; required only before commercial launch |
+| **Trader/non-trader classification** | §0.10. Currently configured Non-trader; **accuracy unconfirmed**. Must be reassessed and confirmed **before any Store submission** — not deferred to commercial launch |
 
 ---
 
@@ -964,7 +1011,7 @@ to the listing copy.
 signed out, from a clean browser** with no cached session. Deployment
 protection, a routing regression or a rewrite change can each break it without
 breaking anything else. See
-[chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8 item 12.
+[chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8 items 23–24.
 
 That same signed-out Production check must additionally confirm the page shows
 the amended §4 and the **August 30, 2026** effective date. A Preview deployment is
@@ -1229,7 +1276,7 @@ and is not produced.
 | `Official URL` | — | Optional. Currently `None`; requires site ownership through Google Search Console |
 | `Mature content` | Off | Toggle displayed off; correct for this item |
 | Reviewer test instructions | Drafted in [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §12 | Ready. **A dedicated low-privilege reviewer account is a new pre-submission gate — §0.9.** No credentials are created or embedded, and none should be |
-| Publisher account | Registered developer; Dashboard accessible | **DONE.** Registration complete and the one-time **$5 fee is paid** (§0.10). Classification intentionally **non-trader** for the current non-commercial phase |
+| Publisher account | Registered developer; Dashboard accessible | **DONE.** Registration complete and the one-time **$5 fee is paid** (§0.10). Classification currently configured **Non-trader** — observed setting only; **its accuracy is an unresolved pre-submission gate**, see §0.10 |
 
 ---
 
