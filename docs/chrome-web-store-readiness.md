@@ -897,17 +897,64 @@ Build the candidate first: `npm run package:extension`.
 > 2. **Draft-preparation gates — discharged.** Items **26–32** are complete:
 >    they were the Dashboard-entry questions, and `001E3C` performed them and
 >    `001E3D` verified them read-only.
-> 3. **Human acceptance and standing checks — still open, and mandatory.** Items
->    **1–25** and **33** are **not** discharged. Items 1–24 require a human
->    driving the real release-candidate build in a real browser; **item 25** is
->    the owner's visual acceptance of the listing images, which uploading them
->    did not perform; **item 33** is the trader/self-declaration re-check that
->    must run *immediately before* the submission action. The standing signed-out
+> 3. **Human acceptance and standing checks — unticked, and mandatory for the
+>    next submission.** Items **1–25** and **33** carry no tick. For items 1–24
+>    that is **not** a claim that nothing was ever run: a real owner acceptance
+>    pass exists and is recorded immediately below. It is a claim that **this
+>    checklist re-runs in full for every actual submission**, which is the same
+>    convention items 23–24 already state explicitly. **Item 25** is the owner's
+>    visual acceptance of the listing images, which uploading them did not
+>    perform. **Item 33** is the trader/self-declaration re-check that must run
+>    *immediately before* the submission action. The standing signed-out
 >    Production `/privacy` re-check (§11) is likewise per-submission and is never
 >    discharged by having passed before.
 >
 > **Do not write "all mandatory release checklist items are complete."** As of
-> 2026-08-30 that is false.
+> 2026-08-30 that is false. **Equally, do not write that the manual acceptance
+> run is unperformed** — see the acceptance record below.
+
+> **Owner manual acceptance — what actually happened, and why no box is ticked.**
+> *(Recorded 2026-08-30 by `001E3D-REVIEW-02`, from existing repository evidence.
+> No test was re-run to produce this note.)*
+>
+> **An acceptance pass exists, and it is the reason this checklist has its
+> current shape.** Owner manual acceptance of the **001E2** release candidate was
+> performed and **failed on the DOI case** — a real human, on a real browser,
+> found that `doi.org` redirects to the publisher before the toolbar can be
+> reached, which is exactly why `001E2-CORRECTION-01` exists (§6, privacy audit
+> §24). After the correction merged as **PR #255 (`45a0516`, 2026-08-29)**, the
+> owner re-ran acceptance and it **passed**: the key retest — *navigate through
+> doi.org, let the redirect finish, then click the real toolbar button* — and the
+> **PubMed regression path** both passed. That record was reconciled into
+> [start-here.md](start-here.md) by commit `5731442` on **2026-08-30**.
+>
+> **That acceptance is behaviourally current for the uploaded package, and this
+> was verified rather than assumed.** `git diff 45a0516..main` over
+> `extension/`, `vite.extension.config.ts`, `tsconfig.extension.json`,
+> `scripts/` and `package.json` is **empty** — no extension source, build config
+> or package-contract change landed after the accepted build. The manifest is
+> still `0.1.0`. So the behaviour the owner accepted is the behaviour inside the
+> `0.1.0` package now sitting in the Store draft.
+>
+> **What the evidence does and does not itemise.** It directly establishes the
+> two steps no automated test can perform — **a real toolbar click** (item 5) and
+> **a real toolbar click on a publisher page after a resolver redirect** (items
+> 9–11) — plus the PubMed path end to end (items 4–7 in substance). It says
+> nothing itemised about: the load/icon checks (**1–3**), the pre-redirect
+> `doi.org` case (**8**), a **second publisher's DOI** (**13**), the
+> unsupported/restricted pages (**14–16**), the signed-out/signed-in handoff
+> (**17–19**), or the permission and popup-copy checks (**20–21**). Those are
+> genuinely unevidenced, not merely unticked.
+>
+> **Why nothing is ticked anyway.** This checklist is **reusable and re-run in
+> full before each actual Store submission** — items 23–24 already say so in
+> their own note, and the section header requires a human pass "against the
+> release-candidate build before **any** Chrome Web Store submission". A tick
+> earned in August would let a future submission skip a step, and several of
+> these items (Production reachability, live policy citations, Chrome's own
+> permission display) can be broken by things outside this repository between now
+> and then. **Treat the acceptance above as evidence for its date, not as a
+> completed step** — the same standing the 2026-08-30 privacy-policy visit has.
 
 ### Load and icons
 
