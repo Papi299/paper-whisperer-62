@@ -391,19 +391,108 @@ should be outside the separately authorized Store-entry task.
 
 ### 0.11 What is still an owner decision
 
+> **SUPERSEDED IN PART, 2026-08-30 by `CHROME-EXTENSION-IMPORT-001E3C` — see
+> §0.12.** Every row below that was open at the time of writing has since been
+> **decided by the owner and entered in the live Dashboard**: Category, Language,
+> Visibility and Regions. The table is kept as the record of what was genuinely
+> undecided when §0 was written; §0.12 is the current state.
+
 Live evidence removed the *documentation* ambiguities. It did not make any of
 these choices:
 
 | Open item | Why it is still open |
 |---|---|
-| **Category** | Required field; owner has not chosen from the live list. `Workflow & Planning` remains a suggestion only |
-| **Language** | Required field; English (United States) is expected but no live selection is saved |
-| **Visibility** | Public / Unlisted / Private — displayed state is a default, not a decision |
-| **Regions** | Displayed all-regions state is a default, not a decision |
-| **Homepage / Official / Support URLs** | All optional; none chosen. Official URL additionally needs Search Console ownership |
-| **Optional marketing assets** | Small promo tile, marquee tile, promo video — all optional, none required |
+| ~~**Category**~~ | Required field; owner has not chosen from the live list. `Workflow & Planning` remains a suggestion only. **CLOSED 2026-08-30 — owner chose `Workflow & Planning`; entered and saved (§0.12)** |
+| ~~**Language**~~ | Required field; English (United States) is expected but no live selection is saved. **CLOSED 2026-08-30 — owner chose `English (United States)`; entered and saved (§0.12)** |
+| ~~**Visibility**~~ | Public / Unlisted / Private — displayed state is a default, not a decision. **CLOSED 2026-08-30 — owner chose `Unlisted`; entered and saved (§0.12)** |
+| ~~**Regions**~~ | Displayed all-regions state is a default, not a decision. **CLOSED 2026-08-30 — owner chose `All regions`; entered and saved (§0.12)** |
+| **Homepage / Official / Support URLs** | All optional; none chosen. Official URL additionally needs Search Console ownership. **Still open — deliberately left blank in the saved draft** |
+| **Optional marketing assets** | Small promo tile, marquee tile, promo video — all optional, none required. **Still open — deliberately omitted from the saved draft** |
 | ~~**Reviewer account**~~ | **CLOSED 2026-08-30** — provisioned and verified low-privilege (§0.9; readiness §8 item 30). What remains is the Store-entry step of typing the owner-held credentials into `Test instructions`; **no fixture is required** |
 | ~~**Trader/non-trader classification**~~ | §0.10. **Owner decision frozen 2026-08-30: Non-trader** for the current beta submission. Not an open choice any more; what remains is re-reading the then-current policy and confirming the Dashboard declaration still matches the owner's intent **immediately before the submission action** |
+
+---
+
+### 0.12 The populated draft — 2026-08-30 (`001E3C` entry, `001E3D` audit)
+
+**This subsection is the current state.** It supersedes §0.11's open rows and
+§13.1's "still not performed" list. `CHROME-EXTENSION-IMPORT-001E3C` populated
+and saved the draft under owner authorization limited to draft mutations;
+`CHROME-EXTENSION-IMPORT-001E3D` then re-read every page **read-only** and
+changed nothing. **The item is still `Draft`. Nothing has been submitted, and
+nothing is published.**
+
+**Store Listing — saved.**
+
+| Field | Saved value |
+|---|---|
+| Title | `PaperLume` — package-derived, not edited |
+| Summary | `Identify the scientific paper on the page you are viewing.` — package-derived, **unchanged**; no editable field exists (§0.3) |
+| Detailed description | Populated from §4, **2,602 characters** as plain text |
+| Category | **`Workflow & Planning`** — the UI stores the leaf value only |
+| Language | **`English (United States)`** (`en_US`) |
+| Store icon | `assets/store/store-icon-128.png` |
+| Screenshots | `screenshot-1-pubmed`, `screenshot-2-doi`, `screenshot-3-unsupported` — **three, in that order** |
+| Promo video / small tile / marquee tile | **Empty** — all optional, deliberately omitted |
+| Homepage / Support URL | **Empty**; Official URL `None` |
+| Mature content | **Off** |
+
+**Privacy — saved.** Single purpose (§5, 534 characters); `activeTab`
+justification (§6 short form, **981** characters); `scripting` justification (§6
+short form, **996** characters) — all three inside the live 1,000-character cap.
+**Remote code = `No, I am not using remote code`, and no remote-code
+justification is stored.** That closes the §0-era finding that the untouched form
+displayed `Yes`: the live form was corrected by selecting `No`, and the answer
+persisted across save and reload. Data categories are exactly **Web history =
+Yes** and **Website content = Yes**, with the other seven **No**; **all three
+certifications** are certified; `Privacy policy URL` is
+`https://app.paperlume.app/privacy`.
+
+**A live-form detail worth recording, because it contradicts the natural
+reading.** After selecting `No`, the remote-code `Justification` field **remains
+visible** and still carries a static `required` attribute in the DOM — as do all
+four textareas on the page, including ones that are plainly conditional. The
+attribute is therefore **not** the form's requiredness signal; the `*` marker is
+(§0.2), and that field carries none. The Dashboard's own blocker panel never
+listed a remote-code justification, and Privacy saved cleanly with the field
+empty. **Do not infer requiredness from the DOM attribute on this form.**
+
+**Test instructions — saved.** Reviewer credentials are populated in Google's
+confidential `Test instructions` fields, entered by the owner directly into the
+browser. The additional-instructions text is the 419-character reviewer script.
+**No credential is recorded in this repository, and none may be.**
+
+**Distribution — saved.** `Free of charge`; visibility **`Unlisted`** (Public and
+Private both unselected); **`All regions`** with the companion `All unlisted
+regions` control also selected — 155 of 155 region controls checked, none
+deselected individually.
+
+**Package — untouched.** Still `0.1.0`, item type Extension, permissions
+`activeTab, scripting`, `main.crx`, **not opted in** to Verified CRX uploads, and
+the public key was not viewed.
+
+**Publisher contact email — the gate that only the live Dashboard revealed.**
+`001E3C` found two **publisher-account** blockers that no item field could
+satisfy: a contact email had to be **provided** and then **verified** on the
+Settings page. They blocked *publication*, not draft saving — every draft save
+succeeded with them outstanding. The owner has since completed both manually.
+`001E3D` confirmed it: Settings shows a **verified** contact email address. **The
+address itself is deliberately not recorded here**; it is publicly displayed by
+Google in connection with the item, which is a disclosure the owner accepted, not
+a repository fact.
+
+**Live blocker panel — 2026-08-30, `001E3D`: zero items.** The Dashboard's
+`Why can't I submit?` panel listed **nine** blockers during `001E3C` (both
+contact-email items, plus seven item-completeness items). It now lists **none**,
+the panel's trigger control is no longer surfaced, and `Submit for review` has
+gone from **disabled** to **enabled**.
+
+**State this precisely and no more strongly.** Zero blockers means **the live
+Dashboard exposes no known pre-submission completeness blocker**. It is **not**
+Google approving the extension, **not** a prediction that review will pass, and
+**not** authorization to submit. Submission remains a separate, explicit owner
+decision, and the §0.10 trader re-check and the standing signed-out `/privacy`
+check both still run immediately before it.
 
 ---
 
@@ -1395,9 +1484,20 @@ support surface it does not yet have. That is a recommendation, not a decision.
 
 ## 13. Explicitly not performed
 
-### 13.1 Current state — as of 2026-08-30, after `001E3A`
+### 13.1 State after `001E3A` — as of 2026-08-30, superseded the same day
 
-Still **not** performed:
+> **SUPERSEDED 2026-08-30 by `CHROME-EXTENSION-IMPORT-001E3C` — see §0.12 for the
+> current state.** The list below was correct after `001E3A` and is preserved as
+> chronology. Most of it is **no longer true**: the Store Listing, Privacy,
+> Distribution and Test-instructions fields have since been populated and saved,
+> the store icon and three screenshots have been uploaded, category, language,
+> visibility and regions have been chosen by the owner, all three certifications
+> are ticked and the privacy-policy URL is entered. **Four items below still
+> hold:** no promo video was produced or uploaded, no Verified CRX opt-in and the
+> public key was never viewed, no GitHub Release/tag/version bump, and — the one
+> that matters most — **no submission for review and no publication.**
+
+Still **not** performed *(as at `001E3A`; read with the supersession above)*:
 
 - No Store Listing, Privacy practices, Distribution or Test-instructions field
   deliberately populated or **saved**.
@@ -1427,6 +1527,12 @@ owner authorization limited to exactly these two mutations:
 
 A separately authorized **`001E3C`** owns everything still outstanding. Nothing
 in this document authorizes it.
+
+> **Update, 2026-08-30.** `001E3C` has since run and populated the draft (§0.12),
+> and `001E3D` audited the result read-only. What is still outstanding is no
+> longer draft *population* but the **submission action itself**, which remains
+> unauthorized and requires a separate explicit owner decision. Nothing in this
+> document authorizes submission or publication.
 
 ### 13.2 Historical — the state through 2026-08-29, preserved
 
