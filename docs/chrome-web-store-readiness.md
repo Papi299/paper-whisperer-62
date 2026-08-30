@@ -17,7 +17,20 @@
 > rule [store-launch-checklist.md](store-launch-checklist.md) applies to the
 > mobile stores.
 >
-> **Nothing has been published.** No Store listing exists, no package has been
+> **Current state, 2026-08-30 — a draft Store item exists; nothing is
+> published.** `CHROME-EXTENSION-IMPORT-001E3A` created one PaperLume **draft**
+> item (`cfanjbamcemoeglgkpbidnclkomaocmo`) and uploaded the validated `0.1.0`
+> package under owner authorization limited to exactly those two mutations. **No
+> listing, privacy or distribution field has been deliberately populated or
+> saved. Nothing has been submitted for review, and nothing is published** — the
+> Dashboard's published side reads *"This item is not published yet"*. Both
+> previously unresolved listing questions are now **resolved from the live form**:
+> the promotional video is **optional**, and the store icon **is** a separate
+> required upload. See [chrome-web-store-listing.md](chrome-web-store-listing.md)
+> §0 for the full live-Dashboard record.
+>
+> *Historical, and true when written (through 2026-08-29):* **Nothing has been
+> published.** No Store listing exists, no package has been
 > uploaded, no GitHub Release has been created, and no version has been bumped.
 > The artefact this document describes is a local, gitignored release candidate.
 >
@@ -927,8 +940,12 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 > result as evidence for that date, not as a completed step.
 - [ ] 25. Review the five committed listing images in [`assets/store/`](../assets/store) and confirm each is accurate and acceptable to publish — in particular that no caption claims the page is never read.
 - [ ] 26. Confirm the Dashboard's **Website content** answer is set to **Yes** and that the permission justification covers **both** `activeTab` and `scripting`.
-- [ ] 27. Resolve the **promotional video** question (§11) against the **live Developer Dashboard**: is the field actually required for the chosen visibility? Google's own pages contradict each other, so this cannot be settled from documentation. If it is required, producing and hosting the video becomes a content gate; if not, it stays deferred.
-- [ ] 28. While in the Dashboard, note whether a **separate store-icon upload field** exists (§10). If it does, `assets/store/store-icon-128.png` is the candidate to use; if it does not, the packaged `icons/icon-128.png` already is the store icon.
+- [x] 27. ~~Resolve the **promotional video** question (§11) against the **live Developer Dashboard**.~~ **DISCHARGED 2026-08-30 — the live field `Global promo video` carries no required marker. OPTIONAL. No video is a gate.**
+- [x] 28. ~~Note whether a **separate store-icon upload field** exists (§10).~~ **DISCHARGED 2026-08-30 — it does. `Store icon *` is REQUIRED, 128×128, with its own upload control. `assets/store/store-icon-128.png` is the candidate to use.**
+- [ ] 29. **Change the Privacy form's remote-code answer to `No, I am not using remote code`, and re-read it after saving.** The untouched live form was observed on 2026-08-30 displaying **`Yes, I am using remote code`** with a required `Justification*`. That is **factually wrong** for this package — no remote JS or Wasm, no external script import, no `eval`, no `new Function`, and the injected function is bundled inside `popup.js` (§4). **Do not write a remote-code justification.** If a justification is still demanded after selecting `No`, **stop and report** rather than inventing text.
+- [ ] 30. **Provision and verify a dedicated low-privilege reviewer account** for the Dashboard's separate **`Test instructions`** page (Username ≤ 100, Password ≤ 100, Additional instructions ≤ 500). The extension can be checked signed out, but `Continue in PaperLume` → Projects/Tags → confirm import **requires PaperLume authentication**, and a reviewer without an account hits a login wall. Requirements: Production account, **no owner/admin privileges**, no sensitive real-user data, minimal seeded state. **Credentials go only into the Store form — never into Git, a PR description, a report, or chat.** Non-secret steps are drafted in §12.
+- [ ] 31. **Confirm each permission justification fits the live 1,000-character cap.** The full drafts in [chrome-web-store-listing.md](chrome-web-store-listing.md) §6 are **over** it (1,071 and 1,470); that document carries measured 981- and 996-character variants to enter instead. Re-measure if either is edited.
+- [ ] 32. **Confirm visibility and regions deliberately.** The live Distribution form displays `Public` and all regions **by default**. Those defaults are not decisions, and publishing worldwide by failing to look at them would be an accident, not a choice.
 
 Record the date, the Chrome version, and the tester for each submission.
 
@@ -1126,17 +1143,32 @@ candidate 128 → mark 72×96, padding 28/16, both at or above the documented
 16 px. The difference is one uniform scale and one offset; same paths, same
 colours, same proportions.
 
-**What is not claimed.** That the candidate is uploaded through a separate
+> **RESOLVED 2026-08-30 — a separate field does exist.** The live Store Listing
+> form exposes **`Store icon *`** — **required**, 128×128, with its own
+> drop/upload control. Classification:
+> **`STORE ICON — SEPARATE DASHBOARD UPLOAD REQUIRED`**. The packaged
+> `icons/icon-128.png` remains required package metadata and is what Chrome
+> itself uses; the separate Store field does not replace it. Keeping
+> `assets/store/store-icon-128.png` was the right call — it is now the confirmed
+> candidate for that upload rather than a speculative extra file, and it has
+> **not** been uploaded. See
+> [chrome-web-store-listing.md](chrome-web-store-listing.md) §0.5.
+>
+> The paragraphs below are the historical position, correct when written on
+> 2026-08-29, and preserved rather than rewritten.
+
+**What was not claimed, before the live form was seen.** That the candidate is
+uploaded through a separate
 Dashboard field, that it overrides the packaged icon, or that the Store will
-display it instead. The Dashboard has not been inspected and this phase may not
+display it instead. The Dashboard had not been inspected and that phase could not
 inspect it;
 [Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)
 lists *"A 128x128 px to use as your store icon"* without settling whether that
-field is a separate upload or is read from the package. **Unresolved until
-someone opens the live form** — §8 item 21 is where that is checked.
+field is a separate upload or is read from the package. **That stayed unresolved
+until someone opened the live form** — §8 item 21 is where it was checked.
 
-The candidate is kept rather than deleted: if a distinct field exists, 001E3 uses
-it; if it does not, the packaged icon is already correct and the file costs one
+The candidate is kept rather than deleted: a distinct field does exist, so the
+separately authorized `001E3C` uses it, and the file costs one
 tracked PNG. The brand system's own 5-unit margin — *"a toolbar icon that floats
 in the middle of its box reads as smaller than its neighbours"*
 (`brand-spec.md` §3) — is why the packaged set is not simply re-padded to match.
@@ -1192,14 +1224,27 @@ restate its contents.
   signed out, from a clean browser — and still shows the amended §4 and the
   August 30, 2026 effective date** — before *each* submission. Last passed
   **2026-08-30**
-- **Promotional video — requirement unresolved.** Google's own pages
-  contradict each other; the live Dashboard decides. See below
-- **Support URL / contact email** — PaperLume publishes no Support page. C16 in
-  [decisions-and-triggers.md](decisions-and-triggers.md) still governs Terms and
-  Support, and both remain unimplemented launch blockers
-- **Category** selection and **language** declaration (listing doc §11)
-- **Publisher account** — verified developer, 2SV enabled, one-time registration
-  fee paid
+- ~~**Promotional video — requirement unresolved.**~~ **RESOLVED 2026-08-30:
+  OPTIONAL** in the live form (`Global promo video`, no `*`). No longer an owner
+  gate; producing one is a marketing choice
+- **Support URL / contact email** — **optional in the live Store form** (no
+  `*`), so Google does not compel it. PaperLume publishes no Support page, and
+  C16 in [decisions-and-triggers.md](decisions-and-triggers.md) still governs
+  Terms and Support as PaperLume's own launch-quality decision. **Two different
+  gates; only the Store one is now known to be non-blocking**
+- **Category** selection and **language** declaration (listing doc §11) — both
+  are **required live fields** (`Category*`, `Language*`) and **neither has been
+  chosen**
+- **Visibility and regions** — the live Distribution form displays `Public` and
+  all regions by **default**. That is not an owner decision, and must not be read
+  as one (listing doc §0.8)
+- **Reviewer account for Test instructions** — a new, concrete pre-submission
+  gate; see §8 item 22
+- ~~**Publisher account** — verified developer, 2SV enabled, one-time
+  registration fee paid~~ **DONE 2026-08-30:** registration complete, **$5 fee
+  paid**, Dashboard accessible, classification intentionally **non-trader** for
+  the current non-commercial phase. **Trader reassessment before commercial
+  launch remains a future gate** (listing doc §0.10)
 - **Distribution** — public vs unlisted vs private, and region availability
   (listing doc §12 documents the three paths and their differing gates without
   choosing between them)
@@ -1225,16 +1270,45 @@ Marquee promo tile, which is optional"*, while
 store icon, at least one screenshot, small promo tile — are produced; the
 disputed one is recorded as unresolved.
 
+> **SUPERSEDED 2026-08-30 by the live form.** Requiredness below was inferred
+> from documentation; it has now been read off the Dashboard itself. The live
+> requirement for this item is **two** graphic assets, not three:
+>
+> | Live field | Live requiredness | Status |
+> |---|---|---|
+> | `Store icon *` | **REQUIRED**, 128×128, separate upload control | Candidate ready: `assets/store/store-icon-128.png`. Not uploaded |
+> | `Screenshots *` | **REQUIRED**, at least one, max 5; 1280×800 or 640×400; JPEG or 24-bit PNG (no alpha) | Three 1280×800 assets ready, all verified PNG colour type 2 (no alpha). Not uploaded |
+> | `Small promo tile` | **OPTIONAL** — no `*` | Ready, 440×280, colour type 2. Not uploaded |
+> | `Marquee promo tile` | **OPTIONAL** — no `*` | Not produced. Still not needed |
+> | `Global promo video` | **OPTIONAL** — no `*` | Not produced. **No longer a gate** |
+>
+> **The small promo tile is optional, not mandatory** — this corrects the row
+> below, which followed Google's `images` page. Full evidence:
+> [chrome-web-store-listing.md](chrome-web-store-listing.md) §0.2, §0.4–§0.6.
+
+**Historical table — inferred from documentation on 2026-08-29, before the live
+form was seen:**
+
 | Asset | Requirement | Status |
 |---|---|---|
 | 128×128 store icon | Required (both pages agree) | **Done** — shipped in the ZIP as `icons/icon-128.png`; a Store-optimised candidate also exists at `assets/store/store-icon-128.png` (§10) |
 | Manifest icons 16/32/48/128 | Required in the ZIP | **Done** — emitted from the brand pack (§10) |
 | 1280×800 screenshot, 1–5 | Required | **Done** — three, from real popup captures |
-| 440×280 small promo tile | Required | **Done** — `assets/store/promo-tile-small-440x280.png` |
-| YouTube promotional video | **Conflicting first-party documentation** — see below | **UNRESOLVED; live Dashboard verification required before submission.** Not produced, and deliberately not faked |
+| 440×280 small promo tile | Required *(superseded: optional)* | **Done** — `assets/store/promo-tile-small-440x280.png` |
+| YouTube promotional video | **Conflicting first-party documentation** — see below | *(superseded: **OPTIONAL** in the live form)* Not produced, and deliberately not faked |
 | 1400×560 marquee promo tile | Optional on every first-party reading | Not produced |
 
-**On the video.**
+**On the video — RESOLVED 2026-08-30: `PROMOTIONAL VIDEO — OPTIONAL IN THE LIVE
+PAPERLUME DASHBOARD`.** The live field is **`Global promo video`** and carries
+**no `*` required marker**. No video is required, and none will be produced.
+
+The analysis below is **preserved as the historical record**. The documentation
+conflict it describes is real and still unfixed on Google's side; what changed is
+that the live form answered the operational question. Refusing to guess was
+correct — the strictest reading would have manufactured a content gate that does
+not exist.
+
+**Historical classification, correct when written on 2026-08-29:**
 `PROMOTIONAL VIDEO REQUIREMENT — FIRST-PARTY DOCUMENTATION CONFLICT; LIVE
 DASHBOARD VERIFICATION REQUIRED BEFORE SUBMISSION.`
 
@@ -1272,16 +1346,24 @@ YouTube, and no filler media was made to retire a row that may not exist.
 
 Nothing in this repository can set these; a human enters them:
 
-- Every privacy-practices answer and certification (listing doc §7)
-- The single-purpose field (listing doc §5)
-- Permission justification for `activeTab`, and the remote-code declaration
-  (listing doc §6)
-- Privacy policy URL (listing doc §8)
-- Reviewer test instructions (§12)
-- Category, language, support contact
-- Pricing / distribution / region configuration
-- Every image upload
-- Package upload
+- Every privacy-practices answer and certification — **all three certifications
+  must be certified** (listing doc §7)
+- The single-purpose field, `Single purpose description*`, max 1,000 (listing doc §5)
+- Permission justifications for **both** `activeTab` and `scripting`, each capped
+  at **1,000 characters** — use the measured short variants in listing doc §6
+- **The remote-code declaration — which must be set to `No`.** The live form was
+  observed defaulting to **`Yes`**, which is wrong for this package. See §8
+  item 29
+- Privacy policy URL — live field `Privacy policy URL*`, **required** (listing doc §8)
+- Reviewer test instructions, plus the **reviewer account** they depend on (§12,
+  §8 item 30)
+- `Category*` and `Language*` — both **required**, neither chosen
+- Distribution: visibility and regions — **displayed defaults are not decisions**
+- Every image upload — **`Store icon *` and `Screenshots *` are the two required
+  ones**; small promo tile, marquee tile and promo video are optional
+
+**Package upload is done** — the validated `0.1.0` release candidate was uploaded
+to draft item `cfanjbamcemoeglgkpbidnclkomaocmo` on 2026-08-30.
 
 ---
 

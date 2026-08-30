@@ -371,7 +371,7 @@ https://app.paperlume.app/extension-import?kind=doi&value=<URL-encoded DOI>
 
 ### 11.9 Distribution status
 
-The extension is **not published** to the Chrome Web Store and no listing exists (`docs/deployment.md`, `README.md` §167). `npm run package:extension` produces a local, gitignored release candidate ZIP and explicitly uploads, publishes and tags nothing.
+The extension is **not published** to the Chrome Web Store and no listing exists (`docs/deployment.md`, `README.md` §167). `npm run package:extension` produces a local, gitignored release candidate ZIP and explicitly uploads, publishes and tags nothing. *(Updated 2026-08-30 — see §26: a **draft** Store item now exists and the `0.1.0` package has been uploaded to it. The extension is **still not published**, and no listing content has been saved. The packaging command's behaviour is unchanged: it still uploads nothing; the upload was a separate, owner-authorized manual action.)*
 
 ---
 
@@ -1188,3 +1188,134 @@ video is required; whether a separate store-icon upload field exists), and **no
 Chrome Web Store item, upload, listing, submission or publication exists** —
 external Store mutation remains `CHROME-EXTENSION-IMPORT-001E3`, which is not
 authorized.
+
+> **Superseded in part on 2026-08-30 — see §26.** A draft Store item and an
+> uploaded package now exist, and both Dashboard-only questions are resolved. The
+> paragraph above is preserved as written; the standing per-submission
+> `/privacy` gate it describes is **unchanged and still in force**.
+
+---
+
+## 26. Addendum — 2026-08-30 — `CHROME-EXTENSION-IMPORT-001E3A` / `001E3B`
+
+**Scope.** A Chrome Web Store draft item now exists and the approved package has
+been uploaded; the live Dashboard forms were then inspected read-only. This
+addendum records what that changed for the *disclosure* analysis. **It changes no
+verified data-flow fact in §11, §19, §24 or §25** — the extension's behaviour is
+byte-for-byte what those sections audited, and no source file was touched.
+
+### 26.1 Current Store state
+
+| Fact | Value |
+|---|---|
+| Draft item ID | `cfanjbamcemoeglgkpbidnclkomaocmo` |
+| Uploaded version | `0.1.0` — accepted; Store shows `main.crx` |
+| Permissions shown by the Store | `activeTab`, `scripting` |
+| Item status | **Draft. Not published.** *"This item is not published yet"* |
+| Listing / Privacy / Distribution fields | **None deliberately populated or saved** |
+
+**Package provenance is local, not Store-attested.** The uploaded artefact was
+`release/paperlume-extension-0.1.0-rc.zip`, **15788 bytes**, SHA-256
+`0feb935d914af2141c41aa129bf211cf08492a5d4ccb5e169bab8afb9f9c4634`. **The
+Dashboard does not expose that hash**, so nothing here claims Google verified it.
+**Class: PARTIALLY VERIFIED** — the local pre-upload validation is fully
+inspectable here; what Google did with the bytes afterwards is not.
+
+### 26.2 Disclosure mapping — unchanged
+
+The live form's nine categories match §24.5 exactly, and **every answer stands**:
+
+| Live category | Answer |
+|---|---|
+| Personally identifiable information | No |
+| Health information | No |
+| Financial and payment information | No |
+| Authentication information | No |
+| Personal communications | No |
+| Location | No |
+| **Web history** | **Yes** |
+| User activity | No |
+| **Website content** | **Yes** |
+
+**The rationale is unchanged and must not be softened.** Local, transient access
+is still access: the category asks what is *accessed*, not what is *retained* or
+*transmitted*. Web history = Yes because the active tab's URL is read; Website
+content = Yes because four `<meta>` `content` values are read on the fallback
+path. That the extension keeps nothing, sends no request of its own, and never
+transmits the source URL are all true (§24.4) and none of them changes either
+answer.
+
+### 26.3 Remote code — the live form was wrong, and the correct answer is No
+
+The **untouched** live Privacy form was observed displaying **`Yes, I am using
+remote code`** with a required `Justification*` exposed.
+
+**That is factually wrong for PaperLume.** The live help text defines remote code
+as JavaScript or Wasm not included in the package, including external file
+references and `eval`-style string evaluation. §11 and §24 verified, from source
+and from the built bundle, that the package contains **no remote JavaScript, no
+remote Wasm, no external script import, no `eval`, and no `new Function`**, and
+that the function passed to `chrome.scripting.executeScript({func})` is **bundled
+inside `popup.js`** and serialized out of the package by Chrome at call time.
+
+**Locked answer: `No, I am not using remote code`.** No justification should be
+written, because the `No` path should not require one. This must be **explicitly
+changed before Privacy practices is saved**, and re-read afterwards.
+
+### 26.4 Transmission wording — the precision this section already requires
+
+§24.4 and [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6
+already state the exception correctly, and it is restated here because it is the
+single easiest claim in this repository to over-simplify:
+
+- the **active-tab / source URL is never transmitted**;
+- **arbitrary page content is never transmitted** — no article text, abstract,
+  title, authors, journal, headings, links, `data-` attributes, JSON-LD, inline
+  scripts, DOM or cookies;
+- **only the detected identifier `value` may leave the extension**, and only
+  after the user presses **Continue**;
+- **that identifier may itself have been derived from a supported DOI metadata
+  `content` value** on the fallback path.
+
+So the flat sentence *"page content is never transmitted"* is **false as
+stated** and must not be written. The accurate form is *"no page content is
+transmitted apart from the detected DOI itself"*. The owner-approved public
+Privacy Policy §4 already uses the exception formulation; **it is not modified by
+this task**, and nothing here asks for legal copy to change.
+
+### 26.5 Certifications and the Limited Use disclosure
+
+The live Privacy page carries exactly **three** certifications and states *"You
+must certify all three disclosures to comply with our Developer Program
+Policies"*. All three are true for PaperLume and the intended answer is **certify
+all three** (transcribed verbatim in
+[chrome-web-store-listing.md](chrome-web-store-listing.md) §7).
+
+**No separate Limited Use checkbox or Limited Use text field was observed.** The
+affirmative Limited Use sentence therefore remains where §25.1 put it — in the
+public Privacy Policy §4 — and **no second copy should be created**.
+
+### 26.6 New gate — a reviewer account, and why this section cares
+
+The Dashboard has a separate **`Test instructions`** page for reviewer
+credentials. The extension is fully inspectable **signed out**, but the
+end-to-end path the listing describes requires PaperLume authentication.
+
+This is a **privacy-relevant** gate, not merely an operational one: it means
+real credentials for a real Production account will be handed to a third party.
+The requirements follow directly — a **dedicated, low-privilege** account, **no
+owner/admin rights**, **no sensitive real-user data**, and only the minimal
+seeded state needed to exercise the import path. **Credentials must never be
+committed to Git, written into a PR description or report, or sent through
+chat.** No such account exists yet, and this task does not create one.
+
+### 26.7 What this addendum does not change
+
+- **No source, extension, schema, migration, Edge Function or policy-copy
+  change.** Documentation only.
+- **No verified data-flow fact moves.** §11, §19, §24 and §25 stand as written.
+- **The standing per-submission `/privacy` verification remains in force** and is
+  not discharged by anything here. Last passed **2026-08-30**; re-run it signed
+  out, in Production, immediately before any actual submission.
+- **No Store form was populated or saved**, nothing was submitted, and nothing is
+  published.

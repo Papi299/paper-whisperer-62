@@ -201,7 +201,9 @@ should not be one: the rule is one line of code, and a second file would be a
 second wordmark waiting to drift.
 
 **Still out of scope:** the stacked lockup and tiled app icon of §7; a Chrome Web
-Store **promotional video** (whose requirement is an unresolved first-party
-documentation conflict — see the listing document §10); favicon wiring; any
+Store **promotional video** (**confirmed OPTIONAL** on the live Dashboard on
+2026-08-30 — the `Global promo video` field carries no required marker; the
+first-party documentation conflict that once made this unresolved is recorded in
+the listing document §10); favicon wiring; any
 privacy policy. Nothing here is
 registered as a trademark — "Paperlume" is **not** a registered mark.

@@ -7,10 +7,17 @@
 > listing copy, the single-purpose statement, the permission justifications, the
 > privacy/data-use answers, and the listing images with their provenance.
 >
-> **No Store item exists.** No package has been uploaded, no listing created, no
-> distribution chosen, no visibility set, no privacy answer entered in Google's
-> form, no fee paid, and no video published. Every field below is text in this
-> repository waiting for owner review. External Store mutation belongs to
+> **A draft Store item now exists — see §0, which supersedes the paragraph
+> below.** `CHROME-EXTENSION-IMPORT-001E3A` created one PaperLume draft item
+> (`cfanjbamcemoeglgkpbidnclkomaocmo`) on **2026-08-30** and uploaded the
+> approved 0.1.0 package. **No listing, privacy or distribution field has been
+> deliberately populated or saved, and nothing has been submitted or published.**
+>
+> *Historical, and true when written (through 2026-08-29):* **No Store item
+> exists.** No package has been uploaded, no listing created, no distribution
+> chosen, no visibility set, no privacy answer entered in Google's form, no fee
+> paid, and no video published. Every field below is text in this repository
+> waiting for owner review. External Store mutation belongs to
 > `CHROME-EXTENSION-IMPORT-001E3` and requires explicit owner authorization.
 >
 > Every requirement, limit and dimension below was read from Google's own
@@ -20,12 +27,19 @@
 > [chrome-web-store-readiness.md](chrome-web-store-readiness.md) applies to its
 > policy citations.
 >
-> **Two questions are deliberately left open**, because they cannot be answered
-> from documentation alone and the Developer Dashboard has not been — and in
-> this phase may not be — opened: whether a **promotional video** is actually
-> required (§10, where Google's own pages contradict each other), and whether
-> the **store icon** is a separate upload field or is read from the package
-> (§9). Both are recorded as unresolved rather than guessed.
+> **Both previously open questions are now RESOLVED from the live form — see
+> §0.** The promotional video is **optional**; the store icon **is a separate
+> required Dashboard upload**. The paragraph below records why they were left
+> open, and is retained as the reasoning that produced the correct answer rather
+> than a guess.
+>
+> *Historical, and true when written (2026-08-29):* **Two questions are
+> deliberately left open**, because they cannot be answered from documentation
+> alone and the Developer Dashboard has not been — and in this phase may not be
+> — opened: whether a **promotional video** is actually required (§10, where
+> Google's own pages contradict each other), and whether the **store icon** is a
+> separate upload field or is read from the package (§9). Both are recorded as
+> unresolved rather than guessed.
 
 > **Amended by CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01 (2026-08-29).** The
 > extension now reads standard bibliographic DOI metadata from a page when — and
@@ -57,6 +71,247 @@ is the policy audit, the data-flow evidence, the packaging contract, the
 real-browser verification record and the mandatory manual release gate. This
 document is the *listing*: the fields and files. Facts are stated in one of
 them and linked from the other, never duplicated.
+
+---
+
+## 0. Live Dashboard reconciliation — 2026-08-30 (`CHROME-EXTENSION-IMPORT-001E3B`)
+
+**This section is the current-state authority for anything the live Developer
+Dashboard settles.** Where it and a later section disagree, this one wins and the
+later section carries a pointer. Sections below are preserved as the drafting and
+evidence record; §13 of this document lists what was explicitly not performed at
+each earlier snapshot, and those snapshots are not rewritten.
+
+**Evidence class.** Owner-observed, from an authenticated Developer Dashboard
+session on 2026-08-30, on the real PaperLume draft. This is stronger than the
+first-party documentation cited elsewhere in this document, because it is the
+form itself rather than a page describing the form. Where a Google doc and the
+live field disagree, **the live field governs for this item** — and only for this
+item, since the Dashboard varies by item type, account and rollout.
+
+### 0.1 The draft item
+
+| Fact | Live value |
+|---|---|
+| Item ID | `cfanjbamcemoeglgkpbidnclkomaocmo` |
+| State | **Draft — not published.** The published side reads *"This item is not published yet"* |
+| Version | `0.1.0` |
+| Item type | Extension |
+| Permissions shown | `activeTab`, `scripting` |
+| CRX file | `main.crx` |
+| Public-key view | Available — **deliberately not opened** |
+| Verified CRX uploads | An `Opt in` control exists — **deliberately not opted in** |
+
+**Package provenance, stated at its real evidence strength.** The ZIP validated
+locally before the owner-assisted upload was
+`release/paperlume-extension-0.1.0-rc.zip`, **15788 bytes**, SHA-256
+**`0feb935d914af2141c41aa129bf211cf08492a5d4ccb5e169bab8afb9f9c4634`**, with
+exactly the eight-entry inventory the packaging contract requires
+(`icons/icon-{16,32,48,128}.png`, `manifest.json`, `popup.css`, `popup.html`,
+`popup.js`), manifest v3, version `0.1.0`, permissions exactly
+`activeTab` + `scripting`, zero host permissions, no shipping `key`, no remote
+code. Pre-upload validation was green: package-integrity and source-boundary
+checks, **395/395** extension unit and boundary tests, and **30/30** real-Chromium
+extension tests.
+
+**The Dashboard does not expose the uploaded ZIP's SHA-256**, so nothing here
+claims Google attests that hash. The hash is *local pre-upload provenance*: it
+establishes what was validated and handed over, not what Google independently
+verified. The Store shows a derived `main.crx`, which is a different artefact
+with a different digest.
+
+### 0.2 Requiredness, resolved from the live form
+
+A `*` in the live form is the required marker. Read directly off the fields:
+
+| Live field | Required? | Note |
+|---|---|---|
+| `Description*` | **Required** | Live limit **16,000** characters |
+| `Category*` | **Required** | Owner has not chosen from the live list |
+| `Language*` | **Required** | Owner has not made a live selection |
+| `Store icon *` | **Required** | 128×128. **A separate Dashboard upload control exists** |
+| `Screenshots *` | **Required** | At least one; max 5; 1280×800 or 640×400; JPEG or 24-bit PNG (no alpha) |
+| `Small promo tile` | **Optional** — no `*` | 440×280; JPEG or 24-bit PNG (no alpha) |
+| `Marquee promo tile` | **Optional** — no `*` | 1400×560; JPEG or 24-bit PNG (no alpha) |
+| `Global promo video` | **Optional** — no `*` | Asks for a YouTube video URL |
+| `Official URL` | Optional | Currently `None`; offers `Add a new site`; help text refers to ownership via Google Search Console |
+| `Homepage URL` | Optional — no `*` | |
+| `Support URL` | Optional — no `*` | See §0.6 |
+| `Mature content` | Toggle, currently off | |
+| `Single purpose description*` | **Required** | Max 1,000 |
+| `activeTab justification*` | **Required** | Max 1,000 |
+| `scripting justification*` | **Required** | Max 1,000 |
+| `Privacy policy URL*` | **Required** | This item declares user-data handling |
+
+### 0.3 Title and summary are package-derived — and the summary has no editable field
+
+The live form labels these **`Title from package`** and **`Summary from
+package`**, showing `PaperLume` and *"Identify the scientific paper on the page
+you are viewing."*
+
+**This corrects §3 of this document.** §3 previously said the summary "can be
+overridden there". **No editable summary field was observed on the live Store
+Listing form.** For the 0.1.0 package, changing the summary must therefore be
+treated as a **package/manifest change requiring a new package upload**, not a
+Dashboard edit — unless future live evidence establishes another mechanism.
+
+**Recommendation for this release: keep the package summary unchanged.** The
+shipped 56-character string is approved user-facing copy, it is truthful, and the
+alternative wording drafted in §3 is not worth a version bump and a re-upload on
+its own. `extension/manifest.json` is deliberately not edited.
+
+### 0.4 Promotional video — RESOLVED: OPTIONAL
+
+**`PROMOTIONAL VIDEO — OPTIONAL IN THE LIVE PAPERLUME DASHBOARD`**
+
+The live field is **`Global promo video`** and **carries no `*` required
+marker**. It asks for a YouTube video URL.
+
+This supersedes the operational question in §10 for this item. **The first-party
+documentation conflict recorded in §10 is real and is preserved** — Google's
+`cws-dashboard-listing` page does list a video among assets you "must provide",
+while `images` says "**only** the extension icon, a small promotional image, and
+a screenshot are **mandatory**". The live form settled which one the submission
+flow actually enforces. That is exactly why §10 refused to guess, and the refusal
+was correct: a guess in either direction had even odds.
+
+**No video is required, and none will be produced.** If one is ever made it is a
+marketing choice, not a submission gate.
+
+### 0.5 Store icon — RESOLVED: SEPARATE DASHBOARD UPLOAD REQUIRED
+
+**`STORE ICON — SEPARATE DASHBOARD UPLOAD REQUIRED`**
+
+The live field is **`Store icon *`** — required, 128×128, with its own
+drop/upload control on the Store Listing form.
+
+This resolves the ambiguity in §9. Both halves of §9's careful claim survive:
+
+- the packaged `icons/icon-128.png` remains **required package metadata** and is
+  what Chrome itself uses; the separate Store field does **not** remove it;
+- `assets/store/store-icon-128.png` was prepared *for exactly this possibility*
+  and is now the **confirmed candidate** for the separate upload rather than a
+  speculative extra file.
+
+Keeping that candidate rather than deleting it was the right call, and this is
+the evidence that settles it. It is **not uploaded here**.
+
+### 0.6 Small promo tile — CORRECTED: OPTIONAL
+
+**`SMALL PROMO TILE — OPTIONAL`**
+
+The live `Small promo tile` field carries **no `*`**. This **corrects a stale
+claim in this document and in
+[chrome-web-store-readiness.md](chrome-web-store-readiness.md)**, both of which
+recorded the small promo tile as one of three mandatory assets, on the strength
+of Google's `images` page.
+
+The live form recognises exactly **two** required graphic assets for this item:
+the **Store icon** and at least one **screenshot**. The prepared 440×280 tile
+remains available as an optional marketing asset.
+
+**Screenshots fit as produced.** The three committed 1280×800 assets match one of
+the two live-accepted sizes. One caveat to check at upload time: the live form
+says **24-bit PNG (no alpha)**, and the generated screenshots must be confirmed
+alpha-free before the separately authorized entry task uploads them. That is a
+verification step, not a known defect.
+
+### 0.7 Support URL is optional in the Store form — and that is not the whole question
+
+The live `Support URL` field carries **no required marker**. Any statement that
+the Chrome Web Store *requires* a support URL is wrong and is corrected.
+
+**This does not dissolve the project's own decision.** C16 in
+[decisions-and-triggers.md](decisions-and-triggers.md) treats Terms and a support
+surface as unimplemented launch blockers, and that decision stands on its own
+product-quality reasoning. The two are simply different gates: *the Store will
+accept a submission without a support URL; PaperLume's own launch-quality
+decision is a separate matter for the owner.* Nothing in C16 is changed here
+beyond removing the false implication that Google compels it.
+
+### 0.8 Distribution — displayed draft state is not an owner decision
+
+Observed on the untouched Distribution form:
+
+| Control | Displayed state | Status |
+|---|---|---|
+| Payments | `Free of charge` selected (alternative: `Contains in-app purchases`) | Correct for this package — it contains no purchase flow. **Reassess if the commercial model changes** |
+| Visibility | `Public` selected; `Unlisted` and `Private` offered; Private describes trusted testers and Google Groups with a current `None` selector | **NOT an owner decision.** Default draft state only |
+| Regions | All regions, all unlisted regions, and visible country rows checked | **NOT an owner decision.** Default draft state only |
+
+**Read this carefully: the displayed `Public` / all-regions state is the form's
+default, not authorization to publish worldwide.** No visibility or region choice
+has been frozen by the owner. The repository recommendation remains a **limited
+beta before any public listing** (§12). Treating a default as a decision is how a
+draft becomes an accidental worldwide launch.
+
+### 0.9 Test instructions — a new, concrete pre-submission gate
+
+The Dashboard exposes a separate **`Test instructions`** page. It states that
+where login, authentication or specific setup is required, the developer should
+supply reviewer credentials and steps, and that the information is confidential
+and used for review.
+
+Live fields: **Username** (max 100) · **Password** (max 100) · **Additional
+instructions** (max 500).
+
+**This matters for PaperLume specifically.** The extension identifies a paper and
+shows it **signed out** — a reviewer can verify the whole extension surface with
+no account. But the *end-to-end* story the listing tells, `Continue in
+PaperLume` → Projects/Tags → confirm import, **requires PaperLume
+authentication**. A reviewer who cannot sign in sees the handoff tab and a login
+wall.
+
+**GATE — create/verify a dedicated low-privilege Chrome Web Store reviewer
+account before submission.** Requirements:
+
+- a Production account suitable for Store review;
+- **no owner or admin privileges**;
+- **no sensitive real-user data**;
+- enough minimal seeded state to exercise Projects/Tags/import if needed;
+- credentials entered **only** into the Store `Test instructions` fields.
+
+**Credentials must never be committed to Git, written into a PR description or
+report, or sent through chat.** Non-secret reviewer *steps* may live in the
+repository — [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §12
+already drafts them. **The account is not created by this task**, which is
+documentation-only.
+
+### 0.10 Publisher account — current state
+
+- Chrome Web Store developer registration **completed**;
+- the one-time **$5 developer fee is paid**;
+- Developer Dashboard **accessible**;
+- publisher classification **intentionally NON-TRADER** for the present
+  non-commercial phase;
+- trader verification **not completed**; **no public trader address added**.
+
+This supersedes the "Publisher account — not done" row in §11 and the
+"no fee paid" statements in the banner and §13.2.
+
+**FUTURE COMMERCIAL-LAUNCH GATE.** Before PaperLume is operated commercially,
+the owner intends to reassess and, if the then-current facts and policy require
+it, switch the publisher account to **Trader** and complete the corresponding
+verification **before** commercial launch. **Nothing here asserts that
+non-trader status is permanently appropriate** — it is correct for the current
+non-commercial phase and is a decision with an expiry condition, not a settled
+fact.
+
+### 0.11 What is still an owner decision
+
+Live evidence removed the *documentation* ambiguities. It did not make any of
+these choices:
+
+| Open item | Why it is still open |
+|---|---|
+| **Category** | Required field; owner has not chosen from the live list. `Workflow & Planning` remains a suggestion only |
+| **Language** | Required field; English (United States) is expected but no live selection is saved |
+| **Visibility** | Public / Unlisted / Private — displayed state is a default, not a decision |
+| **Regions** | Displayed all-regions state is a default, not a decision |
+| **Homepage / Official / Support URLs** | All optional; none chosen. Official URL additionally needs Search Console ownership |
+| **Optional marketing assets** | Small promo tile, marquee tile, promo video — all optional, none required |
+| **Reviewer account** | §0.9 gate; not provisioned |
+| **Trader transition** | §0.10; required only before commercial launch |
 
 ---
 
@@ -113,8 +368,17 @@ that Chrome never has to truncate it.
 
 ## 3. Summary — the short description
 
+> **CORRECTED by §0.3 (2026-08-30).** The live form labels this **`Summary from
+> package`** and **exposes no editable summary field**. The sentence below —
+> "can be overridden there" — was read from Google's documentation and is **not
+> what the live form does**. For the 0.1.0 package, changing the summary is a
+> **manifest change requiring a new package upload**. The recommendation for
+> this release is to **keep the shipped summary unchanged**, and
+> `extension/manifest.json` is deliberately not edited.
+
 The Dashboard's summary field is **prefilled from the manifest `description`**
-and can be overridden there. Chrome's limit is *"no more than 132 characters"*
+and — *per the pre-Dashboard documentation reading, now superseded by §0.3* —
+was expected to be overridable there. Chrome's limit is *"no more than 132 characters"*
 ([description](https://developer.chrome.com/docs/extensions/reference/manifest/description)),
 enforced on the shipping artefact by the package contract.
 
@@ -247,9 +511,10 @@ The manifest declares exactly two.
 > in it, and — when the URL contains neither — reads the standard DOI metadata
 > the page publishes. `activeTab` is the narrowest way to do both: Chrome grants
 > it only in response to the user clicking the extension's toolbar action, it
-> covers only the tab the user was looking at when they clicked, it is revoked
-> when they navigate away, and it shows no install-time warning because it grants
-> nothing until the user asks.
+> covers only the tab the user was looking at when they clicked, it lasts only
+> while that tab stays on that site — Chrome revokes it when the tab navigates to
+> a **different origin** or is closed — and it shows no install-time warning
+> because it grants nothing until the user asks.
 >
 > The URL is read into a local function, classified, and discarded when the popup
 > closes. It is not stored — the extension has no `storage` permission and no
@@ -259,6 +524,32 @@ The manifest declares exactly two.
 >
 > Without `activeTab` the extension cannot see any URL, cannot reach any page,
 > and has no function.
+
+**Lifetime wording corrected 2026-08-30, and why the old wording was wrong.**
+This justification previously said the grant "is revoked when they navigate
+away". That is the headline sentence of Chrome's own page, but it is **broader
+than the actual behaviour** and would have understated the grant on the Store
+form. The same page's worked example is explicit:
+
+> *"Access to the tab lasts while the user is on that page, and is revoked when
+> the user navigates away or closes the tab."* … *"if the user invokes the
+> extension on `https://example.com` and then navigates to
+> `https://example.com/foo`, the extension will continue to have access to the
+> page. If the user navigates to `https://chromium.org`, access is revoked."*
+> — [activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab),
+> re-read **2026-08-30**
+
+So the grant **survives same-origin navigation** within the invoked tab and ends
+at a **cross-origin** navigation or tab close. The corrected sentence says that.
+
+**This changes no behaviour and no disclosure.** PaperLume reads the URL once,
+when the popup opens, and holds nothing afterwards — it has no background
+context in which a longer-lived grant could be used, and no `storage` in which
+anything could outlive the popup. The correction matters because a permission
+justification is read by a reviewer as a technical claim, and an inaccurate one
+is a defect whether or not it flatters the extension. Here the accurate wording
+is marginally *less* flattering, which is precisely why it must be the one that
+ships.
 
 ### `scripting`
 
@@ -286,6 +577,54 @@ The manifest declares exactly two.
 > click produces. That is deliberately narrower than requesting host permissions,
 > which would give PaperLume standing access to every matching page for as long
 > as it is installed, whether or not the user ever asked for anything.
+
+### ⚠ Both justifications exceed the live 1,000-character cap — entry-ready variants
+
+**Finding, 2026-08-30.** The live Privacy form caps `activeTab justification*`
+and `scripting justification*` at **1,000 characters each**. Measured as plain
+text with markdown emphasis stripped, the drafts above are **1,071** and
+**1,470** characters. **Neither can be pasted as written.** This was invisible
+before the live form was seen, because Google's documentation states no limit.
+
+The drafts above are **kept unchanged** — they are the full reasoning, and they
+remain the reference for anyone checking that the short forms below claim
+nothing extra. What follows is what actually gets entered.
+
+**`activeTab justification*` — 981 characters:**
+
+```text
+PaperLume reads the active tab's URL to recognise a PubMed PMID or a DOI in it, and - only when the URL contains neither - reads the standard bibliographic DOI metadata the page publishes. activeTab is the narrowest way to do both: Chrome grants it only when the user clicks the extension's toolbar action, it covers only that one tab, it lasts only while that tab stays on that site (revoked on a cross-origin navigation or when the tab closes), and it shows no install-time warning because it grants nothing until the user asks.
+
+The URL is read into a local function, classified, and discarded when the popup closes. Nothing is stored - there is no storage permission and no background context. Nothing is transmitted - the extension makes no network request at all. If the user presses Continue, only the extracted identifier is carried into a PaperLume URL, never the source URL.
+
+Without activeTab the extension cannot see any URL, cannot reach any page, and has no function.
+```
+
+**`scripting justification*` — 996 characters:**
+
+```text
+A doi.org link redirects to the publisher almost immediately, so when a user clicks PaperLume the address bar shows a publisher URL containing no DOI. Without scripting, PaperLume cannot identify a paper reached the ordinary way people follow a DOI.
+
+scripting runs one small function, bundled in the package, in the tab the user just invoked it on. It reads only the DOI the publisher already publishes in page metadata - citation_doi, dc.identifier, dc.identifier.doi, prism.doi - from the document head, main frame only. Nothing else: no article text, abstract, title, authors, links or cookies. Values reduce to at most one DOI, discarded when the popup closes. A page with two different DOIs identifies neither.
+
+It runs only after the URL identified nothing; on a PubMed record or doi.org link the page is never touched.
+
+scripting grants no page access alone: injection needs host access, which PaperLume does not declare. It comes only from activeTab, the grant the user's click produces.
+```
+
+**What was cut, and what was deliberately not.** The compression removed
+restatement, not claims. Every substantive assertion survives: gesture-bound
+grant, single tab, **cross-origin** revocation, the four metadata keys, head and
+main frame only, the explicit not-read list, fail-closed on two DOIs, the
+URL-first ordering, no storage, no network request, no host permissions. The
+en-dashes are written as `-` because these are plain-text form fields, not
+markdown.
+
+**`Single purpose description*` fits as drafted** — §5 measures **534**
+characters against the same 1,000 cap, and needs no short form.
+
+**Re-measure before entry.** If §5 or §6 is edited later, re-check both counts;
+the cap is a property of the live form, not of this document.
 
 **Evidence that both grants are genuinely gesture-bound**, read from the browser
 rather than promised by the extension:
@@ -361,6 +700,47 @@ in a comment, because a comment ships. See
 repository can set them, and no answer below should be pasted without being
 re-read against the live form.
 
+> ## ⚠ BLOCKING WARNING FOR THE STORE-ENTRY TASK — remote code must be changed to **No**
+>
+> The **untouched** live Privacy form was observed on 2026-08-30 displaying
+> **`Yes, I am using remote code`** selected, with a required `Justification*`
+> field exposed as a consequence.
+>
+> **That selection is factually wrong for PaperLume and must not be saved.**
+>
+> The live help text defines remote code as JavaScript or Wasm that is *not
+> included in the extension package* — including references to external files and
+> strings evaluated through `eval`-style mechanisms. The PaperLume package uses
+> **none** of those:
+>
+> - no remote JavaScript, no remote Wasm, no external script import;
+> - no `eval`, no `new Function`;
+> - the function passed to `chrome.scripting.executeScript({func})` is **bundled
+>   inside `popup.js`** — Chrome serializes it out of the package at call time,
+>   so nothing is fetched and nothing is evaluated from a string;
+> - the package is self-contained, and the package scanner rejects any origin
+>   other than `https://app.paperlume.app` in any packaged file, including in a
+>   comment.
+>
+> **Locked intended answer: `No, I am not using remote code`.**
+>
+> **Do not write a remote-code justification.** The `No` path should not expose
+> that field; if a justification field is still required after selecting `No`,
+> that is a **stop-and-report** event, not a prompt to invent text.
+>
+> Whether the displayed `Yes` is a Dashboard default or an artefact of the
+> observation session is not established, and does not matter: it must be
+> **explicitly changed to No before Privacy practices is saved**, and the saved
+> value re-read afterwards to confirm it took.
+
+**Live Privacy form facts (2026-08-30).** Three required free-text fields, each
+capped at **1,000** characters — `Single purpose description*`,
+`activeTab justification*`, `scripting justification*`. Drafts for all three are
+below and in §5/§6; each must be checked against the 1,000-character cap at
+entry time. The nine data-usage categories in §7 match the live list exactly. The
+`Privacy policy URL*` field is required for this item because it declares
+user-data handling.
+
 ### The boundary these answers are about
 
 The Dashboard is asking about **the extension**, not about PaperLume. The two
@@ -434,11 +814,24 @@ Category definitions quoted from the
 
 ### Certifications
 
-| Statement | Answer | Basis |
+**Live wording, transcribed from the form on 2026-08-30.** The live Privacy page
+contains exactly **three** certifications, and states:
+
+> *"You must certify all three disclosures to comply with our Developer Program
+> Policies"*
+
+| Live statement | Answer | Basis |
 |---|---|---|
-| *I do not sell or transfer user data to third parties, apart from the approved use cases* | **Certify** | Nothing is sold or transferred. The identifier goes only to PaperLume, at the user's request, as the feature the user invoked |
-| *I do not use or transfer user data for purposes unrelated to my item's single purpose* | **Certify** | The identifier **is** the single purpose |
+| *I do not sell or transfer user data to third parties, outside of the approved use cases* | **Certify** | Nothing is sold or transferred. The identifier goes only to PaperLume, at the user's request, as the feature the user invoked |
+| *I do not use or transfer user data for purposes that are unrelated to my item's single purpose* | **Certify** | The identifier **is** the single purpose |
 | *I do not use or transfer user data to determine creditworthiness or for lending purposes* | **Certify** | Not applicable |
+
+**Intended answer: CERTIFY ALL THREE.** Not ticked by any task so far.
+
+**No separate Limited Use checkbox or Limited Use text field was observed on the
+live Privacy page.** The affirmative Limited Use disclosure therefore lives where
+§8 already puts it — in the public Privacy Policy §4 — and **no second copy
+should be added** to the listing copy or invented as a Dashboard field.
 
 ### Why "Website content" became Yes
 
@@ -515,6 +908,10 @@ is a **stop-and-report** event, not an edit.
 ---
 
 ## 8. Privacy policy URL
+
+**Live field: `Privacy policy URL*` — required**, because this item declares
+user-data handling (Web history = Yes, Website content = Yes). Confirmed on the
+live form 2026-08-30. Not entered by any task so far.
 
 ```text
 https://app.paperlume.app/privacy
@@ -609,8 +1006,38 @@ files, which is how the change was confined to the three that had to move.
 | Screenshot 1 | `assets/store/screenshot-1-pubmed-1280x800.png` | 1280×800 | **Real popup**, `dist-extension/` in real Chromium | Captured at 2×, composed onto a caption panel | Layout yes; type uses the host UI font | No | **Yes** — real PubMed detection, from the URL alone with no page access |
 | Screenshot 2 | `assets/store/screenshot-2-doi-1280x800.png` | 1280×800 | **Real popup**, same lane | Same | Same | No | **Yes** — real DOI detection |
 | Screenshot 3 | `assets/store/screenshot-3-unsupported-1280x800.png` | 1280×800 | **Real popup**, same lane | Same | Same | No | **Yes** — real unsupported state |
-| Marquee promo tile | — | 1400×560 | — | Not produced | — | — | **Optional** on every first-party reading; deliberately skipped |
-| Promotional video | — | — | — | Not produced | — | — | **Requirement unresolved** — see §10 |
+| Marquee promo tile | — | 1400×560 | — | Not produced | — | — | **Optional** — confirmed on the live form (no `*`) |
+| Promotional video | — | — | — | Not produced | — | — | **OPTIONAL** — resolved from the live form, §0.4. Historical conflict preserved in §10 |
+
+> **Live requiredness, resolved 2026-08-30 (§0).** The live Store Listing form
+> requires exactly **two** graphic assets for this item: **`Store icon *`**
+> (128×128, its own upload control) and **`Screenshots *`** (at least one; max 5;
+> 1280×800 or 640×400). **`Small promo tile`, `Marquee promo tile` and
+> `Global promo video` all carry no `*` and are OPTIONAL** — which **corrects**
+> this document's earlier statement, taken from Google's `images` page, that the
+> small promo tile is mandatory.
+>
+> **The committed assets already satisfy the live format rule — measured, not
+> assumed.** The live form specifies *JPEG or 24-bit PNG (no alpha)* for
+> screenshots and both promo tiles. Reading the PNG `IHDR` colour type directly
+> off the committed files on 2026-08-30:
+>
+> | File | Dimensions | PNG colour type | Live rule |
+> |---|---|---|---|
+> | `screenshot-1-pubmed-1280x800.png` | 1280×800 | **2 — 24-bit RGB, no alpha** | ✅ |
+> | `screenshot-2-doi-1280x800.png` | 1280×800 | **2 — 24-bit RGB, no alpha** | ✅ |
+> | `screenshot-3-unsupported-1280x800.png` | 1280×800 | **2 — 24-bit RGB, no alpha** | ✅ |
+> | `promo-tile-small-440x280.png` | 440×280 | **2 — 24-bit RGB, no alpha** | ✅ |
+> | `store-icon-128.png` | 128×128 | 6 — RGBA | ✅ — see below |
+>
+> No `tRNS` chunk is present in any of them. **The store icon keeping its alpha
+> channel is correct, not an exception**: the `no alpha` rule is stated for
+> screenshots and promo tiles, while the store icon is specified as 128×128 with
+> Google's documented 96×96 mark plus 16 px of *transparent* padding — which
+> requires alpha. The generator produced the right format for each role.
+>
+> `assets/store/store-icon-128.png` is no longer a speculative candidate: a
+> separate required upload field exists, and it is the file prepared for it.
 
 ### What "real popup" means, precisely
 
@@ -673,15 +1100,24 @@ square, so 96×96 is read as the box it must fit *within* — the mark is scaled
 its taller axis is exactly 96 px, giving 16 px of transparent padding top and
 bottom and 28 px left and right, both at or above the documented minimum.
 
-**What is NOT claimed.** This document does not assert that the candidate is
+> **RESOLVED 2026-08-30 — §0.5.** A separate field **does** exist:
+> **`Store icon *`**, required, 128×128, with its own upload control. The
+> candidate `assets/store/store-icon-128.png` is the file prepared for it. The
+> packaged `icons/icon-128.png` is still required package metadata and is what
+> Chrome itself uses — the separate field does not replace it. Whether the Store
+> *displays* the uploaded icon rather than the packaged one is still not asserted
+> here, and does not need to be. The paragraph below is preserved as the
+> historical position.
+
+**What was NOT claimed, before the live form was seen.** This document did not assert that the candidate is
 uploaded through a separate Dashboard field, that it overrides the packaged
 icon, or that the Chrome Web Store will display it rather than the manifest
-icon. The Dashboard has not been inspected — 001E2 and this correction are not
+icon. The Dashboard had not been inspected — 001E2 and that correction were not
 authorised to open it — and
 [Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)
 lists *"A 128x128 px to use as your store icon"* among the graphic assets
 without settling whether that field is a separate upload or is read from the
-package. Until someone looks at the live form, that is unresolved.
+package. That stayed unresolved until someone looked at the live form.
 
 **Consequence for 001E3.** If the live Dashboard exposes a distinct store-icon
 upload field, the candidate is ready to use. If it does not, the packaged icon
@@ -699,9 +1135,23 @@ is why the packaged set is not simply re-padded to match.
 
 ---
 
-## 10. Promotional video — `FIRST-PARTY DOCUMENTATION CONFLICT`
+## 10. Promotional video — `RESOLVED FROM THE LIVE FORM: OPTIONAL`
 
-**Classification:**
+> **RESOLVED 2026-08-30 — see §0.4.** The live field is **`Global promo video`**
+> and it carries **no `*` required marker**. **Classification is now
+> `PROMOTIONAL VIDEO — OPTIONAL IN THE LIVE PAPERLUME DASHBOARD`.** No video is
+> required and none will be produced.
+>
+> **Everything below is preserved as the historical record**, and is not
+> rewritten. It documents a genuine, still-real conflict between three
+> first-party Google pages, and the decision not to guess which one governed. The
+> live form answered the *operational* question; it did not make the
+> documentation consistent, and a future reader hitting the same contradiction
+> should know it was seen, analysed, and resolved by observation rather than
+> assumption. The gate below (§"The gate, stated as an owner action for 001E3")
+> is **discharged**: it was verified, and the answer was "not required".
+
+**Historical classification, correct when written on 2026-08-29:**
 `PROMOTIONAL VIDEO REQUIREMENT — FIRST-PARTY DOCUMENTATION CONFLICT; LIVE DASHBOARD VERIFICATION REQUIRED BEFORE SUBMISSION`
 
 **Not "required". Not "optional".** Google's own documentation says both, on
@@ -772,11 +1222,14 @@ and is not produced.
 
 | Field | Value | Status |
 |---|---|---|
-| Category | Suggested: **Workflow & Planning** (research/reference tooling) | **Owner decision.** Verify the live category list at entry time |
-| Language | **English (United States)** — the only language the popup ships | Ready |
-| Support URL / contact email | — | **Owner input required.** PaperLume has no published Support page: C16 in [decisions-and-triggers.md](decisions-and-triggers.md) still governs Terms and Support, and both remain unimplemented launch blockers |
-| Reviewer test instructions | Drafted in [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §12 | Ready. No credentials are created or embedded, and none should be |
-| Publisher account | Verified developer, 2SV enabled, one-time registration fee paid | **Owner action.** Not done; no account interaction has occurred |
+| `Category*` | Suggested: **Workflow & Planning** (research/reference tooling) | **REQUIRED field; still an owner decision.** No live selection made. Choose from the live list at entry time |
+| `Language*` | **English (United States)** — the only language the popup ships | **REQUIRED field.** Expected value; **no live selection is saved** |
+| `Support URL` | — | **OPTIONAL in the live Store form** (no `*`) — see §0.7. Separately, C16 in [decisions-and-triggers.md](decisions-and-triggers.md) governs Terms and Support as PaperLume's own launch-quality decision. **The Store does not compel it; C16 is unchanged** |
+| `Homepage URL` | — | Optional (no `*`). Owner decision |
+| `Official URL` | — | Optional. Currently `None`; requires site ownership through Google Search Console |
+| `Mature content` | Off | Toggle displayed off; correct for this item |
+| Reviewer test instructions | Drafted in [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §12 | Ready. **A dedicated low-privilege reviewer account is a new pre-submission gate — §0.9.** No credentials are created or embedded, and none should be |
+| Publisher account | Registered developer; Dashboard accessible | **DONE.** Registration complete and the one-time **$5 fee is paid** (§0.10). Classification intentionally **non-trader** for the current non-commercial phase |
 
 ---
 
@@ -784,6 +1237,14 @@ and is not produced.
 
 Documented, **not chosen**. The owner has made no distribution decision, and
 these three do not carry the same gates.
+
+> **Live Distribution form state, 2026-08-30 — see §0.8.** The untouched form
+> displays `Free of charge` (correct: the package contains no purchase flow),
+> **`Public` visibility**, and **all regions checked**. **None of that is an
+> owner decision** — it is the form's default draft state, observed read-only.
+> The recommendation below, a limited beta before any public listing, is
+> unchanged and unfrozen. Do not read the displayed defaults as authorization to
+> publish worldwide.
 
 ### A. Owner / manual local installation
 
@@ -842,6 +1303,38 @@ support surface it does not yet have. That is a recommendation, not a decision.
 
 ## 13. Explicitly not performed
 
+### 13.1 Current state — as of 2026-08-30, after `001E3A`
+
+Still **not** performed:
+
+- No Store Listing, Privacy practices, Distribution or Test-instructions field
+  deliberately populated or **saved**.
+- No screenshot, store icon, promo tile or video uploaded to Google.
+- No video produced or uploaded to YouTube.
+- No category, language, visibility or region **chosen** by the owner.
+- No certification ticked; no privacy-policy URL entered.
+- No reviewer account created; no reviewer credentials entered anywhere.
+- No opt-in to **Verified CRX uploads**; the item's **public key was not
+  viewed**.
+- No trader-status change, no trader verification, no public address added.
+- No GitHub Release, no tag, no version bump.
+- **No submission for review, and no publication.**
+
+Now **done**, by `CHROME-EXTENSION-IMPORT-001E3A` on 2026-08-30, under explicit
+owner authorization limited to exactly these two mutations:
+
+- Developer registration complete and the one-time **$5 fee paid** (owner, prior
+  to 001E3A).
+- **One** PaperLume draft item created — `cfanjbamcemoeglgkpbidnclkomaocmo`.
+- **One** package uploaded — the validated `0.1.0` release candidate.
+
+A separately authorized **`001E3C`** owns everything still outstanding. Nothing
+in this document authorizes it.
+
+### 13.2 Historical — the state through 2026-08-29, preserved
+
+Correct when written, and superseded by §13.1:
+
 - No Chrome Web Store Developer Dashboard session, of any kind.
 - No package upload.
 - No Store item created, saved, or drafted in Google's system.
@@ -853,5 +1346,5 @@ support surface it does not yet have. That is a recommendation, not a decision.
 - No GitHub Release, no tag, no version bump.
 - No submission for review, and no publication.
 
-`CHROME-EXTENSION-IMPORT-001E3` owns every one of these, and requires explicit
+`CHROME-EXTENSION-IMPORT-001E3` owned every one of these, and required explicit
 owner authorization.
