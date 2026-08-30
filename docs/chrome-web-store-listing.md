@@ -881,7 +881,14 @@ in a comment, because a comment ships. See
 repository can set them, and no answer below should be pasted without being
 re-read against the live form.
 
-> ## ⚠ BLOCKING WARNING FOR THE STORE-ENTRY TASK — remote code must be changed to **No**
+> ## ~~⚠ BLOCKING WARNING FOR THE STORE-ENTRY TASK — remote code must be changed to **No**~~ — RESOLVED 2026-08-30
+>
+> **RESOLVED by `001E3C`, verified by `001E3D`: the saved live answer is
+> `No, I am not using remote code`, the remote-code justification is empty, and
+> the value held across save and reload.** The warning below is preserved as the
+> reasoning that produced that answer — and as the standard any *future* re-entry
+> must still meet — not as an outstanding action. See readiness §8 item 29 and
+> §0.12.
 >
 > The **untouched** live Privacy form was observed on 2026-08-30 displaying
 > **`Yes, I am using remote code`** selected, with a required `Justification*`
@@ -912,7 +919,13 @@ re-read against the live form.
 > Whether the displayed `Yes` is a Dashboard default or an artefact of the
 > observation session is not established, and does not matter: it must be
 > **explicitly changed to No before Privacy practices is saved**, and the saved
-> value re-read afterwards to confirm it took.
+> value re-read afterwards to confirm it took. *(Done 2026-08-30 — `No` was
+> selected, saved and re-read; it took. One thing the entry established that this
+> warning could not: after selecting `No` the justification field **stays
+> visible** and keeps a static `required` attribute — as do all four textareas on
+> that page — so that attribute is **not** the requiredness signal and is not by
+> itself the stop-and-report condition described above. The `*` marker is, and
+> that field carries none.)*
 
 **Live Privacy form facts (2026-08-30).** Three required free-text fields, each
 capped at **1,000** characters — `Single purpose description*`,
