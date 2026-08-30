@@ -298,8 +298,10 @@ documentation-only.
 > **No preseeded Project/Tag/Paper fixture is required, and none was created.**
 > The authenticated import page's Project and Tag selection is optional and its
 > confirm control works with none selected, so the canonical import completes on
-> an empty account — which is the preferable state, because it minimises
-> Production test data and shows the reviewer an ordinary new-user baseline. See
+> an account whose library is empty — the preferable state, because it minimises
+> Production test data and shows the reviewer an ordinary new-user baseline. The
+> identity still holds the ordinary account and authentication records any user
+> has; what it holds none of is seeded research or library content. See
 > readiness §12.
 
 ### 0.10 Publisher account — current state
