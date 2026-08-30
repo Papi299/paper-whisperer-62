@@ -1464,15 +1464,15 @@ was re-read on 2026-08-30: the authenticated import page lets the user
 *optionally* select existing Projects and Tags, the confirm control's disabled
 state depends only on the import phase and the context load — **never on the
 selections** — and the taxonomy section renders nothing at all for a user who has
-neither Projects nor Tags. The canonical import therefore completes on an empty
-account whose library is empty, with zero assignments. (The identity itself of
-course carries the ordinary account records any PaperLume user has — an Auth
-identity, a profile, an entitlement, a usage counter; what it carries none of is
-seeded research or library content.)
+neither Projects nor Tags. The canonical import therefore completes on an account
+whose library is empty, with zero assignments. (The identity itself of course
+carries the ordinary account and authentication records any PaperLume user has —
+an Auth identity, a profile, an entitlement, a usage counter; what it carries
+none of is seeded research or library content.)
 
 The empty-library account is **preferable**, not a shortcut: it minimises
-Production test data, it shows the reviewer an ordinary new-user baseline, and it demonstrates
-that Project/Tag assignment is genuinely optional. A reviewer may create normal
+Production test data, it shows the reviewer an ordinary new-user baseline, and it
+demonstrates that Project/Tag assignment is genuinely optional. A reviewer may create normal
 user-owned content during review if they want to; nothing has to exist
 beforehand, in this repository or in Production.
 
