@@ -459,8 +459,11 @@ extension id · a timestamp
 PMID is a public catalogue number; it does not carry the query string, fragment,
 campaign parameters, or session tokens that the original URL may have held.
 
-**Page content is not sent either.** The metadata read produces at most one DOI
-name, and that DOI is the only thing a `kind`/`value` handoff can carry — the
+**No page content is sent, apart from the detected DOI itself.** That
+qualification matters and is not pedantry: on the metadata path the DOI *is*
+derived from an approved `<meta>` element's `content` value, so "page content is
+never transmitted" would be false as stated. The metadata read produces at most
+one DOI name, and that DOI is the only thing a `kind`/`value` handoff can carry — the
 contract has no third parameter to put anything else in. Asserted on a
 metadata-detected DOI in a real browser, including that the publisher host, the
 article title and the author name appear nowhere in the handoff URL
@@ -556,9 +559,15 @@ handles user data, and "Web history = Yes" makes that unambiguous here.
 
 **Implemented.** PAPERLUME-PRIVACY-001B added the owner-approved Privacy Policy
 to the application as the public, unauthenticated route `/privacy`. Its §4 is the
-extension section and covers all seven points below. It is served by the app
-rather than the still-unchosen marketing site (see C16 in
+extension section. It is served by the app rather than the still-unchosen
+marketing site (see C16 in
 [decisions-and-triggers.md](decisions-and-triggers.md)).
+
+**Point 2 below was added by CORRECTION-01 and the published §4 did not cover
+it** — that is the blocking gate stated at the end of this subsection. The
+amended §4 approved by the owner on 2026-08-30 covers all eight points, but is
+not published until `PRIVACY-POLICY-EXTENSION-METADATA-001B` merges and
+deploys.
 
 **Privacy policy URL to enter in the Developer Dashboard:**
 `https://app.paperlume.app/privacy`
@@ -578,20 +587,25 @@ The content the extension section must cover:
    bibliographic `<meta>` values from that page — locally and transiently;**
 3. that it stores nothing and transmits nothing automatically;
 4. that pressing Continue sends only a PMID or DOI to PaperLume;
-5. that the source URL, page content and titles are never sent;
+5. that the source URL, page content and titles are not sent — with the one
+   exception that the **detected identifier value** is, and only after the user
+   explicitly chooses Continue (a detected DOI may be derived from an approved
+   metadata `content` value, so an unqualified claim here would be false);
 6. how the identifier is then handled by PaperLume once imported;
 7. the existing processor list (Supabase, NCBI/PubMed, Crossref, Gemini) — noting
    the extension itself contacts none of them;
 8. contact route for data-subject requests.
 
-**BLOCKING GATE — the published policy is now materially inaccurate on point 2,
-and this repository is not authorised to fix it.** The owner-approved §4 of
-`/privacy` states, as a bulleted list of things the extension does **not** do:
+**BLOCKING GATE — OWNER APPROVAL GIVEN 2026-08-30; MERGE AND PRODUCTION
+VERIFICATION STILL OUTSTANDING.**
+
+*The defect, recorded as it was found.* The owner-approved §4 of `/privacy`
+stated, as a bulleted list of things the extension does **not** do:
 
 > It does not: … read the contents of the webpage or its DOM; …
 
 That sentence was true of every version up to and including 001E2. It is **false
-of the extension this document now describes.** The rest of §4 remains accurate —
+of the extension this document describes.** The rest of §4 remained accurate —
 the extension still stores nothing, still transmits nothing automatically, still
 sends only the identifier, and still does not maintain a browsing-history
 database, read cookies, or use content scripts.
@@ -599,16 +613,38 @@ database, read cookies, or use content scripts.
 CORRECTION-01 deliberately did **not** edit
 [`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx): the public Privacy Policy is
 owner-approved legal text under separate control, and amending it is an owner and
-legal decision, not an engineering one. The recommended amendment is narrow — the
-"does not read the contents of the webpage or its DOM" bullet must be replaced
-with an accurate statement of the bounded metadata read, and the "reads the URL
-of the currently active browser tab" paragraph extended to mention it.
+legal decision, not an engineering one.
 
-**No Chrome Web Store submission may proceed until that amendment is approved and
-published**, because Google requires the disclosed practices to match the posted
-policy, and "Website content = Yes" against a policy saying the page is never
-read is a direct contradiction a reviewer can check in one click. This gate is
-additional to, and independent of, the existing reachability gate below.
+*The decision.* On **2026-08-30 the owner approved exact replacement wording for
+§4**, and `PRIVACY-POLICY-EXTENSION-METADATA-001B` implements it verbatim,
+together with an effective date of **August 30, 2026**. The amended section
+discloses the bounded metadata read, names the four supported DOI metadata names,
+states that the check is main-frame only, states that processing is local and
+transient and not persisted, replaces the retired bullet with a bounded negative
+list, and closes with an affirmative Limited Use statement. The full record is in
+[privacy-data-flow-audit.md](privacy-data-flow-audit.md) §25.
+
+*What is still open, and why this gate does not yet close.*
+`PRIVACY-POLICY-EXTENSION-METADATA-001B` is **a pull request**. Approving wording
+is not merging it, and merging is not publishing it — the policy a Chrome Web
+Store reviewer reads is whatever Production serves. **No Chrome Web Store
+submission may proceed until the amendment is merged, deployed, and verified in
+Production signed out**, because Google requires the disclosed practices to match
+the posted policy, and "Website content = Yes" against a policy saying the page is
+never read is a direct contradiction a reviewer can check in one click. A Vercel
+Preview deployment is **not** Production and does not close this gate. It is
+additional to, and independent of, the reachability gate below — which the same
+Production check should satisfy at the same time, by confirming both that
+`/privacy` loads and that it shows the amended §4 and the August 30, 2026
+effective date.
+
+**Limited Use disclosure location.** The approved §4 closes with *"PaperLume uses
+information accessed by the Chrome extension only in accordance with the Chrome
+Web Store User Data Policy, including its Limited Use requirements."* The public
+Privacy Policy is therefore the affirmative Limited Use disclosure location, one
+click from the item's listed policy URL. No second copy of that sentence belongs
+elsewhere, and none should be added unless first-party Google documentation
+clearly requires a separate one.
 
 ---
 
@@ -835,8 +871,8 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 ### Before entering anything in the Dashboard
 
 - [ ] 22. Re-verify every policy citation in this document **and in [chrome-web-store-listing.md](chrome-web-store-listing.md)** against the live primary source (see the header) — including the `activeTab` and `chrome.scripting` pages this correction relies on.
-- [ ] 23. **Confirm the public Privacy Policy has been amended and republished** so it no longer says the extension does not read the page's contents or DOM (§6, *BLOCKING GATE*). This is an owner/legal action; until it is done, the disclosed **Website content = Yes** contradicts the posted policy.
-- [ ] 24. Confirm the privacy policy URL is **published and publicly reachable in Production, signed out, from a clean browser**.
+- [ ] 23. **Confirm the amended public Privacy Policy is live in Production** (§6, *BLOCKING GATE*). The owner/legal decision was taken on **2026-08-30** and `PRIVACY-POLICY-EXTENSION-METADATA-001B` implements the approved wording, but approval is not merge and merge is not deployment. Check the served page — not the repository, and not a Preview deployment — and confirm it no longer says the extension does not read the page's contents or DOM, that it discloses the bounded DOI metadata read, and that the effective date reads **August 30, 2026**. Until the *served* page says all three, the disclosed **Website content = Yes** contradicts the posted policy.
+- [ ] 24. Confirm the privacy policy URL is **published and publicly reachable in Production, signed out, from a clean browser**. Items 23 and 24 are satisfied by the same visit; do them together and record the date.
 - [ ] 25. Review the five committed listing images in [`assets/store/`](../assets/store) and confirm each is accurate and acceptable to publish — in particular that no caption claims the page is never read.
 - [ ] 26. Confirm the Dashboard's **Website content** answer is set to **Yes** and that the permission justification covers **both** `activeTab` and `scripting`.
 - [ ] 27. Resolve the **promotional video** question (§11) against the **live Developer Dashboard**: is the field actually required for the chosen visibility? Google's own pages contradict each other, so this cannot be settled from documentation. If it is required, producing and hosting the video becomes a content gate; if not, it stays deferred.
