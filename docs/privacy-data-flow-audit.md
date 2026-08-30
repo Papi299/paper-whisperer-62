@@ -371,7 +371,7 @@ https://app.paperlume.app/extension-import?kind=doi&value=<URL-encoded DOI>
 
 ### 11.9 Distribution status
 
-The extension is **not published** to the Chrome Web Store and no listing exists (`docs/deployment.md`, `README.md` §167). `npm run package:extension` produces a local, gitignored release candidate ZIP and explicitly uploads, publishes and tags nothing. *(Updated 2026-08-30 — see §26: a **draft** Store item now exists and the `0.1.0` package has been uploaded to it. The extension is **still not published**, and no listing content has been saved. The packaging command's behaviour is unchanged: it still uploads nothing; the upload was a separate, owner-authorized manual action.)*
+The extension is **not published** to the Chrome Web Store and no listing exists (`docs/deployment.md`, `README.md` §167). `npm run package:extension` produces a local, gitignored release candidate ZIP and explicitly uploads, publishes and tags nothing. *(Updated 2026-08-30 — see §26 and §26.8: a **draft** Store item now exists, the `0.1.0` package has been uploaded to it, and the listing, privacy, test-instruction and distribution fields have since been **populated and saved**. The extension is **still not published and still not submitted**. The packaging command's behaviour is unchanged: it still uploads nothing; the upload and the form entry were separate, owner-authorized manual actions.)*
 
 ---
 
@@ -1212,7 +1212,7 @@ byte-for-byte what those sections audited, and no source file was touched.
 | Uploaded version | `0.1.0` — accepted; Store shows `main.crx` |
 | Permissions shown by the Store | `activeTab`, `scripting` |
 | Item status | **Draft. Not published.** *"This item is not published yet"* |
-| Listing / Privacy / Distribution fields | **None deliberately populated or saved** |
+| Listing / Privacy / Distribution fields | **None deliberately populated or saved** *(true at `001E3B`; superseded 2026-08-30 — all four pages are now populated and saved, see §26.8)* |
 
 **Package provenance is local, not Store-attested.** The uploaded artefact was
 `release/paperlume-extension-0.1.0-rc.zip`, **15788 bytes**, SHA-256
@@ -1335,9 +1335,9 @@ chat.** No such account exists yet, and this task does not create one.
 > path is zero reviewer research/library fixture rows, on top of the ordinary
 > account records the identity requires in any case.
 >
-> **The credentials are owner-held outside Git and chat, and have not been given
-> to Google.** They are to be entered only into the Dashboard's confidential
-> `Test instructions` fields under a separately authorized task. The
+> **The credentials are owner-held outside Git and chat, and ~~have not been
+> given to Google~~ were entered into the Dashboard's confidential
+> `Test instructions` fields on 2026-08-30 under `001E3C`** — see §26.8. The
 > never-in-Git/PR/report/chat rule above is unchanged and still binding. This
 > addendum records account state only; **no data-flow fact in §11, §19, §24 or
 > §25 moves.**
@@ -1351,4 +1351,48 @@ chat.** No such account exists yet, and this task does not create one.
   not discharged by anything here. Last passed **2026-08-30**; re-run it signed
   out, in Production, immediately before any actual submission.
 - **No Store form was populated or saved**, nothing was submitted, and nothing is
-  published.
+  published. *(True of `001E3A`/`001E3B`. The forms were populated later the same
+  day by `001E3C` — §26.8. Nothing was submitted or published then either, and
+  nothing is now.)*
+
+### 26.8 Addendum — 2026-08-30 — `001E3C` entry, `001E3D` read-only audit
+
+**Scope.** The Store draft's four owner-facing pages were **populated and saved**
+by `001E3C`, and re-read read-only by `001E3D`. **No verified data-flow fact
+moves.** §11, §19, §24, §25 and §26.2 stand exactly as written — no source file
+was touched, and the extension's behaviour is byte-for-byte what they audited.
+
+**What the disclosure answers became, live.** The drafted answers in §24.5 /
+§26.2 were entered **unchanged and unsoftened**: **Web history = Yes**,
+**Website content = Yes**, and the other seven categories **No**. All three
+certifications are certified, and the privacy-policy URL saved as
+`https://app.paperlume.app/privacy`. Single-purpose and both permission
+justifications were entered from the approved short forms and verified
+byte-identical after save.
+
+**One live-form correction is privacy-relevant and worth recording.** The
+untouched Privacy form had displayed **`Yes, I am using remote code`** (§26.4).
+That is factually wrong for this package, and it was corrected: the saved answer
+is **`No, I am not using remote code`**, with **no remote-code justification
+stored**. It persisted across save and reload.
+
+**Reviewer credentials are now with Google.** They are populated in the
+confidential `Test instructions` fields, entered by the owner directly into the
+live form. Verification was deliberately limited to **field non-emptiness and
+character length** — no value was read, echoed, logged, screenshotted or stored,
+and none appears in this repository. **The never-in-Git/PR/report/chat rule is
+unchanged and still binding.**
+
+**Publisher contact email.** Publishing additionally required a publisher contact
+email to be provided and **verified**; the owner completed both manually, and
+`001E3D` confirmed the verified state. **The address is not recorded here.** It
+is worth noting for this document's purposes that Google **publicly displays**
+that address in connection with the item — an owner disclosure decision, not a
+data-flow fact about the extension.
+
+**Submission state is unchanged.** The item is **Draft**, **not submitted** and
+**not published**. The live blocker panel lists **zero** items, which means only
+that the Dashboard exposes no known pre-submission completeness blocker — **not**
+that Google has approved anything, and **not** authorization to submit. The
+standing signed-out `/privacy` check above still runs immediately before any
+actual submission; it passed again on **2026-08-30** under `001E3D`.

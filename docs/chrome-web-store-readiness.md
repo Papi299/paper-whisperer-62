@@ -17,17 +17,25 @@
 > rule [store-launch-checklist.md](store-launch-checklist.md) applies to the
 > mobile stores.
 >
-> **Current state, 2026-08-30 — a draft Store item exists; nothing is
-> published.** `CHROME-EXTENSION-IMPORT-001E3A` created one PaperLume **draft**
-> item (`cfanjbamcemoeglgkpbidnclkomaocmo`) and uploaded the validated `0.1.0`
-> package under owner authorization limited to exactly those two mutations. **No
-> listing, privacy or distribution field has been deliberately populated or
-> saved. Nothing has been submitted for review, and nothing is published** — the
-> Dashboard's published side reads *"This item is not published yet"*. Both
-> previously unresolved listing questions are now **resolved from the live form**:
-> the promotional video is **optional**, and the store icon **is** a separate
-> required upload. See [chrome-web-store-listing.md](chrome-web-store-listing.md)
-> §0 for the full live-Dashboard record.
+> **Current state, 2026-08-30 — the draft Store item is fully populated;
+> nothing is submitted and nothing is published.**
+> `CHROME-EXTENSION-IMPORT-001E3A` created one PaperLume **draft** item
+> (`cfanjbamcemoeglgkpbidnclkomaocmo`) and uploaded the validated `0.1.0`
+> package. **`001E3C` has since populated and saved all four owner-facing pages**
+> — Store Listing, Privacy, Test instructions and Distribution — and
+> **`001E3D`** re-read every page read-only and changed nothing. The owner has
+> also provided and **verified** the publisher contact email, closing the two
+> publisher-account blockers `001E3C` discovered. The live blocker panel now
+> lists **zero** items and `Submit for review` is **enabled** — which means only
+> that **the Dashboard exposes no known pre-submission completeness blocker**,
+> not that Google has approved anything. **Nothing has been submitted for review,
+> and nothing is published** — the Dashboard's published side still reads *"This
+> item is not published yet"*, and submission remains a separate explicit owner
+> decision. Both previously unresolved listing questions were **resolved from the
+> live form**: the promotional video is **optional**, and the store icon **is** a
+> separate required upload. See
+> [chrome-web-store-listing.md](chrome-web-store-listing.md) §0 for the full
+> live-Dashboard record and **§0.12 for the populated-draft state**.
 >
 > *Historical, and true when written (through 2026-08-29):* **Nothing has been
 > published.** No Store listing exists, no package has been
@@ -878,6 +886,76 @@ Build the candidate first: `npm run package:extension`.
 > doi.org and let the redirect complete before touching the toolbar. Racing the
 > redirect tests the old path and proves nothing about the new one.
 
+> **Checklist status, 2026-08-30 — read this before quoting "zero blockers"
+> anywhere.** Three different things are easy to conflate here, and only one of
+> them is finished:
+>
+> 1. **Google's Dashboard completeness — zero blockers.** The live blocker panel
+>    lists no items and `Submit for review` is enabled. That is Google's view of
+>    whether the *item data* is complete, and nothing more. It is not approval,
+>    not a prediction about review, and **not a statement about this checklist**.
+> 2. **Draft-preparation gates — discharged.** Items **26–32** are complete:
+>    they were the Dashboard-entry questions, and `001E3C` performed them and
+>    `001E3D` verified them read-only.
+> 3. **Human acceptance and standing checks — unticked, and mandatory for the
+>    next submission.** Items **1–25** and **33** carry no tick. For items 1–24
+>    that is **not** a claim that nothing was ever run: a real owner acceptance
+>    pass exists and is recorded immediately below. It is a claim that **this
+>    checklist re-runs in full for every actual submission**, which is the same
+>    convention items 23–24 already state explicitly. **Item 25** is the owner's
+>    visual acceptance of the listing images, which uploading them did not
+>    perform. **Item 33** is the trader/self-declaration re-check that must run
+>    *immediately before* the submission action. The standing signed-out
+>    Production `/privacy` re-check (§11) is likewise per-submission and is never
+>    discharged by having passed before.
+>
+> **Do not write "all mandatory release checklist items are complete."** As of
+> 2026-08-30 that is false. **Equally, do not write that the manual acceptance
+> run is unperformed** — see the acceptance record below.
+
+> **Owner manual acceptance — what actually happened, and why no box is ticked.**
+> *(Recorded 2026-08-30 by `001E3D-REVIEW-02`, from existing repository evidence.
+> No test was re-run to produce this note.)*
+>
+> **An acceptance pass exists, and it is the reason this checklist has its
+> current shape.** Owner manual acceptance of the **001E2** release candidate was
+> performed and **failed on the DOI case** — a real human, on a real browser,
+> found that `doi.org` redirects to the publisher before the toolbar can be
+> reached, which is exactly why `001E2-CORRECTION-01` exists (§6, privacy audit
+> §24). After the correction merged as **PR #255 (`45a0516`, 2026-08-29)**, the
+> owner re-ran acceptance and it **passed**: the key retest — *navigate through
+> doi.org, let the redirect finish, then click the real toolbar button* — and the
+> **PubMed regression path** both passed. That record was reconciled into
+> [start-here.md](start-here.md) by commit `5731442` on **2026-08-30**.
+>
+> **That acceptance is behaviourally current for the uploaded package, and this
+> was verified rather than assumed.** `git diff 45a0516..main` over
+> `extension/`, `vite.extension.config.ts`, `tsconfig.extension.json`,
+> `scripts/` and `package.json` is **empty** — no extension source, build config
+> or package-contract change landed after the accepted build. The manifest is
+> still `0.1.0`. So the behaviour the owner accepted is the behaviour inside the
+> `0.1.0` package now sitting in the Store draft.
+>
+> **What the evidence does and does not itemise.** It directly establishes the
+> two steps no automated test can perform — **a real toolbar click** (item 5) and
+> **a real toolbar click on a publisher page after a resolver redirect** (items
+> 9–11) — plus the PubMed path end to end (items 4–7 in substance). It says
+> nothing itemised about: the load/icon checks (**1–3**), the pre-redirect
+> `doi.org` case (**8**), a **second publisher's DOI** (**13**), the
+> unsupported/restricted pages (**14–16**), the signed-out/signed-in handoff
+> (**17–19**), or the permission and popup-copy checks (**20–21**). Those are
+> genuinely unevidenced, not merely unticked.
+>
+> **Why nothing is ticked anyway.** This checklist is **reusable and re-run in
+> full before each actual Store submission** — items 23–24 already say so in
+> their own note, and the section header requires a human pass "against the
+> release-candidate build before **any** Chrome Web Store submission". A tick
+> earned in August would let a future submission skip a step, and several of
+> these items (Production reachability, live policy citations, Chrome's own
+> permission display) can be broken by things outside this repository between now
+> and then. **Treat the acceptance above as evidence for its date, not as a
+> completed step** — the same standing the 2026-08-30 privacy-policy visit has.
+
 ### Load and icons
 
 - [ ] 1. Load `dist-extension/` unpacked at `chrome://extensions` (Developer mode on) in a **clean Chrome profile**. Confirm it loads with **no error and no warning** — in particular no "could not load icon" warning.
@@ -939,13 +1017,13 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 > that Production can silently break between now and then. Treat the 2026-08-30
 > result as evidence for that date, not as a completed step.
 - [ ] 25. Review the five committed listing images in [`assets/store/`](../assets/store) and confirm each is accurate and acceptable to publish — in particular that no caption claims the page is never read.
-- [ ] 26. Confirm the Dashboard's **Website content** answer is set to **Yes** and that the permission justification covers **both** `activeTab` and `scripting`.
+- [x] 26. ~~Confirm the Dashboard's **Website content** answer is set to **Yes** and that the permission justification covers **both** `activeTab` and `scripting`.~~ **DISCHARGED 2026-08-30 — verified in the saved live form under `001E3C`, and re-read read-only under `001E3D`. `Website content` = **Yes** (alongside `Web history` = **Yes**, with the other seven categories **No**), and the Dashboard exposes a *separate* justification field per permission — **both** are populated: `activeTab justification` and `scripting justification`. Character counts are item 31.**
 - [x] 27. ~~Resolve the **promotional video** question (§11) against the **live Developer Dashboard**.~~ **DISCHARGED 2026-08-30 — the live field `Global promo video` carries no required marker. OPTIONAL. No video is a gate.**
 - [x] 28. ~~Note whether a **separate store-icon upload field** exists (§10).~~ **DISCHARGED 2026-08-30 — it does. `Store icon *` is REQUIRED, 128×128, with its own upload control. `assets/store/store-icon-128.png` is the candidate to use.**
-- [ ] 29. **Change the Privacy form's remote-code answer to `No, I am not using remote code`, and re-read it after saving.** The untouched live form was observed on 2026-08-30 displaying **`Yes, I am using remote code`** with a required `Justification*`. That is **factually wrong** for this package — no remote JS or Wasm, no external script import, no `eval`, no `new Function`, and the injected function is bundled inside `popup.js` (§4). **Do not write a remote-code justification.** If a justification is still demanded after selecting `No`, **stop and report** rather than inventing text.
-- [x] 30. ~~**Provision and verify a dedicated low-privilege reviewer account** for the Dashboard's separate **`Test instructions`** page (Username ≤ 100, Password ≤ 100, Additional instructions ≤ 500).~~ **DISCHARGED 2026-08-30 — the account exists in PaperLume Production and its low-privilege posture was verified.** The gate existed because the extension can be checked signed out, but `Continue in PaperLume` → Projects/Tags → confirm import **requires PaperLume authentication**, and a reviewer without an account hits a login wall. **What was verified** on the provisioned account (`0bcf4221-31f5-4f0a-b52d-1a1c567461c0`): exactly one Auth user and one email identity, email confirmed; password sign-in succeeded, the authenticated UUID matched, and the session was discarded afterwards; one `profiles` row; one ordinary **Free** `user_entitlements` row (`plan` free, `plan_status` active, 1500 papers, 524288000 bytes storage, 15 lifetime AI requests, 0 monthly, premium taxonomy off, labs/team off); one lifetime `ai_analysis` usage counter; and **zero** rows in `internal_user_access`, subscriptions, subscription events and usage credits — no billing provider/customer/subscription id, no owner/manager/admin privilege, no AI quota exemption. The library is empty: 0 papers, projects, tags, attachments and filter presets. Provisioning used the supported Supabase Auth Admin `createUser` path with `email_confirm: true`; **no direct Auth-table SQL**, and the entire Production mutation was `+1` each to `auth.users`, `auth.identities`, `profiles`, `user_entitlements` and `usage_counters`, with every other audited table unchanged. **No preseeded fixture is required and none was created — see §12.** **The credentials exist, are owner-held outside Git and chat, and have not been entered into the Chrome Web Store**; they go only into Google's confidential `Test instructions` fields, never into Git, a PR description, a report, or chat. Non-secret steps are drafted in §12.
-- [ ] 31. **Confirm each permission justification fits the live 1,000-character cap.** The full drafts in [chrome-web-store-listing.md](chrome-web-store-listing.md) §6 are **over** it (1,071 and 1,470); that document carries measured 981- and 996-character variants to enter instead. Re-measure if either is edited.
-- [ ] 32. **Confirm visibility and regions deliberately.** The live Distribution form displays `Public` and all regions **by default**. Those defaults are not decisions, and publishing worldwide by failing to look at them would be an accident, not a choice.
+- [x] 29. ~~**Change the Privacy form's remote-code answer to `No, I am not using remote code`, and re-read it after saving.**~~ **DISCHARGED 2026-08-30 — the saved live state is `No, I am not using remote code`, confirmed by re-reading after save under `001E3C` and again read-only under `001E3D`; it did not revert. The remote-code justification is **empty**, and the Dashboard's blocker panel never demanded one.** *Chronology, preserved:* the untouched live form had been observed on 2026-08-30 displaying **`Yes, I am using remote code`** with a `Justification` field. That was **factually wrong** for this package — no remote JS or Wasm, no external script import, no `eval`, no `new Function`, and the injected function is bundled inside `popup.js` (§4) — and it was corrected. **A live-form trap worth not re-litigating:** after selecting `No` the justification field **stays visible** and keeps a static `required` attribute in the DOM, as do all four textareas on that page — so the DOM attribute is **not** the form's requiredness signal; the `*` marker is, and that field carries none. **Still binding for any future re-entry:** do not write a remote-code justification, and if one is ever genuinely demanded after selecting `No`, stop and report rather than inventing text.
+- [x] 30. ~~**Provision and verify a dedicated low-privilege reviewer account** for the Dashboard's separate **`Test instructions`** page (Username ≤ 100, Password ≤ 100, Additional instructions ≤ 500).~~ **DISCHARGED 2026-08-30 — the account exists in PaperLume Production and its low-privilege posture was verified.** The gate existed because the extension can be checked signed out, but `Continue in PaperLume` → Projects/Tags → confirm import **requires PaperLume authentication**, and a reviewer without an account hits a login wall. **What was verified** on the provisioned account (`0bcf4221-31f5-4f0a-b52d-1a1c567461c0`): exactly one Auth user and one email identity, email confirmed; password sign-in succeeded, the authenticated UUID matched, and the session was discarded afterwards; one `profiles` row; one ordinary **Free** `user_entitlements` row (`plan` free, `plan_status` active, 1500 papers, 524288000 bytes storage, 15 lifetime AI requests, 0 monthly, premium taxonomy off, labs/team off); one lifetime `ai_analysis` usage counter; and **zero** rows in `internal_user_access`, subscriptions, subscription events and usage credits — no billing provider/customer/subscription id, no owner/manager/admin privilege, no AI quota exemption. The library is empty: 0 papers, projects, tags, attachments and filter presets. Provisioning used the supported Supabase Auth Admin `createUser` path with `email_confirm: true`; **no direct Auth-table SQL**, and the entire Production mutation was `+1` each to `auth.users`, `auth.identities`, `profiles`, `user_entitlements` and `usage_counters`, with every other audited table unchanged. **No preseeded fixture is required and none was created — see §12.** **The credentials exist, are owner-held outside Git and chat, and ~~have not been entered into the Chrome Web Store~~ are — as of 2026-08-30, under `001E3C` — populated in the Chrome Web Store's confidential `Test instructions` fields**; they go only into those fields, never into Git, a PR description, a report, or chat. Non-secret steps are drafted in §12.
+- [x] 31. ~~**Confirm each permission justification fits the live 1,000-character cap.**~~ **DISCHARGED 2026-08-30 — the entered short forms were re-measured immediately before entry and verified byte-identical after save: `activeTab` = **981** characters, `scripting` = **996** characters, both inside the live 1,000 cap.** The full drafts in [chrome-web-store-listing.md](chrome-web-store-listing.md) §6 remain **over** it (1,071 and 1,470) and are still the reference text, not the entry text. **The safeguard survives and is not discharged by this:** the cap is a property of the live form, so **if either justification is edited before a future submission, re-measure it** — and never paste the long reference version.
+- [x] 32. ~~**Confirm visibility and regions deliberately.**~~ **DISCHARGED 2026-08-30 — the owner chose deliberately and the choices are saved: visibility **`Unlisted`** (Public and Private both unselected) and **`All regions`**, with the companion `All unlisted regions` control selected consistently — 155 of 155 region controls checked, none deselected individually. Payment state remains `Free of charge`.** *The caution below was the right one and it held in practice:* the live Distribution form had displayed `Public` and all regions **by default**, those defaults were not decisions, and publishing worldwide by failing to look at them would have been an accident rather than a choice. **The visibility actually chosen differs from the default that was displayed** — which is the concrete evidence that the default was never treated as authorization.
 - [ ] 33. **Confirm the trader/non-trader declaration still matches the owner's intended self-declaration — before submitting, not before charging.** **Owner decision frozen 2026-08-30 for the current beta submission: Non-trader**, and the Dashboard is configured as Non-trader. That is the owner's **self-declaration**, which is what Chrome asks for — *"it is the developer's responsibility to accurately self-declare"* — and it is **not** a finding by Google that Non-trader is correct. Chrome's test is **purpose-based**: a trader is *"acting for purposes relating to his trade, business, craft or profession"*, a non-trader *"for purposes which are outside"* of them ([trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure), re-read 2026-08-30). Note what the decision does **not** rest on: being pre-commercial is not on its own a basis for declaring Non-trader, and not wanting to publish a home address is an owner concern rather than Chrome's legal test. **What survives as a gate:** immediately before the actual submission action, re-read the then-current trader-disclosure policy and confirm that the Dashboard declaration still matches the owner's intended self-declaration and that no relevant policy or factual change has occurred. **Do not silently change it during Store entry.** If the owner's assessment moves to Trader, complete trader verification and the required public trader information before submission; Chrome makes verified trader information public to Store users, so this is a disclosure decision, not just a form field. Do not treat this as a post-launch task. The earlier open-classification framing is preserved as chronology in listing doc §0.10.
 
 Record the date, the Chrome version, and the tester for each submission.
@@ -1217,7 +1295,8 @@ restate its contents.
 - Detailed description and summary drafts (listing doc §3, §4)
 - Reviewer test instructions (§12) — **and the reviewer account they depend on,
   provisioned and verified 2026-08-30** (§8 item 30). The credentials are
-  owner-held and have not been entered into the Store
+  owner-held and, since 2026-08-30, are **populated in the Store's confidential
+  `Test instructions` fields**
 - Real-browser regression coverage and a mandatory manual gate
 
 ### OWNER INPUT REQUIRED
@@ -1235,17 +1314,34 @@ restate its contents.
   C16 in [decisions-and-triggers.md](decisions-and-triggers.md) still governs
   Terms and Support as PaperLume's own launch-quality decision. **Two different
   gates; only the Store one is now known to be non-blocking**
-- **Category** selection and **language** declaration (listing doc §11) — both
+- ~~**Category** selection and **language** declaration (listing doc §11) — both
   are **required live fields** (`Category*`, `Language*`) and **neither has been
-  chosen**
-- **Visibility and regions** — the live Distribution form displays `Public` and
+  chosen**~~ **CLOSED 2026-08-30 —** owner chose **`Workflow & Planning`** and
+  **`English (United States)`**; both are entered and saved in the live draft
+  (listing doc §0.12)
+- ~~**Visibility and regions** — the live Distribution form displays `Public` and
   all regions by **default**. That is not an owner decision, and must not be read
-  as one (listing doc §0.8)
+  as one (listing doc §0.8)~~ **CLOSED 2026-08-30 —** the owner decided
+  **`Unlisted`** (not the displayed `Public` default) and **`All regions`**, and
+  both are saved. The default/decision distinction above was the right caution
+  and it held: the visibility actually chosen differs from the default that was
+  displayed
 - ~~**Reviewer account for Test instructions**~~ **DISCHARGED 2026-08-30 —
-  provisioned and verified low-privilege; see §8 item 30.** What remains is not
+  provisioned and verified low-privilege; see §8 item 30.** ~~What remains is not
   an account but a Store-entry step: the owner types the owner-held credentials
   into Google's confidential `Test instructions` fields under the separately
-  authorized `001E3C`. **No Project/Tag/Paper fixture is required** (§12)
+  authorized `001E3C`.~~ **That Store-entry step is also DONE 2026-08-30 under
+  `001E3C`: the reviewer credentials are populated in the confidential
+  `Test instructions` fields, entered by the owner directly. Nothing further is
+  required here.** **No Project/Tag/Paper fixture is required** (§12)
+- **Publisher contact email** — **CLOSED 2026-08-30.** Not previously tracked
+  here, because only the live Dashboard surfaced it: publishing requires a
+  publisher contact email that is both **provided** and **verified** on the
+  Settings page. `001E3C` found both outstanding (they blocked publication, not
+  draft saving); the owner has since completed both manually, and `001E3D`
+  confirmed the address is verified. **The address is not recorded in this
+  repository** — Google displays it publicly in connection with the item, which
+  is an owner disclosure decision
 - ~~**Publisher account** — verified developer, 2SV enabled, one-time
   registration fee paid~~ **DONE 2026-08-30:** registration complete, **$5 fee
   paid**, Dashboard accessible. **Current owner-selected CWS publisher
@@ -1367,9 +1463,10 @@ Nothing in this repository can set these; a human enters them:
 - The single-purpose field, `Single purpose description*`, max 1,000 (listing doc §5)
 - Permission justifications for **both** `activeTab` and `scripting`, each capped
   at **1,000 characters** — use the measured short variants in listing doc §6
-- **The remote-code declaration — which must be set to `No`.** The live form was
-  observed defaulting to **`Yes`**, which is wrong for this package. See §8
-  item 29
+- **The remote-code declaration — ~~which must be set to `No`~~ which is saved as
+  `No`, with no justification stored (verified 2026-08-30).** The untouched live
+  form had been observed defaulting to **`Yes`**, which is wrong for this
+  package; it was corrected before Privacy was saved. See §8 item 29
 - Privacy policy URL — live field `Privacy policy URL*`, **required** (listing doc §8)
 - Reviewer test instructions — the **reviewer account** they depend on now
   exists (§8 item 30), but the credentials themselves are owner-held and are
@@ -1437,24 +1534,28 @@ here, and none ever should be** — the account behind them now exists (§8 item
 > If a signed-in review of the destination page is required, please contact us
 > and we will arrange access.
 
-### Reviewer credentials — READY, and not yet given to Google
+### Reviewer credentials — READY, ~~and not yet given to Google~~ and entered 2026-08-30
 
 **Provisioned and verified 2026-08-30**; §8 item 30 holds the audited
 low-privilege posture. Current state:
 
 - the credentials **exist** and are **owner-held, outside Git and outside chat**;
-- they have **not** been entered into the Chrome Web Store;
-- they are to be entered **only** into Google's confidential `Test instructions`
-  fields (Username ≤ 100 · Password ≤ 100 · Additional instructions ≤ 500),
-  under the separately authorized `001E3C`;
+- ~~they have **not** been entered into the Chrome Web Store;~~ **they were
+  entered on 2026-08-30 under `001E3C`** — the owner typed them directly into the
+  live form, and verification was limited to field non-emptiness and length
+  (both within the 100-character caps). No value was read, echoed, logged or
+  stored at any point;
+- they live **only** in Google's confidential `Test instructions` fields
+  (Username ≤ 100 · Password ≤ 100 · Additional instructions ≤ 500);
 - they must never be committed to Git or copied into a PR description, a release
-  report, or chat.
+  report, or chat. **That rule is unchanged and still binding.**
 
 The draft above is preserved as written. Its closing sentence — *"If a signed-in
 review of the destination page is required, please contact us"* — was drafted
-when no reviewer account existed; now that credentials are supplied in the same
-form, whether to keep, soften or drop that sentence is a small copy decision for
-the owner at entry time. **Do not treat that as authorization to enter anything.**
+when no reviewer account existed. **That question is now settled: the sentence
+was dropped at entry**, because credentials are supplied in the same form and the
+offer to "arrange access" had become obsolete. The 419-character text actually
+entered is recorded in listing doc §0.12.
 
 ### No reviewer fixture is required
 
