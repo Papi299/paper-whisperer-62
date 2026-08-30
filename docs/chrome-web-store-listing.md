@@ -245,7 +245,7 @@ has been frozen by the owner. The repository recommendation remains a **limited
 beta before any public listing** (§12). Treating a default as a decision is how a
 draft becomes an accidental worldwide launch.
 
-### 0.9 Test instructions — a new, concrete pre-submission gate
+### 0.9 Test instructions — the reviewer-account gate, now CLOSED
 
 The Dashboard exposes a separate **`Test instructions`** page. It states that
 where login, authentication or specific setup is required, the developer should
@@ -263,7 +263,9 @@ authentication**. A reviewer who cannot sign in sees the handoff tab and a login
 wall.
 
 **GATE — create/verify a dedicated low-privilege Chrome Web Store reviewer
-account before submission.** Requirements:
+account before submission. DISCHARGED 2026-08-30** — the requirements below are
+what the provisioned account was verified against; see the closure note after
+them:
 
 - a Production account suitable for Store review;
 - **no owner or admin privileges**;
@@ -277,29 +279,67 @@ repository — [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §
 already drafts them. **The account is not created by this task**, which is
 documentation-only.
 
+> **GATE CLOSED — 2026-08-30.** The paragraph above described the phase in which
+> no account existed; it is preserved as chronology and superseded by this note.
+> The dedicated low-privilege reviewer account has since been provisioned in
+> PaperLume Production and verified: exactly one Auth user with one confirmed
+> email identity, one `profiles` row, one ordinary **Free** entitlement, one
+> lifetime AI counter, and zero rows for internal access, subscriptions,
+> subscription events and usage credits — no owner/manager/admin privilege, no
+> billing identifiers, no quota exemption, and an empty library. The audited
+> evidence is in
+> [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8 item 30.
+>
+> **The credentials exist and are owner-held outside Git and chat. They have not
+> been entered into the Chrome Web Store**, and they are to be entered only into
+> Google's confidential `Test instructions` fields under the separately
+> authorized `001E3C`.
+>
+> **No preseeded Project/Tag/Paper fixture is required, and none was created.**
+> The authenticated import page's Project and Tag selection is optional and its
+> confirm control works with none selected, so the canonical import completes on
+> an account whose library is empty — the preferable state, because it minimises
+> Production test data and shows the reviewer an ordinary new-user baseline. The
+> identity still holds the ordinary account and authentication records any user
+> has; what it holds none of is seeded research or library content. See
+> readiness §12.
+
 ### 0.10 Publisher account — current state
 
 - Chrome Web Store developer registration **completed**;
 - the one-time **$5 developer fee is paid**;
 - Developer Dashboard **accessible**;
-- publisher classification **currently configured as NON-TRADER** — this records
-  the **observed Dashboard setting only** (see the gate below);
+- publisher classification **NON-TRADER** — both the observed Dashboard setting
+  and, since **2026-08-30**, the owner's explicitly frozen declaration for the
+  current beta submission (see below);
 - trader verification **not completed**; **no public trader address added**.
 
 This supersedes the "Publisher account — not done" row in §11 and the
 "no fee paid" statements in the banner and §13.2.
 
-### Trader/non-trader — an OBSERVED SETTING, not a settled classification
+### Trader/non-trader — the owner's frozen declaration, and the check that survives
 
-**`TRADER STATUS — UNRESOLVED COMPLIANCE JUDGMENT; CONFIRM BEFORE ANY STORE
-SUBMISSION`**
+**`TRADER STATUS — OWNER DECISION FROZEN: NON-TRADER. RE-CONFIRM IMMEDIATELY
+BEFORE ANY STORE SUBMISSION`**
 
-**Observed fact.** The publisher account is currently configured as
-**Non-trader**.
+**Current owner-selected CWS publisher declaration: Non-trader.** The owner
+explicitly froze this on **2026-08-30** for the current beta Chrome Web Store
+submission path, and the Dashboard is configured as Non-trader. This supersedes
+every statement in this repository that still treated the selection as an
+unresolved owner decision *for this submission*.
 
-**What that is not.** It records the observed Dashboard setting only. **It is not
-a legal or policy conclusion that Non-trader is correct**, and nothing in this
-repository adjudicates the question.
+**What that is, and what it is not.** It is the **owner's own self-declaration**
+— which is exactly what Chrome asks for. It is **not** a finding by Google that
+Non-trader is correct, not a legal opinion, and not a conclusion this repository
+reached; nothing here adjudicates the question. Two things in particular are
+**not** the reasoning behind it: being pre-commercial does not on its own make an
+account Non-trader, and not wanting to publish a home address is an owner
+concern, not Chrome's trader test.
+
+**Chronology — preserved, not rewritten.** The paragraphs below record the
+compliance uncertainty that was live before the owner froze the decision. They
+are kept because the reasoning still constrains the pre-submission re-check, and
+because pretending the uncertainty never existed would be a worse record.
 
 **Why the earlier framing was wrong, stated plainly.** An earlier revision of
 this section called Non-trader *"correct for the current non-commercial phase"*
@@ -323,26 +363,31 @@ from whether the item is paid. It does not. Chrome's own definitions are
 Being pre-commercial is therefore **not** on its own a basis for declaring
 Non-trader, and "it isn't paid yet" is not the test.
 
-**There is a fact here that has to be weighed, not ignored.** The published
+**There is a fact here that had to be weighed, not ignored — and the owner has
+now weighed it.** The published
 Privacy Policy states that PaperLume *"is operated by **Maor Pichadza**, an
 individual sole proprietor in Israel operating under the business name
 **MutriSport**"*, while also describing the service as a *"pre-commercial beta
 service"*. Those two statements pull in opposite directions against a
 purpose-based test. **This document does not resolve that tension and must not
-be read as doing so** — it records that the question is live, so that nobody
-treats the current setting as already vetted.
+be read as doing so.** The owner's declaration is the owner's; this document
+records it, and records that the underlying question is one only the owner can
+answer.
 
-**GATE — confirm before any Store submission, not before commercial launch.**
-The owner must reassess and confirm the classification against the actual
-business or professional purpose and the then-current Chrome Web Store policy
-**before any actual Store submission**. **If Trader applies, trader verification
-and the required public trader information must be completed before
-submission** — and note that Chrome makes verified trader information *"available
-to users of the Chrome Web Store"*, so this is a disclosure decision, not only a
-form field.
+**GATE — what survives, and it is NOT discharged.** The owner *decision* is
+frozen. The *check* is not. **Before the actual submission action, re-read the
+then-current
+[trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure)
+policy and confirm that the Dashboard declaration still matches the owner's
+intended self-declaration and that no relevant policy or factual change has
+occurred since 2026-08-30. Do not silently change it during Store entry.** If the
+owner's assessment moves to Trader, trader verification and the required public
+trader information must be completed **before** submission — and note that Chrome
+makes verified trader information *"available to users of the Chrome Web Store"*,
+so this is a disclosure decision, not only a form field.
 
-**No live account setting was changed by any task in this series**, and none
-should be until that confirmation is made.
+**No live account setting has been changed by any task in this series**, and none
+should be outside the separately authorized Store-entry task.
 
 ### 0.11 What is still an owner decision
 
@@ -357,8 +402,8 @@ these choices:
 | **Regions** | Displayed all-regions state is a default, not a decision |
 | **Homepage / Official / Support URLs** | All optional; none chosen. Official URL additionally needs Search Console ownership |
 | **Optional marketing assets** | Small promo tile, marquee tile, promo video — all optional, none required |
-| **Reviewer account** | §0.9 gate; not provisioned |
-| **Trader/non-trader classification** | §0.10. Currently configured Non-trader; **accuracy unconfirmed**. Must be reassessed and confirmed **before any Store submission** — not deferred to commercial launch |
+| ~~**Reviewer account**~~ | **CLOSED 2026-08-30** — provisioned and verified low-privilege (§0.9; readiness §8 item 30). What remains is the Store-entry step of typing the owner-held credentials into `Test instructions`; **no fixture is required** |
+| ~~**Trader/non-trader classification**~~ | §0.10. **Owner decision frozen 2026-08-30: Non-trader** for the current beta submission. Not an open choice any more; what remains is re-reading the then-current policy and confirming the Dashboard declaration still matches the owner's intent **immediately before the submission action** |
 
 ---
 
@@ -1275,8 +1320,8 @@ and is not produced.
 | `Homepage URL` | — | Optional (no `*`). Owner decision |
 | `Official URL` | — | Optional. Currently `None`; requires site ownership through Google Search Console |
 | `Mature content` | Off | Toggle displayed off; correct for this item |
-| Reviewer test instructions | Drafted in [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §12 | Ready. **A dedicated low-privilege reviewer account is a new pre-submission gate — §0.9.** No credentials are created or embedded, and none should be |
-| Publisher account | Registered developer; Dashboard accessible | **DONE.** Registration complete and the one-time **$5 fee is paid** (§0.10). Classification currently configured **Non-trader** — observed setting only; **its accuracy is an unresolved pre-submission gate**, see §0.10 |
+| Reviewer test instructions | Drafted in [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §12 | Ready. **The dedicated low-privilege reviewer account is provisioned and verified — gate CLOSED 2026-08-30, §0.9.** Credentials exist, are owner-held outside Git and chat, and have **not** been entered into the Store. No credentials are embedded here and none should be; no fixture is required |
+| Publisher account | Registered developer; Dashboard accessible | **DONE.** Registration complete and the one-time **$5 fee is paid** (§0.10). **Current owner-selected declaration: Non-trader**, frozen 2026-08-30 for this submission and matching the Dashboard setting — the owner's self-declaration, not a Google finding. A consistency and policy re-check immediately before submission remains, see §0.10 |
 
 ---
 
@@ -1360,10 +1405,15 @@ Still **not** performed:
 - No video produced or uploaded to YouTube.
 - No category, language, visibility or region **chosen** by the owner.
 - No certification ticked; no privacy-policy URL entered.
-- No reviewer account created; no reviewer credentials entered anywhere.
+- **No reviewer credentials entered into the Store**, and no `Test instructions`
+  field populated or saved. *(The reviewer **account** itself now exists —
+  provisioned in PaperLume Production on 2026-08-30, §0.9. That was a Production
+  action, not a Store one, and the credentials remain owner-held.)*
 - No opt-in to **Verified CRX uploads**; the item's **public key was not
   viewed**.
 - No trader-status change, no trader verification, no public address added.
+  *(The owner froze the **declaration** as Non-trader on 2026-08-30 — §0.10 — a
+  decision about the setting already in place, not a change made to it.)*
 - No GitHub Release, no tag, no version bump.
 - **No submission for review, and no publication.**
 
