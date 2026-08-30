@@ -123,7 +123,7 @@ const SECTION_4_APPROVED = [
   "read website cookies or authentication tokens;",
   "store the active-tab URL or the DOI metadata it reads from the page;",
   "use background content scripts; or",
-  "directly transmit the active-tab URL or webpage content to PaperLume.",
+  "directly transmit the active-tab URL or webpage content to PaperLume, except for the detected identifier value described below when you choose to continue.",
   "If you choose to continue, the extension opens the PaperLume web application and provides only the detected identifier type and value, such as a PMID or DOI.",
   "Nothing is sent to PaperLume merely because you open the extension.",
   "Authentication and the actual import take place in the PaperLume web application.",
@@ -284,6 +284,49 @@ describe("Privacy policy page", () => {
     );
 
     expect(blocks).toEqual([...SECTION_4_APPROVED]);
+
+    unmount();
+  });
+
+  it("scopes the no-transmission promise to allow only the Continue identifier", () => {
+    const { container, unmount } = renderPolicy();
+
+    const section = container.querySelector("h2#chrome-extension")!.closest("section")!;
+    const blocks = Array.from(section.querySelectorAll("p, li")).map((el) =>
+      (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+    );
+
+    // Located by short probes, not by restating the copy: SECTION_4_APPROVED
+    // above is the only place the approved wording lives, and a second full
+    // transcript here would be a competing source of truth.
+    const transmissionIndex = blocks.findIndex((b) => b.startsWith("directly transmit"));
+    const continueIndex = blocks.findIndex((b) => b.startsWith("If you choose to continue"));
+    expect(transmissionIndex).toBeGreaterThanOrEqual(0);
+    expect(continueIndex).toBeGreaterThanOrEqual(0);
+
+    const transmission = blocks[transmissionIndex];
+
+    // 1. The active-tab URL and arbitrary webpage content are both covered by
+    //    the promise...
+    expect(transmission).toContain("active-tab URL");
+    expect(transmission).toContain("webpage content");
+
+    // 2. ...but the promise is not categorical. A detected DOI can be derived
+    //    from an approved metadata content value, and that value does travel on
+    //    Continue, so an unqualified "webpage content is never transmitted"
+    //    would contradict the paragraph directly beneath it. The exception is
+    //    what keeps the two consistent.
+    expect(transmission).toContain("except for the detected identifier value");
+    expect(transmission).toContain("when you choose to continue");
+
+    // 3. "described below" must actually have something below it, and it must
+    //    be the paragraph that bounds what Continue sends.
+    expect(continueIndex).toBeGreaterThan(transmissionIndex);
+    expect(blocks[continueIndex]).toContain("only the detected identifier type and value");
+
+    // The exception is narrow: it licenses the identifier, never the URL or the
+    // page text the identifier was read out of.
+    expect(blocks[continueIndex]).not.toContain("URL");
 
     unmount();
   });

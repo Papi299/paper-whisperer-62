@@ -274,7 +274,10 @@ const Privacy = () => {
               <li>read website cookies or authentication tokens;</li>
               <li>store the active-tab URL or the DOI metadata it reads from the page;</li>
               <li>use background content scripts; or</li>
-              <li>directly transmit the active-tab URL or webpage content to PaperLume.</li>
+              <li>
+                directly transmit the active-tab URL or webpage content to PaperLume, except
+                for the detected identifier value described below when you choose to continue.
+              </li>
             </Bullets>
             <P>
               If you choose to continue, the extension opens the PaperLume web application and

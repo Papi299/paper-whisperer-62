@@ -459,8 +459,11 @@ extension id · a timestamp
 PMID is a public catalogue number; it does not carry the query string, fragment,
 campaign parameters, or session tokens that the original URL may have held.
 
-**Page content is not sent either.** The metadata read produces at most one DOI
-name, and that DOI is the only thing a `kind`/`value` handoff can carry — the
+**No page content is sent, apart from the detected DOI itself.** That
+qualification matters and is not pedantry: on the metadata path the DOI *is*
+derived from an approved `<meta>` element's `content` value, so "page content is
+never transmitted" would be false as stated. The metadata read produces at most
+one DOI name, and that DOI is the only thing a `kind`/`value` handoff can carry — the
 contract has no third parameter to put anything else in. Asserted on a
 metadata-detected DOI in a real browser, including that the publisher host, the
 article title and the author name appear nowhere in the handoff URL
@@ -584,7 +587,10 @@ The content the extension section must cover:
    bibliographic `<meta>` values from that page — locally and transiently;**
 3. that it stores nothing and transmits nothing automatically;
 4. that pressing Continue sends only a PMID or DOI to PaperLume;
-5. that the source URL, page content and titles are never sent;
+5. that the source URL, page content and titles are not sent — with the one
+   exception that the **detected identifier value** is, and only after the user
+   explicitly chooses Continue (a detected DOI may be derived from an approved
+   metadata `content` value, so an unqualified claim here would be false);
 6. how the identifier is then handled by PaperLume once imported;
 7. the existing processor list (Supabase, NCBI/PubMed, Crossref, Gemini) — noting
    the extension itself contacts none of them;

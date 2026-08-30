@@ -976,7 +976,7 @@ Not retained · Nothing to delete · VERIFIED · Owner input: no**.
 
 | Item | Value |
 |---|---|
-| Change | `PRIVACY-POLICY-EXTENSION-METADATA-001B` |
+| Change | `PRIVACY-POLICY-EXTENSION-METADATA-001B` (plus `…-REVIEW-01`, the disclosure-precision correction in §25.1.1) |
 | Owner approval date | 2026-08-30 |
 | Base commit | `b2d4943b3c77893e682f94767f347bec9e50b79d` |
 | Scope | Public legal copy (`src/pages/Privacy.tsx`), its test contract, and three documentation corrections. **No extension, application, Edge Function, migration, schema, RLS, provider, Store or Production change of any kind** |
@@ -1000,8 +1000,41 @@ reword it. The material additions over the pre-amendment text are:
   by a **bounded** negative list (article/body text, page title, abstracts,
   author names, links, form contents, iframe contents, and metadata content
   values other than the four supported names);
+- the no-transmission bullet is **scoped rather than categorical** — see §25.1.1;
 - an affirmative **Limited Use** statement closes the section, making the public
   Privacy Policy the disclosure location for it.
+
+#### 25.1.1 Why the no-transmission bullet carries an exception
+
+Exact-head review of the first draft found one remaining ambiguity, and the owner
+approved a corrective sentence for it on the same day. The bullet had read
+*"directly transmit the active-tab URL or webpage content to PaperLume."* — which
+is too categorical, because a detected DOI **can be derived from the `content`
+value of one of the four approved metadata elements**, and that DOI does travel
+when the user presses Continue. Read strictly, the bullet contradicted the
+paragraph immediately beneath it. The approved bullet now ends:
+
+> …, except for the detected identifier value described below when you choose to
+> continue.
+
+The distinction the amended §4 now draws, stated precisely:
+
+- DOI metadata is read **locally only**, and only through the bounded approved
+  fallback — four keys, `document.head`, main frame, and only where the URL
+  identified no paper;
+- a detected DOI may therefore be **derived from a supported metadata `content`
+  value**;
+- after the user **explicitly chooses Continue**, that detected DOI travels to
+  PaperLume as the `value` of the `kind`/`value` handoff;
+- this does **not** mean PaperLume receives the active-tab URL, article or body
+  text, the page title, the abstract, author names, links, form contents, iframe
+  contents, arbitrary metadata values, or any other webpage content. The handoff
+  grammar has no third parameter to carry them, and the identifier is the only
+  thing the exception licenses.
+
+Nothing about the extension changed for this correction: it is a disclosure
+precision fix in the public copy, and the shipping behaviour is exactly as
+§25.2 records it.
 
 The approved copy is **more precise than an earlier draft proposal** on one
 point, and deliberately so: `activeTab` access is described as revoked *"when the
