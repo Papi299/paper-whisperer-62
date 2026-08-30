@@ -101,7 +101,7 @@ const Privacy = () => {
         <article>
           <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PaperLume Privacy Policy</h1>
 
-          <p className="mt-4 font-semibold leading-7">Effective date: August 29, 2026</p>
+          <p className="mt-4 font-semibold leading-7">Effective date: August 30, 2026</p>
 
           <P>
             PaperLume is operated by <strong>Maor Pichadza</strong>, an individual sole proprietor in
@@ -230,26 +230,63 @@ const Privacy = () => {
               can choose whether to import the paper.
             </P>
             <P>
-              When you explicitly activate the extension, it reads the{" "}
-              <strong>URL of the currently active browser tab</strong> to determine whether it
-              contains a supported PubMed or DOI pattern.
+              The extension examines the current tab only when you explicitly activate PaperLume from
+              your browser toolbar. It does not continuously monitor your browsing activity and does
+              not run a background content script. Chrome grants the extension temporary access to
+              the active tab in response to your click. That temporary access is revoked when the tab
+              navigates to a different website origin or when the tab is closed.
             </P>
-            <P>The extension does not continuously monitor your browsing activity.</P>
+            <P>
+              When you activate the extension, it first reads the{" "}
+              <strong>URL of the currently active browser tab</strong> to determine whether it
+              contains a supported PubMed or DOI pattern. If the URL itself identifies a supported
+              paper, the extension does not inspect the page for DOI metadata.
+            </P>
+            <P>
+              If the URL of an ordinary web page does not identify a supported paper, the extension
+              then checks metadata in that page's header for a DOI. It recognizes only four standard
+              DOI metadata names: “citation_doi,” “dc.identifier,” “dc.identifier.doi,” and
+              “prism.doi.” It uses the content value only when a metadata element matches one of
+              those names. This check runs only in the main page frame and does not inspect the
+              contents of embedded frames.
+            </P>
+            <P>
+              Not every website publishes this metadata, and the extension does not use the page
+              title or other page content as a fallback, so it cannot identify a paper on every page.
+            </P>
+            <P>
+              The extension processes the active-tab URL and, when necessary, the matching DOI
+              metadata locally and transiently while determining the paper identifier. It does not
+              persist that information, and opening the extension does not automatically transmit it
+              to PaperLume.
+            </P>
             <P>It does not:</P>
             <Bullets>
               <li>maintain a browsing-history database;</li>
-              <li>read the contents of the webpage or its DOM;</li>
+              <li>
+                read article or body text, the page title, abstracts, author names, links, form
+                contents, or iframe contents;
+              </li>
+              <li>
+                use the content values of page metadata other than the supported DOI metadata
+                described above;
+              </li>
               <li>read website cookies or authentication tokens;</li>
-              <li>store the active-tab URL;</li>
+              <li>store the active-tab URL or the DOI metadata it reads from the page;</li>
               <li>use background content scripts; or</li>
-              <li>directly transmit the active-tab URL to PaperLume.</li>
+              <li>directly transmit the active-tab URL or webpage content to PaperLume.</li>
             </Bullets>
             <P>
               If you choose to continue, the extension opens the PaperLume web application and
               provides only the detected identifier type and value, such as a PMID or DOI.
             </P>
+            <P>Nothing is sent to PaperLume merely because you open the extension.</P>
             <P>
               Authentication and the actual import take place in the PaperLume web application.
+            </P>
+            <P>
+              PaperLume uses information accessed by the Chrome extension only in accordance with the
+              Chrome Web Store User Data Policy, including its Limited Use requirements.
             </P>
           </Section>
 

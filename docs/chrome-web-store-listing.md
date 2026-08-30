@@ -519,9 +519,34 @@ developer account page"*
 ([privacy practices](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy)).
 
 The policy is served by the application as the public, unauthenticated route
-`/privacy` (PAPERLUME-PRIVACY-001B); its §4 is the extension section, and it was
-re-read on 2026-08-29 against the shipping code with **no factual mismatch
-found**. There is no second, Chrome-specific policy and there must not be one.
+`/privacy` (PAPERLUME-PRIVACY-001B); its §4 is the extension section. There is no
+second, Chrome-specific policy and there must not be one.
+
+**§4 history, stated plainly because a stale claim once lived here.** An earlier
+revision of this section recorded a 2026-08-29 re-read finding *"no factual
+mismatch"*. That was written before `CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01`
+landed the DOI metadata fallback, and it did not survive it: the published §4
+listed *"read the contents of the webpage or its DOM"* among the things the
+extension does not do, which the metadata read made false. The mismatch is
+recorded in [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §24.6 and as
+a blocking gate in [chrome-web-store-readiness.md](chrome-web-store-readiness.md)
+§6.
+
+**The owner approved amended §4 wording on 2026-08-30**, and
+`PRIVACY-POLICY-EXTENSION-METADATA-001B` implements exactly that approved copy —
+the bounded metadata read, the four supported DOI metadata names, the
+locally-and-transiently disclosure, and an affirmative Limited Use statement —
+together with an effective date of **August 30, 2026**. **That work is a pull
+request, not a published policy.** Until it is merged and deployed, the policy
+live at the URL above is still the pre-amendment text, and the mismatch above is
+still the live state.
+
+**Limited Use disclosure location.** The approved §4 ends with the affirmative
+statement *"PaperLume uses information accessed by the Chrome extension only in
+accordance with the Chrome Web Store User Data Policy, including its Limited Use
+requirements."* The public Privacy Policy is therefore the disclosure location;
+no second copy of that sentence belongs anywhere else, and none should be added
+to the listing copy.
 
 **Standing submission gate — open, and it does not close permanently.** Before
 **every** Store submission, confirm that URL loads the policy **in Production,
@@ -529,6 +554,11 @@ signed out, from a clean browser** with no cached session. Deployment
 protection, a routing regression or a rewrite change can each break it without
 breaking anything else. See
 [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8 item 12.
+
+Once `PRIVACY-POLICY-EXTENSION-METADATA-001B` merges and deploys, that same
+signed-out Production check must additionally confirm the page shows the amended
+§4 and the **August 30, 2026** effective date. A Preview deployment is not
+Production and does not close this gate.
 
 ---
 

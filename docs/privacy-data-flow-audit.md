@@ -591,7 +591,10 @@ Exhaustive search of the repository and the application's routes.
 
 Based **only** on the extension behaviour verified in §11. This is a factual draft for a human to review against the live Developer Dashboard. **Nothing here has been or may be submitted, and selecting these answers does not guarantee policy compliance** — Google's form wording and policies change, and only the live form is authoritative.
 
-> **SUPERSEDED IN PART on 2026-08-29.** One answer below is now wrong for the current extension: **Website content** is **Yes**, not No. Every other row still holds. The corrected mapping, and why only that one row moved, is in §24.
+> **SUPERSEDED IN PART.** Two things below no longer describe current state, and both are left as written rather than edited, because they were true when audited:
+>
+> - **2026-08-29** — one data-type answer moved: **Website content** is **Yes**, not No. Every other row still holds. The corrected mapping, and why only that row moved, is in §24.
+> - **§19.5's privacy-policy blocker row** describes the state *before* PAPERLUME-PRIVACY-001B. `/privacy` exists and is public. See §25 for what that blocker became.
 
 ### 19.1 Data-type questions
 
@@ -627,7 +630,7 @@ Factual basis for the justification field: the extension needs the address of th
 
 | Blocker | Status |
 |---|---|
-| **A published, publicly reachable privacy policy URL** | Required by Google whenever an extension handles user data, and "Web history = Yes" makes it unambiguous. **Does not exist** (§18) |
+| **A published, publicly reachable privacy policy URL** | Required by Google whenever an extension handles user data, and "Web history = Yes" makes it unambiguous. **Does not exist** (§18) — *the state at this audit; PAPERLUME-PRIVACY-001B has since published `/privacy`, and what remained of this blocker is tracked in §25* |
 | Single-purpose statement | Drafted in `chrome-web-store-readiness.md` §2; owner must submit |
 | Store listing assets / brand icons | Recorded as outstanding in `chrome-web-store-readiness.md` |
 | Manual release acceptance checklist | `chrome-web-store-readiness.md` § Manual release acceptance checklist |
@@ -939,6 +942,16 @@ a posted policy saying the page is never read. Recorded as a blocking gate in
 [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6 and as an item
 in its manual acceptance checklist.
 
+> **The owner input asked for above was given on 2026-08-30.** The diagnosis in
+> this section stands exactly as written — it is what was wrong and why — and
+> **CORRECTION-01 still did not edit the legal copy**, which remains the correct
+> record of that change's scope. What follows it is a separate piece of work with
+> its own authority: the owner approved amended §4 wording, and
+> `PRIVACY-POLICY-EXTENSION-METADATA-001B` implements it. **That work is not yet
+> merged or deployed**, so the policy served at `/privacy` is still the
+> pre-amendment text and this gate is still open. §25 records the resolution and
+> what is left to verify.
+
 ### 24.7 What this addendum does not change
 
 Nothing outside the extension. No new table, column, `ON DELETE` rule, Edge
@@ -950,3 +963,113 @@ gains a sibling: **extension: page DOI metadata · Yes, on click, only where the
 URL identified nothing · Chrome `activeTab` + `scripting` · identifying a paper
 after a DOI redirect · Stored: No · Read into memory only · No processor ·
 Not retained · Nothing to delete · VERIFIED · Owner input: no**.
+
+---
+
+## 25. Addendum — 2026-08-30 — PRIVACY-POLICY-EXTENSION-METADATA-001B
+
+> **A second dated delta, on the same terms as §24.** §11 and §19 remain the
+> audited snapshot; §24 remains the record of what CORRECTION-01 changed and of
+> the policy mismatch it opened. Neither is rewritten here. This section records
+> one thing only: the owner/legal decision §24.6 asked for, and what it does and
+> does not close.
+
+| Item | Value |
+|---|---|
+| Change | `PRIVACY-POLICY-EXTENSION-METADATA-001B` |
+| Owner approval date | 2026-08-30 |
+| Base commit | `b2d4943b3c77893e682f94767f347bec9e50b79d` |
+| Scope | Public legal copy (`src/pages/Privacy.tsx`), its test contract, and three documentation corrections. **No extension, application, Edge Function, migration, schema, RLS, provider, Store or Production change of any kind** |
+| Extension behaviour | **Unchanged.** Re-verified against the shipping source before the copy was edited — see the correspondence table below |
+
+### 25.1 What the owner approved
+
+Amended §4 of the public Privacy Policy, plus an effective date of **August 30,
+2026** (the previous date was August 29, 2026). The wording is frozen
+owner-approved copy: this task implemented it verbatim and is not authorised to
+reword it. The material additions over the pre-amendment text are:
+
+- the metadata fallback is **disclosed**, including that it runs only where the
+  URL identified no paper;
+- the **four supported DOI metadata names** are named in the public copy —
+  `citation_doi`, `dc.identifier`, `dc.identifier.doi`, `prism.doi`;
+- the check is disclosed as **main-frame only**, not inspecting embedded frames;
+- processing is disclosed as **local and transient**, and explicitly **not
+  persisted**;
+- the retired bullet *"read the contents of the webpage or its DOM"* is replaced
+  by a **bounded** negative list (article/body text, page title, abstracts,
+  author names, links, form contents, iframe contents, and metadata content
+  values other than the four supported names);
+- an affirmative **Limited Use** statement closes the section, making the public
+  Privacy Policy the disclosure location for it.
+
+The approved copy is **more precise than an earlier draft proposal** on one
+point, and deliberately so: `activeTab` access is described as revoked *"when the
+tab navigates to a different website origin or when the tab is closed"*, not on
+any navigation. Chrome's own documentation is explicit that the grant survives
+same-origin navigation — *"if the user invokes the extension on
+https://example.com and then navigates to https://example.com/foo, the extension
+will continue to have access to the page"* — so the approved sentence is the
+accurate one.
+
+### 25.2 Factual correspondence, re-verified at the base commit
+
+Every material sentence of the approved copy was checked against the shipping
+source **before** the legal text was edited. Nothing required a code change, and
+none was made.
+
+| Approved statement | Evidence |
+|---|---|
+| Explicit toolbar activation only | `popup.ts` classifies on popup open; manifest has no `background` and no `content_scripts` |
+| Temporary `activeTab` access, revoked on cross-origin navigation or tab close | First-party [activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab) documentation |
+| URL checked first | [`classifyActiveTab.ts`](../extension/src/classifyActiveTab.ts) — `pubmed`, `doi` and `restricted` all return before any injection |
+| No page inspection when the URL identifies a paper | `classifyActiveTab.test.ts` asserts `executeScript` was **not** called for those outcomes |
+| Exactly four metadata names | `const keys = ["citation_doi", "dc.identifier", "dc.identifier.doi", "prism.doi"]` |
+| Page header only | `document.head.querySelectorAll("meta")` |
+| Main frame only, no embedded frames | `allFrames` is not passed, so Chrome's documented default applies |
+| No title or other page-content fallback | No title variant exists on `PaperDetection`; decoy DOIs in title, body and links are asserted ignored |
+| No cookies or authentication tokens | No `cookies` permission; no `document.cookie`; the extension holds no session |
+| Not persisted | No `storage` permission; `sourceBoundary.test.ts` and a real-browser check after a metadata read |
+| No automatic transmission | `sourceBoundary.test.ts` asserts every network primitive absent from every source file |
+| Continue carries only identifier type + value | [`paperLumeHandoff.ts`](../extension/src/paperLumeHandoff.ts) builds `kind` + `value` only; the handoff grammar has no third parameter |
+| Permissions exactly `activeTab` + `scripting`, no host permissions | [`manifest.json`](../extension/manifest.json) — `host_permissions` absent |
+
+### 25.3 Store disclosure mapping — unchanged
+
+**Website content = Yes** and **Web history = Yes** both stand exactly as §24.5
+records them. The amendment exists to make the *public policy* consistent with
+those answers, never to argue either of them down. Local-only processing is not
+an exemption: Google's [User Data
+FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq)
+states that *"Extensions are required to disclose how they handle user data, even
+when data is processed or stored locally on a user's device and is not
+transmitted to external servers."*
+
+### 25.4 What this closes, and what it does not
+
+**Closed by owner decision:** the §24.6 question of *what the policy should say*.
+The wording exists, is approved, and is implemented.
+
+**NOT closed:**
+
+- **Merge.** `PRIVACY-POLICY-EXTENSION-METADATA-001B` is a pull request. Until it
+  merges, `main` still carries the inaccurate §4.
+- **Deployment.** Merging is not publishing. The policy a Store reviewer reads is
+  whatever Production serves.
+- **Production verification.** The signed-out, clean-browser check of
+  `https://app.paperlume.app/privacy` must be performed **after** merge and
+  deployment, and must confirm the amended §4 and the August 30, 2026 effective
+  date. A Vercel Preview is not Production and does not close this gate.
+
+Until all three happen, the pre-Chrome-Web-Store privacy gate stays **open**.
+
+### 25.5 What this addendum does not change
+
+Nothing outside the public legal copy and its documentation. No extension
+behaviour, permission, metadata key, DOI normalization, handoff, popup, package
+inventory or Store asset. No table, column, `ON DELETE` rule, Edge Function,
+external endpoint, analytics dependency, billing integration, Supabase region or
+hosting arrangement. §11 (audited snapshot), §12, §13, §19.1–19.4, §20's matrix
+and §24's delta are all left as written; the historical statements in §19.5 and
+§24.6 are annotated in place rather than rewritten, so what was true when, and
+what changed it, both remain readable.
