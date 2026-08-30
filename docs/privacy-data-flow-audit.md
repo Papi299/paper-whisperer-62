@@ -1309,6 +1309,31 @@ seeded state needed to exercise the import path. **Credentials must never be
 committed to Git, written into a PR description or report, or sent through
 chat.** No such account exists yet, and this task does not create one.
 
+> **Addendum, 2026-08-30 — the account now exists, and the privacy-relevant
+> requirements were met.** The sentence above ("No such account exists yet") was
+> correct when written and is superseded here. A dedicated reviewer account was
+> provisioned in PaperLume Production and verified against exactly the posture
+> this section demanded: **no owner, manager or admin privilege**, no
+> `internal_user_access` row, no AI quota exemption, no premium-taxonomy or
+> labs/team privilege, no billing or subscription state — an ordinary **Free**
+> entitlement and nothing more. **It carries no real-user data of any kind**,
+> because it carries no data at all: zero papers, projects, tags, attachments and
+> filter presets. The audited row-by-row evidence is in
+> [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8 item 30.
+>
+> **The "minimal seeded state" requirement resolved to none.** The authenticated
+> import page treats Project and Tag selection as optional and completes the
+> canonical import with zero selections, so no fixture had to be seeded — which
+> is the better privacy answer, not merely a cheaper one: the smallest amount of
+> Production data that still demonstrates the path is no data.
+>
+> **The credentials are owner-held outside Git and chat, and have not been given
+> to Google.** They are to be entered only into the Dashboard's confidential
+> `Test instructions` fields under a separately authorized task. The
+> never-in-Git/PR/report/chat rule above is unchanged and still binding. This
+> addendum records account state only; **no data-flow fact in §11, §19, §24 or
+> §25 moves.**
+
 ### 26.7 What this addendum does not change
 
 - **No source, extension, schema, migration, Edge Function or policy-copy

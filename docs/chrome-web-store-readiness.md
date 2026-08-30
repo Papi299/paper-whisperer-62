@@ -943,10 +943,10 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 - [x] 27. ~~Resolve the **promotional video** question (§11) against the **live Developer Dashboard**.~~ **DISCHARGED 2026-08-30 — the live field `Global promo video` carries no required marker. OPTIONAL. No video is a gate.**
 - [x] 28. ~~Note whether a **separate store-icon upload field** exists (§10).~~ **DISCHARGED 2026-08-30 — it does. `Store icon *` is REQUIRED, 128×128, with its own upload control. `assets/store/store-icon-128.png` is the candidate to use.**
 - [ ] 29. **Change the Privacy form's remote-code answer to `No, I am not using remote code`, and re-read it after saving.** The untouched live form was observed on 2026-08-30 displaying **`Yes, I am using remote code`** with a required `Justification*`. That is **factually wrong** for this package — no remote JS or Wasm, no external script import, no `eval`, no `new Function`, and the injected function is bundled inside `popup.js` (§4). **Do not write a remote-code justification.** If a justification is still demanded after selecting `No`, **stop and report** rather than inventing text.
-- [ ] 30. **Provision and verify a dedicated low-privilege reviewer account** for the Dashboard's separate **`Test instructions`** page (Username ≤ 100, Password ≤ 100, Additional instructions ≤ 500). The extension can be checked signed out, but `Continue in PaperLume` → Projects/Tags → confirm import **requires PaperLume authentication**, and a reviewer without an account hits a login wall. Requirements: Production account, **no owner/admin privileges**, no sensitive real-user data, minimal seeded state. **Credentials go only into the Store form — never into Git, a PR description, a report, or chat.** Non-secret steps are drafted in §12.
+- [x] 30. ~~**Provision and verify a dedicated low-privilege reviewer account** for the Dashboard's separate **`Test instructions`** page (Username ≤ 100, Password ≤ 100, Additional instructions ≤ 500).~~ **DISCHARGED 2026-08-30 — the account exists in PaperLume Production and its low-privilege posture was verified.** The gate existed because the extension can be checked signed out, but `Continue in PaperLume` → Projects/Tags → confirm import **requires PaperLume authentication**, and a reviewer without an account hits a login wall. **What was verified** on the provisioned account (`0bcf4221-31f5-4f0a-b52d-1a1c567461c0`): exactly one Auth user and one email identity, email confirmed; password sign-in succeeded, the authenticated UUID matched, and the session was discarded afterwards; one `profiles` row; one ordinary **Free** `user_entitlements` row (`plan` free, `plan_status` active, 1500 papers, 524288000 bytes storage, 15 lifetime AI requests, 0 monthly, premium taxonomy off, labs/team off); one lifetime `ai_analysis` usage counter; and **zero** rows in `internal_user_access`, subscriptions, subscription events and usage credits — no billing provider/customer/subscription id, no owner/manager/admin privilege, no AI quota exemption. The library is empty: 0 papers, projects, tags, attachments and filter presets. Provisioning used the supported Supabase Auth Admin `createUser` path with `email_confirm: true`; **no direct Auth-table SQL**, and the entire Production mutation was `+1` each to `auth.users`, `auth.identities`, `profiles`, `user_entitlements` and `usage_counters`, with every other audited table unchanged. **No preseeded fixture is required and none was created — see §12.** **The credentials exist, are owner-held outside Git and chat, and have not been entered into the Chrome Web Store**; they go only into Google's confidential `Test instructions` fields, never into Git, a PR description, a report, or chat. Non-secret steps are drafted in §12.
 - [ ] 31. **Confirm each permission justification fits the live 1,000-character cap.** The full drafts in [chrome-web-store-listing.md](chrome-web-store-listing.md) §6 are **over** it (1,071 and 1,470); that document carries measured 981- and 996-character variants to enter instead. Re-measure if either is edited.
 - [ ] 32. **Confirm visibility and regions deliberately.** The live Distribution form displays `Public` and all regions **by default**. Those defaults are not decisions, and publishing worldwide by failing to look at them would be an accident, not a choice.
-- [ ] 33. **Confirm the trader/non-trader declaration is accurate — before submitting, not before charging.** The account is currently configured **Non-trader**; that is an observed setting, not a vetted classification. Chrome's test is **purpose-based**: a trader is *"acting for purposes relating to his trade, business, craft or profession"*, a non-trader *"for purposes which are outside"* of them, and *"it is the developer's responsibility to accurately self-declare"* ([trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure), re-read 2026-08-30). **Being pre-commercial is not on its own a basis for declaring Non-trader.** Weigh the actual purpose against the then-current policy — noting that the published Privacy Policy describes PaperLume as operated by an individual **sole proprietor** under the **business name MutriSport** while also calling the service a pre-commercial beta. **If Trader applies, complete trader verification and the required public trader information before submission**; Chrome makes verified trader information public to Store users, so this is a disclosure decision, not just a form field. Do not treat this as a post-launch task.
+- [ ] 33. **Confirm the trader/non-trader declaration still matches the owner's intended self-declaration — before submitting, not before charging.** **Owner decision frozen 2026-08-30 for the current beta submission: Non-trader**, and the Dashboard is configured as Non-trader. That is the owner's **self-declaration**, which is what Chrome asks for — *"it is the developer's responsibility to accurately self-declare"* — and it is **not** a finding by Google that Non-trader is correct. Chrome's test is **purpose-based**: a trader is *"acting for purposes relating to his trade, business, craft or profession"*, a non-trader *"for purposes which are outside"* of them ([trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure), re-read 2026-08-30). Note what the decision does **not** rest on: being pre-commercial is not on its own a basis for declaring Non-trader, and not wanting to publish a home address is an owner concern rather than Chrome's legal test. **What survives as a gate:** immediately before the actual submission action, re-read the then-current trader-disclosure policy and confirm that the Dashboard declaration still matches the owner's intended self-declaration and that no relevant policy or factual change has occurred. **Do not silently change it during Store entry.** If the owner's assessment moves to Trader, complete trader verification and the required public trader information before submission; Chrome makes verified trader information public to Store users, so this is a disclosure decision, not just a form field. Do not treat this as a post-launch task. The earlier open-classification framing is preserved as chronology in listing doc §0.10.
 
 Record the date, the Chrome version, and the tester for each submission.
 
@@ -1215,7 +1215,9 @@ restate its contents.
   drafted Dashboard answers (listing doc §7)
 - Privacy policy URL, and the standing gate that re-verifies it (listing doc §8)
 - Detailed description and summary drafts (listing doc §3, §4)
-- Reviewer test instructions (§12)
+- Reviewer test instructions (§12) — **and the reviewer account they depend on,
+  provisioned and verified 2026-08-30** (§8 item 30). The credentials are
+  owner-held and have not been entered into the Store
 - Real-browser regression coverage and a mandatory manual gate
 
 ### OWNER INPUT REQUIRED
@@ -1239,19 +1241,26 @@ restate its contents.
 - **Visibility and regions** — the live Distribution form displays `Public` and
   all regions by **default**. That is not an owner decision, and must not be read
   as one (listing doc §0.8)
-- **Reviewer account for Test instructions** — a new, concrete pre-submission
-  gate; see §8 item 30
+- ~~**Reviewer account for Test instructions**~~ **DISCHARGED 2026-08-30 —
+  provisioned and verified low-privilege; see §8 item 30.** What remains is not
+  an account but a Store-entry step: the owner types the owner-held credentials
+  into Google's confidential `Test instructions` fields under the separately
+  authorized `001E3C`. **No Project/Tag/Paper fixture is required** (§12)
 - ~~**Publisher account** — verified developer, 2SV enabled, one-time
   registration fee paid~~ **DONE 2026-08-30:** registration complete, **$5 fee
-  paid**, Dashboard accessible. **Classification is currently configured
-  Non-trader — an observed Dashboard setting, not a confirmed classification.**
-  Chrome defines trader status by whether the developer acts for purposes
-  relating to a trade, business, craft or profession, **not** by whether the item
-  is currently paid, so being pre-commercial is not on its own a basis for the
-  declaration. **The owner must reassess and confirm the classification against
-  the then-current facts and policy before any Store submission; if Trader
-  applies, complete trader verification and the required public trader
-  information before submission.** See §8 item 33 and listing doc §0.10
+  paid**, Dashboard accessible. **Current owner-selected CWS publisher
+  declaration: Non-trader** — frozen by the owner on 2026-08-30 for the current
+  beta submission, and the Dashboard is configured as Non-trader. That is the
+  owner's own self-declaration, not a Google finding, and it does not rest on
+  the item being unpaid: Chrome defines trader status by whether the developer
+  acts for purposes relating to a trade, business, craft or profession, **not**
+  by whether the item is currently paid. **What remains is a consistency
+  re-check immediately before the submission action** — re-read the then-current
+  policy and confirm the Dashboard declaration still matches the owner's
+  intended self-declaration; do not silently change it during Store entry. If
+  the assessment moves to Trader, trader verification and the required public
+  trader information must be completed first. See §8 item 33 and listing doc
+  §0.10
 - **Distribution** — public vs unlisted vs private, and region availability
   (listing doc §12 documents the three paths and their differing gates without
   choosing between them)
@@ -1362,8 +1371,9 @@ Nothing in this repository can set these; a human enters them:
   observed defaulting to **`Yes`**, which is wrong for this package. See §8
   item 29
 - Privacy policy URL — live field `Privacy policy URL*`, **required** (listing doc §8)
-- Reviewer test instructions, plus the **reviewer account** they depend on (§12,
-  §8 item 30)
+- Reviewer test instructions — the **reviewer account** they depend on now
+  exists (§8 item 30), but the credentials themselves are owner-held and are
+  typed in here, and only here (§12)
 - `Category*` and `Language*` — both **required**, neither chosen
 - Distribution: visibility and regions — **displayed defaults are not decisions**
 - Every image upload — **`Store icon *` and `Screenshots *` are the two required
@@ -1376,8 +1386,9 @@ to draft item `cfanjbamcemoeglgkpbidnclkomaocmo` on 2026-08-30.
 
 ## 12. Reviewer test instructions
 
-Draft for the Dashboard's test-instructions field. **No credentials are created
-or embedded**, and none should be.
+Draft for the Dashboard's test-instructions field. **No credentials are embedded
+here, and none ever should be** — the account behind them now exists (§8 item
+30), but its credentials live only with the owner.
 
 > PaperLume identifies a scientific paper from the tab you are on — from its URL,
 > or from the standard DOI metadata the page publishes — and hands that
@@ -1426,8 +1437,41 @@ or embedded**, and none should be.
 > If a signed-in review of the destination page is required, please contact us
 > and we will arrange access.
 
-**Owner decision:** whether to supply reviewer credentials if Google asks. 001E1
-creates none.
+### Reviewer credentials — READY, and not yet given to Google
+
+**Provisioned and verified 2026-08-30**; §8 item 30 holds the audited
+low-privilege posture. Current state:
+
+- the credentials **exist** and are **owner-held, outside Git and outside chat**;
+- they have **not** been entered into the Chrome Web Store;
+- they are to be entered **only** into Google's confidential `Test instructions`
+  fields (Username ≤ 100 · Password ≤ 100 · Additional instructions ≤ 500),
+  under the separately authorized `001E3C`;
+- they must never be committed to Git or copied into a PR description, a release
+  report, or chat.
+
+The draft above is preserved as written. Its closing sentence — *"If a signed-in
+review of the destination page is required, please contact us"* — was drafted
+when no reviewer account existed; now that credentials are supplied in the same
+form, whether to keep, soften or drop that sentence is a small copy decision for
+the owner at entry time. **Do not treat that as authorization to enter anything.**
+
+### No reviewer fixture is required
+
+**No preseeded reviewer Project/Tag/Paper fixture is required, and none was
+created.** [`src/pages/ExtensionImport.tsx`](../src/pages/ExtensionImport.tsx)
+was re-read on 2026-08-30: the authenticated import page lets the user
+*optionally* select existing Projects and Tags, the confirm control's disabled
+state depends only on the import phase and the context load — **never on the
+selections** — and the taxonomy section renders nothing at all for a user who has
+neither Projects nor Tags. The canonical import therefore completes on an empty
+account with zero assignments.
+
+The empty account is **preferable**, not a shortcut: it minimises Production test
+data, it shows the reviewer an ordinary new-user baseline, and it demonstrates
+that Project/Tag assignment is genuinely optional. A reviewer may create normal
+user-owned content during review if they want to; nothing has to exist
+beforehand, in this repository or in Production.
 
 ---
 
