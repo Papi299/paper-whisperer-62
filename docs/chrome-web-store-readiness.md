@@ -34,6 +34,16 @@
 > below is written to current behaviour; §6 and §8 carry the detail. The
 > `activeTab` documentation was re-read first-party on 2026-08-29 for this change.
 >
+> **Privacy-policy gate CLOSED (2026-08-30).** The mismatch CORRECTION-01 opened
+> — a published §4 saying the extension never reads the page, against a disclosed
+> **Website content = Yes** — is resolved. The owner approved amended §4 wording,
+> `PRIVACY-POLICY-EXTENSION-METADATA-001B` merged as
+> `8144504508df333e850c0ed38ec1352c9579ca24`, and the amended policy was verified
+> live in public Production **signed out** on 2026-08-30. §6 carries the evidence
+> and retains the original diagnosis as history. **This does not retire the
+> standing per-submission check** of `https://app.paperlume.app/privacy` (§6, §8
+> items 23–24), which is re-armed for every actual submission.
+>
 > **Companion document.** [chrome-web-store-listing.md](chrome-web-store-listing.md)
 > holds the submission package itself — listing copy, single-purpose text,
 > permission justifications, the drafted privacy-practices answers, the listing
@@ -564,21 +574,27 @@ marketing site (see C16 in
 [decisions-and-triggers.md](decisions-and-triggers.md)).
 
 **Point 2 below was added by CORRECTION-01 and the published §4 did not cover
-it** — that is the blocking gate stated at the end of this subsection. The
-amended §4 approved by the owner on 2026-08-30 covers all eight points, but is
-not published until `PRIVACY-POLICY-EXTENSION-METADATA-001B` merges and
-deploys.
+it** — that was the blocking gate stated at the end of this subsection, and it is
+now **CLOSED**. The amended §4 approved by the owner on 2026-08-30 covers all
+eight points, and `PRIVACY-POLICY-EXTENSION-METADATA-001B` merged on
+**2026-08-30** (merge commit
+[`8144504`](https://github.com/Papi299/paper-whisperer-62/commit/8144504508df333e850c0ed38ec1352c9579ca24))
+and is live in Production.
 
 **Privacy policy URL to enter in the Developer Dashboard:**
 `https://app.paperlume.app/privacy`
 
-**Reachability gate — open until verified, and this is a standing requirement,
-not a one-off.** Publishing the route is not the same as proving it is reachable.
-Before any Store submission, confirm that URL loads the policy **in Production,
-signed out, from a clean browser** with no cached session (§8 item 12). Deployment
-protection, a routing regression, or a rewrite change can each break it without
-breaking anything else, so re-verify on every submission rather than trusting a
-previous check. Until that verification is recorded, this gate stays open.
+**Reachability gate — STANDING, and it does not close permanently.** Publishing
+the route is not the same as proving it is reachable. Before any Store submission,
+confirm that URL loads the policy **in Production, signed out, from a clean
+browser** with no cached session (§8 item 12). Deployment protection, a routing
+regression, or a rewrite change can each break it without breaking anything else,
+so re-verify on every submission rather than trusting a previous check.
+
+**Last successful signed-out Production verification: 2026-08-30**, which also
+closed the one-time content mismatch below. That verification is evidence for
+*that* date only. This gate is re-armed for the next submission and **must be
+performed again immediately before every actual Chrome Web Store submission**.
 
 The content the extension section must cover:
 
@@ -596,8 +612,12 @@ The content the extension section must cover:
    the extension itself contacts none of them;
 8. contact route for data-subject requests.
 
-**BLOCKING GATE — OWNER APPROVAL GIVEN 2026-08-30; MERGE AND PRODUCTION
-VERIFICATION STILL OUTSTANDING.**
+**PRIVACY-POLICY MISMATCH GATE — CLOSED 2026-08-30.** Owner approval was given,
+`PRIVACY-POLICY-EXTENSION-METADATA-001B` merged, and the amended policy was
+verified live in public Production signed out. The diagnosis below is retained
+**as historical evidence of what the defect was and why it blocked**; the closure
+record follows it. This gate is not the same as the *standing* reachability gate
+above, which remains in force for every submission.
 
 *The defect, recorded as it was found.* The owner-approved §4 of `/privacy`
 stated, as a bulleted list of things the extension does **not** do:
@@ -624,19 +644,41 @@ transient and not persisted, replaces the retired bullet with a bounded negative
 list, and closes with an affirmative Limited Use statement. The full record is in
 [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §25.
 
-*What is still open, and why this gate does not yet close.*
-`PRIVACY-POLICY-EXTENSION-METADATA-001B` is **a pull request**. Approving wording
-is not merging it, and merging is not publishing it — the policy a Chrome Web
-Store reviewer reads is whatever Production serves. **No Chrome Web Store
-submission may proceed until the amendment is merged, deployed, and verified in
-Production signed out**, because Google requires the disclosed practices to match
-the posted policy, and "Website content = Yes" against a policy saying the page is
-never read is a direct contradiction a reviewer can check in one click. A Vercel
-Preview deployment is **not** Production and does not close this gate. It is
-additional to, and independent of, the reachability gate below — which the same
-Production check should satisfy at the same time, by confirming both that
-`/privacy` loads and that it shows the amended §4 and the August 30, 2026
-effective date.
+*Why this gate existed at all — retained, because it is the standard any future
+policy change must still meet.* Approving wording is not merging it, and merging
+is not publishing it: the policy a Chrome Web Store reviewer reads is whatever
+Production serves. Google requires the disclosed practices to match the posted
+policy, and "Website content = Yes" against a policy saying the page is never read
+is a direct contradiction a reviewer can check in one click. A Vercel Preview
+deployment is **not** Production and never closed this gate.
+
+*How it closed.* On **2026-08-30**:
+
+- `PRIVACY-POLICY-EXTENSION-METADATA-001B` (PR #258) **merged** to `main` as a
+  regular two-parent merge commit
+  **`8144504508df333e850c0ed38ec1352c9579ca24`**, whose tree equals the approved
+  head tree `817827f61e5f82b31d636f81a2ee9b91674f814b`.
+- The push-triggered **Validate**, **DB Tests** and **Extension (package + real
+  browser)** lanes all succeeded for that commit, and GitHub's **Vercel** commit
+  status reported *success — "Deployment has completed"*. (Native Vercel
+  READY/alias evidence was **not** obtained and is **not** claimed here.)
+- `https://app.paperlume.app/privacy` was then opened **in public Production, in
+  a signed-out browser**: HTTP **200**, **zero redirects**, and no PaperLume
+  account required.
+
+*What the served page showed.* Effective date **August 30, 2026**; section
+**4. PaperLume Chrome extension** matching the approved copy; the corrected
+transmission bullet (*"…except for the detected identifier value described below
+when you choose to continue."*); the unchanged identifier paragraph; all four DOI
+metadata names (`citation_doi`, `dc.identifier`, `dc.identifier.doi`,
+`prism.doi`); and the affirmative Limited Use sentence. The retired claim
+*"read the contents of the webpage or its DOM"* was **absent**.
+
+**The disclosed *Website content = Yes* no longer contradicts the posted policy.**
+This specific mismatch gate is therefore **CLOSED** and does not reopen on its
+own. What remains is the *standing* per-submission reachability and
+factual-consistency re-check described above — a different gate, deliberately not
+closed by this record.
 
 **Limited Use disclosure location.** The approved §4 closes with *"PaperLume uses
 information accessed by the Chrome extension only in accordance with the Chrome
@@ -871,8 +913,18 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 ### Before entering anything in the Dashboard
 
 - [ ] 22. Re-verify every policy citation in this document **and in [chrome-web-store-listing.md](chrome-web-store-listing.md)** against the live primary source (see the header) — including the `activeTab` and `chrome.scripting` pages this correction relies on.
-- [ ] 23. **Confirm the amended public Privacy Policy is live in Production** (§6, *BLOCKING GATE*). The owner/legal decision was taken on **2026-08-30** and `PRIVACY-POLICY-EXTENSION-METADATA-001B` implements the approved wording, but approval is not merge and merge is not deployment. Check the served page — not the repository, and not a Preview deployment — and confirm it no longer says the extension does not read the page's contents or DOM, that it discloses the bounded DOI metadata read, and that the effective date reads **August 30, 2026**. Until the *served* page says all three, the disclosed **Website content = Yes** contradicts the posted policy.
+- [ ] 23. **Confirm the amended public Privacy Policy is live in Production** (§6). Check the served page — not the repository, and not a Preview deployment — and confirm it no longer says the extension does not read the page's contents or DOM, that it discloses the bounded DOI metadata read, and that the effective date reads **August 30, 2026**. Until the *served* page says all three, the disclosed **Website content = Yes** contradicts the posted policy.
 - [ ] 24. Confirm the privacy policy URL is **published and publicly reachable in Production, signed out, from a clean browser**. Items 23 and 24 are satisfied by the same visit; do them together and record the date.
+
+> **Items 23 and 24 — last passed 2026-08-30, and deliberately left unchecked.**
+> Both were performed and **passed** in public Production, signed out, on
+> **2026-08-30**, after PR #258 merged as
+> `8144504508df333e850c0ed38ec1352c9579ca24`; that visit is what closed the
+> one-time privacy-policy mismatch gate recorded in §6. The boxes stay unticked
+> because **this checklist is reusable and is re-run in full for every actual
+> Store submission** — a tick here would let a future submission skip a check
+> that Production can silently break between now and then. Treat the 2026-08-30
+> result as evidence for that date, not as a completed step.
 - [ ] 25. Review the five committed listing images in [`assets/store/`](../assets/store) and confirm each is accurate and acceptable to publish — in particular that no caption claims the page is never read.
 - [ ] 26. Confirm the Dashboard's **Website content** answer is set to **Yes** and that the permission justification covers **both** `activeTab` and `scripting`.
 - [ ] 27. Resolve the **promotional video** question (§11) against the **live Developer Dashboard**: is the field actually required for the chosen visibility? Google's own pages contradict each other, so this cannot be settled from documentation. If it is required, producing and hosting the video becomes a content gate; if not, it stays deferred.
@@ -1135,14 +1187,11 @@ restate its contents.
 
 ### OWNER INPUT REQUIRED
 
-- **Privacy policy amendment — BLOCKING, new in CORRECTION-01.** The published
-  §4 says the extension *"does not … read the contents of the webpage or its
-  DOM"*, which is no longer true. The text is owner-approved legal content under
-  separate control and was deliberately not edited here. See §6, *BLOCKING GATE*,
-  for the narrow amendment required and why submission cannot proceed without it
 - **Privacy policy URL reachability** — `https://app.paperlume.app/privacy`.
-  What remains is **confirming it loads in Production, signed out, from a clean
-  browser**, before *each* submission
+  **Standing, not one-off.** What remains is **confirming it loads in Production,
+  signed out, from a clean browser — and still shows the amended §4 and the
+  August 30, 2026 effective date** — before *each* submission. Last passed
+  **2026-08-30**
 - **Promotional video — requirement unresolved.** Google's own pages
   contradict each other; the live Dashboard decides. See below
 - **Support URL / contact email** — PaperLume publishes no Support page. C16 in
@@ -1350,6 +1399,9 @@ any DOI resolver call · a title fallback · automatic import · anything that r
 when the user has not opened the popup.
 
 It also did **not** edit the public Privacy Policy (`src/pages/Privacy.tsx`),
-which is owner-approved legal text under separate control. The amendment that
-text now needs is recorded as a blocking gate in §6 and as item 23 of the manual
-checklist, for the owner to action.
+which is owner-approved legal text under separate control. That remains the
+correct record of CORRECTION-01's scope. **Superseded 2026-08-30:** the amendment
+that text needed was approved by the owner and implemented by
+`PRIVACY-POLICY-EXTENSION-METADATA-001B`, which merged as
+`8144504508df333e850c0ed38ec1352c9579ca24` and is live in Production — see §6,
+where that gate is now recorded as **CLOSED**.

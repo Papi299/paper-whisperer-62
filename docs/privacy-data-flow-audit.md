@@ -947,10 +947,16 @@ in its manual acceptance checklist.
 > **CORRECTION-01 still did not edit the legal copy**, which remains the correct
 > record of that change's scope. What follows it is a separate piece of work with
 > its own authority: the owner approved amended §4 wording, and
-> `PRIVACY-POLICY-EXTENSION-METADATA-001B` implements it. **That work is not yet
-> merged or deployed**, so the policy served at `/privacy` is still the
-> pre-amendment text and this gate is still open. §25 records the resolution and
-> what is left to verify.
+> `PRIVACY-POLICY-EXTENSION-METADATA-001B` implements it. **That work was not yet
+> merged or deployed when this annotation was written on 2026-08-30**, so the
+> policy served at `/privacy` was still the pre-amendment text and this gate was
+> still open. §25 records the resolution and what was left to verify.
+>
+> **Superseded later the same day — see §25.6.** The pull request merged as
+> `8144504508df333e850c0ed38ec1352c9579ca24` and the amended policy was verified
+> live in public Production signed out. **This gate is CLOSED.** Nothing above is
+> withdrawn: it is the record of what was wrong, and of the intermediate state
+> between approval and publication. Do not read it as the present state.
 
 ### 24.7 What this addendum does not change
 
@@ -1083,7 +1089,8 @@ transmitted to external servers."*
 **Closed by owner decision:** the §24.6 question of *what the policy should say*.
 The wording exists, is approved, and is implemented.
 
-**NOT closed:**
+**NOT closed — as at the time this subsection was written (2026-08-30, before
+the merge). All three were closed later the same day; see §25.6.**
 
 - **Merge.** `PRIVACY-POLICY-EXTENSION-METADATA-001B` is a pull request. Until it
   merges, `main` still carries the inaccurate §4.
@@ -1096,6 +1103,14 @@ The wording exists, is approved, and is implemented.
 
 Until all three happen, the pre-Chrome-Web-Store privacy gate stays **open**.
 
+> **Superseded 2026-08-30 by §25.6.** All three did happen: the PR merged as
+> `8144504508df333e850c0ed38ec1352c9579ca24`, GitHub's Vercel status for that
+> commit reported success, and the signed-out Production check passed. **The
+> privacy mismatch gate is CLOSED.** The three requirements above are retained
+> because they are the correct standard, and because they record the state
+> between owner approval and publication — not because any of them is still
+> outstanding.
+
 ### 25.5 What this addendum does not change
 
 Nothing outside the public legal copy and its documentation. No extension
@@ -1106,3 +1121,70 @@ hosting arrangement. §11 (audited snapshot), §12, §13, §19.1–19.4, §20's 
 and §24's delta are all left as written; the historical statements in §19.5 and
 §24.6 are annotated in place rather than rewritten, so what was true when, and
 what changed it, both remain readable.
+
+### 25.6 Closure after merge and Production verification
+
+**Added 2026-08-30 (CWS-PRIVACY-GATE-DOC-CLOSURE-001), after the material above
+was written.** §24.6 and §25.4 are left intact: they record, correctly, what the
+mismatch was and the intermediate state in which owner approval existed but the
+published policy had not yet changed. This subsection records what happened next
+and supersedes their "gate open" conclusion.
+
+**Merge.**
+
+| Fact | Value |
+|---|---|
+| Pull request | **#258** — *PRIVACY-POLICY-EXTENSION-METADATA-001B — align public policy with DOI metadata access* |
+| State | **MERGED**, 2026-08-30 |
+| Merge commit | `8144504508df333e850c0ed38ec1352c9579ca24` |
+| Merge type | Regular two-parent merge (`b2d4943b3c77893e682f94767f347bec9e50b79d` + `a69adef5413393b61d6dcbe8f33121ca463063c5`) |
+| Approved-head tree | `817827f61e5f82b31d636f81a2ee9b91674f814b` |
+| Merge tree | `817827f61e5f82b31d636f81a2ee9b91674f814b` — **identical**, so the merge introduced no content beyond the approved head |
+
+**Deployment evidence, stated at exactly the strength it was obtained.**
+Push-triggered **Validate**, **DB Tests** and **Extension (package + real
+browser)** all succeeded for the merge commit; no E2E(local) push run was
+expected or created. GitHub's **Vercel** commit status for that exact SHA reports
+**success — *"Deployment has completed"***.
+
+> **Native Vercel READY/alias evidence was unavailable and is NOT claimed.** No
+> deployment id, no `READY` state read from Vercel itself, and no alias
+> assignment record was obtained. The deployment evidence here is GitHub's commit
+> status plus the independent public-Production check below — which is what
+> actually matters, since a Store reviewer reads the served page, not a
+> deployment record.
+
+**Production verification — public, signed out.** `https://app.paperlume.app/privacy`
+returned **HTTP 200 with zero redirects** and required **no PaperLume account**.
+The served page showed:
+
+- effective date **August 30, 2026**;
+- section **4. PaperLume Chrome extension**, matching the approved 18-block copy;
+- the corrected transmission bullet — *"…directly transmit the active-tab URL or
+  webpage content to PaperLume, except for the detected identifier value
+  described below when you choose to continue."*;
+- the identifier paragraph unchanged — *"If you choose to continue, the extension
+  opens the PaperLume web application and provides only the detected identifier
+  type and value, such as a PMID or DOI."*;
+- all four DOI metadata names: `citation_doi`, `dc.identifier`,
+  `dc.identifier.doi`, `prism.doi`;
+- the affirmative Limited Use sentence — *"PaperLume uses information accessed by
+  the Chrome extension only in accordance with the Chrome Web Store User Data
+  Policy, including its Limited Use requirements."*
+
+The retired claim *"read the contents of the webpage or its DOM"* was **absent**
+from the rendered Production policy.
+
+**Conclusion.** The disclosed **Website content = Yes** and **Web history = Yes**
+(§25.3) no longer contradict the posted policy. The pre-Chrome-Web-Store privacy
+mismatch gate opened by §24.6 is **CLOSED**, and does not reopen on its own.
+
+**What this does not close.** The *standing* per-submission requirement is a
+different gate and remains in force: `https://app.paperlume.app/privacy` must be
+re-verified reachable and factually consistent, in Production and signed out,
+**immediately before every actual Chrome Web Store submission**. Nothing here
+touches the still-unresolved Dashboard-only questions (whether a promotional
+video is required; whether a separate store-icon upload field exists), and **no
+Chrome Web Store item, upload, listing, submission or publication exists** —
+external Store mutation remains `CHROME-EXTENSION-IMPORT-001E3`, which is not
+authorized.

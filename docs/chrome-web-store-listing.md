@@ -38,11 +38,19 @@
 > unchanged, and the screenshot captions were revised only where they had become
 > false.
 >
-> **Blocking, and not fixable here:** the published Privacy Policy states the
-> extension does not read the page or its DOM, which is no longer true. That text
-> is owner-approved and under separate control. See
-> [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6, *BLOCKING
-> GATE*.
+> **Privacy-policy mismatch — CLOSED 2026-08-30.** CORRECTION-01 left the
+> published Privacy Policy stating the extension does not read the page or its
+> DOM, which had become untrue and was not fixable here. The owner approved
+> amended §4 wording; `PRIVACY-POLICY-EXTENSION-METADATA-001B` (PR #258)
+> implemented it and **merged on 2026-08-30** as
+> `8144504508df333e850c0ed38ec1352c9579ca24`; and
+> `https://app.paperlume.app/privacy` was verified **signed out in public
+> Production** on 2026-08-30 showing the amended §4 and the **August 30, 2026**
+> effective date. The disclosed **Website content = Yes** no longer contradicts
+> the posted policy. §8 and
+> [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6 carry the
+> evidence. **A standing per-submission reachability and content re-check of that
+> URL remains required** — see §8.
 
 **Companion document.** [chrome-web-store-readiness.md](chrome-web-store-readiness.md)
 is the policy audit, the data-flow evidence, the packaging contract, the
@@ -527,19 +535,25 @@ revision of this section recorded a 2026-08-29 re-read finding *"no factual
 mismatch"*. That was written before `CHROME-EXTENSION-IMPORT-001E2-CORRECTION-01`
 landed the DOI metadata fallback, and it did not survive it: the published §4
 listed *"read the contents of the webpage or its DOM"* among the things the
-extension does not do, which the metadata read made false. The mismatch is
+extension does not do, which the metadata read made false. That mismatch was
 recorded in [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §24.6 and as
 a blocking gate in [chrome-web-store-readiness.md](chrome-web-store-readiness.md)
-§6.
+§6; both now also carry its closure.
 
 **The owner approved amended §4 wording on 2026-08-30**, and
 `PRIVACY-POLICY-EXTENSION-METADATA-001B` implements exactly that approved copy —
 the bounded metadata read, the four supported DOI metadata names, the
 locally-and-transiently disclosure, and an affirmative Limited Use statement —
-together with an effective date of **August 30, 2026**. **That work is a pull
-request, not a published policy.** Until it is merged and deployed, the policy
-live at the URL above is still the pre-amendment text, and the mismatch above is
-still the live state.
+together with an effective date of **August 30, 2026**.
+
+**That work is now merged and live — the mismatch is CLOSED.**
+`PRIVACY-POLICY-EXTENSION-METADATA-001B` (PR #258) merged on **2026-08-30** as
+`8144504508df333e850c0ed38ec1352c9579ca24`, and the URL above was opened **in
+public Production, signed out**, on 2026-08-30: it served the amended §4, the
+**August 30, 2026** effective date, all four DOI metadata names and the Limited
+Use sentence, and no longer carried the retired *"read the contents of the
+webpage or its DOM"* claim. The historical finding above is left standing as the
+record of what was wrong and when.
 
 **Limited Use disclosure location.** The approved §4 ends with the affirmative
 statement *"PaperLume uses information accessed by the Chrome extension only in
@@ -548,17 +562,18 @@ requirements."* The public Privacy Policy is therefore the disclosure location;
 no second copy of that sentence belongs anywhere else, and none should be added
 to the listing copy.
 
-**Standing submission gate — open, and it does not close permanently.** Before
+**Standing submission gate — it does not close permanently.** Before
 **every** Store submission, confirm that URL loads the policy **in Production,
 signed out, from a clean browser** with no cached session. Deployment
 protection, a routing regression or a rewrite change can each break it without
 breaking anything else. See
 [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8 item 12.
 
-Once `PRIVACY-POLICY-EXTENSION-METADATA-001B` merges and deploys, that same
-signed-out Production check must additionally confirm the page shows the amended
-§4 and the **August 30, 2026** effective date. A Preview deployment is not
-Production and does not close this gate.
+That same signed-out Production check must additionally confirm the page shows
+the amended §4 and the **August 30, 2026** effective date. A Preview deployment is
+not Production and does not close this gate. **Last passed: 2026-08-30** — which
+is evidence for that date only, not a completed step; re-run it immediately before
+every actual submission.
 
 ---
 
