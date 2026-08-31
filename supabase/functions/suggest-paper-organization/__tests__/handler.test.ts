@@ -84,6 +84,8 @@ interface Harness {
   errors: string[];
   sleeps: number[];
   forbidden: string[];
+  /** The per-attempt timeout each provider attempt was armed with, in order. */
+  signalTimeouts: number[];
 }
 
 interface HarnessOptions {
@@ -127,6 +129,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const errors: string[] = [];
   const sleeps: number[] = [];
   const forbidden: string[] = [];
+  const signalTimeouts: number[] = [];
 
   const projects = options.projects ?? [PROJECT_A, PROJECT_B];
   const tags = options.tags ?? [TAG_A, TAG_B];
@@ -217,6 +220,12 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       sleep: async (ms: number) => {
         sleeps.push(ms);
       },
+      // Injected so the configured per-attempt timeout is assertable without
+      // any test waiting 30 seconds for it, and so no real timer is left armed.
+      createTimeoutSignal: (ms: number) => {
+        signalTimeouts.push(ms);
+        return new AbortController().signal;
+      },
       getGeminiApiKey: () => (options.geminiKey === undefined ? GEMINI_KEY : options.geminiKey),
       getGeminiModel: () => "gemini-flash-latest",
       logger: {
@@ -233,6 +242,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     errors,
     sleeps,
     forbidden,
+    signalTimeouts,
   };
 }
 
@@ -931,6 +941,94 @@ describe("refund behaviour", () => {
     const payload = await response.json();
     expect(payload.error).toBe("suggestions_unavailable");
     expect(payload.code).toBe("provider_unavailable");
+  });
+});
+
+// ── 10b. The provider timeout (AI-PROVIDER-RESILIENCE-001A) ───────────────
+
+/**
+ * Production, 2026-08-31T03:25:38Z: one "Suggest Projects & Tags" click logged
+ * `provider_timeout attempt=1 retry_in_ms=2000`, automatically re-sent the
+ * generation, succeeded ~10 s later — and moved Google's daily request counter
+ * by TWO. A separate controlled probe of the shipped model had already returned
+ * a valid HTTP 200 at 18,056 ms, past the old 15 s ceiling.
+ *
+ * These assert both halves of the fix through the real handler: the ceiling is
+ * now 30 s, and reaching it ends the provider-call sequence instead of paying
+ * for a second generation. The transport itself is covered exhaustively in
+ * `_shared/__tests__/geminiTransport.test.ts`; this is the handler contract
+ * around it — one provider request, one refund, one neutral 500.
+ */
+describe("a provider timeout is terminal", () => {
+  const timeout = () => Object.assign(new Error("Signal timed out."), { name: "TimeoutError" });
+
+  it("arms each provider attempt with the 30-second timeout, not the old 15", async () => {
+    const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.signalTimeouts).toEqual([30_000]);
+  });
+
+  it("issues exactly ONE provider request when the attempt times out", async () => {
+    const harness = makeHarness({ responses: [timeout()] });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.signalTimeouts).toEqual([30_000]);
+  });
+
+  it("does not sleep before giving up on a timeout", async () => {
+    const harness = makeHarness({ responses: [timeout()] });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.sleeps).toEqual([]);
+  });
+
+  it("still refunds the one unit and returns the neutral provider failure", async () => {
+    const harness = makeHarness({ responses: [timeout()] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    const payload = await response.json();
+    expect(payload.error).toBe("suggestions_unavailable");
+    expect(payload.code).toBe("provider_unavailable");
+    expect(payload.message).toBe(NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+  });
+
+  it("never turns a timeout into a Paperlume paywall", async () => {
+    const harness = makeHarness({ responses: [timeout()] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).not.toBe(402);
+    expect((await response.json()).error).not.toBe("quota_exceeded");
+  });
+
+  it("logs the timeout as terminal — the log that used to say retry_in_ms=2000", async () => {
+    const harness = makeHarness({ responses: [timeout()] });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    const all = [...harness.logs, ...harness.warns, ...harness.errors].join("\n");
+    expect(all).toContain("suggest-organization provider_timeout attempt=1");
+    expect(all).toContain("retry=0");
+    expect(all).not.toContain("retry_in_ms");
+    expect(all).toContain("detail=timeout");
+    expect(all).toContain("provider_attempts=1");
+  });
+
+  it("times out terminally on a retried attempt too", async () => {
+    // A 503 legitimately buys attempt 2; a timeout there still ends it.
+    const harness = makeHarness({ responses: [new Response("", { status: 503 }), timeout()] });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(harness.sleeps).toEqual([2000]);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+  });
+
+  it("consumes exactly one Paperlume unit however many provider attempts happen", async () => {
+    const harness = makeHarness({
+      responses: [new Response("", { status: 503 }), new Response("", { status: 503 }), geminiOk(EMPTY_SUGGESTIONS)],
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(3);
+    // Three provider requests, still exactly one consume and no refund.
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+    expect(harness.logs.join("\n")).toContain("provider_attempts=3");
   });
 });
 

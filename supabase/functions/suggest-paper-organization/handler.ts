@@ -33,7 +33,8 @@
  *   7. Taxonomy load         — caller-scoped; overflow fails honestly.
  *   8. Provider input build  — allow-listed fields, ephemeral refs, size bound.
  *   9. Consume quota         — one unit, and not before here.
- *  10. Provider call         — bounded retries, finite timeout.
+ *  10. Provider call         — finite timeout, bounded retries, no retry
+ *                              after a timeout.
  *  11. Strict parse          — unusable ⇒ refund + neutral 500.
  *
  * Steps 1–8 can only fail *before* a unit is spent, so a malformed request, a
@@ -51,6 +52,7 @@
  * because Google was busy.
  */
 
+import { callGeminiWithRetry } from "../_shared/geminiTransport.ts";
 import { classifyProviderError, type ProviderErrorClass } from "../_shared/providerError.ts";
 import {
   NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE,
@@ -73,14 +75,6 @@ export const corsHeaders = {
 };
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
-
-/** Per-attempt provider timeout. Matches `analyze-paper`. */
-const PROVIDER_TIMEOUT_MS = 15_000;
-/** Retries *after* the first attempt, and the backoff base. Matches `analyze-paper`. */
-const PROVIDER_MAX_RETRIES = 2;
-const PROVIDER_BASE_DELAY_MS = 2_000;
-/** Ceiling applied to a `Retry-After` the provider asks for. */
-const PROVIDER_MAX_RETRY_AFTER_MS = 10_000;
 
 // ── Injected dependencies ─────────────────────────────────────────────────
 
@@ -119,6 +113,12 @@ export interface SuggestOrganizationDeps {
   fetchImpl(url: string, init: RequestInit): Promise<Response>;
   /** Injected so tests never spend real wall-clock time on backoff. */
   sleep(ms: number): Promise<void>;
+  /**
+   * Injected so a test can assert the configured per-attempt timeout without
+   * waiting for it. `index.ts` leaves this unset and the shared transport uses
+   * the platform `AbortSignal.timeout`.
+   */
+  createTimeoutSignal?(ms: number): AbortSignal;
   /** Read from Deno env by `index.ts`; `null`/empty means the function is misconfigured. */
   getGeminiApiKey(): string | null;
   /** Resolved through the shared `_shared/geminiModel.ts` so this cannot drift from `analyze-paper`. */
@@ -157,22 +157,24 @@ async function safeRefund(
 // ── Provider transport ────────────────────────────────────────────────────
 
 type ProviderCallResult =
-  | { ok: true; payload: unknown }
-  | { ok: false; kind: "http" | "network" | "timeout" | "parse"; status?: number };
+  | { ok: true; payload: unknown; attempts: number }
+  | { ok: false; kind: "http" | "network" | "timeout" | "parse"; status?: number; attempts: number };
 
 /**
- * Call Gemini with a finite per-attempt timeout and a bounded retry budget,
- * retrying only 429 and 5xx (and network/abort failures). An ordinary 4xx is a
- * statement about the request and is returned immediately.
+ * Call Gemini through the shared transport, then read the body.
  *
- * This mirrors `analyze-paper`'s `fetchWithRetry` deliberately rather than
- * sharing it. Extracting that helper into `_shared/` would put a new module into
- * `analyze-paper`'s deploy artifact and force the repository's most
- * safety-critical existing function to be redeployed for a feature that does not
- * change it — widening the rollout blast radius of 001A for no behavioural gain.
- * The same trade-off, with the same reasoning, is recorded in
- * `search-pubmed/handler.ts`. This copy is additionally injected with
- * `fetchImpl`/`sleep`, so unlike the original it is genuinely unit-tested.
+ * The retry/timeout policy itself lives in `_shared/geminiTransport.ts` —
+ * AI-PROVIDER-RESILIENCE-001A moved it there because 001A changes it in BOTH
+ * Gemini callers at once, which is exactly the situation the two-copy
+ * arrangement was chosen to avoid. (The previous note here argued that sharing
+ * would drag `analyze-paper` into this function's deploy artifact for no
+ * behavioural gain; that trade-off no longer holds when the behavioural change
+ * is `analyze-paper`'s too, and one shared policy is now the cheaper way to keep
+ * them honest.)
+ *
+ * What stays here is the part that is genuinely this function's own: a 2xx whose
+ * body is not JSON is an unusable *response*, not a transport failure, and is
+ * classified `parse` without a retry — unchanged.
  */
 async function callProvider(
   url: string,
@@ -181,64 +183,33 @@ async function callProvider(
   deps: SuggestOrganizationDeps,
   logger: NonNullable<SuggestOrganizationDeps["logger"]>,
 ): Promise<ProviderCallResult> {
-  const init: RequestInit = {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify(body),
-  };
+  const result = await callGeminiWithRetry(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify(body),
+    },
+    {
+      label: "suggest-organization",
+      fetchImpl: deps.fetchImpl,
+      sleep: deps.sleep,
+      createTimeoutSignal: deps.createTimeoutSignal,
+      logger,
+    },
+  );
 
-  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt++) {
-    try {
-      const response = await deps.fetchImpl(url, {
-        ...init,
-        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-      });
-
-      if (response.ok) {
-        try {
-          return { ok: true, payload: await response.json() };
-        } catch {
-          // A 200 whose body is not JSON is an unusable response, not a
-          // transport failure — retrying it is unlikely to help.
-          return { ok: false, kind: "parse" };
-        }
-      }
-
-      const retriable = response.status === 429 || response.status >= 500;
-      if (retriable && attempt < PROVIDER_MAX_RETRIES) {
-        let delay = PROVIDER_BASE_DELAY_MS * Math.pow(2, attempt);
-        if (response.status === 429) {
-          const retryAfter = Number(response.headers.get("Retry-After"));
-          if (Number.isFinite(retryAfter) && retryAfter > 0) {
-            delay = Math.min(Math.max(retryAfter * 1000, delay), PROVIDER_MAX_RETRY_AFTER_MS);
-          }
-        }
-        // Status and attempt only. The provider's body can echo request content
-        // and its error envelope can name the Google project, so neither is read
-        // here and neither is logged.
-        logger.warn(
-          `suggest-organization provider_status=${response.status} attempt=${attempt + 1} retry_in_ms=${delay}`,
-        );
-        await deps.sleep(delay);
-        continue;
-      }
-
-      return { ok: false, kind: "http", status: response.status };
-    } catch (error) {
-      const timedOut = error instanceof Error && error.name === "TimeoutError";
-      if (attempt < PROVIDER_MAX_RETRIES) {
-        const delay = PROVIDER_BASE_DELAY_MS * Math.pow(2, attempt);
-        logger.warn(
-          `suggest-organization provider_${timedOut ? "timeout" : "network_error"} attempt=${attempt + 1} retry_in_ms=${delay}`,
-        );
-        await deps.sleep(delay);
-        continue;
-      }
-      return { ok: false, kind: timedOut ? "timeout" : "network" };
-    }
+  if (!result.ok) {
+    return { ok: false, kind: result.kind, status: result.status, attempts: result.attempts };
   }
 
-  return { ok: false, kind: "network" };
+  try {
+    return { ok: true, payload: await result.response.json(), attempts: result.attempts };
+  } catch {
+    // A 200 whose body is not JSON is an unusable response, not a transport
+    // failure — retrying it is unlikely to help.
+    return { ok: false, kind: "parse", attempts: result.attempts };
+  }
 }
 
 // ── Taxonomy loading ──────────────────────────────────────────────────────
@@ -486,7 +457,8 @@ export async function handleSuggestOrganizationRequest(
       // failure is logged separately and never replaces the provider outcome.
       await safeRefund(client, userId, logger);
       logger.error(
-        `suggest-organization outcome=provider_failure class=${providerClass} detail=${failureDetail} refund=attempted`,
+        `suggest-organization outcome=provider_failure class=${providerClass} ` +
+          `detail=${failureDetail} provider_attempts=${call.attempts} refund=attempted`,
       );
       return fail(500, "suggestions_unavailable", NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, {
         code: providerClass,
@@ -494,7 +466,8 @@ export async function handleSuggestOrganizationRequest(
     }
 
     logger.log(
-      `suggest-organization outcome=ok projects_in=${projectsResult.projects.length} ` +
+      `suggest-organization outcome=ok provider_attempts=${call.attempts} ` +
+        `projects_in=${projectsResult.projects.length} ` +
         `tags_in=${tagsResult.tags.length} existing_projects=${suggestions.existingProjects.length} ` +
         `existing_tags=${suggestions.existingTags.length} new_projects=${suggestions.newProjects.length} ` +
         `new_tags=${suggestions.newTags.length}`,
