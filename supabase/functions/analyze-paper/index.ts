@@ -212,7 +212,6 @@ CRITICAL RULES:
       }],
       generationConfig: {
         responseMimeType: "application/json",
-        temperature: 0.1,
       },
     };
 

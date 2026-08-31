@@ -10,7 +10,7 @@ import {
   type OwnedProject,
   type OwnedTag,
 } from "../contract.ts";
-import { buildProviderInput, SYSTEM_INSTRUCTION } from "../prompt.ts";
+import { buildGeminiRequestBody, buildProviderInput, SYSTEM_INSTRUCTION } from "../prompt.ts";
 
 /**
  * AI-PROJECT-TAG-SUGGESTIONS-001A — the privacy boundary and the ephemeral refs.
@@ -360,5 +360,45 @@ describe("SYSTEM_INSTRUCTION", () => {
 
   it("forbids inventing a ref", () => {
     expect(SYSTEM_INSTRUCTION).toContain("Never invent a ref");
+  });
+});
+
+/**
+ * AI-PROVIDER-REQUEST-CONTRACT-001A — the Gemini request contract.
+ *
+ * `buildGeminiRequestBody` is pure, so this asserts on the object that will be
+ * serialized onto the wire rather than on source text. Paperlume pins the JSON
+ * response mode (the parser depends on it) and nothing else: sampling is left at
+ * the provider/model defaults so the request stays portable across Gemini model
+ * versions.
+ */
+describe("buildGeminiRequestBody — the wire contract", () => {
+  // The real serialized payload, so this exercises the same builder the handler
+  // calls rather than a stand-in string.
+  const serialized = expectOk(build()).serialized;
+  const body = buildGeminiRequestBody(serialized);
+  const generationConfig = body.generationConfig as Record<string, unknown>;
+
+  it("carries the system instruction and the serialized input unmodified", () => {
+    expect(body.system_instruction).toEqual({ parts: [{ text: SYSTEM_INSTRUCTION }] });
+    expect(body.contents).toEqual([{ parts: [{ text: serialized }] }]);
+  });
+
+  it("keeps JSON response mode", () => {
+    expect(generationConfig.responseMimeType).toBe("application/json");
+  });
+
+  it("sets no explicit temperature", () => {
+    // `not.toHaveProperty` rather than a value check: an explicit
+    // `temperature: undefined` would still be a sampling override in the source.
+    expect(generationConfig).not.toHaveProperty("temperature");
+  });
+
+  it("sets no replacement sampling override", () => {
+    for (const key of ["topP", "topK", "top_p", "top_k", "seed", "candidateCount"]) {
+      expect(generationConfig).not.toHaveProperty(key);
+    }
+    // JSON response mode is the only key the contract pins.
+    expect(Object.keys(generationConfig)).toEqual(["responseMimeType"]);
   });
 });
