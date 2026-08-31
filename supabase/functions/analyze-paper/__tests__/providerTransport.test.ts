@@ -131,9 +131,15 @@ describe("001A changes transport only", () => {
     expect(SOURCE).not.toContain("gemini-flash-latest");
   });
 
-  it("leaves the generation config alone", () => {
-    // Non-goal: the Gemini 3.x sampling-parameter migration is a separate task.
-    expect(SOURCE).toContain("temperature: 0.1");
+  it("keeps JSON response mode and sets no sampling override", () => {
+    // AI-PROVIDER-REQUEST-CONTRACT-001A superseded 001A's deferral here: the
+    // explicit sampling override is gone, so the request now inherits the
+    // provider/model defaults. JSON response mode is NOT a sampling knob — the
+    // parser depends on it, so it stays pinned.
     expect(SOURCE).toContain('responseMimeType: "application/json"');
+    // Any explicit temperature, at any value, on either spelling.
+    expect(SOURCE).not.toMatch(/\btemperature\s*:/);
+    // And no sampling parameter smuggled in as a replacement.
+    expect(SOURCE).not.toMatch(/\b(topP|topK|top_p|top_k)\s*:/);
   });
 });

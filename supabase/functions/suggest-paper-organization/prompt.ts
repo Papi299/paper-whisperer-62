@@ -296,9 +296,11 @@ export const SYSTEM_INSTRUCTION =
   `most ${MAX_NEW_TAG_NAME_LENGTH}. Do not output any other key.`;
 
 /**
- * The Gemini request body. `temperature` matches `analyze-paper`'s 0.1: this is
- * a classification task, not a creative one, and a low temperature also makes
- * the contract easier for the model to hold.
+ * The Gemini request body. Paperlume sets no sampling parameters: it leaves
+ * temperature, top-p and top-k at the provider/model defaults and pins only the
+ * JSON response mode, which is the part the parser actually depends on. Keeping
+ * the request free of sampling overrides is what makes it portable across
+ * Gemini model versions.
  */
 export function buildGeminiRequestBody(serializedInput: string): Record<string, unknown> {
   return {
@@ -306,7 +308,6 @@ export function buildGeminiRequestBody(serializedInput: string): Record<string, 
     contents: [{ parts: [{ text: serializedInput }] }],
     generationConfig: {
       responseMimeType: "application/json",
-      temperature: 0.1,
     },
   };
 }
