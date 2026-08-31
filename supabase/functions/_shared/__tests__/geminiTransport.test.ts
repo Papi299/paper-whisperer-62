@@ -29,8 +29,21 @@ import {
  * Two properties therefore have to hold, and both are asserted by *counting the
  * fetches*, not by reading the code:
  *
- *   1. the per-attempt ceiling is 30 s, not 15 s;
+ *   1. the per-attempt ceiling is not 15 s;
  *   2. reaching that ceiling ends the sequence — one provider request, no sleep.
+ *
+ * ## TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A
+ *
+ * The transport is running a temporary Production diagnostic policy: a
+ * 90-second per-attempt ceiling with ZERO retries. This suite is therefore
+ * pinned to the DIAGNOSTIC policy, not to the established one.
+ *
+ * The established policy — 30 s with two bounded retries, backoff 2 s then
+ * 4 s — is to be restored when the experiment ends, at which point the
+ * assertions marked TEMPORARY below revert with it. Where a diagnostic
+ * assertion replaces a production semantic (a 429 or a 5xx used to buy a
+ * retry), the production semantic is named in the comment rather than deleted,
+ * so what is temporarily disabled stays legible.
  *
  * Nothing here waits on real time: the timeout duration is asserted through an
  * injected signal factory, and backoff through an injected `sleep`.
@@ -127,38 +140,74 @@ function ok(body: unknown = { candidates: [] }): Response {
 // ── 1. The policy constants ───────────────────────────────────────────────
 
 describe("provider policy constants", () => {
-  it("uses a 30-second per-attempt timeout, not the 15 seconds that cut Production responses short", () => {
-    // A controlled probe of the shipped model returned a valid 200 at 18,056 ms.
-    expect(GEMINI_PROVIDER_TIMEOUT_MS).toBe(30_000);
+  it("TEMPORARY: uses the 90-second diagnostic per-attempt timeout", async () => {
+    // Established policy: 30_000. Raised for AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A
+    // because Production reached our own 30 s ceiling (elapsed_ms=30004) on a
+    // path that completes in ~5-13 s under a controlled direct probe. Still far
+    // above the 18,056 ms success that ruled out the original 15 s ceiling.
+    expect(GEMINI_PROVIDER_TIMEOUT_MS).toBe(90_000);
     expect(GEMINI_PROVIDER_TIMEOUT_MS).toBeGreaterThan(18_056);
   });
 
-  it("keeps the existing bounded retry budget and backoff base", () => {
-    expect(GEMINI_PROVIDER_MAX_RETRIES).toBe(2);
+  it("TEMPORARY: allows no retry at all during the diagnostic", () => {
+    // Established policy: 2. Zero is what keeps a 90 s attempt inside the
+    // request envelope, and what holds one user action to at most one Gemini
+    // generation request for the duration of the experiment.
+    expect(GEMINI_PROVIDER_MAX_RETRIES).toBe(0);
+  });
+
+  it("leaves the backoff base and Retry-After ceiling untouched", () => {
+    // Not part of the diagnostic. They are unreachable while retries are 0, and
+    // must still be the established values when the retry budget is restored.
     expect(GEMINI_PROVIDER_BASE_DELAY_MS).toBe(2_000);
     expect(GEMINI_PROVIDER_MAX_RETRY_AFTER_MS).toBe(10_000);
   });
 
-  it("stays inside the documented 150 s Supabase Edge wall-clock/idle limit at its worst case", () => {
-    // Three full attempts plus the two backoffs — the ceiling reachable only if
-    // the provider answers 5xx just shy of the timeout twice running. A timeout
-    // cannot contribute to this, because a timeout ends the sequence.
+  it("TEMPORARY: bounds the worst-case provider wait to a single 90-second attempt", () => {
+    // With no retry permitted there is exactly one attempt and no backoff, so
+    // the worst case IS the per-attempt ceiling. (The established policy's worst
+    // case was three attempts plus two backoffs: 30 + 2 + 30 + 4 + 30 = 96 s.)
+    const attempts = GEMINI_PROVIDER_MAX_RETRIES + 1;
+    const backoffMs = Array.from(
+      { length: GEMINI_PROVIDER_MAX_RETRIES },
+      (_unused, i) => GEMINI_PROVIDER_BASE_DELAY_MS * Math.pow(2, i),
+    ).reduce((a, b) => a + b, 0);
+
+    expect(attempts).toBe(1);
+    expect(backoffMs).toBe(0);
+
+    const worstCaseMs = attempts * GEMINI_PROVIDER_TIMEOUT_MS + backoffMs;
+    expect(worstCaseMs).toBe(90_000);
+  });
+
+  it("keeps the diagnostic policy below the documented 150 s Edge request idle ceiling", () => {
+    // Supabase documents a 150 s request idle timeout for hosted Edge Functions.
+    // Asserted against the Free-plan figure only — no paid-plan headroom is
+    // assumed anywhere in this suite.
+    const DOCUMENTED_REQUEST_IDLE_CEILING_MS = 150_000;
     const worstCaseMs =
       (GEMINI_PROVIDER_MAX_RETRIES + 1) * GEMINI_PROVIDER_TIMEOUT_MS +
-      GEMINI_PROVIDER_BASE_DELAY_MS +
-      GEMINI_PROVIDER_BASE_DELAY_MS * 2;
-    expect(worstCaseMs).toBe(96_000);
-    expect(worstCaseMs).toBeLessThan(150_000);
+      Array.from(
+        { length: GEMINI_PROVIDER_MAX_RETRIES },
+        (_unused, i) => GEMINI_PROVIDER_BASE_DELAY_MS * Math.pow(2, i),
+      ).reduce((a, b) => a + b, 0);
+
+    expect(worstCaseMs).toBeLessThan(DOCUMENTED_REQUEST_IDLE_CEILING_MS);
+    // The naive change — 90 s while keeping two retries — would have been
+    // 90 + 2 + 90 + 4 + 90 = 276 s, and is what zero retries exists to prevent.
+    expect(3 * GEMINI_PROVIDER_TIMEOUT_MS + 6_000).toBeGreaterThan(
+      DOCUMENTED_REQUEST_IDLE_CEILING_MS,
+    );
   });
 });
 
 // ── 2. The timeout is terminal ────────────────────────────────────────────
 
 describe("a provider timeout is terminal", () => {
-  it("arms every attempt with the 30-second timeout", async () => {
+  it("TEMPORARY: arms the attempt with the 90-second diagnostic timeout", async () => {
     const harness = makeHarness([ok()]);
     await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.signalTimeouts).toEqual([30_000]);
+    expect(harness.signalTimeouts).toEqual([90_000]);
   });
 
   it("passes the timeout signal to fetch", async () => {
@@ -189,7 +238,8 @@ describe("a provider timeout is terminal", () => {
   it("does not arm a second timeout signal after a timeout", async () => {
     const harness = makeHarness([timeoutError()]);
     await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.signalTimeouts).toEqual([30_000]);
+    // Exactly one signal, armed for the diagnostic ceiling.
+    expect(harness.signalTimeouts).toEqual([90_000]);
   });
 
   it("treats an AbortError raised while our own signal is aborted as the timeout", async () => {
@@ -211,100 +261,104 @@ describe("a provider timeout is terminal", () => {
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("times out terminally on a later attempt too, without a further retry", async () => {
-    // A 503 legitimately buys a second attempt; if THAT one times out, the
-    // sequence still ends there rather than spending the third.
+  it("TEMPORARY: cannot reach a later attempt at all, so a 503 never buys one", async () => {
+    // Established policy: a 503 bought attempt 2, and a timeout THERE still
+    // ended the sequence rather than spending the third. With the diagnostic
+    // retry budget of 0 the 503 itself is terminal, so the queued timeout is
+    // never consumed and there is no second attempt to time out.
     const harness = makeHarness([new Response("", { status: 503 }), timeoutError()]);
     const result = await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(2);
-    expect(harness.sleeps).toEqual([2_000]);
-    expect(result).toEqual({ ok: false, kind: "timeout", attempts: 2 });
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
+    expect(result).toEqual({ ok: false, kind: "http", status: 503, attempts: 1 });
   });
 
   it("logs a terminal timeout as retry=0 and never claims a retry is scheduled", async () => {
-    const harness = makeHarness([timeoutError()], { elapsedPerAttempt: 30_000 });
+    const harness = makeHarness([timeoutError()], { elapsedPerAttempt: 90_000 });
     await callGeminiWithRetry(URL, INIT, harness.deps);
     expect(harness.warns).toEqual([
-      "test-fn provider_timeout attempt=1 elapsed_ms=30000 retry=0",
+      "test-fn provider_timeout attempt=1 elapsed_ms=90000 retry=0",
     ]);
     expect(harness.warns.join("\n")).not.toContain("retry_in_ms");
     expect(harness.warns.join("\n")).not.toContain("retry=1");
   });
 });
 
-// ── 3. Explicit retriable HTTP statuses keep their budget ─────────────────
+// ── 3. Retriable HTTP statuses get no retry during the diagnostic ─────────
 
-describe("retriable HTTP statuses", () => {
-  it("retries a persistent 503 up to the existing bound and no further", async () => {
+/**
+ * TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A.
+ *
+ * PRODUCTION SEMANTICS, TEMPORARILY DISABLED BY `GEMINI_PROVIDER_MAX_RETRIES = 0`:
+ * a 429 or a 5xx means the provider answered "not now", so under the
+ * established policy each bought up to two further attempts, separated by a
+ * 2 s then 4 s backoff, with a bounded `Retry-After` honoured on a 429. None of
+ * that code is removed — it is simply unreachable at a retry budget of 0, and
+ * comes back when the constant is restored to 2.
+ *
+ * What must hold *during* the diagnostic is that a retriable status costs
+ * exactly one provider request and no sleep, so a single user action can never
+ * make more than one Gemini generation request while the ceiling is 90 s.
+ */
+describe("retriable HTTP statuses during the diagnostic", () => {
+  it("TEMPORARY: returns a 429 after exactly one provider attempt, with no backoff", async () => {
+    // A second queued 429 proves the count is enforced rather than starved: it
+    // is never consumed.
     const harness = makeHarness([
-      new Response("", { status: 503 }),
+      new Response("", { status: 429 }),
+      new Response("", { status: 429 }),
+    ]);
+    const result = await callGeminiWithRetry(URL, INIT, harness.deps);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
+    expect(harness.signalTimeouts).toEqual([90_000]);
+    expect(result).toEqual({ ok: false, kind: "http", status: 429, attempts: 1 });
+  });
+
+  it("TEMPORARY: returns a 5xx after exactly one provider attempt, with no backoff", async () => {
+    const harness = makeHarness([
       new Response("", { status: 503 }),
       new Response("", { status: 503 }),
     ]);
     const result = await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(3);
-    expect(harness.sleeps).toEqual([2_000, 4_000]);
-    expect(result).toEqual({ ok: false, kind: "http", status: 503, attempts: 3 });
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
+    expect(harness.signalTimeouts).toEqual([90_000]);
+    expect(result).toEqual({ ok: false, kind: "http", status: 503, attempts: 1 });
   });
 
-  it("retries a persistent 429 up to the existing bound", async () => {
-    const harness = makeHarness([
-      new Response("", { status: 429 }),
-      new Response("", { status: 429 }),
-      new Response("", { status: 429 }),
-    ]);
-    const result = await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(3);
-    expect(harness.sleeps).toEqual([2_000, 4_000]);
-    expect(result).toMatchObject({ ok: false, kind: "http", status: 429 });
-  });
-
-  it("recovers when a retry succeeds", async () => {
+  it("TEMPORARY: a queued success after a 5xx is never reached, because there is no retry", async () => {
+    // Established policy returned ok on attempt 2 here. The diagnostic gives up
+    // on the 500 instead — an accepted cost of the bounded experiment.
     const harness = makeHarness([new Response("", { status: 500 }), ok({ candidates: [1] })]);
     const result = await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(result.ok).toBe(true);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(2);
-    if (result.ok) {
-      expect(result.attempts).toBe(2);
-      expect(await result.response.json()).toEqual({ candidates: [1] });
-    }
+    expect(result).toEqual({ ok: false, kind: "http", status: 500, attempts: 1 });
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
   });
 
-  it("honours a bounded Retry-After on a 429", async () => {
+  it("TEMPORARY: does not sleep on a Retry-After it can no longer act on", async () => {
+    // The Retry-After parsing and its 10 s cap are untouched by this task; they
+    // are simply never consulted, because no second attempt exists to schedule.
     const harness = makeHarness([
       new Response("", { status: 429, headers: { "Retry-After": "7" } }),
       ok(),
     ]);
-    await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.sleeps).toEqual([7_000]);
+    const result = await callGeminiWithRetry(URL, INIT, harness.deps);
+    expect(harness.sleeps).toEqual([]);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: false, kind: "http", status: 429 });
   });
 
-  it("caps an outsized Retry-After rather than obeying it", async () => {
-    const harness = makeHarness([
-      new Response("", { status: 429, headers: { "Retry-After": "600" } }),
-      ok(),
-    ]);
-    await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.sleeps).toEqual([GEMINI_PROVIDER_MAX_RETRY_AFTER_MS]);
-  });
-
-  it("ignores a nonsensical Retry-After and falls back to the backoff", async () => {
-    const harness = makeHarness([
-      new Response("", { status: 429, headers: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" } }),
-      ok(),
-    ]);
-    await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.sleeps).toEqual([2_000]);
-  });
-
-  it("logs a retried status with the retry it is actually about to make", async () => {
+  it("TEMPORARY: logs a retriable status as retry=0 and never promises a retry", async () => {
     const harness = makeHarness([new Response("", { status: 503 }), ok()], {
       elapsedPerAttempt: 1_200,
     });
     await callGeminiWithRetry(URL, INIT, harness.deps);
     expect(harness.warns).toEqual([
-      "test-fn provider_status=503 attempt=1 elapsed_ms=1200 retry=1 retry_in_ms=2000",
+      "test-fn provider_status=503 attempt=1 elapsed_ms=1200 retry=0",
     ]);
+    expect(harness.warns.join("\n")).not.toContain("retry_in_ms");
   });
 });
 
@@ -322,32 +376,42 @@ describe("non-retriable HTTP statuses", () => {
 
 // ── 5. Non-timeout network failures ───────────────────────────────────────
 
-describe("non-timeout network failures", () => {
-  it("keeps the existing bounded retry behaviour", async () => {
+/**
+ * TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A.
+ *
+ * PRODUCTION SEMANTICS, TEMPORARILY DISABLED: an ordinary (non-timeout) network
+ * failure kept the same bounded retry budget as a 5xx — up to three attempts
+ * separated by a 2 s then 4 s backoff. At a retry budget of 0 it ends on the
+ * first attempt like everything else. The distinct `network` kind and its
+ * separate log line are unaffected.
+ */
+describe("non-timeout network failures during the diagnostic", () => {
+  it("TEMPORARY: makes exactly one provider attempt and never sleeps", async () => {
     const harness = makeHarness([
       new Error("connection reset"),
       new Error("connection reset"),
-      new Error("connection reset"),
     ]);
     const result = await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(3);
-    expect(harness.sleeps).toEqual([2_000, 4_000]);
-    expect(result).toEqual({ ok: false, kind: "network", attempts: 3 });
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
+    expect(harness.signalTimeouts).toEqual([90_000]);
+    expect(result).toEqual({ ok: false, kind: "network", attempts: 1 });
   });
 
-  it("recovers when a retry succeeds", async () => {
+  it("TEMPORARY: a queued success after a network blip is never reached", async () => {
     const harness = makeHarness([new Error("connection reset"), ok()]);
     const result = await callGeminiWithRetry(URL, INIT, harness.deps);
-    expect(result.ok).toBe(true);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ ok: false, kind: "network", attempts: 1 });
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("is reported separately from a timeout in the logs", async () => {
+  it("is still reported separately from a timeout in the logs", async () => {
     const harness = makeHarness([new Error("connection reset"), ok()], { elapsedPerAttempt: 50 });
     await callGeminiWithRetry(URL, INIT, harness.deps);
     expect(harness.warns).toEqual([
-      "test-fn provider_network_error attempt=1 elapsed_ms=50 retry=1 retry_in_ms=2000",
+      "test-fn provider_network_error attempt=1 elapsed_ms=50 retry=0",
     ]);
+    expect(harness.warns.join("\n")).not.toContain("retry_in_ms");
   });
 });
 
@@ -383,8 +447,6 @@ describe("success", () => {
 describe("log hygiene", () => {
   it("never logs the key, the URL, or the provider's body", async () => {
     const harness = makeHarness([
-      new Response("Google says: project 12345 quota exhausted for model X", { status: 429 }),
-      new Response("Google says: project 12345 quota exhausted for model X", { status: 429 }),
       new Response("Google says: project 12345 quota exhausted for model X", { status: 429 }),
     ]);
     await callGeminiWithRetry(URL, INIT, harness.deps);
