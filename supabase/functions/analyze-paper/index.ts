@@ -3,6 +3,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import { resolveGeminiModel } from "../_shared/geminiModel.ts";
+import { callGeminiWithRetry } from "../_shared/geminiTransport.ts";
 import {
   classifyProviderError,
   NEUTRAL_ANALYSIS_UNAVAILABLE_MESSAGE,
@@ -16,69 +17,6 @@ const corsHeaders = {
 };
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
-
-/**
- * Fetch with bounded retry and exponential backoff.
- * Retries on 429, 5xx, network errors, and timeouts.
- * Does NOT retry on 4xx (except 429) — those are permanent failures.
- */
-async function fetchWithRetry(
-  url: string,
-  init: RequestInit,
-  maxRetries = 2,
-  baseDelayMs = 2000,
-): Promise<Response> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await fetch(url, {
-        ...init,
-        signal: AbortSignal.timeout(15_000),
-      });
-
-      if (res.ok) return res;
-
-      // Non-retriable client errors (except 429)
-      if (res.status !== 429 && res.status < 500) {
-        return res;
-      }
-
-      // Retriable: 429 or 5xx
-      if (attempt < maxRetries) {
-        let delay = baseDelayMs * Math.pow(2, attempt);
-
-        // Respect Retry-After header on 429
-        if (res.status === 429) {
-          const retryAfter = res.headers.get("Retry-After");
-          if (retryAfter) {
-            const retryMs = Number(retryAfter) * 1000;
-            if (!isNaN(retryMs) && retryMs > 0) {
-              delay = Math.min(Math.max(retryMs, delay), 10_000);
-            }
-          }
-        }
-
-        console.log(`fetchWithRetry: attempt ${attempt + 1}/${maxRetries + 1} got ${res.status}, retrying in ${delay}ms`);
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
-      }
-
-      // Exhausted retries
-      return res;
-    } catch (err) {
-      // Network error or timeout
-      if (attempt < maxRetries) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        console.log(`fetchWithRetry: attempt ${attempt + 1}/${maxRetries + 1} network error, retrying in ${delay}ms`);
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  // Unreachable
-  throw new Error("fetchWithRetry: exhausted retries");
-}
 
 /**
  * Best-effort refund of one AI quota unit. Swallows any error so the
@@ -287,22 +225,47 @@ CRITICAL RULES:
     let providerErrorClass: ProviderErrorClass = "unknown";
     let classified = false;
     try {
-      const geminiRes = await fetchWithRetry(geminiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
-        body: JSON.stringify(geminiBody),
-      });
+      // AI-PROVIDER-RESILIENCE-001A: the timeout/retry policy now lives in
+      // _shared/geminiTransport.ts, shared with suggest-paper-organization so
+      // the two Gemini callers cannot drift. 30 s per attempt; 429/5xx and
+      // ordinary network errors keep the same bounded 2 s / 4 s retry budget; a
+      // timeout is TERMINAL and is never automatically re-sent.
+      const providerCall = await callGeminiWithRetry(
+        geminiUrl,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
+          body: JSON.stringify(geminiBody),
+        },
+        {
+          label: "analyze-paper",
+          fetchImpl: (url, init) => fetch(url, init),
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+          logger: console,
+        },
+      );
 
-      console.log("5a. Gemini response status:", geminiRes.status);
+      console.log("5a. Gemini provider attempts:", providerCall.attempts);
 
-      if (!geminiRes.ok) {
-        console.log("5b. Gemini error, status:", geminiRes.status);
-        providerErrorClass = classifyProviderError({ kind: "http", status: geminiRes.status });
+      if (!providerCall.ok) {
+        // A timeout is distinguished from a generic network failure here rather
+        // than collapsed into one: the two are diagnosed very differently, and
+        // only one of them means "we stopped waiting while Google may still have
+        // been generating". Both still classify to `provider_unavailable`, so
+        // nothing the user or the provider panel sees changes.
+        if (providerCall.kind === "http") {
+          console.log("5b. Gemini error, status:", providerCall.status);
+          providerErrorClass = classifyProviderError({ kind: "http", status: providerCall.status });
+          classified = true;
+          throw new Error("gemini_http_" + providerCall.status);
+        }
+        console.log("5b. Gemini transport failure:", providerCall.kind);
+        providerErrorClass = classifyProviderError({ kind: providerCall.kind });
         classified = true;
-        throw new Error("gemini_http_" + geminiRes.status);
+        throw new Error("gemini_" + providerCall.kind);
       }
 
-      const geminiData = await geminiRes.json();
+      const geminiData = await providerCall.response.json();
       console.log("6. Parsing Gemini response");
 
       const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
