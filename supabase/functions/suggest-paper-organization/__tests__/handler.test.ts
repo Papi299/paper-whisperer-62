@@ -897,11 +897,17 @@ describe("refund behaviour", () => {
     expect(harness.rpcCalls[1].args).toEqual({ p_user_id: USER_ID });
   });
 
-  it("retries a 429 within its budget before giving up", async () => {
+  // TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A. PRODUCTION SEMANTICS,
+  // TEMPORARILY DISABLED by `GEMINI_PROVIDER_MAX_RETRIES = 0`: a 429 or 5xx
+  // bought up to two further attempts (backoff 2 s then 4 s, honouring a
+  // bounded Retry-After on a 429), so a transient 503 could still succeed and
+  // keep the unit. None of that is removed from the transport — it is
+  // unreachable at a retry budget of 0 and returns with the constant.
+  it("TEMPORARY: gives up on a 429 after exactly one attempt, with no backoff", async () => {
     const harness = makeHarness({ responses: [new Response("", { status: 429 })] });
     await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(3);
-    expect(harness.sleeps).toEqual([2000, 4000]);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
   });
 
   it("does not retry an ordinary 4xx", async () => {
@@ -910,17 +916,21 @@ describe("refund behaviour", () => {
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("recovers when a retry succeeds, and keeps the unit", async () => {
+  it("TEMPORARY: cannot recover from a 503, and refunds the unit instead", async () => {
+    // Established policy answered 200 here on attempt 2 and kept the unit. The
+    // diagnostic gives up on attempt 1 — the user still pays nothing, because
+    // the refund path is untouched.
     const harness = makeHarness({
       responses: [new Response("", { status: 503 }), geminiOk(EMPTY_SUGGESTIONS)],
     });
     const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
-    expect(response.status).toBe(200);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(2);
-    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+    expect(response.status).toBe(500);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
   });
 
-  it("honours a bounded Retry-After on a 429", async () => {
+  it("TEMPORARY: does not sleep on a Retry-After it can no longer act on", async () => {
     const harness = makeHarness({
       responses: [
         new Response("", { status: 429, headers: { "Retry-After": "7" } }),
@@ -928,7 +938,8 @@ describe("refund behaviour", () => {
       ],
     });
     await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
-    expect(harness.sleeps).toEqual([7000]);
+    expect(harness.sleeps).toEqual([]);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -954,25 +965,29 @@ describe("refund behaviour", () => {
  * a valid HTTP 200 at 18,056 ms, past the old 15 s ceiling.
  *
  * These assert both halves of the fix through the real handler: the ceiling is
- * now 30 s, and reaching it ends the provider-call sequence instead of paying
- * for a second generation. The transport itself is covered exhaustively in
- * `_shared/__tests__/geminiTransport.test.ts`; this is the handler contract
+ * well past 15 s, and reaching it ends the provider-call sequence instead of
+ * paying for a second generation. The transport itself is covered exhaustively
+ * in `_shared/__tests__/geminiTransport.test.ts`; this is the handler contract
  * around it — one provider request, one refund, one neutral 500.
+ *
+ * TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A: that ceiling is currently
+ * the 90 s diagnostic value rather than the established 30 s, and the retry
+ * budget is 0, so no outcome of any kind reaches a second attempt here.
  */
 describe("a provider timeout is terminal", () => {
   const timeout = () => Object.assign(new Error("Signal timed out."), { name: "TimeoutError" });
 
-  it("arms each provider attempt with the 30-second timeout, not the old 15", async () => {
+  it("TEMPORARY: arms the provider attempt with the 90-second diagnostic timeout", async () => {
     const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
     await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
-    expect(harness.signalTimeouts).toEqual([30_000]);
+    expect(harness.signalTimeouts).toEqual([90_000]);
   });
 
   it("issues exactly ONE provider request when the attempt times out", async () => {
     const harness = makeHarness({ responses: [timeout()] });
     await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
-    expect(harness.signalTimeouts).toEqual([30_000]);
+    expect(harness.signalTimeouts).toEqual([90_000]);
   });
 
   it("does not sleep before giving up on a timeout", async () => {
@@ -1010,25 +1025,28 @@ describe("a provider timeout is terminal", () => {
     expect(all).toContain("provider_attempts=1");
   });
 
-  it("times out terminally on a retried attempt too", async () => {
-    // A 503 legitimately buys attempt 2; a timeout there still ends it.
+  it("TEMPORARY: never reaches a second attempt, so a 503 ends it before any timeout", async () => {
+    // Established policy: a 503 bought attempt 2, and a timeout there still
+    // ended the sequence. At a retry budget of 0 the 503 is itself terminal, so
+    // the queued timeout is never consumed. Refund behaviour is unchanged.
     const harness = makeHarness({ responses: [new Response("", { status: 503 }), timeout()] });
     await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(2);
-    expect(harness.sleeps).toEqual([2000]);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
     expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
   });
 
-  it("consumes exactly one Paperlume unit however many provider attempts happen", async () => {
-    const harness = makeHarness({
-      responses: [new Response("", { status: 503 }), new Response("", { status: 503 }), geminiOk(EMPTY_SUGGESTIONS)],
-    });
+  it("consumes exactly one Paperlume unit for the one provider attempt it makes", async () => {
+    // The quota contract is untouched by the diagnostic: one user action, one
+    // consume, no refund on success. Under the established policy the same
+    // assertion held across three provider attempts (`provider_attempts=3`);
+    // during the diagnostic there can only ever be one.
+    const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
     const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(response.status).toBe(200);
-    expect(harness.fetchImpl).toHaveBeenCalledTimes(3);
-    // Three provider requests, still exactly one consume and no refund.
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
     expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
-    expect(harness.logs.join("\n")).toContain("provider_attempts=3");
+    expect(harness.logs.join("\n")).toContain("provider_attempts=1");
   });
 });
 

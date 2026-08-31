@@ -57,9 +57,14 @@ describe("analyze-paper is wired to the shared provider policy", () => {
     expect(SOURCE).not.toContain("15000");
   });
 
-  it("inherits a 30-second attempt timeout and the existing bounded retry budget", () => {
-    expect(GEMINI_PROVIDER_TIMEOUT_MS).toBe(30_000);
-    expect(GEMINI_PROVIDER_MAX_RETRIES).toBe(2);
+  it("TEMPORARY: inherits the 90-second single-attempt diagnostic policy", () => {
+    // AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A. The established policy this
+    // function inherits is 30_000 ms with 2 retries, to be restored when the
+    // bounded Production experiment ends. What this assertion really protects
+    // is that analyze-paper takes WHATEVER the shared policy is rather than
+    // carrying its own — so it moves with the constant, in both directions.
+    expect(GEMINI_PROVIDER_TIMEOUT_MS).toBe(90_000);
+    expect(GEMINI_PROVIDER_MAX_RETRIES).toBe(0);
     expect(GEMINI_PROVIDER_BASE_DELAY_MS).toBe(2_000);
   });
 });
