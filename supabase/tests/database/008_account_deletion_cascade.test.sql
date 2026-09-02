@@ -14,7 +14,8 @@
 --   * behavioural cascade — a synthetic Auth user with a representative row in
 --     every owned table loses all of them when its auth.users row is deleted,
 --     including the junction rows that own no user_id and are reached only
---     through the papers they belong to;
+--     through the papers they belong to, and the saved AI-model preference
+--     (AI-MODEL-SELECTION-001A) whose catalog row must nonetheless survive;
 --   * deliberate retention — subscriptions.user_id and
 --     subscription_events.user_id are ON DELETE SET NULL by design (C13
 --     provider/audit history). Those rows survive with a NULL user_id and,
@@ -104,7 +105,7 @@ BEGIN
 END;
 $hlp$;
 
-SELECT plan(79);
+SELECT plan(84);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Part 1 — catalog contract
@@ -145,6 +146,12 @@ SELECT is(pg_temp.auth_fk_action('user_storage_usage', 'user_id'), 'cascade',
 -- no exemption for it, so it must cascade with the rest.
 SELECT is(pg_temp.auth_fk_action('internal_user_access', 'user_id'), 'cascade',
   'internal_user_access.user_id cascades from auth.users');
+-- AI-MODEL-SELECTION-001A. A saved AI-model preference is a user setting, so it
+-- leaves with the account. Note it references ai_model_catalog on the other
+-- side, and that FK is deliberately NO ACTION — but only in the catalog
+-- direction, which is why deleting the USER is still unobstructed.
+SELECT is(pg_temp.auth_fk_action('user_ai_preferences', 'user_id'), 'cascade',
+  'user_ai_preferences.user_id cascades from auth.users');
 
 -- Junction tables carry no user_id; they are removed via their paper/tag/project.
 SELECT is(pg_temp.auth_fk_action('paper_tags', 'user_id'), 'none',
@@ -283,6 +290,13 @@ INSERT INTO public.internal_user_access (user_id, role, ai_quota_exempt, created
   ('c4000000-0000-0000-0000-0000000000d1', 'manager', false,
    'c4000000-0000-0000-0000-0000000000d2');
 
+-- A saved AI-model preference for each user. Both point at the SAME catalog row
+-- on purpose: the doomed user's preference must go while the neighbour's stays,
+-- and the shared catalog row must survive both.
+INSERT INTO public.user_ai_preferences (user_id, preferred_model_id) VALUES
+  ('c4000000-0000-0000-0000-0000000000d1', 'google/gemini-3.5-flash'),
+  ('c4000000-0000-0000-0000-0000000000d2', 'google/gemini-3.5-flash');
+
 -- Retained provider/audit history for the doomed user.
 INSERT INTO public.subscriptions (id, user_id, provider, status) VALUES
   ('c4000000-0000-0000-0000-0000000000e1', 'c4000000-0000-0000-0000-0000000000d1',
@@ -309,6 +323,8 @@ SELECT is(pg_temp.rows_for('user_storage_usage', 'c4000000-0000-0000-0000-000000
   'pre-delete: doomed storage-usage row exists (quota trigger)');
 SELECT is(pg_temp.rows_for('internal_user_access', 'c4000000-0000-0000-0000-0000000000d1'), 1,
   'pre-delete: doomed internal access row exists');
+SELECT is(pg_temp.rows_for('user_ai_preferences', 'c4000000-0000-0000-0000-0000000000d1'), 1,
+  'pre-delete: doomed AI-model preference exists');
 SELECT is(
   (SELECT count(*)::int FROM public.paper_tags
     WHERE paper_id = 'c4000000-0000-0000-0000-0000000000a1'),
@@ -369,6 +385,8 @@ SELECT is(pg_temp.rows_for('user_storage_usage', 'c4000000-0000-0000-0000-000000
   'cascade: storage-usage accounting removed');
 SELECT is(pg_temp.rows_for('internal_user_access', 'c4000000-0000-0000-0000-0000000000d1'), 0,
   'cascade: internal owner/manager access removed (no exemption)');
+SELECT is(pg_temp.rows_for('user_ai_preferences', 'c4000000-0000-0000-0000-0000000000d1'), 0,
+  'cascade: saved AI-model preference removed');
 
 -- Junction rows own no user_id, so they are the easiest thing to leave behind.
 SELECT is(
@@ -439,6 +457,13 @@ SELECT is(pg_temp.rows_for('paper_attachments', 'c4000000-0000-0000-0000-0000000
   'blast radius: neighbour attachment metadata intact');
 SELECT is(pg_temp.rows_for('user_entitlements', 'c4000000-0000-0000-0000-0000000000d2'), 1,
   'blast radius: neighbour entitlement intact');
+SELECT is(pg_temp.rows_for('user_ai_preferences', 'c4000000-0000-0000-0000-0000000000d2'), 1,
+  'blast radius: neighbour AI-model preference intact');
+-- The catalog is product metadata, not account data: deleting a user who had
+-- chosen a model must not retire the model for everyone else.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE id = 'google/gemini-3.5-flash'), 1,
+  'blast radius: the shared catalog row survives the account deletion');
 SELECT is(pg_temp.rows_for('usage_credits', 'c4000000-0000-0000-0000-0000000000d2'), 1,
   'blast radius: neighbour usage credits intact');
 SELECT is(pg_temp.rows_for('user_storage_usage', 'c4000000-0000-0000-0000-0000000000d2'), 1,

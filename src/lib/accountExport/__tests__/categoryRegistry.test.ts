@@ -175,7 +175,7 @@ describe("account export category registry", () => {
     }
   });
 
-  it("declares the commercial and internal tables as out of scope", () => {
+  it("declares the commercial, internal and model-selection tables as out of scope", () => {
     expect([...ACCOUNT_EXPORT_EXCLUDED_TABLES].sort()).toEqual(
       [
         "internal_user_access",
@@ -185,6 +185,13 @@ describe("account export category registry", () => {
         "usage_credits",
         "user_entitlements",
         "user_storage_usage",
+        // AI-MODEL-SELECTION-001A. `ai_model_catalog` is global product metadata
+        // and is permanently out of scope; `user_ai_preferences` is genuine user
+        // content whose export is DEFERRED only while the preference is
+        // unreachable — 001C must promote it to a singleton category. Pinned
+        // here so that promotion is a deliberate edit rather than a silent one.
+        "ai_model_catalog",
+        "user_ai_preferences",
       ].sort(),
     );
 

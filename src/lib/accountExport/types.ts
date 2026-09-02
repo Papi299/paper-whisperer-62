@@ -141,16 +141,25 @@ export const EXPECTED_ARCHIVE_JSON_PATHS: readonly string[] = [
 ];
 
 /**
- * Tables that carry a `user_id` but are **out of PFA-C02 scope**: commercial
- * entitlement internals, server-only accounting, and authorization metadata.
- * None of them is user-authored account content, so exporting them would leak
- * implementation and security internals rather than improve portability.
+ * Tables deliberately **out of PFA-C02 scope**. Listed explicitly (not merely
+ * omitted) so the boundary is reviewable, and asserted by test so a future
+ * "export everything with a user_id" refactor fails loudly.
  *
- * Listed explicitly (not merely omitted) so the boundary is reviewable, and
- * asserted by test so a future "export everything with a user_id" refactor
- * fails loudly.
+ * Exclusion here has three distinct reasons, and they are not interchangeable:
+ *
+ * 1. **Not user-authored account content.** Commercial entitlement internals,
+ *    server-only accounting and authorization metadata. Exporting these would
+ *    leak implementation and security internals rather than improve
+ *    portability.
+ * 2. **Not account data at all.** Global product metadata that is identical for
+ *    every user and belongs to nobody.
+ * 3. **Deferred, not disclaimed.** Genuine user content that is not yet
+ *    reachable by any user, so there is nothing to export and no reader to
+ *    serve. This reason carries an obligation: it must be revisited by the task
+ *    that makes the data settable.
  */
 export const ACCOUNT_EXPORT_EXCLUDED_TABLES = [
+  // (1) Commercial / accounting / authorization internals.
   "internal_user_access",
   "subscriptions",
   "subscription_events",
@@ -158,6 +167,22 @@ export const ACCOUNT_EXPORT_EXCLUDED_TABLES = [
   "usage_credits",
   "user_entitlements",
   "user_storage_usage",
+
+  // (2) AI-MODEL-SELECTION-001A. The approved-model catalog is global product
+  // metadata with no `user_id` — the same rows for every account. It is not
+  // this user's data in any sense, so it is permanently out of scope.
+  "ai_model_catalog",
+
+  // (3) AI-MODEL-SELECTION-001A. A saved AI-model preference IS user content —
+  // a setting the user chose — and this exclusion is a **deferral, not a claim
+  // that it does not belong in the archive**. As of 001A the table is
+  // unreachable: there is no Settings control, no other write path, and the
+  // only writer is an RPC no shipped code calls, so the table is empty for
+  // every account and exporting it would add an always-`null` file to every
+  // archive. `AI-MODEL-SELECTION-001C` — the task that makes the preference
+  // settable — must move this into `ACCOUNT_EXPORT_SINGLETONS`, since a setting
+  // the user can change is a setting the user can take with them. See C33.
+  "user_ai_preferences",
 ] as const;
 
 /* -------------------------------------------------------------------------
