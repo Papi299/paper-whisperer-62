@@ -15,6 +15,31 @@ vi.mock("@/hooks/useAccountDeletion", () => ({
   useAccountDeletion: () => ({ deleteAccount: vi.fn(), isDeleting: false, canDelete: true }),
 }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+// The AI Model section owns its own React Query reads; this suite renders
+// Settings without a provider, so both of its hooks are stubbed to an inert,
+// non-entitled state. Their behaviour is covered by
+// AiModelSettingsSection.test.tsx and SettingsDialog.aiModel.test.tsx.
+vi.mock("@/hooks/useCurrentUserAccess", () => ({
+  useCurrentUserAccess: () => ({
+    access: { canSelectAiModel: false },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
+}));
+vi.mock("@/hooks/useAiModelSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useAiModelSettings")>()),
+  useAiModelSettings: () => ({
+    options: [],
+    saved: { status: "none" as const },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+    saveModel: vi.fn(),
+    clearModel: vi.fn(),
+    isMutating: false,
+  }),
+}));
 
 import { SettingsDialog } from "../SettingsDialog";
 

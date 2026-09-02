@@ -88,6 +88,24 @@ export const queryKeys = {
     /** Per-user attachment storage used/quota (read-only SELECT-own projection). */
     status: (userId: string) => ["storageUsage", userId, "status"] as const,
   },
+  aiModelSettings: {
+    /**
+     * The server-controlled `ai_model_catalog` (read-only SELECT).
+     *
+     * Scoped by `userId` even though the catalog is global product metadata.
+     * The catalog is only readable by an authenticated role, so a cached copy
+     * left behind under a shared key would survive a sign-out and be served to
+     * the next session; scoping it keeps the repository's "cached
+     * authenticated data is per-user" posture intact for a negligible cost
+     * (two rows today).
+     */
+    catalog: (userId: string) => ["aiModelSettings", userId, "catalog"] as const,
+    /**
+     * The signed-in user's saved model preference — or its documented absence.
+     * Strictly per-user: one user must never read another's cached choice.
+     */
+    preference: (userId: string) => ["aiModelSettings", userId, "preference"] as const,
+  },
   // NOTE: the manager-only Gemini provider-quota key group was removed under
   // owner decision C29 (provider-quota monitoring deferred until
   // commercialization). No frontend query path remains; the deployed Edge
