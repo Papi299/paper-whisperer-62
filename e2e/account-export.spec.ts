@@ -47,7 +47,21 @@ const EXPECTED_JSON_PATHS = [
   "data/author_identity_aliases.json",
   "data/author_identity_links.json",
   "data/author_identity_merges.json",
+  // AI-MODEL-SELECTION-001A. One additive singleton file, same reasoning: no
+  // existing file changed shape, so the manifest version stays 2.
+  "data/user_ai_preferences.json",
 ];
+
+/**
+ * Category keys whose JSON is a single value rather than an array.
+ *
+ * The count reconciliation below is array-shaped, so singletons are checked
+ * separately — by their own semantics (0 when `null`, 1 when present) rather
+ * than by `.length`. Listed explicitly, mirroring `ACCOUNT_EXPORT_SINGLETONS`
+ * in the app, so adding a singleton without teaching this spec about it fails
+ * here instead of throwing an unhelpful `Cannot read properties of null`.
+ */
+const SINGLETON_CATEGORY_KEYS = ["profile", "user_ai_preferences"];
 
 interface Manifest {
   format: string;
@@ -147,10 +161,33 @@ test.describe("Account data export", () => {
     const binaryEntries = paths.filter((path) => path.startsWith("attachments/"));
     expect(binaryEntries).toHaveLength(manifest.attachments.count);
 
-    // Every declared count matches the file it points at.
+    // The saved AI model preference is a singleton, and the seeded fixture has
+    // never set one — so the archive must carry the file with an explicit
+    // `null` rather than omitting it. "No preference" is the meaningful
+    // system-default state, and a reader has to be able to tell it apart from a
+    // category that was dropped.
+    const aiPreference = readJson("data/user_ai_preferences.json") as Record<
+      string,
+      unknown
+    > | null;
+    expect(aiPreference).toBeNull();
+    expect(manifest.categories.user_ai_preferences.count).toBe(0);
+    // The global model catalog is Paperlume's product metadata and must never
+    // be in a personal archive, under any path.
+    expect(paths).not.toContain("data/ai_model_catalog.json");
+    expect(archiveText).not.toContain("ai_model_catalog");
+
+    // Every declared count matches the file it points at. Singletons are
+    // array-less by definition, so they are reconciled by their own rule.
     for (const [key, category] of Object.entries(manifest.categories)) {
-      if (key === "profile") continue;
-      expect((readJson(category.path) as unknown[]).length, `${key} count`).toBe(category.count);
+      const value = readJson(category.path);
+      if (SINGLETON_CATEGORY_KEYS.includes(key)) {
+        expect(Array.isArray(value), `${key} must not be an array`).toBe(false);
+        expect(value === null ? 0 : 1, `${key} count`).toBe(category.count);
+        continue;
+      }
+      expect(Array.isArray(value), `${key} must be an array`).toBe(true);
+      expect((value as unknown[]).length, `${key} count`).toBe(category.count);
     }
 
     // No archive path can escape its directory.
