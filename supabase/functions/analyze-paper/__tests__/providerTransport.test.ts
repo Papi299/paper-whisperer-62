@@ -129,8 +129,12 @@ describe("analyze-paper quota semantics are untouched", () => {
 });
 
 describe("001A changes transport only", () => {
-  it("leaves model selection alone", () => {
-    // Non-goal: no GEMINI_MODEL pin, no fallback list, no failover.
+  it("keeps the system default coming from GEMINI_MODEL, with no literal of its own", () => {
+    // Still 001A's non-goal: this function pins no model, keeps no fallback
+    // list and does no failover. AI-MODEL-SELECTION-001B later added per-user
+    // routing on top — GEMINI_MODEL remains the system default and the safe
+    // fallback, and the routing itself lives in the shared module covered by
+    // `modelRouting.test.ts` and `_shared/__tests__/aiModelSelection.test.ts`.
     expect(SOURCE).toContain('resolveGeminiModel(Deno.env.get("GEMINI_MODEL"))');
     expect(SOURCE).not.toContain("gemini-3");
     expect(SOURCE).not.toContain("gemini-flash-latest");

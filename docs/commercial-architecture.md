@@ -193,17 +193,19 @@ The add-on credit-pack table exists so the shape is settled from day one (C13), 
 
 Per-user running total of attachment bytes, one row per user, `used_bytes` as `BIGINT` (32-bit would overflow at the future Labs/Teams 10 GB cap). Maintained by the `BEFORE INSERT` check-and-consume and `AFTER DELETE` refund triggers on `paper_attachments`. Client SELECT-own is allowed, which is what the read-only Settings → Storage gauge reads.
 
-### 4.7 `ai_model_catalog` — LIVE (schema + seed); selection behavior FUTURE
+### 4.7 `ai_model_catalog` — LIVE (schema + seed); the runtime allowlist
 
 The server-controlled **allowlist** of AI models Paperlume has explicitly approved for selection (`20260902120000`, C33). Columns: `id` (TEXT PK, provider-qualified), `provider`, `provider_model`, `display_name`, `enabled`, `selectable`, `sort_order`, timestamps. Constraints require every text column to be non-empty and already trimmed, and `(provider, provider_model)` is unique.
 
 Seeded with **exactly two rows** — `google/gemini-3.5-flash` and `google/gemini-3.6-flash` — both enabled and selectable, 3.5 ordered first. Nothing else is seeded: Gemini 3.7, Anthropic/Claude, OpenAI/GPT, preview models and the floating `gemini-flash-latest` alias are all absent by decision.
 
-`provider` is deliberately **not** CHECK-constrained to a closed list so a future Anthropic or OpenAI model is a seed row plus a runtime adapter rather than a constraint migration. That is a schema affordance only — **no non-Google provider is implemented**, and adding one requires explicit provider, privacy, cost and runtime-adapter work.
+`provider` is deliberately **not** CHECK-constrained to a closed list so a future Anthropic or OpenAI model is a seed row plus a runtime adapter rather than a constraint migration. That is a schema affordance only — **no non-Google provider is implemented**, and adding one requires explicit provider, privacy, cost and runtime-adapter work. Since AI-MODEL-SELECTION-001B the runtime enforces that boundary rather than trusting the seed: a catalog row naming any provider other than `google` is **refused and falls back to the system default**, and no external URL is constructed for it.
+
+**This table is the runtime allowlist.** `_shared/aiModelSelection.ts` deliberately hard-codes **no** list of model strings — a TypeScript copy would be a second authorization surface that could disagree with this one. A saved preference is honoured only when its catalog row exists, its `id` matches the id that was requested, `enabled` is `true`, `provider` is `google`, and `provider_model` is a non-empty trimmed string.
 
 Posture: `authenticated` holds **SELECT only** (plus a SELECT policy); `anon` and `service_role` hold nothing. Rows are added or retired by a reviewed migration, never at runtime. The table holds **no API key, secret name or credential** — it is product metadata. Retire a model with `enabled = false` rather than `DELETE`, so saved preferences and model history survive.
 
-### 4.8 `user_ai_preferences` — LIVE (schema + write RPCs); runtime routing FUTURE
+### 4.8 `user_ai_preferences` — LIVE (schema, write RPCs, and runtime routing)
 
 At most one saved model preference per user (`user_id` is the PK, `ON DELETE CASCADE` from `auth.users`), with `preferred_model_id` referencing `ai_model_catalog.id`. **Absence of a row is meaningful:** it means the user has expressed no preference and Paperlume uses its system default. The migration therefore backfills nothing and `handle_new_user()` was not extended.
 
@@ -212,11 +214,33 @@ Posture: SELECT-own policy plus a SELECT-only grant to `authenticated`; no clien
 - `set_current_user_ai_model(p_model_id text)` — requires `ai_model_selection_enabled` **and** an `active`/`trialing` status, and requires the requested id to be present in the catalog with `enabled` **and** `selectable`. Returns a structured non-sensitive confirmation (`saved`, `reason`, `preferred_model_id`, `provider`, `display_name`, `updated_at`); every rejection reason (`invalid_model_id`, `missing_entitlement`, `not_entitled`, `inactive_entitlement`, `unknown_model`, `model_disabled`, `model_not_selectable`) writes nothing.
 - `clear_current_user_ai_model()` — resets to the system default. Requires authentication but deliberately **not** the entitlement, so a downgraded user can still drop a dormant preference.
 
-**Downgrade semantics (durable).** A saved preference is **not** deleted when entitlement lapses; it goes **dormant**. The user keeps their choice if access returns, and no authorization gap is created because the future runtime path must re-check `can_select_ai_model` on every AI operation rather than infer permission from the row's existence.
+**Downgrade semantics (durable).** A saved preference is **not** deleted when entitlement lapses; it goes **dormant**. The user keeps their choice if access returns, and no authorization gap is created because the runtime re-checks `can_select_ai_model` on every AI operation rather than inferring permission from the row's existence. Since 001B that is enforced, not merely required: a non-entitled caller's preference row is not even read.
 
 **Portability.** The saved preference is user-owned data and travels in the full account export as the singleton `data/user_ai_preferences.json` (`user_id`, `preferred_model_id`, `created_at`, `updated_at`), with JSON `null` when the user has no explicit choice. `ai_model_catalog` is not exported — it is Paperlume's product metadata, not the user's. See [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §12.7.
 
-**Runtime routing is not built.** `analyze-paper` and `suggest-paper-organization` still resolve the model solely through the global `GEMINI_MODEL` environment configuration and `supabase/functions/_shared/geminiModel.ts`; neither reads these tables. Wiring that up is AI-MODEL-SELECTION-001B. There is **no per-model API key** — both seeded Gemini models are served by the same existing server-side `GEMINI_API_KEY`, and provider credentials never reach the browser.
+### 4.9 Runtime routing — LIVE for Google Gemini (AI-MODEL-SELECTION-001B)
+
+`analyze-paper` and `suggest-paper-organization` share **one** implementation, [`supabase/functions/_shared/aiModelSelection.ts`](../supabase/functions/_shared/aiModelSelection.ts), so their authorization and fallback behaviour cannot drift. Both call it with the caller-scoped client (anon key + the caller's bearer token), the authoritative `auth.getUser()` id, and the already-resolved system default — after request validation and **before** any quota unit is spent.
+
+The decision, in order:
+
+1. **Start at the system default** — `resolveGeminiModel(GEMINI_MODEL)`, always available as the safe fallback.
+2. **Re-check entitlement** — `get_current_user_access()` through the caller's own client. Only `can_select_ai_model === true` permits going further. There is no `plan === 'pro'` comparison, no email check and no internal-role check in either Edge Function; the database access projection is the authority.
+3. **Read the saved preference** — `user_ai_preferences`, singleton, with an explicit `.eq("user_id", <authenticated id>)` as defence in depth on top of the SELECT-own policy. No row means the system default.
+4. **Resolve it through the catalog** — exact-id filter; the returned row's `id` must match, and `enabled` must be `true`.
+5. **Check the provider adapter** — `google` only.
+
+**`enabled` vs `selectable` at runtime.** A saved preference requires `enabled = true` and deliberately **not** `selectable = true`: a model can be closed to *new* choices while the users who already chose it keep working. `enabled = false` retires it and falls back. Requiring **both** remains the setter's job at save time; `set_current_user_ai_model` is unchanged.
+
+**Fail closed on the capability, open on the feature.** Every metadata problem — access RPC error, malformed access row, preference read error, malformed preference, catalog read error, missing/disabled/malformed catalog row, unsupported provider — resolves to the system default. None becomes a PaperLume 402, none refunds a unit, and none fails the request: an unproven entitlement never routes, but nobody loses Analyze because a metadata read hiccuped.
+
+**Only the model changes.** The model component of the Gemini URL is the entire provider delta. Prompts, request bodies, `responseMimeType`, parsing, the suggestion contract, quota consumption/refund, provider-error classification and the temporary 90-second / zero-retry transport are all untouched. There is **no per-model API key** — both seeded Gemini models are served by the same existing server-side `GEMINI_API_KEY`, sent the same way (`x-goog-api-key`), and provider credentials never reach the browser.
+
+**No caller-supplied model, ever.** Neither request contract has a model field, neither function reads a query parameter or a non-`Authorization` header, and the resolver reads no request input at all. The only two sources of a model string are the trusted `GEMINI_MODEL` environment default and the server-controlled catalog after entitlement verification.
+
+**`get-gemini-provider-quota` is unchanged and stays system-default observational monitoring.** It reports the *configured* model, not any caller's routed model, so it and the two generation functions may now legitimately name different models for the same request. Making it preference-aware would change what is being monitored and would need multi-model Monitoring calls; C29 remains deferred.
+
+**No UI yet.** AI-MODEL-SELECTION-001C adds the Settings control. Until then only an already-existing server-side preference can affect AI execution.
 
 ---
 
@@ -236,7 +260,7 @@ The table below is the per-action record of **where enforcement lives and whethe
 | **Bulk import** | None today. *Intended:* refuse a batch larger than `import_batch_limit`, or one whose final count would exceed `paper_limit`. | Same RPC, same gap — no cap check. | **Partial**, for the same reason. Not a C27-blocked item: it is unbuilt enforcement, not billing. |
 | **Identifier metadata fetch (PubMed / Crossref)** | None for MVP. | Function already caps each request at 50 identifiers. No per-month metering for MVP. | Sufficient. |
 | **Synonyms / Exclusions feature access (Pro-only)** | *Intended:* hide / disable the feature surface for Free. | *Intended:* server-side check at the relevant RPC. `user_entitlements.premium_taxonomy_enabled` exists to carry this but is **read by nothing**. | **Not implemented.** Both pools are fully usable by every account today. Remains a launch blocker if they stay user-visible. |
-| **AI model selection** | *Intended:* a Settings control shown only when `useCurrentUserAccess().canSelectAiModel` is true (AI-MODEL-SELECTION-001C). Advisory UX only. | `get_current_user_access().can_select_ai_model` projects `ai_model_selection_enabled AND plan_status IN ('active','trialing')`, fail-closed on a missing entitlement. `set_current_user_ai_model` re-checks the same entitlement plus the catalog allowlist before writing; direct table writes are denied by grant and policy. | **Foundation live; feature not shipped.** The entitlement, catalog, preference table and write RPCs exist and are enforced. **No UI exists** and **no AI operation consults the preference** — runtime routing is 001B, the Settings control is 001C. |
+| **AI model selection** | *Intended:* a Settings control shown only when `useCurrentUserAccess().canSelectAiModel` is true (AI-MODEL-SELECTION-001C). Advisory UX only. | `get_current_user_access().can_select_ai_model` projects `ai_model_selection_enabled AND plan_status IN ('active','trialing')`, fail-closed on a missing entitlement. `set_current_user_ai_model` re-checks the same entitlement plus the catalog allowlist (`enabled` **and** `selectable`) before writing; direct table writes are denied by grant and policy. **At runtime** (§4.9) `analyze-paper` and `suggest-paper-organization` re-check `can_select_ai_model` on **every** operation through the shared `_shared/aiModelSelection.ts` and honour a saved preference only when the catalog row is present, `enabled`, and served by an implemented provider adapter; every other outcome falls back to the system default. | **Server-side enforcement live; UI not shipped.** The entitlement, catalog, preference table, write RPCs **and runtime routing** exist and are enforced. **No UI exists** — the Settings control is 001C, so today only an already-saved server-side preference affects execution. |
 | **Export (CSV / RIS / BibTeX, and the PFA-C02 full account ZIP export)** | None. | None for MVP — exporting one's own data is a baseline expectation, and data portability must not sit behind a plan. | Sufficient. Both export paths are implemented and deliberately ungated. |
 
 ### 5.2 The AI quota RPC pattern

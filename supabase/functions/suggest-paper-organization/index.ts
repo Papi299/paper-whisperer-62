@@ -64,8 +64,12 @@ Deno.serve((req) =>
     // Read at request time, not module load, so a missing secret surfaces as a
     // 500 response rather than a worker that cannot boot.
     getGeminiApiKey: () => Deno.env.get("GEMINI_API_KEY") ?? null,
-    // The shared resolver, so this function and analyze-paper can never
-    // silently disagree about which model is in use.
+    // Paperlume's SYSTEM DEFAULT, through the shared resolver, so this function
+    // and analyze-paper can never disagree about the default. It is the
+    // starting point and the safe fallback — the handler re-checks the caller's
+    // entitlement and may route the request to their saved preference instead
+    // (AI-MODEL-SELECTION-001B). That per-user decision deliberately lives in
+    // the handler, not in this untested Deno glue.
     getGeminiModel: () => resolveGeminiModel(Deno.env.get("GEMINI_MODEL")),
   }),
 );

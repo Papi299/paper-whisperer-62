@@ -270,6 +270,15 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: jsonHeaders });
     }
 
+    // Paperlume's configured SYSTEM DEFAULT model — deliberately not the
+    // caller's own. Since AI-MODEL-SELECTION-001B an entitled user's Analyze /
+    // Suggest request can be routed to their saved preference, so the model
+    // named here is no longer guaranteed to be the model every generation
+    // request used. That is correct for this endpoint: it is manager-only
+    // observational monitoring of the shared Google project's system-default
+    // path, not a per-user routing report. Making it preference-aware would
+    // change what is being monitored (and would need multi-model Monitoring
+    // calls); C29 remains deferred.
     const configuredModel = resolveGeminiModel(Deno.env.get("GEMINI_MODEL"));
     const projectId = Deno.env.get("GOOGLE_CLOUD_PROJECT_ID");
     const clientEmail = Deno.env.get("GOOGLE_MONITORING_CLIENT_EMAIL");
