@@ -15,6 +15,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { useToast } from "@/hooks/use-toast";
 import { useStorageUsage } from "@/hooks/useStorageUsage";
 import { StorageUsageSection } from "@/components/settings/StorageUsageSection";
+import { AiModelSettingsSection } from "@/components/settings/AiModelSettingsSection";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -161,6 +162,15 @@ export function SettingsDialog({ open, onOpenChange, userId }: SettingsDialogPro
               </div>
             </section>
           )}
+
+          {/*
+            Composed here rather than folded into the block above: the section
+            owns its own server reads and its own two RPC write paths, and none
+            of the PubMed state applies to it. In particular it shares nothing
+            with `handleSave` — changing the model cannot submit the API-key
+            field, and the field's Enter handler stays scoped to the field.
+          */}
+          <AiModelSettingsSection userId={userId} open={open} />
 
           <StorageUsageSection
             status={storage.status}

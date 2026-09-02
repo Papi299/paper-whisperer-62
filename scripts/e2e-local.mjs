@@ -55,6 +55,11 @@ import {
   cleanupDisposableAccount,
   provisionDisposableAccount,
 } from "./e2e-local-delete-fixture.mjs";
+import {
+  assertModelAccountResetAndRemove,
+  provisionEntitledModelAccount,
+  removeModelAccount,
+} from "./e2e-local-model-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -162,6 +167,14 @@ const DEFAULT_SPECS = [
   // seed within its own run and is order-independent. No papers, projects or
   // tags are touched; no import and no Edge Function.
   "e2e/scrollarea-reachability.spec.ts",
+  // AI-MODEL-SELECTION-001C Settings model-selection coverage. Mutating, but
+  // only within a disposable per-run account it owns outright: the entitled
+  // cases save and then clear a real `user_ai_preferences` row for that account
+  // alone, and the lifecycle proves afterwards that the row is gone. The
+  // deterministic primary fixture is used read-only, for the NON-entitled case,
+  // and never acquires a preference. No Edge Function is served and no provider
+  // request is made — this spec tests preference persistence and UI only.
+  "e2e/ai-model-settings.spec.ts",
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
   // local delete-account Edge Function. The lifecycle proves afterwards that the
@@ -421,6 +434,9 @@ async function cmdRun(specArgs) {
   // Set once the disposable PFA-C04 account exists; cleared once it is proven
   // deleted, so the failure path only ever cleans up an account that survived.
   let disposable = null;
+  // Set once the disposable ENTITLED model account exists; cleared once its
+  // final state is proven and it is removed.
+  let modelAccount = null;
   try {
     await startStack();
     await resetLocalDb();
@@ -439,6 +455,16 @@ async function cmdRun(specArgs) {
       ? await provisionDisposableAccount({ apiUrl, anonKey, serviceRoleKey, log })
       : null;
 
+    // AI-MODEL-SELECTION-001C entitled fixture. The seeded users are Free with
+    // the capability flag false — exactly what the spec's non-entitled cases
+    // need — so entitlement is granted to a SEPARATE disposable account through
+    // a server-side entitlement write, never by changing the seed. Provisioned
+    // only when the model spec is actually scheduled.
+    const runsModelSpec = specs.some((spec) => spec.includes("ai-model-settings"));
+    modelAccount = runsModelSpec
+      ? await provisionEntitledModelAccount({ apiUrl, anonKey, serviceRoleKey, log })
+      : null;
+
     // Explicit, in-memory backend contract for the guarded Playwright run.
     const childEnv = {
       ...process.env,
@@ -452,6 +478,12 @@ async function cmdRun(specArgs) {
         ? {
             E2E_DELETE_USER_EMAIL: disposable.email,
             E2E_DELETE_USER_PASSWORD: disposable.password,
+          }
+        : {}),
+      ...(modelAccount
+        ? {
+            E2E_MODEL_USER_EMAIL: modelAccount.email,
+            E2E_MODEL_USER_PASSWORD: modelAccount.password,
           }
         : {}),
     };
@@ -470,18 +502,41 @@ async function cmdRun(specArgs) {
       disposable = null; // proven gone; nothing left to clean up
       log("account-deletion E2E verified: disposable account fully removed.");
     }
+
+    // The browser can only observe the rendered control; this asserts what only
+    // an elevated local client can — that the spec's final reset really removed
+    // the preference row — and then removes the disposable account.
+    if (modelAccount) {
+      await assertModelAccountResetAndRemove({
+        apiUrl,
+        anonKey,
+        serviceRoleKey,
+        account: modelAccount,
+        log,
+      });
+      modelAccount = null; // proven reset and removed
+      log("ai-model-settings E2E verified: preference cleared and fixture account removed.");
+    }
   } catch (err) {
     primaryError = err;
     // A failed run may have left the disposable account behind. Remove it
     // best-effort so a debugging session with E2E_KEEP_LOCAL_STACK=1 does not
     // accumulate residue; the deterministic fixtures are never touched.
-    if (disposable) {
+    if (disposable || modelAccount) {
       const target = await readLocalStatus().catch(() => null);
-      if (target) {
+      if (target && disposable) {
         await cleanupDisposableAccount({
           apiUrl: target.apiUrl,
           serviceRoleKey: target.serviceRoleKey,
           account: disposable,
+          log,
+        });
+      }
+      if (target && modelAccount) {
+        await removeModelAccount({
+          apiUrl: target.apiUrl,
+          serviceRoleKey: target.serviceRoleKey,
+          account: modelAccount,
           log,
         });
       }
