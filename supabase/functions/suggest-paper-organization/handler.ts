@@ -32,15 +32,20 @@
  *   6. Paper ownership       — non-disclosing 404 for missing *or* foreign.
  *   7. Taxonomy load         — caller-scoped; overflow fails honestly.
  *   8. Provider input build  — allow-listed fields, ephemeral refs, size bound.
- *   9. Consume quota         — one unit, and not before here.
- *  10. Provider call         — finite timeout, bounded retries, no retry
+ *   9. Model selection       — re-check entitlement, resolve a saved preference
+ *                              through the server-controlled catalog, fail
+ *                              closed to the system default.
+ *  10. Consume quota         — one unit, and not before here.
+ *  11. Provider call         — finite timeout, bounded retries, no retry
  *                              after a timeout.
- *  11. Strict parse          — unusable ⇒ refund + neutral 500.
+ *  12. Strict parse          — unusable ⇒ refund + neutral 500.
  *
- * Steps 1–8 can only fail *before* a unit is spent, so a malformed request, a
+ * Steps 1–9 can only fail *before* a unit is spent, so a malformed request, a
  * foreign paper, an oversized library and a stale client are all free. The
- * Gemini key is checked at step 9's doorstep for the same reason: a
- * misconfigured deployment must not bill the user.
+ * Gemini key is checked at step 10's doorstep for the same reason: a
+ * misconfigured deployment must not bill the user. Step 9 cannot fail the
+ * request at all — every problem it meets resolves to the system default — and
+ * it costs neither a quota unit nor a provider request.
  *
  * ## Provider failure is never a Paperlume paywall
  *
@@ -52,6 +57,12 @@
  * because Google was busy.
  */
 
+import {
+  buildGeminiGenerateContentUrl,
+  formatModelRoutingLog,
+  resolveEffectiveAiModel,
+  type AiModelSelectionClient,
+} from "../_shared/aiModelSelection.ts";
 import { callGeminiWithRetry } from "../_shared/geminiTransport.ts";
 import { classifyProviderError, type ProviderErrorClass } from "../_shared/providerError.ts";
 import {
@@ -85,6 +96,10 @@ const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
  * There is no `insert`, `update`, `upsert` or `delete` here. A future edit that
  * tried to write a Project, a Tag or an assignment would not type-check against
  * this interface, which is a stronger guarantee than a comment asking it not to.
+ *
+ * Model selection (step 9) reads `user_ai_preferences` and `ai_model_catalog`
+ * through this same surface, so it too is structurally read-only — it cannot
+ * grant an entitlement or edit the catalog it is checking against.
  */
 export interface TableQuery {
   eq(column: string, value: string): TableQuery;
@@ -121,7 +136,19 @@ export interface SuggestOrganizationDeps {
   createTimeoutSignal?(ms: number): AbortSignal;
   /** Read from Deno env by `index.ts`; `null`/empty means the function is misconfigured. */
   getGeminiApiKey(): string | null;
-  /** Resolved through the shared `_shared/geminiModel.ts` so this cannot drift from `analyze-paper`. */
+  /**
+   * Paperlume's SYSTEM DEFAULT model, resolved through the shared
+   * `_shared/geminiModel.ts` from `GEMINI_MODEL`, so this function and
+   * `analyze-paper` cannot disagree about the default.
+   *
+   * This is the starting point and the safe fallback, NOT necessarily the model
+   * used: step 9b re-checks the caller's entitlement and may route the request
+   * to their saved preference via `_shared/aiModelSelection.ts`. It is
+   * deliberately not a "get the model for this user" dependency — resolving the
+   * per-user model needs the caller-scoped client and the authenticated id, so
+   * it happens inside the handler where both are already established and where
+   * the tests can exercise it.
+   */
   getGeminiModel(): string;
   /** Injected so tests can assert exactly what is (and is not) logged. */
   logger?: { log(message: string): void; warn(message: string): void; error(message: string): void };
@@ -376,7 +403,31 @@ export async function handleSuggestOrganizationRequest(
       return fail(500, "internal_error", "Something went wrong. Please try again.");
     }
 
-    // 9b. Consume exactly one unit of the EXISTING Paperlume AI quota, through
+    // 9b. Which model will this request use? AI-MODEL-SELECTION-001B (C33).
+    //
+    //     The last pre-provider boundary that is still BEFORE the quota unit is
+    //     spent, and it spends nothing itself: no quota, no provider request.
+    //     Every failure mode inside the resolver — an access RPC error, a
+    //     missing/disabled catalog row, a provider with no adapter — falls back
+    //     to the system default rather than failing this request, so a metadata
+    //     problem can never cost the user a suggestion.
+    //
+    //     Entitlement is re-proven HERE, on this request, through the caller's
+    //     own client: a saved preference deliberately survives a downgrade as a
+    //     dormant row, so its existence is never treated as permission. The
+    //     request body cannot influence any of it — `validateSuggestRequest`
+    //     reads exactly `paperId`, `draft`, `currentProjectIds` and
+    //     `currentTagIds`, and `userId` here is the `getUser()` identity.
+    const systemDefaultModel = deps.getGeminiModel();
+    const modelSelection = await resolveEffectiveAiModel({
+      client: client as AiModelSelectionClient,
+      userId,
+      systemDefaultModel,
+      label: "suggest-organization",
+      logger,
+    });
+
+    // 9c. Consume exactly one unit of the EXISTING Paperlume AI quota, through
     //     the caller-authenticated client so the RPC's `auth.uid()` guard sees
     //     the right user. The RPC is the enforcement authority: this code reads
     //     its `allowed` flag and does no quota arithmetic of its own, which is
@@ -418,8 +469,15 @@ export async function handleSuggestOrganizationRequest(
     }
 
     // 10. The provider call. From here on, every failure path refunds.
-    const model = deps.getGeminiModel();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    //
+    //     The model component of this URL is the ONLY thing per-user selection
+    //     changes: the request body, the `x-goog-api-key` auth with the one
+    //     shared key, the transport policy, the parse and the refund rule are
+    //     identical for the system default and for an honoured preference.
+    const url = buildGeminiGenerateContentUrl(modelSelection);
+    // One bounded routing line: operation, source, provider, public model name.
+    // No user id, no paper id, no draft content, no Projects/Tags, no key.
+    logger.log(formatModelRoutingLog("suggest-organization", modelSelection));
 
     const call = await callProvider(url, apiKey, buildGeminiRequestBody(built.serialized), deps, logger);
 

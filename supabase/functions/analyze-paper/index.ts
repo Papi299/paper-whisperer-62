@@ -2,6 +2,12 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
+import {
+  buildGeminiGenerateContentUrl,
+  formatModelRoutingLog,
+  resolveEffectiveAiModel,
+  type AiModelSelectionClient,
+} from "../_shared/aiModelSelection.ts";
 import { resolveGeminiModel } from "../_shared/geminiModel.ts";
 import { callGeminiWithRetry } from "../_shared/geminiTransport.ts";
 import {
@@ -112,6 +118,30 @@ Deno.serve(async (req) => {
     }
     console.log("3a. Input received");
 
+    // ── Step 2b: Resolve the model this request will actually use ──
+    //
+    // AI-MODEL-SELECTION-001B (C33). Two ordered sources, and nothing else:
+    // Paperlume's system default from the trusted GEMINI_MODEL environment, and
+    // — only for a caller whose entitlement is re-proven server-side right here,
+    // on this request — their saved preference resolved through the
+    // server-controlled ai_model_catalog. The request body is read exactly once,
+    // above, for `title` and `abstract`; it carries no model field and no user
+    // id, and `user.id` below is the authoritative getUser() identity.
+    //
+    // Placed after body validation and BEFORE quota consumption: a malformed
+    // request still costs nothing, and a metadata problem here costs nothing
+    // either, because every failure mode falls back to the system default
+    // rather than failing the request. This spends no quota and makes no
+    // provider call.
+    const systemDefaultModel = resolveGeminiModel(Deno.env.get("GEMINI_MODEL"));
+    const modelSelection = await resolveEffectiveAiModel({
+      client: supabase as unknown as AiModelSelectionClient,
+      userId: user.id,
+      systemDefaultModel,
+      label: "analyze-paper",
+      logger: console,
+    });
+
     // ── Step 3: Consume AI quota (server-side enforcement) ──
     // Calls the SECURITY DEFINER consume_ai_quota RPC through the
     // caller-authenticated Supabase client, so the RPC sees the
@@ -179,11 +209,17 @@ Deno.serve(async (req) => {
     }
     console.log("4a. Gemini key present");
 
-    // Centralized model config (Part D): GEMINI_MODEL secret with the exact
-    // historical fallback. analyze-paper and get-gemini-provider-quota resolve
-    // the same value so they can never silently disagree.
-    const geminiModel = resolveGeminiModel(Deno.env.get("GEMINI_MODEL"));
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
+    // The ONLY provider delta from per-user model selection: the model
+    // component of this URL. The request body, the auth mechanism
+    // (x-goog-api-key with the one shared GEMINI_API_KEY), the parsing and the
+    // quota semantics below are identical whether this is the system default or
+    // an honoured preference. `providerModel` is either the resolved
+    // GEMINI_MODEL value or a catalog-supplied string — never anything the
+    // client sent.
+    const geminiUrl = buildGeminiGenerateContentUrl(modelSelection);
+    // One bounded routing line: operation, source, provider, public model name.
+    // No user id, no email, no token, no key, no title/abstract.
+    console.log(formatModelRoutingLog("analyze-paper", modelSelection));
     console.log("5. Calling Gemini API");
 
     const geminiBody = {
@@ -224,11 +260,16 @@ CRITICAL RULES:
     let providerErrorClass: ProviderErrorClass = "unknown";
     let classified = false;
     try {
-      // AI-PROVIDER-RESILIENCE-001A: the timeout/retry policy now lives in
+      // AI-PROVIDER-RESILIENCE-001A: the timeout/retry policy lives in
       // _shared/geminiTransport.ts, shared with suggest-paper-organization so
-      // the two Gemini callers cannot drift. 30 s per attempt; 429/5xx and
-      // ordinary network errors keep the same bounded 2 s / 4 s retry budget; a
-      // timeout is TERMINAL and is never automatically re-sent.
+      // the two Gemini callers cannot drift. TEMPORARY, per
+      // AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A: 90 s per attempt and ZERO
+      // retries, so every outcome — including a 429/5xx — resolves after a
+      // single attempt and no backoff is slept. (The established policy this
+      // will be restored to is 30 s with two bounded 2 s / 4 s retries; see the
+      // transport header.) A timeout is TERMINAL under either policy and is
+      // never automatically re-sent. This function pins none of it: it takes
+      // whatever the shared constants are.
       const providerCall = await callGeminiWithRetry(
         geminiUrl,
         {

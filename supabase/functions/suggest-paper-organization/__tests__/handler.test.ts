@@ -41,6 +41,25 @@ const USER_ID = "11111111-2222-4333-8444-555555555555";
 const PAPER_ID = "6f1a2b3c-4d5e-4f60-8a91-b2c3d4e5f607";
 const GEMINI_KEY = "SENTINEL-GEMINI-API-KEY";
 
+// AI-MODEL-SELECTION-001B fixtures. The two ids are the rows migration
+// 20260902120000 seeds; they are fixture data, not a runtime allowlist — the
+// resolver hard-codes no model names (see `_shared/__tests__/aiModelSelection.test.ts`).
+const SYSTEM_DEFAULT_MODEL = "gemini-flash-latest";
+const MODEL_35 = {
+  id: "google/gemini-3.5-flash",
+  provider: "google",
+  provider_model: "gemini-3.5-flash",
+  enabled: true,
+  selectable: true,
+};
+const MODEL_36 = {
+  id: "google/gemini-3.6-flash",
+  provider: "google",
+  provider_model: "gemini-3.6-flash",
+  enabled: true,
+  selectable: true,
+};
+
 const PROJECT_A = {
   id: "aaaaaaaa-1111-4111-8111-111111111111",
   name: "Sports Nutrition",
@@ -103,6 +122,17 @@ interface HarnessOptions {
   refundThrows?: boolean;
   responses?: Array<Response | Error>;
   geminiKey?: string | null;
+  /** AI-MODEL-SELECTION-001B. Default: NOT entitled, so the system default is used. */
+  entitled?: boolean;
+  /** Overrides the whole access projection (for malformed/missing-row cases). */
+  access?: unknown;
+  accessError?: { message: string } | null;
+  preference?: Record<string, unknown> | null;
+  preferenceError?: { message: string } | null;
+  catalog?: Record<string, unknown> | null;
+  catalogError?: { message: string } | null;
+  /** Paperlume's configured system default, as `index.ts` would resolve it. */
+  systemDefaultModel?: string;
 }
 
 /** Wrap an object so any property outside `allowed` records a violation and throws. */
@@ -181,6 +211,18 @@ function makeHarness(options: HarnessOptions = {}): Harness {
                 maybeSingle() {
                   record.terminal = "maybeSingle";
                   queries.push(record);
+                  if (table === "user_ai_preferences") {
+                    return Promise.resolve({
+                      data: options.preferenceError ? null : (options.preference ?? null),
+                      error: options.preferenceError ?? null,
+                    });
+                  }
+                  if (table === "ai_model_catalog") {
+                    return Promise.resolve({
+                      data: options.catalogError ? null : (options.catalog ?? null),
+                      error: options.catalogError ?? null,
+                    });
+                  }
                   return Promise.resolve({
                     data: options.paper === undefined ? { id: PAPER_ID } : options.paper,
                     error: options.paperError ?? null,
@@ -199,6 +241,16 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     },
     rpc(fn: string, args: Record<string, unknown>) {
       rpcCalls.push({ fn, args });
+      if (fn === "get_current_user_access") {
+        return Promise.resolve({
+          data: options.accessError
+            ? null
+            : options.access === undefined
+              ? [{ role: "user", can_select_ai_model: options.entitled === true }]
+              : options.access,
+          error: options.accessError ?? null,
+        });
+      }
       if (fn === "refund_ai_quota") {
         if (options.refundThrows) throw new Error("refund exploded");
         return Promise.resolve({ data: null, error: options.refundError ?? null });
@@ -227,7 +279,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
         return new AbortController().signal;
       },
       getGeminiApiKey: () => (options.geminiKey === undefined ? GEMINI_KEY : options.geminiKey),
-      getGeminiModel: () => "gemini-flash-latest",
+      getGeminiModel: () => options.systemDefaultModel ?? SYSTEM_DEFAULT_MODEL,
       logger: {
         log: (m: string) => logs.push(m),
         warn: (m: string) => warns.push(m),
@@ -276,7 +328,17 @@ function sentBody(harness: Harness, call = 0): string {
   return String(init?.body ?? "");
 }
 
-const quotaRpcs = (h: Harness) => h.rpcCalls.map((c) => c.fn);
+/** Every RPC the handler made, in order. */
+const allRpcs = (h: Harness) => h.rpcCalls.map((c) => c.fn);
+/**
+ * Just the two quota RPCs, in order. Filtered rather than mapped since
+ * AI-MODEL-SELECTION-001B added `get_current_user_access` to the request path:
+ * these assertions are about quota, and should not move when routing does.
+ */
+const quotaRpcs = (h: Harness) =>
+  allRpcs(h).filter((fn) => fn === "consume_ai_quota" || fn === "refund_ai_quota");
+/** The args of the single call to `fn`. */
+const rpcArgs = (h: Harness, fn: string) => h.rpcCalls.find((c) => c.fn === fn)?.args;
 
 // ── 1. CORS and method handling ───────────────────────────────────────────
 
@@ -365,9 +427,13 @@ describe("authentication", () => {
       expect(userFilter?.[1]).toBe(USER_ID);
     }
     for (const call of harness.rpcCalls) {
-      expect(call.args).toEqual({ p_user_id: USER_ID });
+      // The quota RPCs are scoped to the authenticated id; the access
+      // projection derives the caller from auth.uid() and takes no argument at
+      // all, so there is nothing there to poison either.
+      expect(call.args).toEqual(call.fn === "get_current_user_access" ? {} : { p_user_id: USER_ID });
     }
     expect(JSON.stringify(harness.queries)).not.toContain(foreign);
+    expect(JSON.stringify(harness.rpcCalls)).not.toContain(foreign);
   });
 });
 
@@ -748,8 +814,11 @@ describe("AI quota", () => {
     const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
     await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(harness.rpcCalls).toEqual([
+      // Model selection re-checks entitlement first; it consumes nothing.
+      { fn: "get_current_user_access", args: {} },
       { fn: "consume_ai_quota", args: { p_user_id: USER_ID } },
     ]);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
     // Consumption happened before the provider was contacted.
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -894,7 +963,7 @@ describe("refund behaviour", () => {
     expect(payload.code).toBe(code);
     expect(payload.message).toBe(NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE);
     expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
-    expect(harness.rpcCalls[1].args).toEqual({ p_user_id: USER_ID });
+    expect(rpcArgs(harness, "refund_ai_quota")).toEqual({ p_user_id: USER_ID });
   });
 
   // TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A. PRODUCTION SEMANTICS,
@@ -1098,12 +1167,15 @@ describe("no application-domain mutation", () => {
     ]);
     // The only RPCs that exist for this function.
     for (const call of harness.rpcCalls) {
-      expect(["consume_ai_quota", "refund_ai_quota"]).toContain(call.fn);
+      expect(["get_current_user_access", "consume_ai_quota", "refund_ai_quota"]).toContain(call.fn);
     }
-    expect(quotaRpcs(harness)).not.toContain("set_paper_projects");
-    expect(quotaRpcs(harness)).not.toContain("set_paper_tags");
-    expect(quotaRpcs(harness)).not.toContain("bulk_set_paper_projects");
-    expect(quotaRpcs(harness)).not.toContain("bulk_set_paper_tags");
+    expect(allRpcs(harness)).not.toContain("set_paper_projects");
+    expect(allRpcs(harness)).not.toContain("set_paper_tags");
+    expect(allRpcs(harness)).not.toContain("bulk_set_paper_projects");
+    expect(allRpcs(harness)).not.toContain("bulk_set_paper_tags");
+    // Nor either model-selection write RPC — routing only ever reads.
+    expect(allRpcs(harness)).not.toContain("set_current_user_ai_model");
+    expect(allRpcs(harness)).not.toContain("clear_current_user_ai_model");
     // The Proxy would have recorded any insert/update/upsert/delete attempt.
     expect(harness.forbidden).toEqual([]);
 
@@ -1186,5 +1258,260 @@ describe("logging", () => {
     expect(all).toContain("class=provider_rate_limit");
     expect(all).not.toContain("project 12345");
     expect(all).not.toContain("Google says");
+  });
+});
+
+// ── 14. Per-user model routing (AI-MODEL-SELECTION-001B) ──────────────────
+//
+// The handler is the real behaviour path, so these run the shipped composition
+// — `resolveEffectiveAiModel` + `buildGeminiGenerateContentUrl` inside a
+// complete request — and assert the URL the fake `fetch` was actually called
+// with. No Gemini network call is made anywhere in this file.
+
+/** The exact URL that was POSTed to the provider. */
+function sentUrl(harness: Harness, call = 0): string {
+  return String(harness.fetchImpl.mock.calls[call]?.[0] ?? "");
+}
+
+const urlFor = (model: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+/** An entitled caller whose saved preference resolves to `catalog`. */
+function routing(catalog: Record<string, unknown> | null, overrides: HarnessOptions = {}) {
+  return makeHarness({
+    entitled: true,
+    preference: { preferred_model_id: (catalog?.id as string | undefined) ?? MODEL_35.id },
+    catalog,
+    responses: [geminiOk(EMPTY_SUGGESTIONS)],
+    ...overrides,
+  });
+}
+
+describe("model routing", () => {
+  it("uses the system default when the caller is not entitled", async () => {
+    const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+    // A caller who cannot select is never asked what they selected.
+    expect(harness.queries.map((q) => q.table)).not.toContain("user_ai_preferences");
+  });
+
+  it("uses the system default when an entitled caller has no preference", async () => {
+    const harness = makeHarness({
+      entitled: true,
+      preference: null,
+      responses: [geminiOk(EMPTY_SUGGESTIONS)],
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+  });
+
+  it("routes a valid Gemini 3.5 preference to gemini-3.5-flash", async () => {
+    const harness = routing({ ...MODEL_35 });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(sentUrl(harness)).toBe(urlFor("gemini-3.5-flash"));
+  });
+
+  it("routes a valid Gemini 3.6 preference to gemini-3.6-flash", async () => {
+    const harness = routing({ ...MODEL_36 });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(sentUrl(harness)).toBe(urlFor("gemini-3.6-flash"));
+  });
+
+  it("ignores a DORMANT preference held by a caller who is no longer entitled", async () => {
+    const harness = makeHarness({
+      entitled: false,
+      preference: { preferred_model_id: MODEL_35.id },
+      catalog: { ...MODEL_35 },
+      responses: [geminiOk(EMPTY_SUGGESTIONS)],
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+    expect(harness.queries.map((q) => q.table)).not.toContain("ai_model_catalog");
+  });
+
+  it("ignores a retired model (enabled = false)", async () => {
+    const harness = routing({ ...MODEL_35, enabled: false });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+  });
+
+  it("HONOURS an enabled model that is no longer selectable", async () => {
+    // `selectable = false` closes a model to NEW choices only. Revoking it here
+    // would take away a choice the user already made.
+    const harness = routing({ ...MODEL_35, selectable: false });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(sentUrl(harness)).toBe(urlFor("gemini-3.5-flash"));
+  });
+
+  it("refuses to call a provider it has no adapter for", async () => {
+    const harness = routing({
+      ...MODEL_35,
+      provider: "anthropic",
+      provider_model: "claude-sentinel-model",
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+    expect(sentUrl(harness)).not.toContain("claude-sentinel-model");
+    expect(sentUrl(harness)).not.toContain("anthropic");
+  });
+
+  it.each<[string, HarnessOptions]>([
+    ["an access RPC error", { entitled: true, accessError: { message: "boom" } }],
+    ["a malformed access row", { access: [] }],
+    ["a preference read error", { entitled: true, preferenceError: { message: "boom" } }],
+    ["a malformed preference", { entitled: true, preference: { preferred_model_id: 7 } }],
+    [
+      "a catalog read error",
+      { entitled: true, preference: { preferred_model_id: MODEL_35.id }, catalogError: { message: "boom" } },
+    ],
+    [
+      "a missing catalog row",
+      { entitled: true, preference: { preferred_model_id: MODEL_35.id }, catalog: null },
+    ],
+    [
+      "a malformed catalog row",
+      {
+        entitled: true,
+        preference: { preferred_model_id: MODEL_35.id },
+        catalog: { ...MODEL_35, provider_model: "  " },
+      },
+    ],
+  ])("fails closed to the system default on %s, without failing the request", async (_label, options) => {
+    const harness = makeHarness({ ...options, responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    // Availability of the ordinary feature is preserved: a metadata problem is
+    // never a 402 and never a 500.
+    expect(response.status).toBe(200);
+    expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+    // And it costs nothing: one unit consumed, no refund.
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+  });
+
+  it("scopes the preference read to the authenticated user and the catalog to the exact id", async () => {
+    const harness = routing({ ...MODEL_35 });
+    await handleSuggestOrganizationRequest(
+      request(validBody({ user_id: "99999999-9999-4999-8999-999999999999", model: "gemini-evil" })),
+      harness.deps,
+    );
+    const preference = harness.queries.find((q) => q.table === "user_ai_preferences");
+    const catalog = harness.queries.find((q) => q.table === "ai_model_catalog");
+    expect(preference?.filters).toEqual([["user_id", USER_ID]]);
+    expect(preference?.columns).toBe("preferred_model_id");
+    expect(catalog?.filters).toEqual([["id", MODEL_35.id]]);
+    expect(catalog?.columns).toBe("id,provider,provider_model,enabled,selectable");
+    // The extra body fields influenced nothing.
+    expect(sentUrl(harness)).toBe(urlFor("gemini-3.5-flash"));
+    expect(sentUrl(harness)).not.toContain("gemini-evil");
+    expect(sentBody(harness)).not.toContain("gemini-evil");
+  });
+
+  it("re-checks entitlement on the request, before the quota unit and before the provider", async () => {
+    const harness = routing({ ...MODEL_35 });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(allRpcs(harness)).toEqual(["get_current_user_access", "consume_ai_quota"]);
+    expect(rpcArgs(harness, "get_current_user_access")).toEqual({});
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("changes ONLY the model component of the URL — the body is byte-identical", async () => {
+    const preferred = routing({ ...MODEL_35 });
+    await handleSuggestOrganizationRequest(request(validBody()), preferred.deps);
+
+    const fallback = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    await handleSuggestOrganizationRequest(request(validBody()), fallback.deps);
+
+    expect(sentBody(preferred)).toBe(sentBody(fallback));
+    expect(sentUrl(preferred)).not.toBe(sentUrl(fallback));
+    // Same host, same API version, same endpoint verb.
+    expect(sentUrl(preferred).replace("gemini-3.5-flash", "M")).toBe(
+      sentUrl(fallback).replace(SYSTEM_DEFAULT_MODEL, "M"),
+    );
+    // Same auth mechanism, same single shared key.
+    const headersOf = (h: Harness) =>
+      (h.fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined)?.headers;
+    expect(headersOf(preferred)).toEqual(headersOf(fallback));
+    expect(headersOf(preferred)).toEqual({
+      "Content-Type": "application/json",
+      "x-goog-api-key": GEMINI_KEY,
+    });
+  });
+
+  it("adds no provider request and no extra quota unit", async () => {
+    const harness = routing({ ...MODEL_35 });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+    expect(harness.sleeps).toEqual([]);
+  });
+
+  it("still refunds exactly once when a routed provider call fails", async () => {
+    const harness = routing({ ...MODEL_35 }, { responses: [new Response("", { status: 503 })] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+    expect(rpcArgs(harness, "refund_ai_quota")).toEqual({ p_user_id: USER_ID });
+    // One attempt, no backoff: the 90 s / zero-retry policy is unchanged.
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.signalTimeouts).toEqual([90_000]);
+    expect(harness.sleeps).toEqual([]);
+  });
+
+  it("leaves ownership, taxonomy loading and the provider payload untouched", async () => {
+    const harness = routing({ ...MODEL_35 });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    // The three domain reads still happen, in order, scoped to the caller.
+    const domain = harness.queries.filter((q) => ["papers", "projects", "tags"].includes(q.table));
+    expect(domain.map((q) => q.table)).toEqual(["papers", "projects", "tags"]);
+    expect(domain[0].filters).toEqual([["id", PAPER_ID], ["user_id", USER_ID]]);
+    expect(domain[1].limit).toBe(MAX_PROJECTS + 1);
+    // The payload still carries ephemeral refs and no database ids.
+    const body = sentBody(harness);
+    expect(body).toContain("P1");
+    expect(body).not.toContain(PROJECT_A.id);
+    expect(body).not.toContain(PAPER_ID);
+    expect(harness.forbidden).toEqual([]);
+  });
+
+  it("logs one bounded routing line and nothing sensitive", async () => {
+    const harness = routing({ ...MODEL_35 });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    const routingLines = harness.logs.filter((l) => l.includes("model_routing"));
+    expect(routingLines).toEqual([
+      "suggest-organization model_routing source=user_preference provider=google model=gemini-3.5-flash",
+    ]);
+    const all = [...harness.logs, ...harness.warns, ...harness.errors].join("\n");
+    for (const secret of [USER_ID, PAPER_ID, GEMINI_KEY, "SENTINEL-JWT", MODEL_35.id, DRAFT.title]) {
+      expect(all).not.toContain(secret);
+    }
+  });
+
+  it("keeps the ordinary paths quiet and bounds the unexpected ones", async () => {
+    const quiet = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    await handleSuggestOrganizationRequest(request(validBody()), quiet.deps);
+    expect(quiet.warns.filter((w) => w.includes("model_selection"))).toEqual([]);
+    expect(quiet.errors).toEqual([]);
+    expect(quiet.logs).toContain(
+      `suggest-organization model_routing source=system_default provider=google model=${SYSTEM_DEFAULT_MODEL}`,
+    );
+
+    const unexpected = makeHarness({
+      entitled: true,
+      preference: { preferred_model_id: MODEL_35.id },
+      catalog: { ...MODEL_35, provider: "openai", provider_model: "gpt-sentinel" },
+      responses: [geminiOk(EMPTY_SUGGESTIONS)],
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), unexpected.deps);
+    expect(unexpected.warns).toContain(
+      "suggest-organization model_selection_fallback reason=unsupported_provider",
+    );
+    const all = [...unexpected.logs, ...unexpected.warns, ...unexpected.errors].join("\n");
+    expect(all).not.toContain("gpt-sentinel");
+    expect(all).not.toContain(USER_ID);
   });
 });
