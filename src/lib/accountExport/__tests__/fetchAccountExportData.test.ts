@@ -14,6 +14,7 @@ import {
   EXCLUDED_PROFILE_COLUMNS,
   PAPER_EXPORT_COLUMNS,
   SAFE_PROFILE_COLUMNS,
+  USER_AI_PREFERENCE_EXPORT_COLUMNS,
   AccountExportError,
 } from "../types";
 
@@ -782,6 +783,233 @@ describe("fetchAccountExportData — 001C compatibility stays narrow", () => {
             },
           ],
         },
+      }),
+    );
+
+    await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * AI-MODEL-SELECTION-001A — the saved model preference is user data
+ *
+ * `set_current_user_ai_model` is granted to `authenticated`, so a preference row
+ * can exist from the moment migration 20260902120000 is applied. A UI is not a
+ * precondition for user data, and an export that omitted the row would silently
+ * drop a choice the user made.
+ *
+ * The rollout tolerance below is one specific, verifiable condition — this
+ * environment does not have the table yet — and nothing else.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+function preferenceRow(overrides: Record<string, unknown> = {}) {
+  return {
+    user_id: USER,
+    preferred_model_id: "google/gemini-3.6-flash",
+    created_at: "2026-09-02T00:00:00Z",
+    updated_at: "2026-09-02T01:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("fetchAccountExportData — AI model preference", () => {
+  it("exports the caller's saved preference", async () => {
+    install(
+      createSupabaseMock({
+        tables: baseTables({ user_ai_preferences: [preferenceRow()] }),
+      }),
+    );
+
+    const data = await fetchAccountExportData(USER);
+
+    expect(data.user_ai_preferences).toEqual({
+      user_id: USER,
+      preferred_model_id: "google/gemini-3.6-flash",
+      created_at: "2026-09-02T00:00:00Z",
+      updated_at: "2026-09-02T01:00:00Z",
+    });
+  });
+
+  it("exports null when the user has no explicit preference", async () => {
+    // Not an empty collection and not an error: no row is exactly what "use
+    // Paperlume's system default" looks like, and the archive says so.
+    install(createSupabaseMock({ tables: baseTables({ user_ai_preferences: [] }) }));
+
+    const data = await fetchAccountExportData(USER);
+
+    expect(data.user_ai_preferences).toBeNull();
+  });
+
+  it("scopes the read to the signed-in user and reads it as a singleton", async () => {
+    const mock = install(
+      createSupabaseMock({
+        tables: baseTables({ user_ai_preferences: [preferenceRow()] }),
+      }),
+    );
+
+    await fetchAccountExportData(USER);
+
+    const queries = mock.queriesFor("user_ai_preferences");
+    expect(queries).toHaveLength(1);
+    expect(queries[0].eq).toContainEqual(["user_id", USER]);
+    expect(queries[0].single).toBe(true);
+  });
+
+  it("requests exactly the approved columns and nothing else", async () => {
+    const mock = install(
+      createSupabaseMock({
+        tables: baseTables({ user_ai_preferences: [preferenceRow()] }),
+      }),
+    );
+
+    await fetchAccountExportData(USER);
+
+    const selected = mock
+      .queriesFor("user_ai_preferences")[0]
+      .select.split(",")
+      .map((column) => column.trim());
+    expect(selected).toEqual([...USER_AI_PREFERENCE_EXPORT_COLUMNS]);
+  });
+
+  it("never reads the global model catalog", async () => {
+    // The catalog is Paperlume's product metadata. Resolving the id against it
+    // would put our data into the user's archive and would make their saved
+    // choice go stale the moment we changed a display name.
+    const mock = install(
+      createSupabaseMock({
+        tables: baseTables({ user_ai_preferences: [preferenceRow()] }),
+      }),
+    );
+
+    await fetchAccountExportData(USER);
+
+    expect(mock.queriesFor("ai_model_catalog")).toHaveLength(0);
+    for (const excluded of ACCOUNT_EXPORT_EXCLUDED_TABLES) {
+      expect(mock.queriesFor(excluded)).toHaveLength(0);
+    }
+  });
+
+  it("fails closed when the backend returns another user's preference", async () => {
+    // `leakTables` simulates a backend that does not apply the predicate — a
+    // misconfigured RLS policy. The export must validate what it received.
+    install(
+      createSupabaseMock({
+        tables: baseTables({
+          user_ai_preferences: [preferenceRow({ user_id: OTHER_USER })],
+        }),
+        leakTables: ["user_ai_preferences"],
+      }),
+    );
+
+    await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+});
+
+describe("fetchAccountExportData — 001A pre-migration compatibility", () => {
+  it("exports null when this environment predates the preference migration", async () => {
+    install(
+      createSupabaseMock({
+        tables: baseTables(),
+        errors: { user_ai_preferences: missingTable("user_ai_preferences") },
+      }),
+    );
+
+    const data = await fetchAccountExportData(USER);
+
+    expect(data.user_ai_preferences).toBeNull();
+  });
+
+  it("leaves every other category intact during that window", async () => {
+    install(
+      createSupabaseMock({
+        tables: baseTables(),
+        errors: { user_ai_preferences: missingTable("user_ai_preferences") },
+      }),
+    );
+
+    const data = await fetchAccountExportData(USER);
+
+    expect(data.profile).not.toBeNull();
+    expect(data.papers).toHaveLength(2);
+    expect(data.paper_attachments).toHaveLength(1);
+    for (const key of ACCOUNT_EXPORT_COLLECTIONS) {
+      expect(Array.isArray(data[key]), `${key} must still be an array`).toBe(true);
+    }
+  });
+});
+
+describe("fetchAccountExportData — 001A compatibility stays narrow", () => {
+  /**
+   * Every one of these must still fail the whole export. Once the table exists,
+   * a genuine read failure and "the user has no preference" are indistinguishable
+   * in the archive — and only one of them is true.
+   */
+  const realFailures: [string, Error][] = [
+    [
+      "permission denied on the preference table",
+      Object.assign(new Error("permission denied for table user_ai_preferences"), {
+        code: "42501",
+      }),
+    ],
+    [
+      "an RLS refusal",
+      Object.assign(
+        new Error('new row violates row-level security policy for table "user_ai_preferences"'),
+        { code: "42501" },
+      ),
+    ],
+    [
+      "an authentication failure",
+      Object.assign(new Error("JWT expired"), { code: "PGRST301" }),
+    ],
+    ["a network failure", new TypeError("Failed to fetch")],
+    ["a timeout", Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" })],
+    [
+      "a malformed preference query",
+      Object.assign(new Error("column user_ai_preferences.nope does not exist"), {
+        code: "42703",
+      }),
+    ],
+    [
+      "a generic server error",
+      Object.assign(new Error("Internal Server Error"), { code: "500" }),
+    ],
+    ["an unknown error with no code", new Error("something went wrong")],
+  ];
+
+  for (const [description, error] of realFailures) {
+    it(`still fails the export on ${description}`, async () => {
+      install(
+        createSupabaseMock({
+          tables: baseTables({ user_ai_preferences: [preferenceRow()] }),
+          errors: { user_ai_preferences: error },
+        }),
+      );
+
+      await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+    });
+  }
+
+  it("still fails when a missing-object error names an UNRELATED table", async () => {
+    // Same SQLSTATE family, different object. Treating this as "the preference
+    // table is not installed" would hide a genuine schema problem elsewhere.
+    install(
+      createSupabaseMock({
+        tables: baseTables(),
+        errors: { user_ai_preferences: missingTable("some_other_table") },
+      }),
+    );
+
+    await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+
+  it("does not treat a missing IDENTITY table as a missing preference table", async () => {
+    // The two classifiers are separate on purpose: each names only its own
+    // objects, so neither can absorb the other's failures.
+    install(
+      createSupabaseMock({
+        tables: baseTables({ user_ai_preferences: [preferenceRow()] }),
+        errors: { user_ai_preferences: missingTable("author_identities") },
       }),
     );
 

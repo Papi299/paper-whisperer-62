@@ -397,6 +397,8 @@ Settings → **Danger zone** → Delete account. A destructive dialog requires t
 
 Deleting the `auth.users` row removes, via `ON DELETE CASCADE` foreign keys, every row in: `profiles`, `papers` (and therefore `paper_projects`, `paper_tags`, `paper_attachments`, `author_identity_links` by their own cascades), `projects`, `tags`, `keyword_pool`, `keyword_exclusion_pool`, `study_type_pool`, `study_type_exclusion_pool`, `synonym_pool`, `filter_presets`, `author_identities`, `author_identity_aliases`, `author_identity_merges`, `user_entitlements`, `usage_counters`, `usage_credits`, `user_storage_usage`, and `internal_user_access`. The cascade is pinned by a database test, `supabase/tests/database/008_account_deletion_cascade.test.sql` (referenced by `commercial-architecture.md` §6 item 7).
 
+**Addendum (2026-09-02, AI-MODEL-SELECTION-001A / C33).** The repository adds one further cascading user table, `user_ai_preferences` (a saved AI-model choice — one row per user, no free text, no credential). Its `ON DELETE CASCADE` and its removal alongside the account are pinned by the same suite `008`, together with the fact that the global `ai_model_catalog` row it referenced **survives** the deletion, since the catalog is product metadata rather than account data. **This table is not in Production**: migration `20260902120000` is not applied there, no Settings control exists, and no code path writes a preference — so today the row type exists in the repository only. The list above records what is deployed.
+
 ### 12.4 What is intentionally retained — the two evidenced exceptions
 
 | Table | Column | Behaviour | Consequence |
@@ -427,6 +429,8 @@ Every internal failure returns the **same** generic message (`GENERIC_FAILURE`),
 ### 12.7 Data export (relevant to portability rights)
 
 Settings → Account data produces one versioned ZIP containing the whole account: `manifest.json` plus JSON for papers (notes and author provenance included), projects, tags, both junction tables, filter presets, all four pools, attachment metadata, the four author-identity datasets, a non-secret profile projection, **and the attachment binaries**. The manifest carries no credential and no email; `pubmed_api_key` is excluded by explicit column projection. — [`src/lib/accountExport/`](../src/lib/accountExport/). **Class: VERIFIED.**
+
+**Addendum (2026-09-02, AI-MODEL-SELECTION-001A / C33).** The archive gains one singleton category, `data/user_ai_preferences.json`, carrying the user's saved AI-model choice: `user_id`, `preferred_model_id`, `created_at`, `updated_at`. It is exported from the moment the schema and its write RPC exist — `set_current_user_ai_model` is granted to `authenticated`, so a real row can exist without any Settings control, and a portability archive that omitted it would silently drop a choice the user made. **No preference exports as JSON `null`**, which is the meaningful "system default" state rather than an omission. The exported id is **not** resolved against `ai_model_catalog`: that table is global Paperlume product metadata, identical for every account, and stays permanently out of the archive. No credential, provider mechanism, entitlement or commercial field travels with the preference. The reader degrades to `null` for exactly one condition — a missing-object error naming `user_ai_preferences`, i.e. an environment that predates the migration — and every other failure still aborts the whole export. `ACCOUNT_EXPORT_VERSION` stays **2**: a new category file is additive and no existing file changed shape.
 
 ---
 

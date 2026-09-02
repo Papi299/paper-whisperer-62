@@ -9,6 +9,42 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      ai_model_catalog: {
+        Row: {
+          created_at: string
+          display_name: string
+          enabled: boolean
+          id: string
+          provider: string
+          provider_model: string
+          selectable: boolean
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          display_name: string
+          enabled?: boolean
+          id: string
+          provider: string
+          provider_model: string
+          selectable?: boolean
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          display_name?: string
+          enabled?: boolean
+          id?: string
+          provider?: string
+          provider_model?: string
+          selectable?: boolean
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       author_identities: {
         Row: {
           created_at: string
@@ -789,9 +825,39 @@ export type Database = {
         }
         Relationships: []
       }
+      user_ai_preferences: {
+        Row: {
+          created_at: string
+          preferred_model_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          preferred_model_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          preferred_model_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_ai_preferences_preferred_model_id_fkey"
+            columns: ["preferred_model_id"]
+            isOneToOne: false
+            referencedRelation: "ai_model_catalog"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_entitlements: {
         Row: {
           ai_lifetime_quota: number
+          ai_model_selection_enabled: boolean
           ai_monthly_quota: number
           billing_customer_id: string | null
           billing_provider: string | null
@@ -812,6 +878,7 @@ export type Database = {
         }
         Insert: {
           ai_lifetime_quota?: number
+          ai_model_selection_enabled?: boolean
           ai_monthly_quota?: number
           billing_customer_id?: string | null
           billing_provider?: string | null
@@ -832,6 +899,7 @@ export type Database = {
         }
         Update: {
           ai_lifetime_quota?: number
+          ai_model_selection_enabled?: boolean
           ai_monthly_quota?: number
           billing_customer_id?: string | null
           billing_provider?: string | null
@@ -892,6 +960,13 @@ export type Database = {
       }
       bulk_update_keywords: { Args: { updates: Json }; Returns: undefined }
       bulk_update_study_types: { Args: { updates: Json }; Returns: undefined }
+      clear_current_user_ai_model: {
+        Args: never
+        Returns: {
+          cleared: boolean
+          reason: string
+        }[]
+      }
       consume_ai_quota: {
         Args: { p_user_id: string }
         Returns: {
@@ -944,6 +1019,7 @@ export type Database = {
         Args: never
         Returns: {
           ai_quota_exempt: boolean
+          can_select_ai_model: boolean
           can_view_provider_quota: boolean
           is_internal: boolean
           labs_team_enabled: boolean
@@ -1031,6 +1107,17 @@ export type Database = {
           matched_notes: boolean
           matched_title: boolean
           paper_id: string
+        }[]
+      }
+      set_current_user_ai_model: {
+        Args: { p_model_id: string }
+        Returns: {
+          display_name: string
+          preferred_model_id: string
+          provider: string
+          reason: string
+          saved: boolean
+          updated_at: string
         }[]
       }
       set_paper_projects: {

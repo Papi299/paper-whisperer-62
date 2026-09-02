@@ -3,6 +3,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { fetchAllPages, type RangeableQuery } from "@/lib/fetchAllPages";
 import { fetchAllPagesInChunks } from "@/lib/fetchAllPagesInChunks";
 import { isAuthorIdentitySchemaMissing } from "@/lib/authorIdentityAvailability";
+import { isAiModelPreferenceSchemaMissing } from "@/lib/aiModelPreferenceAvailability";
 import { attachmentArchivePath, isSafeArchivePath } from "./sanitizeArchiveFilename";
 import {
   AccountExportError,
@@ -12,6 +13,7 @@ import {
   AUTHOR_IDENTITY_MERGE_EXPORT_COLUMNS,
   PAPER_EXPORT_COLUMNS,
   SAFE_PROFILE_COLUMNS,
+  USER_AI_PREFERENCE_EXPORT_COLUMNS,
   type AccountExportData,
   type ExportedAuthorIdentity,
   type ExportedAuthorIdentityAlias,
@@ -29,6 +31,7 @@ import {
   type ExportedStudyTypePool,
   type ExportedSynonymPool,
   type ExportedTag,
+  type ExportedUserAiPreference,
   type SafeExportProfile,
 } from "./types";
 
@@ -61,6 +64,7 @@ const AUTHOR_IDENTITIES_SELECT = AUTHOR_IDENTITY_EXPORT_COLUMNS.join(", ");
 const AUTHOR_IDENTITY_ALIASES_SELECT = AUTHOR_IDENTITY_ALIAS_EXPORT_COLUMNS.join(", ");
 const AUTHOR_IDENTITY_LINKS_SELECT = AUTHOR_IDENTITY_LINK_EXPORT_COLUMNS.join(", ");
 const AUTHOR_IDENTITY_MERGES_SELECT = AUTHOR_IDENTITY_MERGE_EXPORT_COLUMNS.join(", ");
+const USER_AI_PREFERENCE_SELECT = USER_AI_PREFERENCE_EXPORT_COLUMNS.join(", ");
 
 /**
  * `select("*")` is used only for tables with no secret column and no derived
@@ -206,6 +210,50 @@ async function fetchAuthorIdentityExportTables(
   };
 }
 
+/**
+ * Read the caller's saved AI-model preference, tolerating exactly one thing:
+ * this environment predating the migration that creates the table.
+ *
+ * WHY IT IS READ AT ALL. `set_current_user_ai_model` is granted to
+ * `authenticated`, so a real preference row can exist from the moment migration
+ * `20260902120000` is applied — a UI is not a precondition for user data. A
+ * full account export that omitted it would silently drop a choice the user
+ * made, which is the one failure mode this export exists to prevent.
+ *
+ * WHY A SINGLETON. `user_id` is the table's PRIMARY KEY, so "at most one row"
+ * is a schema guarantee. `maybeSingle()` reads that directly and yields `null`
+ * when the user has expressed no preference — which is itself the meaningful
+ * state, not an empty one.
+ *
+ * WHAT IS TOLERATED, AND ONLY THIS. A missing-object error naming
+ * `user_ai_preferences` returns `null`, so the export keeps working during the
+ * schema-before-code rollout window. Nothing else is: permission denied, an RLS
+ * refusal, an auth failure, a network error, a timeout, a malformed query or
+ * response, a missing UNRELATED table, a generic 4xx/5xx and any unknown error
+ * all propagate and fail the whole export. Once the table exists, a genuine read
+ * failure is never converted into "no preference" — the two look identical in
+ * the archive, and only one of them is true.
+ */
+async function fetchUserAiPreference(
+  userId: string,
+): Promise<ExportedUserAiPreference | null> {
+  const result = await supabase
+    .from("user_ai_preferences")
+    .select(USER_AI_PREFERENCE_SELECT)
+    // S2 scoping, exactly as every other owned read: RLS already restricts this
+    // to the caller's own row, and the predicate means the export never depends
+    // on that single control.
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (result.error) {
+    if (isAiModelPreferenceSchemaMissing(result.error)) return null;
+    throw result.error;
+  }
+
+  return (result.data as ExportedUserAiPreference | null) ?? null;
+}
+
 /** Read junction rows reachable from the user's own paper IDs. */
 async function fetchJunction<T>(
   table: "paper_projects" | "paper_tags",
@@ -251,6 +299,7 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
   let authorIdentityAliases: ExportedAuthorIdentityAlias[];
   let authorIdentityLinks: ExportedAuthorIdentityLink[];
   let authorIdentityMerges: ExportedAuthorIdentityMerge[];
+  let userAiPreference: ExportedUserAiPreference | null;
 
   try {
     // The profile projection lists its columns explicitly so `pubmed_api_key`
@@ -264,7 +313,7 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     if (profileResult.error) throw profileResult.error;
     profile = (profileResult.data as SafeExportProfile | null) ?? null;
 
-    const [coreTables, identityTables] = await Promise.all([
+    const [coreTables, identityTables, aiPreference] = await Promise.all([
       Promise.all([
         fetchOwnedTable<ExportedPaper>("papers", PAPERS_SELECT, userId, ["insert_order", "id"]),
         fetchOwnedTable<ExportedProject>("projects", ALL_COLUMNS, userId, ["created_at", "id"]),
@@ -287,6 +336,10 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
       // state of a correctly deployed environment. See
       // `fetchAuthorIdentityExportTables`.
       fetchAuthorIdentityExportTables(userId),
+      // Same shape of gate, its own narrow classifier: the preference table is
+      // the other object whose absence is an expected state of a correctly
+      // deployed environment during rollout. See `fetchUserAiPreference`.
+      fetchUserAiPreference(userId),
     ]);
 
     [
@@ -306,6 +359,7 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     authorIdentityAliases = identityTables.aliases;
     authorIdentityLinks = identityTables.links;
     authorIdentityMerges = identityTables.merges;
+    userAiPreference = aiPreference;
   } catch (error) {
     if (error instanceof AccountExportError) throw error;
     throw readFailure(error);
@@ -334,6 +388,13 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
 
   if (profile && profile.user_id !== userId) {
     throw integrityFailure("profiles returned a row belonging to another user");
+  }
+
+  // The preference is a singleton, so `assertOwnedRows` does not cover it — but
+  // it carries a `user_id` and therefore gets the same treatment: a row for
+  // anyone else must never be archived, whatever produced it.
+  if (userAiPreference && userAiPreference.user_id !== userId) {
+    throw integrityFailure("user_ai_preferences returned a row belonging to another user");
   }
 
   let paperProjects: ExportedPaperProject[];
@@ -443,6 +504,7 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     author_identity_aliases: authorIdentityAliases,
     author_identity_links: authorIdentityLinks,
     author_identity_merges: authorIdentityMerges,
+    user_ai_preferences: userAiPreference,
   };
 }
 

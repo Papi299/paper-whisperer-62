@@ -3,6 +3,7 @@ import { buildAccountExportManifest } from "../buildAccountExportManifest";
 import {
   ACCOUNT_EXPORT_CATEGORIES,
   ACCOUNT_EXPORT_COLLECTIONS,
+  ACCOUNT_EXPORT_SINGLETONS,
   ACCOUNT_EXPORT_FORMAT,
   ACCOUNT_EXPORT_VERSION,
   categoryArchivePath,
@@ -30,6 +31,7 @@ function emptyData(): AccountExportData {
     author_identity_aliases: [],
     author_identity_links: [],
     author_identity_merges: [],
+    user_ai_preferences: null,
   };
 }
 
@@ -134,7 +136,7 @@ describe("buildAccountExportManifest", () => {
     expect(JSON.stringify(manifest)).not.toContain("someone@example.com");
   });
 
-  it("covers every collection key with no extras", () => {
+  it("covers every collection and singleton key with no extras", () => {
     const manifest = buildAccountExportManifest(emptyData(), {
       userId: USER,
       generatedAt: new Date("2026-08-10T20:30:00.000Z"),
@@ -144,8 +146,33 @@ describe("buildAccountExportManifest", () => {
     for (const key of ACCOUNT_EXPORT_COLLECTIONS) {
       expect(manifest.categories, `${key} must be declared`).toHaveProperty(key);
     }
+    for (const key of ACCOUNT_EXPORT_SINGLETONS) {
+      expect(manifest.categories, `${key} must be declared`).toHaveProperty(key);
+    }
     expect(Object.keys(manifest.categories)).toHaveLength(
-      ACCOUNT_EXPORT_COLLECTIONS.length + 1,
+      ACCOUNT_EXPORT_COLLECTIONS.length + ACCOUNT_EXPORT_SINGLETONS.length,
     );
+  });
+
+  it("counts the AI model preference singleton as 1 when saved and 0 when not", () => {
+    const options = {
+      userId: USER,
+      generatedAt: new Date("2026-08-10T20:30:00.000Z"),
+      archivedAttachments: NO_ATTACHMENTS,
+    };
+
+    const absent = buildAccountExportManifest(emptyData(), options);
+    expect(absent.categories.user_ai_preferences.count).toBe(0);
+    expect(absent.categories.user_ai_preferences.path).toBe("data/user_ai_preferences.json");
+
+    const withPreference = emptyData();
+    withPreference.user_ai_preferences = {
+      user_id: USER,
+      preferred_model_id: "google/gemini-3.5-flash",
+      created_at: "2026-09-02T00:00:00Z",
+      updated_at: "2026-09-02T00:00:00Z",
+    };
+    const present = buildAccountExportManifest(withPreference, options);
+    expect(present.categories.user_ai_preferences.count).toBe(1);
   });
 });

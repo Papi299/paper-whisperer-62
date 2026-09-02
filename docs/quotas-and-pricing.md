@@ -50,6 +50,7 @@ Both Synonyms and Exclusions are currently user-accessible features in the codeb
 - A real monthly AI quota (350 / month at MVP baseline) instead of the 15-lifetime taste.
 - Larger storage and paper caps that reflect the working volume of an active researcher rather than the demo volume of someone evaluating.
 - Eligibility for **future** add-on AI credit packs (see §6) so a researcher doesn't get hard-blocked mid-project.
+- **AI model selection** (C33) — the ability to choose which AI model Paperlume uses, currently between **Gemini 3.5 Flash** and **Gemini 3.6 Flash**. **Status: foundation only.** The entitlement, model catalog and per-user preference exist and are enforced server-side (`user_entitlements.ai_model_selection_enabled`, active/trialing status required); **there is no Settings control yet and no AI operation consults the preference** — Free and Pro alike still run on the system default model today. Model choice is **not** metered separately: both models draw on the one `ai_analysis` allowance and neither changes any quota number. Selecting a model costs no additional provider credential — both are served by the same server-side Gemini key.
 
 ### Labs / Teams tier — what it is and is not
 

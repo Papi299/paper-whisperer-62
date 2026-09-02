@@ -17,6 +17,14 @@ import { queryKeys } from "@/lib/queryKeys";
  * by the RPC. It is retained as part of the approved server role contract and
  * the deferred provider-quota backend authorization design (owner decision
  * C29); no active frontend surface consumes it during the Free Tier phase.
+ *
+ * `canSelectAiModel` mirrors the `can_select_ai_model` column, which the server
+ * computes as `ai_model_selection_enabled AND plan_status IN
+ * ('active','trialing')` (owner decision C33). It is **advisory UX only**: the
+ * `set_current_user_ai_model` RPC re-checks the same entitlement itself, and a
+ * future runtime path must re-check it again before honouring a saved
+ * preference. No frontend surface consumes it yet — the Settings control is
+ * AI-MODEL-SELECTION-001C.
  */
 export type InternalRole = "owner" | "manager" | "user";
 
@@ -29,6 +37,7 @@ export interface CurrentUserAccess {
   planStatus: string | null;
   premiumTaxonomyEnabled: boolean;
   labsTeamEnabled: boolean;
+  canSelectAiModel: boolean;
 }
 
 /** Raw row shape returned by the RPC (SETOF → array in supabase-js). */
@@ -41,6 +50,7 @@ interface CurrentUserAccessRow {
   plan_status: string | null;
   premium_taxonomy_enabled: boolean | null;
   labs_team_enabled: boolean | null;
+  can_select_ai_model: boolean | null;
 }
 
 /**
@@ -57,6 +67,7 @@ export const DEFAULT_USER_ACCESS: CurrentUserAccess = {
   planStatus: null,
   premiumTaxonomyEnabled: false,
   labsTeamEnabled: false,
+  canSelectAiModel: false,
 };
 
 function normalizeRole(role: string | null | undefined): InternalRole {
@@ -81,6 +92,17 @@ function normalize(row: CurrentUserAccessRow): CurrentUserAccess {
     planStatus: row.plan_status ?? null,
     premiumTaxonomyEnabled: !!row.premium_taxonomy_enabled,
     labsTeamEnabled: !!row.labs_team_enabled,
+    // Mirrored from the server rather than re-derived from `plan`/`planStatus`:
+    // the RPC already ANDs the explicit entitlement flag with an active/trialing
+    // status, and recomputing that here would create a second, drifting
+    // definition of a rule the server owns.
+    //
+    // Compared strictly against `true` rather than coerced with `!!`. The column
+    // is a server boolean, so anything else — null, absent, a `"false"` string,
+    // a number — is a malformed row, and a malformed row must not grant a paid
+    // capability. `!!"false"` is `true`, which is exactly the failure this
+    // avoids.
+    canSelectAiModel: row.can_select_ai_model === true,
   };
 }
 
