@@ -17,35 +17,13 @@
  * those would turn "your data failed to load" into a silently empty screen, and
  * a graceful degradation that hides genuine faults is worse than a crash. Only
  * the "this object does not exist" family is treated as the compatibility case.
+ *
+ * The code/text matching itself lives in `missingDatabaseObject.ts`, shared with
+ * the other feature that needs the same judgement. What stays here is the part
+ * that is actually 001C-specific: the list of object names below.
  */
 
-/** The shape Supabase/PostgREST errors arrive in. Structural, not the SDK type. */
-interface PostgrestLikeError {
-  code?: string | null;
-  message?: string | null;
-  details?: string | null;
-  hint?: string | null;
-}
-
-/**
- * Postgres SQLSTATEs meaning "the thing you named does not exist".
- *
- *  * 42P01 undefined_table — the table is genuinely absent.
- *  * 42883 undefined_function — the RPC is genuinely absent.
- *  * 42704 undefined_object — raised by some paths for a missing object.
- */
-const MISSING_OBJECT_SQLSTATES = new Set(["42P01", "42883", "42704"]);
-
-/**
- * PostgREST's own codes for a name it cannot find in its schema cache.
- *
- *  * PGRST205 — table/view not found.
- *  * PGRST202 — function not found in the schema cache.
- *
- * These arrive instead of a SQLSTATE because PostgREST resolves the name before
- * it ever reaches Postgres, so they are the codes actually seen in practice.
- */
-const MISSING_SCHEMA_CACHE_CODES = new Set(["PGRST205", "PGRST202"]);
+import { isMissingDatabaseObjectError } from "./missingDatabaseObject";
 
 /** Every 001C object name, so a missing-object error elsewhere is not misread. */
 const IDENTITY_OBJECT_NAMES = [
@@ -70,18 +48,5 @@ const IDENTITY_OBJECT_NAMES = [
  * product, and reporting it as "identity subsystem not installed" would hide it.
  */
 export function isAuthorIdentitySchemaMissing(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-
-  const candidate = error as PostgrestLikeError;
-  const code = typeof candidate.code === "string" ? candidate.code : "";
-  if (!MISSING_OBJECT_SQLSTATES.has(code) && !MISSING_SCHEMA_CACHE_CODES.has(code)) {
-    return false;
-  }
-
-  const haystack = [candidate.message, candidate.details, candidate.hint]
-    .filter((part): part is string => typeof part === "string")
-    .join(" ")
-    .toLowerCase();
-
-  return IDENTITY_OBJECT_NAMES.some((name) => haystack.includes(name));
+  return isMissingDatabaseObjectError(error, IDENTITY_OBJECT_NAMES);
 }

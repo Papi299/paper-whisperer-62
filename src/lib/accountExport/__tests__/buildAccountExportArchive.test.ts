@@ -43,6 +43,7 @@ function emptyData(): AccountExportData {
     author_identity_aliases: [],
     author_identity_links: [],
     author_identity_merges: [],
+    user_ai_preferences: null,
   };
 }
 
@@ -199,6 +200,71 @@ describe("buildAccountExportArchive — category completeness", () => {
     expect(readJson(entries, categoryArchivePath("profile"))).toEqual(data.profile);
     expect(manifest.categories.profile.count).toBe(1);
     expect(manifest.categories.papers.count).toBe(0);
+  });
+
+  it("writes the saved AI model preference as its own singleton file", async () => {
+    // AI-MODEL-SELECTION-001A. The user's choice among Paperlume's approved
+    // models is their data and travels with the rest of the account.
+    const data = emptyData();
+    data.user_ai_preferences = {
+      user_id: USER,
+      preferred_model_id: "google/gemini-3.6-flash",
+      created_at: "2026-09-02T00:00:00Z",
+      updated_at: "2026-09-02T01:00:00Z",
+    };
+
+    const { blob, manifest } = await buildAccountExportArchive({
+      data,
+      userId: USER,
+      generatedAt: GENERATED_AT,
+      downloadAttachment: noAttachments,
+    });
+
+    const entries = await readArchive(blob);
+    expect(Object.keys(entries)).toContain("data/user_ai_preferences.json");
+    expect(readJson(entries, categoryArchivePath("user_ai_preferences"))).toEqual(
+      data.user_ai_preferences,
+    );
+    expect(manifest.categories.user_ai_preferences.count).toBe(1);
+
+    // Exactly the approved fields — no catalog row, provider model string,
+    // display name, credential or entitlement smuggled alongside the choice.
+    const written = readJson(entries, categoryArchivePath("user_ai_preferences")) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(written).sort()).toEqual(
+      ["created_at", "preferred_model_id", "updated_at", "user_id"],
+    );
+    for (const forbidden of [
+      "provider",
+      "provider_model",
+      "display_name",
+      "enabled",
+      "selectable",
+      "sort_order",
+    ]) {
+      expect(written, `${forbidden} must not be exported`).not.toHaveProperty(forbidden);
+    }
+    // The stable provider-qualified id is what preserves the decision.
+    expect(written.preferred_model_id).toBe("google/gemini-3.6-flash");
+  });
+
+  it("writes JSON null for an account with no AI model preference", async () => {
+    // `null` is the meaningful value, not an omission: it is what "no explicit
+    // preference — use the system default" looks like to a reader.
+    const { blob, manifest } = await buildAccountExportArchive({
+      data: emptyData(),
+      userId: USER,
+      generatedAt: GENERATED_AT,
+      downloadAttachment: noAttachments,
+    });
+
+    const entries = await readArchive(blob);
+    expect(Object.keys(entries)).toContain("data/user_ai_preferences.json");
+    expect(readJson(entries, categoryArchivePath("user_ai_preferences"))).toBeNull();
+    expect(strFromU8(entries["data/user_ai_preferences.json"]).trim()).toBe("null");
+    expect(manifest.categories.user_ai_preferences.count).toBe(0);
   });
 });
 

@@ -58,6 +58,16 @@ export const ACCOUNT_EXPORT_FORMAT = "paperlume-account-export" as const;
  * map keyed by category name, and a reader indexing the keys it knows is
  * unaffected by new ones.
  *
+ * DELIBERATELY STILL 2 FOR AI-MODEL-SELECTION-001A.
+ *
+ * Same case, one file smaller: `data/user_ai_preferences.json` is a whole new
+ * category, and no existing file gains, loses or redefines a field. A v2 reader
+ * parsing a v2-plus-one-category archive finds everything it already expects,
+ * byte-for-byte, and simply does not look for the new file. `manifest.json`
+ * gains one entry under `categories`, which — per the 001C reasoning above — is
+ * inherent to adding a category at all and therefore cannot be what makes an
+ * addition non-additive.
+ *
  * The next bump belongs to the next change that alters an existing file.
  */
 export const ACCOUNT_EXPORT_VERSION = 2 as const;
@@ -114,8 +124,15 @@ export const ACCOUNT_EXPORT_COLLECTIONS = [
  * Singleton categories — each is a single JSON value at `data/<key>.json`.
  * `profile` is an object when the row exists and `null` when it does not; the
  * file is always present.
+ *
+ * `user_ai_preferences` (AI-MODEL-SELECTION-001A) is a singleton rather than a
+ * collection because `user_id` is that table's PRIMARY KEY: at most one row per
+ * user is a schema property, not a convention. Its value is the preference
+ * object when the user has saved a choice and `null` when they have not — and
+ * `null` is meaningful rather than empty, since no preference is exactly what
+ * "use Paperlume's system default" looks like.
  */
-export const ACCOUNT_EXPORT_SINGLETONS = ["profile"] as const;
+export const ACCOUNT_EXPORT_SINGLETONS = ["profile", "user_ai_preferences"] as const;
 
 export type AccountExportCollectionKey = (typeof ACCOUNT_EXPORT_COLLECTIONS)[number];
 export type AccountExportSingletonKey = (typeof ACCOUNT_EXPORT_SINGLETONS)[number];
@@ -145,7 +162,7 @@ export const EXPECTED_ARCHIVE_JSON_PATHS: readonly string[] = [
  * omitted) so the boundary is reviewable, and asserted by test so a future
  * "export everything with a user_id" refactor fails loudly.
  *
- * Exclusion here has three distinct reasons, and they are not interchangeable:
+ * Exclusion here has exactly two admissible reasons, and neither is "not yet":
  *
  * 1. **Not user-authored account content.** Commercial entitlement internals,
  *    server-only accounting and authorization metadata. Exporting these would
@@ -153,10 +170,13 @@ export const EXPECTED_ARCHIVE_JSON_PATHS: readonly string[] = [
  *    portability.
  * 2. **Not account data at all.** Global product metadata that is identical for
  *    every user and belongs to nobody.
- * 3. **Deferred, not disclaimed.** Genuine user content that is not yet
- *    reachable by any user, so there is nothing to export and no reader to
- *    serve. This reason carries an obligation: it must be revisited by the task
- *    that makes the data settable.
+ *
+ * A table holding data the user authored belongs in the archive from the moment
+ * it can hold a row — not from the moment a UI makes it convenient to create
+ * one. "There is no screen for it yet" is not an exclusion reason: an
+ * authenticated write surface is an authenticated write surface, and an export
+ * that silently omits what one of them wrote is exactly the failure this
+ * contract exists to prevent.
  */
 export const ACCOUNT_EXPORT_EXCLUDED_TABLES = [
   // (1) Commercial / accounting / authorization internals.
@@ -169,20 +189,12 @@ export const ACCOUNT_EXPORT_EXCLUDED_TABLES = [
   "user_storage_usage",
 
   // (2) AI-MODEL-SELECTION-001A. The approved-model catalog is global product
-  // metadata with no `user_id` — the same rows for every account. It is not
-  // this user's data in any sense, so it is permanently out of scope.
+  // metadata with no `user_id` — the same rows for every account, authored by
+  // Paperlume and changed only by migration. It is not this user's data in any
+  // sense, so it is permanently out of scope. The user's own choice *among*
+  // those models is a different thing entirely, and it IS exported: see the
+  // `user_ai_preferences` singleton above.
   "ai_model_catalog",
-
-  // (3) AI-MODEL-SELECTION-001A. A saved AI-model preference IS user content —
-  // a setting the user chose — and this exclusion is a **deferral, not a claim
-  // that it does not belong in the archive**. As of 001A the table is
-  // unreachable: there is no Settings control, no other write path, and the
-  // only writer is an RPC no shipped code calls, so the table is empty for
-  // every account and exporting it would add an always-`null` file to every
-  // archive. `AI-MODEL-SELECTION-001C` — the task that makes the preference
-  // settable — must move this into `ACCOUNT_EXPORT_SINGLETONS`, since a setting
-  // the user can change is a setting the user can take with them. See C33.
-  "user_ai_preferences",
 ] as const;
 
 /* -------------------------------------------------------------------------
@@ -410,6 +422,56 @@ export type AuthorIdentityMergeColumnsAreExported = Exclude<
   : never;
 
 /* -------------------------------------------------------------------------
+ * AI model preference (AI-MODEL-SELECTION-001A) — explicit column list
+ * ---------------------------------------------------------------------- */
+
+/**
+ * The columns exported from `user_ai_preferences`.
+ *
+ * Every column of the table is here, because none of them is a secret or a
+ * derived artifact: the row records which approved model this user chose and
+ * when. `preferred_model_id` is the stable, provider-qualified catalog id
+ * (`google/gemini-3.5-flash`), which is the whole of the user's decision — it is
+ * sufficient to restore the choice and it names a model, not a mechanism.
+ *
+ * What deliberately does NOT travel with it: the `ai_model_catalog` row it
+ * references (global product metadata — see `ACCOUNT_EXPORT_EXCLUDED_TABLES`),
+ * the provider model string, any API key or secret name, and every entitlement
+ * or commercial field. Joining the catalog in to "helpfully" resolve the id
+ * would put Paperlume's product metadata into a user's personal archive and
+ * would make the exported preference go stale the moment the catalog changed.
+ */
+export const USER_AI_PREFERENCE_EXPORT_COLUMNS = [
+  "user_id",
+  "preferred_model_id",
+  "created_at",
+  "updated_at",
+] as const;
+
+export type UserAiPreferenceExportColumn =
+  (typeof USER_AI_PREFERENCE_EXPORT_COLUMNS)[number];
+
+export type ExportedUserAiPreference = Pick<
+  Tables["user_ai_preferences"]["Row"],
+  UserAiPreferenceExportColumn
+>;
+
+/**
+ * Compile-time exhaustiveness guard — see `ProfileColumnsAreClassified`. A
+ * column added to `user_ai_preferences` later must be classified deliberately
+ * rather than silently entering the archive or silently vanishing from it.
+ * There is no "deliberately excluded" counterpart because nothing in this table
+ * is a secret or a generated value; if that ever changes, add the excluded list
+ * here rather than dropping the guard.
+ */
+export type UserAiPreferenceColumnsAreExported = Exclude<
+  keyof Tables["user_ai_preferences"]["Row"],
+  UserAiPreferenceExportColumn
+> extends never
+  ? true
+  : never;
+
+/* -------------------------------------------------------------------------
  * Row shapes
  * ---------------------------------------------------------------------- */
 
@@ -453,6 +515,16 @@ export interface AccountExportData {
   author_identity_aliases: ExportedAuthorIdentityAlias[];
   author_identity_links: ExportedAuthorIdentityLink[];
   author_identity_merges: ExportedAuthorIdentityMerge[];
+  /**
+   * The user's saved AI-model choice, or `null` when they have none.
+   *
+   * `null` carries meaning here: it is what "no explicit preference — Paperlume
+   * uses its system default" looks like, and it is also the value produced in
+   * the narrow rollout window where this environment predates the migration
+   * that creates the table. Both serialize identically, and neither is an
+   * error.
+   */
+  user_ai_preferences: ExportedUserAiPreference | null;
 }
 
 /**

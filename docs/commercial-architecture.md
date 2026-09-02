@@ -214,6 +214,8 @@ Posture: SELECT-own policy plus a SELECT-only grant to `authenticated`; no clien
 
 **Downgrade semantics (durable).** A saved preference is **not** deleted when entitlement lapses; it goes **dormant**. The user keeps their choice if access returns, and no authorization gap is created because the future runtime path must re-check `can_select_ai_model` on every AI operation rather than infer permission from the row's existence.
 
+**Portability.** The saved preference is user-owned data and travels in the full account export as the singleton `data/user_ai_preferences.json` (`user_id`, `preferred_model_id`, `created_at`, `updated_at`), with JSON `null` when the user has no explicit choice. `ai_model_catalog` is not exported — it is Paperlume's product metadata, not the user's. See [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §12.7.
+
 **Runtime routing is not built.** `analyze-paper` and `suggest-paper-organization` still resolve the model solely through the global `GEMINI_MODEL` environment configuration and `supabase/functions/_shared/geminiModel.ts`; neither reads these tables. Wiring that up is AI-MODEL-SELECTION-001B. There is **no per-model API key** — both seeded Gemini models are served by the same existing server-side `GEMINI_API_KEY`, and provider credentials never reach the browser.
 
 ---

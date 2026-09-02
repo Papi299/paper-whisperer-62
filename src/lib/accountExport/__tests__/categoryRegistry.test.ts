@@ -5,6 +5,7 @@ import {
   ACCOUNT_EXPORT_COLLECTIONS,
   ACCOUNT_EXPORT_EXCLUDED_TABLES,
   ACCOUNT_EXPORT_SINGLETONS,
+  USER_AI_PREFERENCE_EXPORT_COLUMNS,
   EXPECTED_ARCHIVE_JSON_PATHS,
   MANIFEST_PATH,
   categoryArchivePath,
@@ -15,6 +16,7 @@ import {
   type AuthorIdentityMergeColumnsAreExported,
   type PaperColumnsAreClassified,
   type ProfileColumnsAreClassified,
+  type UserAiPreferenceColumnsAreExported,
 } from "../types";
 
 /**
@@ -32,10 +34,17 @@ type PublicTable = keyof Database["public"]["Tables"];
 /** Junction tables are exported, but under their own relationship categories. */
 type JunctionTable = "paper_projects" | "paper_tags";
 
-/** Compile-time: every public table is exported, excluded, or a junction. */
+/**
+ * Compile-time: every public table is exported, excluded, or a junction.
+ *
+ * Singleton keys are included because a singleton category is named after its
+ * table (`user_ai_preferences`); `profile` is the one exception, whose table is
+ * `profiles`, so that literal is spelled out.
+ */
 export type EveryTableIsClassified = Exclude<
   PublicTable,
   | (typeof ACCOUNT_EXPORT_COLLECTIONS)[number]
+  | (typeof ACCOUNT_EXPORT_SINGLETONS)[number]
   | "profiles"
   | (typeof ACCOUNT_EXPORT_EXCLUDED_TABLES)[number]
   | JunctionTable
@@ -69,6 +78,11 @@ describe("account export compile-time guards", () => {
 
   it("classifies every public table as exported, junction, or out of scope", () => {
     const guard: EveryTableIsClassified = true;
+    expect(guard).toBe(true);
+  });
+
+  it("exports every user_ai_preferences column", () => {
+    const guard: UserAiPreferenceColumnsAreExported = true;
     expect(guard).toBe(true);
   });
 
@@ -127,6 +141,10 @@ describe("account export category registry", () => {
         "author_identity_aliases",
         "author_identity_links",
         "author_identity_merges",
+        // AI-MODEL-SELECTION-001A. One additive singleton file, for the same
+        // reason and with the same version consequence: nothing existing
+        // changed shape, so ACCOUNT_EXPORT_VERSION stays 2.
+        "user_ai_preferences",
       ].sort(),
     );
   });
@@ -148,9 +166,49 @@ describe("account export category registry", () => {
     const collections = new Set<string>(ACCOUNT_EXPORT_COLLECTIONS);
     const singletons = new Set<string>(ACCOUNT_EXPORT_SINGLETONS);
 
-    expect(singletons).toEqual(new Set(["profile"]));
+    expect(singletons).toEqual(new Set(["profile", "user_ai_preferences"]));
     for (const key of collections) expect(singletons.has(key)).toBe(false);
     expect(collections.size + singletons.size).toBe(ACCOUNT_EXPORT_CATEGORIES.length);
+  });
+
+  it("exports the AI model preference as a singleton, not an excluded table", () => {
+    // AI-MODEL-SELECTION-001A-CORRECTION-01. `set_current_user_ai_model` is
+    // granted to `authenticated`, so a real preference row can exist the moment
+    // the migration is applied — a Settings screen is not a precondition for
+    // user data. An export that omitted it would silently drop a saved choice.
+    expect(ACCOUNT_EXPORT_SINGLETONS).toContain("user_ai_preferences");
+    expect(ACCOUNT_EXPORT_CATEGORIES).toContain("user_ai_preferences");
+    expect([...ACCOUNT_EXPORT_EXCLUDED_TABLES]).not.toContain("user_ai_preferences");
+    expect(ACCOUNT_EXPORT_COLLECTIONS as readonly string[]).not.toContain(
+      "user_ai_preferences",
+    );
+    expect(EXPECTED_ARCHIVE_JSON_PATHS).toContain("data/user_ai_preferences.json");
+    expect(categoryArchivePath("user_ai_preferences")).toBe(
+      "data/user_ai_preferences.json",
+    );
+  });
+
+  it("keeps the global model catalog out of the export", () => {
+    // The catalog is Paperlume's product metadata, identical for every account
+    // and changed only by migration. Exporting it would put our data in the
+    // user's archive and would make their saved choice go stale as it changed.
+    expect([...ACCOUNT_EXPORT_EXCLUDED_TABLES]).toContain("ai_model_catalog");
+    expect(ACCOUNT_EXPORT_CATEGORIES).not.toContain("ai_model_catalog");
+  });
+
+  it("exports only the approved, non-secret preference columns", () => {
+    expect([...USER_AI_PREFERENCE_EXPORT_COLUMNS]).toEqual([
+      "user_id",
+      "preferred_model_id",
+      "created_at",
+      "updated_at",
+    ]);
+    // Nothing that could carry a credential, a provider mechanism or commercial
+    // state may join the preference export.
+    for (const column of USER_AI_PREFERENCE_EXPORT_COLUMNS) {
+      expect(column).not.toMatch(/key|secret|token|credential|password/i);
+      expect(column).not.toMatch(/provider_model|entitle|plan|quota/i);
+    }
   });
 
   it("keeps every relationship category in the export", () => {
@@ -175,7 +233,7 @@ describe("account export category registry", () => {
     }
   });
 
-  it("declares the commercial, internal and model-selection tables as out of scope", () => {
+  it("declares the commercial, internal and catalog tables as out of scope", () => {
     expect([...ACCOUNT_EXPORT_EXCLUDED_TABLES].sort()).toEqual(
       [
         "internal_user_access",
@@ -185,13 +243,11 @@ describe("account export category registry", () => {
         "usage_credits",
         "user_entitlements",
         "user_storage_usage",
-        // AI-MODEL-SELECTION-001A. `ai_model_catalog` is global product metadata
-        // and is permanently out of scope; `user_ai_preferences` is genuine user
-        // content whose export is DEFERRED only while the preference is
-        // unreachable — 001C must promote it to a singleton category. Pinned
-        // here so that promotion is a deliberate edit rather than a silent one.
+        // AI-MODEL-SELECTION-001A. The approved-model catalog is global product
+        // metadata — the same rows for every account — so it is permanently out
+        // of scope. `user_ai_preferences` is deliberately NOT here: the user's
+        // own choice among those models is their data and is exported.
         "ai_model_catalog",
-        "user_ai_preferences",
       ].sort(),
     );
 
