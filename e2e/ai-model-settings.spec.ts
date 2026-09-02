@@ -18,7 +18,12 @@ import { waitForDashboard } from "./helpers";
  * No Gemini request is made anywhere in this file, and no Edge Function is
  * served: the spec exercises preference persistence and the rendered UI only.
  * The entitled test ends by resetting to Paperlume's default, and the lifecycle
- * then proves with an elevated client that the preference row is really gone.
+ * then proves out-of-band that the preference row is really gone — by signing in
+ * as that same disposable account and reading `user_ai_preferences` through its
+ * own authenticated SELECT-own path. It is deliberately NOT an elevated read:
+ * migration `20260902120000` revokes `service_role` on that table, so the saved
+ * model is readable only by its owner, and the fixture honours that rather than
+ * working around it.
  */
 
 const CLIENT_MODULE_PATH = "/src/integrations/supabase/client.ts";
@@ -268,7 +273,9 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
     await expect(dialog.getByRole("combobox", { name: "AI model" })).toHaveText(DEFAULT_LABEL);
     await closeSettings(page);
 
-    // The lifecycle asserts the privileged half afterwards: that the reset
-    // really removed the `user_ai_preferences` row.
+    // The lifecycle re-checks this out-of-band afterwards: that the reset
+    // really removed the `user_ai_preferences` row. It reads that row as the
+    // account itself, under the SELECT-own policy — not with the elevated key,
+    // which 001A revokes on this table.
   });
 });

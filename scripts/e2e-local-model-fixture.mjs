@@ -17,6 +17,17 @@
  * preference row belonging to this account only; no seeded identity ever holds
  * a `user_ai_preferences` row.
  *
+ * **Two different levels of access, deliberately.** Fixture *administration*
+ * uses the local elevated (service-role) client, because only it can do those
+ * things: creating and deleting the disposable Auth user, and writing the
+ * account's `user_entitlements.ai_model_selection_enabled` flag. Preference
+ * *verification* does not, and must not: migration `20260902120000` revokes
+ * every privilege on `user_ai_preferences` from `service_role` on purpose, so
+ * both the before and after checks sign in as the disposable account with the
+ * local anon client and read that account's own row through the ordinary
+ * authenticated SELECT-own RLS path (`readOwnPreference`). Granting
+ * `service_role` back to make this easier would undo a real security property.
+ *
  * Hard safety rules (mirroring scripts/e2e-local-delete-fixture.mjs):
  *   - only ever runs against a validated loopback Supabase API URL, checked
  *     before any credential is used and before any user is created;
@@ -178,9 +189,11 @@ export async function provisionEntitledModelAccount({
  * Authoritative post-run check plus teardown.
  *
  * The spec's last action resets the account to Paperlume's default, so the
- * preference row must be gone; that is asserted here with the elevated key
- * before the account is removed, because the browser can only observe the
- * rendered control.
+ * preference row must be gone. The browser can only observe the rendered
+ * control, so that claim is re-checked here against the database — but through
+ * the account's OWN authenticated SELECT-own read (`readOwnPreference`), never
+ * with the elevated key, which 001A deliberately revokes on this table. The
+ * elevated key is used only afterwards, to delete the disposable Auth user.
  */
 export async function assertModelAccountResetAndRemove({
   apiUrl,

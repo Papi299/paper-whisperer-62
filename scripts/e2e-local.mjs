@@ -503,9 +503,12 @@ async function cmdRun(specArgs) {
       log("account-deletion E2E verified: disposable account fully removed.");
     }
 
-    // The browser can only observe the rendered control; this asserts what only
-    // an elevated local client can — that the spec's final reset really removed
-    // the preference row — and then removes the disposable account.
+    // The browser can only observe the rendered control, so the reset is
+    // re-checked against the database here. Unlike the deletion proof above,
+    // this is NOT an elevated read: `service_role` is revoked on
+    // `user_ai_preferences` by 001A, so the fixture signs in as the disposable
+    // account and reads its own row under the SELECT-own policy. The elevated
+    // key is used only to delete the account afterwards.
     if (modelAccount) {
       await assertModelAccountResetAndRemove({
         apiUrl,
