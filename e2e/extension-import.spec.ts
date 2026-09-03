@@ -40,6 +40,11 @@ import { getPaperCount, waitForDashboard, createProject, createTag, deleteProjec
  *     yet run migration 20260903180000 returns — causes no additive RPC call at
  *     all and is reported as not applied. This is the pre-migration
  *     compatibility proof, run against the real route;
+ *   • a differently-cased DOI handoff still lands on the paper that already
+ *     exists and creates no second row. Note what this is and is not: the
+ *     canonical normalization step lowercases DOI before the insert, so this is
+ *     an END-TO-END result about the whole pipeline, not an isolated proof that
+ *     the SQL resolver folds case. That proof belongs to pgTAP suite 013;
  *   • two rapid clicks cannot start two imports;
  *   • an assignment RPC that fails after a successful insert never produces copy
  *     claiming the assignment succeeded (CORRECTION-01, finding 1);
@@ -86,11 +91,18 @@ const DOI_TITLE = "C1-E2E-Extension-Import-Delta";
 /**
  * The SAME DOI, differing only in letter case.
  *
- * `idx_papers_user_doi_unique` is on `lower(doi)`, and the duplicate resolver
- * mirrors that index exactly. Handing the route this form proves the resolution
- * folds case the way the database does — and it survives the handoff parser
- * unchanged, because that parser round-trips a DOI name rather than
- * normalising it.
+ * The handoff parser round-trips a DOI *name* rather than normalising it, so
+ * this form reaches the route intact and is displayed as typed. Canonical
+ * normalization then lowercases the DOI (`normalizePaperData`) before the
+ * insert payload is built, so by the time `safe_bulk_insert_papers` sees it,
+ * the case difference is already gone.
+ *
+ * That is deliberately worth testing, and it is worth being precise about what
+ * it tests: this exercises the WHOLE product path for a differently-cased DOI
+ * handoff, not the SQL resolver's case branch in isolation. The isolated proof
+ * that the resolver itself mirrors `lower(doi)` — mixed-case data persisted,
+ * differently-cased input handed straight to the RPC, no application layer in
+ * between — belongs to `supabase/tests/database/013_import_duplicate_resolution.test.sql`.
  */
 const DOI_UPPERCASE = "10.5555/C1-E2E-Extension-Import-Delta";
 const RETRY_PMID = "900000102";
@@ -187,8 +199,8 @@ const METADATA_BY_IDENTIFIER: Record<string, Record<string, unknown>> = {
     source: "pubmed",
   },
   // The same paper, with its DOI stated in the other letter case. Everything
-  // else matches the lowercase entry, so the only thing that can make the
-  // import behave differently is the case folding itself.
+  // else matches the lowercase entry, so letter case is the only variable — any
+  // difference in outcome would have to come from how the pipeline handles it.
   [DOI_UPPERCASE]: {
     identifier: DOI_UPPERCASE,
     title: DOI_TITLE,
@@ -1094,7 +1106,7 @@ test.describe("Extension import handoff", () => {
     await expect(paperRow(page, DOI_TITLE)).toHaveCount(1, { timeout: 30_000 });
   });
 
-  test("resolves a DOI duplicate, and folds its case exactly as the index does", async ({
+  test("accepts a differently-cased DOI handoff without creating a second paper", async ({
     page,
   }) => {
     // The DOI half of the deterministic path, on the paper the double-click test
@@ -1102,13 +1114,39 @@ test.describe("Extension import handoff", () => {
     // something to preserve:
     //
     //   1. the DOI as stored → duplicate resolved → the Tag is added;
-    //   2. the SAME DOI in different letter case → still resolved, because
-    //      `idx_papers_user_doi_unique` is on `lower(doi)` and the resolver
-    //      mirrors that index → the Project is added AND the Tag survives.
+    //   2. the SAME DOI in different letter case → still resolved, and the
+    //      Project is added AND the Tag survives.
     //
-    // Step 2 is the one that could not pass by accident: nothing else in the
-    // library carries that identifier, so a case-sensitive resolver would find
-    // no candidate and refuse to assign.
+    // What step 2 proves, stated precisely. PaperLume's canonical normalization
+    // lowercases the DOI (`normalizePaperData`) before the insert payload
+    // reaches `safe_bulk_insert_papers`, and this route always normalizes —
+    // `useNormalizationConfig` returns a config rather than `undefined`, and the
+    // Import control stays unusable until the pools are ready. So this run does
+    // NOT isolate the SQL resolver's case branch, and it must not be cited as
+    // proof of it: the case difference has already been canonicalised by the
+    // time the RPC is called.
+    //
+    // What it does prove is the product-level property, end to end: a
+    // differently-cased DOI handoff survives the real parser, the real metadata
+    // path, the real normalization and the real duplicate resolution, lands on
+    // the paper that already exists, gains the requested taxonomy, keeps what it
+    // had, and creates no second row.
+    //
+    // And the two layers that handle DOI case here are REDUNDANT, which bounds
+    // this test in the other direction too. The stored row was inserted through
+    // the same normalizing pipeline, so it holds the lowercase form; drop
+    // `lower()` from the resolver and the already-lowercased payload still
+    // matches exactly, while dropping `.toLowerCase()` from normalization still
+    // collides against an index that folds. Either single regression leaves this
+    // test green. It fails when BOTH layers lose case handling, or when parsing,
+    // duplicate resolution or additive assignment break more broadly — so it is
+    // a defence-in-depth and pipeline-integrity check, not a case-folding
+    // attribution for either layer on its own.
+    //
+    // The isolated SQL-level proof that the resolver mirrors
+    // `idx_papers_user_doi_unique`'s `lower(doi)` semantics lives in
+    // `supabase/tests/database/013_import_duplicate_resolution.test.sql`, which
+    // persists mixed-case DOI data and calls the RPC directly.
     const standIn = await installMetadataStandIn(page);
     const rpcs = recordRpcCalls(page);
 
@@ -1124,9 +1162,10 @@ test.describe("Extension import handoff", () => {
 
     // ── 2. The same DOI, different case ──────────────────────────────────────
     await openReadyHandoff(page, "doi", DOI_UPPERCASE);
-    // The route carries the identifier through unchanged — it is not silently
-    // lowercased on the way in, so the collision really is decided by the
-    // database's own folding.
+    // The route carries the identifier through unchanged and shows it as typed —
+    // the handoff parser round-trips a DOI name rather than rewriting it. Case
+    // canonicalisation happens later, inside normalization, on the way to the
+    // insert; this assertion pins the parser's fidelity, not the resolver's.
     await expect(identifierValue(page)).toHaveText(DOI_UPPERCASE);
     await selectTaxonomy(page, { project: PROJECT_NAME });
     await importButton(page).click();
