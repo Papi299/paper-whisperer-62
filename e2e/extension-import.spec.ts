@@ -9,9 +9,15 @@ import { getPaperCount, waitForDashboard, createProject, createTag, deleteProjec
  * needs the local Edge handler and never needs PubMed or Crossref. Everything on
  * either side of that one response is the real product: the real route, the real
  * session, the real `PoolsProvider` and normalization config, the real
- * `bulkImportPapers`, the real `safe_bulk_insert_papers` and the real
- * `bulk_set_paper_projects` / `bulk_set_paper_tags` against the ephemeral local
+ * `bulkImportPapers`, the real `safe_bulk_insert_papers`, the real
+ * `bulk_set_paper_projects` / `bulk_set_paper_tags` and the real
+ * `bulk_add_paper_projects` / `bulk_add_paper_tags` against the ephemeral local
  * database. Nothing is stubbed in JavaScript.
+ *
+ * Two tests additionally intervene at the PostgREST boundary — one fails a
+ * single named RPC, one strips the resolved duplicate id out of a real
+ * `safe_bulk_insert_papers` response to reproduce the older schema. Both leave
+ * every other request untouched and real.
  *
  * The properties under test are the ones a review cannot establish by reading:
  *
@@ -22,8 +28,23 @@ import { getPaperCount, waitForDashboard, createProject, createTag, deleteProjec
  *   • a confirmed import goes through the canonical importer and its Project and
  *     Tag selection really lands on the new row — both asserted independently
  *     against persisted state;
- *   • a duplicate is reported as such and the selection is really NOT applied to
- *     the paper already in the library — asserted against the row, not the copy;
+ *   • a duplicate whose identity the database can PROVE has the selection added
+ *     to the paper already in the library, additively — the memberships it
+ *     already had are still there afterwards, asserted against the row rather
+ *     than the copy, which is the property a replace-all setter would break;
+ *   • a duplicate with no selection writes nothing at all;
+ *   • when one of the two additive RPCs fails, the page does not claim that
+ *     category succeeded, the other category still lands, and the paper keeps
+ *     everything it already had;
+ *   • a duplicate result carrying NO id — exactly what a database that has not
+ *     yet run migration 20260903180000 returns — causes no additive RPC call at
+ *     all and is reported as not applied. This is the pre-migration
+ *     compatibility proof, run against the real route;
+ *   • a differently-cased DOI handoff still lands on the paper that already
+ *     exists and creates no second row. Note what this is and is not: the
+ *     canonical normalization step lowercases DOI before the insert, so this is
+ *     an END-TO-END result about the whole pipeline, not an isolated proof that
+ *     the SQL resolver folds case. That proof belongs to pgTAP suite 013;
  *   • two rapid clicks cannot start two imports;
  *   • an assignment RPC that fails after a successful insert never produces copy
  *     claiming the assignment succeeded (CORRECTION-01, finding 1);
@@ -67,6 +88,23 @@ const PMID = "900000101";
 const PMID_TITLE = "C1-E2E-Extension-Import-Alpha";
 const DOI = "10.5555/c1-e2e-extension-import-delta";
 const DOI_TITLE = "C1-E2E-Extension-Import-Delta";
+/**
+ * The SAME DOI, differing only in letter case.
+ *
+ * The handoff parser round-trips a DOI *name* rather than normalising it, so
+ * this form reaches the route intact and is displayed as typed. Canonical
+ * normalization then lowercases the DOI (`normalizePaperData`) before the
+ * insert payload is built, so by the time `safe_bulk_insert_papers` sees it,
+ * the case difference is already gone.
+ *
+ * That is deliberately worth testing, and it is worth being precise about what
+ * it tests: this exercises the WHOLE product path for a differently-cased DOI
+ * handoff, not the SQL resolver's case branch in isolation. The isolated proof
+ * that the resolver itself mirrors `lower(doi)` — mixed-case data persisted,
+ * differently-cased input handed straight to the RPC, no application layer in
+ * between — belongs to `supabase/tests/database/013_import_duplicate_resolution.test.sql`.
+ */
+const DOI_UPPERCASE = "10.5555/C1-E2E-Extension-Import-Delta";
 const RETRY_PMID = "900000102";
 const RETRY_TITLE = "C1-E2E-Extension-Import-Echo";
 const ASSIGN_FAIL_PMID = "900000103";
@@ -88,6 +126,7 @@ const FIXTURE_TITLES = [
 const PROJECT_NAME = "C1-E2E-Ext-Project";
 const OTHER_PROJECT_NAME = "C1-E2E-Ext-Other-Project";
 const TAG_NAME = "C1-E2E-Ext-Tag";
+const OTHER_TAG_NAME = "C1-E2E-Ext-Other-Tag";
 
 /** `PaperMetadata` records the stand-in returns, keyed by requested identifier. */
 const METADATA_BY_IDENTIFIER: Record<string, Record<string, unknown>> = {
@@ -158,6 +197,25 @@ const METADATA_BY_IDENTIFIER: Record<string, Record<string, unknown>> = {
     pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${ASSIGN_FAIL_PMID}/`,
     journal_url: null,
     source: "pubmed",
+  },
+  // The same paper, with its DOI stated in the other letter case. Everything
+  // else matches the lowercase entry, so letter case is the only variable — any
+  // difference in outcome would have to come from how the pipeline handles it.
+  [DOI_UPPERCASE]: {
+    identifier: DOI_UPPERCASE,
+    title: DOI_TITLE,
+    authors: ["Delta, D"],
+    year: 2022,
+    journal: "Journal of Deterministic E2E Handoff",
+    pmid: null,
+    doi: DOI_UPPERCASE,
+    abstract: null,
+    keywords: [],
+    mesh_terms: [],
+    substances: [],
+    study_type: null,
+    journal_url: `https://doi.org/${DOI_UPPERCASE}`,
+    source: "crossref",
   },
   [CONTEXT_FAIL_PMID]: {
     identifier: CONTEXT_FAIL_PMID,
@@ -300,6 +358,66 @@ async function failRpc(page: Page, rpcName: string): Promise<{ attempts: number 
   return state;
 }
 
+/**
+ * Record which PostgREST RPCs the page invoked, without intercepting any of them.
+ *
+ * A listener rather than a route, so every request still reaches the real local
+ * database. The point of most of these assertions is a NEGATIVE — that a
+ * `bulk_add_*` call was never made — and a negative is only meaningful if the
+ * observation could not itself have prevented the call.
+ */
+function recordRpcCalls(page: Page): { names: string[] } {
+  const names: string[] = [];
+  page.on("request", (request) => {
+    const match = /\/rest\/v1\/rpc\/([A-Za-z0-9_]+)$/.exec(new URL(request.url()).pathname);
+    if (match && request.method() !== "OPTIONS") names.push(match[1]);
+  });
+  return { names };
+}
+
+/**
+ * Reproduce the PRE-MIGRATION database, at the one place the two differ.
+ *
+ * A database that has not yet run 20260903180000 answers every duplicate with
+ * `{ status: "duplicate" }` and no `id`. This forwards the real RPC call to the
+ * real local database, then deletes `id` from any duplicate row in the real
+ * response — so normalization, insertion, per-row isolation and every other
+ * result stay exactly as the current schema produced them, and the only
+ * difference is the field the older schema did not have.
+ *
+ * That makes this the deployment-order proof: if the client can be shown to
+ * write nothing when the id is absent, merging the web change before the
+ * migration is applied cannot call a function that does not exist yet.
+ */
+async function stripResolvedDuplicateIds(page: Page): Promise<{ stripped: number }> {
+  const state = { stripped: 0 };
+
+  await page.route(
+    (url) => url.pathname.endsWith("/rpc/safe_bulk_insert_papers"),
+    async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: STAND_IN_CORS_HEADERS, body: "" });
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as unknown;
+      const rows = Array.isArray(body) ? body : [];
+      const rewritten = rows.map((row) => {
+        const record = row as Record<string, unknown>;
+        if (record?.status === "duplicate" && "id" in record) {
+          state.stripped++;
+          const { id: _dropped, ...withoutId } = record;
+          return withoutId;
+        }
+        return row;
+      });
+      await route.fulfill({ response, json: rewritten });
+    },
+  );
+
+  return state;
+}
+
 /** The PostgREST tables that back the three normalization pools. */
 const NORMALIZATION_POOL_TABLES = ["keyword_pool", "study_type_pool", "synonym_pool"];
 
@@ -385,6 +503,26 @@ const importButton = (page: Page) => page.getByTestId("handoff-import");
 const retryButton = (page: Page) => page.getByTestId("handoff-retry");
 const contextError = (page: Page) => page.getByTestId("handoff-context-error");
 const contextRetryButton = (page: Page) => page.getByTestId("handoff-context-retry");
+const duplicateBox = (page: Page) => page.getByTestId("handoff-duplicate");
+const duplicateAssignment = (page: Page) =>
+  page.getByTestId("handoff-duplicate-assignment");
+
+/** Pick one Project and/or one Tag in the shared assign-on-import selector. */
+async function selectTaxonomy(
+  page: Page,
+  { project, tag }: { project?: string; tag?: string },
+) {
+  if (project) {
+    await page.getByRole("button", { name: /^Projects/ }).click();
+    await page.getByRole("option", { name: project }).click();
+    await page.keyboard.press("Escape");
+  }
+  if (tag) {
+    await page.getByRole("button", { name: /^Tags/ }).click();
+    await page.getByRole("option", { name: tag }).click();
+    await page.keyboard.press("Escape");
+  }
+}
 
 /** Open the handoff route and wait for the confirm control to become usable. */
 async function openReadyHandoff(page: Page, kind: "pmid" | "doi", value: string) {
@@ -457,6 +595,7 @@ test.describe("Extension import handoff", () => {
     await createProject(page, PROJECT_NAME);
     await createProject(page, OTHER_PROJECT_NAME);
     await createTag(page, TAG_NAME);
+    await createTag(page, OTHER_TAG_NAME);
 
     await context.close();
   });
@@ -473,6 +612,7 @@ test.describe("Extension import handoff", () => {
     await deleteProject(page, PROJECT_NAME);
     await deleteProject(page, OTHER_PROJECT_NAME);
     await deleteTag(page, TAG_NAME);
+    await deleteTag(page, OTHER_TAG_NAME);
 
     await context.close();
   });
@@ -753,34 +893,186 @@ test.describe("Extension import handoff", () => {
     expect(standIn.invocations).toHaveLength(0);
   });
 
-  test("reports a duplicate and does not assign the selection to the existing paper", async ({ page }) => {
+  test("adds the selection to a resolved duplicate WITHOUT removing what it already had", async ({
+    page,
+  }) => {
+    // CHROME-EXTENSION-IMPORT-001D. Before this change the route reported the
+    // duplicate and explicitly did not apply the selection, because
+    // `safe_bulk_insert_papers` returned no paper id and there was nothing safe
+    // to assign to. It now returns the id when exactly one owned row matches
+    // the attempted PMID, and the route adds to that row.
+    //
+    // The load-bearing half is what SURVIVES. The paper already carries
+    // PROJECT_NAME and TAG_NAME from the earlier import; a replace-all setter
+    // called with this handoff's selection would delete both, and the row
+    // assertions below are what separates the additive RPC from the setter.
     const standIn = await installMetadataStandIn(page);
+    const rpcs = recordRpcCalls(page);
 
     await openReadyHandoff(page, "pmid", PMID);
+    // DIFFERENT Project and Tag from the ones the paper already has, so a green
+    // run cannot be produced by assigning the same things twice.
+    await selectTaxonomy(page, { project: OTHER_PROJECT_NAME, tag: OTHER_TAG_NAME });
 
-    // A DIFFERENT project this time, so the assertion below distinguishes
-    // "assignment was skipped" from "assignment happened to be the same".
-    await page.getByRole("button", { name: /^Projects/ }).click();
-    await page.getByRole("option", { name: OTHER_PROJECT_NAME }).click();
-    await page.keyboard.press("Escape");
+    await importButton(page).click();
+
+    // Still a duplicate: nothing was inserted, and the page never claims it was.
+    await expect(page.getByText("This paper is already in your library")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(duplicateBox(page).getByText("No new paper was added")).toBeVisible();
+    await expect(page.getByText("Added to your library")).toHaveCount(0);
+
+    // …and it now truthfully says the selection landed on the existing paper.
+    await expect(duplicateAssignment(page)).toContainText(/has been\s+applied/i);
+    await expect(duplicateAssignment(page)).toContainText(/already filed under was kept/i);
+    await expect(page.getByText(/not applied/i)).toHaveCount(0);
+
+    expect(standIn.invocations).toHaveLength(1);
+    expect(standIn.providerRequests).toEqual([]);
+
+    // The ADDITIVE RPCs were used, and the replace-all setters were not. This is
+    // asserted at the wire, not inferred from the resulting state, because a
+    // setter called with a superset would leave identical rows behind.
+    expect(rpcs.names).toContain("bulk_add_paper_projects");
+    expect(rpcs.names).toContain("bulk_add_paper_tags");
+    expect(rpcs.names).not.toContain("bulk_set_paper_projects");
+    expect(rpcs.names).not.toContain("bulk_set_paper_tags");
+
+    // ── Persisted state: all four memberships, and still exactly one row ─────
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const row = paperRow(page, PMID_TITLE);
+    await expect(row).toHaveCount(1, { timeout: 30_000 });
+    await expect(row.getByText(OTHER_PROJECT_NAME)).toBeVisible();
+    await expect(row.getByText(OTHER_TAG_NAME)).toBeVisible();
+    // The two it already had — the assertion a replace-all setter would fail.
+    await expect(row.getByText(PROJECT_NAME)).toBeVisible();
+    await expect(row.getByText(TAG_NAME)).toBeVisible();
+  });
+
+  test("a duplicate with no selection writes nothing at all", async ({ page }) => {
+    // The same paper, now carrying four memberships. With nothing selected there
+    // is no assignment to make, so the route must issue no additive RPC — an
+    // empty additive call would be harmless but is still a write nobody asked
+    // for, and the row must come back byte-identical.
+    const standIn = await installMetadataStandIn(page);
+    const rpcs = recordRpcCalls(page);
+
+    await openReadyHandoff(page, "pmid", PMID);
+    await importButton(page).click();
+
+    await expect(page.getByText("This paper is already in your library")).toBeVisible({
+      timeout: 60_000,
+    });
+    // No assignment sentence at all — there is nothing to report.
+    await expect(duplicateAssignment(page)).toHaveCount(0);
+
+    expect(standIn.invocations).toHaveLength(1);
+    expect(rpcs.names).not.toContain("bulk_add_paper_projects");
+    expect(rpcs.names).not.toContain("bulk_add_paper_tags");
+    expect(rpcs.names).not.toContain("bulk_set_paper_projects");
+    expect(rpcs.names).not.toContain("bulk_set_paper_tags");
+
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const row = paperRow(page, PMID_TITLE);
+    await expect(row).toHaveCount(1, { timeout: 30_000 });
+    for (const name of [PROJECT_NAME, OTHER_PROJECT_NAME, TAG_NAME, OTHER_TAG_NAME]) {
+      await expect(row.getByText(name)).toBeVisible();
+    }
+  });
+
+  test("never claims a duplicate assignment succeeded when its additive RPC failed", async ({
+    page,
+  }) => {
+    // Project and Tag are separate RPCs that fail separately, so a partial
+    // outcome must be described as a partial outcome. The target here is the
+    // paper from the assignment-failure import above: it carries TAG_NAME and
+    // deliberately NOT PROJECT_NAME, and that pre-existing Tag must survive a
+    // run in which the Tag RPC is the one that fails.
+    const standIn = await installMetadataStandIn(page);
+    const tagRpc = await failRpc(page, "bulk_add_paper_tags");
+
+    await openReadyHandoff(page, "pmid", ASSIGN_FAIL_PMID);
+    await selectTaxonomy(page, { project: OTHER_PROJECT_NAME, tag: OTHER_TAG_NAME });
 
     await importButton(page).click();
 
     await expect(page.getByText("This paper is already in your library")).toBeVisible({
       timeout: 60_000,
     });
-    await expect(page.getByText(/not applied/i)).toBeVisible();
 
-    // The importer ran and answered duplicate — it was not short-circuited.
+    // The Project landed and is reported as applied; the Tag did not and is
+    // reported as not applied. Neither statement is made about the other.
+    await expect(duplicateAssignment(page)).toContainText(/1 project selection has been/i);
+    await expect(duplicateAssignment(page)).toContainText(/1 tag selection could/i);
+    await expect(duplicateAssignment(page)).toContainText(/not be applied/i);
+
+    expect(standIn.invocations).toHaveLength(1);
+    // One attempt — the page invents no retry of its own to "fix" the failure.
+    expect(tagRpc.attempts).toBe(1);
+
+    // ── The reality the copy describes, asserted against the row ─────────────
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const row = paperRow(page, ASSIGN_FAIL_TITLE);
+    // Still exactly one row: a duplicate never inserts a second paper, and a
+    // failed assignment never deletes the one that was already there.
+    await expect(row).toHaveCount(1, { timeout: 30_000 });
+    await expect(row.getByText(OTHER_PROJECT_NAME)).toBeVisible();
+    await expect(row.getByText(TAG_NAME)).toBeVisible();
+    await expect(row.getByText(OTHER_TAG_NAME)).toHaveCount(0);
+  });
+
+  test("calls no additive RPC when the duplicate result carries no id", async ({ page }) => {
+    // THE DEPLOYMENT-ORDER PROOF, run against the real route.
+    //
+    // Production runs the pre-migration `safe_bulk_insert_papers` until that
+    // migration is applied, and it answers every duplicate without an id. This
+    // reproduces exactly that by deleting the id from the real response, and
+    // requires that the client then writes nothing — so shipping the web change
+    // first cannot call a `bulk_add_*` function the database does not have.
+    const standIn = await installMetadataStandIn(page);
+    const rpcs = recordRpcCalls(page);
+    const stripper = await stripResolvedDuplicateIds(page);
+
+    await openReadyHandoff(page, "pmid", PMID);
+    await selectTaxonomy(page, { project: PROJECT_NAME, tag: TAG_NAME });
+
+    await importButton(page).click();
+
+    await expect(page.getByText("This paper is already in your library")).toBeVisible({
+      timeout: 60_000,
+    });
+
+    // The interception really fired on a really-resolved duplicate — otherwise
+    // this test would pass by testing nothing.
+    expect(stripper.stripped).toBe(1);
     expect(standIn.invocations).toHaveLength(1);
 
-    // The existing paper keeps its original project and gains nothing.
+    // 1. No additive RPC was called. This is the whole claim.
+    expect(rpcs.names).not.toContain("bulk_add_paper_projects");
+    expect(rpcs.names).not.toContain("bulk_add_paper_tags");
+    // 2. And no setter was reached for it either.
+    expect(rpcs.names).not.toContain("bulk_set_paper_projects");
+    expect(rpcs.names).not.toContain("bulk_set_paper_tags");
+
+    // 3. The user is told the truth: not applied, and why.
+    await expect(duplicateAssignment(page)).toContainText(/not applied/i);
+    await expect(duplicateAssignment(page)).toContainText(
+      /could not identify exactly one existing paper/i,
+    );
+    await expect(duplicateAssignment(page)).not.toContainText(/has been\s+applied/i);
+
+    // 4. The paper is exactly as it was.
     await page.goto("/", { waitUntil: "networkidle" });
     await waitForDashboard(page);
     const row = paperRow(page, PMID_TITLE);
     await expect(row).toHaveCount(1, { timeout: 30_000 });
-    await expect(row.getByText(PROJECT_NAME)).toBeVisible();
-    await expect(row.getByText(OTHER_PROJECT_NAME)).toHaveCount(0);
+    for (const name of [PROJECT_NAME, OTHER_PROJECT_NAME, TAG_NAME, OTHER_TAG_NAME]) {
+      await expect(row.getByText(name)).toBeVisible();
+    }
   });
 
   test("a double click cannot start two imports", async ({ page }) => {
@@ -812,6 +1104,94 @@ test.describe("Extension import handoff", () => {
     await page.goto("/", { waitUntil: "networkidle" });
     await waitForDashboard(page);
     await expect(paperRow(page, DOI_TITLE)).toHaveCount(1, { timeout: 30_000 });
+  });
+
+  test("accepts a differently-cased DOI handoff without creating a second paper", async ({
+    page,
+  }) => {
+    // The DOI half of the deterministic path, on the paper the double-click test
+    // just created with no taxonomy at all. Two runs, because the second needs
+    // something to preserve:
+    //
+    //   1. the DOI as stored → duplicate resolved → the Tag is added;
+    //   2. the SAME DOI in different letter case → still resolved, and the
+    //      Project is added AND the Tag survives.
+    //
+    // What step 2 proves, stated precisely. PaperLume's canonical normalization
+    // lowercases the DOI (`normalizePaperData`) before the insert payload
+    // reaches `safe_bulk_insert_papers`, and this route always normalizes —
+    // `useNormalizationConfig` returns a config rather than `undefined`, and the
+    // Import control stays unusable until the pools are ready. So this run does
+    // NOT isolate the SQL resolver's case branch, and it must not be cited as
+    // proof of it: the case difference has already been canonicalised by the
+    // time the RPC is called.
+    //
+    // What it does prove is the product-level property, end to end: a
+    // differently-cased DOI handoff survives the real parser, the real metadata
+    // path, the real normalization and the real duplicate resolution, lands on
+    // the paper that already exists, gains the requested taxonomy, keeps what it
+    // had, and creates no second row.
+    //
+    // And the two layers that handle DOI case here are REDUNDANT, which bounds
+    // this test in the other direction too. The stored row was inserted through
+    // the same normalizing pipeline, so it holds the lowercase form; drop
+    // `lower()` from the resolver and the already-lowercased payload still
+    // matches exactly, while dropping `.toLowerCase()` from normalization still
+    // collides against an index that folds. Either single regression leaves this
+    // test green. It fails when BOTH layers lose case handling, or when parsing,
+    // duplicate resolution or additive assignment break more broadly — so it is
+    // a defence-in-depth and pipeline-integrity check, not a case-folding
+    // attribution for either layer on its own.
+    //
+    // The isolated SQL-level proof that the resolver mirrors
+    // `idx_papers_user_doi_unique`'s `lower(doi)` semantics lives in
+    // `supabase/tests/database/013_import_duplicate_resolution.test.sql`, which
+    // persists mixed-case DOI data and calls the RPC directly.
+    const standIn = await installMetadataStandIn(page);
+    const rpcs = recordRpcCalls(page);
+
+    // ── 1. Exact-case DOI ────────────────────────────────────────────────────
+    await openReadyHandoff(page, "doi", DOI);
+    await selectTaxonomy(page, { tag: TAG_NAME });
+    await importButton(page).click();
+
+    await expect(page.getByText("This paper is already in your library")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(duplicateAssignment(page)).toContainText(/has been\s+applied/i);
+
+    // ── 2. The same DOI, different case ──────────────────────────────────────
+    await openReadyHandoff(page, "doi", DOI_UPPERCASE);
+    // The route carries the identifier through unchanged and shows it as typed —
+    // the handoff parser round-trips a DOI name rather than rewriting it. Case
+    // canonicalisation happens later, inside normalization, on the way to the
+    // insert; this assertion pins the parser's fidelity, not the resolver's.
+    await expect(identifierValue(page)).toHaveText(DOI_UPPERCASE);
+    await selectTaxonomy(page, { project: PROJECT_NAME });
+    await importButton(page).click();
+
+    await expect(page.getByText("This paper is already in your library")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(duplicateAssignment(page)).toContainText(/1 project selection has been/i);
+    await expect(page.getByText(/not applied/i)).toHaveCount(0);
+
+    expect(standIn.invocations).toHaveLength(2);
+    expect(standIn.invocations[1].identifiers).toEqual([DOI_UPPERCASE]);
+    expect(standIn.providerRequests).toEqual([]);
+    expect(rpcs.names).toContain("bulk_add_paper_tags");
+    expect(rpcs.names).toContain("bulk_add_paper_projects");
+    expect(rpcs.names).not.toContain("bulk_set_paper_tags");
+    expect(rpcs.names).not.toContain("bulk_set_paper_projects");
+
+    // ── Persisted state: one row, both memberships ───────────────────────────
+    // Still ONE row: the differently-cased DOI never became a second paper.
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const row = paperRow(page, DOI_TITLE);
+    await expect(row).toHaveCount(1, { timeout: 30_000 });
+    await expect(row.getByText(PROJECT_NAME)).toBeVisible();
+    await expect(row.getByText(TAG_NAME)).toBeVisible();
   });
 
   test("a failed import reports the failure and can be retried explicitly", async ({ page }) => {

@@ -950,6 +950,14 @@ export type Database = {
         Args: { p_identity_id: string; p_user_id: string }
         Returns: string
       }
+      bulk_add_paper_projects: {
+        Args: { p_paper_ids: string[]; p_project_ids: string[] }
+        Returns: undefined
+      }
+      bulk_add_paper_tags: {
+        Args: { p_paper_ids: string[]; p_tag_ids: string[] }
+        Returns: undefined
+      }
       bulk_set_paper_projects: {
         Args: { p_paper_ids: string[]; p_project_ids: string[] }
         Returns: undefined

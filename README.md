@@ -182,7 +182,9 @@ The extension is still loaded unpacked for development. It is **not** published 
 
 It carries an identifier and nothing else — no token, no session material, no user id, no Project or Tag id, no paper metadata. The Chrome extension above is one sender of these links; it is not a privileged one. The value is untrusted regardless of who sent it: a PMID must already be in normalized form and a DOI must round-trip through the application's canonical DOI handling, so anything else renders as an unrecognised link. There is no title fallback.
 
-Opening the route imports nothing. It shows the identifier, lets you pick from your existing Projects and Tags, and runs the same importer the Add Papers dialog uses only after you choose **Import to PaperLume** — so a link, a bookmark or a refresh can never write to your library. A paper you already have is reported as already in your library, and any Project or Tag you had selected is explicitly *not* applied to it.
+Opening the route imports nothing. It shows the identifier, lets you pick from your existing Projects and Tags, and runs the same importer the Add Papers dialog uses only after you choose **Import to PaperLume** — so a link, a bookmark or a refresh can never write to your library.
+
+A paper you already have is reported as already in your library, and no second copy is created. Your selected Projects and Tags can still be **added** to that existing paper, but only when PaperLume can prove which paper it is: identity comes from your own PMID and DOI uniqueness and nothing else — never a title, never fuzzy or metadata similarity. If the identifiers point at two different papers of yours, or at none that can be proven, nothing is applied and the page says so rather than guessing. When the selection is applied it is **added**: everything that paper was already filed under is kept.
 
 If your projects, tags or keyword settings cannot be loaded, the route says so and offers a retry instead of importing: saving a paper without those settings would file it incorrectly, so importing is unavailable until they load.
 

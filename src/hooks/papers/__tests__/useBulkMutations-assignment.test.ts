@@ -415,3 +415,444 @@ describe("useBulkMutations – bulkDeletePapers explicit user_id scoping (S2 def
     expect((deleteToastCall![0] as { variant?: string }).variant).toBeUndefined();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// CHROME-EXTENSION-IMPORT-001D — deterministic duplicate resolution.
+//
+// `safe_bulk_insert_papers` may now answer a duplicate with the existing
+// paper's id. Everything below is about what the importer is allowed to DO
+// with that id, and the two halves that matter are:
+//
+//   * without the explicit opt-in the id is not acted on at all — Add Papers,
+//     PubMed Search and file import must keep behaving exactly as they did;
+//   * with the opt-in, assignment goes through the ADDITIVE `bulk_add_*` RPCs
+//     and never the replace-all `bulk_set_*`, because the target paper already
+//     has a taxonomy that the setter would delete.
+//
+// The absent-id case is not an edge case here: it is what every database that
+// predates migration 20260903180000 returns for every duplicate, so the
+// "no id → no additive call" test is the compatibility proof that lets the
+// frontend ship before that migration is applied.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Names of the RPCs a run actually invoked, in call order. */
+function rpcNames(): string[] {
+  return mockRpc.mock.calls.map((c: unknown[]) => c[0] as string);
+}
+
+describe("useBulkMutations – resolved-duplicate assignment (bulkImportPapers)", () => {
+  const DUPLICATE_PAPER_ID = "existing-paper-id-1";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetchPaperMetadata.mockResolvedValue([
+      { identifier: "12345", title: "Test Paper", authors: ["Author"], year: 2024, pmid: "12345", doi: null, abstract: null, keywords: [], mesh_terms: [], substances: [], study_type: null, pubmed_url: null, journal_url: null, journal: null },
+    ]);
+  });
+
+  /** The RPC answers "duplicate", optionally naming the existing row. */
+  function setupDuplicate({ resolved }: { resolved: boolean }) {
+    mockProcessChunkedInsert.mockResolvedValue({
+      results: [
+        resolved
+          ? { index: 0, id: DUPLICATE_PAPER_ID, status: "duplicate" }
+          : { index: 0, status: "duplicate" },
+      ],
+      lastError: null,
+    });
+  }
+
+  it("uses the replace-all setters for a NEWLY INSERTED paper, never the additive pair", async () => {
+    // The inserted row owns nothing yet, so "set to exactly this" and "add
+    // this" are the same operation — and the reviewed setter path stays.
+    mockProcessChunkedInsert.mockResolvedValue({
+      results: [{ index: 0, id: "new-paper-id", status: "inserted" }],
+      lastError: null,
+    });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(mockRpc).toHaveBeenCalledWith("bulk_set_paper_projects", {
+      p_paper_ids: ["new-paper-id"],
+      p_project_ids: ["proj-1"],
+    });
+    expect(mockRpc).toHaveBeenCalledWith("bulk_set_paper_tags", {
+      p_paper_ids: ["new-paper-id"],
+      p_tag_ids: ["tag-1"],
+    });
+    expect(rpcNames()).not.toContain("bulk_add_paper_projects");
+    expect(rpcNames()).not.toContain("bulk_add_paper_tags");
+
+    expect(outcome!.items).toEqual([{ identifier: "12345", status: "inserted" }]);
+    expect(outcome!.inserted).toEqual({ projects: "applied", tags: "applied" });
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "not-requested",
+      tags: "not-requested",
+    });
+  });
+
+  it("ignores a resolved duplicate id entirely when the caller did NOT opt in", async () => {
+    // The default path — Add Papers and PubMed Search. The id is present in the
+    // RPC response and must change nothing about what this run does or reports.
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+      });
+    });
+
+    expect(rpcNames()).toEqual([]);
+    expect(outcome!.items).toEqual([
+      { identifier: "12345", status: "duplicate-unresolved" },
+    ]);
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "not-requested",
+      tags: "not-requested",
+    });
+    // The unchanged generic import report: skipped, not added, not failed.
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Bulk import complete",
+        description: "0 added, 1 skipped (duplicates), 0 failed.",
+      }),
+    );
+  });
+
+  it("adds the selected Projects to the resolved duplicate when opted in", async () => {
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(mockRpc).toHaveBeenCalledWith("bulk_add_paper_projects", {
+      p_paper_ids: [DUPLICATE_PAPER_ID],
+      p_project_ids: ["proj-1"],
+    });
+    // The replace-all setter would have deleted the paper's existing Projects.
+    expect(rpcNames()).not.toContain("bulk_set_paper_projects");
+    expect(outcome!.items).toEqual([
+      { identifier: "12345", status: "duplicate-resolved" },
+    ]);
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "applied",
+      tags: "not-requested",
+    });
+  });
+
+  it("adds the selected Tags to the resolved duplicate when opted in", async () => {
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetTagIds: ["tag-1", "tag-2"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(mockRpc).toHaveBeenCalledWith("bulk_add_paper_tags", {
+      p_paper_ids: [DUPLICATE_PAPER_ID],
+      p_tag_ids: ["tag-1", "tag-2"],
+    });
+    expect(rpcNames()).not.toContain("bulk_set_paper_tags");
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "not-requested",
+      tags: "applied",
+    });
+  });
+
+  it("adds both categories when both were selected", async () => {
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+
+    await act(async () => {
+      await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(rpcNames()).toEqual([
+      "bulk_add_paper_projects",
+      "bulk_add_paper_tags",
+    ]);
+  });
+
+  it("calls no additive RPC when the duplicate carries no id, even opted in", async () => {
+    // THE COMPATIBILITY PROOF. This is exactly what a Production database that
+    // has not yet run migration 20260903180000 returns for every duplicate, so
+    // this test is what makes shipping the frontend first safe: no `bulk_add_*`
+    // is invoked, so a function that does not exist yet is never called.
+    setupDuplicate({ resolved: false });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(outcome!.items).toEqual([
+      { identifier: "12345", status: "duplicate-unresolved" },
+    ]);
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "not-requested",
+      tags: "not-requested",
+    });
+  });
+
+  it("writes nothing when a resolved duplicate had no selections at all", async () => {
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockInvalidateAndRefetch).not.toHaveBeenCalled();
+    expect(outcome!.items).toEqual([
+      { identifier: "12345", status: "duplicate-resolved" },
+    ]);
+  });
+
+  it("records a failed additive Project call without claiming it succeeded", async () => {
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: { message: "RPC error" } });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "failed",
+      tags: "not-requested",
+    });
+    // The toast names the existing paper rather than reusing the inserted-paper
+    // sentence, which would have said papers "were imported".
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Bulk import complete with warnings",
+        description: expect.stringContaining("already in your library"),
+        variant: "destructive",
+      }),
+    );
+  });
+
+  it("records a failed additive Tag call without claiming it succeeded", async () => {
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: { message: "RPC error" } });
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetTagIds: ["tag-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "not-requested",
+      tags: "failed",
+    });
+  });
+
+  it("reports a partial failure truthfully — one applied, one failed", async () => {
+    setupDuplicate({ resolved: true });
+    mockRpc
+      .mockResolvedValueOnce({ data: null, error: null }) // bulk_add_paper_projects
+      .mockResolvedValueOnce({ data: null, error: { message: "RPC error" } }); // bulk_add_paper_tags
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(outcome!.resolvedDuplicates).toEqual({
+      projects: "applied",
+      tags: "failed",
+    });
+  });
+
+  it("invalidates the caches when a duplicate assignment may have changed state", async () => {
+    // Including the partial case: the Project write landed, so a stale list
+    // would hide a real change. Invalidation follows the ATTEMPT, not success.
+    setupDuplicate({ resolved: true });
+    mockRpc
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: null, error: { message: "RPC error" } });
+
+    const { result } = renderBulkHook();
+
+    await act(async () => {
+      await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        targetTagIds: ["tag-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(mockInvalidateAndRefetch).toHaveBeenCalled();
+  });
+
+  it("keeps the progress callback reporting the duplicate as skipped", async () => {
+    // Phase 4 semantics are unchanged: a resolved duplicate is still SKIPPED,
+    // never counted as added. The terminal result carries the extra nuance.
+    setupDuplicate({ resolved: true });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const snapshots: { added: string[]; skipped: string[]; failed: string[] }[] = [];
+    const { result } = renderBulkHook();
+
+    await act(async () => {
+      await result.current.bulkImportPapers(
+        ["12345"],
+        (_current, _total, addedIds, skippedIds, failedIds) => {
+          snapshots.push({
+            added: [...addedIds],
+            skipped: [...skippedIds],
+            failed: [...failedIds],
+          });
+        },
+        {
+          targetProjectIds: ["proj-1"],
+          applyAssignmentsToResolvedDuplicates: true,
+        },
+      );
+    });
+
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots[snapshots.length - 1]).toEqual({
+      added: [],
+      skipped: ["12345"],
+      failed: [],
+    });
+  });
+
+  it("reports a failed identifier as failed in the terminal result", async () => {
+    mockFetchPaperMetadata.mockResolvedValue([
+      { identifier: "12345", error: "not found" },
+    ]);
+
+    const { result } = renderBulkHook();
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(["12345"], undefined, {
+        targetProjectIds: ["proj-1"],
+        applyAssignmentsToResolvedDuplicates: true,
+      });
+    });
+
+    expect(outcome!.items).toEqual([{ identifier: "12345", status: "failed" }]);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+});
+
+describe("useBulkMutations – parsed-file import never assigns resolved duplicates", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("ignores a duplicate id the RPC now returns and writes nothing", async () => {
+    // File import is a bulk operation over records the user did not inspect one
+    // by one. `safe_bulk_insert_papers` returning an id here must not silently
+    // re-file papers they already had — that is a separate product decision.
+    mockProcessChunkedInsert.mockResolvedValue({
+      results: [{ index: 0, id: "existing-paper-id-1", status: "duplicate" }],
+      lastError: null,
+    });
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const { result } = renderBulkHook();
+
+    await act(async () => {
+      await result.current.bulkImportFromParsedData(
+        [
+          {
+            title: "Test Paper",
+            authors: ["Author"],
+            year: 2024,
+            journal: null,
+            pmid: "12345",
+            doi: null,
+            abstract: null,
+            keywords: [],
+            mesh_terms: [],
+            substances: [],
+            study_type: null,
+            pubmed_url: null,
+            journal_url: null,
+            drive_url: null,
+          },
+        ],
+        undefined,
+        { targetProjectIds: ["proj-1"], targetTagIds: ["tag-1"] },
+      );
+    });
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockInvalidateAndRefetch).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "File import complete",
+        description: "0 added, 1 skipped (duplicates), 0 failed.",
+      }),
+    );
+  });
+});

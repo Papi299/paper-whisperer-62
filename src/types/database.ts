@@ -137,7 +137,25 @@ export interface DuplicateGroup {
   papers: DuplicatePaperSet;
 }
 
-/** Per-row result from the safe_bulk_insert_papers RPC. */
+/**
+ * Per-row result from the safe_bulk_insert_papers RPC.
+ *
+ * `id` means two different things depending on `status`, and the difference
+ * matters:
+ *
+ *   - `inserted` — the id of the row just created. Always present.
+ *   - `duplicate` — the id of the EXISTING owned row that collided, present
+ *     only when the RPC could prove exactly one candidate under the same
+ *     per-user PMID/DOI uniqueness the database enforces. Absent when zero or
+ *     several distinct rows matched, and absent from every database that
+ *     predates CHROME-EXTENSION-IMPORT-001D.
+ *   - `error` — never present.
+ *
+ * A missing duplicate id is therefore not an anomaly to work around: it is the
+ * fail-closed answer, and it is also what an older deployed database returns
+ * for every duplicate. Code that acts on a duplicate id must treat its absence
+ * as "do nothing", never as "look the paper up another way".
+ */
 export interface BulkInsertResult {
   index: number;
   id?: string;

@@ -17,7 +17,13 @@ import {
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
 import { getErrorMessage } from "@/lib/errorUtils";
 import { processChunkedInsert } from "@/lib/chunkedInsert";
-import { ServerFilterParams, ServerSortParams } from "./types";
+import type {
+  BulkImportAssignmentReport,
+  BulkImportItemStatus,
+  BulkImportOutcome,
+  ServerFilterParams,
+  ServerSortParams,
+} from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
 
@@ -30,6 +36,39 @@ const STRUCTURED_REEVALUATION_SELECT =
   "id, title, abstract, study_type, raw_study_type, raw_publication_types";
 const LEGACY_REEVALUATION_SELECT =
   "id, title, abstract, study_type, raw_study_type";
+
+/**
+ * Options accepted by both bulk importers.
+ *
+ * `applyAssignmentsToResolvedDuplicates` is the ONLY switch that lets a run
+ * touch a paper it did not create, and it is deliberately opt-in per call
+ * rather than a property of the importer:
+ *
+ *   - default (`false` / omitted) — a duplicate is skipped and nothing about it
+ *     is read or written, exactly as before this option existed. Add Papers,
+ *     PubMed Search and parsed-file import all take this path; whether they
+ *     should ever assign to existing papers is a separate product decision.
+ *   - `true` — a duplicate that `safe_bulk_insert_papers` resolved to exactly
+ *     one owned row has the selected Projects/Tags ADDED to it, through
+ *     `bulk_add_*` rather than the replace-all `bulk_set_*`, so nothing it was
+ *     already filed under is removed. `/extension-import` is the one caller
+ *     that opts in, because it is the one surface whose user just picked
+ *     taxonomy for this specific paper.
+ *
+ * A duplicate the database could not resolve carries no id, and is never
+ * assigned to under either setting — which is also what makes this safe to
+ * deploy against a database that predates the resolving RPC.
+ */
+export interface BulkImportOptions {
+  targetProjectIds?: string[];
+  targetTagIds?: string[];
+  applyAssignmentsToResolvedDuplicates?: boolean;
+}
+
+/** An assignment report before any RPC has run: nothing requested, nothing claimed. */
+function emptyAssignmentReport(): BulkImportAssignmentReport {
+  return { projects: "not-requested", tags: "not-requested" };
+}
 
 /** A row from either select; the structured column is simply absent from the legacy one. */
 type ReevaluationRow = {
@@ -59,14 +98,35 @@ export function useBulkMutations(
     async (
       identifiers: string[],
       onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
-      options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
-    ) => {
-      if (!userId || identifiers.length === 0) return;
+      options?: BulkImportOptions,
+    ): Promise<BulkImportOutcome | undefined> => {
+      if (!userId || identifiers.length === 0) return undefined;
 
       const addedIds: string[] = [];
       const skippedIds: string[] = [];
       const failedIds: string[] = [];
       const total = identifiers.length;
+
+      /**
+       * Terminal per-identifier status, keyed by identifier and filled in as
+       * each phase decides. Seeded as `failed` so an identifier that never
+       * reaches a verdict — a fetch that failed, a normalization that threw, a
+       * chunk that never came back — is reported as failed rather than silently
+       * omitted from the outcome.
+       */
+      const itemStatus = new Map<string, BulkImportItemStatus>(
+        identifiers.map((identifier) => [identifier, "failed" as BulkImportItemStatus]),
+      );
+      const insertedReport = emptyAssignmentReport();
+      const resolvedDuplicateReport = emptyAssignmentReport();
+      const buildOutcome = (): BulkImportOutcome => ({
+        items: identifiers.map((identifier) => ({
+          identifier,
+          status: itemStatus.get(identifier) ?? "failed",
+        })),
+        inserted: insertedReport,
+        resolvedDuplicates: resolvedDuplicateReport,
+      });
 
       // Phase 1: Batch fetch all metadata via edge function
       onProgress?.(0, total, addedIds, skippedIds, failedIds);
@@ -91,7 +151,7 @@ export function useBulkMutations(
           title: "Bulk import complete",
           description: `0 added, 0 skipped (duplicates), ${failedIds.length} failed.`,
         });
-        return;
+        return buildOutcome();
       }
 
       // Phase 2: Batch normalize all successful results
@@ -139,7 +199,7 @@ export function useBulkMutations(
           description: getErrorMessage(normError),
           variant: "destructive",
         });
-        return;
+        return buildOutcome();
       }
 
       // Phase 3: Build payload and call safe_bulk_insert_papers RPC
@@ -199,49 +259,85 @@ export function useBulkMutations(
           description: lastError || "Unknown error",
           variant: "destructive",
         });
-        return;
+        return buildOutcome();
       }
 
       // Phase 4: Process RPC results
       const results = allRpcResults;
       const insertedPaperIds: string[] = [];
+      /**
+       * Existing papers this run may assign to.
+       *
+       * Populated ONLY when the caller opted in. Without the opt-in the id is
+       * not even read, so a duplicate behaves exactly as it did before the
+       * resolving RPC existed — the feature cannot leak into Add Papers or
+       * PubMed Search by a later refactor forgetting to check the flag here.
+       */
+      const applyToResolvedDuplicates = options?.applyAssignmentsToResolvedDuplicates === true;
+      const resolvedDuplicateIds: string[] = [];
 
       for (const row of results) {
         const { identifier } = successfulResults[row.index];
         if (row.status === "inserted" && row.id) {
           addedIds.push(identifier);
           insertedPaperIds.push(row.id);
+          itemStatus.set(identifier, "inserted");
         } else if (row.status === "duplicate") {
+          // A duplicate is a duplicate for the counters either way: nothing was
+          // inserted, so it is skipped and never counted as added.
           skippedIds.push(identifier);
+          const resolvedId =
+            applyToResolvedDuplicates && typeof row.id === "string" && row.id.length > 0
+              ? row.id
+              : null;
+          if (resolvedId) {
+            resolvedDuplicateIds.push(resolvedId);
+            itemStatus.set(identifier, "duplicate-resolved");
+          } else {
+            itemStatus.set(identifier, "duplicate-unresolved");
+          }
         } else {
           failedIds.push(identifier);
+          itemStatus.set(identifier, "failed");
         }
       }
 
       onProgress?.(total, total, addedIds, skippedIds, failedIds);
 
-      // Phase 5: Assign project/tags to newly inserted papers
+      // Phase 5: Assign project/tags
+      const projectIds = options?.targetProjectIds ?? [];
+      const tagIds = options?.targetTagIds ?? [];
+      const wantsProjects = projectIds.length > 0;
+      const wantsTags = tagIds.length > 0;
+
+      // Warnings are kept in two lists because the two sentences they produce
+      // say different things: a newly inserted paper "may need manual
+      // assignment", while an existing paper kept everything it already had and
+      // merely did not gain the new selection.
       const assignmentWarnings: string[] = [];
+      const duplicateAssignmentWarnings: string[] = [];
 
+      // 5a. Newly inserted rows — unchanged replace-all semantics. The row was
+      // created moments ago and owns nothing, so setting its exact selection
+      // and adding to an empty set are the same operation.
       if (insertedPaperIds.length > 0) {
-        const projectIds = options?.targetProjectIds;
-        const tagIds = options?.targetTagIds;
-
-        if (projectIds && projectIds.length > 0) {
+        if (wantsProjects) {
           const { error: projError } = await supabase.rpc("bulk_set_paper_projects", {
             p_paper_ids: insertedPaperIds,
             p_project_ids: projectIds,
           });
+          insertedReport.projects = projError ? "failed" : "applied";
           if (projError) {
             assignmentWarnings.push("project assignment failed");
           }
         }
 
-        if (tagIds && tagIds.length > 0) {
+        if (wantsTags) {
           const { error: tagError } = await supabase.rpc("bulk_set_paper_tags", {
             p_paper_ids: insertedPaperIds,
             p_tag_ids: tagIds,
           });
+          insertedReport.tags = tagError ? "failed" : "applied";
           if (tagError) {
             assignmentWarnings.push("tag assignment failed");
           }
@@ -251,12 +347,60 @@ export function useBulkMutations(
         invalidateAndRefetch();
       }
 
+      // 5b. Deterministically resolved duplicates — ADDITIVE only.
+      //
+      // `bulk_add_*`, never `bulk_set_*`: these papers have a history, and the
+      // replace-all setter called with just this handoff's selection would
+      // delete every other Project and Tag they were filed under. The two RPCs
+      // are independent, so one can land while the other fails, and the report
+      // records that rather than collapsing it to a single verdict.
+      if (resolvedDuplicateIds.length > 0 && (wantsProjects || wantsTags)) {
+        if (wantsProjects) {
+          const { error: projError } = await supabase.rpc("bulk_add_paper_projects", {
+            p_paper_ids: resolvedDuplicateIds,
+            p_project_ids: projectIds,
+          });
+          resolvedDuplicateReport.projects = projError ? "failed" : "applied";
+          if (projError) {
+            duplicateAssignmentWarnings.push("project assignment failed");
+          }
+        }
+
+        if (wantsTags) {
+          const { error: tagError } = await supabase.rpc("bulk_add_paper_tags", {
+            p_paper_ids: resolvedDuplicateIds,
+            p_tag_ids: tagIds,
+          });
+          resolvedDuplicateReport.tags = tagError ? "failed" : "applied";
+          if (tagError) {
+            duplicateAssignmentWarnings.push("tag assignment failed");
+          }
+        }
+
+        // Invalidate whenever a write was ATTEMPTED, not only when both
+        // succeeded: a partial success still changed persisted state, and a
+        // stale list would hide the half that landed.
+        invalidateAndRefetch();
+      }
+
       const summary = `${addedIds.length} added, ${skippedIds.length} skipped (duplicates), ${failedIds.length} failed.`;
 
+      const notes: string[] = [];
       if (assignmentWarnings.length > 0) {
+        notes.push(
+          `Note: ${assignmentWarnings.join(" and ")} — papers were imported but may need manual project/tag assignment.`,
+        );
+      }
+      if (duplicateAssignmentWarnings.length > 0) {
+        notes.push(
+          `Note: ${duplicateAssignmentWarnings.join(" and ")} on a paper already in your library — its existing projects and tags are unchanged.`,
+        );
+      }
+
+      if (notes.length > 0) {
         toast({
           title: "Bulk import complete with warnings",
-          description: `${summary} Note: ${assignmentWarnings.join(" and ")} — papers were imported but may need manual project/tag assignment.`,
+          description: `${summary} ${notes.join(" ")}`,
           variant: "destructive",
         });
       } else {
@@ -265,6 +409,8 @@ export function useBulkMutations(
           description: summary,
         });
       }
+
+      return buildOutcome();
     },
     [userId, projects, tags, normalizationConfig, normalize, toast, invalidateAndRefetch, queryClient],
   );
@@ -272,6 +418,15 @@ export function useBulkMutations(
   /**
    * Import pre-parsed papers (from .bib, .ris, .csv file parsers).
    * Skips the metadata fetch phase — goes directly to normalize -> RPC -> cache.
+   *
+   * Duplicate semantics are deliberately unchanged by
+   * CHROME-EXTENSION-IMPORT-001D. `safe_bulk_insert_papers` may now return an
+   * existing paper id alongside `status: "duplicate"`, and this function
+   * ignores it: a file import is a bulk operation over records the user did not
+   * inspect one by one, so silently re-filing papers they already had would be
+   * a product decision nobody has made. The options parameter therefore does
+   * NOT accept `applyAssignmentsToResolvedDuplicates` — passing it here is a
+   * type error rather than a no-op that reads as support.
    */
   const bulkImportFromParsedData = useCallback(
     async (

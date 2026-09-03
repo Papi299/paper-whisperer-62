@@ -58,11 +58,20 @@ interface AddPaperDialogProps {
     paperData: ManualPaperData,
     options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
   ) => Promise<boolean>;
+  /**
+   * The canonical identifier importer.
+   *
+   * Resolves to `unknown` rather than `void` because the importer now returns a
+   * terminal result describing what happened to each identifier after its
+   * assignment phase. This dialog reports progress from `onProgress` and has no
+   * use for that result, so it accepts and ignores whatever comes back instead
+   * of forcing the importer to narrow its contract to this one caller.
+   */
   onBulkImport?: (
     identifiers: string[],
     onProgress?: (current: number, total: number, addedIds: string[], skippedIds: string[], failedIds: string[]) => void,
     options?: { targetProjectIds?: string[]; targetTagIds?: string[] }
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   onFileImport?: (
     papers: RawPaperData[],
     onProgress?: (current: number, total: number, added: number, skipped: number, failed: number) => void,
