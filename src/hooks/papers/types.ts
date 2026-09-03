@@ -89,3 +89,60 @@ export interface MatchFlags {
   matched_notes: boolean;
   matched_keywords: boolean;
 }
+
+/**
+ * What happened to one identifier the canonical importer was given.
+ *
+ * `duplicate-resolved` and `duplicate-unresolved` are both duplicates — the
+ * paper was already in the library either way and nothing was inserted. They
+ * differ only in whether `safe_bulk_insert_papers` could prove which existing
+ * row collided, which is the only thing that makes an additive assignment
+ * safe. A database that predates CHROME-EXTENSION-IMPORT-001D reports every
+ * duplicate as `duplicate-unresolved`, and so does an importer that did not
+ * opt into duplicate assignment.
+ */
+export type BulkImportItemStatus =
+  | "inserted"
+  | "duplicate-resolved"
+  | "duplicate-unresolved"
+  | "failed";
+
+/**
+ * What happened to one category of assignment work, for one group of papers.
+ *
+ * `not-requested` is deliberately distinct from `applied`: a caller must be
+ * able to tell "no assignment RPC ran" from "the user's selection landed",
+ * because only the second one may ever be reported to the user as applied.
+ *
+ * It covers both reasons no RPC ran — the user selected nothing in this
+ * category, and this group held no papers to assign to (a run with no inserted
+ * rows leaves the inserted report `not-requested` even when the user selected
+ * plenty, because nothing was requested *of that group*). Read a group's report
+ * alongside the item statuses that put papers in it.
+ */
+export type BulkImportAssignmentOutcome = "not-requested" | "applied" | "failed";
+
+/** Assignment evidence for one group of papers (newly inserted, or resolved duplicates). */
+export interface BulkImportAssignmentReport {
+  projects: BulkImportAssignmentOutcome;
+  tags: BulkImportAssignmentOutcome;
+}
+
+/**
+ * The canonical importer's terminal result, returned AFTER its assignment phase.
+ *
+ * The `onProgress` callback reports the insert phase and is emitted before any
+ * assignment RPC runs, so it can prove a row was inserted and can prove nothing
+ * at all about whether the user's Projects and Tags landed on it. A caller that
+ * needs to say something truthful about assignment reads this instead — and
+ * reads it rather than querying the database itself, which would fork the
+ * importer's ownership of that decision.
+ */
+export interface BulkImportOutcome {
+  /** One entry per identifier passed in, in input order. */
+  items: { identifier: string; status: BulkImportItemStatus }[];
+  /** Assignment evidence for the rows inserted by this run (`bulk_set_*`, replace-all). */
+  inserted: BulkImportAssignmentReport;
+  /** Assignment evidence for deterministically resolved duplicates (`bulk_add_*`, additive). */
+  resolvedDuplicates: BulkImportAssignmentReport;
+}

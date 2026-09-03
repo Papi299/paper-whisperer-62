@@ -178,6 +178,15 @@ supabase migration list --linked
 - **If Local vs. Remote differ on any row** before you `db push`: do not blindly run `migration repair`. First audit the actual schema state on the remote (e.g., via Supabase Studio SQL editor) to confirm whether the row's effect is already applied. Repair without audit can mark something as applied that wasn't, leaving production half-migrated.
 - **Do not rely on a hard-coded ledger version in this runbook.** Before every deployment, run `supabase migration list --linked` and require every previously deployed migration to show as aligned (Local = Remote), with only the migration explicitly approved for the current deployment shown as local-only. A static "current version" here becomes stale after each deploy; the live ledger is the source of truth. Recent reconciliation history is in [`migration-history.md`](migration-history.md).
 
+### 6.3 Web-before-migration is safe for `20260903180000` (extension-import duplicate resolution)
+
+Merging to `main` triggers a Vercel Production deploy. **Vercel does not apply Supabase migrations** — the database half of `CHROME-EXTENSION-IMPORT-001D` is a separate, separately authorized `supabase db push --linked` step, and the web half is deliberately built to be correct in the window between the two.
+
+- **Before the migration is applied.** The deployed `safe_bulk_insert_papers` answers every `unique_violation` with `{ status: "duplicate" }` and **no `id`**. The client treats a duplicate without an id as *unresolved*: it calls neither `bulk_add_paper_projects` nor `bulk_add_paper_tags` — which is what matters, because those functions do not exist yet — and `/extension-import` reports that the selection was not applied, exactly as it did before this change. No runtime error is possible, because no call to a missing function is made.
+- **After the migration is applied.** A duplicate that resolves to exactly one owned row starts carrying its `id`, and the same already-deployed client begins adding the selection through the additive RPCs. **No second frontend deploy is required** — the feature activates from the database side.
+- **Ordering rule:** web first is safe; database first is also safe (an id the old client never reads changes nothing). What is *not* safe is assuming the feature is live in Production merely because the code merged. Until the migration is applied, duplicates keep failing closed, and any claim that duplicate assignment works in Production must cite the applied migration, not the deploy.
+- This is the inverse of the `search-pubmed` / `suggest-paper-organization` endpoint-before-UI rule in §7b/§7c. Those frontends are useless without their endpoint; this one is *correct* without its migration, by construction and by test — see the `calls no additive RPC when the duplicate result carries no id` case in `e2e/extension-import.spec.ts`, which reproduces the pre-migration response against the real route.
+
 ---
 
 ## 7. Edge Function deployment

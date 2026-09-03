@@ -17,12 +17,14 @@
  *
  * ## There is no second importer here
  *
- * This page calls `bulkImportPapers` with exactly one identifier and reads its
- * existing progress result. It never touches `fetch-paper-metadata`,
- * `safe_bulk_insert_papers`, `bulk_set_paper_projects` or
- * `bulk_set_paper_tags` — those are the importer's implementation details, and
- * duplicating any of them would fork metadata precedence, normalization,
- * provenance, deduplication and assignment away from the Dashboard.
+ * This page calls `bulkImportPapers` with exactly one identifier and reads the
+ * result it returns. It never touches `fetch-paper-metadata`,
+ * `safe_bulk_insert_papers`, `bulk_set_paper_projects`, `bulk_set_paper_tags`,
+ * `bulk_add_paper_projects` or `bulk_add_paper_tags` — those are the importer's
+ * implementation details, and duplicating any of them would fork metadata
+ * precedence, normalization, provenance, deduplication and assignment away from
+ * the Dashboard. Duplicate resolution is part of that rule, not an exception to
+ * it: the page never looks a colliding paper up for itself.
  *
  * The importer must therefore receive this user's real `NormalizationConfig`.
  * It treats a missing one as "skip normalization" rather than as an error, so an
@@ -43,22 +45,40 @@
  * ## What this page can and cannot claim about assignment
  *
  * The importer assigns Projects and Tags in its Phase 5, *after* the Phase 4
- * progress callback this page reads, and a Phase 5 RPC failure is deliberately
- * non-fatal: it becomes a warning toast and leaves the identifier in `addedIds`.
- * So `addedIds` proves the paper was inserted and proves nothing whatsoever
- * about assignment. The success copy states only the insertion, which is
- * authoritative, and points at the library for the rest. Claiming assignment
- * would need post-Phase-5 evidence this page does not have and must not invent
- * by re-running a lookup the importer already owns.
+ * progress callback, and a Phase 5 RPC failure is deliberately non-fatal: it
+ * becomes a warning toast and leaves the identifier in `addedIds`. So a
+ * progress snapshot proves the paper was inserted and proves nothing whatsoever
+ * about assignment.
  *
- * ## Duplicates are reported, not resolved
+ * This page therefore reads `bulkImportPapers`' **terminal result**, which the
+ * importer returns after Phase 5 has finished and which reports, per category,
+ * whether assignment was applied, failed, or was never requested. That is the
+ * only evidence this page is allowed to speak from — it must never re-resolve
+ * the paper or query the junction tables itself, because that would fork the
+ * importer's ownership of the decision it just made.
+ *
+ * The new-paper copy still states only the insertion. Its Phase 5 uses the
+ * replace-all setters, its failure is already surfaced by the importer's own
+ * warning toast, and the previously reviewed wording is deliberately left
+ * alone.
+ *
+ * ## Duplicates are resolved only when identity is provable
  *
  * `safe_bulk_insert_papers` answers a unique-index collision with
- * `{ status: "duplicate" }` and **no paper id**, so the importer records it as
- * skipped and its Phase 5 assignment runs only over newly inserted ids. This
- * page says exactly that: already in your library, and — when the user had
- * selected any — that those selections were not applied to the existing paper.
- * It does not guess which row collided, and nothing here matches on title.
+ * `status: "duplicate"`, and — since CHROME-EXTENSION-IMPORT-001D — with the
+ * existing paper's `id` when, and only when, exactly ONE row owned by this user
+ * matches the attempted PMID or DOI under the same semantics the per-user
+ * unique indexes enforce. Two identifiers naming two different rows, or no
+ * provable row at all, return no id.
+ *
+ * This page opts into acting on that id (`applyAssignmentsToResolvedDuplicates`)
+ * because its user just chose taxonomy for this specific paper. When the id is
+ * present the selection is **added** to the existing paper through the additive
+ * RPCs, so everything it was already filed under is kept; when it is absent —
+ * including against a database that predates that migration — nothing is
+ * written and the page says the selection was not applied. It never guesses
+ * which row collided, never asks the user to choose between candidates, and
+ * nothing here matches on title.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -86,7 +106,12 @@ import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useNormalizationConfig } from "@/hooks/useNormalizationConfig";
 import { usePapers } from "@/hooks/usePapers";
-import type { ServerFilterParams, ServerSortParams } from "@/hooks/papers/types";
+import type {
+  BulkImportAssignmentReport,
+  BulkImportOutcome,
+  ServerFilterParams,
+  ServerSortParams,
+} from "@/hooks/papers/types";
 import {
   buildExtensionImportPath,
   parseExtensionImportIntent,
@@ -123,11 +148,21 @@ const NEUTRAL_SORT_PARAMS: ServerSortParams = {
 /** What the confirm button has produced so far. */
 type ImportPhase = "ready" | "importing" | "imported" | "duplicate" | "failed";
 
-/** The final `onProgress` snapshot, copied out of the importer's live arrays. */
-interface ImportOutcome {
-  added: string[];
-  skipped: string[];
-  failed: string[];
+/** Nothing requested and nothing claimed — the state before any import has run. */
+const NO_ASSIGNMENT: BulkImportAssignmentReport = {
+  projects: "not-requested",
+  tags: "not-requested",
+};
+
+/**
+ * How many of each the user had selected when they pressed Import.
+ *
+ * Selections describe the import that has not happened yet, so a completed run
+ * leaves the live selection alone and reads these instead.
+ */
+interface AssignmentCounts {
+  projects: number;
+  tags: number;
 }
 
 /** A centred single-purpose frame, shared by every state this route renders. */
@@ -279,10 +314,27 @@ function ExtensionImportContent({
   // run leaves them behind rather than letting them imply something about it.
   const assignmentRequested =
     selectedProjectIds.length > 0 || selectedTagIds.length > 0;
-  const [assignmentAtImport, setAssignmentAtImport] = useState({
+  const [assignmentAtImport, setAssignmentAtImport] = useState<AssignmentCounts>({
     projects: 0,
     tags: 0,
   });
+
+  /**
+   * Whether the duplicate this run hit could be resolved to exactly one owned
+   * paper. False covers both "no provable row" and "two identifiers, two rows",
+   * which the user experiences identically: the selection was not applied.
+   * Also false against any database that predates the resolving RPC, which is
+   * what makes this page safe to deploy before that migration runs.
+   */
+  const [duplicateResolved, setDuplicateResolved] = useState(false);
+
+  /**
+   * The importer's post-assignment evidence for whichever group this paper
+   * ended up in. The ONLY thing the terminal copy may speak from — never the
+   * selection, which says what was asked for, not what happened.
+   */
+  const [assignmentResult, setAssignmentResult] =
+    useState<BulkImportAssignmentReport>(NO_ASSIGNMENT);
 
   /**
    * The import context: this user's normalization pools and their taxonomy.
@@ -337,26 +389,26 @@ function ExtensionImportContent({
       projects: selectedProjectIds.length,
       tags: selectedTagIds.length,
     });
+    setDuplicateResolved(false);
+    setAssignmentResult(NO_ASSIGNMENT);
 
-    // The importer reports through `onProgress` and returns void. Its arrays are
-    // live and keep being mutated, so each snapshot is copied; the last one to
-    // arrive before it resolves is the terminal result. One identifier means the
-    // three buckets are mutually exclusive and need no second lookup.
-    let outcome: ImportOutcome | null = null;
+    // The importer's TERMINAL result, returned after its assignment phase has
+    // finished. The progress callback is deliberately not used here: it is
+    // emitted before any assignment RPC runs, so it could only ever prove the
+    // insertion. One identifier in means exactly one item out.
+    let outcome: BulkImportOutcome | undefined;
 
     try {
-      await bulkImportPapers(
+      outcome = await bulkImportPapers(
         [intent.identifier],
-        (_current, _total, addedIds, skippedIds, failedIds) => {
-          outcome = {
-            added: [...addedIds],
-            skipped: [...skippedIds],
-            failed: [...failedIds],
-          };
-        },
+        undefined,
         {
           targetProjectIds: selectedProjectIds,
           targetTagIds: selectedTagIds,
+          // The one caller that opts in. This user picked taxonomy for this
+          // exact paper moments ago, which is the whole justification — and it
+          // is still only acted on when the database proved which row it is.
+          applyAssignmentsToResolvedDuplicates: true,
         },
       );
     } catch {
@@ -368,16 +420,30 @@ function ExtensionImportContent({
       return;
     }
 
-    const result = outcome as ImportOutcome | null;
-    if (result === null) {
-      // The importer returned without reporting — it short-circuits before its
-      // first callback only when it has no user or no identifiers, neither of
-      // which should be reachable here. Treated as a failure rather than
-      // assumed successful.
+    const item = outcome?.items[0];
+    if (!item) {
+      // The importer returned nothing — it short-circuits before doing any work
+      // only when it has no user or no identifiers, neither of which should be
+      // reachable here. Treated as a failure rather than assumed successful.
       setPhase("failed");
-    } else if (result.added.length > 0) {
+    } else if (item.status === "inserted") {
+      // `outcome.inserted` carries this run's assignment evidence, and the
+      // new-paper copy below deliberately does not speak from it: that wording
+      // was reviewed to state only the insertion, the importer already surfaces
+      // an assignment failure in its own warning toast, and widening the claim
+      // is not what this task changes. The evidence is still asserted on in the
+      // importer's unit coverage.
       setPhase("imported");
-    } else if (result.skipped.length > 0) {
+    } else if (item.status === "duplicate-resolved") {
+      setDuplicateResolved(true);
+      setAssignmentResult(outcome!.resolvedDuplicates);
+      setPhase("duplicate");
+    } else if (item.status === "duplicate-unresolved") {
+      // Already in the library, but not identifiable as one exact row — so
+      // nothing was written, and the copy below says so rather than implying
+      // the selection landed somewhere.
+      setDuplicateResolved(false);
+      setAssignmentResult(NO_ASSIGNMENT);
       setPhase("duplicate");
     } else {
       setPhase("failed");
@@ -467,11 +533,13 @@ function ExtensionImportContent({
               <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
               Added to your library
             </p>
-            {/* Deliberately NOT "Assigned to …". The importer's Phase 5 runs
-                after the progress snapshot above and is allowed to fail without
-                removing the paper from `addedIds`, so a successful insertion is
-                no evidence at all that the assignment landed. It reports its own
-                outcome, including assignment warnings, in its toast. */}
+            {/* Deliberately NOT "Assigned to …", and deliberately unchanged by
+                CHROME-EXTENSION-IMPORT-001D. The terminal result does now carry
+                this run's inserted-group assignment evidence, but the reviewed
+                wording here states only the insertion — which is authoritative —
+                and the importer already reports an assignment failure in its own
+                warning toast. Widening the claim on the new-paper path is not
+                what that task changed. */}
             {(assignmentAtImport.projects > 0 || assignmentAtImport.tags > 0) && (
               <p className="text-muted-foreground">
                 Your {describeAssignment(assignmentAtImport)} selection was sent
@@ -486,19 +554,19 @@ function ExtensionImportContent({
             role="status"
             aria-live="polite"
             className="space-y-1 rounded-md border bg-muted/40 p-3 text-sm"
+            data-testid="handoff-duplicate"
           >
             <p className="flex items-center gap-2 font-medium">
               <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
               This paper is already in your library
             </p>
-            <p className="text-muted-foreground">Nothing was imported.</p>
+            <p className="text-muted-foreground">No new paper was added.</p>
             {(assignmentAtImport.projects > 0 || assignmentAtImport.tags > 0) && (
-              <p className="text-muted-foreground">
-                Your {describeAssignment(assignmentAtImport)} selection was{" "}
-                <strong className="font-medium text-foreground">not applied</strong>{" "}
-                to the paper already in your library. Open it in your library to
-                change its projects or tags.
-              </p>
+              <DuplicateAssignmentSummary
+                counts={assignmentAtImport}
+                resolved={duplicateResolved}
+                result={assignmentResult}
+              />
             )}
           </div>
         )}
@@ -586,15 +654,92 @@ function ExtensionImportContent({
 }
 
 /** "2 projects and 1 tag", for the assignment sentence in both terminal states. */
-function describeAssignment({
-  projects,
-  tags,
-}: {
-  projects: number;
-  tags: number;
-}): string {
+function describeAssignment({ projects, tags }: AssignmentCounts): string {
   const parts: string[] = [];
   if (projects > 0) parts.push(`${projects} project${projects === 1 ? "" : "s"}`);
   if (tags > 0) parts.push(`${tags} tag${tags === 1 ? "" : "s"}`);
   return parts.join(" and ");
+}
+
+/**
+ * Narrow `counts` to the categories whose assignment reached `outcome`.
+ *
+ * The two categories are separate RPCs that succeed and fail independently, so
+ * "your 1 project and 1 tag" is only ever true of a group that shared the same
+ * fate. Everything the copy below says is assembled from these two subsets,
+ * which is what keeps a half-failed run from being described as a whole one.
+ */
+function categoriesWith(
+  counts: AssignmentCounts,
+  result: BulkImportAssignmentReport,
+  outcome: BulkImportAssignmentReport["projects"],
+): AssignmentCounts {
+  return {
+    projects: result.projects === outcome ? counts.projects : 0,
+    tags: result.tags === outcome ? counts.tags : 0,
+  };
+}
+
+/** True when the subset holds exactly one selected thing, for "it" vs "them". */
+function isSingular({ projects, tags }: AssignmentCounts): boolean {
+  return projects + tags === 1;
+}
+
+/**
+ * What actually happened to the selection on a paper that already existed.
+ *
+ * Rendered only when the user selected something. Every branch is driven by the
+ * importer's terminal evidence, never by the selection alone — the selection
+ * says what was asked for, and this sentence may only say what was done.
+ */
+function DuplicateAssignmentSummary({
+  counts,
+  resolved,
+  result,
+}: {
+  counts: AssignmentCounts;
+  resolved: boolean;
+  result: BulkImportAssignmentReport;
+}) {
+  // Not identifiable as one exact existing paper — either nothing matched, or
+  // the PMID and the DOI named two different rows. Both are the same fact to
+  // the person reading this: PaperLume refused to guess, so it wrote nothing.
+  // The candidate rows are deliberately not described or offered as a choice.
+  if (!resolved) {
+    return (
+      <p className="text-muted-foreground" data-testid="handoff-duplicate-assignment">
+        Your {describeAssignment(counts)} selection was{" "}
+        <strong className="font-medium text-foreground">not applied</strong>:
+        PaperLume could not identify exactly one existing paper for this
+        identifier, and it will not guess. Open the paper in your library to
+        change its projects or tags.
+      </p>
+    );
+  }
+
+  const applied = categoriesWith(counts, result, "applied");
+  const failed = categoriesWith(counts, result, "failed");
+  const anyApplied = applied.projects + applied.tags > 0;
+  const anyFailed = failed.projects + failed.tags > 0;
+
+  return (
+    <p className="text-muted-foreground" data-testid="handoff-duplicate-assignment">
+      {anyApplied && (
+        <>
+          Your {describeAssignment(applied)} selection has been{" "}
+          <strong className="font-medium text-foreground">applied</strong> to the
+          paper already in your library, and everything it was already filed
+          under was kept.{" "}
+        </>
+      )}
+      {anyFailed && (
+        <>
+          Your {describeAssignment(failed)} selection could{" "}
+          <strong className="font-medium text-foreground">not be applied</strong>{" "}
+          — you can add {isSingular(failed) ? "it" : "them"} from your library.
+          {!anyApplied && " Nothing about that paper was changed."}
+        </>
+      )}
+    </p>
+  );
 }

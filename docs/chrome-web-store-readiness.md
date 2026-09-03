@@ -1614,10 +1614,21 @@ while the installed base is zero. Worth deciding at submission time, not after.
 
 Unchanged by all three, and deliberately so: `/extension-import` behaviour ·
 authentication · the importer · Project/Tag selection · normalisation · duplicate
-semantics (*"Already in your library"*, with no Project/Tag assignment to the
-existing row — 001D remains separate and optional) · any PaperLume business logic
-· anything under `supabase/**` (no migration, Edge Function, RLS, RPC, secret, or
-Production SQL).
+semantics · any PaperLume business logic · anything under `supabase/**` (no
+migration, Edge Function, RLS, RPC, secret, or Production SQL).
+
+> **Duplicate semantics have since changed, on the web side only.**
+> `CHROME-EXTENSION-IMPORT-001D` (2026-09-03) landed the deterministic duplicate
+> path: a paper already in the library is still reported as such and still
+> produces no second row, but the user's selected Projects and Tags are now
+> **added** to that existing paper when — and only when — the database can prove
+> exactly one owned row matches the attempted PMID or DOI, and are left
+> unapplied otherwise. That is a web-application and database change. **The
+> extension package is byte-identical**: no manifest, permission, host-permission,
+> detection, popup, icon, version, ZIP, listing, privacy-answer, submission or
+> publication change, and the Store item's state is exactly as recorded elsewhere
+> in this document. The paragraph above stands as the accurate record of what
+> 001E1 / 001E2 / 001E2-CORRECTION-01 themselves did not change.
 
 001E2 additionally did **not** change: the Privacy Policy's wording; the
 manifest `description`; the popup's markup, styling or behaviour; any provider

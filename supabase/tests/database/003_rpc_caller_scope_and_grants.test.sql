@@ -2,7 +2,7 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 31 SECURITY DEFINER functions (25 directly callable + 4 trigger-
+--   * exactly 33 SECURITY DEFINER functions (27 directly callable + 4 trigger-
 --     only + 2 internal-only); no unexpected privileged function or overload;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
@@ -63,7 +63,7 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (17).
+-- The complete directly-callable SECURITY DEFINER RPC surface (27).
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
@@ -95,7 +95,13 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     -- AI-MODEL-SELECTION-001A. Both derive the caller from auth.uid() and take
     -- no user id at all, so they belong to the same least-privilege matrix.
     'public.set_current_user_ai_model(text)',
-    'public.clear_current_user_ai_model()'
+    'public.clear_current_user_ai_model()',
+    -- CHROME-EXTENSION-IMPORT-001D. The additive counterparts to the two
+    -- bulk_set_* setters, for papers that already exist. Same least-privilege
+    -- posture as every other client RPC; their additive/idempotent/fail-closed
+    -- behaviour is owned by 013_import_duplicate_resolution.test.sql.
+    'public.bulk_add_paper_projects(uuid[],uuid[])',
+    'public.bulk_add_paper_tags(uuid[],uuid[])'
   ]);
 $hlp$;
 
@@ -145,18 +151,20 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(213);
+SELECT plan(223);
 
--- ══ 1. Inventory: exactly 29 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 33 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
 -- internal helpers and one trigger function; 31 after AI-MODEL-SELECTION-001A
--- added set_current_user_ai_model and clear_current_user_ai_model. The count is
--- deliberately exact: a new definer function that nobody registered here is the
--- single easiest way to widen the privileged surface unnoticed.
+-- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
+-- CHROME-EXTENSION-IMPORT-001D added bulk_add_paper_projects and
+-- bulk_add_paper_tags. The count is deliberately exact: a new definer function
+-- that nobody registered here is the single easiest way to widen the privileged
+-- surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  31, 'exactly 31 SECURITY DEFINER functions in public');
+  33, 'exactly 33 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -191,11 +199,13 @@ SELECT is(
        'public.validate_author_mention_for_identity(uuid,uuid,integer,text)'::regprocedure,
        'public.clear_author_identity_links_on_authors_change()'::regprocedure,
        'public.set_current_user_ai_model(text)'::regprocedure,
-       'public.clear_current_user_ai_model()'::regprocedure
+       'public.clear_current_user_ai_model()'::regprocedure,
+       'public.bulk_add_paper_projects(uuid[],uuid[])'::regprocedure,
+       'public.bulk_add_paper_tags(uuid[],uuid[])'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
--- ══ 2. EXECUTE matrix over the 25 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 27 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -244,7 +254,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 25) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 27) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(
