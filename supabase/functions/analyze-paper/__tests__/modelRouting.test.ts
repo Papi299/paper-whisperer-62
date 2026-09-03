@@ -70,6 +70,24 @@ const CATALOG = {
     enabled: true,
     selectable: true,
   },
+  // AI-MODEL-SELECTION-001D (C35). Added to this fixture and nowhere else in
+  // the shipped function — see "names no concrete model string of its own"
+  // below, which reads the committed source and would fail if either id had
+  // been written into `index.ts`.
+  "google/gemini-3.7-flash": {
+    id: "google/gemini-3.7-flash",
+    provider: "google",
+    provider_model: "gemini-3.7-flash",
+    enabled: true,
+    selectable: true,
+  },
+  "google/gemini-3.8-flash": {
+    id: "google/gemini-3.8-flash",
+    provider: "google",
+    provider_model: "gemini-3.8-flash",
+    enabled: true,
+    selectable: true,
+  },
 } as const;
 
 interface Scenario {
@@ -152,6 +170,23 @@ describe("analyze-paper routes to the right model", () => {
       catalogRow: { ...CATALOG["google/gemini-3.6-flash"] },
     });
     expect(url).toBe(urlFor("gemini-3.6-flash"));
+  });
+
+  // The 001D models, routed by the same code path and asserted the same way as
+  // 3.5 and 3.6 above. Parameterized rather than copied four times: the point is
+  // not that each model works in isolation, it is that Analyze needs no
+  // per-model branch at all.
+  it.each([
+    ["google/gemini-3.7-flash", "gemini-3.7-flash"],
+    ["google/gemini-3.8-flash", "gemini-3.8-flash"],
+  ])("routes a catalog-selected %s to its own provider URL", async (id, providerModel) => {
+    const { url } = await routeToUrl({
+      entitled: true,
+      preferredModelId: id,
+      catalogRow: { ...CATALOG[id as keyof typeof CATALOG] },
+    });
+    expect(url).toBe(urlFor(providerModel));
+    expect(url).not.toContain(PRODUCTION_DEFAULT);
   });
 
   it("ignores a DORMANT preference belonging to a caller who is no longer entitled", async () => {

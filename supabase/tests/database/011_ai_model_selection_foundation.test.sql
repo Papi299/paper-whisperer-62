@@ -5,10 +5,10 @@
 -- 20260902120000. The claim that migration makes is an AUTHORIZATION claim, so
 -- it is asserted here rather than assumed:
 --
---   * the catalog is an allowlist — exactly the two approved Gemini rows exist,
---     with the exact provider-qualified internal ids and provider model strings,
---     both enabled and selectable, 3.5 ordered before 3.6, readable by a signed-
---     in caller and mutable by none;
+--   * the catalog is an allowlist — the two rows 001A approved are present with
+--     the exact provider-qualified internal ids and provider model strings, both
+--     enabled and selectable, 3.5 ordered before 3.6, readable by a signed-in
+--     caller and mutable by none;
 --   * the capability is the explicit `ai_model_selection_enabled` flag combined
 --     with an active/trialing status — NOT the plan name. A row whose plan text
 --     says 'pro' but whose flag is false is denied, in the access projection and
@@ -27,6 +27,17 @@
 -- Runtime routing is deliberately NOT covered: this migration changes nothing
 -- about which model an AI operation invokes, and there is no code path from
 -- these tables to a provider request. That is AI-MODEL-SELECTION-001B.
+--
+-- Scope note (AI-MODEL-SELECTION-001D). Every database suite runs against the
+-- FINAL migration state, not against the state each migration left behind, and
+-- migration 20260903120000 later added Gemini 3.7 Flash and Gemini 3.8 Flash
+-- (C35). This suite therefore asserts what 001A durably claims — that ITS two
+-- rows are present exactly as approved, with the posture and constraints it
+-- established — and deliberately no longer claims the catalog is exhausted by
+-- them. The exhaustive "exactly these four rows, in this order" assertions live
+-- in suite 012, which owns the expanded catalog. Nothing here was weakened to
+-- accommodate that: the authorization claims (who may read, who may not write,
+-- what the setter accepts and refuses) are unchanged and still exact.
 --
 -- Deterministic UUIDs; explicit fixtures; no TODO/SKIP; no remote calls; no
 -- Production data; no real credentials. pgTAP is created inside the transaction
@@ -127,41 +138,57 @@ UPDATE public.user_entitlements
 SELECT plan(96);
 
 -- ════════════════════════════════════════════════════════════════════════════
--- 1. Catalog: exactly the two approved models, before any fixture row is added
+-- 1. Catalog: the two models 001A approved, before any fixture row is added
 -- ════════════════════════════════════════════════════════════════════════════
 
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 2,
-  'catalog holds exactly the two initially approved models');
-
-SELECT is(
-  (SELECT array_agg(id ORDER BY sort_order) FROM public.ai_model_catalog),
-  ARRAY['google/gemini-3.5-flash','google/gemini-3.6-flash'],
-  'catalog ids are provider-qualified and ordered 3.5 before 3.6');
-
-SELECT is(
-  (SELECT array_agg(provider_model ORDER BY sort_order) FROM public.ai_model_catalog),
-  ARRAY['gemini-3.5-flash','gemini-3.6-flash'],
-  'catalog provider model strings are exactly the two approved Gemini models');
-
-SELECT is(
-  (SELECT array_agg(display_name ORDER BY sort_order) FROM public.ai_model_catalog),
-  ARRAY['Gemini 3.5 Flash','Gemini 3.6 Flash'],
-  'catalog display names are exactly the two approved labels');
-
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE provider = 'google'), 2,
-  'both seeded models declare provider google');
-
-SELECT ok(
-  (SELECT bool_and(enabled AND selectable) FROM public.ai_model_catalog),
-  'both seeded models are enabled AND selectable');
-
--- Nothing beyond the approved pair. A future Gemini 3.7 / Claude / GPT / preview
--- model, or the floating `gemini-flash-latest` alias, must arrive by explicit
--- product acceptance — not by a seed nobody reviewed.
+-- The 001A pair, asserted as a whole row each: ids, provider model strings,
+-- labels, flags and sort positions together. Their exact values are the durable
+-- part of this migration's claim, and 001D must not have disturbed any of them.
 SELECT is(
   (SELECT count(*)::int FROM public.ai_model_catalog
-    WHERE provider_model ~* '(3\.7|claude|gpt|o[0-9]|preview|latest)'),
-  0, 'no 3.7 / Claude / GPT / preview / -latest model was seeded');
+    WHERE (id, provider, provider_model, display_name, enabled, selectable, sort_order) IN (
+      ('google/gemini-3.5-flash','google','gemini-3.5-flash','Gemini 3.5 Flash',true,true,10),
+      ('google/gemini-3.6-flash','google','gemini-3.6-flash','Gemini 3.6 Flash',true,true,20))),
+  2, 'the two models 001A approved are present exactly as it seeded them');
+
+SELECT is(
+  (SELECT array_agg(id ORDER BY sort_order) FROM public.ai_model_catalog
+    WHERE id IN ('google/gemini-3.5-flash','google/gemini-3.6-flash')),
+  ARRAY['google/gemini-3.5-flash','google/gemini-3.6-flash'],
+  'the 001A ids are provider-qualified and still ordered 3.5 before 3.6');
+
+SELECT is(
+  (SELECT array_agg(provider_model ORDER BY sort_order) FROM public.ai_model_catalog
+    WHERE id IN ('google/gemini-3.5-flash','google/gemini-3.6-flash')),
+  ARRAY['gemini-3.5-flash','gemini-3.6-flash'],
+  'the 001A provider model strings are exactly the two approved Gemini models');
+
+SELECT is(
+  (SELECT array_agg(display_name ORDER BY sort_order) FROM public.ai_model_catalog
+    WHERE id IN ('google/gemini-3.5-flash','google/gemini-3.6-flash')),
+  ARRAY['Gemini 3.5 Flash','Gemini 3.6 Flash'],
+  'the 001A display names are exactly the two approved labels');
+
+SELECT is(
+  (SELECT count(*)::int FROM public.ai_model_catalog
+    WHERE provider = 'google'
+      AND id IN ('google/gemini-3.5-flash','google/gemini-3.6-flash')),
+  2, 'both 001A models declare provider google');
+
+SELECT ok(
+  (SELECT bool_and(enabled AND selectable) FROM public.ai_model_catalog
+    WHERE id IN ('google/gemini-3.5-flash','google/gemini-3.6-flash')),
+  'both 001A models are still enabled AND selectable');
+
+-- Every model still arrives by explicit product acceptance. Gemini 3.7 and 3.8
+-- cleared that bar under C35 and are asserted exhaustively in suite 012; a
+-- Claude / GPT / o-series / preview model or the floating `gemini-flash-latest`
+-- alias has not, and none may appear by a seed nobody reviewed. A floating alias
+-- stays excluded on its own terms: it is not a stable thing to have chosen.
+SELECT is(
+  (SELECT count(*)::int FROM public.ai_model_catalog
+    WHERE provider_model ~* '(claude|gpt|o[0-9]|preview|latest)'),
+  0, 'no Claude / GPT / o-series / preview / -latest model reached the catalog');
 
 -- The catalog is product metadata. Its column set is pinned so a future change
 -- cannot quietly add a place to put an API key, secret name or credential.
@@ -193,9 +220,13 @@ SELECT is(pg_temp.errcode_as('postgres','',
   '23505', 'catalog rejects a second row for the same (provider, provider_model)');
 
 -- ── Catalog read/write posture ──────────────────────────────────────────────
+-- Compared against the catalog's own size rather than a literal: the claim is
+-- "the WHOLE catalog is readable", which must keep holding as reviewed rows are
+-- added, and pinning a number here would only restate suite 012's job.
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d1000000-0000-0000-0000-000000000003'),
   $q$SELECT count(*)::text FROM public.ai_model_catalog$q$),
-  '2', 'an ordinary signed-in user can read the whole catalog');
+  (SELECT count(*)::text FROM public.ai_model_catalog),
+  'an ordinary signed-in user can read the whole catalog');
 
 SELECT is(pg_temp.errcode_as('anon','',
   $q$SELECT count(*) FROM public.ai_model_catalog$q$),

@@ -30,9 +30,15 @@ import {
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 //
-// The two model ids are the rows migration 20260902120000 actually seeds. They
-// are FIXTURE DATA, not a runtime rule: the resolver hard-codes no model list —
-// see the "no TypeScript allowlist" assertions at the end.
+// The four model ids are the rows the catalog actually holds: 3.5 and 3.6 from
+// migration 20260902120000, then 3.7 and 3.8 from 20260903120000 (C35). They are
+// FIXTURE DATA, not a runtime rule: the resolver hard-codes no model list — see
+// the "no TypeScript allowlist" assertions at the end, which route a model
+// string that appears in no migration at all.
+//
+// That the 001D models needed no change to this file beyond fixtures IS the
+// architectural claim. If supporting a new catalog model ever required editing
+// `aiModelSelection.ts`, the database would have stopped being the allowlist.
 
 const SYSTEM_DEFAULT = "gemini-3.6-flash-SYSTEM-DEFAULT-SENTINEL";
 const USER_ID = "11111111-2222-4333-8444-555555555555";
@@ -49,6 +55,20 @@ const CATALOG_36 = {
   id: "google/gemini-3.6-flash",
   provider: "google",
   provider_model: "gemini-3.6-flash",
+  enabled: true,
+  selectable: true,
+};
+const CATALOG_37 = {
+  id: "google/gemini-3.7-flash",
+  provider: "google",
+  provider_model: "gemini-3.7-flash",
+  enabled: true,
+  selectable: true,
+};
+const CATALOG_38 = {
+  id: "google/gemini-3.8-flash",
+  provider: "google",
+  provider_model: "gemini-3.8-flash",
   enabled: true,
   selectable: true,
 };
@@ -319,6 +339,62 @@ describe("catalog resolution", () => {
       fallbackReason: null,
     });
     expect(harness.warns).toEqual([]);
+  });
+
+  // AI-MODEL-SELECTION-001D. Neither of the next two models existed when this
+  // resolver was written, and the resolver was not edited to accept them: the
+  // only thing that changed is the catalog row the fake client returns. That is
+  // the whole test — a passing assertion here means a reviewed row is sufficient
+  // to route a new Google model, and a failing one would mean a code allowlist
+  // had appeared somewhere between the preference read and the URL.
+  it("honours a valid Gemini 3.7 preference with no code change", async () => {
+    const harness = entitledWith(CATALOG_37, CATALOG_37.id);
+    const selection = await resolve(harness);
+    expect(selection).toEqual({
+      provider: "google",
+      providerModel: "gemini-3.7-flash",
+      source: "user_preference",
+      fallbackReason: null,
+    });
+    expect(harness.warns).toEqual([]);
+  });
+
+  it("honours a valid Gemini 3.8 preference with no code change", async () => {
+    const harness = entitledWith(CATALOG_38, CATALOG_38.id);
+    const selection = await resolve(harness);
+    expect(selection).toEqual({
+      provider: "google",
+      providerModel: "gemini-3.8-flash",
+      source: "user_preference",
+      fallbackReason: null,
+    });
+    expect(harness.warns).toEqual([]);
+  });
+
+  // The catalog's provider_model — not its id — is what reaches the provider.
+  // Worth pinning per model, because the two strings differ only by the
+  // `google/` prefix and a resolver that returned the id would look plausible.
+  it.each([
+    ["gemini-3.7-flash", CATALOG_37],
+    ["gemini-3.8-flash", CATALOG_38],
+  ])("sends %s — the catalog provider_model, never the catalog id", async (expected, row) => {
+    const selection = await resolve(entitledWith(row, row.id));
+    expect(selection.providerModel).toBe(expected);
+    expect(selection.providerModel).not.toBe(row.id);
+  });
+
+  // The flags mean the same thing for a new model as for an old one: nothing
+  // about 001D is special-cased.
+  it("falls back when a newly added model is retired (enabled = false)", async () => {
+    const harness = entitledWith({ ...CATALOG_38, enabled: false }, CATALOG_38.id);
+    expectSystemDefault(await resolve(harness), "model_disabled");
+  });
+
+  it("STILL HONOURS a newly added model that is enabled but not selectable", async () => {
+    const harness = entitledWith({ ...CATALOG_37, selectable: false }, CATALOG_37.id);
+    const selection = await resolve(harness);
+    expect(selection.source).toBe("user_preference");
+    expect(selection.providerModel).toBe("gemini-3.7-flash");
   });
 
   it("falls back when the catalog row is missing", async () => {
@@ -675,11 +751,27 @@ describe("the Gemini URL boundary", () => {
     );
   });
 
+  // The exact string that goes on the wire for each newly approved model. An
+  // assertion on the whole URL rather than on the model component, because the
+  // host, the API version and the `:generateContent` verb are just as much part
+  // of the contract 001D must not have moved.
+  it.each([
+    ["gemini-3.7-flash", CATALOG_37],
+    ["gemini-3.8-flash", CATALOG_38],
+  ])("builds the exact generateContent URL for a catalog-selected %s", async (model, row) => {
+    const selection = await resolve(entitledWith(row, row.id));
+    expect(buildGeminiGenerateContentUrl(selection)).toBe(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    );
+  });
+
   it("stays on generativelanguage.googleapis.com for every routing outcome", async () => {
     for (const options of [
       { access: [{ can_select_ai_model: false }] },
       { preference: null },
       { preference: { preferred_model_id: CATALOG_36.id }, catalog: CATALOG_36 },
+      { preference: { preferred_model_id: CATALOG_37.id }, catalog: CATALOG_37 },
+      { preference: { preferred_model_id: CATALOG_38.id }, catalog: CATALOG_38 },
       {
         preference: { preferred_model_id: CATALOG_35.id },
         catalog: { ...CATALOG_35, provider: "anthropic", provider_model: "claude-sentinel" },

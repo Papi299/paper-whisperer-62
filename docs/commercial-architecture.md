@@ -197,7 +197,18 @@ Per-user running total of attachment bytes, one row per user, `used_bytes` as `B
 
 The server-controlled **allowlist** of AI models Paperlume has explicitly approved for selection (`20260902120000`, C33). Columns: `id` (TEXT PK, provider-qualified), `provider`, `provider_model`, `display_name`, `enabled`, `selectable`, `sort_order`, timestamps. Constraints require every text column to be non-empty and already trimmed, and `(provider, provider_model)` is unique.
 
-Seeded with **exactly two rows** — `google/gemini-3.5-flash` and `google/gemini-3.6-flash` — both enabled and selectable, 3.5 ordered first. Nothing else is seeded: Gemini 3.7, Anthropic/Claude, OpenAI/GPT, preview models and the floating `gemini-flash-latest` alias are all absent by decision.
+**Four rows**, all `provider = google`, all enabled and selectable, in `sort_order` 10 / 20 / 30 / 40:
+
+| `id` | `provider_model` | `display_name` | Added by |
+|---|---|---|---|
+| `google/gemini-3.5-flash` | `gemini-3.5-flash` | Gemini 3.5 Flash | `20260902120000` (C33) |
+| `google/gemini-3.6-flash` | `gemini-3.6-flash` | Gemini 3.6 Flash | `20260902120000` (C33) |
+| `google/gemini-3.7-flash` | `gemini-3.7-flash` | Gemini 3.7 Flash | `20260903120000` (C35) |
+| `google/gemini-3.8-flash` | `gemini-3.8-flash` | Gemini 3.8 Flash | `20260903120000` (C35) |
+
+`sort_order` is sparse on purpose, and 001D **appended** 30 and 40 rather than renumbering — a preference someone already saved keeps its position. Nothing else is in the catalog: Anthropic/Claude, OpenAI/GPT, Gemini Pro models, preview models and the floating `gemini-flash-latest` alias are all absent by decision, and a floating alias is excluded on its own terms since it is not a stable thing for a user to have chosen. **Being in this table makes a model selectable, never default** — Paperlume's system default is `gemini-3.5-flash`, resolved server-side from `GEMINI_MODEL` (C34), and no migration changes it.
+
+Adding a model is a reviewed migration and **nothing else**: 001D added 3.7 and 3.8 with zero changes to `_shared/aiModelSelection.ts`, `AiModelSettingsSection.tsx` and `useAiModelSettings.ts`, which is the property the two sections below describe.
 
 `provider` is deliberately **not** CHECK-constrained to a closed list so a future Anthropic or OpenAI model is a seed row plus a runtime adapter rather than a constraint migration. That is a schema affordance only — **no non-Google provider is implemented**, and adding one requires explicit provider, privacy, cost and runtime-adapter work. Since AI-MODEL-SELECTION-001B the runtime enforces that boundary rather than trusting the seed: a catalog row naming any provider other than `google` is **refused and falls back to the system default**, and no external URL is constructed for it.
 
