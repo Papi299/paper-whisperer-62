@@ -47,7 +47,13 @@ beforeAll(() => {
 const USER = "user-1";
 const GEMINI_35_ID = "google/gemini-3.5-flash";
 const GEMINI_36_ID = "google/gemini-3.6-flash";
+const GEMINI_37_ID = "google/gemini-3.7-flash";
+const GEMINI_38_ID = "google/gemini-3.8-flash";
 
+// The four rows the migrated catalog returns. This is the response shape the
+// real PostgREST read produces, so the composed dialog has to discover 3.7 and
+// 3.8 from it — nothing in `SettingsDialog`, `AiModelSettingsSection` or
+// `useAiModelSettings` was changed for AI-MODEL-SELECTION-001D.
 const CATALOG = [
   {
     id: GEMINI_35_ID,
@@ -64,6 +70,22 @@ const CATALOG = [
     enabled: true,
     selectable: true,
     sort_order: 20,
+  },
+  {
+    id: GEMINI_37_ID,
+    provider: "google",
+    display_name: "Gemini 3.7 Flash",
+    enabled: true,
+    selectable: true,
+    sort_order: 30,
+  },
+  {
+    id: GEMINI_38_ID,
+    provider: "google",
+    display_name: "Gemini 3.8 Flash",
+    enabled: true,
+    selectable: true,
+    sort_order: 40,
   },
 ];
 
@@ -197,6 +219,36 @@ describe("SettingsDialog — AI Model section composition", () => {
     expect(
       (prefStub!.eq as unknown as { mock: { calls: unknown[][] } }).mock.calls,
     ).toContainEqual(["user_id", USER]);
+  });
+
+  it("renders every catalog model the server returned, plus the default sentinel", async () => {
+    setup();
+    renderDialog();
+
+    const listbox = await openSelect();
+    expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Paperlume default",
+      "Gemini 3.5 Flash",
+      "Gemini 3.6 Flash",
+      "Gemini 3.7 Flash",
+      "Gemini 3.8 Flash",
+    ]);
+  });
+
+  it("saves a newly added model through the existing setter, with its catalog id", async () => {
+    setup();
+    renderDialog();
+
+    const listbox = await openSelect();
+    fireEvent.click(within(listbox).getByRole("option", { name: "Gemini 3.8 Flash" }));
+
+    await waitFor(() =>
+      expect(mockRpc).toHaveBeenCalledWith("set_current_user_ai_model", {
+        p_model_id: GEMINI_38_ID,
+      }),
+    );
+    // Still only reads against the two tables — adding models added no write path.
+    expect(calls.filter((c) => c.verb !== "select")).toEqual([]);
   });
 
   it("keeps Settings open after a model is saved", async () => {

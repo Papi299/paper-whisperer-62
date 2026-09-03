@@ -41,9 +41,11 @@ const USER_ID = "11111111-2222-4333-8444-555555555555";
 const PAPER_ID = "6f1a2b3c-4d5e-4f60-8a91-b2c3d4e5f607";
 const GEMINI_KEY = "SENTINEL-GEMINI-API-KEY";
 
-// AI-MODEL-SELECTION-001B fixtures. The two ids are the rows migration
-// 20260902120000 seeds; they are fixture data, not a runtime allowlist — the
-// resolver hard-codes no model names (see `_shared/__tests__/aiModelSelection.test.ts`).
+// AI-MODEL-SELECTION-001B / 001D fixtures. The four ids are the catalog rows —
+// 3.5 and 3.6 from migration 20260902120000, 3.7 and 3.8 from 20260903120000
+// (C35). They are fixture data, not a runtime allowlist: the resolver hard-codes
+// no model names (see `_shared/__tests__/aiModelSelection.test.ts`), and this
+// handler was not edited to add the 001D pair.
 const SYSTEM_DEFAULT_MODEL = "gemini-flash-latest";
 const MODEL_35 = {
   id: "google/gemini-3.5-flash",
@@ -56,6 +58,20 @@ const MODEL_36 = {
   id: "google/gemini-3.6-flash",
   provider: "google",
   provider_model: "gemini-3.6-flash",
+  enabled: true,
+  selectable: true,
+};
+const MODEL_37 = {
+  id: "google/gemini-3.7-flash",
+  provider: "google",
+  provider_model: "gemini-3.7-flash",
+  enabled: true,
+  selectable: true,
+};
+const MODEL_38 = {
+  id: "google/gemini-3.8-flash",
+  provider: "google",
+  provider_model: "gemini-3.8-flash",
   enabled: true,
   selectable: true,
 };
@@ -1320,6 +1336,22 @@ describe("model routing", () => {
     const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(response.status).toBe(200);
     expect(sentUrl(harness)).toBe(urlFor("gemini-3.6-flash"));
+  });
+
+  // The 001D models through the real handler, with the real fake transport: the
+  // model component of the POSTed URL is the only thing that moves. One
+  // parameterized case rather than a fourfold copy of the whole suite — the
+  // claim is that Suggest carries no per-model code, not that each model has its
+  // own behaviour.
+  it.each([
+    ["gemini-3.7-flash", MODEL_37],
+    ["gemini-3.8-flash", MODEL_38],
+  ])("routes a catalog-selected %s to its own provider URL", async (model, row) => {
+    const harness = routing({ ...row });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(sentUrl(harness)).toBe(urlFor(model));
+    expect(sentUrl(harness)).not.toContain(SYSTEM_DEFAULT_MODEL);
   });
 
   it("ignores a DORMANT preference held by a caller who is no longer entitled", async () => {

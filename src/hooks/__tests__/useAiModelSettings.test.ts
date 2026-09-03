@@ -21,9 +21,13 @@ import { queryKeys } from "@/lib/queryKeys";
 const USER = "user-1";
 
 /**
- * Catalog fixtures use the two real Production model ids on purpose: concrete
- * ids belong in a fixture, and the point of the suite is that the *hook* never
+ * Catalog fixtures use the real catalog model ids on purpose: concrete ids
+ * belong in a fixture, and the point of the suite is that the *hook* never
  * contains them. Nothing in `useAiModelSettings.ts` names a model.
+ *
+ * 3.5 and 3.6 come from migration `20260902120000`; 3.7 and 3.8 were added by
+ * `20260903120000` (AI-MODEL-SELECTION-001D, C35) with **no change to the hook**
+ * — which is exactly what the four-option assertions below demonstrate.
  */
 const GEMINI_35 = {
   id: "google/gemini-3.5-flash",
@@ -40,6 +44,22 @@ const GEMINI_36 = {
   enabled: true,
   selectable: true,
   sort_order: 20,
+};
+const GEMINI_37 = {
+  id: "google/gemini-3.7-flash",
+  provider: "google",
+  display_name: "Gemini 3.7 Flash",
+  enabled: true,
+  selectable: true,
+  sort_order: 30,
+};
+const GEMINI_38 = {
+  id: "google/gemini-3.8-flash",
+  provider: "google",
+  display_name: "Gemini 3.8 Flash",
+  enabled: true,
+  selectable: true,
+  sort_order: 40,
 };
 
 type Result = { data: unknown; error: unknown };
@@ -197,6 +217,49 @@ describe("useAiModelSettings — reads", () => {
     expect(result.current.options).toEqual([]);
   });
 
+  // AI-MODEL-SELECTION-001D. A catalog response carrying four supported,
+  // enabled, selectable Google rows must produce four choices with their display
+  // names and ids intact. The hook is unmodified; only the server response grew.
+  it("exposes every supported catalog row, including models it has never heard of", async () => {
+    mockTables(rows(GEMINI_35, GEMINI_36, GEMINI_37, GEMINI_38), prefRow(null));
+    const { result } = await renderLoaded();
+
+    expect(result.current.options).toEqual([
+      { id: GEMINI_35.id, provider: "google", displayName: "Gemini 3.5 Flash", enabled: true, selectable: true },
+      { id: GEMINI_36.id, provider: "google", displayName: "Gemini 3.6 Flash", enabled: true, selectable: true },
+      { id: GEMINI_37.id, provider: "google", displayName: "Gemini 3.7 Flash", enabled: true, selectable: true },
+      { id: GEMINI_38.id, provider: "google", displayName: "Gemini 3.8 Flash", enabled: true, selectable: true },
+    ]);
+  });
+
+  // The same filtering rules apply to the new rows as to the old ones — there is
+  // no per-model exemption anywhere in the hook.
+  it("filters a newly added model out on the same rules as any other", async () => {
+    mockTables(
+      rows(
+        GEMINI_35,
+        { ...GEMINI_37, enabled: false },
+        { ...GEMINI_38, selectable: false },
+      ),
+      prefRow(null),
+    );
+    const { result } = await renderLoaded();
+
+    expect(result.current.options.map((o) => o.id)).toEqual([GEMINI_35.id]);
+  });
+
+  it("resolves a saved 3.8 preference to an active saved model", async () => {
+    mockTables(rows(GEMINI_35, GEMINI_36, GEMINI_37, GEMINI_38), prefRow(GEMINI_38.id));
+    const { result } = await renderLoaded();
+
+    expect(result.current.saved).toEqual({
+      status: "active",
+      modelId: GEMINI_38.id,
+      displayName: "Gemini 3.8 Flash",
+      selectable: true,
+    });
+  });
+
   it("offers only enabled + selectable + supported-provider rows, in catalog order", async () => {
     mockTables(
       rows(
@@ -323,6 +386,31 @@ describe("useAiModelSettings — writes", () => {
         p_model_id: GEMINI_35.id,
       }),
     );
+  });
+
+  // The exact catalog id reaches the setter for each newly approved model — not
+  // a bare provider model string, and not a value the hook invented.
+  it.each([
+    ["Gemini 3.7 Flash", GEMINI_37],
+    ["Gemini 3.8 Flash", GEMINI_38],
+  ])("saves %s through set_current_user_ai_model with that exact catalog id", async (label, model) => {
+    mockTables(rows(GEMINI_35, GEMINI_36, GEMINI_37, GEMINI_38), prefRow(null));
+    mockRpc.mockResolvedValue({
+      data: [{ saved: true, reason: "ok", display_name: label }],
+      error: null,
+    });
+    const { result } = await renderLoaded();
+
+    await act(async () => {
+      result.current.saveModel(model.id);
+    });
+    await waitFor(() =>
+      expect(mockRpc).toHaveBeenCalledWith("set_current_user_ai_model", { p_model_id: model.id }),
+    );
+    // One argument object, and still no user id in it.
+    const args = mockRpc.mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(args)).toEqual(["p_model_id"]);
+    expect(JSON.stringify(args)).not.toContain(USER);
   });
 
   it("refetches the authoritative preference after a successful save", async () => {

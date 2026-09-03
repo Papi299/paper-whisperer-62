@@ -31,6 +31,24 @@ const CLIENT_MODULE_PATH = "/src/integrations/supabase/client.ts";
 const DEFAULT_LABEL = "Paperlume default";
 const GEMINI_35_LABEL = "Gemini 3.5 Flash";
 const GEMINI_36_LABEL = "Gemini 3.6 Flash";
+const GEMINI_37_LABEL = "Gemini 3.7 Flash";
+const GEMINI_38_LABEL = "Gemini 3.8 Flash";
+
+/**
+ * Exactly what the dropdown must contain after a full local migration replay:
+ * the sentinel first, then the four catalog models in `sort_order`. 3.7 and 3.8
+ * arrive from migration `20260903120000` (AI-MODEL-SELECTION-001D, C35) with no
+ * frontend change — this list is read out of the live local database through the
+ * ordinary authenticated catalog SELECT, so it is the end-to-end evidence that a
+ * reviewed row is all a new model needs.
+ */
+const EXPECTED_OPTIONS = [
+  DEFAULT_LABEL,
+  GEMINI_35_LABEL,
+  GEMINI_36_LABEL,
+  GEMINI_37_LABEL,
+  GEMINI_38_LABEL,
+];
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -233,9 +251,11 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
     await expect(select).toHaveText(DEFAULT_LABEL);
 
     await select.click();
-    await expect(page.getByRole("option", { name: DEFAULT_LABEL, exact: true })).toBeVisible();
-    await expect(page.getByRole("option", { name: GEMINI_35_LABEL, exact: true })).toBeVisible();
-    await expect(page.getByRole("option", { name: GEMINI_36_LABEL, exact: true })).toBeVisible();
+    // The whole listbox, in order — not four independent presence checks. A
+    // per-option assertion would still pass if the catalog had grown a model
+    // nobody approved, or if the order the user reads had drifted.
+    const listbox = page.getByRole("listbox");
+    await expect(listbox.getByRole("option")).toHaveText(EXPECTED_OPTIONS);
     await page.keyboard.press("Escape");
 
     await closeSettings(page);
@@ -244,6 +264,19 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
   test("persists a saved model and a reset across Settings close/reopen", async ({ page }) => {
     await signInAsEntitled(page);
     await openSettings(page);
+
+    // ── Save a model added by 001D, end to end ──────────────────────────────
+    // One newly added model is persisted through the real stack — the setter
+    // RPC, the FK to the migrated catalog row, and the reopened dialog — because
+    // that is the only place the migration, the RPC and the UI are exercised
+    // together. The remaining three models are covered by suite 012 and the
+    // focused unit tests rather than repeated here.
+    await chooseModel(page, GEMINI_38_LABEL);
+    await expect(settingsDialog(page)).toBeVisible();
+    await closeSettings(page);
+    await expect(
+      (await openSettings(page)).getByRole("combobox", { name: "AI model" }),
+    ).toHaveText(GEMINI_38_LABEL);
 
     // ── Save an explicit Gemini 3.6 preference ──────────────────────────────
     await chooseModel(page, GEMINI_36_LABEL);

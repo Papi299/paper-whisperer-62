@@ -37,12 +37,20 @@ beforeAll(() => {
   }
 });
 
+// The catalog ids as fixture data. The component itself names no model — the
+// static assertions at the end of this suite read its source and prove it — so
+// the AI-MODEL-SELECTION-001D pair below arrives here and nowhere else in the
+// frontend: the shipped UI discovers 3.7 and 3.8 from `ai_model_catalog`.
 const GEMINI_35_ID = "google/gemini-3.5-flash";
 const GEMINI_36_ID = "google/gemini-3.6-flash";
+const GEMINI_37_ID = "google/gemini-3.7-flash";
+const GEMINI_38_ID = "google/gemini-3.8-flash";
 
 const OPTIONS = [
   { id: GEMINI_35_ID, provider: "google", displayName: "Gemini 3.5 Flash", enabled: true, selectable: true },
   { id: GEMINI_36_ID, provider: "google", displayName: "Gemini 3.6 Flash", enabled: true, selectable: true },
+  { id: GEMINI_37_ID, provider: "google", displayName: "Gemini 3.7 Flash", enabled: true, selectable: true },
+  { id: GEMINI_38_ID, provider: "google", displayName: "Gemini 3.8 Flash", enabled: true, selectable: true },
 ];
 
 const saveModel = vi.fn();
@@ -114,13 +122,20 @@ describe("AiModelSettingsSection — entitled, no preference", () => {
     expect(trigger).toHaveTextContent("Paperlume default");
   });
 
-  it("offers Paperlume default plus both seeded catalog models", async () => {
+  it("offers Paperlume default plus every catalog model, in catalog order", async () => {
     renderSection();
     const listbox = await openSelect();
 
-    expect(within(listbox).getByRole("option", { name: "Paperlume default" })).toBeInTheDocument();
-    expect(within(listbox).getByRole("option", { name: "Gemini 3.5 Flash" })).toBeInTheDocument();
-    expect(within(listbox).getByRole("option", { name: "Gemini 3.6 Flash" })).toBeInTheDocument();
+    // The exact rendered list, not four separate presence checks: the sentinel
+    // must come first, and the four models must arrive in the order the hook
+    // handed them over (which is the catalog's own sort_order).
+    expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Paperlume default",
+      "Gemini 3.5 Flash",
+      "Gemini 3.6 Flash",
+      "Gemini 3.7 Flash",
+      "Gemini 3.8 Flash",
+    ]);
   });
 
   it("explains the distinction between following the default and pinning a model", () => {
@@ -180,6 +195,22 @@ describe("AiModelSettingsSection — changing the model", () => {
     fireEvent.click(within(listbox).getByRole("option", { name: "Gemini 3.6 Flash" }));
 
     await waitFor(() => expect(saveModel).toHaveBeenCalledWith(GEMINI_36_ID));
+    expect(clearModel).not.toHaveBeenCalled();
+  });
+
+  // AI-MODEL-SELECTION-001D. Choosing either new model must call the existing
+  // setter with the exact catalog id — the component neither rewrites the id nor
+  // recognises it. These pass against unmodified production code, which is the
+  // result the task is asserting.
+  it.each([
+    ["Gemini 3.7 Flash", GEMINI_37_ID],
+    ["Gemini 3.8 Flash", GEMINI_38_ID],
+  ])("saves %s with its exact catalog id", async (label, id) => {
+    renderSection();
+    const listbox = await openSelect();
+    fireEvent.click(within(listbox).getByRole("option", { name: label }));
+
+    await waitFor(() => expect(saveModel).toHaveBeenCalledWith(id));
     expect(clearModel).not.toHaveBeenCalled();
   });
 
