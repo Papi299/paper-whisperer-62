@@ -116,7 +116,7 @@ INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_nam
    'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/b.pdf','b.pdf','application/pdf',8000);
 SELECT set_config('request.jwt.claims', '', true);
 
-SELECT plan(125);
+SELECT plan(154);
 
 -- ═══ 1. Queue table shape and protection ════════════════════════════════════
 
@@ -586,13 +586,17 @@ SELECT is(
     WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf'),
   0, 'and creates no metadata over it — the ordering decides, not the quota');
 SELECT is(
-  pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+  pg_temp.errcode_as('postgres', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
     $q$INSERT INTO public.paper_attachments (paper_id,user_id,file_path,file_name,file_type,size_bytes)
        VALUES ('b1000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-0000000000b0',
                'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf',
                'rejected.pdf','application/pdf',10)$q$),
   'P0001',
-  'a DIRECT client INSERT over a queued path is refused too — the rule belongs to the table, not to the RPC');
+  'a direct INSERT over a queued path is refused too — the rule belongs to the table, not to the RPC');
+-- As the OWNER, deliberately. A browser cannot reach this trigger any more (see
+-- section 10), but the SECURITY DEFINER RPCs run as the owner and can, so the
+-- table-level guard still has a caller to hold against — and it is the caller
+-- that matters, because it is the one with the privilege.
 SELECT is(
   (SELECT count(*)::int
      FROM public.attachment_cleanup_queue q
@@ -630,13 +634,13 @@ SELECT is(
     WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf'),
   0, 'and creates no metadata for a binary the drain has already removed');
 SELECT is(
-  pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+  pg_temp.errcode_as('postgres', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
     $q$INSERT INTO public.paper_attachments (paper_id,user_id,file_path,file_name,file_type,size_bytes)
        VALUES ('b1000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-0000000000b0',
                'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf',
                'rejected.pdf','application/pdf',10)$q$),
   'P0001',
-  'and a direct INSERT is still refused once the queue row is gone — the tombstone is the guard');
+  'and an owner INSERT is still refused once the queue row is gone — the tombstone is the guard');
 
 -- ── The paper vanished under the upload ──
 -- Paper deletion and finalization are serialized on the paper (see the probe),
@@ -852,6 +856,157 @@ SELECT set_config('request.jwt.claims', '', true);
 SELECT ok(
   (SELECT rolbypassrls FROM pg_roles WHERE rolname = 'service_role'),
   'service_role bypasses RLS, so the account-deletion Storage sweep is unaffected by the fence');
+
+-- ═══ 10. The lifecycle boundary — clients no longer write this table ════════
+--
+-- Sections 1-9 constrain what happens WHEN a browser writes attachment
+-- metadata. Section 6c of the migration removes the premise: after it, the API
+-- roles hold SELECT and nothing else here, and every write goes through the
+-- three SECURITY DEFINER RPCs. This asserts the resulting contract end to end —
+-- the four privileges, the read that must survive, and the three RPCs that must
+-- keep working without depending on any of the privileges that were removed.
+
+-- ── Fixture: a user with quota, a paper, and no attachments yet ──
+SELECT set_config('request.jwt.claims', '', true);
+INSERT INTO auth.users (id, email) VALUES
+  ('ee000000-0000-0000-0000-0000000000e0','boundary@paperlume.test');
+UPDATE public.user_entitlements SET storage_quota_bytes = 100000
+ WHERE user_id = 'ee000000-0000-0000-0000-0000000000e0';
+INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES
+  ('e1000000-0000-0000-0000-0000000000e1','ee000000-0000-0000-0000-0000000000e0','Boundary','[]'::jsonb,1);
+
+-- ── The four privileges, exactly ──
+SELECT ok(has_table_privilege('authenticated','public.paper_attachments','SELECT'),
+  'lifecycle boundary: authenticated keeps SELECT — the UI still lists attachments');
+SELECT ok(NOT has_table_privilege('authenticated','public.paper_attachments','INSERT'),
+  'lifecycle boundary: authenticated holds no INSERT — metadata is created only by finalize_attachment_upload');
+SELECT ok(NOT has_table_privilege('authenticated','public.paper_attachments','UPDATE'),
+  'lifecycle boundary: authenticated holds no UPDATE — file identity is not client-mutable');
+SELECT ok(NOT has_table_privilege('authenticated','public.paper_attachments','DELETE'),
+  'lifecycle boundary: authenticated holds no DELETE — removal always records cleanup intent');
+SELECT ok(NOT has_table_privilege('authenticated','public.paper_attachments','TRUNCATE'),
+  'lifecycle boundary: authenticated holds no TRUNCATE — the one statement that would skip every row trigger');
+SELECT is(
+  (SELECT count(*)::int FROM pg_class c, aclexplode(c.relacl) a
+    WHERE c.oid = 'public.paper_attachments'::regclass AND a.grantee = 0),
+  0, 'lifecycle boundary: nothing is granted to PUBLIC, so no future role inherits write access');
+SELECT ok(NOT has_table_privilege('anon','public.paper_attachments','SELECT')
+      AND NOT has_table_privilege('anon','public.paper_attachments','INSERT')
+      AND NOT has_table_privilege('anon','public.paper_attachments','UPDATE')
+      AND NOT has_table_privilege('anon','public.paper_attachments','DELETE'),
+  'lifecycle boundary: anon reaches this table for nothing at all');
+
+-- ── CUT-2/3/4: the denial is real, not just an ACL row ──
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$INSERT INTO public.paper_attachments (paper_id,user_id,file_path,file_name,file_type,size_bytes)
+       VALUES ('e1000000-0000-0000-0000-0000000000e1','ee000000-0000-0000-0000-0000000000e0',
+               'ee000000-0000-0000-0000-0000000000e0/e1000000-0000-0000-0000-0000000000e1/direct.pdf',
+               'direct.pdf','application/pdf',10)$q$),
+  '42501', 'CUT-2: a direct authenticated INSERT is refused — a perfectly valid, own-paper, own-namespace row');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  0, 'CUT-2: and it created nothing');
+
+-- ── CUT-5a: the RPC that replaced it still works ──
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$SELECT status FROM public.finalize_attachment_upload('e1000000-0000-0000-0000-0000000000e1'::uuid,
+      'ee000000-0000-0000-0000-0000000000e0/e1000000-0000-0000-0000-0000000000e1/direct.pdf',
+      'direct.pdf','application/pdf',10)$q$),
+  'metadata_committed',
+  'CUT-5a: finalize_attachment_upload still inserts metadata — a SECURITY DEFINER function does not consult the caller''s table grants');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  1, 'CUT-5a: exactly one row, written by the server on the client''s behalf');
+SELECT is(
+  (SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  '10', 'CUT-5a: and quota was charged by the same trigger as before — accounting is unchanged by the revoke');
+
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$UPDATE public.paper_attachments SET file_name='renamed.pdf'
+        WHERE user_id='ee000000-0000-0000-0000-0000000000e0'$q$),
+  '42501', 'CUT-3: a direct authenticated UPDATE is refused');
+SELECT is(
+  (SELECT file_name FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  'direct.pdf', 'CUT-3: and the row is untouched');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$DELETE FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'$q$),
+  '42501', 'CUT-4: a direct authenticated DELETE is refused — on the caller''s own row');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$TRUNCATE public.paper_attachments$q$),
+  '42501', 'CUT-4: and TRUNCATE with it');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  1, 'CUT-4: the attachment survived both attempts');
+
+-- ── SELECT is genuinely still usable, not merely granted ──
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$SELECT count(*)::text FROM public.paper_attachments$q$),
+  '1', 'lifecycle boundary: the owner can still read her own attachment');
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('aa000000-0000-0000-0000-0000000000a0'),
+    $q$SELECT count(*)::text FROM public.paper_attachments
+        WHERE user_id='ee000000-0000-0000-0000-0000000000e0'$q$),
+  '0', 'lifecycle boundary: and RLS still hides it from everybody else');
+
+-- ── CUT-5b: deletion through the RPC, with its cleanup intent ──
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$SELECT public.delete_attachment_with_cleanup(
+         (SELECT id FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'))$q$),
+  '00000', 'CUT-5b: delete_attachment_with_cleanup still removes metadata');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  0, 'CUT-5b: the row is gone');
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue
+    WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  1, 'CUT-5b: and the Storage cleanup intent was recorded in the same transaction — the invariant, now database-enforced');
+SELECT is(
+  (SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  '0', 'CUT-5b: quota was refunded by the same trigger as before');
+
+-- ── CUT-5c: paper deletion still cascades and still queues ──
+DELETE FROM public.attachment_cleanup_queue WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
+DELETE FROM public.attachment_cleanup_tombstone WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$SELECT status FROM public.finalize_attachment_upload('e1000000-0000-0000-0000-0000000000e1'::uuid,
+      'ee000000-0000-0000-0000-0000000000e0/e1000000-0000-0000-0000-0000000000e1/cascade.pdf',
+      'cascade.pdf','application/pdf',20)$q$),
+  'metadata_committed', 'CUT-5c: a second upload finalizes for the cascade case');
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$SELECT deleted_count::text || '/' || queued_count::text
+         FROM public.delete_papers_with_attachment_cleanup(
+           ARRAY['e1000000-0000-0000-0000-0000000000e1']::uuid[])$q$),
+  '1/1', 'CUT-5c: delete_papers_with_attachment_cleanup deleted the paper and queued its attachment path');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  0, 'CUT-5c: the metadata cascaded away with the paper');
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue
+    WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
+  1, 'CUT-5c: and its Storage path is recorded, not lost with the row that named it');
+
+-- ── The acknowledgement path a client still needs is untouched ──
+-- The drain deletes its own queue rows once Storage confirms removal. That is
+-- the one write a browser still performs anywhere in this feature, and closing
+-- the metadata table must not have closed it.
+SELECT ok(has_table_privilege('authenticated','public.attachment_cleanup_queue','SELECT')
+      AND has_table_privilege('authenticated','public.attachment_cleanup_queue','DELETE'),
+  'lifecycle boundary: the queue is still readable and acknowledgeable — the drain still works');
+SELECT ok(NOT has_table_privilege('authenticated','public.attachment_cleanup_queue','INSERT'),
+  'lifecycle boundary: but still not writable — cleanup intent is never client-authored');
+
+DELETE FROM public.attachment_cleanup_queue WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
+DELETE FROM public.attachment_cleanup_tombstone WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
+DELETE FROM auth.users WHERE id='ee000000-0000-0000-0000-0000000000e0';
 
 SELECT * FROM finish();
 ROLLBACK;

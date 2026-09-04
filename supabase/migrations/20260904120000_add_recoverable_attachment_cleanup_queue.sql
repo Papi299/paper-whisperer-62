@@ -34,6 +34,16 @@
 -- exists" and "cleanup is authorized" can ever be true for a path, and neither
 -- the browser nor a concurrent retry ever has to guess which.
 --
+-- All of which is reasoning about a browser that writes attachment metadata
+-- directly. Section 6c stops it doing that at all: after this migration the API
+-- roles keep SELECT and lose INSERT/UPDATE/DELETE/TRUNCATE, and metadata is
+-- created and destroyed only by the three SECURITY DEFINER RPCs here. Section 0
+-- is what makes that safe to switch on while a browser is mid-request — a
+-- catalog change waits for nobody, so the migration takes an ACCESS EXCLUSIVE
+-- lock on `paper_attachments` first and holds it to commit, and there is
+-- therefore no such thing as a write that was authorized before the cutover and
+-- commits after it.
+--
 --
 -- What this migration deliberately does NOT do
 -- ────────────────────────────────────────────
@@ -76,6 +86,96 @@
 -- own queue row only ever means "stop trying to remove this object", which at
 -- worst leaves a binary in place — the failure mode this migration already
 -- treats as recoverable, and the one account deletion sweeps regardless.
+
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 0. The cutover barrier
+-- ═════════════════════════════════════════════════════════════════════════════
+--
+-- Section 6c below takes attachment metadata DML away from browser clients, and
+-- section 6b refuses the deletion of a binary that live metadata names. Both are
+-- catalog changes, and a catalog change on its own does NOT wait for anybody:
+-- `REVOKE` locks catalog rows, not `paper_attachments`, so it can commit while a
+-- pre-migration browser's `INSERT INTO paper_attachments` is still open. That
+-- transaction was permission-checked before the revoke and commits happily after
+-- it, which reopens the exact ordering this feature exists to close:
+--
+--   1. an old tab uploads its object and issues a direct metadata INSERT;
+--   2. the INSERT reaches Postgres and is still uncommitted;
+--   3. this migration commits — grants revoked, Storage fence live;
+--   4. the tab loses its HTTP response and runs its old compensation,
+--      `storage.remove(file_path)`;
+--   5. the fence asks whether live metadata names that object. The INSERT has
+--      not committed, so the answer is no, and the delete is permitted;
+--   6. the INSERT commits.
+--
+-- Final state: a committed metadata row, quota charged, binary gone. Every guard
+-- was in place and none of them saw anything, because the whole race happens in
+-- the gap between "authorized" and "committed".
+--
+-- The fix is to make that gap empty. An explicit ACCESS EXCLUSIVE lock, taken as
+-- the migration's first act and held to commit, gives three properties, and the
+-- correction needs all three:
+--
+--   * it conflicts with ROW EXCLUSIVE, so acquiring it WAITS for every open
+--     transaction that has written to this table. Step 2 above cannot still be
+--     in flight once this statement returns;
+--   * it conflicts with every lock mode, so between acquisition and commit no
+--     other session can begin a read or a write here. Nothing can slip in
+--     between the barrier and the revoke;
+--   * a table lock is always held until the transaction ends, so it is released
+--     at exactly the instant the new posture becomes visible. A statement that
+--     queued behind it processes the invalidation for this relation as it takes
+--     its own lock, so it is planned against the NEW privileges — 42501, not a
+--     successful write under the old ones.
+--
+-- Which is the whole claim: after this migration commits there is no such thing
+-- as a pre-cutover direct metadata write that has not already finished.
+--
+-- ACCESS EXCLUSIVE rather than something narrower. SHARE would be enough to wait
+-- out writers, but this migration also runs DDL on the table (an index, a
+-- trigger) that needs more, and a lock upgrade mid-transaction is a deadlock
+-- shape rather than a simplification. The strongest mode, taken once, up front,
+-- is the version whose proof fits in a paragraph — and the probe in
+-- scripts/e2e-local.mjs (Case CUT-1) asserts the waiting behaviour on real
+-- concurrent sessions rather than assuming it.
+--
+-- ── Operational implication, stated because it is real ─────────────────────
+-- This migration BLOCKS all access to `paper_attachments` — reads included — for
+-- its duration, and before that it waits for any in-flight attachment operation
+-- to finish. Everything it does is catalog-only (no table rewrite, no backfill),
+-- so the held window is milliseconds; the wait beforehand is however long the
+-- longest open attachment transaction takes. Deliberately there is no
+-- `lock_timeout`: a timeout would turn a correctness barrier into a race the
+-- migration sometimes loses. Apply it the way any DDL is applied — not during a
+-- known bulk operation. See docs/deployment.md §6.4.
+
+-- ── Why this file opens a transaction explicitly ──────────────────────────
+-- Migration runners do not agree about this. `supabase start` sends a migration
+-- file to Postgres as one batch, which Postgres executes as an implicit
+-- transaction; `supabase db reset` splits the file and runs each statement in
+-- autocommit, where `LOCK TABLE` is not merely useless but an error (25P01,
+-- "LOCK TABLE can only be used in transaction blocks"). A barrier that is
+-- released at the end of its own statement is not a barrier at all, so the
+-- transaction is opened here rather than assumed.
+--
+-- It also makes an older claim in this file true. The fail-closed verification
+-- in section 7 says replay must "produce the reviewed posture or refuse to
+-- commit"; under a statement-at-a-time runner its RAISE would abort the run with
+-- most of the migration already committed. Inside BEGIN/COMMIT it does what it
+-- says: nothing lands unless everything verifies.
+--
+-- And it is what keeps the two halves of the cutover inseparable. The Storage
+-- fence in section 6b and the revoke in section 6c must become visible in the
+-- same instant: a fence that is live while clients can still write metadata can
+-- be walked past by an uncommitted INSERT, and a revoke that lands before the
+-- fence leaves a window where a stale tab's compensation can still delete the
+-- binary of a row that committed just before the cutover. Both windows are
+-- "milliseconds", and milliseconds is the kind of argument this correction
+-- exists to stop making.
+BEGIN;
+
+LOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE;
 
 
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -1033,6 +1133,83 @@ CREATE POLICY "attachments_owner_delete" ON storage.objects
 
 
 -- ═════════════════════════════════════════════════════════════════════════════
+-- 6c. The lifecycle boundary — clients stop writing attachment metadata
+-- ═════════════════════════════════════════════════════════════════════════════
+--
+-- Everything above is reasoning about WHICH of two systems to trust when a
+-- browser and the database disagree. That reasoning only has to happen because
+-- the browser is allowed to write attachment metadata directly. It isn't, after
+-- this.
+--
+-- The post-migration client contract:
+--
+--   SELECT  — unchanged. The UI reads its own attachments, and the account
+--             export reads them, through the same RLS that has always applied.
+--   INSERT  — closed. Metadata is created by `finalize_attachment_upload` only.
+--   DELETE  — closed. Metadata is removed by `delete_attachment_with_cleanup`,
+--             by `delete_papers_with_attachment_cleanup`, by the cascade those
+--             two initiate, or by account deletion.
+--   UPDATE  — closed. It was already unreachable — this table has no UPDATE
+--             policy and never has — but Production carries the old
+--             platform-default ACL that granted the API roles everything, so the
+--             privilege is revoked rather than left standing on a technicality.
+--
+-- TRUNCATE is revoked with them, and for a sharper reason than tidiness: it
+-- removes every row without firing a row trigger and without consulting RLS, so
+-- a role holding it could empty this table without refunding a byte of quota or
+-- recording one path of cleanup intent. It is the one privilege that could make
+-- the invariant below false in a single statement.
+--
+-- What that buys is a Product invariant enforced by the database rather than by
+-- the current React bundle:
+--
+--   **Postgres never removes ordinary user attachment metadata without
+--     recording the Storage cleanup intent in the same transaction.**
+--
+-- and its upload mirror: a metadata row can only come into existence through the
+-- serialized, tombstone-aware, quota-rolling-back decision in section 5. A
+-- hand-written Data API request from a stale bundle — or from anywhere else —
+-- gets 42501 before RLS is even consulted.
+--
+-- ── What this does NOT change ──────────────────────────────────────────────
+--   * The three RPCs are SECURITY DEFINER and execute as this migration's owner,
+--     which owns the table. They do not consult the caller's table grants and
+--     are unaffected. Section 7 asserts they still work.
+--   * `service_role` keeps its grants. Nothing in this repository writes this
+--     table with the service role today — `delete-account` enumerates Storage
+--     itself and then deletes the auth user, letting the FK cascade take the
+--     metadata — but that cascade and any future privileged repair are exactly
+--     what a server role is for, and narrowing it proves nothing here.
+--   * The `owner insert` / `owner delete` RLS policies stay. They are dead for
+--     `authenticated` now that the grant is gone, and that is the point of
+--     defense in depth: if a privilege is ever re-granted by accident, the
+--     ownership predicate is still standing underneath it.
+--   * REFERENCES, TRIGGER and MAINTAIN are untouched — the platform default
+--     grants that trio on every new public table, and Production's legacy
+--     blanket ACL grants them too. None of the three can create or remove a row,
+--     and TRIGGER is inert here besides: neither `anon` nor `authenticated`
+--     holds CREATE on schema `public`, so neither can define the function a
+--     trigger would need. Normalising that trio across every table is a
+--     repository-wide posture question and not this migration's to settle.
+--
+-- ── This is a deliberate narrowing of 20260731162729 ───────────────────────
+-- `20260731162729_reconcile_data_api_grants.sql` granted `authenticated`
+-- SELECT/INSERT/DELETE here, correctly, because that was the client contract at
+-- the time. This migration overrides that decision for this ONE table because
+-- the contract changed: the operations it granted now exist as RPCs that do
+-- strictly more (serialize, validate, record intent, roll back quota). Every
+-- other grant in that migration stands.
+
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.paper_attachments
+    FROM PUBLIC, anon, authenticated;
+
+-- Restated rather than assumed. The line above must never be able to take the
+-- read path with it, and a replay that somehow arrives without it fails in
+-- section 7 rather than shipping an unreadable attachment list.
+GRANT SELECT ON TABLE public.paper_attachments TO authenticated;
+
+
+-- ═════════════════════════════════════════════════════════════════════════════
 -- 7. Fail-closed self-verification
 -- ═════════════════════════════════════════════════════════════════════════════
 --
@@ -1418,5 +1595,88 @@ BEGIN
   IF EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'attachments' AND public) THEN
     RAISE EXCEPTION 'attachment_cleanup: the attachments bucket must stay private';
   END IF;
+
+  -- ── The cutover barrier is still held, right here ──
+  -- Not a restatement of the LOCK at the top of the file: this asserts that the
+  -- posture being verified below is being verified INSIDE the barrier, on a
+  -- table no other session can be reading or writing. If the lock were ever
+  -- moved, weakened, or split into its own transaction, every privilege check
+  -- that follows would become a snapshot of a table other sessions can still
+  -- mutate, and the whole cutover argument would quietly stop holding.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_locks
+     WHERE locktype = 'relation'
+       AND relation = 'public.paper_attachments'::regclass
+       AND mode = 'AccessExclusiveLock'
+       AND granted
+       AND pid = pg_backend_pid()
+  ) THEN
+    RAISE EXCEPTION
+      'attachment_cleanup: the ACCESS EXCLUSIVE cutover barrier on paper_attachments is not held';
+  END IF;
+
+  -- ── The post-migration client authority model ──
+  -- SELECT survives; every write privilege is gone from every browser role.
+  -- Asserted per privilege and per role rather than as one aggregate, so a
+  -- failure says exactly which door was left open.
+  IF NOT has_table_privilege('authenticated', 'public.paper_attachments', 'SELECT') THEN
+    RAISE EXCEPTION 'attachment_cleanup: authenticated must keep SELECT on paper_attachments';
+  END IF;
+  FOREACH v_fn IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] LOOP
+    IF has_table_privilege('authenticated', 'public.paper_attachments', v_fn) THEN
+      RAISE EXCEPTION
+        'attachment_cleanup: authenticated must not hold % on paper_attachments — metadata is written only through the lifecycle RPCs', v_fn;
+    END IF;
+    IF has_table_privilege('anon', 'public.paper_attachments', v_fn) THEN
+      RAISE EXCEPTION 'attachment_cleanup: anon must not hold % on paper_attachments', v_fn;
+    END IF;
+  END LOOP;
+  IF has_table_privilege('anon', 'public.paper_attachments', 'SELECT') THEN
+    RAISE EXCEPTION 'attachment_cleanup: anon must not hold SELECT on paper_attachments';
+  END IF;
+  -- PUBLIC is every role at once, including future ones. A grant here would
+  -- reinstate the whole surface without naming anybody.
+  IF EXISTS (
+    SELECT 1 FROM pg_class c, aclexplode(c.relacl) a
+     WHERE c.oid = 'public.paper_attachments'::regclass AND a.grantee = 0
+  ) THEN
+    RAISE EXCEPTION 'attachment_cleanup: paper_attachments must grant nothing to PUBLIC';
+  END IF;
+
+  -- ── …and the RPCs that replace those privileges still work ──
+  -- SECURITY DEFINER functions execute as this migration's owner and do not
+  -- consult the caller's table grants. That is the entire reason the revoke
+  -- above is safe, so it is asserted rather than assumed: the owner must still
+  -- be able to write the table, and the client must still be able to call the
+  -- three entry points.
+  IF NOT has_table_privilege(
+       (SELECT relowner::regrole::text FROM pg_class WHERE oid = 'public.paper_attachments'::regclass),
+       'public.paper_attachments', 'INSERT, DELETE') THEN
+    RAISE EXCEPTION 'attachment_cleanup: the table owner can no longer write paper_attachments — the lifecycle RPCs would fail';
+  END IF;
+  FOREACH v_fn IN ARRAY ARRAY[
+    'public.finalize_attachment_upload(uuid,text,text,text,integer)',
+    'public.delete_attachment_with_cleanup(uuid)',
+    'public.delete_papers_with_attachment_cleanup(uuid[])'
+  ] LOOP
+    IF NOT has_function_privilege('authenticated', v_fn::regprocedure, 'EXECUTE') THEN
+      RAISE EXCEPTION 'attachment_cleanup: authenticated must be able to execute %', v_fn;
+    END IF;
+    IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = v_fn::regprocedure) THEN
+      RAISE EXCEPTION 'attachment_cleanup: % must be SECURITY DEFINER — it writes a table its callers cannot', v_fn;
+    END IF;
+  END LOOP;
+
+  -- ── The read path the UI depends on is intact ──
+  -- Revoking write must not have taken the RLS predicate with it: an owner
+  -- SELECT policy has to remain, or the attachment list silently empties.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+     WHERE schemaname = 'public' AND tablename = 'paper_attachments' AND cmd = 'SELECT'
+  ) THEN
+    RAISE EXCEPTION 'attachment_cleanup: paper_attachments must keep an owner SELECT policy';
+  END IF;
 END
 $verify$;
+
+COMMIT;

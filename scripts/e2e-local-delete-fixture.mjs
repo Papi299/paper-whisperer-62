@@ -171,15 +171,25 @@ export async function provisionDisposableAccount({ apiUrl, anonKey, serviceRoleK
     if (upload.error) throw new Error(`disposable upload failed: ${upload.error.message}`);
   }
 
-  const meta = await client.from("paper_attachments").insert({
-    paper_id: paperId,
-    user_id: userId,
-    file_path: attachmentPath,
-    file_name: "disposable-attachment.pdf",
-    file_type: "application/pdf",
-    size_bytes: bytes.length,
+  // Through the lifecycle RPC, not a direct INSERT. Since migration
+  // 20260904120000 no browser role holds INSERT on `paper_attachments` — a
+  // direct write from this signed-in client would be refused with 42501 — and
+  // going through `finalize_attachment_upload` is what the product does anyway,
+  // so the fixture is built the way a real upload builds one.
+  const meta = await client.rpc("finalize_attachment_upload", {
+    p_paper_id: paperId,
+    p_file_path: attachmentPath,
+    p_file_name: "disposable-attachment.pdf",
+    p_file_type: "application/pdf",
+    p_size_bytes: bytes.length,
   });
   if (meta.error) throw new Error(`disposable attachment metadata failed: ${meta.error.message}`);
+  const finalized = (meta.data ?? [])[0]?.status;
+  if (finalized !== "metadata_committed") {
+    throw new Error(
+      `disposable attachment metadata was not committed (finalization reported "${finalized ?? "nothing"}").`,
+    );
+  }
 
   await client.auth.signOut();
 

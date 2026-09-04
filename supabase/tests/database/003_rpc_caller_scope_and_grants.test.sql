@@ -173,7 +173,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(246);
+SELECT plan(265);
 
 -- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
@@ -481,6 +481,55 @@ SELECT is(
    'safe_bulk_insert_papers','set_paper_tags','set_paper_projects','bulk_set_paper_tags',
    'bulk_set_paper_projects','consume_ai_quota','refund_ai_quota','get_ai_quota_status','merge_exact_duplicates'
   ]) nm;
+
+-- ══ 11. Table-privilege inventory: the attachment lifecycle boundary ════════
+--
+-- This suite is where the client-reachable surface is pinned, and since
+-- migration 20260904120000 that surface is no longer only about which functions
+-- a browser may execute — it is also about which tables a browser may write.
+-- `paper_attachments` is the one table in this repository whose write privileges
+-- were deliberately narrowed AFTER 20260731162729 granted them, because the
+-- operations moved into RPCs that do strictly more than a bare INSERT or DELETE
+-- can: serialize on the path and the paper, consult the cleanup tombstone,
+-- record Storage cleanup intent in the same transaction, and roll quota back on
+-- rejection. An accidental re-grant would not break a single test elsewhere —
+-- everything would simply work again, the old lossy way — so it is pinned here,
+-- per privilege and per role, next to the RPCs that replaced it.
+SELECT ok(has_table_privilege('authenticated','public.paper_attachments','SELECT'),
+  'paper_attachments: authenticated keeps SELECT (the UI and the account export read it)');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.paper_attachments', priv),
+  'paper_attachments: authenticated must not hold ' || priv)
+  FROM unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE']) priv;
+SELECT ok(NOT has_table_privilege('anon', 'public.paper_attachments', priv),
+  'paper_attachments: anon must not hold ' || priv)
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) priv;
+SELECT is(
+  (SELECT count(*)::int FROM pg_class c, aclexplode(c.relacl) a
+    WHERE c.oid = 'public.paper_attachments'::regclass AND a.grantee = 0),
+  0, 'paper_attachments: nothing granted to PUBLIC');
+-- The three entry points that hold that privilege on the client's behalf. Each
+-- must be SECURITY DEFINER (or the revoke above would break it) and executable
+-- by authenticated (or the feature would be unreachable).
+SELECT ok(has_function_privilege('authenticated', sig::regprocedure, 'EXECUTE')
+      AND (SELECT prosecdef FROM pg_proc WHERE oid = sig::regprocedure),
+  'attachment lifecycle: ' || sig || ' is authenticated-executable and SECURITY DEFINER')
+  FROM unnest(ARRAY[
+    'public.finalize_attachment_upload(uuid,text,text,text,integer)',
+    'public.delete_attachment_with_cleanup(uuid)',
+    'public.delete_papers_with_attachment_cleanup(uuid[])'
+  ]) sig;
+-- The queue keeps the acknowledgement grant the drain needs, and still refuses
+-- client-authored intent.
+SELECT ok(has_table_privilege('authenticated','public.attachment_cleanup_queue','SELECT')
+      AND has_table_privilege('authenticated','public.attachment_cleanup_queue','DELETE')
+      AND NOT has_table_privilege('authenticated','public.attachment_cleanup_queue','INSERT')
+      AND NOT has_table_privilege('authenticated','public.attachment_cleanup_queue','UPDATE'),
+  'attachment_cleanup_queue: authenticated may read and acknowledge, never author or edit');
+-- The tombstone is server-only in every direction.
+SELECT ok(NOT has_table_privilege('authenticated', 'public.attachment_cleanup_tombstone', priv)
+      AND NOT has_table_privilege('anon', 'public.attachment_cleanup_tombstone', priv),
+  'attachment_cleanup_tombstone: no browser role holds ' || priv)
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) priv;
 
 SELECT * FROM finish();
 ROLLBACK;

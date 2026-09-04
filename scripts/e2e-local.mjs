@@ -2045,6 +2045,281 @@ async function runPaperDeleteFinalizationProbe(container) {
   }
 }
 
+const CUT_PROBE_USER = "cc000000-0000-0000-0000-0000000000d0";
+const CUT_PAPER = "cc000000-0000-0000-0000-0000000000d1";
+// The exact privilege set migration 20260904120000 revokes, and the exact grant
+// it leaves standing. The probe restores this posture in its `finally`, so a
+// failure anywhere cannot leave the local database more permissive than a real
+// replay — and assertNoResidue's catalog fingerprint covers relacl, so it would
+// notice if it did.
+const CUT_REVOKE_SQL =
+  "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.paper_attachments " +
+  "FROM PUBLIC, anon, authenticated;\nGRANT SELECT ON TABLE public.paper_attachments TO authenticated;\n";
+const CUT_LEGACY_GRANT_SQL =
+  "GRANT INSERT, UPDATE, DELETE ON TABLE public.paper_attachments TO authenticated;\n";
+
+/** A path inside this probe's namespace. */
+function cutPath(name) {
+  return `${CUT_PROBE_USER}/${CUT_PAPER}/${name}`;
+}
+
+/** Become the probe user, exactly as a Data API request does. */
+function cutAuth(local) {
+  return (
+    `SELECT set_config('request.jwt.claims','{"sub":"${CUT_PROBE_USER}","role":"authenticated"}', ${local});\n` +
+    `SET${local ? " LOCAL" : ""} ROLE authenticated;\n`
+  );
+}
+
+/** A direct, legacy-shaped metadata INSERT — what the old bundle issues. */
+function cutLegacyInsertSql(name, tag) {
+  return (
+    `INSERT INTO public.paper_attachments (paper_id, user_id, file_path, file_name, file_type, size_bytes)\n` +
+    `  VALUES ('${CUT_PAPER}','${CUT_PROBE_USER}','${cutPath(name)}','${name}','application/pdf',16);\n` +
+    `SELECT '${tag}=inserted';\n`
+  );
+}
+
+/** Sessions queued on a `paper_attachments` table lock, by mode. */
+async function countTableLockWaiters(container, mode) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='relation' ` +
+      `AND relation='public.paper_attachments'::regclass AND mode='${mode}' AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** Run one statement as the probe user; report whether it was refused for privilege. */
+async function cutDeniedAs(container, sql) {
+  const r = await dockerPsql(container, cutAuth(false) + sql);
+  return { denied: r.code !== 0 && /permission denied/i.test(r.err), detail: (r.err || r.out).trim().slice(0, 160) };
+}
+
+/**
+ * Migration-cutover probe
+ * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-03, Case CUT-1).
+ *
+ * Revoking a privilege does not wait for anybody. `REVOKE` locks catalog rows,
+ * not the table, so on its own it commits straight past a browser's in-flight
+ * `INSERT INTO paper_attachments` — a statement permission-checked before the
+ * revoke and committed after it. That alone defeats the Storage fence added in
+ * CORRECTION-02, which asks whether live metadata names an object and gets "no"
+ * from a row that has not committed yet:
+ *
+ *   INSERT in flight → migration commits → the old tab's lost-response
+ *   compensation deletes the binary → the INSERT commits → a metadata row with
+ *   quota charged and no file.
+ *
+ * Section 0 of the migration closes that with an explicit ACCESS EXCLUSIVE lock
+ * on `paper_attachments`, taken first and held to commit. This proves the three
+ * properties the argument rests on, with real concurrent sessions and lock
+ * inspection rather than a sleep:
+ *
+ *   1. the barrier WAITS for a pre-existing direct writer (session A);
+ *   2. a writer arriving after the barrier request cannot overtake it, and when
+ *      it finally runs it is planned against the NEW privileges (session C) —
+ *      which is what makes "no pre-cutover writer survives" mean anything;
+ *   3. once the cutover commits, direct metadata DML is closed and the three
+ *      lifecycle RPCs still work.
+ *
+ * The local database already carries the hardened posture, so a pre-cutover
+ * writer cannot exist here without briefly restoring the grant it used to hold.
+ * The probe therefore re-grants, races the REAL statements against the REAL
+ * table, and restores the hardened posture in `finally` — rather than letting a
+ * scratch table stand in for the one whose privileges are the whole subject.
+ */
+async function runMigrationCutoverProbe(container) {
+  log("running migration-cutover probe (direct attachment DML)…");
+
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO auth.users (id, email) VALUES ('${CUT_PROBE_USER}','cutover-race@paperlume.test') ON CONFLICT DO NOTHING;\n` +
+      `UPDATE public.user_entitlements SET storage_quota_bytes=1000000 WHERE user_id='${CUT_PROBE_USER}';\n` +
+      `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+      `  ('${CUT_PAPER}','${CUT_PROBE_USER}','Cutover race','[]'::jsonb,1)\n` +
+      `ON CONFLICT (id) DO NOTHING;\n`,
+  );
+  if (setup.code !== 0) throw new Error(`cutover fixture setup failed: ${setup.err.trim()}`);
+
+  let held = null;      // A — the pre-cutover writer, transaction open.
+  let cutover = null;   // B — the migration's barrier + revoke.
+  let newcomer = null;  // C — a writer that starts after the barrier is requested.
+  try {
+    // ── Pre-cutover world ───────────────────────────────────────────────────
+    // Exactly the grant 20260731162729 left in place — what an already-loaded
+    // bundle was written against.
+    const regrant = await dockerPsql(container, CUT_LEGACY_GRANT_SQL);
+    if (regrant.code !== 0) throw new Error(`cutover probe: could not restore the pre-cutover grant: ${regrant.err.trim()}`);
+    if ((await dbScalar(container,
+      `SELECT has_table_privilege('authenticated','public.paper_attachments','INSERT')::text;`)) !== "true") {
+      throw new Error("cutover probe: the pre-cutover grant did not take effect.");
+    }
+
+    // ── A: a direct authenticated INSERT, reached Postgres, not committed ───
+    held = spawnDockerPsql(container);
+    held.child.stdin.write("BEGIN;\n" + cutAuth(true) + cutLegacyInsertSql("legacy.pdf", "A") + "SELECT 'A_READY';\n");
+    await waitUntil(() => /A_READY/.test(held.readOut()), PROBE_WORKER_MS,
+      "cutover probe: the pre-cutover INSERT never reached the database.");
+    if (!/A=inserted/.test(held.readOut())) {
+      throw new Error("cutover probe: the pre-cutover INSERT did not succeed under the restored grant.");
+    }
+
+    // ── B: the cutover, statement for statement as the migration performs it ─
+    cutover = spawnDockerPsql(container);
+    cutover.child.stdin.write(
+      "BEGIN;\nLOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE;\nSELECT 'B_BARRIER';\n" +
+        CUT_REVOKE_SQL + "COMMIT;\nSELECT 'B_COMMITTED';\n",
+    );
+    cutover.child.stdin.end();
+    await waitUntil(async () => (await countTableLockWaiters(container, "AccessExclusiveLock")) >= 1,
+      PROBE_BARRIER_MS, "cutover probe: the barrier never queued behind the in-flight writer.");
+    if (/B_BARRIER/.test(cutover.readOut())) {
+      throw new Error("cutover probe: the barrier passed a transaction that had already written the table.");
+    }
+
+    // ── C: a writer that begins AFTER the barrier was requested ─────────────
+    newcomer = spawnDockerPsql(container);
+    newcomer.child.stdin.write(cutAuth(false) + cutLegacyInsertSql("newcomer.pdf", "C") + "SELECT 'C_DONE';\n");
+    newcomer.child.stdin.end();
+    await waitUntil(async () => (await countTableLockWaiters(container, "RowExclusiveLock")) >= 1,
+      PROBE_BARRIER_MS, "cutover probe: the newcomer did not queue behind the barrier.");
+    if (/C=inserted/.test(newcomer.readOut())) {
+      throw new Error("cutover probe: a writer overtook the pending barrier.");
+    }
+
+    // ── Release A; B takes the lock, revokes, commits; C then runs ──────────
+    held.child.stdin.write("COMMIT;\nSELECT 'A_COMMITTED';\n");
+    held.child.stdin.end();
+    const [aRes, bRes, cRes] = await Promise.all([
+      withTimeout(held.done, FIN_HOLD_MS, "cutover probe: pre-cutover writer exit"),
+      withTimeout(cutover.done, FIN_HOLD_MS, "cutover probe: cutover exit"),
+      withTimeout(newcomer.done, FIN_HOLD_MS, "cutover probe: newcomer exit"),
+    ]);
+    held = null;
+    cutover = null;
+    newcomer = null;
+
+    if (aRes.code !== 0 || aRes.signal !== null || !/A_COMMITTED/.test(aRes.out)) {
+      throw new Error(`cutover probe: the pre-cutover writer did not commit cleanly (code=${aRes.code}).`);
+    }
+    if (bRes.code !== 0 || bRes.signal !== null || !/B_BARRIER/.test(bRes.out) || !/B_COMMITTED/.test(bRes.out)) {
+      throw new Error(`cutover probe: the cutover did not complete cleanly (code=${bRes.code}).`);
+    }
+    // C must have been REFUSED, not merely blocked — and refused for lack of
+    // privilege, which is only true if it re-planned against the new ACL.
+    if (/C=inserted/.test(cRes.out)) {
+      throw new Error("cutover probe: a direct INSERT authorized before the cutover committed after it.");
+    }
+    if (!/permission denied/i.test(cRes.err + cRes.out)) {
+      throw new Error(`cutover probe: the queued writer failed for the wrong reason: ${(cRes.err || cRes.out).trim().slice(0, 200)}`);
+    }
+
+    // ── The resulting state, read back ──────────────────────────────────────
+    // A's row is present: it was authorized AND committed entirely before the
+    // cutover, which is exactly what "the barrier waited" means. C's is not.
+    const rows = (await dbScalar(container,
+      `SELECT (SELECT count(*) FROM public.paper_attachments WHERE file_path='${cutPath("legacy.pdf")}') || '|' || ` +
+      `(SELECT count(*) FROM public.paper_attachments WHERE file_path='${cutPath("newcomer.pdf")}');`))
+      .split("|").map((n) => parseInt(n, 10));
+    if (rows[0] !== 1 || rows[1] !== 0) {
+      throw new Error(`cutover probe: expected the pre-cutover row present and the queued one absent, got ${rows.join("|")}.`);
+    }
+    log("cutover probe CUT-1 OK: the barrier waited for the in-flight writer, and the writer queued behind it was refused by the new privileges.");
+
+    // ── CUT-2/3/4: direct DML is closed, on the caller's own rows ───────────
+    const attempts = [
+      ["CUT-2 INSERT",
+       `INSERT INTO public.paper_attachments (paper_id, user_id, file_path, file_name, file_type, size_bytes)\n` +
+       `  VALUES ('${CUT_PAPER}','${CUT_PROBE_USER}','${cutPath("post.pdf")}','post.pdf','application/pdf',16);\n`],
+      ["CUT-3 UPDATE",
+       `UPDATE public.paper_attachments SET file_name='renamed.pdf' WHERE user_id='${CUT_PROBE_USER}';\n`],
+      ["CUT-4 DELETE",
+       `DELETE FROM public.paper_attachments WHERE user_id='${CUT_PROBE_USER}';\n`],
+      ["CUT-4 TRUNCATE", `TRUNCATE public.paper_attachments;\n`],
+    ];
+    for (const [label, sql] of attempts) {
+      const r = await cutDeniedAs(container, sql);
+      if (!r.denied) throw new Error(`cutover probe ${label}: a direct authenticated write was NOT refused (${r.detail}).`);
+    }
+    const stillReadable = await dockerPsql(container,
+      cutAuth(false) + `SELECT 'CUTSELECT=' || count(*)::text FROM public.paper_attachments;\n`);
+    if (stillReadable.code !== 0 || !/CUTSELECT=1/.test(stillReadable.out)) {
+      throw new Error("cutover probe: SELECT did not survive the revoke — the attachment list would be empty.");
+    }
+    log("cutover probe CUT-2/3/4 OK: direct INSERT, UPDATE, DELETE and TRUNCATE all refused; SELECT preserved.");
+
+    // ── CUT-5: the RPCs that hold the privilege on the client's behalf ──────
+    const rpc = await dockerPsql(container,
+      cutAuth(false) +
+      `SELECT 'FINALIZE=' || status FROM public.finalize_attachment_upload(\n` +
+      `  '${CUT_PAPER}'::uuid, '${cutPath("viaRpc.pdf")}', 'viaRpc.pdf', 'application/pdf', 16);\n` +
+      `SELECT public.delete_attachment_with_cleanup(\n` +
+      `  (SELECT id FROM public.paper_attachments WHERE file_path='${cutPath("viaRpc.pdf")}'));\n` +
+      `SELECT 'DELETED=' || count(*)::text FROM public.paper_attachments\n` +
+      `  WHERE file_path='${cutPath("viaRpc.pdf")}';\n` +
+      `SELECT 'QUEUED=' || count(*)::text FROM public.attachment_cleanup_queue\n` +
+      `  WHERE file_path='${cutPath("viaRpc.pdf")}';\n` +
+      // The paper still holds session A's pre-cutover row, so a correct bulk
+      // delete reports one paper and one remaining path — proof the cascade and
+      // the intent snapshot both still run without any client table grant.
+      `SELECT 'PAPERS=' || deleted_count::text || '/' || queued_count::text\n` +
+      `  FROM public.delete_papers_with_attachment_cleanup(ARRAY['${CUT_PAPER}']::uuid[]);\n`);
+    if (rpc.code !== 0) throw new Error(`cutover probe: the lifecycle RPCs failed after the revoke: ${rpc.err.trim()}`);
+    for (const [needle, what] of [
+      ["FINALIZE=metadata_committed", "finalize_attachment_upload could not insert metadata"],
+      ["DELETED=0", "delete_attachment_with_cleanup did not remove metadata"],
+      ["QUEUED=1", "delete_attachment_with_cleanup removed metadata without recording Storage cleanup intent"],
+      ["PAPERS=1/1", "delete_papers_with_attachment_cleanup did not delete the paper and queue its remaining path"],
+    ]) {
+      if (!rpc.out.includes(needle)) {
+        throw new Error(`cutover probe CUT-5: ${what} (expected ${needle}, got ${rpc.out.trim().slice(0, 200)}).`);
+      }
+    }
+    log("cutover probe CUT-5 OK: finalize, attachment delete and paper delete all still work as the client, with no client table grants.");
+  } finally {
+    await killPsql(newcomer);
+    await killPsql(cutover);
+    await killPsql(held);
+    // Restore the migration's posture unconditionally. A failure here is fatal:
+    // leaving the local database more permissive than a replay would make every
+    // later assertion in this lane meaningless.
+    const restore = await dockerPsql(container, CUT_REVOKE_SQL);
+    if (restore.code !== 0) {
+      throw new Error(`cutover probe: could not restore the hardened grant posture: ${restore.err.trim()}`);
+    }
+  }
+
+  const posture = await dbScalar(container,
+    `SELECT has_table_privilege('authenticated','public.paper_attachments','INSERT')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.paper_attachments','UPDATE')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.paper_attachments','DELETE')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.paper_attachments','TRUNCATE')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.paper_attachments','SELECT')::text;`);
+  if (posture !== "false|false|false|false|true") {
+    throw new Error(`cutover probe: the restored posture is wrong (insert|update|delete|truncate|select = ${posture}).`);
+  }
+
+  const waiters = await countTableLockWaiters(container, "AccessExclusiveLock");
+  if (waiters !== 0) throw new Error(`cutover probe: ${waiters} ungranted table-lock waiter(s) remain.`);
+
+  const cleanup = await dockerPsql(container,
+    `DELETE FROM public.attachment_cleanup_queue WHERE user_id='${CUT_PROBE_USER}';\n` +
+    `DELETE FROM public.attachment_cleanup_tombstone WHERE user_id='${CUT_PROBE_USER}';\n` +
+    `DELETE FROM auth.users WHERE id='${CUT_PROBE_USER}';\n`);
+  if (cleanup.code !== 0) throw new Error(`cutover fixture cleanup failed: ${cleanup.err.trim()}`);
+  const residual = (await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${CUT_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.papers WHERE user_id='${CUT_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.paper_attachments WHERE user_id='${CUT_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${CUT_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_tombstone WHERE user_id='${CUT_PROBE_USER}');`))
+    .split("|").map((n) => parseInt(n, 10));
+  if (residual.some((c) => c !== 0)) {
+    throw new Error(`cutover fixture not fully removed (user|papers|attachments|queue|tombstone = ${residual.join("|")}).`);
+  }
+}
+
 /**
  * Residue + catalog check on a fresh connection (Sections H): after the
  * transaction-isolated pgTAP suites, the negative control, the framework-free
@@ -2227,6 +2502,7 @@ async function cmdDbTests() {
     await runMergeCycleProbe(container);
     await runAttachmentFinalizationProbe(container);
     await runPaperDeleteFinalizationProbe(container);
+    await runMigrationCutoverProbe(container);
     await assertNoResidue(container, pgtapBefore, catalogBefore);
 
     log("all local database-security tests passed.");

@@ -731,3 +731,156 @@ test.describe("Attachment cleanup is recoverable", () => {
     }
   });
 });
+
+/**
+ * The minimum shape of the app's Supabase client needed to replay a
+ * pre-migration bundle's network sequence from inside the page.
+ *
+ * Written out rather than reached for with `any` because the point of these
+ * tests is that a specific set of calls is refused — if one of them changes
+ * shape, this should stop compiling rather than silently stop testing.
+ */
+type StaleBundleClient = {
+  auth: { getUser: () => Promise<{ data: { user: { id: string } | null } }> };
+  from: (table: string) => {
+    select: (cols: string) => {
+      limit: (n: number) => Promise<{ data: { id: string }[] | null; error: unknown }>;
+    };
+    insert: (row: Record<string, unknown>) => Promise<{ error: { code?: string; message?: string } | null }>;
+    update: (patch: Record<string, unknown>) => {
+      eq: (col: string, val: string) => Promise<{ error: { code?: string } | null }>;
+    };
+    delete: () => {
+      eq: (col: string, val: string) => Promise<{ error: { code?: string } | null }>;
+    };
+  };
+  storage: {
+    from: (bucket: string) => {
+      upload: (path: string, body: Blob, opts: Record<string, unknown>) => Promise<{ error: { message?: string } | null }>;
+      remove: (paths: string[]) => Promise<{ data: unknown[] | null; error: unknown }>;
+    };
+  };
+};
+
+test.describe("The attachment lifecycle boundary", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+  });
+
+  test("a stale bundle's upload can no longer create metadata, and its own cleanup still works", async ({ page }) => {
+    // The pre-migration upload sequence, replayed byte for byte against the
+    // post-migration schema: PUT the object, then INSERT the metadata row
+    // directly. After 20260904120000 that INSERT is refused at the ACL, so the
+    // damaged half-state this feature exists to prevent — a committed metadata
+    // row whose binary the same tab then deletes — cannot be produced at all.
+    //
+    // What the old bundle does next is its own compensation, and that still
+    // works, because no metadata row names the object: it removes the file and
+    // nothing is left behind. That is the good case, and it is deliberately not
+    // the only one — see the assertions about durable intent at the end.
+    const staged = await page.evaluate(async (modPath) => {
+      const mod = await import(modPath);
+      const client = (mod as { supabase: StaleBundleClient }).supabase;
+      const { data: userData } = await client.auth.getUser();
+      const uid = userData.user?.id ?? "";
+      const { data: papers } = await client.from("papers").select("id").limit(1);
+      const paperId = (papers ?? [])[0]?.id ?? "";
+      const path = `${uid}/${paperId}/stale-upload-${Date.now()}.png`;
+
+      const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const upload = await client.storage
+        .from("attachments")
+        .upload(path, new Blob([bytes], { type: "image/png" }), { contentType: "image/png", upsert: false });
+
+      // Exactly the call `legacyFinalizeUpload` makes on a pre-migration database.
+      const insert = await client.from("paper_attachments").insert({
+        paper_id: paperId,
+        user_id: uid,
+        file_path: path,
+        file_name: "stale-upload.png",
+        file_type: "image/png",
+        size_bytes: bytes.length,
+      });
+
+      return {
+        path,
+        uploadFailed: Boolean(upload.error),
+        insertCode: insert.error?.code ?? null,
+        insertFailed: Boolean(insert.error),
+      };
+    }, CLIENT_MODULE_PATH);
+
+    expect(staged.uploadFailed).toBe(false);
+    // 42501 — insufficient_privilege. Not a trigger, not RLS: the row never gets
+    // as far as being evaluated.
+    expect(staged.insertFailed).toBe(true);
+    expect(staged.insertCode).toBe("42501");
+    expect(await countAttachmentRows(page, staged.path)).toBe(0);
+    // The binary is still there — which is the whole reason the old bundle has a
+    // compensation step at all.
+    expect(await storageObjectExists(page, staged.path)).toBe(true);
+
+    // Its compensation, unchanged. The fence only refuses objects a live
+    // metadata row names, and this one has none, so the removal is allowed.
+    const removed = await page.evaluate(async ([modPath, path]) => {
+      const mod = await import(modPath);
+      const client = (mod as { supabase: StaleBundleClient }).supabase;
+      const { data, error } = await client.storage.from("attachments").remove([path]);
+      return { deleted: (data ?? []).length, errored: Boolean(error) };
+    }, [CLIENT_MODULE_PATH, staged.path] as const);
+
+    expect(removed.errored).toBe(false);
+    expect(removed.deleted).toBe(1);
+    expect(await storageObjectExists(page, staged.path)).toBe(false);
+
+    // …and nothing durable was recorded, because a bundle that predates this
+    // feature cannot call functionality it does not know exists. If that removal
+    // had ALSO failed, the binary would have stayed until account deletion. That
+    // is the honest residual limitation of a stale client, and it is documented
+    // rather than papered over.
+    expect(await readCleanupQueue(page)).toEqual([]);
+  });
+
+  test("a live attachment's metadata cannot be altered or removed directly", async ({ page }) => {
+    // The deletion half of the same boundary. A stale tab — or a hand-written
+    // Data API request — cannot make attachment metadata change or disappear
+    // without going through the RPC that records Storage cleanup intent in the
+    // same transaction. That is what turns "cleanup intent is always recorded"
+    // from a property of the current React bundle into a property of the
+    // database.
+    const firstRow = page.locator("tbody tr").first();
+    const paperTitle = (await firstRow.locator("td p").first().textContent())!.trim();
+    await openEditPaperDialog(page, paperTitle);
+    const dialog = page.getByRole("dialog");
+    await waitForAttachmentsLoaded(page, dialog);
+
+    const filePath = await uploadAndCapturePath(page, dialog);
+    expect(await countAttachmentRows(page, filePath)).toBe(1);
+    await dialog.getByRole("button", { name: /cancel/i }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+
+    const attempts = await page.evaluate(async ([modPath, path]) => {
+      const mod = await import(modPath);
+      const client = (mod as { supabase: StaleBundleClient }).supabase;
+      const update = await client.from("paper_attachments").update({ file_name: "renamed.png" }).eq("file_path", path);
+      const remove = await client.from("paper_attachments").delete().eq("file_path", path);
+      return { updateCode: update.error?.code ?? null, deleteCode: remove.error?.code ?? null };
+    }, [CLIENT_MODULE_PATH, filePath] as const);
+
+    expect(attempts.updateCode).toBe("42501");
+    expect(attempts.deleteCode).toBe("42501");
+    // Both halves survive: the row is still there, and so is its file.
+    expect(await countAttachmentRows(page, filePath)).toBe(1);
+    expect(await storageObjectExists(page, filePath)).toBe(true);
+    expect(await readCleanupQueue(page)).toEqual([]);
+
+    // And the authoritative path still removes both, in the order that keeps the
+    // Storage object reachable from the database until it is actually gone.
+    await deleteAttachmentByPath(page, filePath);
+    expect(await countAttachmentRows(page, filePath)).toBe(0);
+    expect(await storageObjectExists(page, filePath)).toBe(false);
+  });
+});

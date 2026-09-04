@@ -98,18 +98,28 @@ INSERT INTO public.papers (id, user_id, title, insert_order) VALUES
   ('d0000000-0000-0000-0000-0000000000c3','c5000000-0000-0000-0000-000000000003','Paper I',2),
   ('d0000000-0000-0000-0000-0000000000c2','c5000000-0000-0000-0000-000000000002','Paper M',3);
 
-SELECT plan(25);
+SELECT plan(28);
 
 -- ══ Storage accounting (user S, quota 1000, paper S) ═════════════════════════
+--
+-- The insert cases below run as `postgres`, not as `authenticated`. Migration
+-- 20260904120000 revoked INSERT/UPDATE/DELETE on paper_attachments from every
+-- browser role, so a direct client insert is now refused at the ACL before the
+-- quota trigger is ever reached — every case here would report 42501 and stop
+-- measuring accounting at all. The writer that remains is the table owner, which
+-- is the role the SECURITY DEFINER lifecycle RPCs execute as, so it is exactly
+-- who the quota and ownership triggers now guard. Claims unchanged; writer only.
+-- The ACL boundary itself is asserted at the end of this section, beside the
+-- equivalent assertions for user_storage_usage.
 -- 1. valid insert increments usage by exactly file_size.
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(id,paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('e0000000-0000-0000-0000-000000000a01','d0000000-0000-0000-0000-0000000000c1','c5000000-0000-0000-0000-000000000001','s/a1.pdf','a1.pdf','application/pdf',400)$q$),
   '00000', 'storage: first valid attachment insert succeeds');
 SELECT is((SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='c5000000-0000-0000-0000-000000000001'),
   '400', 'storage: usage incremented by exactly the first file size (400)');
 -- 2. second valid insert increments by the additional exact size.
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(id,paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('e0000000-0000-0000-0000-000000000a02','d0000000-0000-0000-0000-0000000000c1','c5000000-0000-0000-0000-000000000001','s/a2.pdf','a2.pdf','application/pdf',300)$q$),
   '00000', 'storage: second valid attachment insert succeeds');
@@ -120,7 +130,7 @@ DELETE FROM public.paper_attachments WHERE id='e0000000-0000-0000-0000-000000000
 SELECT is((SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='c5000000-0000-0000-0000-000000000001'),
   '300', 'storage: deletion decrements usage by exactly the file size (300)');
 -- 5-7. over-cap insertion rejected, creates no row, leaves usage unchanged.
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(id,paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('e0000000-0000-0000-0000-000000000a03','d0000000-0000-0000-0000-0000000000c1','c5000000-0000-0000-0000-000000000001','s/big.pdf','big.pdf','application/pdf',800)$q$),
   'P0001', 'storage: over-cap insertion rejected (300+800 > 1000)');
@@ -129,7 +139,7 @@ SELECT is((SELECT count(*)::int FROM public.paper_attachments WHERE user_id='c50
 SELECT is((SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='c5000000-0000-0000-0000-000000000001'),
   '300', 'storage: over-cap rejection left usage unchanged');
 -- 8. negative file size rejected.
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(id,paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('e0000000-0000-0000-0000-000000000a04','d0000000-0000-0000-0000-0000000000c1','c5000000-0000-0000-0000-000000000001','s/neg.pdf','neg.pdf','application/pdf',-5)$q$),
   'P0001', 'storage: negative file size rejected');
@@ -139,20 +149,20 @@ DELETE FROM public.paper_attachments WHERE id='e0000000-0000-0000-0000-000000000
 SELECT is((SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='c5000000-0000-0000-0000-000000000001'),
   '0', 'storage: refund is floored at 0, never negative');
 -- 9. missing entitlement rejected safely (user M, paper M).
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000002","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"c5000000-0000-0000-0000-000000000002","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('d0000000-0000-0000-0000-0000000000c2','c5000000-0000-0000-0000-000000000002','m/a.pdf','a.pdf','application/pdf',100)$q$),
   'P0001', 'storage: missing entitlement rejected safely');
 -- 10. inactive entitlement: storage is gated on storage_quota_bytes, not plan_status
 --     (the current contract), so an active quota row still permits the upload.
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000003","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"c5000000-0000-0000-0000-000000000003","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('d0000000-0000-0000-0000-0000000000c3','c5000000-0000-0000-0000-000000000003','i/a.pdf','a.pdf','application/pdf',100)$q$),
   '00000', 'storage: inactive entitlement still permits upload (quota is not plan_status-gated)');
 SELECT is((SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='c5000000-0000-0000-0000-000000000003'),
   '100', 'storage: inactive-user upload incremented its own usage by exactly the file size');
 -- 11. cross-owner attachment rejected BEFORE any accounting mutation.
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('d0000000-0000-0000-0000-0000000000c3','c5000000-0000-0000-0000-000000000001','s/x.pdf','x.pdf','application/pdf',50)$q$),
   'P0001', 'storage: cross-owner attachment (foreign paper) rejected');
@@ -165,6 +175,21 @@ SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-00
 SELECT is(pg_temp.errcode_as('anon','',
   $q$SELECT count(*) FROM public.user_storage_usage$q$),
   '42501', 'storage: anon has no direct access to storage accounting (ACL)');
+-- 14-16. …and since 20260904120000, ordinary users cannot write the attachment
+-- metadata that DRIVES that accounting either. Every write privilege on
+-- paper_attachments is gone from the browser roles, so quota can only move
+-- through the lifecycle RPCs and the triggers above. SELECT is untouched — the
+-- UI still lists its own attachments.
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+  $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
+     VALUES ('d0000000-0000-0000-0000-0000000000c1','c5000000-0000-0000-0000-000000000001','s/direct.pdf','direct.pdf','application/pdf',1)$q$),
+  '42501', 'storage: ordinary user cannot directly INSERT attachment metadata (ACL)');
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+  $q$DELETE FROM public.paper_attachments WHERE user_id='c5000000-0000-0000-0000-000000000001'$q$),
+  '42501', 'storage: ordinary user cannot directly DELETE attachment metadata (ACL)');
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"c5000000-0000-0000-0000-000000000001","role":"authenticated"}',
+  $q$SELECT count(*) FROM public.paper_attachments$q$),
+  '00000', 'storage: …but SELECT is preserved — the attachment list still reads');
 
 -- ══ AI quota sequential semantics ════════════════════════════════════════════
 -- Free user F: lifetime cap 15, preloaded to 14.

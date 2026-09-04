@@ -294,22 +294,32 @@ SELECT is(
 );
 
 -- ── 13. paper_attachments ownership + quota defense ─────────────────────────
+--
+-- Asserted as `postgres` rather than as `authenticated` since migration
+-- 20260904120000. That migration revoked INSERT/UPDATE/DELETE on this table from
+-- every browser role, so a direct client write now fails at the ACL (42501)
+-- before any trigger runs — which would make these three cases pass for the
+-- wrong reason and stop testing the ownership and quota triggers at all. The
+-- remaining writer is the table owner, which is also the role the SECURITY
+-- DEFINER lifecycle RPCs execute as, so that is who the trigger defenses now
+-- have to hold against. The claims below are unchanged; only the writer is.
+-- The ACL boundary itself is asserted in 004 and 014.
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  pg_temp.errcode_as('postgres', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
     $q$INSERT INTO public.paper_attachments(paper_id, user_id, file_path, file_name, file_type, size_bytes)
        VALUES ('10000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-00000000000a','a/ok.pdf','ok.pdf','application/pdf',12345)$q$),
   '00000',
   'paper_attachments: own attachment on own paper allowed'
 );
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  pg_temp.errcode_as('postgres', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
     $q$INSERT INTO public.paper_attachments(paper_id, user_id, file_path, file_name, file_type, size_bytes)
        VALUES ('10000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-00000000000a','a/x.pdf','x.pdf','application/pdf',100)$q$),
   'P0001',
   'paper_attachments: own attachment pointing at a foreign paper rejected'
 );
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  pg_temp.errcode_as('postgres', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
     $q$INSERT INTO public.paper_attachments(paper_id, user_id, file_path, file_name, file_type, size_bytes)
        VALUES ('10000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-00000000000b','a/y.pdf','y.pdf','application/pdf',100)$q$),
   'P0001',
