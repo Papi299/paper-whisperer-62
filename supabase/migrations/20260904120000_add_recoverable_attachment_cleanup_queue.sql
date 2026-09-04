@@ -39,10 +39,11 @@
 -- roles keep SELECT and lose INSERT/UPDATE/DELETE/TRUNCATE, and metadata is
 -- created and destroyed only by the three SECURITY DEFINER RPCs here. Section 0
 -- is what makes that safe to switch on while a browser is mid-request — a
--- catalog change waits for nobody, so the migration takes an ACCESS EXCLUSIVE
--- lock on `paper_attachments` first and holds it to commit, and there is
--- therefore no such thing as a write that was authorized before the cutover and
--- commits after it.
+-- catalog change waits for nobody, so the migration opens with an explicit
+-- three-table barrier, `auth.users` then `papers` then `paper_attachments`,
+-- held to commit. There is therefore no such thing as a write that was
+-- authorized before the cutover and commits after it. Section 0 derives every
+-- mode and the order itself; none of the three is a preference.
 --
 --
 -- What this migration deliberately does NOT do
@@ -65,8 +66,16 @@
 --     before, so a queued-but-not-yet-removed object is already refunded while
 --     still physically present. Making quota include pending bytes is a separate
 --     Product/accounting decision and is not taken here.
---   * It does not weaken Storage RLS. `attachments_owner_read/insert/update/
---     delete` and the private bucket are untouched.
+--   * It does not weaken Storage RLS — but it does not leave it byte-identical
+--     either, and the difference matters. The `attachments` bucket stays
+--     private, and the owner-prefix boundary that scopes every policy to
+--     `<uid>/...` is retained exactly as it was.
+--     `attachments_owner_read/insert/update` are untouched. The owner DELETE
+--     policy is deliberately REPLACED: section 6b re-creates
+--     `attachments_owner_delete` with the same owner-prefix boundary PLUS a
+--     live-metadata fence, so an owner may still delete their own objects but
+--     may no longer delete one that a committed `paper_attachments` row still
+--     names. That is a strengthening, and it is the only Storage change here.
 --
 --
 -- Why the browser may not INSERT into the queue directly
@@ -188,42 +197,121 @@
 -- of it is a browser's raw statement. Taking `papers` first inverts it into a
 -- cycle whose other side is always OUR code, which can be made to conform.
 --
+-- ── And the Auth table is upstream of both, so it is locked FIRST ─────────
+-- The two tables created below carry `user_id UUID NOT NULL REFERENCES
+-- auth.users(id) ON DELETE CASCADE`, and in PostgreSQL **adding a foreign key
+-- takes SHARE ROW EXCLUSIVE on the REFERENCED table** — for the inline form in
+-- `CREATE TABLE` exactly as for `ALTER TABLE ... ADD CONSTRAINT`, because both
+-- go through the same constraint-addition path and both install referential
+-- triggers on the parent. Verified directly on the PostgreSQL 17.6 this project
+-- runs (local and Production alike): a bare `CREATE TABLE` takes no lock on
+-- `auth.users` at all, and the same statement with the FK takes
+-- `ShareRowExclusiveLock`.
+--
+-- So this migration ALWAYS needed a lock on `auth.users`. Before this
+-- correction it simply took it late and implicitly, at section 1 — several
+-- hundred lines after it had already taken the two barriers below. That is a
+-- lock-order inversion, and it deadlocks against an ordinary account deletion:
+--
+--   * session A (account deletion) issues `DELETE FROM auth.users`. It holds
+--     ROW EXCLUSIVE on `auth.users` and its cascade now needs ROW EXCLUSIVE on
+--     `papers` and on `paper_attachments` — both of which are direct
+--     `ON DELETE CASCADE` children of `auth.users`;
+--   * session B (this migration) already holds the two barriers below, reaches
+--     section 1, and requests SHARE ROW EXCLUSIVE on `auth.users`.
+--
+-- B waits for A upstream while A waits for B downstream. Postgres detects it and
+-- aborts one of them — observed, not theorised:
+--
+--     ERROR:  deadlock detected
+--     DETAIL:  Process 411 waits for ShareRowExclusiveLock on auth.users;
+--              blocked by process 409.
+--              Process 409 waits for RowExclusiveLock on paper_attachments;
+--              blocked by process 411.
+--
+-- Fail-safe, but not an acceptable rollout property: a user closing their
+-- account should not be able to abort a migration, or be aborted by one. The fix
+-- is to take the lock the migration is already going to need BEFORE the locks
+-- that stand between an Auth writer and its cascades — so the migration waits
+-- upstream, holding nothing, instead of waiting upstream while holding
+-- downstream.
+--
+-- SHARE ROW EXCLUSIVE is the mode, and it is derived the same way as the others:
+--
+--   * it is exactly what the foreign keys below will require, so acquiring it
+--     here is not an extra cost and — crucially — leaves NO later upgrade. A
+--     lock upgrade mid-transaction is its own deadlock shape; verified that
+--     after this lock is held, creating both FK-bearing tables adds only
+--     `AccessShareLock`, nothing stronger;
+--   * it conflicts with ROW EXCLUSIVE, so it drains and then excludes Auth row
+--     writers — which is what makes the barrier mean anything: once it is
+--     granted, no account deletion can be in flight downstream;
+--   * it does NOT conflict with ROW SHARE or ACCESS SHARE, so the foreign-key
+--     reference checks that ordinary `papers` and `paper_attachments` INSERTs
+--     perform against `auth.users` continue throughout. If it blocked those, the
+--     barrier would recreate downstream the very cycle it exists to remove.
+--
 -- ── The global lock order this establishes ────────────────────────────────
---   **`papers` before `paper_attachments`, for anything that takes a lock on
---     both that conflicts with ROW EXCLUSIVE.**
+--   **`auth.users` before `papers` before `paper_attachments`, for anything
+--     that takes a lock on more than one of them that conflicts with ROW
+--     EXCLUSIVE.**
 --
 -- Everything already conforms, or is provably harmless:
 --
+--   * account deletion (`DELETE FROM auth.users`): `auth.users` ROW EXCLUSIVE,
+--     then the cascade's ROW EXCLUSIVE on `papers` and `paper_attachments`.
+--     Conforms — and can no longer be caught mid-cascade by this migration,
+--     because the migration cannot pass its first lock while such a transaction
+--     is open.
+--   * signup / Auth user mutation: ROW EXCLUSIVE on `auth.users` and nothing
+--     else here. It can be delayed by the first barrier, but it holds nothing
+--     downstream, so it can never close a cycle.
 --   * `DELETE FROM papers` (any caller): `papers` ROW EXCLUSIVE, then the
 --     cascade's ROW EXCLUSIVE on `paper_attachments`. Conforms.
---   * account deletion's `auth.users` cascade: same shape. Conforms.
---   * `finalize_attachment_upload` and any raw `INSERT INTO paper_attachments`:
---     take `paper_attachments` first and then need only ACCESS SHARE / ROW SHARE
---     on `papers`, which SHARE permits. They can never be blocked by this
---     barrier, so they can never be the other side of a cycle.
+--   * `INSERT INTO papers` / `INSERT INTO paper_attachments`: take their own
+--     table first and then need only ROW SHARE on `auth.users` and ROW SHARE /
+--     ACCESS SHARE on `papers` for the foreign-key checks — all of which SHARE
+--     ROW EXCLUSIVE and SHARE permit. They reach the parents in the opposite
+--     order, which is harmless precisely because they can never be BLOCKED
+--     there, and a lock that is always granted immediately cannot be an edge in
+--     a wait-for cycle.
+--   * `finalize_attachment_upload`: same shape as the INSERT above.
 --   * `delete_papers_with_attachment_cleanup` and `merge_exact_duplicates` both
 --     write `paper_attachments` and then `papers`, which does NOT conform — so
 --     each now takes `LOCK TABLE public.papers IN ROW EXCLUSIVE MODE` before it
 --     touches `paper_attachments` at all (sections 4 and 4b). ROW EXCLUSIVE is
 --     self-compatible and is the lock their own DELETE/UPDATE takes moments
 --     later, so ordinary concurrency is unchanged; all it does is fix WHEN they
---     join the order.
+--     join the order. Neither needs a lock on `auth.users`.
 --
--- With that, the proof is one sentence: while this migration holds SHARE on
--- `papers` and waits for `paper_attachments`, every session that can be holding
--- a `paper_attachments` lock needs at most ACCESS SHARE or ROW SHARE on
--- `papers`, and SHARE grants both. No cycle can form.
+-- With that, the proof is two sentences. Once the first barrier is granted, no
+-- session is holding a conflicting `auth.users` lock, so no Auth cascade can be
+-- in flight downstream of us at all. And while this migration holds SHARE ROW
+-- EXCLUSIVE on `auth.users` and SHARE on `papers` and waits for
+-- `paper_attachments`, every session that can be holding a `paper_attachments`
+-- lock needs at most ROW SHARE on `auth.users` and ROW SHARE or ACCESS SHARE on
+-- `papers` — which SHARE ROW EXCLUSIVE and SHARE respectively grant. No cycle
+-- can form.
 --
 -- ── Operational implication, stated because it is real ─────────────────────
--- This migration BLOCKS all access to `paper_attachments` — reads included — and
--- blocks all WRITES to `papers` (reads of `papers` continue) for its duration,
--- and before that it waits for any in-flight attachment or paper operation to
--- finish. Everything it does is catalog-only (no table rewrite, no backfill),
--- so the held window is milliseconds; the wait beforehand is however long the
--- longest open attachment transaction takes. Deliberately there is no
+-- For the duration of this transaction the migration BLOCKS:
+--
+--   * all WRITES to `auth.users` — signup and user creation, account deletion,
+--     and Auth user mutation including the sign-in timestamp update. Reads of
+--     `auth.users`, and the foreign-key reference checks that ordinary
+--     application inserts make against it, continue;
+--   * all WRITES to `papers` (reads continue);
+--   * all ACCESS to `paper_attachments`, reads included.
+--
+-- And before any of that it WAITS for any in-flight Auth, paper or attachment
+-- transaction to finish. Everything it does is catalog-only (no table rewrite,
+-- no backfill), so the held window is milliseconds; the wait beforehand is
+-- however long the longest such open transaction takes. Deliberately there is no
 -- `lock_timeout`: a timeout would turn a correctness barrier into a race the
--- migration sometimes loses. Apply it the way any DDL is applied — not during a
--- known bulk operation. See docs/deployment.md §6.4.
+-- migration sometimes loses, and it is not there to make rollout faster. Apply
+-- it the way any DDL is applied — not during a known bulk operation, and
+-- accepting that a signup or sign-in arriving in the window waits rather than
+-- fails. See docs/deployment.md §6.4.
 
 -- ── Why this file opens a transaction explicitly ──────────────────────────
 -- Migration runners do not agree about this. `supabase start` sends a migration
@@ -250,6 +338,7 @@
 -- exists to stop making.
 BEGIN;
 
+LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.papers IN SHARE MODE;
 LOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE;
 
@@ -2058,6 +2147,26 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'attachments' AND public) THEN
     RAISE EXCEPTION 'attachment_cleanup: the attachments bucket must stay private';
+  END IF;
+
+  -- ── The upstream half of the barrier is still held, right here ──
+  -- `auth.users` is the first lock the file takes and the one that makes the
+  -- other two safe: while it is held, no Auth writer — and therefore no account
+  -- deletion cascading toward `papers` and `paper_attachments` — can be in
+  -- flight downstream of this transaction. SHARE ROW EXCLUSIVE specifically,
+  -- because it is exactly what the foreign keys in sections 1 and 1b require:
+  -- assert the mode, and a later edit that weakened it into a lock UPGRADE (its
+  -- own deadlock shape) fails here rather than in Production.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_locks
+     WHERE locktype = 'relation'
+       AND relation = 'auth.users'::regclass
+       AND mode = 'ShareRowExclusiveLock'
+       AND granted
+       AND pid = pg_backend_pid()
+  ) THEN
+    RAISE EXCEPTION
+      'attachment_cleanup: the SHARE ROW EXCLUSIVE cutover barrier on auth.users is not held';
   END IF;
 
   -- ── The cutover barrier is still held, right here ──

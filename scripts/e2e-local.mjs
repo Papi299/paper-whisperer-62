@@ -2060,13 +2060,22 @@ const CUT_REVOKE_SQL =
 const CUT_LEGACY_GRANT_SQL =
   "GRANT INSERT, UPDATE, DELETE ON TABLE public.paper_attachments TO authenticated;\n" +
   "GRANT DELETE ON TABLE public.papers TO authenticated;\n";
-// The cutover's own two statements, in the migration's order. `papers` SHARE
-// first is not a preference: a stronger mode there would block the foreign-key
-// check of an in-flight `paper_attachments` INSERT, and locking the child first
-// would put an in-flight `DELETE FROM papers` — which holds the parent and needs
-// the child for its cascade — on the other side of a cycle nobody can fix,
-// because that transaction is a browser's raw statement.
+// The cutover's own three statements, in the migration's order. None of the
+// three modes is a preference, and neither is the order:
+//
+//   * `auth.users` SHARE ROW EXCLUSIVE is exactly what the queue and tombstone
+//     foreign keys require, so taking it up front costs nothing and — the point
+//     — leaves no later lock UPGRADE. Taken FIRST because a migration holding
+//     the two downstream barriers and then requesting it deadlocks against an
+//     account deletion holding `auth.users` and cascading toward them;
+//   * `papers` SHARE, not stronger: a stronger mode would block the foreign-key
+//     check of an in-flight `paper_attachments` INSERT;
+//   * locking the child first would put an in-flight `DELETE FROM papers` —
+//     which holds the parent and needs the child for its cascade — on the other
+//     side of a cycle nobody can fix, because that transaction is a browser's
+//     raw statement.
 const CUT_BARRIER_SQL =
+  "LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE;\n" +
   "LOCK TABLE public.papers IN SHARE MODE;\n" +
   "LOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE;\n";
 
@@ -2108,6 +2117,26 @@ async function countTableLockWaiters(container, mode) {
     container,
     `SELECT count(*) FROM pg_locks WHERE locktype='relation' ` +
       `AND relation='public.paper_attachments'::regclass AND mode='${mode}' AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** Sessions queued on an `auth.users` table lock, by mode. */
+async function countAuthLockWaiters(container, mode) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='relation' ` +
+      `AND relation='auth.users'::regclass AND mode='${mode}' AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** Sessions HOLDING a granted table lock on `rel`, by mode. */
+async function countGrantedLocks(container, rel, mode) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='relation' ` +
+      `AND relation='${rel}'::regclass AND mode='${mode}' AND granted;`,
   );
   return parseInt(n || "0", 10);
 }
@@ -2277,6 +2306,231 @@ async function runParentCutoverCases(container) {
   }
 }
 
+const ACUT_USER_A = "cc000000-0000-0000-0000-0000000000d4";
+const ACUT_USER_B = "cc000000-0000-0000-0000-0000000000d5";
+const ACUT_USER_C = "cc000000-0000-0000-0000-0000000000d6";
+const ACUT_PAPER_A = "cc000000-0000-0000-0000-0000000000d7";
+const ACUT_PAPER_C = "cc000000-0000-0000-0000-0000000000d8";
+
+/**
+ * A disposable Auth user whose rows really do reach the paper and attachment
+ * cascades — so a `DELETE FROM auth.users` on it has to traverse both of the
+ * tables the cutover barriers cover, rather than deleting an isolated row.
+ */
+function acutFixtureSql(user, paper) {
+  return (
+    `INSERT INTO auth.users (id, email) VALUES ('${user}','${user}@paperlume.test')\n` +
+    `ON CONFLICT DO NOTHING;\n` +
+    `UPDATE public.user_entitlements SET storage_quota_bytes=1000000 WHERE user_id='${user}';\n` +
+    `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+    `  ('${paper}','${user}','Auth cutover race','[]'::jsonb,1)\n` +
+    `ON CONFLICT (id) DO NOTHING;\n` +
+    // The ownership and quota triggers derive the owner from auth.uid(), so the
+    // claim has to be set even for an owner-side fixture insert. Session-scoped,
+    // because psql runs in autocommit.
+    `SELECT set_config('request.jwt.claims','{"sub":"${user}","role":"authenticated"}', false);\n` +
+    `INSERT INTO public.paper_attachments (paper_id, user_id, file_path, file_name, file_type, size_bytes)\n` +
+    `  VALUES ('${paper}','${user}','${user}/${paper}/auth.pdf','auth.pdf','application/pdf',16)\n` +
+    `ON CONFLICT DO NOTHING;\n` +
+    `SELECT set_config('request.jwt.claims', NULL, false);\n`
+  );
+}
+
+/** Everything a disposable Auth user owns, across the four cascading tables. */
+async function acutFootprint(container, user) {
+  return (await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${user}') || '|' || ` +
+    `(SELECT count(*) FROM public.papers WHERE user_id='${user}') || '|' || ` +
+    `(SELECT count(*) FROM public.paper_attachments WHERE user_id='${user}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${user}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_tombstone WHERE user_id='${user}');`))
+    .split("|").map((n) => parseInt(n, 10));
+}
+
+/**
+ * Auth/account-deletion cutover probe
+ * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-05, Cases A-CUT-1…4).
+ *
+ * The queue and tombstone tables created by this migration both carry
+ * `user_id ... REFERENCES auth.users(id) ON DELETE CASCADE`, and in PostgreSQL
+ * adding a foreign key takes SHARE ROW EXCLUSIVE on the REFERENCED table. So the
+ * migration always needed a lock on `auth.users` — it simply used to take it
+ * late and implicitly, hundreds of lines after it had already taken the `papers`
+ * and `paper_attachments` barriers. That is a lock-order inversion, and against
+ * an ordinary account deletion it is a real deadlock, not a theoretical one:
+ *
+ *     ERROR:  deadlock detected
+ *     DETAIL:  Process A waits for ShareRowExclusiveLock on auth.users;
+ *              Process B waits for RowExclusiveLock on paper_attachments.
+ *
+ * `auth.users` is now the migration's FIRST lock, so the migration waits
+ * UPSTREAM while holding nothing, instead of waiting upstream while holding the
+ * downstream tables an Auth cascade needs. This proves that with real sessions
+ * and `pg_locks`, never a sleep:
+ *
+ *   A-CUT-1  an account deletion already in progress finishes; the migration
+ *            queues on `auth.users` and has NOT taken `papers`;
+ *   A-CUT-2  an account deletion arriving behind the pending barrier cannot
+ *            overtake it — and is DELAYED, not refused: unlike a stale client's
+ *            paper delete, account deletion is not a privilege being revoked;
+ *   A-CUT-3  account deletion still works normally once the cutover exists;
+ *   A-CUT-4  no lock, process or fixture residue.
+ *
+ * It runs INSIDE runMigrationCutoverProbe's try/finally, so the hardened posture
+ * is restored on every path.
+ */
+async function runAuthCutoverCases(container) {
+  const setup = await dockerPsql(container,
+    acutFixtureSql(ACUT_USER_A, ACUT_PAPER_A) + acutFixtureSql(ACUT_USER_C, ACUT_PAPER_C) +
+    `INSERT INTO auth.users (id, email) VALUES ('${ACUT_USER_B}','${ACUT_USER_B}@paperlume.test')\n` +
+    `ON CONFLICT DO NOTHING;\n`);
+  if (setup.code !== 0) throw new Error(`auth cutover fixture failed: ${setup.err.trim()}`);
+  for (const [user, label] of [[ACUT_USER_A, "A-CUT-1"], [ACUT_USER_C, "A-CUT-3"]]) {
+    const f = await acutFootprint(container, user);
+    if (f[0] !== 1 || f[1] !== 1 || f[2] !== 1) {
+      throw new Error(`auth cutover ${label}: the disposable user does not reach both cascades (user|papers|attachments|queue|tombstone = ${f.join("|")}).`);
+    }
+  }
+
+  let deleter = null;   // A — an account deletion already in progress.
+  let cutover = null;   // B — the migration's barrier + revoke.
+  let newcomer = null;  // C — an account deletion that arrives behind the barrier.
+  try {
+    // ── A-CUT-1: an account deletion already in progress ────────────────────
+    // A real `DELETE FROM auth.users` runs its cascades inside the one statement
+    // that takes the Auth writer lock, so there is no natural pause between the
+    // two. The explicit ROW EXCLUSIVE is a deterministic auxiliary blocker that
+    // holds the session at EXACTLY the lock state that statement reaches — and
+    // the cascading DELETE below is then the real one, really traversing
+    // `papers` and `paper_attachments`.
+    deleter = spawnDockerPsql(container);
+    deleter.child.stdin.write(
+      "BEGIN;\nLOCK TABLE auth.users IN ROW EXCLUSIVE MODE;\nSELECT 'AA_HOLDS_AUTH';\n");
+    await waitUntil(() => /AA_HOLDS_AUTH/.test(deleter.readOut()), PROBE_WORKER_MS,
+      "auth cutover A-CUT-1: the account deletion never took the Auth writer lock.");
+
+    cutover = spawnDockerPsql(container);
+    cutover.child.stdin.write(
+      "BEGIN;\n" + CUT_BARRIER_SQL + "SELECT 'AB_BARRIER';\n" +
+        CUT_REVOKE_SQL + "COMMIT;\nSELECT 'AB_COMMITTED';\n");
+    cutover.child.stdin.end();
+
+    // It must queue UPSTREAM, on the first lock in the order.
+    await waitUntil(async () => (await countAuthLockWaiters(container, "ShareRowExclusiveLock")) >= 1,
+      PROBE_BARRIER_MS, "auth cutover A-CUT-1: the barrier never queued on auth.users.");
+    if (/AB_BARRIER/.test(cutover.readOut())) {
+      throw new Error("auth cutover A-CUT-1: the barrier passed an open Auth writer.");
+    }
+    // …and it must be holding NOTHING downstream while it waits. This is the
+    // whole correction: with the old order the migration would already own the
+    // `papers` SHARE and the `paper_attachments` ACCESS EXCLUSIVE here, which is
+    // precisely what the account deletion's cascade needs next.
+    const downstream = (await countGrantedLocks(container, "public.papers", "ShareLock"))
+      + (await countGrantedLocks(container, "public.paper_attachments", "AccessExclusiveLock"));
+    if (downstream !== 0) {
+      throw new Error(`auth cutover A-CUT-1: the barrier is holding ${downstream} downstream lock(s) while waiting upstream — that is the deadlock shape this case exists to exclude.`);
+    }
+
+    // ── A-CUT-2: an Auth writer arriving behind the pending barrier ─────────
+    // ROW EXCLUSIVE is self-compatible, so C is NOT blocked by A. If it runs, it
+    // ran by overtaking the pending SHARE ROW EXCLUSIVE — which would mean the
+    // barrier can be starved indefinitely.
+    newcomer = spawnDockerPsql(container);
+    newcomer.child.stdin.write(
+      `DELETE FROM auth.users WHERE id='${ACUT_USER_B}';\nSELECT 'AC_DELETED';\n`);
+    newcomer.child.stdin.end();
+    await waitUntil(async () => (await countAuthLockWaiters(container, "RowExclusiveLock")) >= 1,
+      PROBE_BARRIER_MS, "auth cutover A-CUT-2: the newcomer did not queue behind the barrier.");
+    if (/AC_DELETED/.test(newcomer.readOut())) {
+      throw new Error("auth cutover A-CUT-2: an Auth writer overtook the pending barrier.");
+    }
+
+    // ── Release A: the real cascading deletion, then commit ─────────────────
+    deleter.child.stdin.write(
+      `DELETE FROM auth.users WHERE id='${ACUT_USER_A}';\nSELECT 'AA_DELETED';\n` +
+      "COMMIT;\nSELECT 'AA_COMMITTED';\n");
+    deleter.child.stdin.end();
+    const [aRes, bRes, cRes] = await Promise.all([
+      withTimeout(deleter.done, FIN_HOLD_MS, "auth cutover: account deletion exit"),
+      withTimeout(cutover.done, FIN_HOLD_MS, "auth cutover: cutover exit"),
+      withTimeout(newcomer.done, FIN_HOLD_MS, "auth cutover: newcomer exit"),
+    ]);
+    deleter = null;
+    cutover = null;
+    newcomer = null;
+
+    // No deadlock anywhere — the failure this correction exists to remove would
+    // surface as exactly this string, in whichever session Postgres chose.
+    const all = aRes.out + aRes.err + bRes.out + bRes.err + cRes.out + cRes.err;
+    if (/deadlock detected/i.test(all)) {
+      throw new Error(`auth cutover: DEADLOCK between the migration and account deletion — ${all.match(/DETAIL:[^\n]*/)?.[0] || ""}`);
+    }
+    if (aRes.code !== 0 || aRes.signal !== null || !/AA_DELETED/.test(aRes.out) || !/AA_COMMITTED/.test(aRes.out)) {
+      throw new Error(`auth cutover A-CUT-1: the in-flight account deletion did not complete cleanly (code=${aRes.code}).`);
+    }
+    if (bRes.code !== 0 || bRes.signal !== null || !/AB_BARRIER/.test(bRes.out) || !/AB_COMMITTED/.test(bRes.out)) {
+      throw new Error(`auth cutover A-CUT-1: the cutover did not complete cleanly (code=${bRes.code}).`);
+    }
+    // A-CUT-2: delayed, then SUCCESSFUL. Account deletion is not a revoked
+    // privilege, so unlike P-CUT-2 the right outcome here is that it works.
+    if (cRes.code !== 0 || cRes.signal !== null || !/AC_DELETED/.test(cRes.out)) {
+      throw new Error(`auth cutover A-CUT-2: the queued account deletion did not succeed after the cutover (code=${cRes.code}): ${(cRes.err || cRes.out).trim().slice(0, 200)}`);
+    }
+
+    // Both deletions really removed everything they cascaded to.
+    for (const [user, label] of [[ACUT_USER_A, "A-CUT-1"], [ACUT_USER_B, "A-CUT-2"]]) {
+      const f = await acutFootprint(container, user);
+      if (f.some((c) => c !== 0)) {
+        throw new Error(`auth cutover ${label}: the account deletion left rows behind (user|papers|attachments|queue|tombstone = ${f.join("|")}).`);
+      }
+    }
+    log("cutover probe A-CUT-1/2 OK: the barrier waited UPSTREAM on auth.users holding no downstream lock, the in-flight account deletion cascaded and committed, no deadlock, and the Auth writer queued behind the barrier was delayed and then succeeded.");
+
+    // ── A-CUT-3: account deletion is normal once the cutover exists ─────────
+    // The posture is now the post-migration one (the cutover above committed the
+    // revoke), so this is account deletion against the shipped world.
+    const posture = await dbScalar(container,
+      `SELECT has_table_privilege('authenticated','public.paper_attachments','INSERT')::text || '|' || ` +
+      `has_table_privilege('authenticated','public.papers','DELETE')::text;`);
+    if (posture !== "false|false") {
+      throw new Error(`auth cutover A-CUT-3: expected the post-cutover posture before this case, got ${posture}.`);
+    }
+    const after = await dockerPsql(container,
+      `DELETE FROM auth.users WHERE id='${ACUT_USER_C}';\nSELECT 'AD_DELETED';\n`);
+    if (after.code !== 0 || !/AD_DELETED/.test(after.out)) {
+      throw new Error(`auth cutover A-CUT-3: account deletion failed after the cutover: ${(after.err || after.out).trim().slice(0, 200)}`);
+    }
+    const f = await acutFootprint(container, ACUT_USER_C);
+    if (f.some((c) => c !== 0)) {
+      throw new Error(`auth cutover A-CUT-3: post-cutover account deletion left rows behind (user|papers|attachments|queue|tombstone = ${f.join("|")}).`);
+    }
+    log("cutover probe A-CUT-3 OK: account deletion still removes the Auth user and every cascading row after the cutover — the Storage sweep it performs is unchanged and lives in the Edge function, untouched here.");
+
+    // ── A-CUT-4: no lock residue on any of the three tables ────────────────
+    const residue =
+      (await countAuthLockWaiters(container, "ShareRowExclusiveLock"))
+      + (await countAuthLockWaiters(container, "RowExclusiveLock"))
+      + (await countPapersLockWaiters(container, "ShareLock"))
+      + (await countPapersLockWaiters(container, "RowExclusiveLock"))
+      + (await countTableLockWaiters(container, "AccessExclusiveLock"))
+      + (await countTableLockWaiters(container, "RowExclusiveLock"));
+    if (residue !== 0) {
+      throw new Error(`auth cutover A-CUT-4: ${residue} ungranted relation-lock waiter(s) remain on auth.users/papers/paper_attachments.`);
+    }
+    log("cutover probe A-CUT-4 OK: no relation-lock waiters remain on auth.users, papers or paper_attachments.");
+  } catch (err) {
+    await killPsql(newcomer);
+    await killPsql(cutover);
+    await killPsql(deleter);
+    throw err;
+  } finally {
+    // Deterministic cleanup: whatever the outcome, none of the three disposable
+    // users may survive this probe.
+    await dockerPsql(container,
+      `DELETE FROM auth.users WHERE id IN ('${ACUT_USER_A}','${ACUT_USER_B}','${ACUT_USER_C}');\n`);
+  }
+}
+
 /**
  * Migration-cutover probe
  * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-03, Case CUT-1).
@@ -2293,9 +2547,10 @@ async function runParentCutoverCases(container) {
  *   quota charged and no file.
  *
  * Section 0 of the migration closes that with an explicit ACCESS EXCLUSIVE lock
- * on `paper_attachments`, taken first and held to commit. This proves the three
- * properties the argument rests on, with real concurrent sessions and lock
- * inspection rather than a sleep:
+ * on `paper_attachments` — the LAST of its three barriers (`auth.users`, then
+ * `papers`, then this one), held to commit. This proves the three properties the
+ * argument rests on, with real concurrent sessions and lock inspection rather
+ * than a sleep:
  *
  *   1. the barrier WAITS for a pre-existing direct writer (session A);
  *   2. a writer arriving after the barrier request cannot overtake it, and when
@@ -2467,6 +2722,15 @@ async function runMigrationCutoverProbe(container) {
     const reopen = await dockerPsql(container, CUT_LEGACY_GRANT_SQL);
     if (reopen.code !== 0) throw new Error(`cutover probe: could not restore the pre-cutover grants for the parent cases: ${reopen.err.trim()}`);
     await runParentCutoverCases(container);
+
+    // ── The upstream half of the same boundary ─────────────────────────────
+    // Both barriers above are downstream of `auth.users`, and the migration must
+    // reach that table BEFORE either of them or it deadlocks against an ordinary
+    // account deletion. Re-open the pre-cutover world once more and race the
+    // Auth table too.
+    const reopenAuth = await dockerPsql(container, CUT_LEGACY_GRANT_SQL);
+    if (reopenAuth.code !== 0) throw new Error(`cutover probe: could not restore the pre-cutover grants for the auth cases: ${reopenAuth.err.trim()}`);
+    await runAuthCutoverCases(container);
   } finally {
     await killPsql(newcomer);
     await killPsql(cutover);
@@ -2499,7 +2763,9 @@ async function runMigrationCutoverProbe(container) {
 
   const waiters = (await countTableLockWaiters(container, "AccessExclusiveLock"))
     + (await countPapersLockWaiters(container, "ShareLock"))
-    + (await countPapersLockWaiters(container, "RowExclusiveLock"));
+    + (await countPapersLockWaiters(container, "RowExclusiveLock"))
+    + (await countAuthLockWaiters(container, "ShareRowExclusiveLock"))
+    + (await countAuthLockWaiters(container, "RowExclusiveLock"));
   if (waiters !== 0) throw new Error(`cutover probe: ${waiters} ungranted table-lock waiter(s) remain.`);
 
   const cleanup = await dockerPsql(container,
