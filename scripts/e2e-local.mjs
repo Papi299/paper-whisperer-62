@@ -1392,10 +1392,11 @@ async function runMergeCycleProbe(container) {
  * Residue + catalog check on a fresh connection (Sections H): after the
  * transaction-isolated pgTAP suites, the negative control, the framework-free
  * file, and the concurrency probe (+ its cleanup), no test user, application row,
- * entitlement/quota/storage/access row, or advisory lock may remain; pgTAP state
- * must be unchanged; and the catalog fingerprint (functions, policies, RLS flags,
- * triggers, relations) must exactly equal the pre-test baseline — proving no
- * persistent function/policy/trigger/relation/RLS-flag/extension/helper changed.
+ * entitlement/quota/storage/access/cleanup-queue row, or advisory lock may
+ * remain; pgTAP state must be unchanged; and the catalog fingerprint (functions,
+ * policies, RLS flags, triggers, relations) must exactly equal the pre-test
+ * baseline — proving no persistent
+ * function/policy/trigger/relation/RLS-flag/extension/helper changed.
  */
 async function assertNoResidue(container, pgtapBefore, catalogBefore) {
   const counts = (await dbScalar(container,
@@ -1409,9 +1410,13 @@ async function assertNoResidue(container, pgtapBefore, catalogBefore) {
     "(SELECT count(*) FROM public.usage_counters) || '|' || " +
     "(SELECT count(*) FROM public.user_storage_usage) || '|' || " +
     "(SELECT count(*) FROM public.internal_user_access) || '|' || " +
+    // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001: a cleanup job left behind would
+    // be a real leak, because a queue row is a standing instruction to delete a
+    // Storage object.
+    "(SELECT count(*) FROM public.attachment_cleanup_queue) || '|' || " +
     "(SELECT count(*) FROM pg_locks WHERE locktype='advisory');")).split("|").map((s) => parseInt(s, 10));
   if (counts.some((c) => c !== 0)) {
-    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|advisory = ${counts.join("|")}).`);
+    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|cleanup|advisory = ${counts.join("|")}).`);
   }
   const pgtapAfter = await pgtapState(container);
   if (pgtapAfter !== pgtapBefore) {

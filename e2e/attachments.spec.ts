@@ -5,6 +5,7 @@ import {
   waitForDashboard,
   openEditPaperDialog,
   collectConsoleErrors,
+  deletePapersByTitleSubstrings,
 } from "./helpers";
 
 /**
@@ -14,8 +15,12 @@ import {
  * - valid upload, visibility, signed URL open, persistence after refresh
  * - delete
  * - invalid type rejection at the client
+ * - ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001: a Storage deletion that fails
+ *   leaves the logical deletion committed and the cleanup intent durable, and a
+ *   later authenticated session finishes the job from that intent alone
  *
- * Uses the first paper in the test account's library.
+ * Uses the first paper in the test account's library, except the paper-deletion
+ * case, which owns a disposable paper of its own.
  * Cleanup: every uploaded attachment is deleted within the test group.
  */
 
@@ -279,5 +284,310 @@ test.describe("Attachment invalid type rejection", () => {
     await page.keyboard.press("Escape");
 
     expect(criticalOnly(errors)).toHaveLength(0);
+  });
+});
+
+// ─── ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 — recoverable cleanup ───────────
+//
+// The proof the whole feature exists for: a Storage deletion that fails must not
+// take the cleanup intent with it, and a later authenticated session must be
+// able to finish the job from durable state alone.
+//
+// Deterministic ONLY at the HTTP boundary. `page.route` fails exactly one
+// request shape — the Storage object DELETE, and in one case the
+// `paper_attachments` INSERT — and everything else is the real product against
+// the real local Supabase: real upload, real RPCs, real queue rows, real
+// binaries. Nothing is stubbed inside the application.
+
+/** The Supabase Storage remove endpoint for the attachments bucket. */
+const STORAGE_DELETE_URL = "**/storage/v1/object/attachments";
+
+/** The `paper_attachments` REST collection (both the select and the insert). */
+const ATTACHMENT_METADATA_URL = "**/rest/v1/paper_attachments*";
+
+/**
+ * Runtime path to the Vite-served Supabase client, so page-side probes use the
+ * SAME authenticated session and the SAME RLS the product does. Reading the
+ * queue and listing Storage through anything else would prove something about a
+ * different principal.
+ */
+const CLIENT_MODULE_PATH = "/src/integrations/supabase/client.ts";
+
+interface QueueRow { id: string; file_path: string; reason: string }
+
+/** The signed-in user's own pending cleanup rows. */
+async function readCleanupQueue(page: Page): Promise<QueueRow[]> {
+  return page.evaluate(async (modPath) => {
+    const mod = await import(modPath);
+    const client = (mod as { supabase: { from: (t: string) => { select: (c: string) => { order: (c: string, o: unknown) => Promise<{ data: unknown; error: unknown }> } } } }).supabase;
+    const { data, error } = await client
+      .from("attachment_cleanup_queue")
+      .select("id, file_path, reason")
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(`cleanup queue read failed: ${JSON.stringify(error)}`);
+    return (data ?? []) as { id: string; file_path: string; reason: string }[];
+  }, CLIENT_MODULE_PATH);
+}
+
+/** Metadata rows for one exact Storage path, read as the signed-in user. */
+async function countAttachmentRows(page: Page, filePath: string): Promise<number> {
+  return page.evaluate(async ([modPath, path]) => {
+    const mod = await import(modPath);
+    const client = (mod as { supabase: { from: (t: string) => { select: (c: string) => { eq: (c: string, v: string) => Promise<{ data: unknown[] | null; error: unknown }> } } } }).supabase;
+    const { data, error } = await client
+      .from("paper_attachments")
+      .select("id")
+      .eq("file_path", path);
+    if (error) throw new Error(`attachment read failed: ${JSON.stringify(error)}`);
+    return (data ?? []).length;
+  }, [CLIENT_MODULE_PATH, filePath] as const);
+}
+
+/**
+ * Whether the binary is still in the bucket.
+ *
+ * `list()` on the object's own directory, filtered to its name — a directory
+ * listing is unambiguous about presence in a way a signed-URL probe is not.
+ */
+async function storageObjectExists(page: Page, filePath: string): Promise<boolean> {
+  return page.evaluate(async ([modPath, path]) => {
+    const mod = await import(modPath);
+    const client = (mod as { supabase: { storage: { from: (b: string) => { list: (p: string, o: unknown) => Promise<{ data: { name: string }[] | null; error: unknown }> } } } }).supabase;
+    const lastSlash = path.lastIndexOf("/");
+    const dir = path.slice(0, lastSlash);
+    const name = path.slice(lastSlash + 1);
+    const { data, error } = await client.storage.from("attachments").list(dir, { limit: 100, search: name });
+    if (error) throw new Error(`storage list failed: ${JSON.stringify(error)}`);
+    return (data ?? []).some((entry) => entry.name === name);
+  }, [CLIENT_MODULE_PATH, filePath] as const);
+}
+
+/**
+ * Upload the PNG fixture through the real UI and return the Storage key it
+ * landed on, read off the upload request itself rather than reconstructed.
+ */
+async function uploadAndCapturePath(page: Page, dialog: ReturnType<Page["getByRole"]>): Promise<string> {
+  const uploadRequest = page.waitForRequest(
+    (req) => req.method() === "POST" && /\/storage\/v1\/object\/attachments\//.test(req.url()),
+    { timeout: 20_000 },
+  );
+  await dialog.locator('input[type="file"]').setInputFiles(PNG_FIXTURE);
+  const request = await uploadRequest;
+  await expect(page.getByText("Attachment uploaded", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  const marker = "/storage/v1/object/attachments/";
+  const url = new URL(request.url());
+  const path = decodeURIComponent(url.pathname.slice(url.pathname.indexOf(marker) + marker.length));
+  expect(path).toMatch(/^[0-9a-f-]{36}\/[0-9a-f-]{36}\/.+$/);
+  return path;
+}
+
+/** Fail every Storage object DELETE until the returned disposer is called. */
+async function failStorageDeletes(page: Page) {
+  const handler = async (route: import("@playwright/test").Route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ statusCode: "503", error: "ServiceUnavailable", message: "forced by test" }),
+    });
+  };
+  await page.route(STORAGE_DELETE_URL, handler);
+  return { dispose: () => page.unroute(STORAGE_DELETE_URL, handler) };
+}
+
+/**
+ * Reload into a fresh authenticated session and wait for the session-start
+ * recovery pass to empty the queue.
+ *
+ * This is the mechanism under test, not a test convenience: nothing else in the
+ * product retries, so if the reload does not clear the queue then the feature
+ * does not recover.
+ */
+async function recoverThroughNewSession(page: Page) {
+  await page.goto("/", { waitUntil: "networkidle" });
+  await waitForDashboard(page);
+  await expect.poll(() => readCleanupQueue(page), { timeout: 20_000, intervals: [250, 500, 1000] })
+    .toEqual([]);
+}
+
+test.describe("Attachment cleanup is recoverable", () => {
+  test.describe.configure({ mode: "serial" });
+  test.setTimeout(150_000);
+
+  test.beforeEach(async ({ page }) => {
+    // Every case starts from an empty queue, so a row observed later provably
+    // belongs to the action under test.
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    await expect.poll(() => readCleanupQueue(page), { timeout: 20_000 }).toEqual([]);
+  });
+
+  test("a failed Storage delete leaves the attachment logically deleted and the cleanup queued", async ({ page }) => {
+    const errors = collectConsoleErrors(page);
+
+    const firstRow = page.locator("tbody tr").first();
+    const paperTitle = (await firstRow.locator("td p").first().textContent())!.trim();
+    await openEditPaperDialog(page, paperTitle);
+    const dialog = page.getByRole("dialog");
+    await deleteTestAttachments(page, dialog);
+
+    const filePath = await uploadAndCapturePath(page, dialog);
+    expect(await storageObjectExists(page, filePath)).toBe(true);
+
+    const forcedFailure = await failStorageDeletes(page);
+
+    const card = dialog.locator("div.group").filter({ hasText: TEST_FILE_NAME }).first();
+    await card.hover();
+    await card.locator('button[title="Delete"]').click();
+
+    // The delete is reported as what it is: done, with cleanup outstanding.
+    await expect(page.getByText("Attachment deleted", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
+    // The toast description is rendered twice — visibly, and again inside the
+    // aria-live status region as one concatenated string. Either is proof it was
+    // shown, so the assertion takes the first match rather than requiring one.
+    await expect(
+      page.getByText(/File cleanup is pending and will retry automatically/i).first(),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(dialog.getByText(TEST_FILE_NAME)).not.toBeVisible({ timeout: 5_000 });
+
+    // The logical deletion committed …
+    expect(await countAttachmentRows(page, filePath)).toBe(0);
+    // … the intent survived it …
+    const queued = await readCleanupQueue(page);
+    expect(queued.map((row) => ({ file_path: row.file_path, reason: row.reason }))).toEqual([
+      { file_path: filePath, reason: "attachment_delete" },
+    ]);
+    // … and the binary really is still there, so the queue row is describing a
+    // real object rather than a phantom.
+    expect(await storageObjectExists(page, filePath)).toBe(true);
+
+    await page.keyboard.press("Escape");
+    await forcedFailure.dispose();
+
+    // The recovery mechanism, end to end.
+    await recoverThroughNewSession(page);
+    expect(await storageObjectExists(page, filePath)).toBe(false);
+
+    // Nothing broke beyond the failure this test deliberately caused. The forced
+    // Storage 503 IS logged by the browser as a failed resource load — that is
+    // the interception working — so it is excluded by name rather than by
+    // dropping the assertion, which would stop it noticing a real fault.
+    const unexpected = criticalOnly(errors).filter((e) => !/503/.test(e));
+    expect(unexpected).toHaveLength(0);
+  });
+
+  test("a failed metadata insert queues the orphan and a later session removes it", async ({ page }) => {
+    const firstRow = page.locator("tbody tr").first();
+    const paperTitle = (await firstRow.locator("td p").first().textContent())!.trim();
+    await openEditPaperDialog(page, paperTitle);
+    const dialog = page.getByRole("dialog");
+    await waitForAttachmentsLoaded(page, dialog);
+
+    // Upload succeeds; the metadata INSERT is refused at the HTTP boundary. The
+    // row genuinely never exists, so the compensation RPC's metadata-exists
+    // guard correctly finds nothing and queues the object.
+    const insertHandler = async (route: import("@playwright/test").Route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "XX000", message: "forced by test" }),
+      });
+    };
+    await page.route(ATTACHMENT_METADATA_URL, insertHandler);
+    const forcedFailure = await failStorageDeletes(page);
+
+    const uploadRequest = page.waitForRequest(
+      (req) => req.method() === "POST" && /\/storage\/v1\/object\/attachments\//.test(req.url()),
+      { timeout: 20_000 },
+    );
+    await dialog.locator('input[type="file"]').setInputFiles(PNG_FIXTURE);
+    const request = await uploadRequest;
+    const marker = "/storage/v1/object/attachments/";
+    const url = new URL(request.url());
+    const filePath = decodeURIComponent(url.pathname.slice(url.pathname.indexOf(marker) + marker.length));
+
+    // The save failed and cleanup could not complete — said plainly.
+    await expect(page.getByText(/Failed to save/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(
+      page.getByText(/cleanup will retry automatically/i).first(),
+    ).toBeVisible({ timeout: 5_000 });
+
+    await page.unroute(ATTACHMENT_METADATA_URL, insertHandler);
+
+    // Intent persisted, binary still present, no metadata row anywhere.
+    const queued = await readCleanupQueue(page);
+    expect(queued.map((row) => ({ file_path: row.file_path, reason: row.reason }))).toEqual([
+      { file_path: filePath, reason: "upload_compensation" },
+    ]);
+    expect(await storageObjectExists(page, filePath)).toBe(true);
+    expect(await countAttachmentRows(page, filePath)).toBe(0);
+
+    await page.keyboard.press("Escape");
+    await forcedFailure.dispose();
+
+    await recoverThroughNewSession(page);
+    expect(await storageObjectExists(page, filePath)).toBe(false);
+  });
+
+  test("deleting a paper keeps its attachment's cleanup recoverable", async ({ page }) => {
+    const disposableTitle = `_e2e_cleanup_paper_${Date.now()}`;
+    let filePath = "";
+
+    try {
+      // ── A disposable paper of this test's own, created through the real UI ──
+      await page.getByRole("button", { name: /add papers/i }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.getByRole("tab", { name: /manual/i }).click();
+      await page.locator("#manual-title").fill(disposableTitle);
+      await page.getByRole("button", { name: /^add paper$/i }).click();
+      await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 10_000 });
+
+      const row = page.locator("tbody tr").filter({ hasText: disposableTitle }).first();
+      await expect(row).toBeVisible({ timeout: 15_000 });
+
+      await openEditPaperDialog(page, disposableTitle);
+      const dialog = page.getByRole("dialog");
+      await waitForAttachmentsLoaded(page, dialog);
+      filePath = await uploadAndCapturePath(page, dialog);
+      // Close through the dialog's own control. Escape can land on the toast or
+      // the file input instead of the dialog right after an upload.
+      await dialog.getByRole("button", { name: /cancel/i }).click();
+      await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+
+      const forcedFailure = await failStorageDeletes(page);
+
+      await row.getByRole("button", { name: `Delete ${disposableTitle}` }).click();
+      const confirm = page.getByRole("alertdialog").filter({ hasText: /cannot be undone/i });
+      await expect(confirm).toBeVisible({ timeout: 5_000 });
+      await confirm.getByRole("button", { name: /^delete$/i }).click();
+
+      // The paper deletion committed; only the file cleanup is outstanding.
+      await expect(page.getByText("Paper deleted", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
+      await expect(
+        page.getByText(/Attachment file cleanup is pending and will retry automatically/i).first(),
+      ).toBeVisible({ timeout: 5_000 });
+      // The row is NOT restored — a rollback here would contradict the database.
+      await expect(page.locator("tbody tr").filter({ hasText: disposableTitle })).toHaveCount(0);
+
+      expect(await countAttachmentRows(page, filePath)).toBe(0);
+      const queued = await readCleanupQueue(page);
+      expect(queued.map((r) => ({ file_path: r.file_path, reason: r.reason }))).toEqual([
+        { file_path: filePath, reason: "paper_delete" },
+      ]);
+      expect(await storageObjectExists(page, filePath)).toBe(true);
+
+      await forcedFailure.dispose();
+      await recoverThroughNewSession(page);
+      expect(await storageObjectExists(page, filePath)).toBe(false);
+    } finally {
+      // Order-independent: tolerate finding nothing, because the happy path has
+      // already deleted the paper by the time this runs.
+      await page.unroute(STORAGE_DELETE_URL).catch(() => {});
+      await page.goto("/", { waitUntil: "networkidle" }).catch(() => {});
+      await waitForDashboard(page).catch(() => {});
+      await deletePapersByTitleSubstrings(page, [disposableTitle]).catch(() => {});
+    }
   });
 });

@@ -1697,6 +1697,14 @@ const PDF_LAST_TOKEN = "zzpdflast";
 const PDF_SOLO_TOKEN = "zzpdfsolo";
 const PDF_SLOW_TOKEN = "zzpdfslow";
 const PDF_THEFT_TOKEN = "zzpdftheft";
+
+/**
+ * The single deletion request the paper-delete path makes
+ * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001). Delaying it — the real request,
+ * delayed, never stubbed — is what makes the window between the optimistic
+ * removal and the settled deletion observable instead of a race.
+ */
+const DELETE_RPC_PATTERN = /rpc\/delete_papers_with_attachment_cleanup/;
 const PDF_ALL_TOKENS = [
   PDF_GROUP_TOKEN,
   PDF_LAST_TOKEN,
@@ -1926,20 +1934,28 @@ test.describe("POST-DELETION-PAPER-TABLE-FOCUS-CONTINUITY-001 — confirmed-dele
     await expect(heading).toHaveAttribute("tabindex", "-1");
   });
 
-  // ── D. Slow removal: restoration first, then the handoff ──────────────────
+  // ── D. The removal is immediate; the later settle changes nothing ─────────
 
   /**
-   * The two removal timings must both end in the same place.
+   * Deletion has two moments, and focus must be right at both.
    *
-   * Normally the optimistic removal lands while Radix is still animating the
-   * confirmation out, so focus goes straight from the panel to the successor.
-   * Delaying the pre-deletion attachment read — a real request, delayed, not
-   * stubbed — produces the other order: the confirmation closes first,
-   * `useDialogFocusRestore` restores the still-mounted original Delete button,
-   * and only then does the row disappear underneath it. Focus must not be left
-   * on `<body>` when that happens.
+   * **What changed.** This case used to delay the pre-deletion
+   * `paper_attachments` read to push the optimistic removal *after* the
+   * confirmation had closed, producing a "restore the opener, then unmount it"
+   * ordering. ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 removed that read: the
+   * paths are collected server-side inside `delete_papers_with_attachment_cleanup`,
+   * so nothing network-bound precedes the cache update any more and the row
+   * disappears at click time. The old ordering is no longer producible — which
+   * is a UX improvement, not a lost guarantee.
+   *
+   * **What is asserted instead**, using the same technique on the request that
+   * *is* still in the path: with the deletion RPC delayed — a real request,
+   * delayed, not stubbed — the row is already gone and focus has already been
+   * handed off *before the server answers*. Then the deletion settles (RPC,
+   * cleanup drain, cache invalidation and refetch) and focus must not move
+   * again.
    */
-  test("a slow removal restores the opener first and still hands off afterwards", async ({
+  test("removes the row before the server answers and leaves focus alone when it does", async ({
     page,
   }) => {
     test.setTimeout(120_000);
@@ -1955,45 +1971,63 @@ test.describe("POST-DELETION-PAPER-TABLE-FOCUS-CONTINUITY-001 — confirmed-dele
 
       const [deletedLabel, nextLabel] = await visibleDeleteLabels(page);
 
-      await page.route(/paper_attachments/, async (route) => {
+      let rpcAnswered = false;
+      await page.route(DELETE_RPC_PATTERN, async (route) => {
         await new Promise((resolve) => setTimeout(resolve, 2_500));
+        rpcAnswered = true;
         await route.continue();
       });
 
       const opener = page.getByRole("button", { name: deletedLabel, exact: true });
+      const openerHandle = await opener.elementHandle();
       await opener.click();
       const confirm = page.getByRole("alertdialog");
       await expect(confirm).toBeVisible();
       await confirm.getByRole("button", { name: "Delete", exact: true }).click();
       await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
 
-      // Close-focus ran while the row was still there: PR #219's restoration
-      // put focus back on the opener, which is correct for this instant.
-      await expect(rowDeleteButtons(page)).toHaveCount(2);
-      await expect(opener).toBeFocused();
+      // Optimistic, and genuinely so: the row is gone and the opener is out of
+      // the DOM while the server has not replied yet.
+      await expect(rowDeleteButtons(page)).toHaveCount(1, { timeout: 5_000 });
+      expect(
+        await openerHandle!.evaluate((el) => el.isConnected),
+        "the opener leaves the DOM with its row",
+      ).toBe(false);
+      expect(rpcAnswered, "the removal did not wait for the server").toBe(false);
 
-      // Now the row — and the focused button with it — is removed.
-      await expect(rowDeleteButtons(page)).toHaveCount(1, { timeout: 20_000 });
       const active = await activeElement(page);
       expect(active.isBody, "focus must not drop to <body>").toBe(false);
-      expect(active.ariaLabel, "the handoff picks up where restoration left off").toBe(nextLabel);
-      await expect(page.getByRole("button", { name: nextLabel, exact: true })).toBeFocused();
+      expect(active.ariaLabel, "the handoff runs on the optimistic removal").toBe(nextLabel);
+
+      // Now let it settle: the RPC answers, cleanup drains, the list refetches.
+      await expect(page.getByText("Paper deleted", { exact: true }).first()).toBeVisible({
+        timeout: 20_000,
+      });
+      expect(rpcAnswered).toBe(true);
+      await expect(
+        page.getByRole("button", { name: nextLabel, exact: true }),
+        "settling must not move focus a second time",
+      ).toBeFocused();
     } finally {
-      await page.unroute(/paper_attachments/).catch(() => {});
+      await page.unroute(DELETE_RPC_PATTERN).catch(() => {});
       await deleteFixturesMatching(page, PDF_SLOW_TOKEN).catch(() => {});
     }
   });
 
-  // ── E. The handoff must never take focus the user has moved elsewhere ─────
+  // ── E. The settle must never take focus the user has moved elsewhere ──────
 
   /**
-   * Deletion is asynchronous: the optimistic cache removal only runs after the
-   * pre-deletion attachment read returns, so there is a real window in which
-   * the user can move on before the row disappears. Delaying exactly that one
-   * PostgREST read — the request still executes, nothing is stubbed — widens
-   * the window deterministically instead of racing it.
+   * The handoff is single-shot by design: the first render without the deleted
+   * paper either performs it or declines it, and nothing stays armed afterwards.
+   * That matters because a deletion keeps working after the row vanishes — the
+   * RPC answers, the cleanup queue drains, and the list caches invalidate and
+   * refetch — and every one of those produces a fresh render.
+   *
+   * Delaying the deletion RPC widens that tail deterministically instead of
+   * racing it, so the user can demonstrably move focus during it. Whatever the
+   * list does afterwards, focus must stay where the user put it.
    */
-  test("the handoff does not steal focus the user moved after confirming", async ({ page }) => {
+  test("the settle does not steal focus the user moved after the row was removed", async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize(DESKTOP);
     await page.goto("/", { waitUntil: "networkidle" });
@@ -2002,7 +2036,7 @@ test.describe("POST-DELETION-PAPER-TABLE-FOCUS-CONTINUITY-001 — confirmed-dele
     await createDisposablePaper(page, `ZZ Post Delete Focus Theft ${PDF_THEFT_TOKEN}`);
     await filterToFixtures(page, PDF_THEFT_TOKEN, 1);
 
-    await page.route(/paper_attachments/, async (route) => {
+    await page.route(DELETE_RPC_PATTERN, async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 2_500));
       await route.continue();
     });
@@ -2015,21 +2049,23 @@ test.describe("POST-DELETION-PAPER-TABLE-FOCUS-CONTINUITY-001 — confirmed-dele
       await confirm.getByRole("button", { name: "Delete", exact: true }).click();
       await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
 
-      // The row is still there — the deletion has not settled yet.
-      await expect(rowDeleteButtons(page)).toHaveCount(1);
+      // The row is gone optimistically; the deletion has NOT settled yet.
+      await expect(rowDeleteButtons(page)).toHaveCount(0, { timeout: 5_000 });
 
       // The user deliberately moves on to another valid control.
       const addPapers = page.getByRole("button", { name: /add papers/i }).first();
       await addPapers.focus();
       await expect(addPapers).toBeFocused();
 
-      // Now the removal lands. Focus must stay where the user put it.
-      await expect(rowDeleteButtons(page)).toHaveCount(0, { timeout: 20_000 });
+      // Now the tail lands. Focus must stay where the user put it.
+      await expect(page.getByText("Paper deleted", { exact: true }).first()).toBeVisible({
+        timeout: 20_000,
+      });
       const active = await activeElement(page);
       expect(active.isBody, "focus must not drop to <body>").toBe(false);
-      await expect(addPapers, "the late handoff must not pull focus back").toBeFocused();
+      await expect(addPapers, "the settle must not pull focus back").toBeFocused();
     } finally {
-      await page.unroute(/paper_attachments/).catch(() => {});
+      await page.unroute(DELETE_RPC_PATTERN).catch(() => {});
     }
   });
 });

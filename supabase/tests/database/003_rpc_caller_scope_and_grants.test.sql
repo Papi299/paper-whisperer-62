@@ -2,7 +2,7 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 33 SECURITY DEFINER functions (27 directly callable + 4 trigger-
+--   * exactly 36 SECURITY DEFINER functions (30 directly callable + 4 trigger-
 --     only + 2 internal-only); no unexpected privileged function or overload;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
@@ -63,7 +63,7 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (27).
+-- The complete directly-callable SECURITY DEFINER RPC surface (30).
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
@@ -101,7 +101,16 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     -- posture as every other client RPC; their additive/idempotent/fail-closed
     -- behaviour is owned by 013_import_duplicate_resolution.test.sql.
     'public.bulk_add_paper_projects(uuid[],uuid[])',
-    'public.bulk_add_paper_tags(uuid[],uuid[])'
+    'public.bulk_add_paper_tags(uuid[],uuid[])',
+    -- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. All three derive the caller from
+    -- auth.uid(), take no user id at all, and write the durable cleanup queue in
+    -- the same transaction as the logical deletion they perform. Their
+    -- behaviour is owned by 014_attachment_cleanup_recovery.test.sql; what they
+    -- owe this suite is the same least-privilege posture as every other client
+    -- RPC.
+    'public.delete_attachment_with_cleanup(uuid)',
+    'public.delete_papers_with_attachment_cleanup(uuid[])',
+    'public.queue_untracked_attachment_cleanup(uuid,text)'
   ]);
 $hlp$;
 
@@ -151,20 +160,25 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(223);
+SELECT plan(238);
 
--- ══ 1. Inventory: exactly 33 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
 -- internal helpers and one trigger function; 31 after AI-MODEL-SELECTION-001A
 -- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
 -- CHROME-EXTENSION-IMPORT-001D added bulk_add_paper_projects and
--- bulk_add_paper_tags. The count is deliberately exact: a new definer function
--- that nobody registered here is the single easiest way to widen the privileged
--- surface unnoticed.
+-- bulk_add_paper_tags; 36 after ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 added
+-- delete_attachment_with_cleanup, delete_papers_with_attachment_cleanup and
+-- queue_untracked_attachment_cleanup. That feature's fourth function,
+-- attachment_cleanup_path_is_safe, is deliberately NOT here: it is SECURITY
+-- INVOKER and reads nothing, so it is out of this inventory's remit by
+-- definition — its posture is pinned by suites 007 and 014. The count is
+-- deliberately exact: a new definer function that nobody registered here is the
+-- single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  33, 'exactly 33 SECURITY DEFINER functions in public');
+  36, 'exactly 36 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -201,11 +215,14 @@ SELECT is(
        'public.set_current_user_ai_model(text)'::regprocedure,
        'public.clear_current_user_ai_model()'::regprocedure,
        'public.bulk_add_paper_projects(uuid[],uuid[])'::regprocedure,
-       'public.bulk_add_paper_tags(uuid[],uuid[])'::regprocedure
+       'public.bulk_add_paper_tags(uuid[],uuid[])'::regprocedure,
+       'public.delete_attachment_with_cleanup(uuid)'::regprocedure,
+       'public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure,
+       'public.queue_untracked_attachment_cleanup(uuid,text)'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
--- ══ 2. EXECUTE matrix over the 27 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 30 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -254,7 +271,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 27) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 30) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(

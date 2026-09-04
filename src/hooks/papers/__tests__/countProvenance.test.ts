@@ -29,12 +29,16 @@ import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/r
 
 // ── Supabase mock (hoisted) ────────────────────────────────────────────
 //
-// `deletePaper` touches exactly two tables:
-//   • `paper_attachments` — `.select("file_path").eq("paper_id", id)`, awaited
-//     for storage cleanup paths (empty here, so storage is never called);
-//   • `papers` — `.delete().eq("id", …).eq("user_id", …)`, the row deletion
-//     whose `{ error }` decides between success and rollback.
-const { mockFrom, mockStorageRemove, setDeleteError, resetSupabase } = vi.hoisted(() => {
+// Since ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001, `deletePaper` performs the
+// deletion through `delete_papers_with_attachment_cleanup`, whose `{ error }`
+// is what now decides between success and rollback — `setDeleteError` therefore
+// drives the RPC. It then drains the cleanup queue, which reads
+// `attachment_cleanup_queue` (empty here, so Storage is never called).
+//
+// `paper_attachments` and the direct `papers` DELETE remain mocked because the
+// pre-migration compatibility path still uses them; these tests do not take that
+// path, and a table access nobody expects still throws.
+const { mockFrom, mockRpc, mockStorageRemove, setDeleteError, resetSupabase } = vi.hoisted(() => {
   let deleteError: { message: string } | null = null;
 
   type Thenable<T> = {
@@ -55,23 +59,45 @@ const { mockFrom, mockStorageRemove, setDeleteError, resetSupabase } = vi.hoiste
     const chain: {
       select: () => typeof chain;
       eq: (col: string, val: unknown) => typeof chain;
+      in: (col: string, val: unknown) => typeof chain;
     } & Thenable<{ data: unknown[]; error: null }> = {
       select: () => chain,
       eq: () => chain,
+      in: () => chain,
       then: (onF, onR) => Promise.resolve({ data: [], error: null }).then(onF, onR),
     };
     return chain;
   };
 
+  // The cleanup drain: `.select().eq().order().order().range()` resolves to an
+  // empty page, so nothing is ever handed to Storage.
+  const cleanupQueueChain = () => {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      order: () => chain,
+      range: async () => ({ data: [] as unknown[], error: null }),
+      delete: () => chain,
+      in: async () => ({ error: null }),
+    };
+    return chain;
+  };
+
   const mockStorageRemove = vi.fn(async () => ({ data: null, error: null }));
+  const mockRpc = vi.fn(async (_fn: string, _args: unknown) => ({
+    data: [{ deleted_count: 1, queued_count: 0 }],
+    error: deleteError,
+  }));
   const mockFrom = vi.fn((table: string) => {
     if (table === "paper_attachments") return attachmentsChain();
+    if (table === "attachment_cleanup_queue") return cleanupQueueChain();
     if (table === "papers") return { delete: () => deleteChain() };
     throw new Error(`unexpected table access: ${table}`);
   });
 
   return {
     mockFrom,
+    mockRpc,
     mockStorageRemove,
     setDeleteError: (e: { message: string } | null) => {
       deleteError = e;
@@ -83,7 +109,11 @@ const { mockFrom, mockStorageRemove, setDeleteError, resetSupabase } = vi.hoiste
 });
 
 vi.mock("@/integrations/supabase/client", () => ({
-  supabase: { from: mockFrom, storage: { from: () => ({ remove: mockStorageRemove }) } },
+  supabase: {
+    from: mockFrom,
+    rpc: mockRpc,
+    storage: { from: () => ({ remove: mockStorageRemove }) },
+  },
 }));
 
 const mockToast = vi.fn();

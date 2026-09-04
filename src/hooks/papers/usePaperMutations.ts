@@ -13,6 +13,12 @@ import {
 import { ServerFilterParams, ServerSortParams } from "./types";
 import { useNormalizationWorker } from "@/hooks/useNormalizationWorker";
 import { usePaperCacheHelpers } from "./usePaperCacheHelpers";
+import { drainAttachmentCleanupQueue } from "@/lib/attachmentCleanup";
+import {
+  isAttachmentCleanupSchemaMissing,
+  noteAttachmentCleanupObjectPresent,
+} from "@/lib/attachmentCleanupAvailability";
+import { legacyDeletePapersWithBestEffortCleanup } from "./deletePapersCompat";
 
 export function usePaperMutations(
   userId: string | undefined,
@@ -416,48 +422,13 @@ export function usePaperMutations(
     [userId, papers, tags, projects, cancelQueries, snapshotCache, updatePapersCache, rollbackCache, removeStaleListCaches, queryClient, toast],
   );
 
-  const deletePaper = useCallback(
-    async (paperId: string) => {
-      if (!userId) return;
-
-      await cancelQueries();
-      const snapshot = snapshotCache();
-
-      // 1. Query attachment paths BEFORE deletion (CASCADE will remove rows)
-      const { data: attachments } = await supabase
-        .from("paper_attachments")
-        .select("file_path")
-        .eq("paper_id", paperId);
-      const storagePaths = (attachments || []).map((a) => a.file_path);
-
-      // Optimistic: remove paper and decrement counts immediately (always safe)
-      updatePapersCache((old) => old.filter((p) => p.id !== paperId));
-      adjustCount(-1);
-      adjustFilteredCount(-1);
-
-      // 2. Delete from DB. The explicit `.eq("user_id", userId)` is
-      // defense-in-depth on top of the `papers` table's RLS — same
-      // rationale as `updatePaper`'s ownership filter above.
-      const { error } = await supabase
-        .from("papers")
-        .delete()
-        .eq("id", paperId)
-        .eq("user_id", userId);
-      if (error) {
-        rollbackCache(snapshot);
-        toast({ title: "Error deleting paper", description: error.message, variant: "destructive" });
-        return;
-      }
-
-      // 3. Best-effort storage cleanup (only after successful DB deletion)
-      if (storagePaths.length > 0) {
-        try {
-          await supabase.storage.from("attachments").remove(storagePaths);
-        } catch (e) {
-          console.warn("Storage cleanup failed (non-critical):", e);
-        }
-      }
-
+  /**
+   * The cache/notification tail shared by every successful single-paper delete,
+   * whichever path performed it. Split out so the durable path and the
+   * pre-migration fallback cannot drift in what they invalidate.
+   */
+  const finishPaperDeletion = useCallback(
+    (message: { title: string; description?: string }) => {
       removeStaleListCaches();
       // AUTHOR-IDENTITY-RESOLUTION-001C: the paper's identity links cascade away
       // with it. The identities themselves survive — a person is not deleted
@@ -465,9 +436,78 @@ export function usePaperMutations(
       if (userId) {
         queryClient.invalidateQueries({ queryKey: queryKeys.authorIdentities.all(userId) });
       }
-      toast({ title: "Paper deleted" });
+      toast(message);
     },
-    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, adjustFilteredCount, rollbackCache, removeStaleListCaches, queryClient, toast],
+    [userId, removeStaleListCaches, queryClient, toast],
+  );
+
+  const legacyDeletePapers = useCallback(
+    (paperIds: string[]) => legacyDeletePapersWithBestEffortCleanup(userId ?? "", paperIds),
+    [userId],
+  );
+
+  const deletePaper = useCallback(
+    async (paperId: string) => {
+      if (!userId) return;
+
+      await cancelQueries();
+      const snapshot = snapshotCache();
+
+      // Optimistic: remove paper and decrement counts immediately (always safe)
+      updatePapersCache((old) => old.filter((p) => p.id !== paperId));
+      adjustCount(-1);
+      adjustFilteredCount(-1);
+
+      // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. One transaction queues every
+      // attachment path this deletion makes unreachable and then deletes the
+      // paper, so the Storage keys can never be lost by the same statement that
+      // orphans their binaries. Attachment metadata still cascades, and its
+      // AFTER DELETE trigger still refunds storage quota, exactly as before.
+      //
+      // Single delete goes through the same bulk-capable RPC with a one-element
+      // array rather than a second function: two implementations of
+      // "enqueue before delete" would be two places for the ordering to drift.
+      const { error: rpcError } = await supabase.rpc("delete_papers_with_attachment_cleanup", {
+        p_paper_ids: [paperId],
+      });
+
+      if (rpcError) {
+        if (!isAttachmentCleanupSchemaMissing(rpcError)) {
+          // Nothing committed. The paper is still there, so the optimistic
+          // removal must be undone.
+          rollbackCache(snapshot);
+          toast({ title: "Error deleting paper", description: rpcError.message, variant: "destructive" });
+          return;
+        }
+
+        // Pre-migration database: fall back to the deletion path that shipped
+        // before the queue existed. Its cleanup is best-effort and non-durable
+        // — that is the gap this feature closes once the migration is applied —
+        // but a returned `{ error }` is now recognised as a failure instead of
+        // being invisible, so the user is told the truth about it.
+        const legacy = await legacyDeletePapers([paperId]);
+        if (!legacy.ok) {
+          rollbackCache(snapshot);
+          toast({ title: "Error deleting paper", description: legacy.message, variant: "destructive" });
+          return;
+        }
+        finishPaperDeletion(legacy.cleanupFailed
+          ? { title: "Paper deleted", description: "One or more attachment files could not be removed." }
+          : { title: "Paper deleted" });
+        return;
+      }
+
+      noteAttachmentCleanupObjectPresent("delete_papers_with_attachment_cleanup");
+
+      // Committed. The paper is gone from the library whatever Storage does
+      // next, so a cleanup failure becomes a warning — never a rollback, which
+      // would show the user a paper the database no longer has.
+      const cleanup = await drainAttachmentCleanupQueue(userId);
+      finishPaperDeletion(cleanup.status === "pending"
+        ? { title: "Paper deleted", description: "Attachment file cleanup is pending and will retry automatically." }
+        : { title: "Paper deleted" });
+    },
+    [userId, cancelQueries, snapshotCache, updatePapersCache, adjustCount, adjustFilteredCount, rollbackCache, legacyDeletePapers, finishPaperDeletion, toast],
   );
 
   return { addPaperManually, updatePaper, deletePaper };

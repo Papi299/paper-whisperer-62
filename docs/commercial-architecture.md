@@ -193,6 +193,8 @@ The add-on credit-pack table exists so the shape is settled from day one (C13), 
 
 Per-user running total of attachment bytes, one row per user, `used_bytes` as `BIGINT` (32-bit would overflow at the future Labs/Teams 10 GB cap). Maintained by the `BEFORE INSERT` check-and-consume and `AFTER DELETE` refund triggers on `paper_attachments`. Client SELECT-own is allowed, which is what the read-only Settings → Storage gauge reads.
 
+Quota tracks **metadata**, not bytes physically present. `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` (`20260904120000`) does not change that: the refund fires from the metadata DELETE inside the deletion RPC's transaction, so an object still awaiting physical removal is already refunded while the binary exists. That is deliberate — the durable cleanup queue exists to make the physical remainder *recoverable*, not to make it billable. Making quota include pending-cleanup bytes would be a separate Product/accounting decision (see [decisions-and-triggers.md](decisions-and-triggers.md) **C37**), and it is not taken.
+
 ### 4.7 `ai_model_catalog` — LIVE (schema + seed); the runtime allowlist
 
 The server-controlled **allowlist** of AI models Paperlume has explicitly approved for selection (`20260902120000`, C33). Columns: `id` (TEXT PK, provider-qualified), `provider`, `provider_model`, `display_name`, `enabled`, `selectable`, `sort_order`, timestamps. Constraints require every text column to be non-empty and already trimmed, and `(provider, provider_model)` is unique.

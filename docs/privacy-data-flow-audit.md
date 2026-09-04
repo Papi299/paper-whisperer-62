@@ -144,6 +144,8 @@ Additionally, a research library on medical or clinical topics can reveal a grea
 
 **Gap worth stating honestly:** between a paper deletion whose best-effort Storage cleanup failed and the user's eventual account deletion, an orphaned binary can persist in the bucket with no metadata row pointing at it. It remains inaccessible to anyone but the owner (the RLS path prefix still matches only them), and account deletion sweeps it. A policy should not claim attachment binaries are deleted *immediately and unconditionally* when a paper is deleted.
 
+> **Addressed in the repository, not yet in Production — see [§27](#27-addendum--2026-09-04--attachment-orphan-cleanup-hardening-001).** `20260904120000` makes the cleanup intent durable in Postgres before the metadata naming the object is removed. This paragraph continues to describe the **deployed** system until that migration is applied, and even afterwards the two claims it refuses stay refused: there is no scheduled worker, so cleanup is not immediate and not guaranteed for a user who never returns.
+
 ---
 
 ## 7. Authentication, cookies and browser storage
@@ -757,7 +759,7 @@ Location is `Supabase (ap-south-1, India)` unless stated. "Until account deletio
 17. **No AI disclaimer is surfaced in the app** where AI output is shown, despite being a stated launch requirement (§18).
 18. **No `/privacy`, `/terms`, `/support` route or link exists** in the app (§18).
 19. **The Crossref `User-Agent` names the retired `paperindex.app` brand** and an address of unknown reachability (§9.3).
-20. **Orphaned attachment binaries can survive a failed best-effort cleanup** until account deletion (§6.3).
+20. **Orphaned attachment binaries can survive a failed best-effort cleanup** until account deletion (§6.3). *Repository fix landed 2026-09-04 (`ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001`, §27); the item stays OPEN until the migration is applied to Production, and it narrows rather than closes — cleanup becomes recoverable, not immediate or guaranteed.*
 21. **No error-tracking with PII redaction exists**, which is a stated launch blocker — if one is later added, it becomes a new processor and this audit must be revised.
 
 ---
@@ -1400,3 +1402,48 @@ that the Dashboard exposes no known pre-submission completeness blocker — **no
 that Google has approved anything, and **not** authorization to submit. The
 standing signed-out `/privacy` check above still runs immediately before any
 actual submission; it passed again on **2026-08-30** under `001E3D`.
+
+---
+
+## 27. Addendum — 2026-09-04 — `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001`
+
+**Scope.** This addendum reconciles §6.3 ("Deletion lifecycle for attachments") and §22.4 item 20 with the change that `20260904120000` makes. **No new processor, no new external recipient, no new network egress and no new server component is introduced**, and no attachment binary is inspected: cleanup uses Supabase Postgres, Supabase Storage and the already-authenticated browser, and nothing else. §8 (AI providers), §9 (NCBI/Crossref), §11/§24/§25/§26 (extension) and §12's account-deletion analysis are untouched. `supabase/functions/**` is byte-identical.
+
+### 27.1 The finding this addendum answers is preserved, not erased
+
+§6.3's closing paragraph and §22.4 item 20 recorded a real defect and **remain the accurate description of the deployed Production system until the migration is applied.** They are not rewritten. Restated for the record, as it was:
+
+- paper deletion read the attachment paths, deleted the papers, and then made one best-effort `storage.remove()`;
+- a failure there was caught, logged as non-critical and swallowed;
+- after the delete, those paths existed nowhere but a local variable in one browser tab, so nothing in the system knew a binary still needed removal;
+- the orphan survived — inaccessible to anyone but its owner, since the Storage RLS path prefix still matched only them — until the user eventually deleted their account, at which point the `delete-account` sweep found it;
+- upload compensation had the same weakness in miniature: one `remove()` whose failure left no record.
+
+### 27.2 What changes once the migration is applied
+
+| Before | After (migration applied) |
+|---|---|
+| Cleanup intent lived only in a browser variable after the delete | Intent is written to `public.attachment_cleanup_queue` in the **same Postgres transaction** that removes the metadata naming the object |
+| A failed `storage.remove()` was logged and swallowed | A failure leaves the queue row in place and the user is told cleanup is pending |
+| One attempt, then the knowledge was gone | Immediate retry after the action, plus one bounded retry at the next authenticated session start |
+| Orphan discoverable only by the account-deletion sweep | Orphan is represented as a durable, owner-scoped row until it is removed |
+
+New user-scoped table, for the §5 inventory: **`attachment_cleanup_queue`** — `id`, `user_id`, `file_path` (a Storage object key of the form `{userId}/{paperId}/{uniqueName}`), `reason` (one of three fixed operational values), `created_at`. It holds **no** bibliographic content, no file contents, no file name beyond what is already inside the object key, no PMID/DOI and no free text. Clients hold `SELECT`-own and `DELETE`-own and **no INSERT or UPDATE**; `anon`, `PUBLIC` and `service_role` hold nothing. `user_id` is `ON DELETE CASCADE` from `auth.users`, pinned by `supabase/tests/database/008_account_deletion_cascade.test.sql`.
+
+**Retention:** a row exists only between the logical deletion and the successful physical removal of that object — normally seconds. It persists longer only when Storage cleanup has failed, which is the entire point, and it is removed by the account cascade regardless.
+
+**Account export:** the queue is **excluded** from the portability archive (`ACCOUNT_EXPORT_EXCLUDED_TABLES`), on the same ground as `user_storage_usage`: it is server-maintained operational bookkeeping about attachments the user has already deleted, written only by `SECURITY DEFINER` RPCs as a consequence of a deletion, and never authored by the user. **Exclusion from the archive is not exclusion from deletion or privacy accounting** — it is user-scoped database state, it appears in this inventory, and it cascades with the account.
+
+### 27.3 What must NOT be claimed
+
+This work adds **no scheduled worker, no cron, no queue consumer and no autonomous server component**, deliberately (see [decisions-and-triggers.md](decisions-and-triggers.md) **C37**). Therefore:
+
+- ❌ "every attachment binary is deleted immediately" — **false**, and it was false before this change too. A binary awaiting cleanup can remain for as long as Storage refuses.
+- ❌ "cleanup is guaranteed even if the user never returns" — **false**. Nothing on the server executes a queue row. If the user never signs in again, the row simply waits.
+- ✅ "cleanup intent is recorded durably before the metadata that names the object is removed, is retried immediately and again at the next sign-in, and account deletion remains the final sweep" — **true once the migration is applied**.
+
+Account deletion is unchanged and remains the last resort: it still enumerates **Storage itself**, recursively and paginated, and must never be rewritten to trust the queue as an inventory. The queue can never be assumed complete; historical and pre-feature orphans exist; and an object with neither a metadata row nor a queue row must still be found. §12's analysis stands exactly as written.
+
+### 27.4 Rollout status
+
+**The migration is NOT applied to Production as of this addendum.** Production's latest applied migration is `20260903180000`. Until `20260904120000` is applied, the deployed frontend uses the pre-migration behaviour described in §27.1 — with one honest improvement that needs no migration: a `storage.remove()` that returns `{ error }` is now recognised as a cleanup failure and reported, instead of being silently treated as success. §22.4 item 20 therefore stays open until the Production migration lands, and this document must be revised again at that point to record it.

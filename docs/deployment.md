@@ -187,6 +187,21 @@ Merging to `main` triggers a Vercel Production deploy. **Vercel does not apply S
 - **Ordering rule:** web first is safe; database first is also safe (an id the old client never reads changes nothing). What is *not* safe is assuming the feature is live in Production merely because the code merged. Until the migration is applied, duplicates keep failing closed, and any claim that duplicate assignment works in Production must cite the applied migration, not the deploy.
 - This is the inverse of the `search-pubmed` / `suggest-paper-organization` endpoint-before-UI rule in §7b/§7c. Those frontends are useless without their endpoint; this one is *correct* without its migration, by construction and by test — see the `calls no additive RPC when the duplicate result carries no id` case in `e2e/extension-import.spec.ts`, which reproduces the pre-migration response against the real route.
 
+### 6.4 Web-before-migration is safe for `20260904120000` (recoverable attachment cleanup)
+
+Same rule as §6.3, same reason: merging to `main` triggers a Vercel Production deploy, **Vercel does not apply Supabase migrations**, and the database half of `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` is a separate, separately authorized `supabase db push --linked` step. **There is no Edge deployment for this work at all** — `supabase/functions/**` is unchanged.
+
+- **Before the migration is applied.** `attachment_cleanup_queue` and the three cleanup RPCs do not exist. Every call to one comes back as PostgREST `PGRST202`/`PGRST205` (or SQLSTATE `42883`/`42P01`) naming the missing object, and a narrow classifier — which recognises only those four object names, and only under a missing-object code — routes each flow to the behaviour that shipped before this change:
+  - **attachment delete:** Storage object first, then the metadata row. On this path Storage-first is what *prevents* an orphan, so a Storage failure correctly leaves both halves intact and the user can retry.
+  - **paper / bulk delete:** read the attachment paths, delete the papers, then remove the objects best-effort.
+  - **upload compensation:** immediate `storage.remove()` of the just-written object.
+  One thing IS better than before even here: a `remove()` that returns `{ error }` — which is how Supabase Storage reports most failures — is now recognised as a cleanup failure instead of being invisible, so the user is told files remain rather than seeing an unqualified success.
+- **After the migration is applied.** The same already-deployed client starts taking the durable path: cleanup intent is written in the same transaction as the logical deletion, and physical removal is retried immediately and again at the next authenticated session start. **No second frontend deploy is required** — the feature activates from the database side.
+- **Ordering rule:** web first is safe; database first is also safe (a client that never calls the new RPCs is unaffected by their existence). What is *not* safe is assuming the durable path is live in Production merely because the code merged. Until the migration is applied, cleanup is still best-effort, and any claim that orphaned binaries are now recoverable in Production must cite the applied migration, not the deploy.
+- **A partially installed schema is a fault, not an old schema.** The classifier refuses the compatibility verdict once any cleanup object has answered successfully in that browser session. If the queue exists but an RPC does not — a state the transactional migration cannot produce — the error surfaces instead of silently downgrading every user to the older lossy path. If that is ever observed in Production, treat it as a broken migration, not a rollout window.
+
+**Post-migration verification (structural, non-destructive).** After applying, confirm on the linked project that `public.attachment_cleanup_queue` exists with RLS enabled *and* forced, exactly two policies (SELECT, DELETE), `authenticated` holding SELECT+DELETE and **not** INSERT/UPDATE, `anon`/`service_role`/`PUBLIC` holding nothing, the `(user_id, file_path)` unique constraint present, the `auth.users` FK cascading, and no FK to `papers`/`paper_attachments`; and that all three RPCs are `SECURITY DEFINER` with `search_path=public` and executable by `authenticated` only. The migration's own `DO $verify$` block asserts all of this inside the same transaction, so a successful apply already proves it — this is the read-back, not a second gate.
+
 ---
 
 ## 7. Edge Function deployment
@@ -627,6 +642,7 @@ Finally, confirm the boundary held elsewhere:
 
 - [ ] Open a paper → upload a small PDF → confirm it appears in the attachments list.
 - [ ] Delete that attachment → confirm it disappears and storage is cleaned (no orphaned file).
+- [ ] **After `20260904120000` is applied:** delete an attachment, then confirm `attachment_cleanup_queue` holds **no** row for the signed-in user — the healthy path enqueues and drains within the same action, so a lingering row means physical cleanup did not complete. A row that IS present is not a failure of the delete; it is pending work that the next authenticated session retries.
 
 ---
 

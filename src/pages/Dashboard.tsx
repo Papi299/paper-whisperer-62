@@ -45,6 +45,7 @@ import { MobileAnalyticsSheet } from "@/components/papers/MobileAnalyticsSheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 import { useNormalizationConfig } from "@/hooks/useNormalizationConfig";
+import { useAttachmentCleanupRecovery } from "@/hooks/useAttachmentCleanupRecovery";
 
 /**
  * Outer Dashboard shell: handles auth redirect and provides PoolsProvider.
@@ -52,6 +53,16 @@ import { useNormalizationConfig } from "@/hooks/useNormalizationConfig";
 export function Dashboard() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+
+  // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. The single place in the product
+  // where pending attachment cleanup is retried on session start. It belongs
+  // here rather than in `DashboardContent` because this shell mounts once for a
+  // signed-in user and survives every filter, page and dialog change below it,
+  // and rather than in `App` because it must not run for the unauthenticated
+  // routes. It is background work: nothing below waits on it, and it raises no
+  // toast. Do NOT add a second mount elsewhere — two would race for the same
+  // rows to no purpose.
+  useAttachmentCleanupRecovery(user?.id);
 
   useEffect(() => {
     if (!authLoading && !user) {

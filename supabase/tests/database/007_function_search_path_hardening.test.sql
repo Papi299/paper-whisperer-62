@@ -10,6 +10,19 @@
 --   * public.immutable_english_tsvector_textarr(text[]) — search-vector helper
 --   * public.immutable_english_tsvector_jsonb(jsonb)    — search-vector helper
 --
+-- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 later added a fifth function of the
+-- same kind, and it joins sections 1 and 2 for the same reason the original four
+-- are there:
+--
+--   * public.attachment_cleanup_path_is_safe(uuid,text,uuid) — path predicate
+--
+-- It is a non-RPC helper: SECURITY INVOKER, pure, reading no table, callable by
+-- nobody but its owner, and used only from inside the three cleanup RPCs. Its
+-- BEHAVIOUR — which paths it accepts and refuses — is owned by
+-- 014_attachment_cleanup_recovery.test.sql; what it owes this suite is the same
+-- execution-environment pinning as its four predecessors. Sections 3–5 below
+-- concern the search-vector wrappers specifically and do not apply to it.
+--
 -- This suite pins that hardening and, just as importantly, pins that it stayed
 -- execution-environment-only. The bounded RPC surface is not this suite's remit:
 -- `search_papers`'s `search_path=public` and the least-privilege EXECUTE grants
@@ -51,13 +64,15 @@ RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
     ('immutable_english_tsvector_textarr(text[])',
        'public.immutable_english_tsvector_textarr(text[])'::regprocedure::oid),
     ('immutable_english_tsvector_jsonb(jsonb)',
-       'public.immutable_english_tsvector_jsonb(jsonb)'::regprocedure::oid)
+       'public.immutable_english_tsvector_jsonb(jsonb)'::regprocedure::oid),
+    ('attachment_cleanup_path_is_safe(uuid,text,uuid)',
+       'public.attachment_cleanup_path_is_safe(uuid,text,uuid)'::regprocedure::oid)
   ) AS t(label, oid);
 $hlp$;
 
--- 8 (search_path) + 8 (posture) + 24 (wrapper equivalence)
---   + 12 (generated search_vector) + 3 (set_updated_at) = 55
-SELECT plan(55);
+-- 10 (search_path) + 10 (posture) + 24 (wrapper equivalence)
+--   + 12 (generated search_vector) + 3 (set_updated_at) = 59
+SELECT plan(59);
 
 -- ══ 1. Bounded search_path — exactly pg_catalog, nothing else ═══════════════
 SELECT is(
@@ -94,7 +109,11 @@ SELECT is(
       ('set_updated_at()',                           'v/u/plpgsql/trigger'),
       ('immutable_english_tsvector_text(text)',      'i/s/sql/tsvector'),
       ('immutable_english_tsvector_textarr(text[])', 'i/s/sql/tsvector'),
-      ('immutable_english_tsvector_jsonb(jsonb)',    'i/s/sql/tsvector')
+      ('immutable_english_tsvector_jsonb(jsonb)',    'i/s/sql/tsvector'),
+      -- IMMUTABLE and PARALLEL SAFE are load-bearing, not incidental: the helper
+      -- is a pure predicate over its arguments, and anything that made it read
+      -- state would have to change one of them.
+      ('attachment_cleanup_path_is_safe(uuid,text,uuid)', 'i/s/sql/boolean')
     ) AS v(label, expected) ON v.label = h.label
 ) f;
 
