@@ -476,7 +476,13 @@ export function usePaperMutations(
           // Nothing committed. The paper is still there, so the optimistic
           // removal must be undone.
           rollbackCache(snapshot);
-          toast({ title: "Error deleting paper", description: rpcError.message, variant: "destructive" });
+          // Bounded copy: the RPC's guards describe paths, namespaces and
+          // ownership, none of which belongs in a toast.
+          toast({
+            title: "Error deleting paper",
+            description: "The paper could not be deleted. Please try again.",
+            variant: "destructive",
+          });
           return;
         }
 

@@ -25,6 +25,15 @@
 -- is durable, retryable and owner-scoped, and physical removal becomes a
 -- best-effort operation over recoverable state instead of over a lost variable.
 --
+-- Upload has the mirror window — the binary lands in Storage before any row
+-- describes it — and it needs more than durability, because there the client can
+-- be WRONG about what happened. A metadata write whose HTTP response is lost may
+-- still commit, and deleting the object on that belief destroys a valid
+-- attachment. Section 5 therefore makes the whole upload finalization one
+-- server-side, idempotent, serialized decision, so exactly one of "metadata
+-- exists" and "cleanup is authorized" can ever be true for a path, and neither
+-- the browser nor a concurrent retry ever has to guess which.
+--
 --
 -- What this migration deliberately does NOT do
 -- ────────────────────────────────────────────
@@ -59,8 +68,9 @@
 -- of files that are perfectly valid. So the table has SELECT-own and DELETE-own
 -- policies and no INSERT policy at all: rows appear only through the three
 -- SECURITY DEFINER RPCs below, each of which derives the caller from auth.uid(),
--- proves ownership, validates the path, and knows the logical-deletion condition
--- that makes the object garbage in the first place.
+-- proves ownership, validates the path, and knows the condition — a logical
+-- deletion, or a metadata insert the database itself refused — that makes the
+-- object garbage in the first place.
 --
 -- DELETE-own is the acknowledgement path and is safe to expose: deleting your
 -- own queue row only ever means "stop trying to remove this object", which at
@@ -100,9 +110,9 @@ COMMENT ON TABLE public.attachment_cleanup_queue IS
     'Durable, owner-scoped record of Storage objects whose attachment metadata '
     'has already been deleted and whose binaries therefore should not exist. '
     'Written ONLY by delete_attachment_with_cleanup, '
-    'delete_papers_with_attachment_cleanup and '
-    'queue_untracked_attachment_cleanup, in the same transaction as the logical '
-    'deletion that made the object unreachable. Drained by the authenticated '
+    'delete_papers_with_attachment_cleanup and finalize_attachment_upload, in '
+    'the same transaction as the logical deletion — or the rejected metadata '
+    'insert — that made the object unreachable. Drained by the authenticated '
     'browser session, which removes the object through the existing Storage '
     'owner-DELETE policy and then deletes its own row. A row is an intent, not a '
     'guarantee: nothing on the server executes it, and account deletion still '
@@ -117,7 +127,7 @@ COMMENT ON COLUMN public.attachment_cleanup_queue.file_path IS
 COMMENT ON COLUMN public.attachment_cleanup_queue.reason IS
     'Which lifecycle event created the intent: attachment_delete (one attachment '
     'deleted), paper_delete (its paper deleted), upload_compensation (binary '
-    'uploaded but metadata insert failed). Operational only — nothing branches '
+    'uploaded but metadata was rejected). Operational only — nothing branches '
     'on it at drain time.';
 
 -- The one index the drain actually uses: caller, oldest first, id as the
@@ -428,30 +438,130 @@ GRANT EXECUTE ON FUNCTION public.delete_papers_with_attachment_cleanup(UUID[]) T
 
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 5. queue_untracked_attachment_cleanup(p_paper_id uuid, p_file_path text)
+-- 5. finalize_attachment_upload(...) — the linearization point for an upload
 -- ═════════════════════════════════════════════════════════════════════════════
 --
--- Upload compensation. The client uploads the binary first and inserts metadata
--- second (unchanged by this work), so a failed insert leaves an object that no
--- row describes — the one orphan that exists with no deletion having happened.
+-- The client uploads the binary to Storage first and records metadata second.
+-- That order is not negotiable — Postgres must never hold the bytes — so there
+-- is always an instant where an object exists that no row describes.
 --
--- The metadata-exists guard is the important half. "The insert failed" is what
--- the BROWSER observed, and a request that timed out, was aborted mid-flight or
--- lost its response can commit anyway. Queueing on that belief alone would
--- schedule a perfectly valid, quota-charged attachment for destruction. So the
--- server checks the fact rather than trusting the report.
+-- The first version of this migration closed that window with a separate
+-- compensation RPC: the browser INSERTed metadata directly, and if it saw an
+-- error it called a second function that checked whether a committed
+-- paper_attachments row named the path, and queued cleanup when none did. That
+-- check is correct about a row that has ALREADY committed and useless about one
+-- that has not, and the difference is exactly the case it existed to handle:
+--
+--   T1  the INSERT reaches Postgres and begins; it has not committed.
+--   ↯   the browser's HTTP response is lost (aborted request, dropped
+--       connection, proxy timeout) and it observes an error.
+--   T2  the compensation RPC runs, takes its own snapshot, sees no committed
+--       metadata row, and commits a cleanup intent.
+--   →   the browser drains the queue and deletes the Storage object.
+--   T1  commits.
+--
+-- The account is now left with a valid, quota-charged attachment row pointing at
+-- a binary that has been deleted — the mirror of the orphan this whole migration
+-- exists to prevent, and strictly worse, because the user can see the attachment
+-- and cannot open it. No number of repeated SELECTs fixes it: a sequential
+-- existence check cannot prove that no earlier transaction will commit later.
+--
+-- So metadata is not written by the client at all on this schema. It is written
+-- here, and this function is the only place where either outcome — a metadata
+-- row or a cleanup intent for the same path — can be created.
+--
+--
+-- Why that makes the outcome linearizable
+-- ───────────────────────────────────────
+-- The first thing this function does after validating the caller is take a
+-- transaction-scoped advisory lock keyed on (caller, path). Two finalization
+-- attempts for the same object therefore cannot overlap: one runs to commit or
+-- abort and releases the lock, and only then does the other proceed. Postgres
+-- releases transaction advisory locks during commit AFTER the transaction's
+-- writes have been made visible to new snapshots, and under READ COMMITTED each
+-- statement inside a VOLATILE function takes a fresh snapshot — so the second
+-- attempt's first read already sees whatever the first attempt committed.
+--
+-- That reduces every interleaving to two ordered cases:
+--
+--   * the earlier attempt committed METADATA — the later one finds it and
+--     returns `metadata_present`, queueing nothing;
+--   * the earlier attempt committed CLEANUP INTENT — the later one finds it and
+--     returns `cleanup_queued`, inserting nothing.
+--
+-- Metadata and cleanup intent for one path are therefore mutually exclusive, and
+-- "cleanup was authorized" can never be followed by a late metadata commit from
+-- an attempt that was concurrent with it: there are no concurrent attempts.
+--
+-- Because the fresh-snapshot half of that argument is an isolation-level
+-- property rather than a lock property, the isolation level is asserted rather
+-- than assumed. Under REPEATABLE READ or SERIALIZABLE a waiter could hold a
+-- snapshot older than the commit it just waited for and reach the opposite
+-- decision, so this function refuses to run there. PostgREST uses READ COMMITTED;
+-- an environment that does not is a misconfiguration, and failing closed makes
+-- it visible instead of silently reopening the race.
+--
+-- The tombstone trigger in section 6 extends the same exclusion to any INSERT
+-- that does not come through here at all, so the invariant is a property of the
+-- table rather than of this function's callers.
+--
+--
+-- Idempotency, which is what makes a lost response survivable
+-- ──────────────────────────────────────────────────────────
+-- Paths are generated fresh per upload attempt and never reused, so "the same
+-- path" always means "the same upload". Calling this function again with the
+-- same arguments is therefore safe and is the documented recovery for an
+-- ambiguous transport failure:
+--
+--   * the first call committed metadata → the retry returns `metadata_present`
+--     with the committed row, and nothing is scheduled for deletion;
+--   * the first call committed cleanup intent → the retry returns
+--     `cleanup_queued` and refuses to write metadata over a path already
+--     declared garbage;
+--   * the first call's transaction rolled back entirely → nothing is committed,
+--     and the retry finalizes from scratch.
+--
+-- The browser never has to guess which of the three happened, which is the whole
+-- point: guessing is what deleted the file.
+--
+--
+-- Quota
+-- ─────
+-- The INSERT below fires `trg_paper_attachments_check_storage_quota` exactly as a
+-- client INSERT does, because it is an ordinary INSERT on the same table. The
+-- trigger's own ownership guard still reads auth.uid(), which SECURITY DEFINER
+-- does not change. The INSERT is wrapped in a PL/pgSQL block with an EXCEPTION
+-- handler, so a rejection — quota exceeded, a constraint, anything — rolls back
+-- the failed row AND the quota the trigger consumed for it, while the enclosing
+-- transaction survives to commit the cleanup intent. Quota is consumed exactly
+-- once on success and not at all on rejection.
 
-CREATE OR REPLACE FUNCTION public.queue_untracked_attachment_cleanup(
-    p_paper_id  UUID,
-    p_file_path TEXT
+CREATE OR REPLACE FUNCTION public.finalize_attachment_upload(
+    p_paper_id   UUID,
+    p_file_path  TEXT,
+    p_file_name  TEXT,
+    p_file_type  TEXT,
+    p_size_bytes INTEGER
 )
-RETURNS TEXT
+RETURNS TABLE (
+    status                TEXT,
+    attachment_id         UUID,
+    attachment_paper_id   UUID,
+    attachment_user_id    UUID,
+    attachment_file_path  TEXT,
+    attachment_file_name  TEXT,
+    attachment_file_type  TEXT,
+    attachment_size_bytes INTEGER,
+    attachment_created_at TIMESTAMPTZ
+)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
   v_uid UUID := auth.uid();
+  v_row public.paper_attachments%ROWTYPE;
+  v_ok  BOOLEAN;
 BEGIN
   IF v_uid IS NULL THEN
     RAISE EXCEPTION 'Authentication required';
@@ -460,53 +570,174 @@ BEGIN
     RAISE EXCEPTION 'Paper id is required';
   END IF;
 
+  -- The serialization argument above depends on each statement here taking a
+  -- fresh snapshot after the lock is granted. Fail closed rather than run the
+  -- race under an isolation level that does not provide it.
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'Attachment finalization requires READ COMMITTED isolation';
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM public.papers WHERE id = p_paper_id AND user_id = v_uid
   ) THEN
     RAISE EXCEPTION 'Paper not found';
   END IF;
 
-  -- The contract names one paper, so the path must belong to that paper's
-  -- namespace and not merely to the caller's.
+  -- The contract names one paper, so the path must be inside that paper's
+  -- namespace and not merely inside the caller's.
   IF NOT public.attachment_cleanup_path_is_safe(v_uid, p_file_path, p_paper_id) THEN
     RAISE EXCEPTION 'File path is outside the caller namespace';
   END IF;
 
-  -- Any metadata row of the caller's naming this exact object means the object
-  -- is live. Checked on file_path rather than paper_id because file_path is what
-  -- identifies the object, and a merged attachment can legitimately sit under a
-  -- different paper than its path names.
+  -- ── Serialization point ──────────────────────────────────────────────────
+  -- Held to the end of THIS transaction, whichever way it ends. Keyed on the
+  -- caller and the path, so unrelated uploads never wait on each other; a hash
+  -- collision would only make two unrelated finalizations take turns, which is
+  -- slower and never wrong.
+  PERFORM pg_advisory_xact_lock(20260904, hashtext(v_uid::text || '/' || p_file_path));
+
+  -- Everything below reads AFTER the lock was granted, so it sees the committed
+  -- result of any finalization that held this lock before us.
+  SELECT * INTO v_row
+    FROM public.paper_attachments
+   WHERE user_id = v_uid
+     AND file_path = p_file_path;
+
+  IF FOUND THEN
+    -- Already a valid attachment. This is the lost-response case that used to
+    -- destroy the file: the answer is the committed row, not a cleanup.
+    RETURN QUERY SELECT 'metadata_present'::TEXT, v_row.id, v_row.paper_id,
+                        v_row.user_id, v_row.file_path, v_row.file_name,
+                        v_row.file_type, v_row.size_bytes, v_row.created_at;
+    RETURN;
+  END IF;
+
   IF EXISTS (
-    SELECT 1 FROM public.paper_attachments
-     WHERE file_path = p_file_path
-       AND user_id = v_uid
+    SELECT 1 FROM public.attachment_cleanup_queue
+     WHERE user_id = v_uid AND file_path = p_file_path
   ) THEN
-    RETURN 'metadata_present';
+    -- The path is already declared garbage. Writing metadata over it would
+    -- resurrect an object the drain is entitled to delete at any moment.
+    RETURN QUERY SELECT 'cleanup_queued'::TEXT, NULL::UUID, NULL::UUID, NULL::UUID,
+                        NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::INTEGER,
+                        NULL::TIMESTAMPTZ;
+    RETURN;
+  END IF;
+
+  -- ── The metadata attempt, in its own subtransaction ──────────────────────
+  -- Ownership and path are already proven, so any failure from here is a
+  -- rejection of the metadata itself: the binary is garbage and the intent to
+  -- remove it must outlive the failure. The subtransaction rollback undoes the
+  -- row and the quota the BEFORE INSERT trigger consumed for it; the enclosing
+  -- transaction continues and commits the queue row.
+  BEGIN
+    INSERT INTO public.paper_attachments
+      (paper_id, user_id, file_path, file_name, file_type, size_bytes)
+    VALUES
+      (p_paper_id, v_uid, p_file_path, p_file_name, p_file_type, p_size_bytes)
+    RETURNING * INTO v_row;
+    v_ok := TRUE;
+  EXCEPTION WHEN OTHERS THEN
+    -- Deliberately not re-raised and deliberately not reported in detail. The
+    -- caller learns the outcome, never the guard text.
+    v_ok := FALSE;
+  END;
+
+  IF v_ok THEN
+    RETURN QUERY SELECT 'metadata_committed'::TEXT, v_row.id, v_row.paper_id,
+                        v_row.user_id, v_row.file_path, v_row.file_name,
+                        v_row.file_type, v_row.size_bytes, v_row.created_at;
+    RETURN;
   END IF;
 
   INSERT INTO public.attachment_cleanup_queue (user_id, file_path, reason)
   VALUES (v_uid, p_file_path, 'upload_compensation')
   ON CONFLICT (user_id, file_path) DO NOTHING;
 
-  RETURN 'queued';
+  RETURN QUERY SELECT 'cleanup_queued'::TEXT, NULL::UUID, NULL::UUID, NULL::UUID,
+                      NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::INTEGER,
+                      NULL::TIMESTAMPTZ;
 END;
 $$;
 
-COMMENT ON FUNCTION public.queue_untracked_attachment_cleanup(UUID, TEXT) IS
-    'Records cleanup intent for a Storage object the caller uploaded whose '
-    'metadata insert failed. Returns ''metadata_present'' and queues NOTHING when '
-    'a paper_attachments row for that exact path exists — the client''s belief '
-    'that the insert failed can be wrong, and a valid attachment must never be '
-    'scheduled for deletion. Otherwise returns ''queued''. Idempotent through the '
-    '(user_id, file_path) uniqueness. Touches no Storage object.';
+COMMENT ON FUNCTION public.finalize_attachment_upload(UUID, TEXT, TEXT, TEXT, INTEGER) IS
+    'The only way attachment metadata is created on this schema, and the '
+    'linearization point for one uploaded Storage object. Takes a '
+    'transaction-scoped advisory lock on (auth.uid(), file_path) before reading '
+    'anything, so concurrent or repeated finalizations of the same object are '
+    'strictly ordered instead of racing. Returns metadata_present with the '
+    'committed row when metadata already exists, cleanup_queued when durable '
+    'cleanup intent already exists or when the metadata INSERT is rejected (the '
+    'rejection and the storage quota it consumed roll back; the intent commits), '
+    'and metadata_committed with the new row otherwise. Idempotent: a repeated '
+    'call after a lost response reports the durable outcome instead of letting '
+    'the client guess. Requires READ COMMITTED. Touches no Storage object.';
 
-REVOKE ALL ON FUNCTION public.queue_untracked_attachment_cleanup(UUID, TEXT)
+REVOKE ALL ON FUNCTION public.finalize_attachment_upload(UUID, TEXT, TEXT, TEXT, INTEGER)
     FROM PUBLIC, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.queue_untracked_attachment_cleanup(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.finalize_attachment_upload(UUID, TEXT, TEXT, TEXT, INTEGER) TO authenticated;
 
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 6. Fail-closed self-verification
+-- 6. The tombstone: metadata may never be written over a queued path
+-- ═════════════════════════════════════════════════════════════════════════════
+--
+-- Section 5 proves that two finalizations of the same object cannot interleave.
+-- That is a property of the function, and `authenticated` still holds INSERT on
+-- paper_attachments — the pre-migration client path needs it, and a browser tab
+-- loaded before the frontend deploy still uses it. Without this trigger the
+-- exclusion would hold only for writes that came through finalization.
+--
+-- So the rule is enforced on the table: while a cleanup intent for a path
+-- exists, no metadata row may name that path. A queue row is a standing
+-- instruction to delete the object, and any row created over it would describe a
+-- file the next drain is entitled to remove.
+--
+-- Named to sort before trg_paper_attachments_check_storage_quota so a refusal
+-- costs no quota accounting at all. SECURITY DEFINER because the check must see
+-- the whole queue rather than whatever the inserting role's RLS policy exposes:
+-- the same predicate must hold whether the INSERT arrives from finalization
+-- (running as the owner) or from a client (running as authenticated).
+
+CREATE OR REPLACE FUNCTION public.reject_attachment_over_cleanup_intent()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.user_id IS NOT NULL AND NEW.file_path IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.attachment_cleanup_queue
+     WHERE user_id = NEW.user_id
+       AND file_path = NEW.file_path
+  ) THEN
+    -- Says nothing about the path. The client that hits this legitimately is
+    -- retrying an upload whose cleanup already committed, and the outcome it
+    -- needs is "not saved", not the contents of the queue.
+    RAISE EXCEPTION 'Attachment path is queued for cleanup';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.reject_attachment_over_cleanup_intent() IS
+    'BEFORE INSERT trigger function for paper_attachments. Refuses any metadata '
+    'row whose (user_id, file_path) already has a durable cleanup intent, so a '
+    'path declared garbage can never be turned back into a valid attachment — '
+    'including by an INSERT that did not come through finalize_attachment_upload. '
+    'SECURITY DEFINER so the queue is fully visible regardless of the inserting '
+    'role; safe search_path.';
+
+DROP TRIGGER IF EXISTS trg_paper_attachments_block_cleanup_intent ON public.paper_attachments;
+CREATE TRIGGER trg_paper_attachments_block_cleanup_intent
+  BEFORE INSERT ON public.paper_attachments
+  FOR EACH ROW EXECUTE FUNCTION public.reject_attachment_over_cleanup_intent();
+
+REVOKE ALL ON FUNCTION public.reject_attachment_over_cleanup_intent()
+    FROM PUBLIC, anon, authenticated, service_role;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 7. Fail-closed self-verification
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- Replay must produce the reviewed posture or refuse to commit. Everything here
@@ -600,7 +831,7 @@ BEGIN
   FOREACH v_fn IN ARRAY ARRAY[
     'public.delete_attachment_with_cleanup(uuid)',
     'public.delete_papers_with_attachment_cleanup(uuid[])',
-    'public.queue_untracked_attachment_cleanup(uuid,text)'
+    'public.finalize_attachment_upload(uuid,text,text,text,integer)'
   ] LOOP
     SELECT p.proconfig INTO v_cfg FROM pg_proc p WHERE p.oid = v_fn::regprocedure;
     IF NOT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = v_fn::regprocedure) THEN
@@ -632,6 +863,71 @@ BEGIN
       RAISE EXCEPTION 'attachment_cleanup: % references the storage schema; the RPCs must not touch Storage', v_fn;
     END IF;
   END LOOP;
+
+  -- ── The superseded compensation RPC must not exist ──
+  -- Its sequential existence check could not see an in-flight metadata INSERT,
+  -- which is the race section 5 exists to remove. Leaving it callable would
+  -- leave that race reachable from any client that still knew its name.
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = 'queue_untracked_attachment_cleanup'
+  ) THEN
+    RAISE EXCEPTION 'attachment_cleanup: queue_untracked_attachment_cleanup must not exist';
+  END IF;
+
+  -- ── The tombstone trigger and its function ──
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgrelid = 'public.paper_attachments'::regclass
+       AND tgname = 'trg_paper_attachments_block_cleanup_intent'
+       AND NOT tgisinternal
+  ) THEN
+    RAISE EXCEPTION 'attachment_cleanup: the cleanup-intent tombstone trigger is missing';
+  END IF;
+  -- It must fire BEFORE the quota trigger, so a refusal consumes no quota. The
+  -- name is what decides that, so the name ordering is asserted rather than
+  -- trusted.
+  IF NOT ('trg_paper_attachments_block_cleanup_intent'
+            < 'trg_paper_attachments_check_storage_quota') THEN
+    RAISE EXCEPTION 'attachment_cleanup: the tombstone trigger no longer sorts before the quota trigger';
+  END IF;
+  IF NOT (SELECT p.prosecdef FROM pg_proc p
+           WHERE p.oid = 'public.reject_attachment_over_cleanup_intent()'::regprocedure) THEN
+    RAISE EXCEPTION 'attachment_cleanup: reject_attachment_over_cleanup_intent must be SECURITY DEFINER';
+  END IF;
+  IF NOT (SELECT p.proconfig FROM pg_proc p
+           WHERE p.oid = 'public.reject_attachment_over_cleanup_intent()'::regprocedure)
+         @> ARRAY['search_path=public'] THEN
+    RAISE EXCEPTION 'attachment_cleanup: reject_attachment_over_cleanup_intent does not pin search_path=public';
+  END IF;
+  IF has_function_privilege('authenticated', 'public.reject_attachment_over_cleanup_intent()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.reject_attachment_over_cleanup_intent()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.reject_attachment_over_cleanup_intent()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'attachment_cleanup: reject_attachment_over_cleanup_intent must not be directly executable';
+  END IF;
+  IF (SELECT p.prosrc FROM pg_proc p
+       WHERE p.oid = 'public.reject_attachment_over_cleanup_intent()'::regprocedure)
+       ~* '(\mstorage[[:space:]]*\.|"storage"[[:space:]]*\.)' THEN
+    RAISE EXCEPTION 'attachment_cleanup: the tombstone trigger references the storage schema';
+  END IF;
+
+  -- ── Finalization actually serializes: the lock is taken before it reads ──
+  -- Asserted on the source rather than at runtime, because the property that
+  -- matters is ordering within the function body, and a reordering that put a
+  -- read first would be invisible to any single-connection test.
+  IF (SELECT p.prosrc FROM pg_proc p
+       WHERE p.oid = 'public.finalize_attachment_upload(uuid,text,text,text,integer)'::regprocedure)
+       !~ 'pg_advisory_xact_lock' THEN
+    RAISE EXCEPTION 'attachment_cleanup: finalize_attachment_upload takes no transaction advisory lock';
+  END IF;
+  IF (SELECT position('pg_advisory_xact_lock' IN p.prosrc)
+        FROM pg_proc p
+       WHERE p.oid = 'public.finalize_attachment_upload(uuid,text,text,text,integer)'::regprocedure)
+     > (SELECT position('FROM public.paper_attachments' IN p.prosrc)
+          FROM pg_proc p
+         WHERE p.oid = 'public.finalize_attachment_upload(uuid,text,text,text,integer)'::regprocedure) THEN
+    RAISE EXCEPTION 'attachment_cleanup: finalize_attachment_upload reads paper_attachments before it serializes';
+  END IF;
 
   -- ── The path helper is internal, pure and pinned ──
   IF (SELECT p.prosecdef FROM pg_proc p

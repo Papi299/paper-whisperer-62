@@ -1047,6 +1047,26 @@ export type Database = {
           paper_id: string
         }[]
       }
+      finalize_attachment_upload: {
+        Args: {
+          p_file_name: string
+          p_file_path: string
+          p_file_type: string
+          p_paper_id: string
+          p_size_bytes: number
+        }
+        Returns: {
+          attachment_created_at: string
+          attachment_file_name: string
+          attachment_file_path: string
+          attachment_file_type: string
+          attachment_id: string
+          attachment_paper_id: string
+          attachment_size_bytes: number
+          attachment_user_id: string
+          status: string
+        }[]
+      }
       get_ai_quota_status: {
         Args: { p_user_id: string }
         Returns: {
@@ -1113,10 +1133,6 @@ export type Database = {
       merge_exact_duplicates: {
         Args: { p_discard_ids: string[]; p_keep_id: string }
         Returns: undefined
-      }
-      queue_untracked_attachment_cleanup: {
-        Args: { p_file_path: string; p_paper_id: string }
-        Returns: string
       }
       refund_ai_quota: {
         Args: { p_user_id: string }

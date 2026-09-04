@@ -19,14 +19,24 @@
 --   * delete_papers_with_attachment_cleanup: all-ids-validated-before-mutation,
 --     duplicate-id normalisation, papers with and without attachments, NULL
 --     elements, and fail-closed on an unsafe path;
---   * queue_untracked_attachment_cleanup: the metadata-exists guard that stops a
---     valid attachment being scheduled for deletion, plus every path/ownership
+--   * finalize_attachment_upload: the upload state machine — metadata committed,
+--     the idempotent retry that reports the committed row instead of guessing,
+--     the rejected insert whose cleanup intent commits while its quota rolls
+--     back, and the tombstone that stops a queued path becoming metadata again
+--     (including through a direct client INSERT), plus every path/ownership
 --     rejection;
 --   * the internal path helper's posture and its accept/reject matrix.
 --
--- The EXECUTE/ownership matrix over the three new RPCs as part of the exhaustive
--- privileged surface is 003's remit, not this suite's; what is checked here is
--- their behaviour.
+-- NOT asserted here, because a single connection cannot: the ORDERING that makes
+-- finalization safe under a lost response. Two concurrent finalizations of one
+-- object must be serialized, not merely produce a tidy end state, and every
+-- statement in a pgTAP transaction is serialized already. That proof lives in
+-- `runAttachmentFinalizationProbe` (scripts/e2e-local.mjs), which runs real
+-- concurrent connections and reproduces the superseded design's stale read.
+--
+-- The EXECUTE/ownership matrix over the three client RPCs and the tombstone
+-- trigger function, as part of the exhaustive privileged surface, is 003's
+-- remit, not this suite's; what is checked here is their behaviour.
 --
 -- No Storage object is created, read or deleted by this suite — nothing in the
 -- database can touch one, which is itself asserted below.
@@ -106,7 +116,7 @@ INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_nam
    'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/b.pdf','b.pdf','application/pdf',8000);
 SELECT set_config('request.jwt.claims', '', true);
 
-SELECT plan(95);
+SELECT plan(106);
 
 -- ═══ 1. Queue table shape and protection ════════════════════════════════════
 
@@ -226,6 +236,21 @@ SELECT is(
   (SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='aa000000-0000-0000-0000-0000000000a0'),
   '7000', 'baseline: A''s storage usage reflects its three attachments');
 
+-- A fourth attachment sharing c1's path. The product never creates one — paths
+-- are generated per upload — but the schema permits it, and the queue's
+-- ON CONFLICT idempotence is what makes deleting both produce ONE job rather
+-- than a duplicate-key failure that would abort the second deletion.
+--
+-- It has to be planted HERE, before any intent exists: since CORRECTION-01 the
+-- tombstone trigger refuses metadata for a path that is already queued for
+-- cleanup, which is asserted directly in section 5. Inserted with A's claims so
+-- the ownership trigger accepts it.
+SELECT set_config('request.jwt.claims', pg_temp.claims('aa000000-0000-0000-0000-0000000000a0'), true);
+INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_name, file_type, size_bytes) VALUES
+  ('c4000000-0000-0000-0000-0000000000c4','a1000000-0000-0000-0000-0000000000a1','aa000000-0000-0000-0000-0000000000a0',
+   'aa000000-0000-0000-0000-0000000000a0/a1000000-0000-0000-0000-0000000000a1/one.pdf','one.pdf','application/pdf',1000);
+SELECT set_config('request.jwt.claims', '', true);
+
 SELECT is(
   pg_temp.errcode_as('authenticated','',
     $q$SELECT public.delete_attachment_with_cleanup('c1000000-0000-0000-0000-0000000000c1'::uuid)$q$),
@@ -244,7 +269,7 @@ SELECT is(
   'P0001', 'delete_attachment_with_cleanup: NULL attachment id rejected');
 SELECT is(
   (SELECT count(*)::int FROM public.paper_attachments),
-  4, 'every rejected call deleted nothing');
+  5, 'every rejected call deleted nothing');
 SELECT is(
   (SELECT count(*)::int FROM public.attachment_cleanup_queue),
   0, 'every rejected call queued nothing');
@@ -263,20 +288,14 @@ SELECT is(
   'exactly one queue row, owned by the caller, naming that path, reason attachment_delete');
 SELECT is(
   (SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='aa000000-0000-0000-0000-0000000000a0'),
-  '6000', 'the existing AFTER DELETE refund trigger still fired — quota semantics unchanged');
+  '7000', 'the existing AFTER DELETE refund trigger still fired — quota semantics unchanged');
 SELECT is(
   (SELECT count(*)::int FROM public.paper_attachments WHERE id IN
      ('c2000000-0000-0000-0000-0000000000c2','c3000000-0000-0000-0000-0000000000c3','d1000000-0000-0000-0000-0000000000d1')),
   3, 'unrelated attachments — the caller''s and B''s — are untouched');
 
--- Idempotence of the intent: a second attachment sharing the SAME path (which
--- the product never creates, but which the queue must survive) adds no second
--- job. Inserted with A's claims so the ownership trigger accepts it.
-SELECT set_config('request.jwt.claims', pg_temp.claims('aa000000-0000-0000-0000-0000000000a0'), true);
-INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_name, file_type, size_bytes) VALUES
-  ('c4000000-0000-0000-0000-0000000000c4','a1000000-0000-0000-0000-0000000000a1','aa000000-0000-0000-0000-0000000000a0',
-   'aa000000-0000-0000-0000-0000000000a0/a1000000-0000-0000-0000-0000000000a1/one.pdf','one.pdf','application/pdf',1000);
-SELECT set_config('request.jwt.claims', '', true);
+-- Idempotence of the intent: deleting the second row that shares c1's path
+-- re-states an intent the queue already holds, and must not fail or duplicate.
 SELECT is(
   pg_temp.errcode_as('authenticated', pg_temp.claims('aa000000-0000-0000-0000-0000000000a0'),
     $q$SELECT public.delete_attachment_with_cleanup('c4000000-0000-0000-0000-0000000000c4'::uuid)$q$),
@@ -409,75 +428,180 @@ SELECT is(
 
 DELETE FROM public.paper_attachments WHERE id='d2000000-0000-0000-0000-0000000000d2';
 
--- ═══ 5. queue_untracked_attachment_cleanup ══════════════════════════════════
+-- ═══ 5. finalize_attachment_upload ══════════════════════════════════════════
+--
+-- The upload half, and the one place attachment metadata is created on this
+-- schema. What is asserted here is the STATE MACHINE — success, rejection,
+-- idempotent retry, and the mutual exclusion between metadata and cleanup
+-- intent for one path.
+--
+-- What a single-connection suite CANNOT assert is the ordering property that
+-- makes the state machine trustworthy: that two concurrent finalizations of the
+-- same object are serialized rather than both reading the same pre-commit
+-- state. Every statement here is already serialized, so the race is invisible to
+-- it. That proof is a real multi-connection probe — `runAttachmentFinalizationProbe`
+-- in scripts/e2e-local.mjs — which holds one finalization open, shows the
+-- superseded existence check reading the stale absence that used to destroy
+-- files, and shows the corrected RPC blocking and converging instead.
 
+-- A deterministic quota window for B: 8000 bytes already used by the fixture
+-- attachment, so 3000 more fits exactly and anything beyond that cannot.
+UPDATE public.user_entitlements SET storage_quota_bytes = 11000
+ WHERE user_id = 'bb000000-0000-0000-0000-0000000000b0';
+
+-- ── Every rejection happens before anything can be written ──
 SELECT is(
   pg_temp.errcode_as('authenticated','',
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf')$q$),
-  'P0001', 'queue_untracked_attachment_cleanup: null-auth caller rejected');
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf',
+      'new.pdf','application/pdf',10)$q$),
+  'P0001', 'finalize_attachment_upload: null-auth caller rejected');
 SELECT is(
   pg_temp.errcode_as('authenticated', pg_temp.claims('aa000000-0000-0000-0000-0000000000a0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'aa000000-0000-0000-0000-0000000000a0/b1000000-0000-0000-0000-0000000000b1/new.pdf')$q$),
-  'P0001', 'queue_untracked_attachment_cleanup: a foreign paper is rejected');
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'aa000000-0000-0000-0000-0000000000a0/b1000000-0000-0000-0000-0000000000b1/new.pdf',
+      'new.pdf','application/pdf',10)$q$),
+  'P0001', 'finalize_attachment_upload: a foreign paper is rejected');
 SELECT is(
   pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'aa000000-0000-0000-0000-0000000000a0/b1000000-0000-0000-0000-0000000000b1/new.pdf')$q$),
-  'P0001', 'queue_untracked_attachment_cleanup: a path in another user''s namespace is rejected');
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'aa000000-0000-0000-0000-0000000000a0/b1000000-0000-0000-0000-0000000000b1/new.pdf',
+      'new.pdf','application/pdf',10)$q$),
+  'P0001', 'finalize_attachment_upload: a path in another user''s namespace is rejected');
 SELECT is(
   pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'bb000000-0000-0000-0000-0000000000b0/a1000000-0000-0000-0000-0000000000a1/new.pdf')$q$),
-  'P0001', 'queue_untracked_attachment_cleanup: a path under a DIFFERENT paper than the one named is rejected');
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/a1000000-0000-0000-0000-0000000000a1/new.pdf',
+      'new.pdf','application/pdf',10)$q$),
+  'P0001', 'finalize_attachment_upload: a path under a DIFFERENT paper than the one named is rejected');
 SELECT is(
   pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/../../escape.pdf')$q$),
-  'P0001', 'queue_untracked_attachment_cleanup: a traversal path is rejected');
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/../../escape.pdf',
+      'escape.pdf','application/pdf',10)$q$),
+  'P0001', 'finalize_attachment_upload: a traversal path is rejected');
 SELECT is(
   pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid, '')$q$),
-  'P0001', 'queue_untracked_attachment_cleanup: an empty path is rejected');
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      '', 'x.pdf','application/pdf',10)$q$),
+  'P0001', 'finalize_attachment_upload: an empty path is rejected');
 SELECT is(
   pg_temp.errcode_as('anon','',
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf')$q$),
-  '42501', 'queue_untracked_attachment_cleanup: anon is denied at the ACL');
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf',
+      'new.pdf','application/pdf',10)$q$),
+  '42501', 'finalize_attachment_upload: anon is denied at the ACL');
 SELECT is(
-  (SELECT count(*)::int FROM public.attachment_cleanup_queue), 0,
-  'no rejected compensation call queued anything');
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue)
+    + (SELECT count(*)::int FROM public.paper_attachments
+        WHERE file_path LIKE '%new.pdf' OR file_path LIKE '%escape.pdf'),
+  0, 'no rejected finalization created metadata OR queued cleanup');
 
--- The metadata-exists guard: this path IS a live attachment, so nothing queues.
+-- ── The success state ──
 SELECT is(
   pg_temp.scalar_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/b.pdf')$q$),
-  'metadata_present',
-  'queue_untracked_attachment_cleanup: a path with a live metadata row reports metadata_present');
+    $q$SELECT status FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf',
+      'new.pdf','application/pdf',3000)$q$),
+  'metadata_committed', 'finalize_attachment_upload: a valid upload commits its metadata');
+SELECT is(
+  (SELECT user_id::text || '|' || paper_id::text || '|' || file_name || '|' || size_bytes::text
+     FROM public.paper_attachments
+    WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf'),
+  'bb000000-0000-0000-0000-0000000000b0|b1000000-0000-0000-0000-0000000000b1|new.pdf|3000',
+  'the row is owned by the caller, under the named paper, with the submitted metadata');
+SELECT is(
+  (SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='bb000000-0000-0000-0000-0000000000b0'),
+  '11000', 'the existing quota trigger consumed the bytes exactly once');
 SELECT is(
   (SELECT count(*)::int FROM public.attachment_cleanup_queue), 0,
-  'and queues NOTHING — a valid attachment is never scheduled for deletion');
+  'a committed metadata row leaves no cleanup intent behind');
 
--- The genuine compensation case.
+-- ── The idempotent retry: a lost response must not change the outcome ──
+-- This is the case the superseded design got wrong. The caller repeats the exact
+-- same finalization because it never saw the answer; the server reports the
+-- durable state it already has, and nothing is scheduled for deletion.
 SELECT is(
   pg_temp.scalar_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/orphan.pdf')$q$),
-  'queued', 'queue_untracked_attachment_cleanup: an untracked path is queued');
+    $q$SELECT status FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf',
+      'new.pdf','application/pdf',3000)$q$),
+  'metadata_present', 'finalize_attachment_upload: a repeated call reports the committed metadata');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments
+    WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf'),
+  1, 'and creates no second row');
+SELECT is(
+  (SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='bb000000-0000-0000-0000-0000000000b0'),
+  '11000', 'and charges no second quota');
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue), 0,
+  'and — the whole point — schedules nothing for deletion');
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$SELECT attachment_id::text FROM public.finalize_attachment_upload(
+      'b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf',
+      'new.pdf','application/pdf',3000)$q$),
+  (SELECT id::text FROM public.paper_attachments
+    WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/new.pdf'),
+  'and returns the committed row itself, so the client can render it');
+
+-- ── A rejected metadata insert commits the intent instead of losing it ──
+-- Deterministic rejection, not an injected fault: 5000 more bytes cannot fit the
+-- 11000-byte quota, so the BEFORE INSERT trigger raises inside the function's
+-- subtransaction.
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$SELECT status FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf',
+      'rejected.pdf','application/pdf',5000)$q$),
+  'cleanup_queued', 'finalize_attachment_upload: a rejected metadata insert reports cleanup_queued');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments
+    WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf'),
+  0, 'the rejected row did not commit');
 SELECT is(
   (SELECT user_id::text || '|' || file_path || '|' || reason FROM public.attachment_cleanup_queue),
-  'bb000000-0000-0000-0000-0000000000b0|bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/orphan.pdf|upload_compensation',
-  'the row is owned by the caller and carries reason upload_compensation');
+  'bb000000-0000-0000-0000-0000000000b0|bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf|upload_compensation',
+  'but its cleanup intent DID — owned by the caller, reason upload_compensation');
+SELECT is(
+  (SELECT used_bytes::text FROM public.user_storage_usage WHERE user_id='bb000000-0000-0000-0000-0000000000b0'),
+  '11000', 'and the quota the trigger consumed for it rolled back with it');
+
+-- ── The tombstone: a path declared garbage can never become metadata again ──
+-- The queue row is a standing instruction to delete the object, so anything that
+-- recreated metadata over it would describe a file the next drain may remove.
+UPDATE public.user_entitlements SET storage_quota_bytes = 100000000
+ WHERE user_id = 'bb000000-0000-0000-0000-0000000000b0';
 SELECT is(
   pg_temp.scalar_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
-    $q$SELECT public.queue_untracked_attachment_cleanup('b1000000-0000-0000-0000-0000000000b1'::uuid,
-      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/orphan.pdf')$q$),
-  'queued', 'a repeated compensation call still reports queued');
+    $q$SELECT status FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf',
+      'rejected.pdf','application/pdf',10)$q$),
+  'cleanup_queued',
+  'finalize_attachment_upload: a retry with quota to spare still reports the existing cleanup intent');
 SELECT is(
-  (SELECT count(*)::int FROM public.attachment_cleanup_queue), 1,
-  'and remains exactly one row — idempotent through the uniqueness');
+  (SELECT count(*)::int FROM public.paper_attachments
+    WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf'),
+  0, 'and creates no metadata over it — the ordering decides, not the quota');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$INSERT INTO public.paper_attachments (paper_id,user_id,file_path,file_name,file_type,size_bytes)
+       VALUES ('b1000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-0000000000b0',
+               'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf',
+               'rejected.pdf','application/pdf',10)$q$),
+  'P0001',
+  'a DIRECT client INSERT over a queued path is refused too — the rule belongs to the table, not to the RPC');
+SELECT is(
+  (SELECT count(*)::int
+     FROM public.attachment_cleanup_queue q
+     JOIN public.paper_attachments a
+       ON a.user_id = q.user_id AND a.file_path = q.file_path),
+  0, 'metadata and cleanup intent never coexist for the same path');
+
+-- Restore the queue to empty so the sections after this one start clean.
+DELETE FROM public.attachment_cleanup_queue;
 
 -- ═══ 6. The internal path helper ════════════════════════════════════════════
 
@@ -553,7 +677,8 @@ SELECT is(
     WHERE n.nspname='public'
       AND p.proname IN ('delete_attachment_with_cleanup',
                         'delete_papers_with_attachment_cleanup',
-                        'queue_untracked_attachment_cleanup',
+                        'finalize_attachment_upload',
+                        'reject_attachment_over_cleanup_intent',
                         'attachment_cleanup_path_is_safe')
       AND p.prosrc ~* '(\mstorage[[:space:]]*\.|"storage"[[:space:]]*\.)'),
   0, 'no attachment-cleanup function references the storage schema');

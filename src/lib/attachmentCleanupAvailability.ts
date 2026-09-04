@@ -1,9 +1,9 @@
 /**
  * Recognising "the attachment-cleanup schema is not installed here".
  *
- * ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 adds one table and three RPCs in a
- * migration that, like every other, reaches Production separately from — and
- * after — the code that uses it. Merging to `main` deploys the frontend through
+ * ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 adds one table and three client RPCs
+ * in a migration that, like every other, reaches Production separately from —
+ * and after — the code that uses it. Merging to `main` deploys the frontend through
  * Vercel; `supabase db push` is a different, separately authorised step. In the
  * window between the two, and on any Vercel Preview built from this branch, the
  * deployed client will ask a database that has never heard of
@@ -36,15 +36,17 @@ import { isMissingDatabaseObjectError } from "./missingDatabaseObject";
 
 /**
  * Every object name this feature is willing to treat as legitimately absent.
- * The internal path helper is deliberately absent from the list: no client ever
- * calls it, so a missing-object error naming it would mean something unexpected
- * and must surface.
+ *
+ * The internal path helper and the cleanup-intent tombstone trigger function are
+ * deliberately absent from the list: no client ever calls either, so a
+ * missing-object error naming one would mean something unexpected and must
+ * surface rather than being read as "this database is simply older".
  */
 export const ATTACHMENT_CLEANUP_OBJECT_NAMES = [
   "attachment_cleanup_queue",
   "delete_attachment_with_cleanup",
   "delete_papers_with_attachment_cleanup",
-  "queue_untracked_attachment_cleanup",
+  "finalize_attachment_upload",
 ] as const;
 
 /** Cleanup objects proven to exist in this browser session. */

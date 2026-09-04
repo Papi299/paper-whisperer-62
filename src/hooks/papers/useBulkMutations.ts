@@ -619,7 +619,13 @@ export function useBulkMutations(
       if (rpcError) {
         if (!isAttachmentCleanupSchemaMissing(rpcError)) {
           rollbackCache(snapshot);
-          toast({ title: "Error deleting papers", description: getErrorMessage(rpcError), variant: "destructive" });
+          // Bounded copy: the RPC's guards describe paths, namespaces and
+        // ownership, none of which belongs in a toast.
+        toast({
+          title: "Error deleting papers",
+          description: "The selected papers could not be deleted. Please try again.",
+          variant: "destructive",
+        });
           return;
         }
 

@@ -111,6 +111,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 import {
   ATTACHMENTS_BUCKET,
+  CLEANUP_MAX_PAGES,
   CLEANUP_QUEUE_PAGE_SIZE,
   CLEANUP_QUEUE_TABLE,
   CLEANUP_REMOVE_BATCH_SIZE,
@@ -282,6 +283,89 @@ describe("drainAttachmentCleanupQueue — reading the queue", () => {
 
     expect(result.status).toBe("pending");
     expect(mockStorageRemove).not.toHaveBeenCalled();
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// The page bound, and what a bounded pass is allowed to CLAIM
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("drainAttachmentCleanupQueue — the page bound is honest", () => {
+  const fullPage = (n: number) => ({
+    data: Array.from({ length: CLEANUP_QUEUE_PAGE_SIZE }, (_, i) =>
+      job(`p${n}-${i}`, ownedPath(`p${n}-${i}.pdf`)),
+    ),
+    error: null as unknown,
+  });
+
+  it("completes when the LAST permitted page comes back short", async () => {
+    // The bound is reached, but a short page is the end of the queue: nothing is
+    // unseen, so `completed` is earned rather than assumed.
+    queueState.pages = [
+      ...Array.from({ length: CLEANUP_MAX_PAGES - 1 }, (_, n) => fullPage(n)),
+      { data: [job("last", ownedPath("last.pdf"))], error: null },
+    ];
+
+    const result = await drainAttachmentCleanupQueue(USER);
+
+    expect(queueState.rangeCalls).toHaveLength(CLEANUP_MAX_PAGES);
+    expect(result).toEqual({
+      status: "completed",
+      removed: CLEANUP_QUEUE_PAGE_SIZE * (CLEANUP_MAX_PAGES - 1) + 1,
+      pending: 0,
+    });
+  });
+
+  it("does NOT report completion when the last permitted page comes back full", async () => {
+    // The defect this test exists for: every job the pass fetched was removed
+    // and acknowledged, so the old code called that `completed` — while the
+    // queue had never been enumerated to its end.
+    queueState.pages = Array.from({ length: CLEANUP_MAX_PAGES }, (_, n) => fullPage(n));
+
+    const result = await drainAttachmentCleanupQueue(USER);
+
+    expect(mockStorageRemove).toHaveBeenCalled();
+    expect(queueState.ackCalls.length).toBeGreaterThan(0);
+    expect(result.status).toBe("pending");
+    expect(result.removed).toBe(CLEANUP_QUEUE_PAGE_SIZE * CLEANUP_MAX_PAGES);
+  });
+
+  it("reports the unseen remainder as unknown rather than fabricating a count", async () => {
+    queueState.pages = Array.from({ length: CLEANUP_MAX_PAGES }, (_, n) => fullPage(n));
+
+    const result = await drainAttachmentCleanupQueue(USER);
+
+    // `0` would be a lie and any number would be a guess: the pass never saw the
+    // end of the queue, so the only truthful answer is "unknown".
+    expect(result.pending).toBeNull();
+  });
+
+  it("never reads past its bound, however long the queue is", async () => {
+    // The bound is a real bound. It is not raised to avoid the pending status —
+    // one session start must not become an unbounded walk.
+    queueState.pages = Array.from({ length: CLEANUP_MAX_PAGES + 5 }, (_, n) => fullPage(n));
+
+    await drainAttachmentCleanupQueue(USER);
+
+    expect(queueState.rangeCalls).toHaveLength(CLEANUP_MAX_PAGES);
+    expect(queueState.rangeCalls[CLEANUP_MAX_PAGES - 1]).toEqual([
+      CLEANUP_QUEUE_PAGE_SIZE * (CLEANUP_MAX_PAGES - 1),
+      CLEANUP_QUEUE_PAGE_SIZE * CLEANUP_MAX_PAGES - 1,
+    ]);
+  });
+
+  it("still reports a truthful count when the walk ended before the bound", async () => {
+    // Truncation is the only case that erases the count. A Storage failure
+    // inside a fully enumerated queue still knows exactly what remains.
+    queueState.pages = [
+      { data: [job("j1", ownedPath("a.pdf")), job("j2", ownedPath("b.pdf"))], error: null },
+    ];
+    mockStorageRemove.mockResolvedValue({ data: null, error: { message: "storage unavailable" } });
+
+    const result = await drainAttachmentCleanupQueue(USER);
+
+    expect(result).toEqual({ status: "pending", removed: 0, pending: 2 });
   });
 });
 

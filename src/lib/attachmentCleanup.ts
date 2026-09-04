@@ -36,6 +36,9 @@
  *    Supabase Storage treats as a no-op — and retries the acknowledgement.
  * 4. **Nothing identifying is logged.** No path, file name, paper id or user id
  *    ever reaches the console; only counts and a stable message.
+ * 5. **The bound is honest.** The pass reads at most `CLEANUP_MAX_PAGES` pages
+ *    and reports `completed` only when it actually SAW the end of the queue.
+ *    Finishing the work it fetched is not the same as finishing the queue.
  */
 
 import { supabase } from "@/integrations/supabase/client";
@@ -64,6 +67,9 @@ export const CLEANUP_REMOVE_BATCH_SIZE = 100;
  * Pages read in one pass. A bound, not an expectation: a normal queue holds a
  * handful of rows. It exists so a pathological queue cannot turn one session
  * start into an unbounded loop — the remainder is simply picked up next time.
+ *
+ * Reaching it is not an error and does not raise the bound; it changes what the
+ * pass is allowed to CLAIM. See `fetchCleanupJobs`.
  */
 export const CLEANUP_MAX_PAGES = 20;
 
@@ -80,17 +86,27 @@ export interface AttachmentCleanupJob {
  *
  *  * `unavailable` — this environment predates the cleanup migration. No Storage
  *    call was made and no claim is made about orphans.
- *  * `completed` — nothing was pending, or everything pending was removed and
- *    acknowledged.
- *  * `pending` — at least one job remains. Either Storage refused, or the queue
- *    could not be read, or a queued path failed re-validation. It will be
- *    retried; it has NOT been lost.
+ *  * `completed` — the drain saw the END of the queue and everything it saw is
+ *    gone. This is the only status that claims there is no pending cleanup.
+ *  * `pending` — work remains. Either Storage refused, or the queue could not be
+ *    read, or a queued path failed re-validation, or the page bound was reached
+ *    before the end of the queue was observed. It will be retried; it has NOT
+ *    been lost.
+ *
+ * `completed` is deliberately hard to earn. A pass that removed every job it
+ * FETCHED has not finished if it never saw the end of the queue — see
+ * `fetchCleanupJobs`.
  */
 export interface AttachmentCleanupResult {
   status: "completed" | "pending" | "unavailable";
   /** Objects removed AND acknowledged in this pass. */
   removed: number;
-  /** Jobs known to remain. `null` when the queue itself could not be read. */
+  /**
+   * Jobs known to remain, or `null` when that number is genuinely unknown —
+   * the queue could not be read at all, or enumeration stopped at the page
+   * bound with rows still unseen. It is never a guess: a caller that needs a
+   * number and gets `null` must say "pending", not "none".
+   */
   pending: number | null;
 }
 
@@ -143,12 +159,32 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  * Every page is read before anything is deleted, so the offsets cannot shift
  * underneath the walk.
  *
- * Returns `null` when the queue could not be read at all; throws nothing.
+ * ── `truncated` ───────────────────────────────────────────────────────────
+ *
+ * The page bound is a real bound: this function will not read a
+ * `CLEANUP_MAX_PAGES + 1`-th page under any circumstances. So it reports
+ * whether it actually reached the end of the queue, which is a different
+ * question from whether it stopped.
+ *
+ * Enumeration is COMPLETE when a page came back short (or empty): a page holding
+ * fewer than `CLEANUP_QUEUE_PAGE_SIZE` rows is the last page by definition. It
+ * is TRUNCATED when the last page the bound allowed came back FULL — that is
+ * exactly the case where more rows may exist and this pass will never see them.
+ * A caller that treated a truncated read as the whole queue would report
+ * `completed` for a queue it had only partly drained.
+ *
+ * Returns `failed` when the queue could not be read at all; throws nothing.
  */
 async function fetchCleanupJobs(
   userId: string,
-): Promise<{ jobs: AttachmentCleanupJob[] } | { unavailable: true } | { failed: true }> {
+): Promise<
+  { jobs: AttachmentCleanupJob[]; truncated: boolean } | { unavailable: true } | { failed: true }
+> {
   const jobs: AttachmentCleanupJob[] = [];
+  // Only cleared by observing the end of the queue. Starting from "truncated"
+  // means a loop that somehow exits without seeing a short page still reports
+  // the cautious answer.
+  let truncated = true;
 
   for (let page = 0; page < CLEANUP_MAX_PAGES; page++) {
     const from = page * CLEANUP_QUEUE_PAGE_SIZE;
@@ -183,10 +219,14 @@ async function fetchCleanupJobs(
 
     const rows = data ?? [];
     jobs.push(...rows);
-    if (rows.length < CLEANUP_QUEUE_PAGE_SIZE) break;
+    if (rows.length < CLEANUP_QUEUE_PAGE_SIZE) {
+      // A short page is the end of the queue. Nothing is unseen.
+      truncated = false;
+      break;
+    }
   }
 
-  return { jobs };
+  return { jobs, truncated };
 }
 
 /**
@@ -269,7 +309,7 @@ export async function drainAttachmentCleanupQueue(
     return { status: "pending", removed: 0, pending: null };
   }
 
-  const { jobs } = fetched;
+  const { jobs, truncated } = fetched;
   if (jobs.length === 0) return { status: "completed", removed: 0, pending: 0 };
 
   // A queued path outside this user's namespace cannot be produced by the RPCs
@@ -279,6 +319,15 @@ export async function drainAttachmentCleanupQueue(
 
   const removed = await removeAndAcknowledge(userId, safeJobs);
   const pending = jobs.length - removed;
+
+  if (truncated) {
+    // Every job this pass FETCHED may well be gone, but the queue was longer
+    // than one bounded pass can enumerate, so the remainder is unknown — not
+    // zero. Reporting `completed` here is the false claim this branch exists to
+    // prevent; the next authenticated session takes the following window.
+    console.warn("attachment-cleanup: the pending queue is longer than one pass can drain");
+    return { status: "pending", removed, pending: null };
+  }
 
   if (pending > 0) {
     console.warn(`attachment-cleanup: ${pending} cleanup job(s) still pending`);

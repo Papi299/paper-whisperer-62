@@ -31,7 +31,7 @@ describe("isAttachmentCleanupSchemaMissing", () => {
       "attachment_cleanup_queue",
       "delete_attachment_with_cleanup",
       "delete_papers_with_attachment_cleanup",
-      "queue_untracked_attachment_cleanup",
+      "finalize_attachment_upload",
     ]);
   });
 
@@ -67,7 +67,7 @@ describe("isAttachmentCleanupSchemaMissing", () => {
       expect(
         isAttachmentCleanupSchemaMissing({
           code: "42883",
-          message: "function public.queue_untracked_attachment_cleanup(uuid, text) does not exist",
+          message: "function public.finalize_attachment_upload(uuid, text, text, text, integer) does not exist",
         }),
       ).toBe(true);
     });

@@ -293,17 +293,22 @@ test.describe("Attachment invalid type rejection", () => {
 // take the cleanup intent with it, and a later authenticated session must be
 // able to finish the job from durable state alone.
 //
-// Deterministic ONLY at the HTTP boundary. `page.route` fails exactly one
-// request shape — the Storage object DELETE, and in one case the
-// `paper_attachments` INSERT — and everything else is the real product against
-// the real local Supabase: real upload, real RPCs, real queue rows, real
-// binaries. Nothing is stubbed inside the application.
+// Deterministic ONLY at the HTTP boundary. `page.route` interferes with exactly
+// one request shape per case — the Storage object DELETE, or the finalization
+// RPC — and everything else is the real product against the real local Supabase:
+// real upload, real RPCs, real queue rows, real binaries. Nothing is stubbed
+// inside the application, and no case decides an outcome the SERVER should
+// decide: the metadata-rejection case makes the database refuse the row, and the
+// lost-response case lets the database commit and then destroys the answer.
 
 /** The Supabase Storage remove endpoint for the attachments bucket. */
 const STORAGE_DELETE_URL = "**/storage/v1/object/attachments";
 
-/** The `paper_attachments` REST collection (both the select and the insert). */
+/** The `paper_attachments` REST collection (used for page-side verification). */
 const ATTACHMENT_METADATA_URL = "**/rest/v1/paper_attachments*";
+
+/** The upload finalization RPC — the only writer of attachment metadata. */
+const FINALIZE_RPC_URL = "**/rest/v1/rpc/finalize_attachment_upload";
 
 /**
  * Runtime path to the Vite-served Supabase client, so page-side probes use the
@@ -360,6 +365,36 @@ async function storageObjectExists(page: Page, filePath: string): Promise<boolea
     if (error) throw new Error(`storage list failed: ${JSON.stringify(error)}`);
     return (data ?? []).some((entry) => entry.name === name);
   }, [CLIENT_MODULE_PATH, filePath] as const);
+}
+
+/**
+ * Remove one attachment completely — metadata and binary — as the signed-in
+ * user, through the same durable RPC the product uses.
+ *
+ * Housekeeping for the lost-response case, which deliberately ends with a saved
+ * attachment rather than an orphan. Written page-side rather than through the UI
+ * because the dialog it was uploaded into has already been dismissed.
+ *
+ * The RPC only queues the intent; the product's own recovery pass performs the
+ * physical removal and acknowledges the row, so that is what finishes the job
+ * here too rather than a second copy of the drain.
+ */
+async function deleteAttachmentByPath(page: Page, filePath: string): Promise<void> {
+  await page.evaluate(async ([modPath, path]) => {
+    const mod = await import(modPath);
+    const client = (mod as {
+      supabase: {
+        from: (t: string) => { select: (c: string) => { eq: (c: string, v: string) => Promise<{ data: { id: string }[] | null; error: unknown }> } };
+        rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+      };
+    }).supabase;
+    const { data } = await client.from("paper_attachments").select("id").eq("file_path", path);
+    for (const row of data ?? []) {
+      const { error } = await client.rpc("delete_attachment_with_cleanup", { p_attachment_id: row.id });
+      if (error) throw new Error(`cleanup delete failed: ${JSON.stringify(error)}`);
+    }
+  }, [CLIENT_MODULE_PATH, filePath] as const);
+  await recoverThroughNewSession(page);
 }
 
 /**
@@ -477,25 +512,25 @@ test.describe("Attachment cleanup is recoverable", () => {
     expect(unexpected).toHaveLength(0);
   });
 
-  test("a failed metadata insert queues the orphan and a later session removes it", async ({ page }) => {
+  test("a metadata rejection queues the orphan and a later session removes it", async ({ page }) => {
     const firstRow = page.locator("tbody tr").first();
     const paperTitle = (await firstRow.locator("td p").first().textContent())!.trim();
     await openEditPaperDialog(page, paperTitle);
     const dialog = page.getByRole("dialog");
     await waitForAttachmentsLoaded(page, dialog);
 
-    // Upload succeeds; the metadata INSERT is refused at the HTTP boundary. The
-    // row genuinely never exists, so the compensation RPC's metadata-exists
-    // guard correctly finds nothing and queues the object.
-    const insertHandler = async (route: import("@playwright/test").Route) => {
+    // The upload succeeds and the finalization RPC really runs — but with a NULL
+    // file name, which its INSERT cannot satisfy. So the DATABASE refuses the
+    // metadata, rolls the row and its quota back inside the function's
+    // subtransaction, and commits the cleanup intent in the same transaction.
+    // Nothing here fakes the answer: the rejection and the queue row are the
+    // server's, produced by the same code path a real quota refusal takes.
+    const finalizeHandler = async (route: import("@playwright/test").Route) => {
       if (route.request().method() !== "POST") return route.fallback();
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({ code: "XX000", message: "forced by test" }),
-      });
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      await route.continue({ postData: JSON.stringify({ ...body, p_file_name: null }) });
     };
-    await page.route(ATTACHMENT_METADATA_URL, insertHandler);
+    await page.route(FINALIZE_RPC_URL, finalizeHandler);
     const forcedFailure = await failStorageDeletes(page);
 
     const uploadRequest = page.waitForRequest(
@@ -514,7 +549,7 @@ test.describe("Attachment cleanup is recoverable", () => {
       page.getByText(/cleanup will retry automatically/i).first(),
     ).toBeVisible({ timeout: 5_000 });
 
-    await page.unroute(ATTACHMENT_METADATA_URL, insertHandler);
+    await page.unroute(FINALIZE_RPC_URL, finalizeHandler);
 
     // Intent persisted, binary still present, no metadata row anywhere.
     const queued = await readCleanupQueue(page);
@@ -529,6 +564,66 @@ test.describe("Attachment cleanup is recoverable", () => {
 
     await recoverThroughNewSession(page);
     expect(await storageObjectExists(page, filePath)).toBe(false);
+  });
+
+  test("a finalization whose response is lost still saves the attachment", async ({ page }) => {
+    // The case ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-01 exists for,
+    // reproduced at the real HTTP boundary with no timing anywhere in it.
+    //
+    // The first finalization request is DELIVERED — the database receives it and
+    // commits the metadata — and then its response is destroyed, so the browser
+    // sees a transport failure for a call that actually succeeded. Under the
+    // superseded protocol that observation is what removed the object.
+    //
+    // Here the browser may only repeat the idempotent call, and the server
+    // answers with the row it already holds.
+    const firstRow = page.locator("tbody tr").first();
+    const paperTitle = (await firstRow.locator("td p").first().textContent())!.trim();
+    await openEditPaperDialog(page, paperTitle);
+    const dialog = page.getByRole("dialog");
+    await waitForAttachmentsLoaded(page, dialog);
+
+    let swallowed = false;
+    let finalizeRequests = 0;
+    const lossHandler = async (route: import("@playwright/test").Route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      finalizeRequests += 1;
+      if (swallowed) return route.fallback();
+      swallowed = true;
+      // Perform the request for real, then abort instead of fulfilling: the
+      // transaction commits and the answer never arrives.
+      await route.fetch();
+      await route.abort("connectionfailed");
+    };
+    await page.route(FINALIZE_RPC_URL, lossHandler);
+
+    const uploadRequest = page.waitForRequest(
+      (req) => req.method() === "POST" && /\/storage\/v1\/object\/attachments\//.test(req.url()),
+      { timeout: 20_000 },
+    );
+    await dialog.locator('input[type="file"]').setInputFiles(PNG_FIXTURE);
+    const request = await uploadRequest;
+    const marker = "/storage/v1/object/attachments/";
+    const url = new URL(request.url());
+    const filePath = decodeURIComponent(url.pathname.slice(url.pathname.indexOf(marker) + marker.length));
+
+    // The attachment is saved, not lost and not reported as failed.
+    await expect(page.getByText(/Attachment uploaded/i).first()).toBeVisible({ timeout: 20_000 });
+    await page.unroute(FINALIZE_RPC_URL, lossHandler);
+
+    // Two attempts: the one whose answer vanished, and the reconciling retry.
+    expect(finalizeRequests).toBe(2);
+    // Exactly one metadata row — the retry reported the committed one rather
+    // than creating a second.
+    expect(await countAttachmentRows(page, filePath)).toBe(1);
+    // And the file is still there: nothing was scheduled for deletion, and
+    // nothing was deleted on the strength of a lost response.
+    expect(await storageObjectExists(page, filePath)).toBe(true);
+    expect(await readCleanupQueue(page)).toEqual([]);
+
+    // Clean up the attachment this case deliberately kept.
+    await page.keyboard.press("Escape");
+    await deleteAttachmentByPath(page, filePath);
   });
 
   test("deleting a paper keeps its attachment's cleanup recoverable", async ({ page }) => {

@@ -19,9 +19,11 @@
  *                  catch, then prove it rolled back) → run every pgTAP suite
  *                  under supabase/tests/database (isolated, extension state
  *                  restored) → run the framework-free 18-case verification →
- *                  prove true concurrent AI-quota consumption at the cap with
- *                  bounded, fail-closed coordinator/worker processes whose
- *                  deadlines all start at barrier release → verify no
+ *                  prove true concurrent AI-quota consumption at the cap, the
+ *                  author-identity merge-cycle refusal, and the attachment
+ *                  upload-finalization linearization, each with bounded,
+ *                  fail-closed coordinator/worker processes whose deadlines all
+ *                  start at barrier release → verify no
  *                  row/catalog residue → stop the stack and delete its volumes →
  *                  authoritatively inspect that no current-project container
  *                  remains. Cleanup is MANDATORY and never honors
@@ -1388,6 +1390,380 @@ async function runMergeCycleProbe(container) {
   }
 }
 
+// ── ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-01 ────────────────────
+// Upload-finalization linearization probe. Its own user, paper, barrier key and
+// quota so it cannot interact with the two probes above.
+const FIN_PROBE_USER = "cc000000-0000-0000-0000-0000000000ce";
+const FIN_PROBE_PAPER = "cc000000-0000-0000-0000-0000000000cf";
+const FIN_BARRIER_KEY = 918273647;
+const FIN_BARRIER_OBJID = FIN_BARRIER_KEY & 0xffffffff;
+const FIN_BARRIER_CLASSID = Math.floor(FIN_BARRIER_KEY / 2 ** 32);
+// The advisory-lock class finalize_attachment_upload itself takes, from
+// migration 20260904120000. Waiting on it is how this probe observes that a
+// second finalization is genuinely blocked rather than merely slow.
+const FIN_LOCK_CLASSID = 20260904;
+const FIN_QUOTA = 4096;        // storage quota granted to the probe user.
+const FIN_OK_BYTES = 1024;     // fits.
+const FIN_TOO_BIG = 1000000;   // cannot fit — a deterministic metadata rejection.
+const FIN_HOLD_MS = 20000;     // a held transaction must be released within this.
+
+/** A path in the probe user's own namespace, under the probe paper. */
+function finPath(name) {
+  return `${FIN_PROBE_USER}/${FIN_PROBE_PAPER}/${name}`;
+}
+
+/** Count ungranted waiters on this probe's own start barrier. */
+async function countFinBarrierWaiters(container) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${FIN_BARRIER_CLASSID} ` +
+      `AND objid=${FIN_BARRIER_OBJID} AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** Count sessions blocked on the RPC's own (user, path) advisory lock class. */
+async function countFinalizeLockWaiters(container) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' ` +
+      `AND classid=${FIN_LOCK_CLASSID} AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** Become the probe user for the rest of this session, exactly as a request does. */
+function finAuthPrelude(local) {
+  return (
+    `SELECT set_config('request.jwt.claims','{"sub":"${FIN_PROBE_USER}","role":"authenticated"}', ${local});\n` +
+    `SET${local ? " LOCAL" : ""} ROLE authenticated;\n`
+  );
+}
+
+/** `SELECT status FROM finalize_attachment_upload(...)`, tagged for parsing. */
+function finalizeSql(path, bytes, tag = "OUTCOME") {
+  return (
+    `SELECT '${tag}=' || status FROM public.finalize_attachment_upload(` +
+    `'${FIN_PROBE_PAPER}'::uuid, '${path}', 'probe.pdf', 'application/pdf', ${bytes});\n`
+  );
+}
+
+/** One barrier worker: block on the shared barrier, then finalize the same path. */
+function finWorkerSql(path, bytes) {
+  return (
+    finAuthPrelude(false) +
+    `SELECT pg_advisory_lock_shared(${FIN_BARRIER_KEY});\n` +
+    finalizeSql(path, bytes)
+  );
+}
+
+/** Set the probe user's storage quota (committed, so other sessions see it). */
+async function setFinQuota(container, bytes) {
+  const r = await dockerPsql(
+    container,
+    `UPDATE public.user_entitlements SET storage_quota_bytes=${bytes} WHERE user_id='${FIN_PROBE_USER}';`,
+  );
+  if (r.code !== 0) throw new Error(`finalization probe: quota fixture update failed: ${r.err.trim()}`);
+}
+
+/** `metadata rows for this path | cleanup rows for this path | bytes charged`. */
+async function finState(container, path) {
+  const raw = await dbScalar(
+    container,
+    `SELECT (SELECT count(*) FROM public.paper_attachments WHERE user_id='${FIN_PROBE_USER}' AND file_path='${path}') || '|' || ` +
+      `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${FIN_PROBE_USER}' AND file_path='${path}') || '|' || ` +
+      `(SELECT COALESCE(used_bytes,0) FROM public.user_storage_usage WHERE user_id='${FIN_PROBE_USER}');`,
+  );
+  const [metadata, cleanup, used] = raw.split("|").map((s) => parseInt(s, 10));
+  return { metadata, cleanup, used };
+}
+
+/** Assert a {metadata, cleanup, used} triple, naming the case that failed. */
+function assertFinState(label, actual, expected) {
+  for (const key of ["metadata", "cleanup", "used"]) {
+    if (actual[key] !== expected[key]) {
+      throw new Error(
+        `finalization probe ${label}: expected ${key}=${expected[key]}, got ${actual[key]} ` +
+          `(metadata|cleanup|used = ${actual.metadata}|${actual.cleanup}|${actual.used}).`,
+      );
+    }
+  }
+}
+
+/**
+ * Run one finalization in a session that STAYS OPEN, so its writes exist but are
+ * not yet visible. Returns the live handle plus its reported status; the caller
+ * must commit it (or the probe's error path kills it).
+ */
+async function beginHeldFinalization(container, path, bytes, label) {
+  const held = spawnDockerPsql(container);
+  held.child.stdin.write(
+    "BEGIN;\n" + finAuthPrelude(true) + finalizeSql(path, bytes, "HELD") + "SELECT 'HELD_READY';\n",
+  );
+  await waitUntil(() => /HELD_READY/.test(held.readOut()), PROBE_WORKER_MS,
+    `finalization probe ${label}: the held transaction never reached its finalization.`);
+  const line = held.readOut().split("\n").map((s) => s.trim())
+    .filter((l) => l.startsWith("HELD=")).pop();
+  return { held, status: line ? line.slice("HELD=".length) : "" };
+}
+
+/**
+ * True-concurrency upload-finalization probe
+ * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-01).
+ *
+ * The defect this exists for is not a missing constraint; it is an ORDERING.
+ * The superseded design inserted attachment metadata from the browser and, when
+ * the browser saw an error, asked a second RPC whether a committed metadata row
+ * named the path. A metadata transaction that was still IN FLIGHT answered that
+ * question with "no", so a lost HTTP response could queue cleanup for a row that
+ * committed a moment later — and the drain would then delete a valid,
+ * quota-charged attachment's binary.
+ *
+ * A single-connection pgTAP suite cannot see that: every statement in it is
+ * already serialized. So this probe uses real concurrent sessions, and Case C
+ * additionally runs the OLD existence check against an in-flight transaction as
+ * a negative control — it must observe the stale "no" that the old design acted
+ * on, while the corrected RPC blocks and then converges.
+ *
+ * Same fail-closed discipline as the two probes above: every process tracked,
+ * every wait bounded by an explicit deadline, no arbitrary sleep used as proof,
+ * clean exits required, and the fixture proven absent afterwards.
+ */
+async function runAttachmentFinalizationProbe(container) {
+  log("running true-concurrency attachment upload-finalization probe…");
+
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO auth.users (id, email) VALUES ('${FIN_PROBE_USER}','finalize-race@paperlume.test') ON CONFLICT DO NOTHING;\n` +
+      `UPDATE public.user_entitlements SET storage_quota_bytes=${FIN_QUOTA} WHERE user_id='${FIN_PROBE_USER}';\n` +
+      `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) ` +
+      `VALUES ('${FIN_PROBE_PAPER}','${FIN_PROBE_USER}','Finalization race','[]'::jsonb,1) ON CONFLICT (id) DO NOTHING;\n`,
+  );
+  if (setup.code !== 0) throw new Error(`finalization fixture setup failed: ${setup.err.trim()}`);
+
+  const pathA = finPath("case-a.pdf");
+  const pathB = finPath("case-b.pdf");
+  const pathC = finPath("case-c.pdf");
+  const pathD = finPath("case-d.pdf");
+
+  let coord = null;
+  let w1 = null;
+  let w2 = null;
+  let heldC = null;
+  let heldD = null;
+  try {
+    // ── Case Z — the isolation level the linearization argument depends on ──
+    // The serialization proof has two halves: the advisory lock orders the
+    // transactions, and READ COMMITTED guarantees the waiter's next read takes a
+    // snapshot NEWER than the commit it just waited for. The second half is not
+    // a lock property, so the function refuses to run where it does not hold.
+    const isolation = await dockerPsql(
+      container,
+      "BEGIN ISOLATION LEVEL REPEATABLE READ;\n" + finAuthPrelude(true) +
+        finalizeSql(pathA, FIN_OK_BYTES) + "ROLLBACK;\n",
+    );
+    if (isolation.code === 0 || !/READ COMMITTED/i.test(isolation.err)) {
+      throw new Error("finalization probe Case Z: finalization did not refuse a non-READ-COMMITTED transaction.");
+    }
+    log("finalization probe Case Z OK: REPEATABLE READ is refused, not silently raced.");
+
+    // ── Case A — two concurrent finalizations of the SAME object ────────────
+    coord = spawnDockerPsql(container);
+    coord.child.stdin.write(`SELECT pg_advisory_lock(${FIN_BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
+    await waitUntil(() => /COORD_LOCKED/.test(coord.readOut()), PROBE_COORD_ACQUIRE_MS,
+      "finalization coordinator failed to acquire the barrier lock.");
+
+    w1 = spawnDockerPsql(container);
+    w2 = spawnDockerPsql(container);
+    w1.child.stdin.write(finWorkerSql(pathA, FIN_OK_BYTES)); w1.child.stdin.end();
+    w2.child.stdin.write(finWorkerSql(pathA, FIN_OK_BYTES)); w2.child.stdin.end();
+    await waitUntil(async () => (await countFinBarrierWaiters(container)) >= 2, PROBE_BARRIER_MS,
+      "both finalization workers did not reach the barrier.");
+
+    const releaseAt = Date.now();
+    coord.child.stdin.write(
+      `SELECT 'UNLOCK=' || pg_advisory_unlock(${FIN_BARRIER_KEY})::text; SELECT 'COORD_UNLOCKED';\n`);
+    coord.child.stdin.end();
+
+    const timed = (p) => p.then((v) => ({ v, ms: Date.now() - releaseAt }));
+    const [crT, r1T, r2T] = await Promise.all([
+      timed(withTimeout(coord.done, PROBE_COORD_EXIT_MS, "finalization coordinator exit")),
+      timed(withTimeout(w1.done, PROBE_WORKER_MS, "finalization worker 1 exit")),
+      timed(withTimeout(w2.done, PROBE_WORKER_MS, "finalization worker 2 exit")),
+    ]);
+    const cr = crT.v;
+    const r1 = r1T.v;
+    const r2 = r2T.v;
+
+    log(`finalization exits from barrier release (ms): coordinator=${crT.ms} (<= ${PROBE_COORD_EXIT_MS}); ` +
+      `worker1=${r1T.ms} (<= ${PROBE_WORKER_MS}); worker2=${r2T.ms} (<= ${PROBE_WORKER_MS}).`);
+    if (crT.ms > PROBE_COORD_EXIT_MS || r1T.ms > PROBE_WORKER_MS || r2T.ms > PROBE_WORKER_MS) {
+      throw new Error("finalization probe: a process exited outside its deadline from barrier release.");
+    }
+    if (cr.code !== 0 || cr.signal !== null || !/UNLOCK=t/.test(cr.out) || !/COORD_UNLOCKED/.test(cr.out)) {
+      throw new Error(`finalization coordinator did not acquire+release the barrier and exit cleanly (code=${cr.code}, signal=${cr.signal ?? "none"}).`);
+    }
+    for (const [nm, r] of [["worker 1", r1], ["worker 2", r2]]) {
+      if (r.code !== 0 || r.signal !== null) {
+        throw new Error(`finalization ${nm} did not exit cleanly (code=${r.code}, signal=${r.signal ?? "none"}); output not accepted.`);
+      }
+    }
+
+    // One creates the row; the other must find it. Two metadata_committed would
+    // mean the lock did not order them; any cleanup_queued would mean one of
+    // them concluded the object was garbage while the other was saving it.
+    const outcomesA = [parseProbeOutcome(r1), parseProbeOutcome(r2)].sort();
+    if (outcomesA.join(",") !== "metadata_committed,metadata_present") {
+      throw new Error(`finalization probe Case A expected one metadata_committed + one metadata_present, got: ${outcomesA.join(", ")}`);
+    }
+    assertFinState("Case A", await finState(container, pathA),
+      { metadata: 1, cleanup: 0, used: FIN_OK_BYTES });
+    log(`finalization probe Case A OK: one committed + one converged; one metadata row, no cleanup row, ${FIN_OK_BYTES} bytes charged once.`);
+
+    // ── Case B — a rejected metadata insert must still commit its intent ────
+    // Deterministic rejection, not an injected fault: the requested size cannot
+    // fit the remaining quota, so the BEFORE INSERT trigger raises inside the
+    // function's subtransaction. The row and the quota it consumed roll back;
+    // the enclosing transaction survives and commits the cleanup row.
+    const rejected = await dockerPsql(container, finAuthPrelude(false) + finalizeSql(pathB, FIN_TOO_BIG));
+    if (rejected.code !== 0 || !/OUTCOME=cleanup_queued/.test(rejected.out)) {
+      throw new Error("finalization probe Case B: a quota-rejected finalization did not report cleanup_queued.");
+    }
+    assertFinState("Case B", await finState(container, pathB),
+      { metadata: 0, cleanup: 1, used: FIN_OK_BYTES });
+
+    // The same path, retried once the quota would now allow it. The intent is a
+    // tombstone: a path already declared garbage must never become metadata,
+    // because the drain is entitled to delete its object at any moment.
+    await setFinQuota(container, FIN_QUOTA * 1000);
+    const retried = await dockerPsql(container, finAuthPrelude(false) + finalizeSql(pathB, FIN_OK_BYTES));
+    if (retried.code !== 0 || !/OUTCOME=cleanup_queued/.test(retried.out)) {
+      throw new Error("finalization probe Case B: the retry did not report the existing cleanup state.");
+    }
+    assertFinState("Case B retry", await finState(container, pathB),
+      { metadata: 0, cleanup: 1, used: FIN_OK_BYTES });
+    log("finalization probe Case B OK: rejection committed one cleanup row, charged no quota, and the retry refused to create metadata over it.");
+
+    // ── Case C — the exact interleaving the old design got wrong ────────────
+    // A finalization commits metadata but its transaction is still open, which
+    // is precisely the state a lost HTTP response leaves behind.
+    const c = await beginHeldFinalization(container, pathC, FIN_OK_BYTES, "Case C");
+    heldC = c.held;
+    if (c.status !== "metadata_committed") {
+      throw new Error(`finalization probe Case C: the held transaction reported "${c.status}", expected metadata_committed.`);
+    }
+
+    // Negative control — the OLD compensation check, run right now. It must
+    // observe the stale "no metadata" that made the old design queue cleanup for
+    // a valid attachment. If this ever starts returning true, this case has
+    // stopped reproducing the race and proves nothing.
+    const stale = await dbScalar(container,
+      `SELECT EXISTS (SELECT 1 FROM public.paper_attachments WHERE file_path='${pathC}')::text;`);
+    if (stale !== "false") {
+      throw new Error("finalization probe Case C: the in-flight metadata row was already visible; the race is not reproduced.");
+    }
+
+    // The corrected RPC, from an independent session, while that transaction is
+    // still open. It must BLOCK on the function's own advisory lock rather than
+    // read the same stale state and reach the opposite conclusion.
+    const late = spawnDockerPsql(container);
+    late.child.stdin.write(finAuthPrelude(false) + finalizeSql(pathC, FIN_OK_BYTES) + "SELECT 'LATE_DONE';\n");
+    late.child.stdin.end();
+    await waitUntil(async () => (await countFinalizeLockWaiters(container)) >= 1, PROBE_BARRIER_MS,
+      "finalization probe Case C: the second finalization never blocked on the serialization lock.");
+    if (/LATE_DONE/.test(late.readOut())) {
+      throw new Error("finalization probe Case C: the second finalization completed while the first was still in flight.");
+    }
+
+    heldC.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n"); heldC.child.stdin.end();
+    const [heldRes, lateRes] = await Promise.all([
+      withTimeout(heldC.done, FIN_HOLD_MS, "finalization probe Case C held-transaction exit"),
+      withTimeout(late.done, FIN_HOLD_MS, "finalization probe Case C waiter exit"),
+    ]);
+    heldC = null;
+    if (heldRes.code !== 0 || heldRes.signal !== null || !/HELD_COMMITTED/.test(heldRes.out)) {
+      throw new Error(`finalization probe Case C: the held transaction did not commit cleanly (code=${heldRes.code}, signal=${heldRes.signal ?? "none"}).`);
+    }
+    if (lateRes.code !== 0 || lateRes.signal !== null) {
+      throw new Error(`finalization probe Case C: the waiter did not exit cleanly (code=${lateRes.code}, signal=${lateRes.signal ?? "none"}).`);
+    }
+    if (parseProbeOutcome(lateRes) !== "metadata_present") {
+      throw new Error(`finalization probe Case C: the waiter reported "${parseProbeOutcome(lateRes)}", expected metadata_present.`);
+    }
+    assertFinState("Case C", await finState(container, pathC),
+      { metadata: 1, cleanup: 0, used: FIN_OK_BYTES * 2 });
+    log("finalization probe Case C OK: the old existence check saw the stale absence; the corrected RPC waited and returned metadata_present, queueing nothing.");
+
+    // ── Case D — the mirror ordering, cleanup committed first ───────────────
+    await setFinQuota(container, FIN_QUOTA);
+    const d = await beginHeldFinalization(container, pathD, FIN_TOO_BIG, "Case D");
+    heldD = d.held;
+    if (d.status !== "cleanup_queued") {
+      throw new Error(`finalization probe Case D: the held transaction reported "${d.status}", expected cleanup_queued.`);
+    }
+
+    const lateD = spawnDockerPsql(container);
+    await setFinQuota(container, FIN_QUOTA * 1000);
+    lateD.child.stdin.write(finAuthPrelude(false) + finalizeSql(pathD, FIN_OK_BYTES) + "SELECT 'LATE_DONE';\n");
+    lateD.child.stdin.end();
+    await waitUntil(async () => (await countFinalizeLockWaiters(container)) >= 1, PROBE_BARRIER_MS,
+      "finalization probe Case D: the second finalization never blocked on the serialization lock.");
+
+    heldD.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n"); heldD.child.stdin.end();
+    const [heldResD, lateResD] = await Promise.all([
+      withTimeout(heldD.done, FIN_HOLD_MS, "finalization probe Case D held-transaction exit"),
+      withTimeout(lateD.done, FIN_HOLD_MS, "finalization probe Case D waiter exit"),
+    ]);
+    heldD = null;
+    if (heldResD.code !== 0 || heldResD.signal !== null || !/HELD_COMMITTED/.test(heldResD.out)) {
+      throw new Error(`finalization probe Case D: the held transaction did not commit cleanly (code=${heldResD.code}, signal=${heldResD.signal ?? "none"}).`);
+    }
+    if (lateResD.code !== 0 || lateResD.signal !== null) {
+      throw new Error(`finalization probe Case D: the waiter did not exit cleanly (code=${lateResD.code}, signal=${lateResD.signal ?? "none"}).`);
+    }
+    // The waiter had enough quota to succeed and must still refuse: the ordering,
+    // not the quota, is what decides.
+    if (parseProbeOutcome(lateResD) !== "cleanup_queued") {
+      throw new Error(`finalization probe Case D: the waiter reported "${parseProbeOutcome(lateResD)}", expected cleanup_queued.`);
+    }
+    assertFinState("Case D", await finState(container, pathD),
+      { metadata: 0, cleanup: 1, used: FIN_OK_BYTES * 2 });
+    log("finalization probe Case D OK: a committed cleanup intent could not be overwritten by a finalization that began before it.");
+  } catch (err) {
+    await killPsql(w1);
+    await killPsql(w2);
+    await killPsql(coord);
+    await killPsql(heldC);
+    await killPsql(heldD);
+    throw err;
+  }
+
+  // No session may still hold or await either lock class on a fresh connection.
+  const finWaiters = await countFinBarrierWaiters(container);
+  const rpcLocks = parseInt(await dbScalar(container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${FIN_LOCK_CLASSID};`), 10);
+  if (finWaiters !== 0) throw new Error(`finalization probe: ${finWaiters} ungranted barrier waiter(s) remain.`);
+  if (rpcLocks !== 0) throw new Error(`finalization probe: ${rpcLocks} finalization advisory lock(s) remain.`);
+
+  const cleanup = await dockerPsql(container,
+    `SELECT pg_advisory_unlock_all();\n` +
+    `DELETE FROM public.attachment_cleanup_queue WHERE user_id='${FIN_PROBE_USER}';\n` +
+    `DELETE FROM auth.users WHERE id='${FIN_PROBE_USER}';\n`);
+  if (cleanup.code !== 0) throw new Error(`finalization fixture cleanup failed: ${cleanup.err.trim()}`);
+  const residual = (await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${FIN_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.papers WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.paper_attachments WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.user_storage_usage WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND (classid=${FIN_LOCK_CLASSID} ` +
+    `OR (classid=${FIN_BARRIER_CLASSID} AND objid=${FIN_BARRIER_OBJID})));`))
+    .split("|").map((s) => parseInt(s, 10));
+  if (residual.some((c) => c !== 0)) {
+    throw new Error(`finalization fixture not fully removed (user|papers|attachments|cleanup|storage|advisory = ${residual.join("|")}).`);
+  }
+}
+
 /**
  * Residue + catalog check on a fresh connection (Sections H): after the
  * transaction-isolated pgTAP suites, the negative control, the framework-free
@@ -1565,6 +1941,7 @@ async function cmdDbTests() {
     await runLegacyVerification(container);
     await runConcurrencyProbe(container);
     await runMergeCycleProbe(container);
+    await runAttachmentFinalizationProbe(container);
     await assertNoResidue(container, pgtapBefore, catalogBefore);
 
     log("all local database-security tests passed.");

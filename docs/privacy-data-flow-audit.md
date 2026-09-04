@@ -1417,7 +1417,7 @@ actual submission; it passed again on **2026-08-30** under `001E3D`.
 - a failure there was caught, logged as non-critical and swallowed;
 - after the delete, those paths existed nowhere but a local variable in one browser tab, so nothing in the system knew a binary still needed removal;
 - the orphan survived — inaccessible to anyone but its owner, since the Storage RLS path prefix still matched only them — until the user eventually deleted their account, at which point the `delete-account` sweep found it;
-- upload compensation had the same weakness in miniature: one `remove()` whose failure left no record.
+- upload had the same weakness in miniature, plus one of its own: the browser INSERTed the attachment metadata itself and, on any error it observed, removed the just-written object with one `remove()` whose failure left no record. "The insert failed" is only ever what a browser OBSERVED, and a request whose response is lost can have committed — so that compensation could delete the binary of a metadata row that was about to become visible.
 
 ### 27.2 What changes once the migration is applied
 
@@ -1427,6 +1427,8 @@ actual submission; it passed again on **2026-08-30** under `001E3D`.
 | A failed `storage.remove()` was logged and swallowed | A failure leaves the queue row in place and the user is told cleanup is pending |
 | One attempt, then the knowledge was gone | Immediate retry after the action, plus one bounded retry at the next authenticated session start |
 | Orphan discoverable only by the account-deletion sweep | Orphan is represented as a durable, owner-scoped row until it is removed |
+| Upload metadata was written by the browser, and an ambiguous response could make it delete a valid file | Metadata is written only by `finalize_attachment_upload`, serialized per `(user, path)`, so exactly one of "metadata exists" and "cleanup is authorized" can be true for a path; an ambiguous response is reconciled by repeating the idempotent call, never by deleting |
+| A file whose fate was unknown could be removed on a guess | When the database cannot be reached at all, the object is **left in place** and no cleanup is claimed |
 
 New user-scoped table, for the §5 inventory: **`attachment_cleanup_queue`** — `id`, `user_id`, `file_path` (a Storage object key of the form `{userId}/{paperId}/{uniqueName}`), `reason` (one of three fixed operational values), `created_at`. It holds **no** bibliographic content, no file contents, no file name beyond what is already inside the object key, no PMID/DOI and no free text. Clients hold `SELECT`-own and `DELETE`-own and **no INSERT or UPDATE**; `anon`, `PUBLIC` and `service_role` hold nothing. `user_id` is `ON DELETE CASCADE` from `auth.users`, pinned by `supabase/tests/database/008_account_deletion_cascade.test.sql`.
 
@@ -1440,10 +1442,12 @@ This work adds **no scheduled worker, no cron, no queue consumer and no autonomo
 
 - ❌ "every attachment binary is deleted immediately" — **false**, and it was false before this change too. A binary awaiting cleanup can remain for as long as Storage refuses.
 - ❌ "cleanup is guaranteed even if the user never returns" — **false**. Nothing on the server executes a queue row. If the user never signs in again, the row simply waits.
+- ❌ "an uploaded binary is always either saved or removed" — **false**. If the database cannot be reached to finalize an upload, the object stays in Storage with no metadata row and no queue row, because deleting a file whose fate is unknown is the worse error. That object is found by the account-deletion Storage sweep, like any other historical orphan.
+- ❌ "one pass always clears the queue" — **false**. A drain reads at most 20 pages of 200 rows; if that bound is reached without seeing the end of the queue it reports pending work of an unknown size rather than claiming completion, and the next authenticated session takes the following window.
 - ✅ "cleanup intent is recorded durably before the metadata that names the object is removed, is retried immediately and again at the next sign-in, and account deletion remains the final sweep" — **true once the migration is applied**.
 
 Account deletion is unchanged and remains the last resort: it still enumerates **Storage itself**, recursively and paginated, and must never be rewritten to trust the queue as an inventory. The queue can never be assumed complete; historical and pre-feature orphans exist; and an object with neither a metadata row nor a queue row must still be found. §12's analysis stands exactly as written.
 
 ### 27.4 Rollout status
 
-**The migration is NOT applied to Production as of this addendum.** Production's latest applied migration is `20260903180000`. Until `20260904120000` is applied, the deployed frontend uses the pre-migration behaviour described in §27.1 — with one honest improvement that needs no migration: a `storage.remove()` that returns `{ error }` is now recognised as a cleanup failure and reported, instead of being silently treated as success. §22.4 item 20 therefore stays open until the Production migration lands, and this document must be revised again at that point to record it.
+**The migration is NOT applied to Production as of this addendum.** Production's latest applied migration is `20260903180000`. Until `20260904120000` is applied, the deployed frontend uses the pre-migration behaviour described in §27.1 — including the browser-side upload metadata INSERT and its lost-response weakness, which is a schema-level fix and cannot be made from the client — with one honest improvement that needs no migration: a `storage.remove()` that returns `{ error }` is now recognised as a cleanup failure and reported, instead of being silently treated as success. §22.4 item 20 therefore stays open until the Production migration lands, and this document must be revised again at that point to record it.

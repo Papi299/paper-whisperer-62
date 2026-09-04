@@ -2,7 +2,7 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 36 SECURITY DEFINER functions (30 directly callable + 4 trigger-
+--   * exactly 37 SECURITY DEFINER functions (30 directly callable + 5 trigger-
 --     only + 2 internal-only); no unexpected privileged function or overload;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
@@ -104,17 +104,18 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.bulk_add_paper_tags(uuid[],uuid[])',
     -- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. All three derive the caller from
     -- auth.uid(), take no user id at all, and write the durable cleanup queue in
-    -- the same transaction as the logical deletion they perform. Their
-    -- behaviour is owned by 014_attachment_cleanup_recovery.test.sql; what they
-    -- owe this suite is the same least-privilege posture as every other client
-    -- RPC.
+    -- the same transaction as the logical deletion — or, for
+    -- finalize_attachment_upload, the rejected metadata insert — that made the
+    -- object garbage. Their behaviour is owned by
+    -- 014_attachment_cleanup_recovery.test.sql; what they owe this suite is the
+    -- same least-privilege posture as every other client RPC.
     'public.delete_attachment_with_cleanup(uuid)',
     'public.delete_papers_with_attachment_cleanup(uuid[])',
-    'public.queue_untracked_attachment_cleanup(uuid,text)'
+    'public.finalize_attachment_upload(uuid,text,text,text,integer)'
   ]);
 $hlp$;
 
--- The three trigger-only SECURITY DEFINER functions.
+-- The five trigger-only SECURITY DEFINER functions.
 -- Internal 001C helpers: called only from inside other SECURITY DEFINER
 -- functions, which execute as the owner, so no role needs EXECUTE on them. Same
 -- required posture as a trigger-only function, different reason for it.
@@ -130,6 +131,10 @@ CREATE FUNCTION pg_temp.trigger_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.check_and_consume_storage_quota()',
     'public.handle_new_user()',
     'public.refund_storage_quota()',
+    -- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-01 tombstone. SECURITY
+    -- DEFINER so the cleanup queue is fully visible whichever role is inserting,
+    -- which is exactly why no role may call it directly.
+    'public.reject_attachment_over_cleanup_intent()',
     -- 001C stale-link invalidation. SECURITY DEFINER because clients hold no
     -- DELETE on author_identity_links, so no role may be able to call it as a
     -- general-purpose privileged delete.
@@ -160,7 +165,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(238);
+SELECT plan(241);
 
 -- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
@@ -168,17 +173,21 @@ SELECT plan(238);
 -- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
 -- CHROME-EXTENSION-IMPORT-001D added bulk_add_paper_projects and
 -- bulk_add_paper_tags; 36 after ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 added
--- delete_attachment_with_cleanup, delete_papers_with_attachment_cleanup and
--- queue_untracked_attachment_cleanup. That feature's fourth function,
--- attachment_cleanup_path_is_safe, is deliberately NOT here: it is SECURITY
--- INVOKER and reads nothing, so it is out of this inventory's remit by
--- definition — its posture is pinned by suites 007 and 014. The count is
--- deliberately exact: a new definer function that nobody registered here is the
--- single easiest way to widen the privileged surface unnoticed.
+-- delete_attachment_with_cleanup, delete_papers_with_attachment_cleanup and one
+-- upload RPC; 37 after its CORRECTION-01 added the
+-- reject_attachment_over_cleanup_intent trigger function. The directly-callable
+-- count is still 30: the upload RPC was REPLACED, not added to —
+-- queue_untracked_attachment_cleanup gave way to finalize_attachment_upload,
+-- whose atomic, serialized contract the old one could not provide. That
+-- feature's remaining function, attachment_cleanup_path_is_safe, is deliberately
+-- NOT here: it is SECURITY INVOKER and reads nothing, so it is out of this
+-- inventory's remit by definition — its posture is pinned by suites 007 and 014.
+-- The count is deliberately exact: a new definer function that nobody registered
+-- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  36, 'exactly 36 SECURITY DEFINER functions in public');
+  37, 'exactly 37 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -218,7 +227,8 @@ SELECT is(
        'public.bulk_add_paper_tags(uuid[],uuid[])'::regprocedure,
        'public.delete_attachment_with_cleanup(uuid)'::regprocedure,
        'public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure,
-       'public.queue_untracked_attachment_cleanup(uuid,text)'::regprocedure
+       'public.finalize_attachment_upload(uuid,text,text,text,integer)'::regprocedure,
+       'public.reject_attachment_over_cleanup_intent()'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
