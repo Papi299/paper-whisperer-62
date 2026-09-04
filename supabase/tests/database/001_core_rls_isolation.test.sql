@@ -98,7 +98,7 @@ INSERT INTO public.filter_presets (id, user_id, name, payload) VALUES
   ('a0000000-0000-0000-0000-0000000000a4','aa000000-0000-0000-0000-000000000001','Preset A','{"q":"a"}'::jsonb),
   ('b0000000-0000-0000-0000-0000000000b4','bb000000-0000-0000-0000-000000000002','Preset B','{"q":"b"}'::jsonb);
 
-SELECT plan(40);
+SELECT plan(43);
 
 -- Claim strings.
 --   A  = {"sub":"aa…01","role":"authenticated"}
@@ -131,12 +131,28 @@ SELECT is(pg_temp.rowcount_as('authenticated','{"sub":"bb000000-0000-0000-0000-0
 SELECT is(
   (SELECT title FROM public.papers WHERE id='a0000000-0000-0000-0000-0000000000a1'),
   'Paper A (own edit)', 'papers: A''s title is unchanged by B''s attempts');
-SELECT is(pg_temp.rowcount_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
+-- Since migration 20260904120000 no browser role holds DELETE on papers at all:
+-- a paper deletion cascades its paper_attachments rows away, so it has to go
+-- through delete_papers_with_attachment_cleanup, which records the Storage
+-- cleanup intent in the same transaction. The row-level isolation this suite
+-- exists to prove therefore moves to that RPC, and is asserted there rather than
+-- being quietly lost to a grant that refuses everybody equally.
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
   $q$DELETE FROM public.papers WHERE id='a0000000-0000-0000-0000-0000000000a1'$q$),
-  0, 'papers: B cannot delete A''s paper (0 rows)');
+  '42501', 'papers: B cannot delete A''s paper — no browser role holds DELETE');
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
+  $q$DELETE FROM public.papers WHERE id='a0000000-0000-0000-0000-0000000000a1'$q$),
+  '42501', 'papers: nor can A on her own paper — deletion is the lifecycle RPC''s to perform');
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
+  $q$SELECT * FROM public.delete_papers_with_attachment_cleanup(
+       ARRAY['a0000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  'P0001', 'papers: B cannot delete A''s paper through the lifecycle RPC either');
 SELECT is(
   (SELECT count(*)::int FROM public.papers WHERE id='a0000000-0000-0000-0000-0000000000a1'),
-  1, 'papers: A''s paper still exists after B''s delete attempt');
+  1, 'papers: A''s paper still exists after B''s delete attempts');
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
+  $q$TRUNCATE public.papers$q$),
+  '42501', 'papers: TRUNCATE is closed too — it would empty the table without firing a trigger or consulting RLS');
 SELECT is(pg_temp.errcode_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
   $q$INSERT INTO public.papers (user_id,title,insert_order) VALUES ('aa000000-0000-0000-0000-000000000001','forged',99)$q$),
   '42501', 'papers: B cannot insert a paper owned by A (WITH CHECK)');

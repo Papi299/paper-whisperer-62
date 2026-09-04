@@ -173,7 +173,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(265);
+SELECT plan(281);
 
 -- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
@@ -525,6 +525,66 @@ SELECT ok(has_table_privilege('authenticated','public.attachment_cleanup_queue',
       AND NOT has_table_privilege('authenticated','public.attachment_cleanup_queue','INSERT')
       AND NOT has_table_privilege('authenticated','public.attachment_cleanup_queue','UPDATE'),
   'attachment_cleanup_queue: authenticated may read and acknowledge, never author or edit');
+-- The PARENT half of the same boundary. `paper_attachments.paper_id` cascades
+-- from `papers`, so a direct paper deletion removes attachment metadata without
+-- any statement naming it — the same bypass through a different table. DELETE
+-- and TRUNCATE are therefore closed here too, while the ordinary product
+-- capabilities are explicitly required to survive: this migration narrows the
+-- attachment lifecycle, it does not touch paper authoring.
+SELECT ok(has_table_privilege('authenticated', 'public.papers', priv),
+  'papers: authenticated keeps ' || priv || ' (ordinary paper authoring is untouched)')
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE']) priv;
+SELECT ok(NOT has_table_privilege('authenticated', 'public.papers', priv),
+  'papers: authenticated must not hold ' || priv || ' — a paper deletion cascades attachment metadata away')
+  FROM unnest(ARRAY['DELETE','TRUNCATE']) priv;
+SELECT ok(NOT has_table_privilege('anon', 'public.papers', priv),
+  'papers: anon must not hold ' || priv)
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) priv;
+SELECT is(
+  (SELECT count(*)::int FROM pg_class c, aclexplode(c.relacl) a
+    WHERE c.oid = 'public.papers'::regclass AND a.grantee = 0
+      AND a.privilege_type IN ('DELETE','TRUNCATE')),
+  0, 'papers: PUBLIC holds neither DELETE nor TRUNCATE');
+-- Exactly two functions in this schema delete papers, and both are trusted: the
+-- lifecycle RPC, and the duplicate merge, which re-parents attachment rows onto
+-- the kept paper BEFORE deleting the discards so nothing cascades. A third one
+-- appearing is the single easiest way to reopen the bypass unnoticed.
+SELECT is(
+  (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prokind IN ('f','p')
+      AND pg_get_functiondef(p.oid) ~* 'DELETE[[:space:]]+FROM[[:space:]]+(public\.)?papers'),
+  2, 'exactly two public functions delete papers');
+SELECT is(
+  (SELECT string_agg(p.proname, ',' ORDER BY p.proname)
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prokind IN ('f','p')
+      AND pg_get_functiondef(p.oid) ~* 'DELETE[[:space:]]+FROM[[:space:]]+(public\.)?papers'),
+  'delete_papers_with_attachment_cleanup,merge_exact_duplicates',
+  'and they are exactly the two trusted ones');
+SELECT ok(
+  (SELECT bool_and(p.prosecdef) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prokind IN ('f','p')
+      AND pg_get_functiondef(p.oid) ~* 'DELETE[[:space:]]+FROM[[:space:]]+(public\.)?papers'),
+  'both paper-deleting functions are SECURITY DEFINER, so the revoke cannot break them');
+-- Both write paper_attachments and papers, so both must take the papers lock
+-- before the child — the global order the migration cutover depends on.
+SELECT ok(
+  position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure)) > 0
+  AND position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure))
+      < position('FROM public.paper_attachments' IN
+    pg_get_functiondef('public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure)),
+  'delete_papers_with_attachment_cleanup locks papers before it reads paper_attachments');
+SELECT ok(
+  position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure)) > 0
+  AND position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure))
+      < position('UPDATE paper_attachments' IN
+    pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure)),
+  'merge_exact_duplicates locks papers before it re-parents paper_attachments');
+
 -- The tombstone is server-only in every direction.
 SELECT ok(NOT has_table_privilege('authenticated', 'public.attachment_cleanup_tombstone', priv)
       AND NOT has_table_privilege('anon', 'public.attachment_cleanup_tombstone', priv),

@@ -1006,10 +1006,16 @@ SELECT is(pg_temp.link_count('0a000000-0000-0000-0000-0000000000d3'), 0,
 
 -- ══ 12. Paper deletion ══════════════════════════════════════════════════════
 
+-- Through the lifecycle RPC, not a direct DELETE. Since migration
+-- 20260904120000 no browser role holds DELETE on papers — a paper deletion
+-- cascades its attachment metadata away, so it must record the Storage cleanup
+-- intent first — and this is the call the product now makes. The claim under
+-- test is unchanged: the owner may delete their paper, and the author-identity
+-- links cascade with it.
 SELECT lives_ok(
   $q$SELECT pg_temp.run_as(pg_temp.claims_u1(),
-       $inner$DELETE FROM public.papers
-              WHERE id = '0a000000-0000-0000-0000-0000000000d1'$inner$)$q$,
+       $inner$SELECT * FROM public.delete_papers_with_attachment_cleanup(
+                ARRAY['0a000000-0000-0000-0000-0000000000d1']::uuid[])$inner$)$q$,
   'paper delete: the owner may delete their paper');
 
 SELECT is(pg_temp.link_count('0a000000-0000-0000-0000-0000000000d1'), 0,

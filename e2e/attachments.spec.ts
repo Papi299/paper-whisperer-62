@@ -752,6 +752,7 @@ type StaleBundleClient = {
     };
     delete: () => {
       eq: (col: string, val: string) => Promise<{ error: { code?: string } | null }>;
+      in: (col: string, vals: string[]) => Promise<{ error: { code?: string } | null }>;
     };
   };
   storage: {
@@ -842,6 +843,61 @@ test.describe("The attachment lifecycle boundary", () => {
     // is the honest residual limitation of a stale client, and it is documented
     // rather than papered over.
     expect(await readCleanupQueue(page)).toEqual([]);
+  });
+
+  test("a stale bundle cannot delete a paper around the lifecycle, single or bulk", async ({ page }) => {
+    // The parent door. `paper_attachments.paper_id` cascades from `papers`, so a
+    // direct paper deletion removes attachment metadata without any statement
+    // naming it — the same bypass through a different table, and the one an old
+    // bundle actually uses, because it deletes papers with a raw Data API
+    // DELETE.
+    //
+    // After 20260904120000 that DELETE is refused. What matters is not only the
+    // refusal but its ORDER: the old bundle reads the attachment paths, deletes
+    // the papers, and only then asks Storage to remove the binaries. Because the
+    // database refuses at step two, step three never runs, so a stale tab cannot
+    // strip the files off papers it did not manage to delete.
+    const firstRow = page.locator("tbody tr").first();
+    const paperTitle = (await firstRow.locator("td p").first().textContent())!.trim();
+    await openEditPaperDialog(page, paperTitle);
+    const dialog = page.getByRole("dialog");
+    await waitForAttachmentsLoaded(page, dialog);
+    const filePath = await uploadAndCapturePath(page, dialog);
+    await dialog.getByRole("button", { name: /cancel/i }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 10_000 });
+
+    const attempts = await page.evaluate(async ([modPath, path]) => {
+      const mod = await import(modPath);
+      const client = (mod as { supabase: StaleBundleClient }).supabase;
+      const { data: rows } = await client.from("paper_attachments").select("paper_id");
+      // The paper this attachment belongs to, read the way the old bundle reads it.
+      const { data: papers } = await client.from("papers").select("id").limit(1);
+      const paperId = (papers ?? [])[0]?.id ?? "";
+      const single = await client.from("papers").delete().eq("id", paperId);
+      const bulk = await client.from("papers").delete().in("id", [paperId]);
+      return {
+        paperId,
+        rows: (rows ?? []).length,
+        singleCode: single.error?.code ?? null,
+        bulkCode: bulk.error?.code ?? null,
+        path,
+      };
+    }, [CLIENT_MODULE_PATH, filePath] as const);
+
+    expect(attempts.singleCode).toBe("42501");
+    expect(attempts.bulkCode).toBe("42501");
+    // Nothing was destroyed on either attempt: the paper, its metadata and its
+    // binary all survive, and no cleanup intent was recorded because none was
+    // needed.
+    expect(await countAttachmentRows(page, filePath)).toBe(1);
+    expect(await storageObjectExists(page, filePath)).toBe(true);
+    expect(await readCleanupQueue(page)).toEqual([]);
+
+    // The corrected path still removes both halves, in the order that keeps the
+    // Storage object reachable from the database until it is actually gone.
+    await deleteAttachmentByPath(page, filePath);
+    expect(await countAttachmentRows(page, filePath)).toBe(0);
+    expect(await storageObjectExists(page, filePath)).toBe(false);
   });
 
   test("a live attachment's metadata cannot be altered or removed directly", async ({ page }) => {

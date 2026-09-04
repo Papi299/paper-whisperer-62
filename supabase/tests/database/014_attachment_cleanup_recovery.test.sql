@@ -116,7 +116,7 @@ INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_nam
    'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/b.pdf','b.pdf','application/pdf',8000);
 SELECT set_config('request.jwt.claims', '', true);
 
-SELECT plan(154);
+SELECT plan(167);
 
 -- ═══ 1. Queue table shape and protection ════════════════════════════════════
 
@@ -993,6 +993,85 @@ SELECT is(
   (SELECT count(*)::int FROM public.attachment_cleanup_queue
     WHERE user_id='ee000000-0000-0000-0000-0000000000e0'),
   1, 'CUT-5c: and its Storage path is recorded, not lost with the row that named it');
+
+-- ── 10b. The parent boundary: the cascade is a door too ──
+--
+-- `paper_attachments.paper_id` is ON DELETE CASCADE from `papers`, so deleting
+-- the parent removes the child without any statement naming it. Closing direct
+-- DML on the child while leaving that open would make the invariant a statement
+-- about which table a caller happens to write. This asserts the second door is
+-- shut, that ordinary paper authoring is NOT, and that the RPC which replaces
+-- the revoked capability still records intent before the cascade runs.
+-- Section 10 deliberately ends with a queue row outstanding, so this starts from
+-- a known-empty queue rather than asserting against whatever it left.
+DELETE FROM public.attachment_cleanup_queue WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
+DELETE FROM public.attachment_cleanup_tombstone WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
+
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$INSERT INTO public.papers (id, user_id, title, keywords, insert_order)
+       VALUES ('e2000000-0000-0000-0000-0000000000e2','ee000000-0000-0000-0000-0000000000e0',
+               'Parent boundary','[]'::jsonb, 2)$q$),
+  '00000', 'parent boundary: creating a paper is untouched');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$UPDATE public.papers SET title = 'renamed'
+        WHERE id = 'e2000000-0000-0000-0000-0000000000e2'$q$),
+  '00000', 'parent boundary: editing a paper is untouched');
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$SELECT status FROM public.finalize_attachment_upload('e2000000-0000-0000-0000-0000000000e2'::uuid,
+      'ee000000-0000-0000-0000-0000000000e0/e2000000-0000-0000-0000-0000000000e2/parent.pdf',
+      'parent.pdf','application/pdf',30)$q$),
+  'metadata_committed', 'parent boundary: an attachment is finalized onto it normally');
+
+-- P-CUT-3 / P-CUT-4, at the SQL level.
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$DELETE FROM public.papers WHERE id = 'e2000000-0000-0000-0000-0000000000e2'$q$),
+  '42501',
+  'P-CUT-3: a direct authenticated paper DELETE is refused — on the caller''s own attachment-bearing paper');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$TRUNCATE public.papers$q$),
+  '42501', 'P-CUT-4: TRUNCATE is refused with it');
+SELECT is(
+  (SELECT count(*)::int FROM public.papers WHERE id = 'e2000000-0000-0000-0000-0000000000e2'),
+  1, 'P-CUT-3/4: the paper survived both attempts');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments
+    WHERE paper_id = 'e2000000-0000-0000-0000-0000000000e2'),
+  1, 'P-CUT-3/4: and so did its attachment metadata — nothing cascaded');
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue
+    WHERE user_id = 'ee000000-0000-0000-0000-0000000000e0'),
+  0, 'P-CUT-3/4: a refused deletion queues nothing, because nothing was destroyed');
+
+-- P-CUT-5: the authoritative path still deletes, and still records first.
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('ee000000-0000-0000-0000-0000000000e0'),
+    $q$SELECT deleted_count::text || '/' || queued_count::text
+         FROM public.delete_papers_with_attachment_cleanup(
+           ARRAY['e2000000-0000-0000-0000-0000000000e2']::uuid[])$q$),
+  '1/1', 'P-CUT-5: the lifecycle RPC deleted the paper and queued its attachment path');
+SELECT is(
+  (SELECT count(*)::int FROM public.papers WHERE id = 'e2000000-0000-0000-0000-0000000000e2'),
+  0, 'P-CUT-5: the paper is gone');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments
+    WHERE paper_id = 'e2000000-0000-0000-0000-0000000000e2'),
+  0, 'P-CUT-5: its metadata cascaded away, as it always did');
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue
+    WHERE file_path = 'ee000000-0000-0000-0000-0000000000e0/e2000000-0000-0000-0000-0000000000e2/parent.pdf'
+      AND reason = 'paper_delete'),
+  1, 'P-CUT-5: and the Storage path was recorded BEFORE the cascade ran — the invariant, on the parent side');
+SELECT is(
+  (SELECT used_bytes::text FROM public.user_storage_usage
+    WHERE user_id = 'ee000000-0000-0000-0000-0000000000e0'),
+  '0', 'P-CUT-5: quota was refunded by the cascade''s existing trigger');
+DELETE FROM public.attachment_cleanup_queue WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
+DELETE FROM public.attachment_cleanup_tombstone WHERE user_id='ee000000-0000-0000-0000-0000000000e0';
 
 -- ── The acknowledgement path a client still needs is untouched ──
 -- The drain deletes its own queue rows once Storage confirms removal. That is

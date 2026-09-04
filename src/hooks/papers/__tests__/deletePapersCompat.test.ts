@@ -155,4 +155,53 @@ describe("legacyDeletePapersWithBestEffortCleanup", () => {
     expect(mockStorageRemove).not.toHaveBeenCalled();
     expect(result).toEqual({ ok: false, message: "permission denied", cleanupFailed: false });
   });
+
+  /**
+   * The stale-bundle case, at the exact shape the database now produces.
+   *
+   * This helper is only ever reached against a PRE-migration schema by the
+   * corrected client — but a browser tab that loaded the OLD bundle before the
+   * deploy calls the same sequence directly, and after `20260904120000` no
+   * browser role holds DELETE on `papers`. What matters is not that it fails:
+   * it is that it fails BEFORE the Storage call, so the binaries of papers that
+   * still exist are never removed. If this path ever started deleting objects on
+   * a failed database delete, a stale tab would strip the files off papers it
+   * had not deleted.
+   */
+  it("refuses safely when the post-migration schema denies the paper delete (42501)", async () => {
+    state.attachmentsResult = { data: [{ file_path: PATHS[0] }, { file_path: PATHS[1] }], error: null };
+    state.deleteResult = {
+      error: {
+        code: "42501",
+        message: 'permission denied for table papers',
+        details: null,
+        hint: null,
+      },
+    };
+
+    const result = await legacyDeletePapersWithBestEffortCleanup(USER, ["paper-1"]);
+
+    expect(result.ok).toBe(false);
+    // Not reported as a cleanup failure: nothing needed cleaning up, because
+    // nothing was deleted.
+    expect(result.cleanupFailed).toBe(false);
+    expect(result.message).toContain("permission denied");
+    expect(mockStorageRemove).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stale BULK delete the same way, with no Storage call for any paper", async () => {
+    state.attachmentsResult = {
+      data: [{ file_path: PATHS[0] }, { file_path: PATHS[1] }],
+      error: null,
+    };
+    state.deleteResult = { error: { code: "42501", message: "permission denied for table papers" } };
+
+    const result = await legacyDeletePapersWithBestEffortCleanup(USER, ["paper-1", "paper-2", "paper-3"]);
+
+    expect(result.ok).toBe(false);
+    expect(mockStorageRemove).not.toHaveBeenCalled();
+    // The read still happened for every selected paper — the refusal is the
+    // database's, not a client-side pre-check that could drift from it.
+    expect(state.selectInCalls).toEqual([["paper_id", ["paper-1", "paper-2", "paper-3"]]]);
+  });
 });

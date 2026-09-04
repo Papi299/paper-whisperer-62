@@ -2054,9 +2054,21 @@ const CUT_PAPER = "cc000000-0000-0000-0000-0000000000d1";
 // notice if it did.
 const CUT_REVOKE_SQL =
   "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.paper_attachments " +
-  "FROM PUBLIC, anon, authenticated;\nGRANT SELECT ON TABLE public.paper_attachments TO authenticated;\n";
+  "FROM PUBLIC, anon, authenticated;\nGRANT SELECT ON TABLE public.paper_attachments TO authenticated;\n" +
+  "REVOKE DELETE, TRUNCATE ON TABLE public.papers FROM PUBLIC, anon, authenticated;\n" +
+  "GRANT SELECT, INSERT, UPDATE ON TABLE public.papers TO authenticated;\n";
 const CUT_LEGACY_GRANT_SQL =
-  "GRANT INSERT, UPDATE, DELETE ON TABLE public.paper_attachments TO authenticated;\n";
+  "GRANT INSERT, UPDATE, DELETE ON TABLE public.paper_attachments TO authenticated;\n" +
+  "GRANT DELETE ON TABLE public.papers TO authenticated;\n";
+// The cutover's own two statements, in the migration's order. `papers` SHARE
+// first is not a preference: a stronger mode there would block the foreign-key
+// check of an in-flight `paper_attachments` INSERT, and locking the child first
+// would put an in-flight `DELETE FROM papers` — which holds the parent and needs
+// the child for its cascade — on the other side of a cycle nobody can fix,
+// because that transaction is a browser's raw statement.
+const CUT_BARRIER_SQL =
+  "LOCK TABLE public.papers IN SHARE MODE;\n" +
+  "LOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE;\n";
 
 /** A path inside this probe's namespace. */
 function cutPath(name) {
@@ -2080,6 +2092,16 @@ function cutLegacyInsertSql(name, tag) {
   );
 }
 
+/** Sessions queued on a `papers` table lock, by mode. */
+async function countPapersLockWaiters(container, mode) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='relation' ` +
+      `AND relation='public.papers'::regclass AND mode='${mode}' AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
 /** Sessions queued on a `paper_attachments` table lock, by mode. */
 async function countTableLockWaiters(container, mode) {
   const n = await dbScalar(
@@ -2094,6 +2116,165 @@ async function countTableLockWaiters(container, mode) {
 async function cutDeniedAs(container, sql) {
   const r = await dockerPsql(container, cutAuth(false) + sql);
   return { denied: r.code !== 0 && /permission denied/i.test(r.err), detail: (r.err || r.out).trim().slice(0, 160) };
+}
+
+const PCUT_PAPER = "cc000000-0000-0000-0000-0000000000d2";
+
+/** A direct, legacy-shaped parent deletion — what the old bundle issues. */
+function pcutLegacyDeleteSql(tag) {
+  return (
+    `DELETE FROM public.papers WHERE id='${PCUT_PAPER}' AND user_id='${CUT_PROBE_USER}';\n` +
+    `SELECT '${tag}=deleted';\n`
+  );
+}
+
+/**
+ * Parent-table cutover probe
+ * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-04, Cases P-CUT-1/P-CUT-2).
+ *
+ * Attachment metadata has a second door: `paper_attachments.paper_id` cascades
+ * from `papers`, so deleting the parent removes the child without any statement
+ * naming it. Section 6d of the migration revokes DELETE and TRUNCATE on `papers`
+ * to close it, and that revoke needs a barrier for exactly the reason the child's
+ * did — with a sharper failure mode, because the Storage fence makes the stale
+ * client's own cleanup FAIL where it used to succeed:
+ *
+ *   1. an old tab issues `DELETE FROM papers`; still uncommitted;
+ *   2. the migration commits — the fence is live;
+ *   3. the tab asks Storage to remove the binaries it read beforehand;
+ *   4. the cascade has not committed, so live metadata still names them and the
+ *      fence REFUSES;
+ *   5. the deletion commits, taking the metadata with it.
+ *
+ *   → a binary no queue row describes, where without the migration step 4 would
+ *     have succeeded and left nothing behind.
+ *
+ * This proves the barrier drains the parent writer (P-CUT-1) and that one
+ * arriving behind it cannot overtake it and is refused when it runs (P-CUT-2),
+ * with real sessions and `pg_locks` rather than a sleep.
+ *
+ * It runs INSIDE runMigrationCutoverProbe's try/finally, so the hardened posture
+ * is restored on any path.
+ */
+async function runParentCutoverCases(container) {
+  // A fresh attachment-bearing paper, so the deletion under test really does
+  // cascade metadata rather than deleting an empty row.
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+      `  ('${PCUT_PAPER}','${CUT_PROBE_USER}','Parent cutover race','[]'::jsonb,2)\n` +
+      `ON CONFLICT (id) DO NOTHING;\n` +
+      // The ownership and quota triggers on paper_attachments derive the owner
+      // from auth.uid(), so the claim has to be set even for an owner-side
+      // fixture insert. Session-scoped (false) because psql runs in autocommit
+      // and a transaction-local setting would not survive to the next statement.
+      `SELECT set_config('request.jwt.claims','{"sub":"${CUT_PROBE_USER}","role":"authenticated"}', false);\n` +
+      `INSERT INTO public.paper_attachments (paper_id, user_id, file_path, file_name, file_type, size_bytes)\n` +
+      `  VALUES ('${PCUT_PAPER}','${CUT_PROBE_USER}','${CUT_PROBE_USER}/${PCUT_PAPER}/parent.pdf',\n` +
+      `          'parent.pdf','application/pdf',16)\n` +
+      `ON CONFLICT DO NOTHING;\n`,
+  );
+  if (setup.code !== 0) throw new Error(`parent cutover fixture failed: ${setup.err.trim()}`);
+
+  let held = null;
+  let cutover = null;
+  let newcomer = null;
+  try {
+    // ── P-CUT-1: a direct paper DELETE already in flight ────────────────────
+    held = spawnDockerPsql(container);
+    held.child.stdin.write("BEGIN;\n" + cutAuth(true) + pcutLegacyDeleteSql("PA") + "SELECT 'PA_READY';\n");
+    await waitUntil(() => /PA_READY/.test(held.readOut()), PROBE_WORKER_MS,
+      "parent cutover P-CUT-1: the pre-cutover paper DELETE never reached the database.");
+    if (!/PA=deleted/.test(held.readOut())) {
+      throw new Error("parent cutover P-CUT-1: the pre-cutover paper DELETE did not succeed under the restored grant.");
+    }
+
+    cutover = spawnDockerPsql(container);
+    cutover.child.stdin.write(
+      "BEGIN;\n" + CUT_BARRIER_SQL + "SELECT 'PB_BARRIER';\n" +
+        CUT_REVOKE_SQL + "COMMIT;\nSELECT 'PB_COMMITTED';\n",
+    );
+    cutover.child.stdin.end();
+    // It must queue on the PARENT, which is the lock it takes first.
+    await waitUntil(async () => (await countPapersLockWaiters(container, "ShareLock")) >= 1,
+      PROBE_BARRIER_MS, "parent cutover P-CUT-1: the barrier never queued behind the in-flight paper deletion.");
+    if (/PB_BARRIER/.test(cutover.readOut())) {
+      throw new Error("parent cutover P-CUT-1: the barrier passed a transaction that had already deleted a paper.");
+    }
+
+    // ── P-CUT-2: a direct paper DELETE that arrives behind the barrier ──────
+    newcomer = spawnDockerPsql(container);
+    newcomer.child.stdin.write(cutAuth(false) + pcutLegacyDeleteSql("PC") + "SELECT 'PC_DONE';\n");
+    newcomer.child.stdin.end();
+    await waitUntil(async () => (await countPapersLockWaiters(container, "RowExclusiveLock")) >= 1,
+      PROBE_BARRIER_MS, "parent cutover P-CUT-2: the newcomer did not queue behind the barrier.");
+    if (/PC=deleted/.test(newcomer.readOut())) {
+      throw new Error("parent cutover P-CUT-2: a paper deletion overtook the pending barrier.");
+    }
+
+    held.child.stdin.write("COMMIT;\nSELECT 'PA_COMMITTED';\n");
+    held.child.stdin.end();
+    const [aRes, bRes, cRes] = await Promise.all([
+      withTimeout(held.done, FIN_HOLD_MS, "parent cutover: pre-cutover deleter exit"),
+      withTimeout(cutover.done, FIN_HOLD_MS, "parent cutover: cutover exit"),
+      withTimeout(newcomer.done, FIN_HOLD_MS, "parent cutover: newcomer exit"),
+    ]);
+    held = null;
+    cutover = null;
+    newcomer = null;
+
+    if (aRes.code !== 0 || aRes.signal !== null || !/PA_COMMITTED/.test(aRes.out)) {
+      throw new Error(`parent cutover P-CUT-1: the pre-cutover deleter did not commit cleanly (code=${aRes.code}).`);
+    }
+    if (bRes.code !== 0 || bRes.signal !== null || !/PB_BARRIER/.test(bRes.out) || !/PB_COMMITTED/.test(bRes.out)) {
+      throw new Error(`parent cutover P-CUT-1: the cutover did not complete cleanly (code=${bRes.code}) — a deadlock here would show as a nonzero exit.`);
+    }
+    // P-CUT-2: refused, not merely blocked, and refused for lack of privilege —
+    // which is only true if it re-planned against the post-cutover ACL.
+    if (/PC=deleted/.test(cRes.out)) {
+      throw new Error("parent cutover P-CUT-2: a paper DELETE authorized before the cutover committed after it.");
+    }
+    if (!/permission denied/i.test(cRes.err + cRes.out)) {
+      throw new Error(`parent cutover P-CUT-2: the queued deletion failed for the wrong reason: ${(cRes.err || cRes.out).trim().slice(0, 200)}`);
+    }
+    log("cutover probe P-CUT-1/2 OK: the barrier waited for the in-flight paper deletion, and the one queued behind it was refused by the new privileges.");
+
+    // ── P-CUT-3/4: post-cutover parent DML is closed ───────────────────────
+    const parentPaper = "cc000000-0000-0000-0000-0000000000d3";
+    const seed = await dockerPsql(container,
+      `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+      `  ('${parentPaper}','${CUT_PROBE_USER}','Post cutover','[]'::jsonb,3)\n` +
+      `ON CONFLICT (id) DO NOTHING;\n`);
+    if (seed.code !== 0) throw new Error(`parent cutover: post-cutover fixture failed: ${seed.err.trim()}`);
+    for (const [label, sql] of [
+      ["P-CUT-3 DELETE", `DELETE FROM public.papers WHERE id='${parentPaper}';\n`],
+      ["P-CUT-4 TRUNCATE", `TRUNCATE public.papers CASCADE;\n`],
+    ]) {
+      const r = await cutDeniedAs(container, sql);
+      if (!r.denied) throw new Error(`parent cutover ${label}: a direct authenticated statement was NOT refused (${r.detail}).`);
+    }
+    // …while ordinary paper authoring is untouched. Revoking the lifecycle's
+    // door must not have taken the product's front door with it.
+    const authoring = await dockerPsql(container, cutAuth(false) +
+      `UPDATE public.papers SET title='edited' WHERE id='${parentPaper}';\n` +
+      `SELECT 'PSELECT=' || count(*)::text FROM public.papers WHERE id='${parentPaper}';\n`);
+    if (authoring.code !== 0 || !/PSELECT=1/.test(authoring.out)) {
+      throw new Error(`parent cutover: SELECT/UPDATE on papers did not survive the revoke: ${(authoring.err || authoring.out).trim().slice(0, 200)}`);
+    }
+    // P-CUT-5: the authoritative path still deletes and still records first.
+    const rpc = await dockerPsql(container, cutAuth(false) +
+      `SELECT 'PPAPERS=' || deleted_count::text || '/' || queued_count::text\n` +
+      `  FROM public.delete_papers_with_attachment_cleanup(ARRAY['${parentPaper}']::uuid[]);\n`);
+    if (rpc.code !== 0 || !rpc.out.includes("PPAPERS=1/0")) {
+      throw new Error(`parent cutover P-CUT-5: the lifecycle RPC could not delete a paper after the revoke (${(rpc.err || rpc.out).trim().slice(0, 200)}).`);
+    }
+    log("cutover probe P-CUT-3/4/5 OK: direct paper DELETE and TRUNCATE refused, SELECT/INSERT/UPDATE preserved, lifecycle deletion still works.");
+  } catch (err) {
+    await killPsql(newcomer);
+    await killPsql(cutover);
+    await killPsql(held);
+    throw err;
+  }
 }
 
 /**
@@ -2152,8 +2333,9 @@ async function runMigrationCutoverProbe(container) {
     const regrant = await dockerPsql(container, CUT_LEGACY_GRANT_SQL);
     if (regrant.code !== 0) throw new Error(`cutover probe: could not restore the pre-cutover grant: ${regrant.err.trim()}`);
     if ((await dbScalar(container,
-      `SELECT has_table_privilege('authenticated','public.paper_attachments','INSERT')::text;`)) !== "true") {
-      throw new Error("cutover probe: the pre-cutover grant did not take effect.");
+      `SELECT has_table_privilege('authenticated','public.paper_attachments','INSERT')::text || '|' || ` +
+      `has_table_privilege('authenticated','public.papers','DELETE')::text;`)) !== "true|true") {
+      throw new Error("cutover probe: the pre-cutover grants did not take effect.");
     }
 
     // ── A: a direct authenticated INSERT, reached Postgres, not committed ───
@@ -2168,7 +2350,7 @@ async function runMigrationCutoverProbe(container) {
     // ── B: the cutover, statement for statement as the migration performs it ─
     cutover = spawnDockerPsql(container);
     cutover.child.stdin.write(
-      "BEGIN;\nLOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE;\nSELECT 'B_BARRIER';\n" +
+      "BEGIN;\n" + CUT_BARRIER_SQL + "SELECT 'B_BARRIER';\n" +
         CUT_REVOKE_SQL + "COMMIT;\nSELECT 'B_COMMITTED';\n",
     );
     cutover.child.stdin.end();
@@ -2277,6 +2459,14 @@ async function runMigrationCutoverProbe(container) {
       }
     }
     log("cutover probe CUT-5 OK: finalize, attachment delete and paper delete all still work as the client, with no client table grants.");
+
+    // ── The parent half of the same boundary ───────────────────────────────
+    // Re-open the pre-cutover world once more (the block above closed it) and
+    // race the parent table the same way. Inside this try/finally, so the
+    // hardened posture is restored on every path.
+    const reopen = await dockerPsql(container, CUT_LEGACY_GRANT_SQL);
+    if (reopen.code !== 0) throw new Error(`cutover probe: could not restore the pre-cutover grants for the parent cases: ${reopen.err.trim()}`);
+    await runParentCutoverCases(container);
   } finally {
     await killPsql(newcomer);
     await killPsql(cutover);
@@ -2295,12 +2485,21 @@ async function runMigrationCutoverProbe(container) {
     `has_table_privilege('authenticated','public.paper_attachments','UPDATE')::text || '|' || ` +
     `has_table_privilege('authenticated','public.paper_attachments','DELETE')::text || '|' || ` +
     `has_table_privilege('authenticated','public.paper_attachments','TRUNCATE')::text || '|' || ` +
-    `has_table_privilege('authenticated','public.paper_attachments','SELECT')::text;`);
-  if (posture !== "false|false|false|false|true") {
-    throw new Error(`cutover probe: the restored posture is wrong (insert|update|delete|truncate|select = ${posture}).`);
+    `has_table_privilege('authenticated','public.paper_attachments','SELECT')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.papers','DELETE')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.papers','TRUNCATE')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.papers','SELECT')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.papers','INSERT')::text || '|' || ` +
+    `has_table_privilege('authenticated','public.papers','UPDATE')::text;`);
+  if (posture !== "false|false|false|false|true|false|false|true|true|true") {
+    throw new Error(
+      `cutover probe: the restored posture is wrong ` +
+      `(attach insert|update|delete|truncate|select, papers delete|truncate|select|insert|update = ${posture}).`);
   }
 
-  const waiters = await countTableLockWaiters(container, "AccessExclusiveLock");
+  const waiters = (await countTableLockWaiters(container, "AccessExclusiveLock"))
+    + (await countPapersLockWaiters(container, "ShareLock"))
+    + (await countPapersLockWaiters(container, "RowExclusiveLock"));
   if (waiters !== 0) throw new Error(`cutover probe: ${waiters} ungranted table-lock waiter(s) remain.`);
 
   const cleanup = await dockerPsql(container,
