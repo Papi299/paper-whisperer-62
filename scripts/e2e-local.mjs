@@ -1729,6 +1729,70 @@ async function runAttachmentFinalizationProbe(container) {
     assertFinState("Case D", await finState(container, pathD),
       { metadata: 0, cleanup: 1, used: FIN_OK_BYTES * 2 });
     log("finalization probe Case D OK: a committed cleanup intent could not be overwritten by a finalization that began before it.");
+
+    // ── Case E — the decision must outlive the work it authorised ───────────
+    // Case B left pathB with a cleanup row AND a tombstone. The drain's last
+    // act is to DELETE the queue row, which is what the client is granted and
+    // what the browser does. Once it has, the queue holds nothing about this
+    // path — and if that were the only record, a duplicated finalization would
+    // find no metadata and no intent and create metadata for a binary the drain
+    // has already removed.
+    const acked = await dockerPsql(
+      container,
+      finAuthPrelude(false) +
+        `DELETE FROM public.attachment_cleanup_queue WHERE file_path='${pathB}';\n`,
+    );
+    if (acked.code !== 0) {
+      throw new Error(`finalization probe Case E: acknowledging the queue row failed: ${acked.err.trim()}`);
+    }
+    const ackedState = await finState(container, pathB);
+    if (ackedState.cleanup !== 0) {
+      throw new Error("finalization probe Case E: the queue row was not acknowledged; the case proves nothing.");
+    }
+
+    // Two concurrent replays, released together, with quota to spare — so only
+    // the durable decision can be what stops them.
+    coord = spawnDockerPsql(container);
+    coord.child.stdin.write(`SELECT pg_advisory_lock(${FIN_BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
+    await waitUntil(() => /COORD_LOCKED/.test(coord.readOut()), PROBE_COORD_ACQUIRE_MS,
+      "finalization probe Case E: coordinator failed to acquire the barrier lock.");
+    w1 = spawnDockerPsql(container);
+    w2 = spawnDockerPsql(container);
+    w1.child.stdin.write(finWorkerSql(pathB, FIN_OK_BYTES)); w1.child.stdin.end();
+    w2.child.stdin.write(finWorkerSql(pathB, FIN_OK_BYTES)); w2.child.stdin.end();
+    await waitUntil(async () => (await countFinBarrierWaiters(container)) >= 2, PROBE_BARRIER_MS,
+      "finalization probe Case E: both replays did not reach the barrier.");
+    coord.child.stdin.write(
+      `SELECT 'UNLOCK=' || pg_advisory_unlock(${FIN_BARRIER_KEY})::text; SELECT 'COORD_UNLOCKED';\n`);
+    coord.child.stdin.end();
+    const [crE, r1E, r2E] = await Promise.all([
+      withTimeout(coord.done, PROBE_COORD_EXIT_MS, "finalization probe Case E coordinator exit"),
+      withTimeout(w1.done, PROBE_WORKER_MS, "finalization probe Case E worker 1 exit"),
+      withTimeout(w2.done, PROBE_WORKER_MS, "finalization probe Case E worker 2 exit"),
+    ]);
+    coord = null;
+    w1 = null;
+    w2 = null;
+    if (crE.code !== 0 || crE.signal !== null || !/COORD_UNLOCKED/.test(crE.out)) {
+      throw new Error(`finalization probe Case E: coordinator did not exit cleanly (code=${crE.code}).`);
+    }
+    for (const [nm, r] of [["replay 1", r1E], ["replay 2", r2E]]) {
+      if (r.code !== 0 || r.signal !== null) {
+        throw new Error(`finalization probe Case E: ${nm} did not exit cleanly (code=${r.code}).`);
+      }
+    }
+    const outcomesE = [parseProbeOutcome(r1E), parseProbeOutcome(r2E)];
+    if (outcomesE.some((o) => o !== "cleanup_queued")) {
+      throw new Error(`finalization probe Case E expected both replays to report cleanup_queued, got: ${outcomesE.join(", ")}`);
+    }
+    const afterE = await finState(container, pathB);
+    if (afterE.metadata !== 0) {
+      throw new Error(`finalization probe Case E: a replay created metadata for a removed object (metadata=${afterE.metadata}).`);
+    }
+    if (afterE.used !== FIN_OK_BYTES * 2) {
+      throw new Error(`finalization probe Case E: quota moved (used=${afterE.used}).`);
+    }
+    log("finalization probe Case E OK: after the cleanup was acknowledged, two concurrent replays still reported cleanup and created no metadata.");
   } catch (err) {
     await killPsql(w1);
     await killPsql(w2);
@@ -1748,6 +1812,7 @@ async function runAttachmentFinalizationProbe(container) {
   const cleanup = await dockerPsql(container,
     `SELECT pg_advisory_unlock_all();\n` +
     `DELETE FROM public.attachment_cleanup_queue WHERE user_id='${FIN_PROBE_USER}';\n` +
+    `DELETE FROM public.attachment_cleanup_tombstone WHERE user_id='${FIN_PROBE_USER}';\n` +
     `DELETE FROM auth.users WHERE id='${FIN_PROBE_USER}';\n`);
   if (cleanup.code !== 0) throw new Error(`finalization fixture cleanup failed: ${cleanup.err.trim()}`);
   const residual = (await dbScalar(container,
@@ -1755,12 +1820,228 @@ async function runAttachmentFinalizationProbe(container) {
     `(SELECT count(*) FROM public.papers WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
     `(SELECT count(*) FROM public.paper_attachments WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
     `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_tombstone WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
     `(SELECT count(*) FROM public.user_storage_usage WHERE user_id='${FIN_PROBE_USER}') || '|' || ` +
     `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND (classid=${FIN_LOCK_CLASSID} ` +
     `OR (classid=${FIN_BARRIER_CLASSID} AND objid=${FIN_BARRIER_OBJID})));`))
     .split("|").map((s) => parseInt(s, 10));
   if (residual.some((c) => c !== 0)) {
-    throw new Error(`finalization fixture not fully removed (user|papers|attachments|cleanup|storage|advisory = ${residual.join("|")}).`);
+    throw new Error(`finalization fixture not fully removed (user|papers|attachments|cleanup|tombstone|storage|advisory = ${residual.join("|")}).`);
+  }
+}
+
+// ── ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-02 ────────────────────
+// Paper deletion vs upload finalization. Its own user, papers and barrier key.
+const PD_PROBE_USER = "cc000000-0000-0000-0000-0000000000cf";
+const PD_PAPER_A = "cc000000-0000-0000-0000-0000000000f1";
+const PD_PAPER_B = "cc000000-0000-0000-0000-0000000000f2";
+// The advisory-lock class both writers take on a paper, from migration
+// 20260904120000. Waiting on it is how this probe observes real blocking.
+const PD_LOCK_CLASSID = 20260905;
+
+/** A path under one of this probe's papers. */
+function pdPath(paper, name) {
+  return `${PD_PROBE_USER}/${paper}/${name}`;
+}
+
+/** Count sessions blocked on the per-paper serialization lock. */
+async function countPaperLockWaiters(container) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' ` +
+      `AND classid=${PD_LOCK_CLASSID} AND NOT granted;`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** Become the probe user, exactly as a request does. */
+function pdAuth(local) {
+  return (
+    `SELECT set_config('request.jwt.claims','{"sub":"${PD_PROBE_USER}","role":"authenticated"}', ${local});\n` +
+    `SET${local ? " LOCAL" : ""} ROLE authenticated;\n`
+  );
+}
+
+function pdFinalizeSql(paper, path, tag) {
+  return (
+    `SELECT '${tag}=' || status FROM public.finalize_attachment_upload(` +
+    `'${paper}'::uuid, '${path}', 'probe.pdf', 'application/pdf', 16);\n`
+  );
+}
+
+function pdDeleteSql(paper, tag) {
+  return (
+    `SELECT '${tag}=' || deleted_count::text || '/' || queued_count::text ` +
+    `FROM public.delete_papers_with_attachment_cleanup(ARRAY['${paper}']::uuid[]);\n`
+  );
+}
+
+/** Metadata rows | queue rows | tombstones, for one exact path. */
+async function pdState(container, path) {
+  const raw = await dbScalar(
+    container,
+    `SELECT (SELECT count(*) FROM public.paper_attachments WHERE file_path='${path}') || '|' || ` +
+      `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE file_path='${path}') || '|' || ` +
+      `(SELECT count(*) FROM public.attachment_cleanup_tombstone WHERE file_path='${path}');`,
+  );
+  const [metadata, queued, tombstoned] = raw.split("|").map((s) => parseInt(s, 10));
+  return { metadata, queued, tombstoned };
+}
+
+/**
+ * True-concurrency paper-deletion / upload-finalization probe
+ * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-02).
+ *
+ * Paper deletion queues the attachment paths it is about to destroy and then
+ * deletes the papers. Between those two steps an upload can finalize: the
+ * snapshot was taken without the new attachment, the cascade then takes it away,
+ * and its Storage object is left with nothing recorded anywhere — the exact
+ * orphan the feature exists to prevent, arriving through the one door the
+ * feature had left open. The foreign key does not help: it makes the cascade
+ * happen, it does not make the snapshot current.
+ *
+ * Both writers therefore take the same per-paper advisory lock — deletion before
+ * its snapshot, finalization before its first read — so only two orderings
+ * exist, and this asserts both of them with real concurrent sessions.
+ *
+ * Same fail-closed discipline as the probes above: every process tracked and
+ * bounded, blocking proven through pg_locks rather than assumed from a sleep,
+ * clean exits required, fixture proven absent afterwards.
+ */
+async function runPaperDeleteFinalizationProbe(container) {
+  log("running true-concurrency paper-delete / finalization probe…");
+
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO auth.users (id, email) VALUES ('${PD_PROBE_USER}','paper-delete-race@paperlume.test') ON CONFLICT DO NOTHING;\n` +
+      `UPDATE public.user_entitlements SET storage_quota_bytes=1000000 WHERE user_id='${PD_PROBE_USER}';\n` +
+      `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+      `  ('${PD_PAPER_A}','${PD_PROBE_USER}','Delete race A','[]'::jsonb,1),\n` +
+      `  ('${PD_PAPER_B}','${PD_PROBE_USER}','Delete race B','[]'::jsonb,2)\n` +
+      `ON CONFLICT (id) DO NOTHING;\n`,
+  );
+  if (setup.code !== 0) throw new Error(`paper-delete fixture setup failed: ${setup.err.trim()}`);
+
+  const pathP1 = pdPath(PD_PAPER_A, "late-upload.pdf");
+  const pathP2 = pdPath(PD_PAPER_B, "doomed-upload.pdf");
+
+  let held = null;
+  let waiter = null;
+  try {
+    // ── Case P1 — finalization wins the lock ────────────────────────────────
+    // A finalization has committed metadata but has not committed its
+    // transaction: precisely the window in which the old snapshot was taken.
+    held = spawnDockerPsql(container);
+    held.child.stdin.write(
+      "BEGIN;\n" + pdAuth(true) + pdFinalizeSql(PD_PAPER_A, pathP1, "HELD") + "SELECT 'HELD_READY';\n",
+    );
+    await waitUntil(() => /HELD_READY/.test(held.readOut()), PROBE_WORKER_MS,
+      "paper-delete probe P1: the held finalization never completed its work.");
+    if (!/HELD=metadata_committed/.test(held.readOut())) {
+      throw new Error("paper-delete probe P1: the held finalization did not commit metadata.");
+    }
+
+    waiter = spawnDockerPsql(container);
+    waiter.child.stdin.write(pdAuth(false) + pdDeleteSql(PD_PAPER_A, "OUTCOME") + "SELECT 'WAITER_DONE';\n");
+    waiter.child.stdin.end();
+    await waitUntil(async () => (await countPaperLockWaiters(container)) >= 1, PROBE_BARRIER_MS,
+      "paper-delete probe P1: the deletion never blocked on the per-paper lock.");
+    if (/WAITER_DONE/.test(waiter.readOut())) {
+      throw new Error("paper-delete probe P1: the deletion completed while the finalization was still in flight.");
+    }
+
+    held.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n"); held.child.stdin.end();
+    const [heldRes, waitRes] = await Promise.all([
+      withTimeout(held.done, FIN_HOLD_MS, "paper-delete probe P1 held-transaction exit"),
+      withTimeout(waiter.done, FIN_HOLD_MS, "paper-delete probe P1 waiter exit"),
+    ]);
+    held = null;
+    waiter = null;
+    if (heldRes.code !== 0 || heldRes.signal !== null || !/HELD_COMMITTED/.test(heldRes.out)) {
+      throw new Error(`paper-delete probe P1: the held transaction did not commit cleanly (code=${heldRes.code}).`);
+    }
+    if (waitRes.code !== 0 || waitRes.signal !== null) {
+      throw new Error(`paper-delete probe P1: the deletion did not exit cleanly (code=${waitRes.code}).`);
+    }
+    // The deletion's own report must show it SAW the late attachment.
+    if (parseProbeOutcome(waitRes) !== "1/1") {
+      throw new Error(`paper-delete probe P1: deletion reported "${parseProbeOutcome(waitRes)}", expected 1 paper and 1 queued path.`);
+    }
+    const p1 = await pdState(container, pathP1);
+    if (p1.metadata !== 0 || p1.queued !== 1) {
+      throw new Error(`paper-delete probe P1: expected the path queued and its metadata cascaded away, got metadata|queued|tombstoned = ${p1.metadata}|${p1.queued}|${p1.tombstoned}.`);
+    }
+    log("paper-delete probe P1 OK: deletion waited, then queued the attachment that finalized during its window.");
+
+    // ── Case P2 — deletion wins the lock ────────────────────────────────────
+    // The mirror. A deletion holds the lock with its papers already removed but
+    // uncommitted; a finalization for a path under one of them must not be able
+    // to commit metadata behind it.
+    held = spawnDockerPsql(container);
+    held.child.stdin.write(
+      "BEGIN;\n" + pdAuth(true) + pdDeleteSql(PD_PAPER_B, "HELD") + "SELECT 'HELD_READY';\n",
+    );
+    await waitUntil(() => /HELD_READY/.test(held.readOut()), PROBE_WORKER_MS,
+      "paper-delete probe P2: the held deletion never completed its work.");
+
+    waiter = spawnDockerPsql(container);
+    waiter.child.stdin.write(pdAuth(false) + pdFinalizeSql(PD_PAPER_B, pathP2, "OUTCOME") + "SELECT 'WAITER_DONE';\n");
+    waiter.child.stdin.end();
+    await waitUntil(async () => (await countPaperLockWaiters(container)) >= 1, PROBE_BARRIER_MS,
+      "paper-delete probe P2: the finalization never blocked on the per-paper lock.");
+    if (/WAITER_DONE/.test(waiter.readOut())) {
+      throw new Error("paper-delete probe P2: the finalization completed while the deletion was still in flight.");
+    }
+
+    held.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n"); held.child.stdin.end();
+    const [heldRes2, waitRes2] = await Promise.all([
+      withTimeout(held.done, FIN_HOLD_MS, "paper-delete probe P2 held-transaction exit"),
+      withTimeout(waiter.done, FIN_HOLD_MS, "paper-delete probe P2 waiter exit"),
+    ]);
+    held = null;
+    waiter = null;
+    if (heldRes2.code !== 0 || heldRes2.signal !== null || !/HELD_COMMITTED/.test(heldRes2.out)) {
+      throw new Error(`paper-delete probe P2: the held transaction did not commit cleanly (code=${heldRes2.code}).`);
+    }
+    if (waitRes2.code !== 0 || waitRes2.signal !== null) {
+      throw new Error(`paper-delete probe P2: the finalization did not exit cleanly (code=${waitRes2.code}).`);
+    }
+    // It must NOT have created metadata under a paper that is gone, and it must
+    // NOT have raised either — raising would abort without recording anything,
+    // leaving the uploaded object as an orphan nothing knows about.
+    if (parseProbeOutcome(waitRes2) !== "cleanup_queued") {
+      throw new Error(`paper-delete probe P2: finalization reported "${parseProbeOutcome(waitRes2)}", expected cleanup_queued.`);
+    }
+    const p2 = await pdState(container, pathP2);
+    if (p2.metadata !== 0 || p2.queued !== 1 || p2.tombstoned !== 1) {
+      throw new Error(`paper-delete probe P2: expected no metadata and a durable cleanup decision, got metadata|queued|tombstoned = ${p2.metadata}|${p2.queued}|${p2.tombstoned}.`);
+    }
+    log("paper-delete probe P2 OK: the late finalization could not create metadata under a deleted paper, and its object was queued rather than orphaned.");
+  } catch (err) {
+    await killPsql(waiter);
+    await killPsql(held);
+    throw err;
+  }
+
+  const waiters = await countPaperLockWaiters(container);
+  if (waiters !== 0) throw new Error(`paper-delete probe: ${waiters} ungranted paper-lock waiter(s) remain.`);
+
+  const cleanup = await dockerPsql(container,
+    `SELECT pg_advisory_unlock_all();\n` +
+    `DELETE FROM public.attachment_cleanup_queue WHERE user_id='${PD_PROBE_USER}';\n` +
+    `DELETE FROM public.attachment_cleanup_tombstone WHERE user_id='${PD_PROBE_USER}';\n` +
+    `DELETE FROM auth.users WHERE id='${PD_PROBE_USER}';\n`);
+  if (cleanup.code !== 0) throw new Error(`paper-delete fixture cleanup failed: ${cleanup.err.trim()}`);
+  const residual = (await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${PD_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.papers WHERE user_id='${PD_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.paper_attachments WHERE user_id='${PD_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${PD_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_tombstone WHERE user_id='${PD_PROBE_USER}') || '|' || ` +
+    `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${PD_LOCK_CLASSID});`))
+    .split("|").map((s) => parseInt(s, 10));
+  if (residual.some((c) => c !== 0)) {
+    throw new Error(`paper-delete fixture not fully removed (user|papers|attachments|queue|tombstone|advisory = ${residual.join("|")}).`);
   }
 }
 
@@ -1790,9 +2071,12 @@ async function assertNoResidue(container, pgtapBefore, catalogBefore) {
     // be a real leak, because a queue row is a standing instruction to delete a
     // Storage object.
     "(SELECT count(*) FROM public.attachment_cleanup_queue) || '|' || " +
+    // The permanent half of the same record. It outlives the queue row by
+    // design, so a leftover here is just as much a leak.
+    "(SELECT count(*) FROM public.attachment_cleanup_tombstone) || '|' || " +
     "(SELECT count(*) FROM pg_locks WHERE locktype='advisory');")).split("|").map((s) => parseInt(s, 10));
   if (counts.some((c) => c !== 0)) {
-    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|cleanup|advisory = ${counts.join("|")}).`);
+    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|cleanup|tombstone|advisory = ${counts.join("|")}).`);
   }
   const pgtapAfter = await pgtapState(container);
   if (pgtapAfter !== pgtapBefore) {
@@ -1942,6 +2226,7 @@ async function cmdDbTests() {
     await runConcurrencyProbe(container);
     await runMergeCycleProbe(container);
     await runAttachmentFinalizationProbe(container);
+    await runPaperDeleteFinalizationProbe(container);
     await assertNoResidue(container, pgtapBefore, catalogBefore);
 
     log("all local database-security tests passed.");

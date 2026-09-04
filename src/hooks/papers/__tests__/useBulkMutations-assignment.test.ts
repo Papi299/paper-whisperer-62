@@ -31,7 +31,7 @@ const {
       select: vi.fn(() => chain),
       eq: vi.fn(() => chain),
       order: vi.fn(() => chain),
-      range: vi.fn(async () => ({ data: [] as unknown[], error: null })),
+      limit: vi.fn(async () => ({ data: [] as unknown[], error: null })),
       delete: vi.fn(() => chain),
       in: vi.fn(async () => ({ error: null })),
     };

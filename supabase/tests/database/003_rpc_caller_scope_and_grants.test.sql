@@ -2,7 +2,7 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 37 SECURITY DEFINER functions (30 directly callable + 5 trigger-
+--   * exactly 38 SECURITY DEFINER functions (31 directly callable + 5 trigger-
 --     only + 2 internal-only); no unexpected privileged function or overload;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
@@ -111,7 +111,15 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     -- same least-privilege posture as every other client RPC.
     'public.delete_attachment_with_cleanup(uuid)',
     'public.delete_papers_with_attachment_cleanup(uuid[])',
-    'public.finalize_attachment_upload(uuid,text,text,text,integer)'
+    'public.finalize_attachment_upload(uuid,text,text,text,integer)',
+    -- CORRECTION-02. Not a product API: it is the predicate the
+    -- attachments_owner_delete Storage policy evaluates, and a policy is
+    -- evaluated as the requesting role, so `authenticated` must be able to
+    -- execute it. It belongs in this matrix for exactly that reason — it is an
+    -- authenticated-executable SECURITY DEFINER function, and the rule that it
+    -- derives its caller from auth.uid() and takes no user id applies to it like
+    -- every other entry here.
+    'public.attachment_object_has_live_metadata(text)'
   ]);
 $hlp$;
 
@@ -165,7 +173,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(241);
+SELECT plan(246);
 
 -- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
@@ -175,19 +183,21 @@ SELECT plan(241);
 -- bulk_add_paper_tags; 36 after ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 added
 -- delete_attachment_with_cleanup, delete_papers_with_attachment_cleanup and one
 -- upload RPC; 37 after its CORRECTION-01 added the
--- reject_attachment_over_cleanup_intent trigger function. The directly-callable
--- count is still 30: the upload RPC was REPLACED, not added to —
--- queue_untracked_attachment_cleanup gave way to finalize_attachment_upload,
--- whose atomic, serialized contract the old one could not provide. That
--- feature's remaining function, attachment_cleanup_path_is_safe, is deliberately
--- NOT here: it is SECURITY INVOKER and reads nothing, so it is out of this
--- inventory's remit by definition — its posture is pinned by suites 007 and 014.
+-- reject_attachment_over_cleanup_intent trigger function; 38 after CORRECTION-02
+-- added attachment_object_has_live_metadata, the predicate the Storage delete
+-- policy evaluates. The directly-callable count goes 30 -> 31 for that one; the
+-- upload RPC itself was REPLACED, not added to — queue_untracked_attachment_cleanup
+-- gave way to finalize_attachment_upload, whose atomic, serialized contract the
+-- old one could not provide. That feature's remaining function,
+-- attachment_cleanup_path_is_safe, is deliberately NOT here: it is SECURITY
+-- INVOKER and reads nothing, so it is out of this inventory's remit by
+-- definition — its posture is pinned by suites 007 and 014.
 -- The count is deliberately exact: a new definer function that nobody registered
 -- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  37, 'exactly 37 SECURITY DEFINER functions in public');
+  38, 'exactly 38 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -228,11 +238,12 @@ SELECT is(
        'public.delete_attachment_with_cleanup(uuid)'::regprocedure,
        'public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure,
        'public.finalize_attachment_upload(uuid,text,text,text,integer)'::regprocedure,
-       'public.reject_attachment_over_cleanup_intent()'::regprocedure
+       'public.reject_attachment_over_cleanup_intent()'::regprocedure,
+       'public.attachment_object_has_live_metadata(text)'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
--- ══ 2. EXECUTE matrix over the 30 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 31 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -281,7 +292,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 30) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 31) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(

@@ -116,7 +116,7 @@ INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_nam
    'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/b.pdf','b.pdf','application/pdf',8000);
 SELECT set_config('request.jwt.claims', '', true);
 
-SELECT plan(106);
+SELECT plan(125);
 
 -- ═══ 1. Queue table shape and protection ════════════════════════════════════
 
@@ -600,6 +600,74 @@ SELECT is(
        ON a.user_id = q.user_id AND a.file_path = q.file_path),
   0, 'metadata and cleanup intent never coexist for the same path');
 
+-- ── The decision outlives the work: replay AFTER acknowledgement ──
+-- The drain removes the object and then DELETEs its queue row. If the queue row
+-- were the only record, a duplicated or delayed finalization arriving after that
+-- would find no metadata and no intent, and would happily create metadata for a
+-- binary that is already gone. The tombstone is what stops it, so this asserts
+-- the state the drain actually leaves behind.
+DELETE FROM public.attachment_cleanup_queue
+ WHERE user_id = 'bb000000-0000-0000-0000-0000000000b0'
+   AND file_path = 'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf';
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue
+    WHERE file_path = 'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf'),
+  0, 'acknowledgement really does remove the queue row');
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_tombstone
+    WHERE user_id = 'bb000000-0000-0000-0000-0000000000b0'
+      AND file_path = 'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf'),
+  1, 'and leaves the permanent decision behind');
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$SELECT status FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf',
+      'rejected.pdf','application/pdf',10)$q$),
+  'cleanup_queued',
+  'finalize_attachment_upload: a replay AFTER the cleanup was acknowledged still reports cleanup');
+SELECT is(
+  (SELECT count(*)::int FROM public.paper_attachments
+    WHERE file_path='bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf'),
+  0, 'and creates no metadata for a binary the drain has already removed');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$INSERT INTO public.paper_attachments (paper_id,user_id,file_path,file_name,file_type,size_bytes)
+       VALUES ('b1000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-0000000000b0',
+               'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/rejected.pdf',
+               'rejected.pdf','application/pdf',10)$q$),
+  'P0001',
+  'and a direct INSERT is still refused once the queue row is gone — the tombstone is the guard');
+
+-- ── The paper vanished under the upload ──
+-- Paper deletion and finalization are serialized on the paper (see the probe),
+-- so when deletion wins, finalization finds no paper. Raising there would abort
+-- the transaction and leave the uploaded binary with nothing recorded anywhere —
+-- an orphan created by the function that exists to prevent them. It declares the
+-- object garbage instead.
+SELECT is(
+  pg_temp.scalar_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$SELECT status FROM public.finalize_attachment_upload('ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid,
+      'bb000000-0000-0000-0000-0000000000b0/ffffffff-ffff-ffff-ffff-ffffffffffff/vanished.pdf',
+      'vanished.pdf','application/pdf',10)$q$),
+  'cleanup_queued',
+  'finalize_attachment_upload: a path whose paper no longer exists is declared garbage, not refused');
+SELECT is(
+  (SELECT user_id::text || '|' || reason FROM public.attachment_cleanup_queue
+    WHERE file_path='bb000000-0000-0000-0000-0000000000b0/ffffffff-ffff-ffff-ffff-ffffffffffff/vanished.pdf'),
+  'bb000000-0000-0000-0000-0000000000b0|upload_compensation',
+  'and its intent is queued rather than lost');
+-- A paper that EXISTS but belongs to someone else is a different thing
+-- entirely: papers never change owner, so that is a bad request, not a race.
+-- Asserted as A against B's still-live paper — by this point in the suite A's
+-- own papers have been deleted, so using one of those would prove the
+-- paper-vanished branch again rather than the ownership one.
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('aa000000-0000-0000-0000-0000000000a0'),
+    $q$SELECT * FROM public.finalize_attachment_upload('b1000000-0000-0000-0000-0000000000b1'::uuid,
+      'aa000000-0000-0000-0000-0000000000a0/b1000000-0000-0000-0000-0000000000b1/foreign.pdf',
+      'foreign.pdf','application/pdf',10)$q$),
+  'P0001', 'finalize_attachment_upload: a paper owned by someone else is still refused outright');
+
 -- Restore the queue to empty so the sections after this one start clean.
 DELETE FROM public.attachment_cleanup_queue;
 
@@ -679,9 +747,111 @@ SELECT is(
                         'delete_papers_with_attachment_cleanup',
                         'finalize_attachment_upload',
                         'reject_attachment_over_cleanup_intent',
+                        'attachment_object_has_live_metadata',
                         'attachment_cleanup_path_is_safe')
       AND p.prosrc ~* '(\mstorage[[:space:]]*\.|"storage"[[:space:]]*\.)'),
   0, 'no attachment-cleanup function references the storage schema');
+
+
+-- ═══ 8. The cleanup tombstone is unreachable from any client ════════════════
+-- It is the record that keeps a removed object removed. A row a user could
+-- delete would be a row a user could delete in order to resurrect one, so the
+-- table has no policy of any kind and no role holds any privilege on it.
+
+SELECT ok(
+  (SELECT relrowsecurity AND relforcerowsecurity FROM pg_class
+    WHERE oid='public.attachment_cleanup_tombstone'::regclass),
+  'attachment_cleanup_tombstone has RLS enabled AND forced');
+SELECT is(
+  (SELECT count(*)::int FROM pg_policies
+    WHERE schemaname='public' AND tablename='attachment_cleanup_tombstone'),
+  0, 'attachment_cleanup_tombstone has no policy of any kind');
+SELECT ok(
+  NOT has_table_privilege('authenticated','public.attachment_cleanup_tombstone','SELECT, INSERT, UPDATE, DELETE')
+  AND NOT has_table_privilege('anon','public.attachment_cleanup_tombstone','SELECT, INSERT, UPDATE, DELETE')
+  AND NOT has_table_privilege('service_role','public.attachment_cleanup_tombstone','SELECT, INSERT, UPDATE, DELETE'),
+  'no client role holds any privilege on attachment_cleanup_tombstone');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$SELECT count(*) FROM public.attachment_cleanup_tombstone$q$),
+  '42501', 'authenticated cannot even read it');
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$DELETE FROM public.attachment_cleanup_tombstone
+        WHERE user_id='bb000000-0000-0000-0000-0000000000b0'$q$),
+  '42501', 'and cannot delete its own tombstone to reopen a finalized path');
+
+-- ═══ 9. The Storage fence: a live attachment's binary cannot be deleted ═════
+-- The post-migration protection against a browser tab still running the
+-- pre-migration bundle. Storage deletes go through storage.objects, which is
+-- gated by an API-set GUC and then by RLS; this exercises exactly the path the
+-- Storage API takes.
+
+SELECT set_config('request.jwt.claims', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'), true);
+INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_name, file_type, size_bytes) VALUES
+  ('d9000000-0000-0000-0000-0000000000d9','b1000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-0000000000b0',
+   'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/fenced.pdf','fenced.pdf','application/pdf',1);
+SELECT set_config('request.jwt.claims', '', true);
+INSERT INTO storage.objects (bucket_id, name) VALUES
+  ('attachments','bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/fenced.pdf'),
+  ('attachments','bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/unfenced.pdf'),
+  ('attachments','aa000000-0000-0000-0000-0000000000a0/a1000000-0000-0000-0000-0000000000a1/neighbour.pdf');
+
+CREATE FUNCTION pg_temp.storage_delete_as(p_uid text, p_name text) RETURNS integer
+LANGUAGE plpgsql AS $hlp$
+DECLARE v_n integer;
+BEGIN
+  PERFORM set_config('request.jwt.claims', pg_temp.claims(p_uid), true);
+  -- Exactly what the Storage API sets before it deletes; without it the
+  -- storage.protect_delete trigger refuses every direct DELETE.
+  PERFORM set_config('storage.allow_delete_query', 'true', true);
+  SET LOCAL ROLE authenticated;
+  WITH d AS (DELETE FROM storage.objects WHERE name = p_name RETURNING 1)
+  SELECT count(*)::int INTO v_n FROM d;
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims', '', true);
+  PERFORM set_config('storage.allow_delete_query', 'false', true);
+  RETURN v_n;
+END;
+$hlp$;
+
+SELECT is(
+  pg_temp.storage_delete_as('bb000000-0000-0000-0000-0000000000b0',
+    'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/fenced.pdf'),
+  0, 'Storage fence: an object a live metadata row names cannot be deleted by its owner');
+SELECT is(
+  pg_temp.storage_delete_as('bb000000-0000-0000-0000-0000000000b0',
+    'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/unfenced.pdf'),
+  1, 'Storage fence: an object no metadata row names is still deletable — upload compensation works');
+SELECT is(
+  pg_temp.storage_delete_as('bb000000-0000-0000-0000-0000000000b0',
+    'aa000000-0000-0000-0000-0000000000a0/a1000000-0000-0000-0000-0000000000a1/neighbour.pdf'),
+  0, 'Storage fence: the owner-prefix boundary is unchanged — another user''s object is still refused');
+
+-- The durable deletion path removes the metadata inside its own transaction, so
+-- by the time the drain runs there is nothing left to fence.
+SELECT is(
+  pg_temp.errcode_as('authenticated', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'),
+    $q$SELECT public.delete_attachment_with_cleanup('d9000000-0000-0000-0000-0000000000d9'::uuid)$q$),
+  '00000', 'the durable delete RPC still succeeds with the fence in place');
+SELECT is(
+  pg_temp.storage_delete_as('bb000000-0000-0000-0000-0000000000b0',
+    'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/fenced.pdf'),
+  1, 'and the drain may then remove the object — the fence blocks the OLD ordering, not the new one');
+
+-- Account deletion sweeps Storage with the elevated role, which bypasses RLS.
+-- It must: it exists to find objects no metadata row describes.
+SELECT set_config('request.jwt.claims', '', true);
+INSERT INTO storage.objects (bucket_id, name) VALUES
+  ('attachments','bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/sweepme.pdf');
+SELECT set_config('request.jwt.claims', pg_temp.claims('bb000000-0000-0000-0000-0000000000b0'), true);
+INSERT INTO public.paper_attachments (id, paper_id, user_id, file_path, file_name, file_type, size_bytes) VALUES
+  ('d8000000-0000-0000-0000-0000000000d8','b1000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-0000000000b0',
+   'bb000000-0000-0000-0000-0000000000b0/b1000000-0000-0000-0000-0000000000b1/sweepme.pdf','sweepme.pdf','application/pdf',1);
+SELECT set_config('request.jwt.claims', '', true);
+SELECT ok(
+  (SELECT rolbypassrls FROM pg_roles WHERE rolname = 'service_role'),
+  'service_role bypasses RLS, so the account-deletion Storage sweep is unaffected by the fence');
 
 SELECT * FROM finish();
 ROLLBACK;

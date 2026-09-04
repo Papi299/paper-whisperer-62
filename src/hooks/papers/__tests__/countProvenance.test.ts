@@ -76,7 +76,7 @@ const { mockFrom, mockRpc, mockStorageRemove, setDeleteError, resetSupabase } = 
       select: () => chain,
       eq: () => chain,
       order: () => chain,
-      range: async () => ({ data: [] as unknown[], error: null }),
+      limit: async () => ({ data: [] as unknown[], error: null }),
       delete: () => chain,
       in: async () => ({ error: null }),
     };

@@ -626,6 +626,51 @@ test.describe("Attachment cleanup is recoverable", () => {
     await deleteAttachmentByPath(page, filePath);
   });
 
+  test("a stale client cannot delete the binary of a live attachment", async ({ page }) => {
+    // The post-migration fence, exercised through the real Storage API.
+    //
+    // A browser tab that loaded the pre-migration bundle is still running the
+    // old upload compensation: on any error it observed from its own metadata
+    // INSERT — including one that actually committed — it removes the object it
+    // just uploaded. That is the ordering this feature exists to retire, and no
+    // amount of new client code can reach a client that has already shipped.
+    //
+    // So this uploads normally, then performs exactly that removal as the
+    // signed-in user, and requires the file and its metadata row to survive.
+    const firstRow = page.locator("tbody tr").first();
+    const paperTitle = (await firstRow.locator("td p").first().textContent())!.trim();
+    await openEditPaperDialog(page, paperTitle);
+    const dialog = page.getByRole("dialog");
+    await waitForAttachmentsLoaded(page, dialog);
+
+    const filePath = await uploadAndCapturePath(page, dialog);
+    expect(await countAttachmentRows(page, filePath)).toBe(1);
+
+    await page.keyboard.press("Escape");
+
+    // Byte for byte what the old bundle did, through the same client the product
+    // uses, as the same authenticated user.
+    const removed = await page.evaluate(async ([modPath, path]) => {
+      const mod = await import(modPath);
+      const client = (mod as {
+        supabase: { storage: { from: (b: string) => { remove: (paths: string[]) => Promise<{ data: unknown[] | null; error: unknown }> } } };
+      }).supabase;
+      const { data, error } = await client.storage.from("attachments").remove([path]);
+      return { deleted: (data ?? []).length, errored: Boolean(error) };
+    }, [CLIENT_MODULE_PATH, filePath] as const);
+
+    // Storage RLS refuses the row, so nothing is deleted. Whether that surfaces
+    // as an error or as an empty result is the Storage API's business; what
+    // matters is the object.
+    expect(removed.deleted).toBe(0);
+    expect(await storageObjectExists(page, filePath)).toBe(true);
+    expect(await countAttachmentRows(page, filePath)).toBe(1);
+
+    // And the corrected path still works: metadata first, then the object.
+    await deleteAttachmentByPath(page, filePath);
+    expect(await storageObjectExists(page, filePath)).toBe(false);
+  });
+
   test("deleting a paper keeps its attachment's cleanup recoverable", async ({ page }) => {
     const disposableTitle = `_e2e_cleanup_paper_${Date.now()}`;
     let filePath = "";

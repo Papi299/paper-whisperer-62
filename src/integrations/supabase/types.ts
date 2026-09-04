@@ -69,6 +69,24 @@ export type Database = {
         }
         Relationships: []
       }
+      attachment_cleanup_tombstone: {
+        Row: {
+          created_at: string
+          file_path: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          file_path: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          file_path?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       author_identities: {
         Row: {
           created_at: string
@@ -972,6 +990,10 @@ export type Database = {
     Functions: {
       attachment_cleanup_path_is_safe: {
         Args: { p_file_path: string; p_paper_id: string; p_user_id: string }
+        Returns: boolean
+      }
+      attachment_object_has_live_metadata: {
+        Args: { p_name: string }
         Returns: boolean
       }
       author_identity_effective_root: {

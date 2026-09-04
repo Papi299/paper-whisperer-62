@@ -94,7 +94,7 @@ const {
       select: () => chain,
       eq: () => chain,
       order: () => chain,
-      range: async () => {
+      limit: async () => {
         const page = state.cleanupPages[Math.min(state.cleanupCursor, state.cleanupPages.length - 1)];
         state.cleanupCursor += 1;
         return page;

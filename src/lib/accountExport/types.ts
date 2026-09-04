@@ -204,6 +204,21 @@ export const ACCOUNT_EXPORT_EXCLUDED_TABLES = [
   // the portability archive is not exclusion from deletion or privacy
   // accounting.
   "attachment_cleanup_queue",
+  // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-02.
+  // `attachment_cleanup_tombstone` is the same kind of state and a step further
+  // from the user: it records that one uploaded Storage object was finalized as
+  // garbage, and it is kept AFTER the cleanup queue row for it has been
+  // acknowledged, so a duplicated upload finalization cannot create metadata for
+  // a binary that is already gone. No client role holds any privilege on it and
+  // it has no policy of any kind — it exists purely to constrain what the server
+  // will do next.
+  //
+  // Excluded under reason (1). Exporting it would hand the user a list of upload
+  // attempts that failed, described only by an internal Storage key, about files
+  // the archive correctly does not contain. As above, this is NOT an exclusion
+  // from deletion or privacy accounting: it is user-scoped, it appears in the
+  // privacy inventory, and it cascades with the account (pinned by suite 008).
+  "attachment_cleanup_tombstone",
 
   // (2) AI-MODEL-SELECTION-001A. The approved-model catalog is global product
   // metadata with no `user_id` — the same rows for every account, authored by

@@ -256,6 +256,7 @@ describe("account export category registry", () => {
         // above. It still cascades on account deletion — pinned by suite 008 —
         // so exclusion here is about portability, never about retention.
         "attachment_cleanup_queue",
+      "attachment_cleanup_tombstone",
       ].sort(),
     );
 
