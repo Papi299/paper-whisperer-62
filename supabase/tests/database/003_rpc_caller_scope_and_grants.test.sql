@@ -2,7 +2,7 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 33 SECURITY DEFINER functions (27 directly callable + 4 trigger-
+--   * exactly 38 SECURITY DEFINER functions (31 directly callable + 5 trigger-
 --     only + 2 internal-only); no unexpected privileged function or overload;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
@@ -63,7 +63,7 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (27).
+-- The complete directly-callable SECURITY DEFINER RPC surface (30).
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
@@ -101,11 +101,29 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     -- posture as every other client RPC; their additive/idempotent/fail-closed
     -- behaviour is owned by 013_import_duplicate_resolution.test.sql.
     'public.bulk_add_paper_projects(uuid[],uuid[])',
-    'public.bulk_add_paper_tags(uuid[],uuid[])'
+    'public.bulk_add_paper_tags(uuid[],uuid[])',
+    -- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. All three derive the caller from
+    -- auth.uid(), take no user id at all, and write the durable cleanup queue in
+    -- the same transaction as the logical deletion — or, for
+    -- finalize_attachment_upload, the rejected metadata insert — that made the
+    -- object garbage. Their behaviour is owned by
+    -- 014_attachment_cleanup_recovery.test.sql; what they owe this suite is the
+    -- same least-privilege posture as every other client RPC.
+    'public.delete_attachment_with_cleanup(uuid)',
+    'public.delete_papers_with_attachment_cleanup(uuid[])',
+    'public.finalize_attachment_upload(uuid,text,text,text,integer)',
+    -- CORRECTION-02. Not a product API: it is the predicate the
+    -- attachments_owner_delete Storage policy evaluates, and a policy is
+    -- evaluated as the requesting role, so `authenticated` must be able to
+    -- execute it. It belongs in this matrix for exactly that reason — it is an
+    -- authenticated-executable SECURITY DEFINER function, and the rule that it
+    -- derives its caller from auth.uid() and takes no user id applies to it like
+    -- every other entry here.
+    'public.attachment_object_has_live_metadata(text)'
   ]);
 $hlp$;
 
--- The three trigger-only SECURITY DEFINER functions.
+-- The five trigger-only SECURITY DEFINER functions.
 -- Internal 001C helpers: called only from inside other SECURITY DEFINER
 -- functions, which execute as the owner, so no role needs EXECUTE on them. Same
 -- required posture as a trigger-only function, different reason for it.
@@ -121,6 +139,10 @@ CREATE FUNCTION pg_temp.trigger_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.check_and_consume_storage_quota()',
     'public.handle_new_user()',
     'public.refund_storage_quota()',
+    -- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-01 tombstone. SECURITY
+    -- DEFINER so the cleanup queue is fully visible whichever role is inserting,
+    -- which is exactly why no role may call it directly.
+    'public.reject_attachment_over_cleanup_intent()',
     -- 001C stale-link invalidation. SECURITY DEFINER because clients hold no
     -- DELETE on author_identity_links, so no role may be able to call it as a
     -- general-purpose privileged delete.
@@ -151,20 +173,31 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(223);
+SELECT plan(281);
 
--- ══ 1. Inventory: exactly 33 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
 -- internal helpers and one trigger function; 31 after AI-MODEL-SELECTION-001A
 -- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
 -- CHROME-EXTENSION-IMPORT-001D added bulk_add_paper_projects and
--- bulk_add_paper_tags. The count is deliberately exact: a new definer function
--- that nobody registered here is the single easiest way to widen the privileged
--- surface unnoticed.
+-- bulk_add_paper_tags; 36 after ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 added
+-- delete_attachment_with_cleanup, delete_papers_with_attachment_cleanup and one
+-- upload RPC; 37 after its CORRECTION-01 added the
+-- reject_attachment_over_cleanup_intent trigger function; 38 after CORRECTION-02
+-- added attachment_object_has_live_metadata, the predicate the Storage delete
+-- policy evaluates. The directly-callable count goes 30 -> 31 for that one; the
+-- upload RPC itself was REPLACED, not added to — queue_untracked_attachment_cleanup
+-- gave way to finalize_attachment_upload, whose atomic, serialized contract the
+-- old one could not provide. That feature's remaining function,
+-- attachment_cleanup_path_is_safe, is deliberately NOT here: it is SECURITY
+-- INVOKER and reads nothing, so it is out of this inventory's remit by
+-- definition — its posture is pinned by suites 007 and 014.
+-- The count is deliberately exact: a new definer function that nobody registered
+-- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  33, 'exactly 33 SECURITY DEFINER functions in public');
+  38, 'exactly 38 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -201,11 +234,16 @@ SELECT is(
        'public.set_current_user_ai_model(text)'::regprocedure,
        'public.clear_current_user_ai_model()'::regprocedure,
        'public.bulk_add_paper_projects(uuid[],uuid[])'::regprocedure,
-       'public.bulk_add_paper_tags(uuid[],uuid[])'::regprocedure
+       'public.bulk_add_paper_tags(uuid[],uuid[])'::regprocedure,
+       'public.delete_attachment_with_cleanup(uuid)'::regprocedure,
+       'public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure,
+       'public.finalize_attachment_upload(uuid,text,text,text,integer)'::regprocedure,
+       'public.reject_attachment_over_cleanup_intent()'::regprocedure,
+       'public.attachment_object_has_live_metadata(text)'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
--- ══ 2. EXECUTE matrix over the 27 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 31 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -254,7 +292,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 27) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 31) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(
@@ -443,6 +481,115 @@ SELECT is(
    'safe_bulk_insert_papers','set_paper_tags','set_paper_projects','bulk_set_paper_tags',
    'bulk_set_paper_projects','consume_ai_quota','refund_ai_quota','get_ai_quota_status','merge_exact_duplicates'
   ]) nm;
+
+-- ══ 11. Table-privilege inventory: the attachment lifecycle boundary ════════
+--
+-- This suite is where the client-reachable surface is pinned, and since
+-- migration 20260904120000 that surface is no longer only about which functions
+-- a browser may execute — it is also about which tables a browser may write.
+-- `paper_attachments` is the one table in this repository whose write privileges
+-- were deliberately narrowed AFTER 20260731162729 granted them, because the
+-- operations moved into RPCs that do strictly more than a bare INSERT or DELETE
+-- can: serialize on the path and the paper, consult the cleanup tombstone,
+-- record Storage cleanup intent in the same transaction, and roll quota back on
+-- rejection. An accidental re-grant would not break a single test elsewhere —
+-- everything would simply work again, the old lossy way — so it is pinned here,
+-- per privilege and per role, next to the RPCs that replaced it.
+SELECT ok(has_table_privilege('authenticated','public.paper_attachments','SELECT'),
+  'paper_attachments: authenticated keeps SELECT (the UI and the account export read it)');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.paper_attachments', priv),
+  'paper_attachments: authenticated must not hold ' || priv)
+  FROM unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE']) priv;
+SELECT ok(NOT has_table_privilege('anon', 'public.paper_attachments', priv),
+  'paper_attachments: anon must not hold ' || priv)
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) priv;
+SELECT is(
+  (SELECT count(*)::int FROM pg_class c, aclexplode(c.relacl) a
+    WHERE c.oid = 'public.paper_attachments'::regclass AND a.grantee = 0),
+  0, 'paper_attachments: nothing granted to PUBLIC');
+-- The three entry points that hold that privilege on the client's behalf. Each
+-- must be SECURITY DEFINER (or the revoke above would break it) and executable
+-- by authenticated (or the feature would be unreachable).
+SELECT ok(has_function_privilege('authenticated', sig::regprocedure, 'EXECUTE')
+      AND (SELECT prosecdef FROM pg_proc WHERE oid = sig::regprocedure),
+  'attachment lifecycle: ' || sig || ' is authenticated-executable and SECURITY DEFINER')
+  FROM unnest(ARRAY[
+    'public.finalize_attachment_upload(uuid,text,text,text,integer)',
+    'public.delete_attachment_with_cleanup(uuid)',
+    'public.delete_papers_with_attachment_cleanup(uuid[])'
+  ]) sig;
+-- The queue keeps the acknowledgement grant the drain needs, and still refuses
+-- client-authored intent.
+SELECT ok(has_table_privilege('authenticated','public.attachment_cleanup_queue','SELECT')
+      AND has_table_privilege('authenticated','public.attachment_cleanup_queue','DELETE')
+      AND NOT has_table_privilege('authenticated','public.attachment_cleanup_queue','INSERT')
+      AND NOT has_table_privilege('authenticated','public.attachment_cleanup_queue','UPDATE'),
+  'attachment_cleanup_queue: authenticated may read and acknowledge, never author or edit');
+-- The PARENT half of the same boundary. `paper_attachments.paper_id` cascades
+-- from `papers`, so a direct paper deletion removes attachment metadata without
+-- any statement naming it — the same bypass through a different table. DELETE
+-- and TRUNCATE are therefore closed here too, while the ordinary product
+-- capabilities are explicitly required to survive: this migration narrows the
+-- attachment lifecycle, it does not touch paper authoring.
+SELECT ok(has_table_privilege('authenticated', 'public.papers', priv),
+  'papers: authenticated keeps ' || priv || ' (ordinary paper authoring is untouched)')
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE']) priv;
+SELECT ok(NOT has_table_privilege('authenticated', 'public.papers', priv),
+  'papers: authenticated must not hold ' || priv || ' — a paper deletion cascades attachment metadata away')
+  FROM unnest(ARRAY['DELETE','TRUNCATE']) priv;
+SELECT ok(NOT has_table_privilege('anon', 'public.papers', priv),
+  'papers: anon must not hold ' || priv)
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) priv;
+SELECT is(
+  (SELECT count(*)::int FROM pg_class c, aclexplode(c.relacl) a
+    WHERE c.oid = 'public.papers'::regclass AND a.grantee = 0
+      AND a.privilege_type IN ('DELETE','TRUNCATE')),
+  0, 'papers: PUBLIC holds neither DELETE nor TRUNCATE');
+-- Exactly two functions in this schema delete papers, and both are trusted: the
+-- lifecycle RPC, and the duplicate merge, which re-parents attachment rows onto
+-- the kept paper BEFORE deleting the discards so nothing cascades. A third one
+-- appearing is the single easiest way to reopen the bypass unnoticed.
+SELECT is(
+  (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prokind IN ('f','p')
+      AND pg_get_functiondef(p.oid) ~* 'DELETE[[:space:]]+FROM[[:space:]]+(public\.)?papers'),
+  2, 'exactly two public functions delete papers');
+SELECT is(
+  (SELECT string_agg(p.proname, ',' ORDER BY p.proname)
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prokind IN ('f','p')
+      AND pg_get_functiondef(p.oid) ~* 'DELETE[[:space:]]+FROM[[:space:]]+(public\.)?papers'),
+  'delete_papers_with_attachment_cleanup,merge_exact_duplicates',
+  'and they are exactly the two trusted ones');
+SELECT ok(
+  (SELECT bool_and(p.prosecdef) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prokind IN ('f','p')
+      AND pg_get_functiondef(p.oid) ~* 'DELETE[[:space:]]+FROM[[:space:]]+(public\.)?papers'),
+  'both paper-deleting functions are SECURITY DEFINER, so the revoke cannot break them');
+-- Both write paper_attachments and papers, so both must take the papers lock
+-- before the child — the global order the migration cutover depends on.
+SELECT ok(
+  position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure)) > 0
+  AND position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure))
+      < position('FROM public.paper_attachments' IN
+    pg_get_functiondef('public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure)),
+  'delete_papers_with_attachment_cleanup locks papers before it reads paper_attachments');
+SELECT ok(
+  position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure)) > 0
+  AND position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN
+    pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure))
+      < position('UPDATE paper_attachments' IN
+    pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure)),
+  'merge_exact_duplicates locks papers before it re-parents paper_attachments');
+
+-- The tombstone is server-only in every direction.
+SELECT ok(NOT has_table_privilege('authenticated', 'public.attachment_cleanup_tombstone', priv)
+      AND NOT has_table_privilege('anon', 'public.attachment_cleanup_tombstone', priv),
+  'attachment_cleanup_tombstone: no browser role holds ' || priv)
+  FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) priv;
 
 SELECT * FROM finish();
 ROLLBACK;

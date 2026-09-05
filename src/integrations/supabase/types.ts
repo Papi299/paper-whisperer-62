@@ -45,6 +45,48 @@ export type Database = {
         }
         Relationships: []
       }
+      attachment_cleanup_queue: {
+        Row: {
+          created_at: string
+          file_path: string
+          id: string
+          reason: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          file_path: string
+          id?: string
+          reason: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          file_path?: string
+          id?: string
+          reason?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      attachment_cleanup_tombstone: {
+        Row: {
+          created_at: string
+          file_path: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          file_path: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          file_path?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       author_identities: {
         Row: {
           created_at: string
@@ -946,6 +988,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      attachment_cleanup_path_is_safe: {
+        Args: { p_file_path: string; p_paper_id: string; p_user_id: string }
+        Returns: boolean
+      }
+      attachment_object_has_live_metadata: {
+        Args: { p_name: string }
+        Returns: boolean
+      }
       author_identity_effective_root: {
         Args: { p_identity_id: string; p_user_id: string }
         Returns: string
@@ -998,14 +1048,45 @@ export type Database = {
         }
         Returns: Json
       }
+      delete_attachment_with_cleanup: {
+        Args: { p_attachment_id: string }
+        Returns: undefined
+      }
       delete_empty_author_identity: {
         Args: { p_identity_id: string }
         Returns: boolean
+      }
+      delete_papers_with_attachment_cleanup: {
+        Args: { p_paper_ids: string[] }
+        Returns: {
+          deleted_count: number
+          queued_count: number
+        }[]
       }
       filter_papers_by_keywords: {
         Args: { p_keywords: string[]; p_user_id: string }
         Returns: {
           paper_id: string
+        }[]
+      }
+      finalize_attachment_upload: {
+        Args: {
+          p_file_name: string
+          p_file_path: string
+          p_file_type: string
+          p_paper_id: string
+          p_size_bytes: number
+        }
+        Returns: {
+          attachment_created_at: string
+          attachment_file_name: string
+          attachment_file_path: string
+          attachment_file_type: string
+          attachment_id: string
+          attachment_paper_id: string
+          attachment_size_bytes: number
+          attachment_user_id: string
+          status: string
         }[]
       }
       get_ai_quota_status: {

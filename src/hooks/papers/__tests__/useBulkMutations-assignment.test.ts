@@ -2,21 +2,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 // ── Supabase mock (hoisted) ───────────────────────────────────────────
-// The bulk-delete path (`bulkDeletePapers`) chains
-// `.from("papers").delete().in("id", paperIds).eq("user_id", userId)`
-// after the S2 bulk-delete hardening, so the `delete()` mock must expose
-// a recordable `in().eq()` chain. The hoisted `mockDeleteIn` and
-// `mockDeleteInEq` spies are asserted against in the bulk-delete
-// describe block below. The attachments `select("file_path").in(...)`
-// pre-delete read is mocked via a separate `mockAttachmentsSelectIn`
-// returning `{ data: [], error: null }` so the storage-cleanup branch
-// is skipped (no storage paths).
+// Since ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 the bulk-delete path deletes
+// through `delete_papers_with_attachment_cleanup` and then drains
+// `attachment_cleanup_queue`. The direct
+// `.from("papers").delete().in("id", paperIds).eq("user_id", userId)` chain is
+// still mocked because it is what the PRE-MIGRATION compatibility path uses, and
+// the S2 scoping test below now exercises it through that path — where the
+// predicate still has to be right. `mockAttachmentsSelectIn` serves the
+// compatibility path's pre-delete `select("file_path").in(...)` read; the
+// cleanup-queue chain resolves to an empty page so Storage is never called.
 const {
   mockRpc,
   mockFrom,
   mockDeleteIn,
   mockDeleteInEq,
   mockAttachmentsSelectIn,
+  mockStorageRemove,
 } = vi.hoisted(() => {
   const mockRpc = vi.fn();
   const mockDeleteInEq = vi.fn().mockResolvedValue({ error: null });
@@ -24,6 +25,18 @@ const {
   const mockAttachmentsSelectIn = vi
     .fn()
     .mockResolvedValue({ data: [], error: null });
+  const mockStorageRemove = vi.fn().mockResolvedValue({ data: null, error: null });
+  const cleanupQueueChain = () => {
+    const chain = {
+      select: vi.fn(() => chain),
+      eq: vi.fn(() => chain),
+      order: vi.fn(() => chain),
+      limit: vi.fn(async () => ({ data: [] as unknown[], error: null })),
+      delete: vi.fn(() => chain),
+      in: vi.fn(async () => ({ error: null })),
+    };
+    return chain;
+  };
   const mockFrom = vi.fn((table: string) => {
     if (table === "papers") {
       return {
@@ -37,17 +50,31 @@ const {
         select: vi.fn(() => ({ in: mockAttachmentsSelectIn })),
       };
     }
+    if (table === "attachment_cleanup_queue") {
+      return cleanupQueueChain();
+    }
     return {
       insert: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn() })) })),
       delete: vi.fn(() => ({ in: vi.fn() })),
       select: vi.fn(() => ({ eq: vi.fn() })),
     };
   });
-  return { mockRpc, mockFrom, mockDeleteIn, mockDeleteInEq, mockAttachmentsSelectIn };
+  return {
+    mockRpc,
+    mockFrom,
+    mockDeleteIn,
+    mockDeleteInEq,
+    mockAttachmentsSelectIn,
+    mockStorageRemove,
+  };
 });
 
 vi.mock("@/integrations/supabase/client", () => ({
-  supabase: { from: mockFrom, rpc: mockRpc },
+  supabase: {
+    from: mockFrom,
+    rpc: mockRpc,
+    storage: { from: () => ({ remove: mockStorageRemove }) },
+  },
 }));
 
 // ── useToast mock ─────────────────────────────────────────────────────
@@ -112,6 +139,7 @@ vi.mock("@/lib/chunkedInsert", () => ({
 }));
 
 import { useBulkMutations } from "../useBulkMutations";
+import { resetAttachmentCleanupAvailabilityForTests } from "@/lib/attachmentCleanupAvailability";
 import type { PaperWithTags, Project, Tag } from "@/types/database";
 import type { ServerFilterParams, ServerSortParams } from "../types";
 
@@ -373,24 +401,67 @@ describe("useBulkMutations – assignment failure visibility (bulkImportFromPars
 });
 
 describe("useBulkMutations – bulkDeletePapers explicit user_id scoping (S2 defense-in-depth)", () => {
-  // Regression coverage for the S2 bulk-delete hardening — sibling to
-  // the PR #133 single-row `usePaperMutations.deletePaper` test that
-  // asserts `(\"id\", paperId)` AND `(\"user_id\", userId)` are both on
-  // the `.eq` chain. Here the chain shape is `.delete().in(\"id\",
-  // paperIds).eq(\"user_id\", userId)` — assert the trailing `.eq` is
-  // called exactly once with the user-scoping predicate.
+  // Regression coverage for the S2 bulk-delete hardening. Since
+  // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 the ownership check that matters on
+  // the primary path lives SERVER-side — `delete_papers_with_attachment_cleanup`
+  // validates every id against `auth.uid()` before mutating anything, which is
+  // strictly stronger than a client predicate and is pinned by
+  // supabase/tests/database/014_attachment_cleanup_recovery.test.sql.
+  //
+  // The client-side `.in("id", …).eq("user_id", …)` chain still exists in the
+  // pre-migration compatibility path, and this suite keeps asserting it there:
+  // that path runs in Production until the migration is applied, so its scoping
+  // predicate is not historical.
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // The missing-schema classifier deliberately remembers, for the life of the
+    // session, that a cleanup object answered — that is what turns a LATER
+    // missing-object error into a visible partial-install failure rather than a
+    // silent downgrade. Tests that exercise both the present and the absent
+    // schema in one file must therefore start each case from no evidence.
+    resetAttachmentCleanupAvailabilityForTests();
     mockDeleteInEq.mockResolvedValue({ error: null });
     mockAttachmentsSelectIn.mockResolvedValue({ data: [], error: null });
   });
 
-  it("scopes the bulk delete by both row ids AND user_id (defense-in-depth on top of RLS)", async () => {
+  it("deletes through the cleanup RPC, not a direct table delete, when the schema is present", async () => {
     const paperIds = ["paper-1", "paper-2", "paper-3"];
+    mockRpc.mockResolvedValue({ data: [{ deleted_count: 3, queued_count: 0 }], error: null });
 
     const { result } = renderBulkHook();
+    await act(async () => {
+      await result.current.bulkDeletePapers(paperIds);
+    });
 
+    expect(mockRpc).toHaveBeenCalledWith("delete_papers_with_attachment_cleanup", {
+      p_paper_ids: paperIds,
+    });
+    // No direct DELETE at all: the RPC owns both the enqueue and the deletion,
+    // and issuing a second one would be a partial, non-atomic duplicate.
+    expect(mockDeleteIn).not.toHaveBeenCalled();
+
+    const deleteToastCall = mockToast.mock.calls.find(
+      (c: unknown[]) =>
+        typeof (c[0] as { title?: string }).title === "string" &&
+        (c[0] as { title: string }).title.startsWith("Deleted "),
+    );
+    expect(deleteToastCall).toBeTruthy();
+    expect((deleteToastCall![0] as { variant?: string }).variant).toBeUndefined();
+  });
+
+  it("scopes the pre-migration fallback delete by both row ids AND user_id (defense-in-depth on top of RLS)", async () => {
+    const paperIds = ["paper-1", "paper-2", "paper-3"];
+    // The exact pre-migration answer: PostgREST cannot find the function.
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: {
+        code: "PGRST202",
+        message: "Could not find the function public.delete_papers_with_attachment_cleanup(p_paper_ids) in the schema cache",
+      },
+    });
+
+    const { result } = renderBulkHook();
     await act(async () => {
       await result.current.bulkDeletePapers(paperIds);
     });
@@ -404,8 +475,6 @@ describe("useBulkMutations – bulkDeletePapers explicit user_id scoping (S2 def
     expect(mockDeleteInEq).toHaveBeenCalledWith("user_id", userId);
     expect(mockDeleteInEq).toHaveBeenCalledTimes(1);
 
-    // Success toast (no destructive variant) — confirms the chain
-    // resolved without taking the error branch.
     const deleteToastCall = mockToast.mock.calls.find(
       (c: unknown[]) =>
         typeof (c[0] as { title?: string }).title === "string" &&

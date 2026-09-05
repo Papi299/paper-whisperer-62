@@ -83,7 +83,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(26);
+SELECT plan(29);
 
 -- ══ paper_projects (both-owner RLS) ══════════════════════════════════════════
 SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
@@ -141,19 +141,29 @@ SELECT is(
   1, 'paper_tags: A''s relationship survives B''s delete attempt');
 
 -- ══ paper_attachments (ownership trigger + storage accounting) ═══════════════
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
+--
+-- The four write cases below run as `postgres`, not as `authenticated`. Since
+-- migration 20260904120000 no browser role holds INSERT/UPDATE/DELETE here, so a
+-- direct client write is refused at the ACL before the ownership trigger is
+-- consulted — these cases would then pass while testing nothing. The writer that
+-- remains is the table owner, which is who the SECURITY DEFINER lifecycle RPCs
+-- execute as, so it is exactly who the trigger has to hold against now. The two
+-- client-facing assertions that follow them are new: the ACL boundary itself,
+-- and cross-user isolation re-proved through the RPC that replaced the direct
+-- DELETE.
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('a0000000-0000-0000-0000-0000000000a1','aa000000-0000-0000-0000-000000000001','a/ok.pdf','ok.pdf','application/pdf',1000)$q$),
   '00000', 'paper_attachments: own attachment on own paper allowed (positive control)');
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('b0000000-0000-0000-0000-0000000000b1','aa000000-0000-0000-0000-000000000001','a/x.pdf','x.pdf','application/pdf',100)$q$),
   'P0001', 'paper_attachments: own user_id + foreign paper_id rejected (trigger)');
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('a0000000-0000-0000-0000-0000000000a1','bb000000-0000-0000-0000-000000000002','a/y.pdf','y.pdf','application/pdf',100)$q$),
   'P0001', 'paper_attachments: foreign user_id + own paper rejected (trigger)');
-SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('postgres','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
   $q$INSERT INTO public.paper_attachments(paper_id,user_id,file_path,file_name,file_type,size_bytes)
      VALUES ('b0000000-0000-0000-0000-0000000000b1','bb000000-0000-0000-0000-000000000002','a/z.pdf','z.pdf','application/pdf',100)$q$),
   'P0001', 'paper_attachments: foreign user_id + foreign paper rejected (trigger)');
@@ -163,9 +173,23 @@ SELECT is(pg_temp.scalar_as('authenticated','{"sub":"aa000000-0000-0000-0000-000
 SELECT is(pg_temp.scalar_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
   $q$SELECT count(*)::text FROM public.paper_attachments WHERE paper_id='a0000000-0000-0000-0000-0000000000a1'$q$),
   '0', 'paper_attachments: B cannot view A''s attachment metadata');
-SELECT is(pg_temp.rowcount_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
   $q$DELETE FROM public.paper_attachments WHERE paper_id='a0000000-0000-0000-0000-0000000000a1'$q$),
-  0, 'paper_attachments: B cannot delete A''s attachment metadata (0 rows)');
+  '42501', 'paper_attachments: B cannot delete A''s attachment metadata — no browser role holds DELETE at all');
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
+  $q$DELETE FROM public.paper_attachments WHERE paper_id='a0000000-0000-0000-0000-0000000000a1'$q$),
+  '42501', 'paper_attachments: nor can A, on her own row — deletion is the lifecycle RPC''s to perform');
+-- Cross-user isolation, re-proved on the path that replaced the direct DELETE.
+-- The grant boundary above refuses everyone equally, which is a weaker statement
+-- than the one this suite exists to make; the RPC is where owner separation now
+-- lives, so that is where it is asserted.
+SELECT is(pg_temp.errcode_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}',
+  $q$SELECT public.delete_attachment_with_cleanup(
+       (SELECT id FROM public.paper_attachments WHERE paper_id='a0000000-0000-0000-0000-0000000000a1'))$q$),
+  'P0001', 'paper_attachments: B cannot delete A''s attachment through the lifecycle RPC either');
+SELECT is(
+  (SELECT count(*)::int FROM public.attachment_cleanup_queue), 0,
+  'paper_attachments: B''s refused RPC call queued no cleanup for A''s object');
 SELECT is(
   (SELECT count(*)::int FROM public.paper_attachments WHERE user_id='aa000000-0000-0000-0000-000000000001'),
   1, 'paper_attachments: rejected combinations created no row (only the one valid attachment exists)');

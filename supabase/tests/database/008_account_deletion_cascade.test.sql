@@ -14,8 +14,11 @@
 --   * behavioural cascade — a synthetic Auth user with a representative row in
 --     every owned table loses all of them when its auth.users row is deleted,
 --     including the junction rows that own no user_id and are reached only
---     through the papers they belong to, and the saved AI-model preference
---     (AI-MODEL-SELECTION-001A) whose catalog row must nonetheless survive;
+--     through the papers they belong to, the saved AI-model preference
+--     (AI-MODEL-SELECTION-001A) whose catalog row must nonetheless survive, and
+--     pending attachment-cleanup intent (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001)
+--     — which must cascade from auth.users while being reachable from no paper,
+--     since an intent that died with its paper would be useless;
 --   * deliberate retention — subscriptions.user_id and
 --     subscription_events.user_id are ON DELETE SET NULL by design (C13
 --     provider/audit history). Those rows survive with a NULL user_id and,
@@ -105,7 +108,7 @@ BEGIN
 END;
 $hlp$;
 
-SELECT plan(84);
+SELECT plan(94);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Part 1 — catalog contract
@@ -152,6 +155,32 @@ SELECT is(pg_temp.auth_fk_action('internal_user_access', 'user_id'), 'cascade',
 -- direction, which is why deleting the USER is still unobstructed.
 SELECT is(pg_temp.auth_fk_action('user_ai_preferences', 'user_id'), 'cascade',
   'user_ai_preferences.user_id cascades from auth.users');
+-- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. Pending Storage-cleanup intent is
+-- user-scoped operational state and leaves with the account like everything
+-- else. It is excluded from the portability ARCHIVE (see
+-- src/lib/accountExport/types.ts) — which is a different question entirely, and
+-- this cascade is why exclusion there costs the user nothing.
+SELECT is(pg_temp.auth_fk_action('attachment_cleanup_queue', 'user_id'), 'cascade',
+  'attachment_cleanup_queue.user_id cascades from auth.users');
+-- CORRECTION-02. The tombstone is the same state one step further from the user
+-- — the permanent record that an uploaded object was finalized as garbage, kept
+-- after the queue row for it was acknowledged. It is durable ON PURPOSE, so its
+-- cascade is the only thing that bounds how long it lives.
+SELECT is(pg_temp.auth_fk_action('attachment_cleanup_tombstone', 'user_id'), 'cascade',
+  'attachment_cleanup_tombstone.user_id cascades from auth.users');
+-- And it must NOT be reachable from papers: an intent that cascaded away with
+-- the paper whose deletion created it would be destroyed by the exact statement
+-- it exists to outlive.
+SELECT is(
+  (SELECT count(*)::int FROM pg_constraint
+    WHERE contype='f' AND conrelid='public.attachment_cleanup_queue'::regclass
+      AND confrelid IN ('public.papers'::regclass,'public.paper_attachments'::regclass)),
+  0, 'attachment_cleanup_queue has no FK to papers/paper_attachments (intent outlives them)');
+SELECT is(
+  (SELECT count(*)::int FROM pg_constraint
+    WHERE contype='f' AND conrelid='public.attachment_cleanup_tombstone'::regclass
+      AND confrelid IN ('public.papers'::regclass,'public.paper_attachments'::regclass)),
+  0, 'attachment_cleanup_tombstone has no FK to papers/paper_attachments');
 
 -- Junction tables carry no user_id; they are removed via their paper/tag/project.
 SELECT is(pg_temp.auth_fk_action('paper_tags', 'user_id'), 'none',
@@ -282,6 +311,25 @@ INSERT INTO public.paper_attachments (paper_id, user_id, file_path, file_name, f
 
 SELECT set_config('request.jwt.claims', '', true);
 
+-- Pending attachment cleanup for each user (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001).
+-- Planted as the owner because the table has no client INSERT path at all: in
+-- production these rows appear only from inside the cleanup RPCs. What this
+-- suite is asserting is the cascade, not how the row got there.
+INSERT INTO public.attachment_cleanup_queue (user_id, file_path, reason) VALUES
+  ('c4000000-0000-0000-0000-0000000000d1',
+   'c4000000-0000-0000-0000-0000000000d1/c4000000-0000-0000-0000-0000000000a1/pending-doomed.pdf',
+   'paper_delete'),
+  ('c4000000-0000-0000-0000-0000000000d2',
+   'c4000000-0000-0000-0000-0000000000d2/c4000000-0000-0000-0000-0000000000a2/pending-keeper.pdf',
+   'paper_delete');
+
+-- The permanent cleanup decision for each user, same reasoning as above.
+INSERT INTO public.attachment_cleanup_tombstone (user_id, file_path) VALUES
+  ('c4000000-0000-0000-0000-0000000000d1',
+   'c4000000-0000-0000-0000-0000000000d1/c4000000-0000-0000-0000-0000000000a1/finalized-doomed.pdf'),
+  ('c4000000-0000-0000-0000-0000000000d2',
+   'c4000000-0000-0000-0000-0000000000d2/c4000000-0000-0000-0000-0000000000a2/finalized-keeper.pdf');
+
 INSERT INTO public.usage_credits (user_id, source, quantity_granted, quantity_remaining) VALUES
   ('c4000000-0000-0000-0000-0000000000d1', 'manual_grant', 10, 10),
   ('c4000000-0000-0000-0000-0000000000d2', 'manual_grant', 10, 10);
@@ -325,6 +373,10 @@ SELECT is(pg_temp.rows_for('internal_user_access', 'c4000000-0000-0000-0000-0000
   'pre-delete: doomed internal access row exists');
 SELECT is(pg_temp.rows_for('user_ai_preferences', 'c4000000-0000-0000-0000-0000000000d1'), 1,
   'pre-delete: doomed AI-model preference exists');
+SELECT is(pg_temp.rows_for('attachment_cleanup_queue', 'c4000000-0000-0000-0000-0000000000d1'), 1,
+  'pre-delete: doomed pending attachment cleanup exists');
+SELECT is(pg_temp.rows_for('attachment_cleanup_tombstone', 'c4000000-0000-0000-0000-0000000000d1'), 1,
+  'pre-delete: doomed cleanup tombstone exists');
 SELECT is(
   (SELECT count(*)::int FROM public.paper_tags
     WHERE paper_id = 'c4000000-0000-0000-0000-0000000000a1'),
@@ -387,6 +439,10 @@ SELECT is(pg_temp.rows_for('internal_user_access', 'c4000000-0000-0000-0000-0000
   'cascade: internal owner/manager access removed (no exemption)');
 SELECT is(pg_temp.rows_for('user_ai_preferences', 'c4000000-0000-0000-0000-0000000000d1'), 0,
   'cascade: saved AI-model preference removed');
+SELECT is(pg_temp.rows_for('attachment_cleanup_queue', 'c4000000-0000-0000-0000-0000000000d1'), 0,
+  'cascade: pending attachment-cleanup intent removed');
+SELECT is(pg_temp.rows_for('attachment_cleanup_tombstone', 'c4000000-0000-0000-0000-0000000000d1'), 0,
+  'cascade: permanent cleanup tombstone removed');
 
 -- Junction rows own no user_id, so they are the easiest thing to leave behind.
 SELECT is(
@@ -459,6 +515,10 @@ SELECT is(pg_temp.rows_for('user_entitlements', 'c4000000-0000-0000-0000-0000000
   'blast radius: neighbour entitlement intact');
 SELECT is(pg_temp.rows_for('user_ai_preferences', 'c4000000-0000-0000-0000-0000000000d2'), 1,
   'blast radius: neighbour AI-model preference intact');
+SELECT is(pg_temp.rows_for('attachment_cleanup_queue', 'c4000000-0000-0000-0000-0000000000d2'), 1,
+  'blast radius: neighbour pending attachment cleanup intact');
+SELECT is(pg_temp.rows_for('attachment_cleanup_tombstone', 'c4000000-0000-0000-0000-0000000000d2'), 1,
+  'blast radius: neighbour cleanup tombstone intact');
 -- The catalog is product metadata, not account data: deleting a user who had
 -- chosen a model must not retire the model for everyone else.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog

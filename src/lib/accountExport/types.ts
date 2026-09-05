@@ -187,6 +187,38 @@ export const ACCOUNT_EXPORT_EXCLUDED_TABLES = [
   "usage_credits",
   "user_entitlements",
   "user_storage_usage",
+  // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. `attachment_cleanup_queue` holds
+  // Storage object keys whose metadata has ALREADY been deleted — the durable
+  // record that a binary the user removed should not still exist. It is
+  // server-maintained in exactly the sense `user_storage_usage` above is: no
+  // client may INSERT or UPDATE it (there is no policy and no grant), every row
+  // is written by a SECURITY DEFINER RPC as a consequence of a deletion, and a
+  // row's whole content is a path plus why it is queued.
+  //
+  // It is therefore excluded under reason (1), not deferred. Exporting it would
+  // hand the user internal cleanup bookkeeping about files they deleted, and
+  // would describe attachments the archive itself — correctly — does not
+  // contain. Note the second admissible reason does NOT apply: this IS the
+  // user's own account state, it is user-scoped, and it cascades on account
+  // deletion like every other owned table (pinned by suite 008). Exclusion from
+  // the portability archive is not exclusion from deletion or privacy
+  // accounting.
+  "attachment_cleanup_queue",
+  // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-02.
+  // `attachment_cleanup_tombstone` is the same kind of state and a step further
+  // from the user: it records that one uploaded Storage object was finalized as
+  // garbage, and it is kept AFTER the cleanup queue row for it has been
+  // acknowledged, so a duplicated upload finalization cannot create metadata for
+  // a binary that is already gone. No client role holds any privilege on it and
+  // it has no policy of any kind — it exists purely to constrain what the server
+  // will do next.
+  //
+  // Excluded under reason (1). Exporting it would hand the user a list of upload
+  // attempts that failed, described only by an internal Storage key, about files
+  // the archive correctly does not contain. As above, this is NOT an exclusion
+  // from deletion or privacy accounting: it is user-scoped, it appears in the
+  // privacy inventory, and it cascades with the account (pinned by suite 008).
+  "attachment_cleanup_tombstone",
 
   // (2) AI-MODEL-SELECTION-001A. The approved-model catalog is global product
   // metadata with no `user_id` — the same rows for every account, authored by

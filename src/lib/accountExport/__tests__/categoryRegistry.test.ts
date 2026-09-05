@@ -248,6 +248,15 @@ describe("account export category registry", () => {
         // of scope. `user_ai_preferences` is deliberately NOT here: the user's
         // own choice among those models is their data and is exported.
         "ai_model_catalog",
+        // ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001. Server-maintained cleanup
+        // bookkeeping about attachments the user has ALREADY deleted: no client
+        // can INSERT or UPDATE it, every row is written by a SECURITY DEFINER
+        // RPC as a consequence of a deletion, and its content is a Storage path
+        // plus a reason. Excluded on the same ground as `user_storage_usage`
+        // above. It still cascades on account deletion — pinned by suite 008 —
+        // so exclusion here is about portability, never about retention.
+        "attachment_cleanup_queue",
+      "attachment_cleanup_tombstone",
       ].sort(),
     );
 
