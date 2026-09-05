@@ -537,14 +537,26 @@ SELECT ok(has_table_privilege('authenticated', 'public.papers', priv),
 SELECT ok(NOT has_table_privilege('authenticated', 'public.papers', priv),
   'papers: authenticated must not hold ' || priv || ' — a paper deletion cascades attachment metadata away')
   FROM unnest(ARRAY['DELETE','TRUNCATE']) priv;
+-- All five, on both tables. This assertion is older than the migration that
+-- finally makes it true everywhere: it passed from the day it was written,
+-- because the current Supabase platform default grants `anon` only `Dxtm`
+-- (TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) on a new public table and no
+-- migration here grants `anon` any of the four DML privileges. Hosted Production
+-- was provisioned under the OLD default, which granted `anon` all of `arwdDxtm`,
+-- so the statement this pins was true on a replay and false there until
+-- 20260904120000 began revoking `anon` BY ROLE rather than by privilege. The gap
+-- is covered where it can actually be reproduced — `scripts/e2e-local.mjs` seeds
+-- the legacy ACL and races the real cutover — and pinned here as the steady state.
 SELECT ok(NOT has_table_privilege('anon', 'public.papers', priv),
   'papers: anon must not hold ' || priv)
   FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) priv;
+-- Nothing at all, matching `paper_attachments` above and the migration's own
+-- section 7. PUBLIC is every role at once, so a grant here would hand `anon` the
+-- surface the line above just denied it, without ever naming `anon`.
 SELECT is(
   (SELECT count(*)::int FROM pg_class c, aclexplode(c.relacl) a
-    WHERE c.oid = 'public.papers'::regclass AND a.grantee = 0
-      AND a.privilege_type IN ('DELETE','TRUNCATE')),
-  0, 'papers: PUBLIC holds neither DELETE nor TRUNCATE');
+    WHERE c.oid = 'public.papers'::regclass AND a.grantee = 0),
+  0, 'papers: nothing granted to PUBLIC');
 -- Exactly two functions in this schema delete papers, and both are trusted: the
 -- lifecycle RPC, and the duplicate merge, which re-parents attachment rows onto
 -- the kept paper BEFORE deleting the discards so nothing cascades. A third one

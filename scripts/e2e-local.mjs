@@ -2047,19 +2047,72 @@ async function runPaperDeleteFinalizationProbe(container) {
 
 const CUT_PROBE_USER = "cc000000-0000-0000-0000-0000000000d0";
 const CUT_PAPER = "cc000000-0000-0000-0000-0000000000d1";
+
+const CUTOVER_MIGRATION =
+  "supabase/migrations/20260904120000_add_recoverable_attachment_cleanup_queue.sql";
+
+/**
+ * The migration's OWN table-privilege statements, read out of the migration file
+ * rather than restated here.
+ *
+ * This used to be a hand-written copy, and that is exactly how the Production
+ * rollout defect survived CI: the copy said what the migration was MEANT to do,
+ * so every probe that restored "the hardened posture" restored the intended one
+ * and never noticed the migration itself was reaching a different one. Deriving
+ * it means the probes below exercise the real statements, and a change to the
+ * migration that this harness has not accounted for fails here rather than
+ * passing quietly.
+ *
+ * Comments are stripped and statements split on `;`, then filtered to the
+ * top-level GRANT/REVOKE statements naming the two tables. The count is pinned:
+ * a parse that silently returned nothing would turn every `finally` restore into
+ * a no-op and leave the local database permanently more permissive than a replay.
+ */
+function readCutoverGrantSql() {
+  const src = readFileSync(resolve(ROOT, CUTOVER_MIGRATION), "utf8");
+  const bare = src
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+  const stmts = bare
+    .split(";")
+    .map((stmt) => stmt.trim().replace(/\s+/g, " "))
+    .filter(
+      (stmt) =>
+        /^(GRANT|REVOKE)\b/i.test(stmt) &&
+        /\bON TABLE public\.(papers|paper_attachments)\b/i.test(stmt),
+    );
+  const EXPECTED = 6;
+  if (stmts.length !== EXPECTED) {
+    throw new Error(
+      `cutover harness: expected ${EXPECTED} table GRANT/REVOKE statements in ` +
+        `${CUTOVER_MIGRATION}, found ${stmts.length}. The migration's privilege ` +
+        `surface changed — update this harness deliberately rather than loosening the check.`,
+    );
+  }
+  for (const needle of ["public.papers", "public.paper_attachments"]) {
+    if (!stmts.some((stmt) => stmt.includes(needle))) {
+      throw new Error(`cutover harness: no GRANT/REVOKE parsed for ${needle}.`);
+    }
+  }
+  return stmts.map((stmt) => `${stmt};`).join("\n") + "\n";
+}
+
 // The exact privilege set migration 20260904120000 revokes, and the exact grant
 // it leaves standing. The probe restores this posture in its `finally`, so a
 // failure anywhere cannot leave the local database more permissive than a real
 // replay — and assertNoResidue's catalog fingerprint covers relacl, so it would
 // notice if it did.
-const CUT_REVOKE_SQL =
-  "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.paper_attachments " +
-  "FROM PUBLIC, anon, authenticated;\nGRANT SELECT ON TABLE public.paper_attachments TO authenticated;\n" +
-  "REVOKE DELETE, TRUNCATE ON TABLE public.papers FROM PUBLIC, anon, authenticated;\n" +
-  "GRANT SELECT, INSERT, UPDATE ON TABLE public.papers TO authenticated;\n";
+const CUT_REVOKE_SQL = readCutoverGrantSql();
 const CUT_LEGACY_GRANT_SQL =
   "GRANT INSERT, UPDATE, DELETE ON TABLE public.paper_attachments TO authenticated;\n" +
   "GRANT DELETE ON TABLE public.papers TO authenticated;\n";
+// Hosted Production's legacy ACL: the OLD Supabase platform default granted ALL
+// on every new public table to all three API roles. A clean `db reset` never
+// produces this, which is why the drift it causes was invisible to CI.
+const CUT_PROD_LEGACY_ACL_SQL =
+  "GRANT ALL ON TABLE public.papers TO anon, authenticated, service_role;\n" +
+  "GRANT ALL ON TABLE public.paper_attachments TO anon, authenticated, service_role;\n";
 // The cutover's own three statements, in the migration's order. None of the
 // three modes is a preference, and neither is the order:
 //
@@ -2795,6 +2848,126 @@ async function runMergeCutoverCases(container) {
 }
 
 /**
+ * Production-legacy ACL parity probe (ACL-1…ACL-3).
+ *
+ * WHY THIS EXISTS. The first Phase-2 Production rollout was refused by the
+ * migration's own section 7 with `anon must not hold SELECT on
+ * paper_attachments`, and nothing in this repository could have predicted it.
+ * Hosted Production was provisioned under Supabase's OLD platform default, which
+ * auto-granted ALL (`arwdDxtm`) on every new public table to
+ * anon/authenticated/service_role; a `db reset` today gets the NEW default,
+ * which grants the API roles only `Dxtm` (TRUNCATE, REFERENCES, TRIGGER,
+ * MAINTAIN) and none of the four DML privileges. So `anon` begins a local replay
+ * holding none of SELECT/INSERT/UPDATE/DELETE and Production holds all four, and
+ * a migration that revokes privileges BY NAME converges the replay while leaving
+ * whatever it failed to name standing on Production. Every probe and pgTAP test
+ * in this repository ran only against the replay, so the divergence had no way
+ * to show up until the rollout hit it.
+ *
+ * WHAT IT DOES. In ONE transaction that is always rolled back:
+ *
+ *   ACL-1  seed hosted Production's legacy ACL on both tables, and PROVE the
+ *          seed took. Without this the probe would "pass" by never having
+ *          reproduced the condition at all — the failure mode this correction
+ *          exists to stop repeating.
+ *   ACL-2  apply the migration's own privilege statements, read from the
+ *          migration file (readCutoverGrantSql) rather than restated here.
+ *   ACL-3  assert the reviewed final matrix — `anon` reaches neither table for
+ *          any of the five client privileges, `authenticated` keeps exactly the
+ *          capabilities the product needs and no writes it must not have,
+ *          `service_role` is untouched, and PUBLIC holds nothing.
+ *
+ * Against the pre-correction migration this fails at ACL-3 with `anon` still
+ * holding SELECT on `paper_attachments` and SELECT/INSERT/UPDATE on `papers` —
+ * the second of which section 7 did not assert, so that half would have
+ * COMMITTED wrong rather than refusing.
+ *
+ * Nothing is committed: GRANT/REVOKE are transactional, so the ROLLBACK restores
+ * the exact starting ACL. assertNoResidue's catalog fingerprint covers relacl
+ * and would catch it if that were ever untrue.
+ */
+async function runAclParityProbe(container) {
+  log("running Production-legacy ACL parity probe…");
+
+  const res = await dockerPsql(
+    container,
+    "BEGIN;\n" +
+      // ── ACL-1: reproduce hosted Production, and prove we did ──
+      CUT_PROD_LEGACY_ACL_SQL +
+      "DO $seed$ BEGIN\n" +
+      "  IF NOT (has_table_privilege('anon','public.paper_attachments','SELECT')\n" +
+      "      AND has_table_privilege('anon','public.papers','SELECT')\n" +
+      "      AND has_table_privilege('anon','public.papers','DELETE')) THEN\n" +
+      "    RAISE EXCEPTION 'ACL-1: the legacy Production ACL seed did not take — this probe would prove nothing';\n" +
+      "  END IF;\n" +
+      "END $seed$;\n" +
+      "SELECT 'ACL1=seeded';\n" +
+      // ── ACL-2: the migration's real statements ──
+      CUT_REVOKE_SQL +
+      // ── ACL-3: the reviewed final matrix ──
+      "DO $matrix$\n" +
+      "DECLARE p TEXT; bad TEXT := '';\n" +
+      "BEGIN\n" +
+      "  FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE'] LOOP\n" +
+      "    IF has_table_privilege('anon','public.paper_attachments',p) THEN bad := bad || ' anon+' || p || '@paper_attachments'; END IF;\n" +
+      "    IF has_table_privilege('anon','public.papers',p) THEN bad := bad || ' anon+' || p || '@papers'; END IF;\n" +
+      "  END LOOP;\n" +
+      "  FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE'] LOOP\n" +
+      "    IF has_table_privilege('authenticated','public.paper_attachments',p) THEN bad := bad || ' authenticated+' || p || '@paper_attachments'; END IF;\n" +
+      "  END LOOP;\n" +
+      "  FOREACH p IN ARRAY ARRAY['DELETE','TRUNCATE'] LOOP\n" +
+      "    IF has_table_privilege('authenticated','public.papers',p) THEN bad := bad || ' authenticated+' || p || '@papers'; END IF;\n" +
+      "  END LOOP;\n" +
+      "  IF NOT has_table_privilege('authenticated','public.paper_attachments','SELECT') THEN bad := bad || ' authenticated-SELECT@paper_attachments'; END IF;\n" +
+      "  FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE'] LOOP\n" +
+      "    IF NOT has_table_privilege('authenticated','public.papers',p) THEN bad := bad || ' authenticated-' || p || '@papers'; END IF;\n" +
+      "  END LOOP;\n" +
+      "  FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE'] LOOP\n" +
+      "    IF NOT has_table_privilege('service_role','public.paper_attachments',p) THEN bad := bad || ' service_role-' || p || '@paper_attachments'; END IF;\n" +
+      "    IF NOT has_table_privilege('service_role','public.papers',p) THEN bad := bad || ' service_role-' || p || '@papers'; END IF;\n" +
+      "  END LOOP;\n" +
+      "  IF EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) a\n" +
+      "              WHERE c.oid IN ('public.papers'::regclass,'public.paper_attachments'::regclass)\n" +
+      "                AND a.grantee = 0) THEN bad := bad || ' PUBLIC-holds-something'; END IF;\n" +
+      "  IF bad <> '' THEN\n" +
+      "    RAISE EXCEPTION 'ACL-3: the cutover did not converge the legacy Production ACL —%', bad;\n" +
+      "  END IF;\n" +
+      "END $matrix$;\n" +
+      "SELECT 'ACL3=converged';\n" +
+      "ROLLBACK;\n",
+  );
+  if (res.code !== 0) {
+    throw new Error(`ACL parity probe failed: ${(res.err || res.out).trim().slice(0, 400)}`);
+  }
+  for (const [needle, what] of [
+    ["ACL1=seeded", "the legacy Production ACL seed did not run"],
+    ["ACL3=converged", "the migration's privilege statements did not converge the legacy Production ACL"],
+  ]) {
+    if (!res.out.includes(needle)) {
+      throw new Error(`ACL parity probe: ${what} (expected ${needle}).`);
+    }
+  }
+
+  // The transaction rolled back, so the starting ACL must be back exactly. Read
+  // it on a fresh statement rather than trusting the ROLLBACK.
+  const restored = await dbScalar(
+    container,
+    "SELECT (SELECT count(*)::text FROM pg_class c, aclexplode(c.relacl) a " +
+      "WHERE c.oid IN ('public.papers'::regclass,'public.paper_attachments'::regclass) " +
+      "AND a.grantee = 'anon'::regrole) || '|' || " +
+      "has_table_privilege('authenticated','public.paper_attachments','SELECT')::text || '|' || " +
+      "has_table_privilege('authenticated','public.papers','INSERT')::text;",
+  );
+  if (restored !== "0|true|true") {
+    throw new Error(
+      `ACL parity probe: the rollback did not restore the starting ACL ` +
+        `(anon grants|attach select|papers insert = ${restored}).`,
+    );
+  }
+  log("ACL parity probe OK: the cutover converges hosted Production's legacy ACL, and rolled back clean.");
+}
+
+/**
  * Migration-cutover probe
  * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-03, Case CUT-1).
  *
@@ -3238,6 +3411,7 @@ async function cmdDbTests() {
     await runMergeCycleProbe(container);
     await runAttachmentFinalizationProbe(container);
     await runPaperDeleteFinalizationProbe(container);
+    await runAclParityProbe(container);
     await runMigrationCutoverProbe(container);
     await assertNoResidue(container, pgtapBefore, catalogBefore);
 
