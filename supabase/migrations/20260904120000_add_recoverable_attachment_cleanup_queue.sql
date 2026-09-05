@@ -35,9 +35,12 @@
 -- the browser nor a concurrent retry ever has to guess which.
 --
 -- All of which is reasoning about a browser that writes attachment metadata
--- directly. Section 6c stops it doing that at all: after this migration the API
--- roles keep SELECT and lose INSERT/UPDATE/DELETE/TRUNCATE, and metadata is
--- created and destroyed only by the three SECURITY DEFINER RPCs here. Section 0
+-- directly. Section 6c stops it doing that at all. After this migration
+-- `authenticated` keeps SELECT on `paper_attachments` and loses direct
+-- INSERT/UPDATE/DELETE/TRUNCATE, while `anon` and PUBLIC retain no table
+-- privilege there at all; metadata is created and destroyed only by the three
+-- SECURITY DEFINER RPCs here. The two client roles are stated separately
+-- throughout because they do not end in the same place — see section 6c. Section 0
 -- is what makes that safe to switch on while a browser is mid-request — a
 -- catalog change waits for nobody, so the migration opens with an explicit
 -- three-table barrier, `auth.users` then `papers` then `paper_attachments`,
@@ -1475,13 +1478,16 @@ CREATE POLICY "attachments_owner_delete" ON storage.objects
 --     `authenticated` now that the grant is gone, and that is the point of
 --     defense in depth: if a privilege is ever re-granted by accident, the
 --     ownership predicate is still standing underneath it.
---   * REFERENCES, TRIGGER and MAINTAIN are untouched — the platform default
---     grants that trio on every new public table, and Production's legacy
---     blanket ACL grants them too. None of the three can create or remove a row,
---     and TRIGGER is inert here besides: neither `anon` nor `authenticated`
---     holds CREATE on schema `public`, so neither can define the function a
---     trigger would need. Normalising that trio across every table is a
---     repository-wide posture question and not this migration's to settle.
+--   * REFERENCES, TRIGGER and MAINTAIN stay with `authenticated` and
+--     `service_role` — the platform default grants that trio on every new public
+--     table, and Production's legacy blanket ACL grants them too. None of the
+--     three can create or remove a row, and TRIGGER is inert here besides:
+--     `authenticated` does not hold CREATE on schema `public`, so it cannot
+--     define the function a trigger would need. Normalising that trio across
+--     every table is a repository-wide posture question and not this migration's
+--     to settle. `anon` is the one exception, and not an exception to that rule:
+--     `anon` is meant to reach this table for NOTHING, so it is revoked by role
+--     rather than privilege by privilege — see the note below the grants.
 --
 -- ── This is a deliberate narrowing of 20260731162729 ───────────────────────
 -- `20260731162729_reconcile_data_api_grants.sql` granted `authenticated`
@@ -1491,11 +1497,43 @@ CREATE POLICY "attachments_owner_delete" ON storage.objects
 -- strictly more (serialize, validate, record intent, roll back quota). Every
 -- other grant in that migration stands.
 
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.paper_attachments
-    FROM PUBLIC, anon, authenticated;
+-- ── Why `anon` is revoked by role, and why enumerating privileges cannot ──
+-- The first Production rollout of this migration stopped here, refused by
+-- section 7's `anon must not hold SELECT on paper_attachments`. The cause is a
+-- divergence no local replay can reproduce. Hosted Production was provisioned
+-- under Supabase's OLD platform default, which auto-granted ALL (`arwdDxtm`) on
+-- every new public table to `anon`, `authenticated` and `service_role`. A fresh
+-- `db reset` today gets the NEW default, which grants the API roles only
+-- `Dxtm` — TRUNCATE, REFERENCES, TRIGGER, MAINTAIN — and none of SELECT, INSERT,
+-- UPDATE or DELETE; `20260731162729_reconcile_data_api_grants.sql` then grants
+-- back only what each table's policies expose, and grants `anon` nothing, on any
+-- table. So the two environments differ precisely in the four DML privileges: on
+-- a clean replay `anon` reaches this table for none of them and a revoke naming
+-- the four write privileges looks complete, while on Production `anon` holds all
+-- of `arwdDxtm` and that same revoke leaves SELECT standing (along with
+-- REFERENCES, TRIGGER and MAINTAIN, which it never named in either environment).
+--
+-- Enumerating privileges cannot converge those two starting states, because they
+-- do not disagree about one privilege — they disagree about the whole ACL. So
+-- the revoke below names the ROLE: whatever `anon` and PUBLIC were given, by a
+-- platform default or by any earlier migration, they hold nothing on this table
+-- afterwards, and this migration is idempotent across both histories.
+-- `authenticated` keeps its per-privilege treatment, because there the contract
+-- really is per privilege — SELECT stays, the writes go.
+--
+-- What this does NOT change is RLS. Every policy on this table requires
+-- `auth.uid() = user_id`, which is NULL in an anonymous session, so `anon` could
+-- not read a row even while it held SELECT. The legacy grant was an over-broad
+-- reachable surface rather than an exposure — and it is closed here instead of
+-- being left standing on that technicality, for the same reason the UPDATE note
+-- above gives.
 
--- Restated rather than assumed. The line above must never be able to take the
--- read path with it, and a replay that somehow arrives without it fails in
+REVOKE ALL ON TABLE public.paper_attachments FROM PUBLIC, anon;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.paper_attachments
+    FROM authenticated;
+
+-- Restated rather than assumed. The lines above must never be able to take the
+-- read path with them, and a replay that somehow arrives without it fails in
 -- section 7 rather than shipping an unreadable attachment list.
 GRANT SELECT ON TABLE public.paper_attachments TO authenticated;
 
@@ -1569,11 +1607,22 @@ GRANT SELECT ON TABLE public.paper_attachments TO authenticated;
 -- is the third stale-tab symptom, alongside upload and attachment delete, and it
 -- is the reason web-first is a requirement. See docs/deployment.md §6.4.
 
-REVOKE DELETE, TRUNCATE ON TABLE public.papers
-    FROM PUBLIC, anon, authenticated;
+-- `anon` is revoked by role here for the reason section 6c gives, and the gap it
+-- closes is the wider of the two. Production's legacy ACL grants `anon` all of
+-- SELECT/INSERT/UPDATE/DELETE/TRUNCATE on this table. A revoke naming only
+-- DELETE and TRUNCATE would have left `anon` holding SELECT, INSERT and UPDATE —
+-- and, unlike section 6c, section 7 never asserted otherwise, so this migration
+-- would have COMMITTED in that state rather than refusing. It is the silent half
+-- of the same defect: `supabase/tests/database/003` has always required `anon` to
+-- hold none of the five here and has always passed, because it only ever runs on
+-- a clean replay where `anon` starts with nothing to lose. Section 7 now asserts
+-- all five, and `scripts/e2e-local.mjs` seeds the legacy ACL before it checks.
 
--- Restated so the revoke above can never take an ordinary product capability
--- with it. A replay that somehow lands without these fails in section 7 rather
+REVOKE ALL ON TABLE public.papers FROM PUBLIC, anon;
+REVOKE DELETE, TRUNCATE ON TABLE public.papers FROM authenticated;
+
+-- Restated so the revokes above can never take an ordinary product capability
+-- with them. A replay that somehow lands without these fails in section 7 rather
 -- than shipping a library nobody can add to or edit.
 GRANT SELECT, INSERT, UPDATE ON TABLE public.papers TO authenticated;
 
@@ -2005,9 +2054,10 @@ BEGIN
   END IF;
 
   -- ── The post-migration client authority model ──
-  -- SELECT survives; every write privilege is gone from every browser role.
-  -- Asserted per privilege and per role rather than as one aggregate, so a
-  -- failure says exactly which door was left open.
+  -- `authenticated` keeps SELECT and loses every write privilege; `anon` and
+  -- PUBLIC keep nothing at all, SELECT included. Asserted per privilege and per
+  -- role rather than as one aggregate, so a failure says exactly which door was
+  -- left open — and because the two client roles do not end in the same place.
   IF NOT has_table_privilege('authenticated', 'public.paper_attachments', 'SELECT') THEN
     RAISE EXCEPTION 'attachment_cleanup: authenticated must keep SELECT on paper_attachments';
   END IF;
@@ -2088,6 +2138,14 @@ BEGIN
       RAISE EXCEPTION
         'attachment_cleanup: authenticated must not hold % on papers — a paper deletion cascades attachment metadata away, so it must go through delete_papers_with_attachment_cleanup', v_fn;
     END IF;
+  END LOOP;
+  -- All five, not only the two this section revokes from `authenticated`. `anon`
+  -- is meant to reach this table for nothing at all, and checking only
+  -- DELETE/TRUNCATE is precisely what would have let a Production replay commit
+  -- while `anon` still held SELECT, INSERT and UPDATE from the legacy platform
+  -- ACL. `has_table_privilege` resolves PUBLIC grants too, so this also fails if
+  -- the surface is reinstated without naming `anon`.
+  FOREACH v_fn IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] LOOP
     IF has_table_privilege('anon', 'public.papers', v_fn) THEN
       RAISE EXCEPTION 'attachment_cleanup: anon must not hold % on papers', v_fn;
     END IF;
@@ -2095,9 +2153,8 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_class c, aclexplode(c.relacl) a
      WHERE c.oid = 'public.papers'::regclass AND a.grantee = 0
-       AND a.privilege_type IN ('DELETE', 'TRUNCATE')
   ) THEN
-    RAISE EXCEPTION 'attachment_cleanup: papers must grant no DELETE or TRUNCATE to PUBLIC';
+    RAISE EXCEPTION 'attachment_cleanup: papers must grant nothing to PUBLIC';
   END IF;
 
   -- ── …and the RPC that replaces the revoked capability still works ──
