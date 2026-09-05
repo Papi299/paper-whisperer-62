@@ -35,9 +35,12 @@
 -- the browser nor a concurrent retry ever has to guess which.
 --
 -- All of which is reasoning about a browser that writes attachment metadata
--- directly. Section 6c stops it doing that at all: after this migration the API
--- roles keep SELECT and lose INSERT/UPDATE/DELETE/TRUNCATE, and metadata is
--- created and destroyed only by the three SECURITY DEFINER RPCs here. Section 0
+-- directly. Section 6c stops it doing that at all. After this migration
+-- `authenticated` keeps SELECT on `paper_attachments` and loses direct
+-- INSERT/UPDATE/DELETE/TRUNCATE, while `anon` and PUBLIC retain no table
+-- privilege there at all; metadata is created and destroyed only by the three
+-- SECURITY DEFINER RPCs here. The two client roles are stated separately
+-- throughout because they do not end in the same place — see section 6c. Section 0
 -- is what makes that safe to switch on while a browser is mid-request — a
 -- catalog change waits for nobody, so the migration opens with an explicit
 -- three-table barrier, `auth.users` then `papers` then `paper_attachments`,
@@ -2051,9 +2054,10 @@ BEGIN
   END IF;
 
   -- ── The post-migration client authority model ──
-  -- SELECT survives; every write privilege is gone from every browser role.
-  -- Asserted per privilege and per role rather than as one aggregate, so a
-  -- failure says exactly which door was left open.
+  -- `authenticated` keeps SELECT and loses every write privilege; `anon` and
+  -- PUBLIC keep nothing at all, SELECT included. Asserted per privilege and per
+  -- role rather than as one aggregate, so a failure says exactly which door was
+  -- left open — and because the two client roles do not end in the same place.
   IF NOT has_table_privilege('authenticated', 'public.paper_attachments', 'SELECT') THEN
     RAISE EXCEPTION 'attachment_cleanup: authenticated must keep SELECT on paper_attachments';
   END IF;
