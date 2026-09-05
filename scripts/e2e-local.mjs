@@ -2531,6 +2531,269 @@ async function runAuthCutoverCases(container) {
   }
 }
 
+const MCUT_USER = "cc000000-0000-0000-0000-0000000000e0";
+const MCUT_KEEP = "cc000000-0000-0000-0000-0000000000e1";
+const MCUT_DISCARD = "cc000000-0000-0000-0000-0000000000e2";
+
+// The lock sequence of `merge_exact_duplicates` AS DEPLOYED IN PRODUCTION TODAY,
+// statement for statement, verified against the live Production catalog (which
+// contains no LOCK TABLE of any kind): read `papers` (ACCESS SHARE), write
+// `paper_attachments` (ROW EXCLUSIVE), and only THEN `DELETE FROM papers`
+// (ROW EXCLUSIVE). Child before parent. Reproduced with raw statements rather
+// than by installing the old function body, so the negative control cannot
+// perturb the catalog the residue check fingerprints.
+function mcutLegacyChildSql() {
+  return (
+    `SELECT count(*) FROM public.papers WHERE id IN ('${MCUT_KEEP}','${MCUT_DISCARD}');\n` +
+    `UPDATE public.paper_attachments SET paper_id='${MCUT_KEEP}' WHERE paper_id='${MCUT_DISCARD}';\n` +
+    `SELECT 'MA_HOLDS_CHILD';\n`
+  );
+}
+function mcutLegacyParentSql() {
+  return `DELETE FROM public.papers WHERE id='${MCUT_DISCARD}';\nSELECT 'MA_DELETED';\n`;
+}
+
+// Phase 2's gate, mirrored from
+// `20260904120000_add_recoverable_attachment_cleanup_queue.sql` section 0. The
+// migration's own copy is authoritative — a clean replay is what proves it
+// parses and passes; this copy is what proves it FIRES.
+const MCUT_PHASE_GATE_SQL =
+  "DO $g$\nDECLARE v_src TEXT; v_pids TEXT; v_count INTEGER;\nBEGIN\n" +
+  "  SELECT pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure) INTO v_src;\n" +
+  "  IF position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN v_src) = 0\n" +
+  "     OR position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN v_src)\n" +
+  "        > position('UPDATE paper_attachments' IN v_src) THEN\n" +
+  "    RAISE EXCEPTION 'attachment_cleanup: PHASE 1 MISSING.';\n" +
+  "  END IF;\n" +
+  "  SELECT count(*) INTO v_count FROM auth.users;\n" +
+  "  IF v_count > 0 THEN\n" +
+  "    SELECT count(*), string_agg(DISTINCT a.pid::text, ', ' ORDER BY a.pid::text) INTO v_count, v_pids\n" +
+  "      FROM pg_stat_activity a\n" +
+  "     WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()\n" +
+  "       AND a.backend_type = 'client backend' AND a.xact_start IS NOT NULL\n" +
+  "       AND a.xact_start < (SELECT b.xact_start FROM pg_stat_activity b WHERE b.pid = pg_backend_pid());\n" +
+  "    IF v_count > 0 THEN\n" +
+  "      RAISE EXCEPTION 'attachment_cleanup: DRAIN NOT PROVEN. % older client transaction(s) (pid %).', v_count, v_pids;\n" +
+  "    END IF;\n" +
+  "  END IF;\nEND\n$g$;\n";
+
+/** The merge fixture: a keep paper, a discard paper, and an attachment on the discard. */
+function mcutFixtureSql() {
+  return (
+    `INSERT INTO auth.users (id, email) VALUES ('${MCUT_USER}','merge-cutover@paperlume.test')\n` +
+    `ON CONFLICT DO NOTHING;\n` +
+    `UPDATE public.user_entitlements SET storage_quota_bytes=1000000 WHERE user_id='${MCUT_USER}';\n` +
+    `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+    `  ('${MCUT_KEEP}','${MCUT_USER}','Merge keep','[]'::jsonb,1),\n` +
+    `  ('${MCUT_DISCARD}','${MCUT_USER}','Merge discard','[]'::jsonb,2)\n` +
+    `ON CONFLICT (id) DO NOTHING;\n` +
+    `SELECT set_config('request.jwt.claims','{"sub":"${MCUT_USER}","role":"authenticated"}', false);\n` +
+    `INSERT INTO public.paper_attachments (paper_id, user_id, file_path, file_name, file_type, size_bytes)\n` +
+    `  VALUES ('${MCUT_DISCARD}','${MCUT_USER}','${MCUT_USER}/${MCUT_DISCARD}/merge.pdf',\n` +
+    `          'merge.pdf','application/pdf',16)\n` +
+    `ON CONFLICT DO NOTHING;\n` +
+    `SELECT set_config('request.jwt.claims', NULL, false);\n`
+  );
+}
+
+/** Where the attachment lives, and what cleanup state exists for this user. */
+async function mcutState(container) {
+  return (await dbScalar(container,
+    `SELECT (SELECT count(*) FROM public.papers WHERE id='${MCUT_KEEP}') || '|' || ` +
+    `(SELECT count(*) FROM public.papers WHERE id='${MCUT_DISCARD}') || '|' || ` +
+    `(SELECT count(*) FROM public.paper_attachments WHERE user_id='${MCUT_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.paper_attachments WHERE paper_id='${MCUT_KEEP}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${MCUT_USER}') || '|' || ` +
+    `(SELECT count(*) FROM public.attachment_cleanup_tombstone WHERE user_id='${MCUT_USER}');`))
+    .split("|").map((n) => parseInt(n, 10));
+}
+
+/**
+ * Legacy-merge cutover probe
+ * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-06, Cases M-CUT-1…4).
+ *
+ * CORRECTION-04 derived the cutover order against the writers this schema will
+ * have. It has one more that it HAS: `merge_exact_duplicates` as deployed in
+ * Production takes no table lock at all, reaches `papers` under ACCESS SHARE and
+ * ROW SHARE, writes `paper_attachments`, and only then issues
+ * `DELETE FROM papers`. Child before parent — the opposite of a stale bundle's
+ * direct paper deletion. Two historical writers with opposite orders on the same
+ * two tables means no single transaction holding both locks is safe against
+ * both: parent-first cycles with the merge, child-first cycles with the paper
+ * delete. And function replacement is no escape — `CREATE OR REPLACE FUNCTION`
+ * does not wait for in-flight executions (measured: it returned in 32 ms while
+ * the old call was parked mid-body, and that call still completed with the OLD
+ * body).
+ *
+ * Hence two separately committed phases and an observed drain. This proves the
+ * whole argument with real sessions and `pg_locks`:
+ *
+ *   M-CUT-1  the superseded one-transaction topology really does deadlock —
+ *            a negative control that FAILS the suite if it cannot reproduce it;
+ *   M-CUT-2  under the corrected architecture the same interleaving is REFUSED
+ *            by the phase gate before a single lock is taken, and the legacy
+ *            merge then completes with correct data;
+ *   M-CUT-3  a merge that begins after the boundary uses the parent-first body
+ *            and coexists with the barrier;
+ *   M-CUT-4  no lock, process or fixture residue.
+ */
+async function runMergeCutoverCases(container) {
+  const setup = await dockerPsql(container, mcutFixtureSql());
+  if (setup.code !== 0) throw new Error(`merge cutover fixture failed: ${setup.err.trim()}`);
+  const before = await mcutState(container);
+  if (before[0] !== 1 || before[1] !== 1 || before[2] !== 1) {
+    throw new Error(`merge cutover: fixture is not the expected keep/discard/attachment shape (${before.join("|")}).`);
+  }
+
+  let legacy = null;
+  let cutover = null;
+  try {
+    // ── M-CUT-1: negative control — the superseded topology ────────────────
+    legacy = spawnDockerPsql(container);
+    legacy.child.stdin.write("BEGIN;\n" + mcutLegacyChildSql());
+    await waitUntil(() => /MA_HOLDS_CHILD/.test(legacy.readOut()), PROBE_WORKER_MS,
+      "merge cutover M-CUT-1: the legacy merge never re-parented the attachment.");
+    const childHeld = await dbScalar(container,
+      `SELECT count(*) FROM pg_locks WHERE locktype='relation' ` +
+      `AND relation='public.paper_attachments'::regclass AND mode='RowExclusiveLock' AND granted;`);
+    if (parseInt(childHeld || "0", 10) < 1) {
+      throw new Error("merge cutover M-CUT-1: the legacy merge does not hold the child write lock — the control cannot reproduce anything.");
+    }
+
+    // The CORRECTION-05 barrier, with NO phase gate — i.e. the architecture as
+    // it stood before this correction.
+    cutover = spawnDockerPsql(container);
+    cutover.child.stdin.end(
+      "BEGIN;\n" + CUT_BARRIER_SQL + "SELECT 'MB_BARRIER';\nCOMMIT;\nSELECT 'MB_COMMITTED';\n");
+    await waitUntil(async () => (await countTableLockWaiters(container, "AccessExclusiveLock")) >= 1,
+      PROBE_BARRIER_MS, "merge cutover M-CUT-1: the barrier never queued on paper_attachments.");
+
+    // Now the legacy body's next statement: the parent delete it has always done.
+    legacy.child.stdin.write(mcutLegacyParentSql());
+    const [mbRes] = await Promise.all([
+      withTimeout(cutover.done, FIN_HOLD_MS, "merge cutover M-CUT-1: cutover exit"),
+    ]);
+    cutover = null;
+    const control = mbRes.out + mbRes.err;
+    if (!/deadlock detected/i.test(control)) {
+      throw new Error(
+        "merge cutover M-CUT-1: the negative control did NOT reproduce the deadlock, so it proves nothing. " +
+        "Either the legacy ordering or the barrier changed; re-derive before trusting any case below. " +
+        `Cutover session said: ${control.trim().slice(0, 300)}`);
+    }
+    const detail = (control.match(/DETAIL:[\s\S]*?(?=\nHINT|\nERROR|$)/i) || [""])[0].replace(/\s+/g, " ").trim();
+    log(`cutover probe M-CUT-1 OK (negative control REPRODUCED the superseded deadlock): ${detail.slice(0, 220)}`);
+
+    // The legacy merge itself survived — Postgres chose the migration as victim.
+    legacy.child.stdin.end("COMMIT;\nSELECT 'MA_COMMITTED';\n");
+    const maRes = await withTimeout(legacy.done, FIN_HOLD_MS, "merge cutover M-CUT-1: legacy merge exit");
+    legacy = null;
+    if (maRes.code !== 0 || !/MA_COMMITTED/.test(maRes.out)) {
+      throw new Error(`merge cutover M-CUT-1: the legacy merge did not commit (code=${maRes.code}).`);
+    }
+
+    // ── M-CUT-2: the corrected architecture, same interleaving ─────────────
+    // Re-create the discard paper so the same race can be run again.
+    const reseed = await dockerPsql(container,
+      `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+      `  ('${MCUT_DISCARD}','${MCUT_USER}','Merge discard','[]'::jsonb,2)\n` +
+      `ON CONFLICT (id) DO NOTHING;\n` +
+      `UPDATE public.paper_attachments SET paper_id='${MCUT_DISCARD}' WHERE user_id='${MCUT_USER}';\n`);
+    if (reseed.code !== 0) throw new Error(`merge cutover: could not reseed for M-CUT-2: ${reseed.err.trim()}`);
+
+    legacy = spawnDockerPsql(container);
+    legacy.child.stdin.write("BEGIN;\n" + mcutLegacyChildSql());
+    await waitUntil(() => /MA_HOLDS_CHILD/.test(legacy.readOut()), PROBE_WORKER_MS,
+      "merge cutover M-CUT-2: the legacy merge never re-parented the attachment.");
+
+    // Phase 2 as it now stands: the gate runs BEFORE any lock.
+    const gated = await dockerPsql(container,
+      "BEGIN;\n" + MCUT_PHASE_GATE_SQL + CUT_BARRIER_SQL + "COMMIT;\n");
+    if (gated.code === 0) {
+      throw new Error("merge cutover M-CUT-2: the cutover was NOT refused while a legacy merge was in flight — the phase gate did not fire.");
+    }
+    if (!/DRAIN NOT PROVEN/i.test(gated.err + gated.out)) {
+      throw new Error(`merge cutover M-CUT-2: the cutover failed for the wrong reason: ${(gated.err || gated.out).trim().slice(0, 250)}`);
+    }
+    if (/deadlock detected/i.test(gated.err + gated.out)) {
+      throw new Error("merge cutover M-CUT-2: the cutover DEADLOCKED instead of refusing — the gate must run before the barrier.");
+    }
+
+    // The legacy merge is unaffected and completes correctly.
+    legacy.child.stdin.write(mcutLegacyParentSql());
+    legacy.child.stdin.end("COMMIT;\nSELECT 'MA2_COMMITTED';\n");
+    const ma2 = await withTimeout(legacy.done, FIN_HOLD_MS, "merge cutover M-CUT-2: legacy merge exit");
+    legacy = null;
+    if (ma2.code !== 0 || !/MA2_COMMITTED/.test(ma2.out) || !/MA_DELETED/.test(ma2.out)) {
+      throw new Error(`merge cutover M-CUT-2: the legacy merge did not complete cleanly (code=${ma2.code}).`);
+    }
+    // No half-merge: the kept paper survives, the discard is gone, and the
+    // attachment moved with it rather than cascading away.
+    const after = await mcutState(container);
+    const [keep, discard, attachTotal, attachOnKeep, queued, tombstoned] = after;
+    if (keep !== 1 || discard !== 0) {
+      throw new Error(`merge cutover M-CUT-2: half-merge — expected the keep paper present and the discard gone, got keep=${keep} discard=${discard}.`);
+    }
+    if (attachTotal !== 1 || attachOnKeep !== 1) {
+      throw new Error(`merge cutover M-CUT-2: attachment metadata was lost or left behind (total=${attachTotal}, on-keep=${attachOnKeep}) — a cascade took it.`);
+    }
+    if (queued !== 0 || tombstoned !== 0) {
+      throw new Error(`merge cutover M-CUT-2: cleanup state was manufactured for a merge that stranded nothing (queue=${queued}, tombstone=${tombstoned}).`);
+    }
+    log("cutover probe M-CUT-2 OK: with a legacy merge in flight the cutover was REFUSED by the phase gate before taking a lock — no deadlock — and the merge then completed with the attachment on the kept paper, no half-merge and no cleanup row invented.");
+
+    // ── M-CUT-3: a merge that begins after the boundary ────────────────────
+    // The installed body is phase 1's, which takes the parent lock first. It
+    // therefore conforms to the barrier's order and cannot cycle with it.
+    const conforms = await dbScalar(container,
+      `SELECT (position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN v) > 0 ` +
+      `AND position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN v) ` +
+      `  < position('UPDATE paper_attachments' IN v))::text ` +
+      `FROM (SELECT pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure) v) t;`);
+    if (conforms !== "true") {
+      throw new Error("merge cutover M-CUT-3: the installed merge does not lock papers before re-parenting attachments — phase 1 is not in effect.");
+    }
+    const reseed3 = await dockerPsql(container,
+      `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+      `  ('${MCUT_DISCARD}','${MCUT_USER}','Merge discard','[]'::jsonb,2)\n` +
+      `ON CONFLICT (id) DO NOTHING;\n` +
+      `UPDATE public.paper_attachments SET paper_id='${MCUT_DISCARD}' WHERE user_id='${MCUT_USER}';\n`);
+    if (reseed3.code !== 0) throw new Error(`merge cutover: could not reseed for M-CUT-3: ${reseed3.err.trim()}`);
+
+    const realMerge = await dockerPsql(container,
+      `SELECT set_config('request.jwt.claims','{"sub":"${MCUT_USER}","role":"authenticated"}', false);\n` +
+      `SELECT public.merge_exact_duplicates('${MCUT_KEEP}'::uuid, ARRAY['${MCUT_DISCARD}']::uuid[]);\n` +
+      `SELECT 'MERGED';\n` +
+      `SELECT set_config('request.jwt.claims', NULL, false);\n`);
+    if (realMerge.code !== 0 || !/MERGED/.test(realMerge.out)) {
+      throw new Error(`merge cutover M-CUT-3: the corrected merge RPC failed: ${(realMerge.err || realMerge.out).trim().slice(0, 250)}`);
+    }
+    const after3 = await mcutState(container);
+    if (after3[0] !== 1 || after3[1] !== 0 || after3[2] !== 1 || after3[3] !== 1 || after3[4] !== 0 || after3[5] !== 0) {
+      throw new Error(`merge cutover M-CUT-3: post-boundary merge produced the wrong state (keep|discard|attach|on-keep|queue|tombstone = ${after3.join("|")}).`);
+    }
+    log("cutover probe M-CUT-3 OK: a merge begun after the boundary used the parent-first body, re-parented the attachment and stranded nothing.");
+
+    // ── M-CUT-4: residue ──────────────────────────────────────────────────
+    const residue =
+      (await countAuthLockWaiters(container, "ShareRowExclusiveLock"))
+      + (await countPapersLockWaiters(container, "ShareLock"))
+      + (await countPapersLockWaiters(container, "RowExclusiveLock"))
+      + (await countTableLockWaiters(container, "AccessExclusiveLock"))
+      + (await countTableLockWaiters(container, "RowExclusiveLock"));
+    if (residue !== 0) {
+      throw new Error(`merge cutover M-CUT-4: ${residue} ungranted relation-lock waiter(s) remain.`);
+    }
+    log("cutover probe M-CUT-4 OK: no relation-lock waiters remain after the merge-cutover cases.");
+  } catch (err) {
+    await killPsql(cutover);
+    await killPsql(legacy);
+    throw err;
+  } finally {
+    await dockerPsql(container, `DELETE FROM auth.users WHERE id='${MCUT_USER}';\n`);
+  }
+}
+
 /**
  * Migration-cutover probe
  * (ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001-CORRECTION-03, Case CUT-1).
@@ -2731,6 +2994,14 @@ async function runMigrationCutoverProbe(container) {
     const reopenAuth = await dockerPsql(container, CUT_LEGACY_GRANT_SQL);
     if (reopenAuth.code !== 0) throw new Error(`cutover probe: could not restore the pre-cutover grants for the auth cases: ${reopenAuth.err.trim()}`);
     await runAuthCutoverCases(container);
+
+    // ── The writer this schema HAS, as opposed to the ones it will have ───
+    // Every case above races the cutover against writers as they exist after
+    // the migration. The legacy `merge_exact_duplicates` still deployed in
+    // Production runs child-before-parent, which is the one order the barrier
+    // cannot tolerate — and no reordering fixes it, because a stale paper
+    // delete runs parent-before-child. Hence two phases and a drain.
+    await runMergeCutoverCases(container);
   } finally {
     await killPsql(newcomer);
     await killPsql(cutover);

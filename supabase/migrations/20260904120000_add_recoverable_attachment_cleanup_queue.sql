@@ -123,7 +123,8 @@
 -- the gap between "authorized" and "committed".
 --
 -- The fix is to make that gap empty. An explicit ACCESS EXCLUSIVE lock, taken as
--- the migration's first act and held to commit, gives three properties, and the
+-- the migration's first LOCKING act (the phase gate above takes none) and held
+-- to commit, gives three properties, and the
 -- correction needs all three:
 --
 --   * it conflicts with ROW EXCLUSIVE, so acquiring it WAITS for every open
@@ -278,11 +279,43 @@
 --   * `finalize_attachment_upload`: same shape as the INSERT above.
 --   * `delete_papers_with_attachment_cleanup` and `merge_exact_duplicates` both
 --     write `paper_attachments` and then `papers`, which does NOT conform — so
---     each now takes `LOCK TABLE public.papers IN ROW EXCLUSIVE MODE` before it
---     touches `paper_attachments` at all (sections 4 and 4b). ROW EXCLUSIVE is
---     self-compatible and is the lock their own DELETE/UPDATE takes moments
---     later, so ordinary concurrency is unchanged; all it does is fix WHEN they
---     join the order. Neither needs a lock on `auth.users`.
+--     each takes `LOCK TABLE public.papers IN ROW EXCLUSIVE MODE` before it
+--     touches `paper_attachments` at all. ROW EXCLUSIVE is self-compatible and
+--     is the lock their own DELETE/UPDATE takes moments later, so ordinary
+--     concurrency is unchanged; all it does is fix WHEN they join the order.
+--     Neither needs a lock on `auth.users`. The first is defined in section 4
+--     below. The second is NOT defined here — it is the whole reason this file
+--     is phase 2, and it is installed by
+--     `20260904110000_prepare_merge_lock_order.sql`, which must have committed
+--     and drained before this file runs. The phase gate above enforces that.
+--
+-- ── Why the conforming set is not enough on its own ───────────────────────
+-- Everything above reasons about writers as they will exist AFTER this
+-- migration. The cutover also has to survive the writers that exist WHILE it
+-- runs, and one of those does not conform: `merge_exact_duplicates` as deployed
+-- today takes no table lock at all, reaches `papers` only under ACCESS SHARE and
+-- ROW SHARE, writes `paper_attachments`, and only then issues
+-- `DELETE FROM papers`. Child before parent — the exact opposite of a stale
+-- bundle's direct paper deletion, which goes parent then child. Two historical
+-- writers with opposite orders on the same two tables means NO single
+-- transaction that must hold both locks can be safe against both of them:
+-- parent-first cycles with the merge, child-first cycles with the paper delete
+-- (which is the deadlock the parent lock was added to close in the first
+-- place). Reproduced, not argued — the migration was the victim:
+--
+--     ERROR:  deadlock detected
+--     DETAIL:  Process 325 waits for AccessExclusiveLock on paper_attachments;
+--              Process 322 waits for RowExclusiveLock on papers.
+--
+-- Adding an intermediate table to the barrier does not rescue it: `paper_tags`
+-- and `paper_projects` are cascade children of `papers` AND are written by the
+-- legacy merge before it touches `paper_attachments`, so the two writers
+-- disagree about their order too. The only remaining move is to stop the
+-- non-conforming writer from existing before this file runs, which cannot be
+-- done inside this transaction — `CREATE OR REPLACE FUNCTION` does not drain
+-- in-flight invocations (measured: it returned in 32 ms and the running call
+-- still completed with the old body). Hence a separately committed phase 1 and
+-- an observed drain. See that file's header and docs/deployment.md §6.4.
 --
 -- With that, the proof is two sentences. Once the first barrier is granted, no
 -- session is holding a conflicting `auth.users` lock, so no Auth cascade can be
@@ -337,6 +370,81 @@
 -- "milliseconds", and milliseconds is the kind of argument this correction
 -- exists to stop making.
 BEGIN;
+
+-- ── PHASE GATE — checked before a single lock is taken ──────────────────────
+-- This file is PHASE 2 of 2. It is safe only once
+-- `20260904110000_prepare_merge_lock_order.sql` has committed AND every
+-- transaction that predates it has ended. Both conditions are asserted here,
+-- fail-closed, BEFORE the barrier — because by the time the barrier is held it
+-- is already too late to discover either.
+DO $phase_gate$
+DECLARE
+  v_src   TEXT;
+  v_pids  TEXT;
+  v_count INTEGER;
+BEGIN
+  -- ── 1. Phase 1 has landed ──
+  -- The legacy `merge_exact_duplicates` writes `paper_attachments` and only then
+  -- `papers`. The barrier below takes `papers` and then `paper_attachments`.
+  -- Those two orders form a cycle, and Postgres resolves it by killing one of
+  -- them — in testing, this migration. Phase 1 retires that body.
+  SELECT pg_get_functiondef('public.merge_exact_duplicates(uuid,uuid[])'::regprocedure)
+    INTO v_src;
+  IF position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN v_src) = 0
+     OR position('LOCK TABLE public.papers IN ROW EXCLUSIVE MODE' IN v_src)
+        > position('UPDATE paper_attachments' IN v_src) THEN
+    RAISE EXCEPTION
+      'attachment_cleanup: PHASE 1 MISSING. Apply 20260904110000_prepare_merge_lock_order.sql first, then observe the drain in docs/deployment.md §6.4. The installed merge_exact_duplicates still re-parents paper_attachments before it locks papers, and this migration deadlocks against it.';
+  END IF;
+
+  -- ── 2. The drain has actually happened ──
+  -- Phase 1 changes the body only for calls that BEGIN after it commits;
+  -- `CREATE OR REPLACE FUNCTION` does not wait for executions already running,
+  -- and one that began earlier runs the old body to completion (measured on this
+  -- PostgreSQL 17.6: the replacement returned in 32 ms and the in-flight call
+  -- still returned the old body). So the boundary has to be observed, not
+  -- assumed — and `supabase db push` will happily apply both files back to back
+  -- with no boundary at all, which is exactly what this refuses.
+  --
+  -- The test is the conservative one, and it is conservative on purpose: every
+  -- transaction that could still be inside the pre-phase-1 body necessarily
+  -- began before phase 1 committed, and therefore before THIS transaction
+  -- started. So if no client transaction older than this one is open, none can
+  -- be inside that body — with no window, and with no dependence on which locks
+  -- it happens to hold yet or on its isolation level. Both of those weaker
+  -- signals were considered and rejected: a lock-based test races (the old body
+  -- takes the child lock only part-way through, so it can acquire it between the
+  -- check and the barrier), and a role-privilege test cannot tell PostgREST's
+  -- `authenticator` apart from the platform's own service connections.
+  --
+  -- It is guarded by the one condition that makes the question meaningful. The
+  -- body being drained is reachable only through the merge RPC, which raises
+  -- 'Authentication required' unless `auth.uid()` is set and then requires the
+  -- caller to own the papers — and `papers` cascades from `auth.users`. So in a
+  -- database with no Auth users, no invocation can exist to drain, and the only
+  -- transactions that could ever trip the test are the platform's own
+  -- (PostgREST's schema reload, realtime's and storage's migrations) during a
+  -- bootstrap or a replay. That is not a drain failure and must not be reported
+  -- as one. In any database with users — which is every real rollout, and
+  -- Production specifically — the test is fully armed.
+  SELECT count(*) INTO v_count FROM auth.users;
+  IF v_count > 0 THEN
+    SELECT count(*), string_agg(DISTINCT a.pid::text, ', ' ORDER BY a.pid::text)
+      INTO v_count, v_pids
+      FROM pg_stat_activity a
+     WHERE a.datname = current_database()
+       AND a.pid <> pg_backend_pid()
+       AND a.backend_type = 'client backend'
+       AND a.xact_start IS NOT NULL
+       AND a.xact_start < (SELECT b.xact_start FROM pg_stat_activity b WHERE b.pid = pg_backend_pid());
+    IF v_count > 0 THEN
+      RAISE EXCEPTION
+        'attachment_cleanup: DRAIN NOT PROVEN. % client transaction(s) older than this one are still open (pid %). Any of them may be executing the pre-phase-1 merge_exact_duplicates body, which deadlocks against the barrier below — this migration was the victim when that race was reproduced. Do NOT retry blindly: apply 20260904110000 first, wait for those transactions to end, verify with the query in docs/deployment.md §6.4, and only then apply this file.',
+        v_count, v_pids;
+    END IF;
+  END IF;
+END
+$phase_gate$;
 
 LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.papers IN SHARE MODE;
@@ -826,299 +934,6 @@ COMMENT ON FUNCTION public.delete_papers_with_attachment_cleanup(UUID[]) IS
 REVOKE ALL ON FUNCTION public.delete_papers_with_attachment_cleanup(UUID[])
     FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.delete_papers_with_attachment_cleanup(UUID[]) TO authenticated;
-
-
--- ═════════════════════════════════════════════════════════════════════════════
--- 4b. merge_exact_duplicates — joins the same lock order, and nothing else
--- ═════════════════════════════════════════════════════════════════════════════
---
--- Re-declared here for ONE added statement. This is the only other function in
--- the schema that writes both `paper_attachments` and `papers`, and it writes
--- them child-first, which is the direction section 0's cutover cannot tolerate.
---
--- It is otherwise byte-identical to its definition in
--- `20260817120000_add_structured_author_provenance.sql` — same signature, same
--- SECURITY DEFINER, same pinned `search_path`, same body — and the merge suites
--- (`005`, `009`, `010`) are what hold that claim honest rather than review.
---
--- It is worth being explicit that this function is NOT an attachment-cleanup
--- bypass and never was: step 4 re-parents `paper_attachments` onto the kept
--- paper BEFORE step 5 deletes the discards, so no metadata cascades away and no
--- Storage object is ever left undescribed. `file_path` is not touched, no quota
--- trigger fires, and Storage is not addressed. The change below is about lock
--- ordering at migration time and nothing else.
-
-CREATE OR REPLACE FUNCTION public.merge_exact_duplicates(
-  p_keep_id uuid,
-  p_discard_ids uuid[]
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_user_id uuid := auth.uid();
-  v_owned   integer;
-  v_merged  record;
-BEGIN
-  -- ══ 1. Validation ════════════════════════════════════════════════════════
-  -- Every check runs before the first persistent mutation, so a rejected call
-  -- is provably side-effect free. The function is SECURITY DEFINER and its owner
-  -- (postgres) holds BYPASSRLS, so these explicit auth.uid() predicates — not
-  -- row-level security — are the authorization boundary.
-
-  IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'Authentication required';
-  END IF;
-
-  IF p_keep_id IS NULL THEN
-    RAISE EXCEPTION 'Keep paper id is required';
-  END IF;
-
-  IF p_discard_ids IS NULL OR cardinality(p_discard_ids) = 0 THEN
-    RAISE EXCEPTION 'At least one discard paper id is required';
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM unnest(p_discard_ids) AS d WHERE d IS NULL) THEN
-    RAISE EXCEPTION 'Discard paper ids must not contain NULL';
-  END IF;
-
-  -- The keep paper must never be reachable through its own discard list.
-  IF p_keep_id = ANY(p_discard_ids) THEN
-    RAISE EXCEPTION 'Keep paper cannot also be listed as a discard paper';
-  END IF;
-
-  -- Repeated discard ids are malformed input, not a merge instruction: reject
-  -- rather than silently normalising, so the caller learns its request was wrong.
-  IF cardinality(p_discard_ids) <>
-     (SELECT count(DISTINCT d)::integer FROM unnest(p_discard_ids) AS d) THEN
-    RAISE EXCEPTION 'Discard paper ids must be unique';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM papers WHERE id = p_keep_id AND user_id = v_user_id
-  ) THEN
-    RAISE EXCEPTION 'Keep paper not found or access denied';
-  END IF;
-
-  -- All-or-nothing: every discard id must resolve to an existing caller-owned
-  -- paper. Counting owned rows rejects unknown and foreign ids alike.
-  SELECT count(*)::integer INTO v_owned
-  FROM papers
-  WHERE id = ANY(p_discard_ids) AND user_id = v_user_id;
-
-  IF v_owned <> cardinality(p_discard_ids) THEN
-    RAISE EXCEPTION 'One or more discard papers not found or access denied';
-  END IF;
-
-  -- ══ 1b. Join the global lock order (added by CORRECTION-04) ══════════════
-  -- The ONLY line that differs from the definition in
-  -- 20260817120000_add_structured_author_provenance.sql. Everything else below
-  -- is that function byte for byte.
-  --
-  -- This function updates `paper_attachments` (step 4) and only then deletes and
-  -- updates `papers` (steps 5-6) — the opposite of the order section 0 of this
-  -- migration establishes. Its cutover holds SHARE on `papers` while waiting for
-  -- ACCESS EXCLUSIVE on `paper_attachments`, so a merge sitting between steps 4
-  -- and 5 would be waiting for the migration on `papers` while the migration
-  -- waited for it on `paper_attachments`: a deadlock, in a window of two
-  -- adjacent statements. Taking the lock step 5 needs anyway, here, removes the
-  -- window rather than making it small.
-  --
-  -- ROW EXCLUSIVE is self-compatible and is what the DELETE below acquires in
-  -- any case, so concurrency between merges, inserts, updates and deletes is
-  -- exactly as it was. Only DDL-strength locks — which is to say this migration
-  -- — can now see the difference.
-  LOCK TABLE public.papers IN ROW EXCLUSIVE MODE;
-
-  -- ══ 2. Capture the merged metadata before anything is deleted ════════════
-  WITH keep AS (
-    SELECT * FROM papers WHERE id = p_keep_id
-  ),
-  discard AS (
-    SELECT * FROM papers WHERE id = ANY(p_discard_ids)
-  ),
-  -- Deterministic source order for list metadata: the keep paper first, then
-  -- the discards by (created_at, id).
-  ordered AS (
-    SELECT s.keywords, s.raw_keywords, s.mesh_terms, s.substances,
-           row_number() OVER (ORDER BY s.grp, s.created_at, s.id) AS rn
-    FROM (
-      SELECT 0 AS grp, k.created_at, k.id,
-             k.keywords, k.raw_keywords, k.mesh_terms, k.substances
-      FROM keep k
-      UNION ALL
-      SELECT 1, d.created_at, d.id,
-             d.keywords, d.raw_keywords, d.mesh_terms, d.substances
-      FROM discard d
-    ) s
-  ),
-  -- Unpivot the four list columns, keeping each element's source row (rn) and
-  -- its position inside its own JSON array (ord). Anything that is not a JSON
-  -- array — including SQL NULL — contributes nothing.
-  elems AS (
-    SELECT f.field, e.val, o.rn, e.ord
-    FROM ordered o
-    CROSS JOIN LATERAL (VALUES
-      ('keywords'::text,     o.keywords),
-      ('raw_keywords'::text, o.raw_keywords),
-      ('mesh_terms'::text,   o.mesh_terms),
-      ('substances'::text,   o.substances)
-    ) AS f(field, arr)
-    CROSS JOIN LATERAL jsonb_array_elements_text(
-      CASE WHEN jsonb_typeof(f.arr) = 'array' THEN f.arr ELSE '[]'::jsonb END
-    ) WITH ORDINALITY AS e(val, ord)
-  ),
-  -- Exact-value deduplication that retains the first occurrence only.
-  firsts AS (
-    SELECT DISTINCT ON (field, val) field, val, rn, ord
-    FROM elems
-    ORDER BY field, val, rn, ord
-  ),
-  lists AS (
-    SELECT
-      COALESCE((SELECT jsonb_agg(val ORDER BY rn, ord) FROM firsts WHERE field = 'keywords'),     '[]'::jsonb) AS keywords,
-      COALESCE((SELECT jsonb_agg(val ORDER BY rn, ord) FROM firsts WHERE field = 'raw_keywords'), '[]'::jsonb) AS raw_keywords,
-      COALESCE((SELECT jsonb_agg(val ORDER BY rn, ord) FROM firsts WHERE field = 'mesh_terms'),   '[]'::jsonb) AS mesh_terms,
-      COALESCE((SELECT jsonb_agg(val ORDER BY rn, ord) FROM firsts WHERE field = 'substances'),   '[]'::jsonb) AS substances
-  ),
-  -- The single source row that supplies BOTH raw study-type representations:
-  -- the keep paper first (grp 0), then the discards by (created_at, id). Rows
-  -- with no raw_study_type cannot establish the pair and are not candidates.
-  provenance AS (
-    SELECT s.raw_study_type, s.raw_publication_types
-    FROM (
-      SELECT 0 AS grp, k.created_at, k.id, k.raw_study_type, k.raw_publication_types
-      FROM keep k
-      UNION ALL
-      SELECT 1, d.created_at, d.id, d.raw_study_type, d.raw_publication_types
-      FROM discard d
-    ) s
-    WHERE s.raw_study_type IS NOT NULL
-    ORDER BY s.grp, s.created_at, s.id
-    LIMIT 1
-  ),
-  -- The single source row that supplies BOTH the authors array and the
-  -- structured provenance describing it, under the function's pre-existing
-  -- authors rule: the keep paper first (grp 0), then the discards by
-  -- (created_at, id), considering only rows with a non-empty authors array.
-  -- Selecting the ROW rather than each column independently is what keeps the
-  -- names and the structure describing them from coming out of different
-  -- records.
-  author_source AS (
-    SELECT s.authors, s.author_provenance
-    FROM (
-      SELECT 0 AS grp, k.created_at, k.id, k.authors, k.author_provenance
-      FROM keep k
-      UNION ALL
-      SELECT 1, d.created_at, d.id, d.authors, d.author_provenance
-      FROM discard d
-    ) s
-    WHERE jsonb_typeof(s.authors) = 'array' AND jsonb_array_length(s.authors) > 0
-    ORDER BY s.grp, s.created_at, s.id
-    LIMIT 1
-  )
-  SELECT
-    -- Scalar metadata: the keep value wins; a NULL keep value is filled from the
-    -- earliest discard that has one, ordered by (created_at, id).
-    COALESCE(k.abstract,            (SELECT d.abstract            FROM discard d WHERE d.abstract            IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS abstract,
-    COALESCE(k.journal,             (SELECT d.journal             FROM discard d WHERE d.journal             IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS journal,
-    COALESCE(k.year,                (SELECT d.year                FROM discard d WHERE d.year                IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS year,
-    COALESCE(k.pmid,                (SELECT d.pmid                FROM discard d WHERE d.pmid                IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS pmid,
-    COALESCE(k.doi,                 (SELECT d.doi                 FROM discard d WHERE d.doi                 IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS doi,
-    COALESCE(k.study_type,          (SELECT d.study_type          FROM discard d WHERE d.study_type          IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS study_type,
-    COALESCE(k.statistical_methods, (SELECT d.statistical_methods FROM discard d WHERE d.statistical_methods IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS statistical_methods,
-    COALESCE(k.pubmed_url,          (SELECT d.pubmed_url          FROM discard d WHERE d.pubmed_url          IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS pubmed_url,
-    COALESCE(k.journal_url,         (SELECT d.journal_url         FROM discard d WHERE d.journal_url         IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS journal_url,
-    COALESCE(k.drive_url,           (SELECT d.drive_url           FROM discard d WHERE d.drive_url           IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS drive_url,
-    COALESCE(k.tldr,                (SELECT d.tldr                FROM discard d WHERE d.tldr                IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS tldr,
-    COALESCE(k.notes,               (SELECT d.notes               FROM discard d WHERE d.notes               IS NOT NULL ORDER BY d.created_at, d.id LIMIT 1)) AS notes,
-    -- Raw study-type provenance, taken whole from one source row so the joined
-    -- string and its boundaries always describe the same source statement.
-    -- Falling back to the keep row when no row qualifies leaves a legacy keep
-    -- paper exactly as it was rather than borrowing a foreign array.
-    COALESCE((SELECT p.raw_study_type FROM provenance p), k.raw_study_type) AS raw_study_type,
-    CASE
-      WHEN EXISTS (SELECT 1 FROM provenance)
-        THEN (SELECT p.raw_publication_types FROM provenance p)
-      ELSE k.raw_publication_types
-    END AS raw_publication_types,
-    -- Authors are a whole-value choice, never a union: a non-empty keep author
-    -- list is preserved exactly, otherwise the earliest non-empty discard list
-    -- is adopted. Identical selection to the previous CASE expression, now
-    -- routed through author_source so its provenance travels with it.
-    COALESCE((SELECT a.authors FROM author_source a), k.authors) AS authors,
-    -- ...and the provenance from that SAME row. NULL there stays NULL here.
-    CASE
-      WHEN EXISTS (SELECT 1 FROM author_source)
-        THEN (SELECT a.author_provenance FROM author_source a)
-      ELSE k.author_provenance
-    END AS author_provenance,
-    l.keywords, l.raw_keywords, l.mesh_terms, l.substances
-  INTO v_merged
-  FROM keep k CROSS JOIN lists l;
-
-  -- ══ 3. Preserve relationships before the discards disappear ══════════════
-  -- Junction rows cascade on delete, so union them onto the keep paper first.
-  -- DISTINCT collapses the same assignment held by several discards; ON CONFLICT
-  -- collapses an assignment the keep paper already holds.
-  INSERT INTO paper_tags (paper_id, tag_id)
-  SELECT DISTINCT p_keep_id, pt.tag_id
-  FROM paper_tags pt
-  WHERE pt.paper_id = ANY(p_discard_ids)
-  ON CONFLICT (paper_id, tag_id) DO NOTHING;
-
-  INSERT INTO paper_projects (paper_id, project_id)
-  SELECT DISTINCT p_keep_id, pp.project_id
-  FROM paper_projects pp
-  WHERE pp.paper_id = ANY(p_discard_ids)
-  ON CONFLICT (paper_id, project_id) DO NOTHING;
-
-  -- ══ 4. Re-parent attachments so the cascade cannot destroy them ══════════
-  -- Only paper_id changes. id, user_id, file_path, file_name, file_type,
-  -- size_bytes and created_at are all left untouched, the Storage object is not
-  -- addressed at all, and no quota trigger fires.
-  UPDATE paper_attachments
-  SET paper_id = p_keep_id
-  WHERE paper_id = ANY(p_discard_ids);
-
-  -- ══ 5. Delete the discards, releasing their unique identifier values ═════
-  DELETE FROM papers
-  WHERE id = ANY(p_discard_ids)
-    AND user_id = v_user_id;
-
-  -- ══ 6. Apply the captured metadata to the keep paper ═════════════════════
-  -- Runs last so an identifier transferred from a discard cannot collide with
-  -- the still-live discard row. id, user_id, title, created_at and insert_order
-  -- are never assigned; has_abstract and search_vector are generated columns and
-  -- update themselves from their sources.
-  UPDATE papers SET
-    abstract              = v_merged.abstract,
-    journal               = v_merged.journal,
-    year                  = v_merged.year,
-    pmid                  = v_merged.pmid,
-    doi                   = v_merged.doi,
-    study_type            = v_merged.study_type,
-    statistical_methods   = v_merged.statistical_methods,
-    pubmed_url            = v_merged.pubmed_url,
-    journal_url           = v_merged.journal_url,
-    drive_url             = v_merged.drive_url,
-    raw_study_type        = v_merged.raw_study_type,
-    raw_publication_types = v_merged.raw_publication_types,
-    tldr                  = v_merged.tldr,
-    notes                 = v_merged.notes,
-    authors               = v_merged.authors,
-    author_provenance     = v_merged.author_provenance,
-    keywords              = v_merged.keywords,
-    raw_keywords          = v_merged.raw_keywords,
-    mesh_terms            = v_merged.mesh_terms,
-    substances            = v_merged.substances,
-    updated_at            = now()
-  WHERE id = p_keep_id
-    AND user_id = v_user_id;
-END;
-$$;
 
 
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -1735,7 +1550,8 @@ GRANT SELECT ON TABLE public.paper_attachments TO authenticated;
 --     DEFINER, so unaffected by this revoke.
 --   * `merge_exact_duplicates` — SECURITY DEFINER. It re-parents attachment rows
 --     onto the kept paper BEFORE deleting the discards, so nothing cascades and
---     no object is stranded. Not a bypass; see section 4b.
+--     no object is stranded. Not a bypass; installed by phase 1,
+--     20260904110000_prepare_merge_lock_order.sql.
 --   * account deletion — `delete-account` deletes the auth user and lets the
 --     cascade run. Attachment metadata going away there is the point, and its
 --     independent Storage sweep is what actually removes the binaries. It runs

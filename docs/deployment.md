@@ -189,7 +189,47 @@ Merging to `main` triggers a Vercel Production deploy. **Vercel does not apply S
 
 ### 6.4 Web-before-migration is required for `20260904120000` (recoverable attachment cleanup)
 
-Same rule as §6.3, same reason: merging to `main` triggers a Vercel Production deploy, **Vercel does not apply Supabase migrations**, and the database half of `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` is a separate, separately authorized `supabase db push --linked` step. **There is no Edge deployment for this work at all** — `supabase/functions/**` is unchanged.
+Same rule as §6.3, same reason: merging to `main` triggers a Vercel Production deploy, **Vercel does not apply Supabase migrations**, and the database half of `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` is a separate, separately authorized step. **There is no Edge deployment for this work at all** — `supabase/functions/**` is unchanged.
+
+> #### ⚠ The database half is TWO migrations with a mandatory checkpoint between them
+>
+> **`supabase db push --linked` applied to both files in one command is NOT a valid rollout.** It is not merely discouraged — it is the specific failure this checkpoint exists to prevent, and `20260904120000` refuses to run when it detects it.
+>
+> | Phase | File | What it does |
+> |---|---|---|
+> | 1 | `20260904110000_prepare_merge_lock_order.sql` | Replaces `merge_exact_duplicates` with a body that locks `papers` **before** re-parenting `paper_attachments`. Nothing else. |
+> | — | **operator checkpoint** | Verify no transaction predating phase 1 is still open (query below). |
+> | 2 | `20260904120000_add_recoverable_attachment_cleanup_queue.sql` | The cutover: the two cleanup tables, the lifecycle RPCs, the Storage fence, the grant revokes, behind the three-table barrier. |
+>
+> **Why.** `merge_exact_duplicates` as deployed in Production today takes no table lock at all: it reads `papers`, writes `paper_attachments`, and only then issues `DELETE FROM papers` — child before parent. Phase 2's barrier goes parent before child. Those two orders form a wait-for cycle, and it is not hypothetical; reproduced on PostgreSQL 17.6 against the real tables, with **the migration as the victim**:
+>
+> ```
+> ERROR:  deadlock detected
+> DETAIL:  Process 325 waits for AccessExclusiveLock on paper_attachments; blocked by process 322.
+>          Process 322 waits for RowExclusiveLock on papers; blocked by process 325.
+> ```
+>
+> Reordering phase 2's barrier does not fix it, because the *other* historical writer — a stale bundle's raw `DELETE FROM papers` — runs parent before child, so whichever order the barrier picks, one of the two can cycle with it. `paper_tags` and `paper_projects` do not help either: they are cascade children of `papers` **and** are written by the legacy merge before it touches `paper_attachments`, so the two writers disagree about their order too. The only remaining move is to retire the child-first writer before phase 2 runs — which cannot be done inside phase 2, because **`CREATE OR REPLACE FUNCTION` does not drain in-flight executions.** Measured on this PostgreSQL 17.6, with the old call parked mid-body: the replacement returned in **32 ms**, and the in-flight call still completed with the **old body**. Only calls that *begin* after the replacement commits get the new one.
+>
+> **The checkpoint, and exactly how it is verified.** After phase 1 commits, run this against the linked project and require **zero rows**:
+>
+> ```sql
+> SELECT pid, usename, application_name, state, now() - xact_start AS open_for
+>   FROM pg_stat_activity
+>  WHERE datname = current_database()
+>    AND pid <> pg_backend_pid()
+>    AND backend_type = 'client backend'
+>    AND xact_start IS NOT NULL
+>    AND xact_start < (SELECT max(xact_start) FROM pg_stat_activity WHERE pid = pg_backend_pid());
+> ```
+>
+> Any transaction that could still be executing the pre-phase-1 merge body necessarily began before phase 1 committed. So once no client transaction older than the current one remains, none can be inside that body — that is the whole drain argument, and it is *checked*, not waited out. Re-run the query until it is empty; do not substitute a fixed wait for it. In practice the merge is a sub-second RPC, so this clears almost immediately, but a long-running session (an open psql, a report, an idle-in-transaction connection) will hold it — end those first.
+>
+> **Phase 2 enforces both halves itself, fail-closed, before it takes a single lock.** It refuses with `PHASE 1 MISSING` if the installed `merge_exact_duplicates` still re-parents attachments before locking `papers`, and with `DRAIN NOT PROVEN` — naming the offending pids — if any older client transaction is open. The drain half arms only when `auth.users` is non-empty, because the body being drained is reachable only through the merge RPC, which requires `auth.uid()` and paper ownership; a database with no users has nothing to drain, so a bootstrap or a local replay is not falsely reported as a drain failure. Production has users, so it is fully armed there. **If phase 2 refuses, do not retry it blindly** — the refusal is the gate working. Fix the named condition and re-apply.
+>
+> **If phase 1 succeeds and phase 2 is delayed.** Nothing breaks and nothing is half-applied. Phase 1 changes only *when* one function takes a lock it already took; merge semantics, signature and results are identical, and no table, policy, grant or trigger changes. The application behaves exactly as before, indefinitely. It is in fact strictly better off: parent-first also removes a pre-existing hazard between the legacy merge and an ordinary paper deletion, which are opposite-ordered against each other today. There is no rush and no partial state to babysit.
+>
+> **If phase 2 fails.** It is one transaction, so it rolls back entirely — no table, RPC, policy or grant change lands. The database stays in the phase-1 state described above, which is fully functional. Read the error, satisfy it, and re-apply. A `DRAIN NOT PROVEN` or `PHASE 1 MISSING` refusal costs nothing; a deadlock, which is what these replace, would have aborted the migration at an arbitrary point in its barrier.
 
 - **Before the migration is applied.** `attachment_cleanup_queue` and the three cleanup RPCs do not exist. Every call to one comes back as PostgREST `PGRST202`/`PGRST205` (or SQLSTATE `42883`/`42P01`) naming the missing object, and a narrow classifier — which recognises only those four object names, and only under a missing-object code — routes each flow to the behaviour that shipped before this change:
   - **attachment delete:** Storage object first, then the metadata row. On this path Storage-first is what *prevents* an orphan, so a Storage failure correctly leaves both halves intact and the user can retry.
@@ -205,7 +245,7 @@ Same rule as §6.3, same reason: merging to `main` triggers a Vercel Production 
   - **Web first:** correct, and the only order that is also feature-functional throughout. Deployed clients never write the table directly and delete metadata first, so neither the revoke nor the fence ever fires for them, and the durable path activates the moment the migration lands.
   - **Database first:** *non-destructive*, but **not feature-functional**. Until the new bundle reaches a tab, that tab cannot upload an attachment (the direct INSERT is refused with `42501`), cannot delete one (the Storage call is refused), and cannot delete a paper (the direct `DELETE` is refused with `42501`). All three fail visibly and leave every paper, every metadata row and every binary intact — nothing is destroyed and no data is lost — but a user on a stale tab is looking at a broken attachment feature *and* a broken delete button until they reload. Do not describe this order as safe-and-working; it is safe-and-degraded. Prefer web first, and if the order is ever reversed, expect those three symptoms and do not diagnose them as a broken migration.
   - What is *not* safe either way is assuming the durable path is live in Production merely because the code merged. Until the migration is applied, cleanup is still best-effort, and any claim that orphaned binaries are now recoverable in Production must cite the applied migration, not the deploy.
-- **The migration takes three brief locks, and may wait.** Its first three statements are `LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE`, then `LOCK TABLE public.papers IN SHARE MODE`, then `LOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE`, all held until the migration commits. The order and the modes are derived, not chosen:
+- **Phase 2 takes three brief locks, and may wait.** It opens with the phase gate above — which takes no lock at all, so a refusal there costs nothing — and then, as its first three locking statements, `LOCK TABLE auth.users IN SHARE ROW EXCLUSIVE MODE`, `LOCK TABLE public.papers IN SHARE MODE`, and `LOCK TABLE public.paper_attachments IN ACCESS EXCLUSIVE MODE`, all held until the migration commits. The order and the modes are derived, not chosen:
   - **`auth.users` first.** The two tables this migration creates carry `user_id ... REFERENCES auth.users(id) ON DELETE CASCADE`, and adding a foreign key takes `SHARE ROW EXCLUSIVE` on the *referenced* table. So the migration always needed this lock — the only question was whether it took it explicitly and first, or implicitly and last. Last is a lock-order inversion that deadlocks against an ordinary account deletion, which holds `auth.users` and then cascades into `papers` and `paper_attachments`; taking it first means the migration waits **upstream holding nothing** instead. `SHARE ROW EXCLUSIVE` is exactly what the foreign keys will require, so there is no later lock upgrade (an upgrade is its own deadlock shape); it conflicts with `ROW EXCLUSIVE`, so Auth writers are drained and then excluded; and it does *not* conflict with `ROW SHARE`, so the foreign-key reference checks ordinary inserts make against `auth.users` continue throughout.
   - **then `papers`, in `SHARE`.** A stronger lock there would block the foreign-key check of an in-flight `paper_attachments` INSERT.
   - **then `paper_attachments`.** Locking the child first would put an in-flight `DELETE FROM papers` — which holds the parent and needs the child for its cascade — on the other side of a deadlock nobody can fix, because that transaction is a browser's raw statement. Taking the parents first, each in the weakest mode that still blocks the writers it must, is the only ordering whose remaining hazards are all in code this repository controls; `delete_papers_with_attachment_cleanup` and `merge_exact_duplicates` each take their `papers` lock before touching `paper_attachments` so that they conform.
