@@ -1,4 +1,5 @@
--- DATA-API-ACL-RECONCILIATION-001 — complete the Data API client-role ACL matrix.
+-- DATA-API-ACL-RECONCILIATION-001 — complete the Data API client-role ACL matrix
+-- for public relations and sequences.
 --
 -- WHY THIS MIGRATION EXISTS
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -18,7 +19,9 @@
 -- A clean replay does not reproduce that, so no test in this repository could
 -- see it. `20260904120000` converged exactly two tables (`papers`,
 -- `paper_attachments`) because that feature's invariant required it. This
--- migration finishes the job for every remaining client-role privilege.
+-- migration finishes the job for every remaining client-role privilege on the
+-- Data API relation and sequence surface. Function EXECUTE is a different
+-- surface and is deliberately not part of it (see SCOPE below).
 --
 -- WHY RLS IS NOT ALREADY THE ANSWER
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -49,11 +52,17 @@
 --
 -- Deliberately NOT touched, each its own separate question:
 --   * `service_role` — table privileges, sequence privileges, AND its default
---     privileges. It is the server boundary, it bypasses RLS, and it showed ZERO
---     drift between Production and a clean replay, so there is nothing here to
---     RECONCILE — narrowing it would be a new decision, taken without the
---     evidence that would justify it. It is not named in a single statement
---     below, and section 4 proves it did not move.
+--     privileges. Its TABLE privileges were already aligned between hosted
+--     Production and a clean replay; its sequence and default postures are
+--     environment-dependent (hosted vs clean replay: `rwU` vs `wU` on the
+--     sequence, ALL vs `Dxtm` on table defaults, `rwU` vs `w` on sequence
+--     defaults). So this migration deliberately PRESERVES the exact
+--     pre-migration `service_role` posture rather than converging or narrowing
+--     it. It is the server boundary and it bypasses RLS; narrowing it would be a
+--     new decision, taken without the evidence that would justify it. It is not
+--     named in a single statement below, section 2 accepts only its recognised
+--     platform shapes, and section 4 proves the exact observed posture did not
+--     move.
 --   * Function EXECUTE privileges and function default privileges. The
 --     SECURITY DEFINER surface is already least-privilege and pinned by suite
 --     003. The residual question is the five SECURITY INVOKER helpers that carry
@@ -74,7 +83,7 @@
 --
 -- TWO SUPPORTED STARTING HISTORIES
 -- ─────────────────────────────────────────────────────────────────────────────
--- This migration must converge BOTH, and section 1 refuses anything else:
+-- This migration must converge BOTH, and section 2 refuses anything else:
 --
 --   H1 "hosted"   — Production as audited: `anon`/`authenticated` hold ALL on the
 --                   17, the sequence is `rwU` for both, and `postgres`'s default
@@ -88,6 +97,26 @@
 --                   existing projects on 2026-10-30, with existing table grants
 --                   retained — so Production may legitimately be in H2 by the
 --                   time this is applied, and that must not fail the migration.
+--
+-- The default-privilege entries `postgres` holds in `public` are judged WHOLE,
+-- every grantee included. Section 3e revokes by NAME, so a grantee it does not
+-- name would pass straight through it and survive:
+--
+--                  TABLES                        SEQUENCES
+--   postgres       all eight (the owner's own)   SELECT, UPDATE, USAGE
+--   anon           H1: all eight | H2: Dxtm      H1: rwU | H2: UPDATE
+--   authenticated  checked on its own, never inferred from anon — and anon and
+--                  authenticated must BOTH be H1 or BOTH be H2, on tables and
+--                  sequences alike
+--   service_role   a recognised H1 or H2 shape per object type; not converged,
+--                  so not tied to the client roles' history — snapshotted, and
+--                  proven unchanged
+--   PUBLIC         none (no audited history has a direct entry)
+--   anyone else    none — refused before any change, never silently preserved
+--
+-- Existing objects and default privileges are classified separately: Supabase
+-- keeps existing table grants, so after 2026-10-30 Production can hold H1
+-- tables under H2 defaults, and each is accepted on its own terms.
 --
 -- Both converge to one end state, and section 4 asserts that end state rather
 -- than either starting point.
@@ -221,16 +250,19 @@ INSERT INTO acl_target (relname, grp, auth_privs) VALUES
 -- stop the run: its intended surface has never been reviewed.
 --
 -- The default-privilege check accepts H1 and H2 (see the header) and NOTHING
--- else. It must not fail merely because Supabase already performed, on its own
--- schedule, a revoke this repository also intends — but an unrecognised shape,
--- or a GLOBAL default entry (which `IN SCHEMA public` could not override), is a
--- reason to stop and re-audit.
+-- else, judged on the whole entry rather than on `anon` alone. It must not fail
+-- merely because Supabase already performed, on its own schedule, a revoke this
+-- repository also intends — but an unrecognised shape, an `authenticated` shape
+-- that differs from `anon`'s history, a direct PUBLIC entry, any grantee outside
+-- the reviewed four, or a GLOBAL default entry (which `IN SCHEMA public` could
+-- not override) is a reason to stop and re-audit.
 
 DO $pre$
 DECLARE
   v_all      CONSTANT text[] := ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN'];
   v_nondml   CONSTANT text[] := ARRAY['TRUNCATE','REFERENCES','TRIGGER','MAINTAIN'];
   v_seq_all  CONSTANT text[] := ARRAY['SELECT','UPDATE','USAGE'];
+  v_seq_upd  CONSTANT text[] := ARRAY['UPDATE'];
   v_anon     oid := to_regrole('anon');
   v_auth     oid := to_regrole('authenticated');
   v_svc      oid := to_regrole('service_role');
@@ -241,6 +273,16 @@ DECLARE
   v_anon_p   text[];
   v_auth_p   text[];
   v_hosted   boolean;
+  v_def_pg_r   text[];
+  v_def_anon_r text[];
+  v_def_auth_r text[];
+  v_def_svc_r  text[];
+  v_def_pg_s   text[];
+  v_def_anon_s text[];
+  v_def_auth_s text[];
+  v_def_svc_s  text[];
+  v_hist_r     text;
+  v_hist_s     text;
 BEGIN
   IF v_anon IS NULL OR v_auth IS NULL OR v_svc IS NULL OR v_pg IS NULL THEN
     RAISE EXCEPTION 'data-api-acl: anon / authenticated / service_role / postgres must all exist';
@@ -378,28 +420,83 @@ BEGIN
     RAISE EXCEPTION 'data-api-acl: sequence: anon ACL matches neither supported starting history (found %)', v_anon_p;
   END IF;
 
-  -- ── 2g. postgres default privileges in public — H1 or H2, and no globals ──
-  SELECT coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type), ARRAY[]::text[]) INTO v_anon_p
-    FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
-   WHERE n.nspname = 'public' AND d.defaclrole = v_pg AND d.defaclobjtype = 'r' AND a.grantee = v_anon;
-  IF NOT ((v_anon_p @> v_all AND v_anon_p <@ v_all) OR (v_anon_p @> v_nondml AND v_anon_p <@ v_nondml)) THEN
-    RAISE EXCEPTION 'data-api-acl: postgres/public TABLE default privileges for anon match neither supported history (found %)', v_anon_p;
-  END IF;
-
-  SELECT coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type), ARRAY[]::text[]) INTO v_anon_p
-    FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
-   WHERE n.nspname = 'public' AND d.defaclrole = v_pg AND d.defaclobjtype = 'S' AND a.grantee = v_anon;
-  IF NOT ((v_anon_p @> v_seq_all AND v_anon_p <@ v_seq_all) OR (v_anon_p @> ARRAY['UPDATE'] AND v_anon_p <@ ARRAY['UPDATE'])) THEN
-    RAISE EXCEPTION 'data-api-acl: postgres/public SEQUENCE default privileges for anon match neither supported history (found %)', v_anon_p;
-  END IF;
+  -- ── 2g. postgres default privileges in public — the WHOLE entry ───────────
+  -- Section 3e revokes by name from PUBLIC, anon and authenticated, so a grantee
+  -- it does not name would survive it untouched, and a client-role shape nobody
+  -- audited would be silently normalized. Every grantee is validated here,
+  -- before anything changes — see the table in the header.
 
   -- A GLOBAL default-privilege entry cannot be revoked by an `IN SCHEMA public`
-  -- statement, so one would make section 3's hardening silently incomplete.
+  -- statement, so one would make section 3e's hardening silently incomplete.
   SELECT count(*) INTO v_n
     FROM pg_default_acl d
    WHERE d.defaclnamespace = 0 AND d.defaclrole = v_pg AND d.defaclobjtype IN ('r','S');
   IF v_n <> 0 THEN
     RAISE EXCEPTION 'data-api-acl: postgres holds GLOBAL default privileges on tables/sequences; `IN SCHEMA public` could not override them';
+  END IF;
+
+  -- No grantee outside the reviewed four, and no direct PUBLIC entry. No audited
+  -- history has either, and section 3e would leave a third party in place.
+  SELECT coalesce(string_agg(DISTINCT d.defaclobjtype::text || ':' ||
+                             CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END, ', '), '')
+    INTO v_txt
+    FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+   WHERE n.nspname = 'public' AND d.defaclrole = v_pg AND d.defaclobjtype IN ('r','S')
+     AND a.grantee NOT IN (v_pg, v_anon, v_auth, v_svc);
+  IF v_txt <> '' THEN
+    RAISE EXCEPTION
+      'data-api-acl: unexpected default-privilege grantee(s) on postgres/public tables or sequences: % — no audited history has one, and section 3e would leave it in place',
+      v_txt;
+  END IF;
+
+  -- Each reviewed grantee's shape, per object type. A missing entry reads as
+  -- empty and so matches no history.
+  SELECT coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_pg),   ARRAY[]::text[]),
+         coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_anon), ARRAY[]::text[]),
+         coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_auth), ARRAY[]::text[]),
+         coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_svc),  ARRAY[]::text[])
+    INTO v_def_pg_r, v_def_anon_r, v_def_auth_r, v_def_svc_r
+    FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+   WHERE n.nspname = 'public' AND d.defaclrole = v_pg AND d.defaclobjtype = 'r';
+
+  SELECT coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_pg),   ARRAY[]::text[]),
+         coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_anon), ARRAY[]::text[]),
+         coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_auth), ARRAY[]::text[]),
+         coalesce(array_agg(a.privilege_type ORDER BY a.privilege_type) FILTER (WHERE a.grantee = v_svc),  ARRAY[]::text[])
+    INTO v_def_pg_s, v_def_anon_s, v_def_auth_s, v_def_svc_s
+    FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+   WHERE n.nspname = 'public' AND d.defaclrole = v_pg AND d.defaclobjtype = 'S';
+
+  -- The owner's own entry is the same in both histories.
+  IF NOT (v_def_pg_r @> v_all AND v_def_pg_r <@ v_all)
+     OR NOT (v_def_pg_s @> v_seq_all AND v_def_pg_s <@ v_seq_all) THEN
+    RAISE EXCEPTION 'data-api-acl: postgres''s own default entry in public is not the audited owner set (tables %, sequences %)',
+      v_def_pg_r, v_def_pg_s;
+  END IF;
+
+  -- anon AND authenticated, each checked on its own: both H1 or both H2, on
+  -- tables and sequences alike. authenticated is never inferred from anon.
+  v_hist_r := CASE
+    WHEN (v_def_anon_r @> v_all    AND v_def_anon_r <@ v_all)    AND (v_def_auth_r @> v_all    AND v_def_auth_r <@ v_all)    THEN 'H1'
+    WHEN (v_def_anon_r @> v_nondml AND v_def_anon_r <@ v_nondml) AND (v_def_auth_r @> v_nondml AND v_def_auth_r <@ v_nondml) THEN 'H2'
+  END;
+  v_hist_s := CASE
+    WHEN (v_def_anon_s @> v_seq_all AND v_def_anon_s <@ v_seq_all) AND (v_def_auth_s @> v_seq_all AND v_def_auth_s <@ v_seq_all) THEN 'H1'
+    WHEN (v_def_anon_s @> v_seq_upd AND v_def_anon_s <@ v_seq_upd) AND (v_def_auth_s @> v_seq_upd AND v_def_auth_s <@ v_seq_upd) THEN 'H2'
+  END;
+  IF v_hist_r IS NULL OR v_hist_s IS NULL OR v_hist_r <> v_hist_s THEN
+    RAISE EXCEPTION
+      'data-api-acl: postgres/public client-role default privileges match neither audited starting history as a whole (tables: anon %, authenticated %; sequences: anon %, authenticated %)',
+      v_def_anon_r, v_def_auth_r, v_def_anon_s, v_def_auth_s;
+  END IF;
+
+  -- service_role is preserved, not converged, so it is not tied to the client
+  -- roles' history — but it must be a shape the platform is known to produce.
+  -- Section 4 then proves this exact observed shape is what remains.
+  IF NOT ((v_def_svc_r @> v_all AND v_def_svc_r <@ v_all) OR (v_def_svc_r @> v_nondml AND v_def_svc_r <@ v_nondml))
+     OR NOT ((v_def_svc_s @> v_seq_all AND v_def_svc_s <@ v_seq_all) OR (v_def_svc_s @> v_seq_upd AND v_def_svc_s <@ v_seq_upd)) THEN
+    RAISE EXCEPTION 'data-api-acl: service_role''s postgres/public default privileges are not a recognised platform shape (tables %, sequences %)',
+      v_def_svc_r, v_def_svc_s;
   END IF;
 
   -- ── 2h. Snapshots of everything this migration must NOT change ────────────
@@ -426,7 +523,7 @@ BEGIN
       WHERE (n.nspname = 'public' OR d.defaclnamespace = 0)
         AND (d.defaclrole <> v_pg                        -- supabase_admin's defaults
              OR d.defaclobjtype = 'f'                    -- function defaults
-             OR a.grantee = v_svc)), true);              -- service_role's defaults
+             OR a.grantee IN (v_svc, v_pg))), true);     -- service_role's, and the owner's own
 END
 $pre$;
 
@@ -641,6 +738,20 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- ...and no role outside the owner, authenticated and service_role holds
+  -- anything on a public relation or sequence. An allowlist, not a list of the
+  -- roles section 3 named, for the same reason as 4f.
+  SELECT coalesce(string_agg(DISTINCT c.relname || ':' ||
+                             CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END, ', '), '')
+    INTO v_txt
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace,
+         aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) a
+   WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f','S')
+     AND a.grantee NOT IN (v_pg, v_auth, v_svc);
+  IF v_txt <> '' THEN
+    RAISE EXCEPTION 'data-api-acl: a role other than the owner, authenticated and service_role holds a privilege on a public relation or sequence: %', v_txt;
+  END IF;
+
   -- ── 4b. authenticated holds exactly the intended matrix ───────────────────
   FOR r IN SELECT t.relname, t.auth_privs, c.oid
              FROM acl_target t
@@ -709,32 +820,45 @@ BEGIN
       v_txt, v_n, current_setting('paperlume.acl_pre_service_role'), current_setting('paperlume.acl_pre_service_role_n');
   END IF;
 
-  -- ── 4f. Default privileges: client roles gone, everything else untouched ──
-  SELECT coalesce(string_agg(d.defaclobjtype::text || ':' || a.grantee::text || ':' || a.privilege_type, ', '
+  -- ── 4f. Default privileges: only the owner and service_role remain ───────
+  -- An ALLOWLIST over the whole entry, not a check of the three roles section 3e
+  -- named: a grantee nobody named is exactly what a name-list check would miss.
+  SELECT coalesce(string_agg(d.defaclobjtype::text || ':' ||
+                             CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type, ', '
                              ORDER BY d.defaclobjtype::text, a.grantee::text, a.privilege_type), '')
     INTO v_txt
     FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
    WHERE n.nspname = 'public' AND d.defaclrole = v_pg AND d.defaclobjtype IN ('r','S')
-     AND a.grantee IN (0, v_anon, v_auth);
+     AND a.grantee NOT IN (v_pg, v_svc);
   IF v_txt <> '' THEN
-    RAISE EXCEPTION 'data-api-acl: postgres/public table/sequence defaults still grant PUBLIC/anon/authenticated: %', v_txt;
+    RAISE EXCEPTION 'data-api-acl: postgres/public table/sequence defaults still grant a role other than the owner and service_role: %', v_txt;
   END IF;
 
+  SELECT count(*) INTO v_n
+    FROM pg_default_acl d
+   WHERE d.defaclnamespace = 0 AND d.defaclrole = v_pg AND d.defaclobjtype IN ('r','S');
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'data-api-acl: postgres now holds GLOBAL table/sequence default privileges';
+  END IF;
+
+  -- service_role's exact observed defaults, the owner's own entry, function
+  -- defaults and supabase_admin's defaults: all equal to the section-2 snapshot.
   SELECT coalesce(md5(string_agg(pg_get_userbyid(d.defaclrole) || ':' || d.defaclobjtype::text || ':' ||
                                  a.grantee::text || ':' || a.privilege_type, ','
                                  ORDER BY pg_get_userbyid(d.defaclrole), d.defaclobjtype::text, a.grantee::text, a.privilege_type)), '')
     INTO v_txt
     FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
    WHERE (n.nspname = 'public' OR d.defaclnamespace = 0)
-     AND (d.defaclrole <> v_pg OR d.defaclobjtype = 'f' OR a.grantee = v_svc);
+     AND (d.defaclrole <> v_pg OR d.defaclobjtype = 'f' OR a.grantee IN (v_svc, v_pg));
   IF v_txt <> current_setting('paperlume.acl_pre_defaults_kept') THEN
-    RAISE EXCEPTION 'data-api-acl: default privileges outside this migration''s scope changed (service_role, function or supabase_admin defaults)';
+    RAISE EXCEPTION 'data-api-acl: default privileges outside this migration''s scope changed (service_role, the owner''s own entry, function or supabase_admin defaults)';
   END IF;
 
   -- ── 4g. D1a proved on a real object, not only in the catalog ──────────────
   -- The catalog check above reads the stored default ACL. This creates the kind
   -- of object the next migration will create and asks what it actually inherited
   -- — which is the only way to be sure no other default-privilege entry applies.
+  -- Anything granted to a role other than the owner and service_role fails it.
   -- Both objects are dropped again before this block ends; the transaction
   -- commits with the schema exactly as section 2 found it.
   CREATE TABLE public._acl_d1a_probe_tbl (id bigserial PRIMARY KEY);
@@ -743,12 +867,13 @@ BEGIN
   FOREACH v_obj IN ARRAY ARRAY['public._acl_d1a_probe_tbl', 'public._acl_d1a_probe_view', 'public._acl_d1a_probe_tbl_id_seq']
   LOOP
     v_probe := v_obj::regclass;
-    SELECT coalesce(string_agg(a.grantee::text || ':' || a.privilege_type, ',' ORDER BY a.privilege_type), '')
+    SELECT coalesce(string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type, ','
+                               ORDER BY a.grantee::text, a.privilege_type), '')
       INTO v_txt
       FROM pg_class c, aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) a
-     WHERE c.oid = v_probe AND a.grantee IN (0, v_anon, v_auth);
+     WHERE c.oid = v_probe AND a.grantee NOT IN (v_pg, v_svc);
     IF v_txt <> '' THEN
-      RAISE EXCEPTION 'data-api-acl: a newly created % still inherits client privileges: %', v_probe, v_txt;
+      RAISE EXCEPTION 'data-api-acl: a newly created % inherits privileges for a role other than its owner and service_role: %', v_probe, v_txt;
     END IF;
   END LOOP;
 

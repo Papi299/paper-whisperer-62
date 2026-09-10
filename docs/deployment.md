@@ -321,13 +321,22 @@ supabase db push --dry-run                # expect EXACTLY this one migration
 -- 28 ordinary tables, 1 sequence, all owned by postgres, and no other Data API relation
 select c.relkind, count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
  where n.nspname = 'public' and c.relkind in ('r','p','v','m','f','S') group by 1;
--- the starting default-privilege shape (either supported shape is fine)
+-- the starting default-privilege entries — judged WHOLE, see below
 select d.defaclobjtype, d.defaclacl from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace
  where n.nspname = 'public' and pg_get_userbyid(d.defaclrole) = 'postgres';
 ```
 
 A table added since the audit **must** stop the rollout: its intended surface has
 never been reviewed, and the migration will refuse it rather than guess.
+
+The same holds for the default privileges. For TABLES (`r`) and SEQUENCES (`S`)
+the entry must be one of the two audited histories **as a whole**: `postgres`
+holds its full owner set; `anon` and `authenticated` both hold ALL / `rwU`
+(hosted, today) or both hold `Dxtm` / `w` (after Supabase's 2026-10-30 change);
+`service_role` holds either shape; and nothing else appears — no direct `PUBLIC`
+entry and no other role. Anything else — an `authenticated` entry that differs
+from `anon`'s, an unfamiliar grantee — makes the migration refuse before it
+changes anything. That is a reason to re-audit, never to relax the precondition.
 
 **Supabase's own 2026-10-30 change is compatible in both orders.** Supabase moves
 existing projects to opt-in Data API defaults on that date, keeping existing table
@@ -351,6 +360,11 @@ select c.relname, a.grantee, a.privilege_type
    and a.grantee in (0, 'anon'::regrole);
 -- authenticated on the sequence must be USAGE only
 select relacl from pg_class where oid = 'public.papers_insert_order_seq'::regclass;
+-- must return no rows: only the owner and service_role remain in the defaults
+select d.defaclobjtype, a.grantee, a.privilege_type
+  from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+ where n.nspname = 'public' and pg_get_userbyid(d.defaclrole) = 'postgres' and d.defaclobjtype in ('r','S')
+   and a.grantee not in ('postgres'::regrole, 'service_role'::regrole);
 ```
 
 Then a signed-in smoke pass: load the library, add/edit/delete a paper, edit tags

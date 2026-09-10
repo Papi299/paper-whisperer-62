@@ -6,7 +6,7 @@
 -- is the defect this whole initiative exists to remove, and a subset test would
 -- have passed against every state it was meant to catch.
 --
--- Three properties make this suite different from the ACL assertions already in
+-- Four properties make this suite different from the ACL assertions already in
 -- 003 and 014, which pin four tables between them:
 --
 --   * it is CATALOG-DRIVEN. It enumerates `public` and requires every relation it
@@ -22,6 +22,11 @@
 --     idiom matches nothing and quietly passes. This suite never uses it.
 --   * it pins the FUTURE-OBJECT defaults, and proves them on real objects rather
 --     than only reading `pg_default_acl`.
+--   * it checks ALLOWLISTS, not only named roles. Besides pinning PUBLIC, anon,
+--     authenticated and service_role by name, it requires that NO OTHER role
+--     holds anything on a public relation or in `postgres`'s public default
+--     entries (ACL-B6, ACL-G6, and the real-object probes in G4/G5b): a grantee
+--     nobody named is exactly what a list of named roles cannot see.
 --
 -- What this suite deliberately does NOT assert, because this initiative
 -- deliberately did not change it:
@@ -60,6 +65,17 @@ CREATE FUNCTION pg_temp.eff_seq_privs(p_rel regclass, p_role oid) RETURNS text L
   SELECT coalesce(string_agg(p, ',' ORDER BY p), '')
     FROM unnest(ARRAY['SELECT','UPDATE','USAGE']) p
    WHERE has_sequence_privilege(p_role, p_rel, p);
+$fn$;
+
+-- Every direct entry whose grantee is NOT in p_allowed, as 'role:PRIVILEGE'.
+-- The allowlist form of the question: it also sees a role nobody thought to name.
+CREATE FUNCTION pg_temp.grants_outside(p_rel regclass, p_allowed oid[]) RETURNS text LANGUAGE sql STABLE AS $fn$
+  SELECT coalesce(string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type,
+                             ',' ORDER BY a.grantee::text, a.privilege_type), '')
+    FROM pg_class c,
+         aclexplode(coalesce(c.relacl,
+           acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) a
+   WHERE c.oid = p_rel AND a.grantee <> ALL (p_allowed);
 $fn$;
 
 -- ── The intended matrix, as data ────────────────────────────────────────────
@@ -115,7 +131,7 @@ INSERT INTO acl_invoker_public_exec_allowlist VALUES
   ('set_updated_at()',                          'updated_at trigger function'),
   ('update_updated_at_column()',                'updated_at trigger function');
 
-SELECT plan(86);
+SELECT plan(88);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -148,7 +164,7 @@ SELECT is(
   '',
   'ACL-A4 every public relation and sequence is owned by postgres');
 
--- ══ B. PUBLIC and anon reach nothing ════════════════════════════════════════
+-- ══ B. PUBLIC, anon — and any unreviewed role — reach nothing ═══════════════
 SELECT is(
   (SELECT coalesce(string_agg(c.relname || '=' || pg_temp.direct_privs(c.oid, 0), ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -191,6 +207,17 @@ SELECT is(
       AND a.grantee IN (0, to_regrole('anon')::oid)),
   '',
   'ACL-B5 no column-level privilege is granted to PUBLIC or anon');
+
+SELECT is(
+  (SELECT coalesce(string_agg(c.relname || '=' || pg_temp.grants_outside(c.oid,
+             ARRAY[to_regrole('postgres')::oid, to_regrole('authenticated')::oid, to_regrole('service_role')::oid]),
+             '; ' ORDER BY c.relname), '')
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f','S')
+      AND pg_temp.grants_outside(c.oid,
+            ARRAY[to_regrole('postgres')::oid, to_regrole('authenticated')::oid, to_regrole('service_role')::oid]) <> ''),
+  '',
+  'ACL-B6 no role outside the owner, authenticated and service_role holds a privilege on any public relation or sequence');
 
 -- ══ C. authenticated holds exactly the intended matrix ══════════════════════
 SELECT is(
@@ -288,6 +315,20 @@ SELECT ok(
   IN ('DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE', 'MAINTAIN,REFERENCES,TRIGGER,TRUNCATE'),
   'ACL-G3 service_role table defaults are left exactly as the platform maintains them (broad, or narrowed by Supabase)');
 
+-- G1 names the client roles. G6 is the allowlist over the whole entry, and it is
+-- the assertion that catches a default grantee nobody named (NC6c in the
+-- hosted-parity lane proves G1 alone would not).
+SELECT is(
+  (SELECT coalesce(string_agg(d.defaclobjtype::text || ':' ||
+                              CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type, ', '
+                              ORDER BY d.defaclobjtype::text, a.grantee::text, a.privilege_type), '')
+     FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+    WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid
+      AND d.defaclobjtype IN ('r','S')
+      AND a.grantee NOT IN (to_regrole('postgres')::oid, to_regrole('service_role')::oid)),
+  '',
+  'ACL-G6 postgres table/sequence defaults in public name no grantee but the owner and service_role');
+
 -- ══ H. SECURITY INVOKER routine inventory (guard only; no grant is changed) ══
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text), '')
@@ -340,11 +381,9 @@ CREATE MATERIALIZED VIEW public.zz_acl_probe_matview AS SELECT 1 AS one;
 CREATE TABLE public.zz_acl_probe_part (id int NOT NULL) PARTITION BY RANGE (id);
 
 SELECT is(
-  pg_temp.direct_privs(('public.' || probe)::regclass, 0)
-  || pg_temp.direct_privs(('public.' || probe)::regclass, to_regrole('anon')::oid)
-  || pg_temp.direct_privs(('public.' || probe)::regclass, to_regrole('authenticated')::oid),
+  pg_temp.grants_outside(('public.' || probe)::regclass, ARRAY[to_regrole('postgres')::oid, to_regrole('service_role')::oid]),
   '',
-  'ACL-G4 a newly created ' || probe || ' inherits nothing for PUBLIC, anon or authenticated'
+  'ACL-G4 a newly created ' || probe || ' inherits nothing for any role but its owner and service_role'
 ) FROM unnest(ARRAY['zz_acl_probe_tbl','zz_acl_probe_view','zz_acl_probe_matview','zz_acl_probe_part','zz_acl_probe_tbl_id_seq']) probe;
 
 -- ══ G5. Supabase's own documented revoke cannot undo D1a ════════════════════
@@ -372,11 +411,9 @@ SELECT is(
 
 CREATE TABLE public.zz_acl_probe_after_platform (id bigserial PRIMARY KEY);
 SELECT is(
-  pg_temp.direct_privs('public.zz_acl_probe_after_platform'::regclass, 0)
-  || pg_temp.direct_privs('public.zz_acl_probe_after_platform'::regclass, to_regrole('anon')::oid)
-  || pg_temp.direct_privs('public.zz_acl_probe_after_platform'::regclass, to_regrole('authenticated')::oid),
+  pg_temp.grants_outside('public.zz_acl_probe_after_platform'::regclass, ARRAY[to_regrole('postgres')::oid, to_regrole('service_role')::oid]),
   '',
-  'ACL-G5b a table created after that platform revoke still reaches no client role');
+  'ACL-G5b a table created after that platform revoke still reaches no role but its owner and service_role');
 
 DROP TABLE public.zz_acl_probe_after_platform;
 DROP TABLE public.zz_acl_probe_part;

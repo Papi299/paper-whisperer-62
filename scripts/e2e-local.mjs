@@ -3259,16 +3259,22 @@ async function runMigrationCutoverProbe(container) {
  *      reconciliation — so the reconciliation has not run yet;
  *   2. prove suite 015 FAILS here (negative control: a suite that cannot fail
  *      proves nothing);
- *   3. seed hosted Production's ACL state and prove the seed reproduced it
+ *   3. prove the migration REFUSES a default-privilege entry outside the two
+ *      audited histories before changing anything — an unexplained
+ *      `authenticated` shape (NC6a) and an unreviewed grantee (NC6b) — then
+ *      prove the lane is byte-identical to its state before each control;
+ *   4. seed hosted Production's ACL state and prove the seed reproduced it
  *      EXACTLY, against a committed read-only reference — a seed that silently
  *      did nothing would make every assertion below vacuous;
- *   4. prove suite 015 still FAILS on the hosted shape;
- *   5. apply the pending migration(s) with the CLI, from the real migration
+ *   5. prove suite 015 still FAILS on the hosted shape;
+ *   6. apply the pending migration(s) with the CLI, from the real migration
  *      file — never a hand-copied transcription of its statements, so the
  *      lane cannot drift from the implementation it is testing;
- *   6. prove suite 015 PASSES, and that `service_role` did not move;
- *   7. prove a NEW table that forgets its ACLs is unreachable at runtime AND
- *      fails CI.
+ *   7. prove suite 015 PASSES, and that `service_role` did not move;
+ *   8. prove a NEW table that forgets its ACLs is unreachable at runtime AND
+ *      fails CI;
+ *   9. prove a grantee nobody named, arriving AFTER the migration, fails CI
+ *      through the allowlist assertions (NC6c).
  *
  * It runs in the db-tests lifecycle only, never in the E2E lane, and it adds one
  * reset + replay rather than a second Playwright run.
@@ -3279,6 +3285,54 @@ const ACL_HOSTED_SEED = "scripts/acl-parity/hosted-baseline-20260904120000.sql";
 const ACL_HOSTED_REFERENCE = "scripts/acl-parity/hosted-baseline-20260904120000.reference.json";
 const ACL_MATRIX_SUITE = "supabase/tests/database/015_data_api_acl_matrix.test.sql";
 const ACL_NC2_TABLE = "zz_acl_nc2_forgotten";
+
+/**
+ * The whole object-privilege and default-privilege state, plus the migration
+ * ledger, as sortable lines. A refused migration must leave every one of them
+ * exactly as it found them, and a control's clean-up must restore them exactly.
+ */
+const ACL_FULL_STATE_SQL = [
+  "SELECT 'ledger|' || count(*) || '|' || max(version) FROM supabase_migrations.schema_migrations;",
+  "SELECT 'rel|' || c.relname || '|' || coalesce(c.relacl::text,'NULL') FROM pg_class c " +
+    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f','S');",
+  "SELECT 'col|' || c.relname || '.' || a.attname || '|' || a.attacl::text FROM pg_attribute a " +
+    "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace " +
+    "WHERE n.nspname='public' AND a.attacl IS NOT NULL;",
+  "SELECT 'fn|' || p.oid::regprocedure::text || '|' || coalesce(p.proacl::text,'NULL') FROM pg_proc p " +
+    "JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='public';",
+  "SELECT 'def|' || pg_get_userbyid(d.defaclrole) || '|' || coalesce(n.nspname,'<global>') || '|' || " +
+    "d.defaclobjtype::text || '|' || d.defaclacl::text FROM pg_default_acl d " +
+    "LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace;",
+].join("\n");
+
+/**
+ * NC6 — default-privilege states the migration must REFUSE before it changes
+ * anything. Each is one statement away from the supported clean-replay (H2)
+ * shape, and each was ACCEPTED by the preconditions as first written, which
+ * checked `anon` alone: NC6a was silently normalized by D1a, and NC6b committed
+ * with the unreviewed grantee still in the default entry.
+ *
+ * Each `refusal` pattern matches the raised error WITH its substituted values.
+ * The CLI echoes the failing statement's source after the error, and that source
+ * contains every RAISE text with `%` placeholders, so a pattern on the bare
+ * wording could be satisfied by the echo of a different failure.
+ */
+const ACL_NC6_CASES = [
+  {
+    id: "NC6a",
+    what: "an authenticated TABLE default outside the audited histories, with anon left in H2",
+    inject: "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO authenticated;",
+    undo: "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT ON TABLES FROM authenticated;",
+    refusal: /ERROR: data-api-acl: postgres\/public client-role default privileges match neither audited starting history as a whole \(tables: anon \{[A-Z,]*\}, authenticated \{[A-Z,]*SELECT[A-Z,]*\};/,
+  },
+  {
+    id: "NC6b",
+    what: "a TABLE default for a role outside the approved default ACL (authenticator)",
+    inject: "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO authenticator;",
+    undo: "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT ON TABLES FROM authenticator;",
+    refusal: /ERROR: data-api-acl: unexpected default-privilege grantee\(s\) on postgres\/public tables or sequences: r:authenticator /,
+  },
+];
 
 /** Catalog dumps compared against the committed hosted-Production reference. */
 const ACL_DUMP_SQL = {
@@ -3347,6 +3401,64 @@ async function aclDump(container, sql) {
   return r.out.split("\n").map((line) => line.trim()).filter(Boolean).sort();
 }
 
+async function aclFullState(container) {
+  return (await aclDump(container, ACL_FULL_STATE_SQL)).join("\n");
+}
+
+/**
+ * One NC6 refusal control. Requires, in order: the injection really changed the
+ * state (else the control is vacuous); `supabase migration up` fails, and fails
+ * with the named precondition refusal rather than for any other reason; the
+ * migration is absent from the ledger; and every ACL and default privilege —
+ * the injected one included — is exactly as it was, i.e. the whole file rolled
+ * back as one transaction. The injection is then removed and the lane must be
+ * byte-identical to its state before the control.
+ */
+async function runAclRefusalControl(container, aclVersion, c) {
+  const clean = await aclFullState(container);
+  const inject = await dockerPsql(container, c.inject);
+  if (inject.code !== 0) {
+    throw new Error(`ACL parity lane (${c.id}): could not inject the unsupported default: ${inject.err.trim() || "(no stderr)"}`);
+  }
+  try {
+    const injected = await aclFullState(container);
+    if (injected === clean) {
+      throw new Error(`ACL parity lane (${c.id}): the injection changed nothing, so the control would prove nothing.`);
+    }
+    const up = await runCapture("supabase", ["migration", "up", "--local"]);
+    const said = `${up.out}\n${up.err}`;
+    if (up.code === 0) {
+      throw new Error(`ACL parity lane (${c.id}): the migration ACCEPTED ${c.what}. It must refuse it before changing anything.`);
+    }
+    if (!c.refusal.test(said)) {
+      throw new Error(
+        `ACL parity lane (${c.id}): the migration failed, but not with the expected precondition refusal — ` +
+          `it failed for the wrong reason:\n${said.trim().split("\n").slice(-6).join("\n")}`,
+      );
+    }
+    const inLedger = await dbScalar(container,
+      `SELECT count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '${aclVersion}';`);
+    if (inLedger !== "0") {
+      throw new Error(`ACL parity lane (${c.id}): the refused migration ${aclVersion} is in the ledger.`);
+    }
+    if ((await aclFullState(container)) !== injected) {
+      throw new Error(
+        `ACL parity lane (${c.id}): the refused migration still changed ACL or default-privilege state — ` +
+          "it did not roll back as one transaction.",
+      );
+    }
+  } finally {
+    const undo = await dockerPsql(container, c.undo);
+    if (undo.code !== 0) {
+      throw new Error(`ACL parity lane (${c.id}): could not remove the injected default: ${undo.err.trim() || "(no stderr)"}`);
+    }
+  }
+  if ((await aclFullState(container)) !== clean) {
+    throw new Error(`ACL parity lane (${c.id}): the lane is not byte-identical to its pre-control state after clean-up.`);
+  }
+  log(`${c.id} OK: the migration refused ${c.what} before any change — not in the ledger, every ACL and default privilege untouched.`);
+}
+
 async function runHostedAclParityLane() {
   log("running hosted-Production ACL parity lane (DATA-API-ACL-RECONCILIATION-001)…");
 
@@ -3381,7 +3493,13 @@ async function runHostedAclParityLane() {
     ["ACL-B2", "ACL-C1", "ACL-E1", "ACL-G1"]);
   log("NC1 OK: the ACL matrix suite fails against the pre-migration clean replay.");
 
-  // ── 3. Seed hosted Production, and prove the seed took ────────────────────
+  // ── 3. NC6a/NC6b — unsupported default-privilege starting states ─────────
+  // Run on the clean-replay (H2) lane BEFORE seeding: each control restores the
+  // lane byte-for-byte, and step 4's exact comparison against the Production
+  // reference independently proves nothing was left behind.
+  for (const c of ACL_NC6_CASES) await runAclRefusalControl(container, aclVersion, c);
+
+  // ── 4. Seed hosted Production, and prove the seed took ────────────────────
   const seed = await dockerPsql(container, readFileSync(resolve(ROOT, ACL_HOSTED_SEED), "utf-8"));
   if (seed.code !== 0) {
     throw new Error(`ACL parity lane: the hosted-Production seed failed: ${seed.err.trim() || "(no stderr)"}`);
@@ -3402,12 +3520,12 @@ async function runHostedAclParityLane() {
   }
   log(`hosted-Production ACL seed verified against ${ACL_HOSTED_REFERENCE} (relations, routines, default privileges).`);
 
-  // ── 4. NC3 — the suite must fail on the hosted shape too ──────────────────
+  // ── 5. NC3 — the suite must fail on the hosted shape too ──────────────────
   assertAclSuiteFailed("NC3 (hosted Production ACL, pre-migration)", await runAclMatrixSuite(),
     ["ACL-B2", "ACL-C1", "ACL-E1", "ACL-G1"]);
   log("NC3 OK: the ACL matrix suite fails against hosted Production's legacy ACL.");
 
-  // ── 5. Apply the real migration file, through the real CLI path ───────────
+  // ── 6. Apply the real migration file, through the real CLI path ───────────
   const serviceRoleBefore = await dbScalar(container, ACL_SERVICE_ROLE_SNAPSHOT_SQL);
   const upCode = await runInherit("supabase", ["migration", "up", "--local"]);
   if (upCode !== 0) throw new Error("ACL parity lane: `supabase migration up --local` failed.");
@@ -3417,7 +3535,7 @@ async function runHostedAclParityLane() {
     throw new Error(`ACL parity lane: migration ${aclVersion} is not in the local ledger after \`migration up\`.`);
   }
 
-  // ── 6. The convergence proof, and NC4 ─────────────────────────────────────
+  // ── 7. The convergence proof, and NC4 ─────────────────────────────────────
   const converged = await runAclMatrixSuite();
   if (!converged.passed) {
     throw new Error(
@@ -3436,7 +3554,7 @@ async function runHostedAclParityLane() {
   }
   log("NC4 OK: service_role relation and default privileges are byte-identical across the migration.");
 
-  // ── 7. NC2 — a future table whose author forgot its ACLs ──────────────────
+  // ── 8. NC2 — a future table whose author forgot its ACLs ──────────────────
   // Two independent guarantees, and the lane requires BOTH: the table is
   // unreachable at runtime (fail-closed, from the default-privilege hardening),
   // and CI refuses to accept it (fail-loud, from the catalog-driven guard).
@@ -3460,9 +3578,44 @@ async function runHostedAclParityLane() {
     if (drop.code !== 0) throw new Error(`ACL parity lane: could not drop the NC2 probe table: ${drop.err.trim()}`);
   }
 
+  // ── 9. NC6c — a grantee nobody named, arriving AFTER the migration ────────
+  // The migration refuses an unreviewed default grantee it finds (NC6b), but
+  // nothing stops a LATER statement adding one. CI must catch it: the allowlist
+  // assertions fail, while the named-role checks stay green — which is exactly
+  // the blind spot the allowlist form closes.
+  const beforeNc6c = await aclFullState(container);
+  const nc6c = await dockerPsql(container,
+    "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO authenticator;\n" +
+      "GRANT SELECT ON TABLE public.tags TO authenticator;\n");
+  if (nc6c.code !== 0) {
+    throw new Error(`ACL parity lane (NC6c): could not inject the third-party grants: ${nc6c.err.trim() || "(no stderr)"}`);
+  }
+  try {
+    const flagged = await runAclMatrixSuite();
+    assertAclSuiteFailed("NC6c (third-party grantee after the migration)", flagged, ["ACL-B6", "ACL-G6", "ACL-G4"]);
+    const named = flagged.failed.filter((name) => /^ACL-(B1|B2|G1) /.test(name));
+    if (named.length > 0) {
+      throw new Error(
+        `ACL parity lane (NC6c): the named-role checks failed too (${named.join("; ")}), so the injection ` +
+          "was not a pure third-party grant and the control proves less than it claims.",
+      );
+    }
+    log("NC6c OK: a third-party grantee added after the migration fails CI through the allowlist assertions; the named-role checks alone stay green.");
+  } finally {
+    const undo = await dockerPsql(container,
+      "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT ON TABLES FROM authenticator;\n" +
+        "REVOKE SELECT ON TABLE public.tags FROM authenticator;\n");
+    if (undo.code !== 0) {
+      throw new Error(`ACL parity lane (NC6c): could not remove the third-party grants: ${undo.err.trim() || "(no stderr)"}`);
+    }
+  }
+  if ((await aclFullState(container)) !== beforeNc6c) {
+    throw new Error("ACL parity lane (NC6c): the lane is not byte-identical to its pre-control state after clean-up.");
+  }
+
   const restored = await runAclMatrixSuite();
   if (!restored.passed) {
-    throw new Error("ACL parity lane: suite 015 does not pass again after the NC2 probe table was dropped.");
+    throw new Error("ACL parity lane: suite 015 does not pass again after the NC2 and NC6c probes were removed.");
   }
   log("hosted-Production ACL parity lane OK.");
 }
