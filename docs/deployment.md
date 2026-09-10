@@ -189,6 +189,8 @@ Merging to `main` triggers a Vercel Production deploy. **Vercel does not apply S
 
 ### 6.4 Web-before-migration is required for `20260904120000` (recoverable attachment cleanup)
 
+> **Status — this rollout is COMPLETE. Both phases are applied to Production and the procedure below is retained as the record of how, and as the pattern for any future two-phase cutover.** Phase 1 (`20260904110000`) and phase 2 (`20260904120000`) were applied with the operator checkpoint between them — after PR #273 merged on 2026-09-05, and after the corrected frontend had already been deployed. The lifecycle then passed a bounded Production wet acceptance on 2026-09-10 (`ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` is technically closed). **Do not re-run these steps** — phase 2 refuses to re-apply, and the ledger already carries both rows. Verify rather than trust this note: `supabase migration list --linked` should show 80 rows with `20260904120000` latest.
+
 Same rule as §6.3, same reason: merging to `main` triggers a Vercel Production deploy, **Vercel does not apply Supabase migrations**, and the database half of `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` is a separate, separately authorized step. **There is no Edge deployment for this work at all** — `supabase/functions/**` is unchanged.
 
 > #### ⚠ The database half is TWO migrations with a mandatory checkpoint between them
@@ -261,13 +263,13 @@ Same rule as §6.3, same reason: merging to `main` triggers a Vercel Production 
 
 #### 6.4a Which client is running, against which database
 
-Four combinations exist during a rollout, and only one of them is degraded:
+Four combinations exist during a rollout, and only one of them is degraded. Production has since completed the rollout, so only the second row still describes it:
 
 | Frontend | Database | Behaviour |
 |---|---|---|
 | corrected (this PR) | pre-migration | Works, through narrow legacy compatibility: browser-side metadata INSERT and immediate compensation, exactly what shipped, including its lost-response weakness — which is a schema-level fix and cannot be made from a client. Neither the revoke nor the Storage fence exists yet, so nothing else changes. |
 | corrected | post-migration | The intended design: serialized finalization, durable tombstone, atomic enqueue-before-delete, fenced Storage deletes, and metadata writes only through the lifecycle RPCs. |
-| **stale** (loaded before the deploy) | pre-migration | Unchanged from today. This is what Production is running right now, and it is the state this feature replaces. |
+| **stale** (loaded before the deploy) | pre-migration | Unchanged. This combination no longer occurs in Production — the migration has been applied — and it is the state this feature replaced. |
 | **stale** | post-migration | Safe but degraded. **Upload fails**: the direct metadata INSERT is refused with `42501`, so no attachment is created — the old bundle then runs its immediate Storage cleanup and, if that succeeds, nothing is left. **Attachment deletion fails**: the Storage call is refused by the fence, so the tab reports "Delete failed" and both halves survive. **Paper deletion fails**: the direct `DELETE FROM papers` is refused with `42501`, so the paper, its attachment metadata and its binaries all survive — and because that bundle reads the paths, deletes the papers and only then calls Storage, the refusal at step two means step three never runs, so it cannot strip files off papers it did not delete. **A lost-response compensation is refused** too, so a valid attachment's binary cannot be destroyed. Nothing is destroyed in any of these cases, and the user gets the feature back by reloading onto the new bundle. |
 
 The last row is the point of the three changes together: the destructive orderings are not merely no longer written, they are no longer permitted — the half-state that made them dangerous (a committed metadata row whose binary the same tab deletes) can no longer be created at all, and attachment metadata can no longer be removed through the parent table either.
