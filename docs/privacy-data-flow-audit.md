@@ -144,7 +144,7 @@ Additionally, a research library on medical or clinical topics can reveal a grea
 
 **Gap worth stating honestly:** between a paper deletion whose best-effort Storage cleanup failed and the user's eventual account deletion, an orphaned binary can persist in the bucket with no metadata row pointing at it. It remains inaccessible to anyone but the owner (the RLS path prefix still matches only them), and account deletion sweeps it. A policy should not claim attachment binaries are deleted *immediately and unconditionally* when a paper is deleted.
 
-> **Addressed in the repository, not yet in Production — see [§27](#27-addendum--2026-09-04--attachment-orphan-cleanup-hardening-001).** `20260904120000` makes the cleanup intent durable in Postgres before the metadata naming the object is removed. This paragraph continues to describe the **deployed** system until that migration is applied, and even afterwards the two claims it refuses stay refused: there is no scheduled worker, so cleanup is not immediate and not guaranteed for a user who never returns.
+> **Addressed, and now live in Production — see [§27](#27-addendum--2026-09-04--attachment-orphan-cleanup-hardening-001) for the change and [§28](#28-addendum--2026-09-10--attachment-orphan-cleanup-hardening-001-production-rollout-and-acceptance) for the rollout and its acceptance.** `20260904120000` makes the cleanup intent durable in Postgres before the metadata naming the object is removed. The paragraph above describes the system as it behaved **before** that migration; it is kept because it is what the deployed system did for the whole period this audit covers. The two claims it refuses stay refused: there is still no scheduled worker, so cleanup is not immediate and not guaranteed for a user who never returns.
 
 ---
 
@@ -759,7 +759,7 @@ Location is `Supabase (ap-south-1, India)` unless stated. "Until account deletio
 17. **No AI disclaimer is surfaced in the app** where AI output is shown, despite being a stated launch requirement (§18).
 18. **No `/privacy`, `/terms`, `/support` route or link exists** in the app (§18).
 19. **The Crossref `User-Agent` names the retired `paperindex.app` brand** and an address of unknown reachability (§9.3).
-20. **Orphaned attachment binaries can survive a failed best-effort cleanup** until account deletion (§6.3). *Repository fix landed 2026-09-04 (`ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001`, §27); the item stays OPEN until the migration is applied to Production, and it narrows rather than closes — cleanup becomes recoverable, not immediate or guaranteed.*
+20. **Orphaned attachment binaries can survive a failed best-effort cleanup** until account deletion (§6.3). *NARROWED, not closed. The fix is live in Production: `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` landed in the repository 2026-09-04 (§27), both migrations are now applied to Production, and the lifecycle passed a bounded wet acceptance on 2026-09-10 (§28). Cleanup is now **recoverable** — durable intent, retried immediately and again at the next authenticated session — but still **not immediate and not guaranteed**: there is no scheduled worker, so a queue row waits for a user who never returns, an object whose finalization never reached the database is deliberately left in place, and pre-feature orphans remain. Account deletion stays the final sweep, and this item therefore stays open in its residual form.*
 21. **No error-tracking with PII redaction exists**, which is a stated launch blocker — if one is later added, it becomes a new processor and this audit must be revised.
 
 ---
@@ -1465,6 +1465,41 @@ Account deletion is unchanged and remains the last resort: it still enumerates *
 
 ### 27.4 Rollout status
 
+> **Superseded on 2026-09-10 — see [§28](#28-addendum--2026-09-10--attachment-orphan-cleanup-hardening-001-production-rollout-and-acceptance).** The paragraph below is preserved as written: at the date of this addendum it was accurate, and the rollout requirement it states is exactly what was then carried out. Read it as history, not as current status.
+
 **The migration is NOT applied to Production as of this addendum.** Production's latest applied migration is `20260903180000`. Until `20260904120000` is applied, the deployed frontend uses the pre-migration behaviour described in §27.1 — including the browser-side upload metadata INSERT and its lost-response weakness, which is a schema-level fix and cannot be made from the client — with one honest improvement that needs no migration: a `storage.remove()` that returns `{ error }` is now recognised as a cleanup failure and reported, instead of being silently treated as success. §22.4 item 20 therefore stays open until the Production migration lands, and this document must be revised again at that point to record it.
 
 One consequence of the privilege change is worth stating in advance of that: applying the migration makes the currently deployed Production bundle's *legacy* attachment paths stop working, because they write `paper_attachments` directly — and its **paper deletion** stop working too, because it deletes `papers` directly. That is why the frontend must be deployed first — see [deployment.md](deployment.md) §6.4 and the four-combination table in §6.4a. Applying the database half first is non-destructive but leaves users on already-loaded tabs unable to add or delete attachments until they reload.
+
+---
+
+## 28. Addendum — 2026-09-10 — `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` Production rollout and acceptance
+
+**Scope.** This is the revision §27.4 required. It records that the change described in §27 is now applied to Production and that its user-visible behaviour was accepted there. **It introduces no new data, no new table, no new processor, no new external recipient and no new network egress** — §27's inventory of `attachment_cleanup_queue` and `attachment_cleanup_tombstone` is unchanged, and §5, §8, §9, §11, §12, §24, §25, §26 are untouched. `supabase/functions/**` is still byte-identical. §27 is preserved exactly as written.
+
+### 28.1 Rollout
+
+Both migrations are applied to Production, in the two authorized phases with the operator checkpoint between them: `20260904110000_prepare_merge_lock_order.sql`, a verified drain of the legacy merge body, then `20260904120000_add_recoverable_attachment_cleanup_queue.sql` behind its three-table cutover barrier. The corrected frontend had already been deployed, which is the ordering [deployment.md](deployment.md) §6.4 requires. The application happened after PR #273 merged on 2026-09-05 and was verified live before the 2026-09-10 acceptance; **the exact date is not recorded anywhere readable** — `supabase_migrations.schema_migrations` stores no applied-at timestamp, so no document should state one it cannot cite. The Production ledger now holds **80** rows with `20260904120000` latest, and every structure §27.2 describes is live: both tables, the lifecycle RPCs, `trg_paper_attachments_block_cleanup_intent`, both supporting indexes, and the `attachment_object_has_live_metadata` condition on `attachments_owner_delete`. `authenticated` holds `SELECT` only on `paper_attachments` and no longer holds `DELETE`/`TRUNCATE` on `papers`; `anon` holds none of the five on either table.
+
+### 28.2 Acceptance, and what it was allowed to touch
+
+A bounded wet acceptance ran on **2026-09-10** against the real Production application and the real Production Supabase project, on a **dedicated, empty Production account created for the purpose**. It was confined to that account: two disposable papers and five small PNG uploads, every one carrying a unique run marker, all created and removed through the ordinary authenticated product paths. **No other account was read or written, no pre-existing user data was touched, no SQL DML, service-role, admin-Storage or Auth-admin operation was used, and no account was deleted.** Administrative access was read-only.
+
+The account was verified empty before the first write and empty again afterwards — zero papers, zero attachments, zero queue rows, zero tombstones, zero Storage objects under its prefix — and no acceptance marker remains anywhere in Production. Production-wide, attachment metadata rows and attachment Storage objects both returned to **10**, the cleanup queue and the tombstone table are both **empty**, and no account was created or removed by the run beyond the acceptance account itself, which remains present. **A zero-valued `user_storage_usage` row for that account persists**: it is ordinary quota accounting created by the first upload (§27.2 and the quota triggers of `20260521030000`), it is already inventoried in §5, and it is not an orphan.
+
+### 28.3 What Production confirmed, in privacy terms
+
+- **Cleanup intent is durable, and the failure it exists for was exercised.** With Storage deletion forced to fail, the logical deletion still committed and the Storage key survived as one owner-scoped queue row — `attachment_delete` for an attachment deletion, `paper_delete` for a paper deletion — with the binary still present. Nothing was deleted on a guess.
+- **The retry is the user's own authenticated session, exactly as claimed.** The next session drained the queue itself, in the order this document describes: read the queue, delete the object, then acknowledge the row. No server component acted; there is still no worker, no cron and no queue consumer.
+- **A logical deletion is not undone by a physical failure.** A deleted paper stayed deleted while only its file cleanup was retried.
+- **A lost finalization response does not destroy a saved file, and leaves no permanent record.** A finalization that really committed in Production but whose response never reached the browser was reconciled by repeating the idempotent call: exactly **one** metadata row, the binary intact, no queue row and **no tombstone**.
+- **The destructive doors a stale client could reach are closed by the database, not by the current bundle.** As the signed-in owner, a direct `storage.remove()` of a live attachment deleted nothing, and direct `UPDATE`/`DELETE` on `paper_attachments` and a raw `DELETE` on `papers` were each refused with `42501`.
+
+### 28.4 What this addendum still does NOT claim
+
+Everything §27.3 refuses is still refused, and applying the migration changed none of it. In particular: cleanup is still **not immediate and not guaranteed**, because nothing on the server executes a queue row; an upload whose fate the database never learned is still left in place rather than deleted; and account deletion remains the final sweep and must never be rewritten to trust the queue or the tombstone as an inventory.
+
+Two further limits belong to the acceptance itself:
+
+- ❌ "the permanent tombstone-rejection path was proven in Production" — **false, and deliberately so.** No `upload_compensation` tombstone was manufactured in Production. That branch remains proven by the migration's own verification block, the pgTAP suite and deterministic local E2E, and creating permanent synthetic state in Production to demonstrate it was explicitly out of scope.
+- ❌ "Production is now free of orphaned attachment binaries" — **false.** The acceptance proved the new lifecycle's behaviour on objects it created itself. It performed **no** historical orphan hunt, and pre-feature orphans — objects no metadata row and no queue row ever described — are unaffected by this work and are still found only by the account-deletion Storage sweep.
