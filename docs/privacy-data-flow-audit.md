@@ -1451,7 +1451,7 @@ New user-scoped table, for the §5 inventory: **`attachment_cleanup_queue`** —
 
 ### 27.3 What must NOT be claimed
 
-This work adds **no scheduled worker, no cron, no queue consumer and no autonomous server component**, deliberately (see [decisions-and-triggers.md](decisions-and-triggers.md) **C37**). Therefore:
+This work adds **no scheduled worker, no cron, no autonomous server component and no server-side queue consumer**, deliberately (see [decisions-and-triggers.md](decisions-and-triggers.md) **C37**). The queue consumer is the **authenticated application session itself** — once immediately after the user's action, and once again at the next authenticated session start — which is exactly why cleanup is recoverable rather than guaranteed. Therefore:
 
 - ❌ "every attachment binary is deleted immediately" — **false**, and it was false before this change too. A binary awaiting cleanup can remain for as long as Storage refuses.
 - ❌ "cleanup is guaranteed even if the user never returns" — **false**. Nothing on the server executes a queue row. If the user never signs in again, the row simply waits.
