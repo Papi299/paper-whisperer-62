@@ -1617,13 +1617,15 @@ authentication · the importer · Project/Tag selection · normalisation · dupl
 semantics · any PaperLume business logic · anything under `supabase/**` (no
 migration, Edge Function, RLS, RPC, secret, or Production SQL).
 
-> **Duplicate semantics have since changed, on the web side only.**
+> **Duplicate semantics have since changed in PaperLume itself, not in the extension.**
 > `CHROME-EXTENSION-IMPORT-001D` (2026-09-03) landed the deterministic duplicate
 > path: a paper already in the library is still reported as such and still
 > produces no second row, but the user's selected Projects and Tags are now
 > **added** to that existing paper when — and only when — the database can prove
 > exactly one owned row matches the attempted PMID or DOI, and are left
-> unapplied otherwise. That is a web-application and database change. **The
+> unapplied otherwise. That is a web-application and database change, and its
+> database half (migration `20260903180000`) is verified live in Production as
+> of 2026-09-11. **The
 > extension package is byte-identical**: no manifest, permission, host-permission,
 > detection, popup, icon, version, ZIP, listing, privacy-answer, submission or
 > publication change, and the Store item's state is exactly as recorded elsewhere

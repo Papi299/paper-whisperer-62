@@ -1028,11 +1028,12 @@ test.describe("Extension import handoff", () => {
   test("calls no additive RPC when the duplicate result carries no id", async ({ page }) => {
     // THE DEPLOYMENT-ORDER PROOF, run against the real route.
     //
-    // Production runs the pre-migration `safe_bulk_insert_papers` until that
-    // migration is applied, and it answers every duplicate without an id. This
-    // reproduces exactly that by deleting the id from the real response, and
-    // requires that the client then writes nothing — so shipping the web change
-    // first cannot call a `bulk_add_*` function the database does not have.
+    // A database that predates 20260903180000 answers every duplicate without
+    // an id — as Production did while the web change shipped ahead of that
+    // migration. This reproduces exactly that by deleting the id from the real
+    // response, and requires that the client then writes nothing — so a web
+    // build running against such a database cannot call a `bulk_add_*`
+    // function that database does not have.
     const standIn = await installMetadataStandIn(page);
     const rpcs = recordRpcCalls(page);
     const stripper = await stripResolvedDuplicateIds(page);
