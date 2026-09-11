@@ -278,10 +278,19 @@ The last row is the point of the three changes together: the destructive orderin
 
 **Post-migration verification (structural, non-destructive).** After applying, confirm on the linked project that `public.attachment_cleanup_queue` exists with RLS enabled *and* forced, exactly two policies (SELECT, DELETE), `authenticated` holding SELECT+DELETE and **not** INSERT/UPDATE, `anon`/`service_role`/`PUBLIC` holding nothing, the `(user_id, file_path)` unique constraint present, the `auth.users` FK cascading, and no FK to `papers`/`paper_attachments`; that all three client RPCs are `SECURITY DEFINER` with `search_path=public` and executable by `authenticated` only; that `trg_paper_attachments_block_cleanup_intent` exists on `paper_attachments` alongside the two pre-existing storage-quota triggers; that `public.attachment_cleanup_tombstone` exists with RLS enabled *and* forced, **zero** policies and no privilege for any client role; that `authenticated` holds **`SELECT` only** on `public.paper_attachments` — no `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE`, with `anon` and `PUBLIC` holding nothing at all; that `authenticated` holds **`SELECT`, `INSERT` and `UPDATE` but neither `DELETE` nor `TRUNCATE`** on `public.papers`, with `anon` holding none of the five; and that `attachments_owner_delete` on `storage.objects` still carries its owner-prefix condition and now also calls `attachment_object_has_live_metadata`, with `idx_paper_attachments_user_file_path` present to serve it. The migration's own `DO $verify$` block asserts all of this inside the same transaction — plus that `finalize_attachment_upload` serializes before it reads, that no `queue_untracked_attachment_cleanup` function exists, and that all three cutover barriers — `SHARE ROW EXCLUSIVE` on `auth.users`, `SHARE` on `public.papers` and `ACCESS EXCLUSIVE` on `public.paper_attachments` — are still held, granted, by the migration's own backend at the moment the privilege posture is checked — so a successful apply already proves it; this is the read-back, not a second gate.
 
-### 6.5 No ordering constraint for `20260910212202` (Data API ACL reconciliation)
+### 6.5 No ordering constraint for `20260910212202` (Data API ACL reconciliation) — COMPLETE
 
-**Not yet applied to Production.** This is the runbook for a future, separately
-authorized rollout; merging the PR does not perform it.
+> **Status — COMPLETE. APPLIED TO PRODUCTION 2026-09-11. DO NOT RE-RUN AS A
+> PENDING DEPLOY.** PR #275 merged as `9ca298ba14c32459200ea84db4fa16bd75e20057`
+> and the migration was applied **exactly once**, in a single successful
+> `supabase db push` that needed no retry. The ledger moved **80 → 81**, its
+> latest is now `20260910212202`, and ordinary `public` tables carrying a direct
+> `anon` grant moved **17 → 0**. A read-only postflight confirmed the full
+> contract below. **Nothing here is a pending step.** The procedure that follows
+> is retained as the record of how it was done and as generic
+> recovery/replay reference — not as something to execute again against this
+> project. Verify rather than trust this note: `supabase migration list --linked`
+> should show **81** rows with `20260910212202` latest.
 
 **What it changes.** Client-role object privileges only: `PUBLIC`, `anon` and
 `authenticated` on the 28 ordinary `public` tables and the one sequence, plus the
@@ -305,18 +314,21 @@ guards against cannot arise here:
   after — the re-`GRANT`s restate it inside the same transaction — so no
   in-flight request can lose a privilege it was planned with.
 
-**Stale browser tabs are unaffected.** No shipped bundle issues a statement that
+**Stale browser tabs were unaffected.** No shipped bundle issues a statement that
 uses a revoked privilege. The one observable difference is in operations that
-never worked: a hand-written request that today returns "0 rows affected"
-(RLS filtered it) will return `42501` instead.
+never worked: a hand-written request that previously returned "0 rows affected"
+(RLS filtered it) now returns `42501` instead.
 
-**Preflight (read-only).** The migration pins its own preconditions and refuses
-an unexpected schema, so the useful preflight is confirming you know which state
-Production is in:
+**Preflight (read-only) — the historical rollout sequence.** The migration pins
+its own preconditions and refuses an unexpected schema, so the useful preflight
+was confirming which state Production was in. These are the commands that were
+run on 2026-09-11, kept as the record and as the pattern for a comparable
+future ACL migration. **Against this project they are now satisfied** — the
+migration is applied, so a dry-run here proposes nothing:
 
 ```sh
-supabase migration list --linked          # expect this migration local-only
-supabase db push --dry-run                # expect EXACTLY this one migration
+supabase migration list --linked          # then: this migration local-only. NOW: 81/81 aligned
+supabase db push --dry-run                # then: EXACTLY this one migration. NOW: nothing to push
 ```
 
 ```sql
@@ -334,8 +346,8 @@ never been reviewed, and the migration will refuse it rather than guess.
 The same holds for the default privileges. For TABLES (`r`) and SEQUENCES (`S`)
 the entry must be one of the two audited histories **as a whole**: `postgres`
 holds its full owner set; `anon` and `authenticated` both hold ALL / `rwU`
-(hosted, today) or both hold `Dxtm` / `w` (after Supabase's 2026-10-30 change);
-`service_role` holds either shape; and nothing else appears — no direct `PUBLIC`
+(hosted, as Production stood before this rollout) or both hold `Dxtm` / `w`
+(after Supabase's 2026-10-30 change); `service_role` holds either shape; and nothing else appears — no direct `PUBLIC`
 entry and no other role. Anything else — an `authenticated` entry that differs
 from `anon`'s, an unfamiliar grantee — makes the migration refuse before it
 changes anything. That is a reason to re-audit, never to relax the precondition.
@@ -347,11 +359,16 @@ applying them after it restores nothing; and if they land first, the migration's
 preconditions accept that shape and simply remove the remainder. Suite 015 proves
 this by running Supabase's documented statements against the converged state.
 
-**Apply** with the standard §6.1 sequence. The file is wrapped in an explicit
+**Apply — already done; do not repeat.** It was applied with the standard §6.1
+sequence, as one `supabase db push`. The file is wrapped in an explicit
 `BEGIN … COMMIT` and ends with a fail-closed verification block, so it either
-produces the reviewed matrix or leaves the database untouched.
+produces the reviewed matrix or leaves the database untouched — which is also
+why re-running it is unnecessary rather than merely discouraged: the ledger
+already carries its row.
 
-**Postflight (read-only).** Confirm on the linked project:
+**Postflight (read-only) — run on 2026-09-11, and still the right re-check.**
+These queries returned the required empty/converged results then, and they
+remain the SELECT-only way to re-confirm the live posture at any time:
 
 ```sql
 -- must return no rows: PUBLIC (grantee 0) and anon reach nothing
@@ -371,11 +388,16 @@ select d.defaclobjtype, a.grantee, a.privilege_type
 
 Then a signed-in smoke pass: load the library, add/edit/delete a paper, edit tags
 and projects, add and remove a keyword and a study type, save a filter preset,
-open Analytics, and confirm the storage gauge and AI quota still render.
+open Analytics, and confirm the storage gauge and AI quota still render. **On
+2026-09-11 that pass was deliberately not run**: the rollout authorization was
+read-only outside the migration itself, so runtime observation was limited to
+non-mutating signed-out `GET`s of `/` and `/auth` (both `200`). The pass above
+stays the right check for a comparable future ACL change, and remains available
+on demand here.
 
-**Rollback.** Re-`GRANT` the previous posture. Nothing here touches data, so
-recovery is a privilege statement, not a restore. The correct target is the
-intended matrix — if a real dependency surfaces, re-grant that one privilege on
+**Rollback (reference only — not invoked).** Re-`GRANT` the previous posture.
+Nothing here touches data, so recovery is a privilege statement, not a
+restore. The correct target is the intended matrix — if a real dependency surfaces, re-grant that one privilege on
 that one table and amend the matrix, its test and this runbook together, rather
 than restoring the legacy blanket ACL.
 
