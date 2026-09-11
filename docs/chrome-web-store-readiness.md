@@ -1617,18 +1617,23 @@ authentication · the importer · Project/Tag selection · normalisation · dupl
 semantics · any PaperLume business logic · anything under `supabase/**` (no
 migration, Edge Function, RLS, RPC, secret, or Production SQL).
 
-> **Duplicate semantics have since changed, on the web side only.**
+> **Duplicate semantics have since changed in PaperLume itself, not in the extension.**
 > `CHROME-EXTENSION-IMPORT-001D` (2026-09-03) landed the deterministic duplicate
 > path: a paper already in the library is still reported as such and still
 > produces no second row, but the user's selected Projects and Tags are now
 > **added** to that existing paper when — and only when — the database can prove
 > exactly one owned row matches the attempted PMID or DOI, and are left
-> unapplied otherwise. That is a web-application and database change. **The
+> unapplied otherwise. That is a web-application and database change, and its
+> database half (migration `20260903180000`) is verified live in Production as
+> of 2026-09-11. **The
 > extension package is byte-identical**: no manifest, permission, host-permission,
 > detection, popup, icon, version, ZIP, listing, privacy-answer, submission or
-> publication change, and the Store item's state is exactly as recorded elsewhere
-> in this document. The paragraph above stands as the accurate record of what
-> 001E1 / 001E2 / 001E2-CORRECTION-01 themselves did not change.
+> publication change. The extension package, listing materials and Store
+> configuration were not changed by `CHROME-EXTENSION-IMPORT-001D` or by its
+> Production-acceptance task; the Chrome Web Store review/publication lifecycle
+> is separate, and this note makes no claim about its current state. The
+> paragraph above stands as the accurate record of what 001E1 / 001E2 /
+> 001E2-CORRECTION-01 themselves did not change.
 
 001E2 additionally did **not** change: the Privacy Policy's wording; the
 manifest `description`; the popup's markup, styling or behaviour; any provider
