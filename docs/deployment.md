@@ -278,6 +278,109 @@ The last row is the point of the three changes together: the destructive orderin
 
 **Post-migration verification (structural, non-destructive).** After applying, confirm on the linked project that `public.attachment_cleanup_queue` exists with RLS enabled *and* forced, exactly two policies (SELECT, DELETE), `authenticated` holding SELECT+DELETE and **not** INSERT/UPDATE, `anon`/`service_role`/`PUBLIC` holding nothing, the `(user_id, file_path)` unique constraint present, the `auth.users` FK cascading, and no FK to `papers`/`paper_attachments`; that all three client RPCs are `SECURITY DEFINER` with `search_path=public` and executable by `authenticated` only; that `trg_paper_attachments_block_cleanup_intent` exists on `paper_attachments` alongside the two pre-existing storage-quota triggers; that `public.attachment_cleanup_tombstone` exists with RLS enabled *and* forced, **zero** policies and no privilege for any client role; that `authenticated` holds **`SELECT` only** on `public.paper_attachments` — no `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE`, with `anon` and `PUBLIC` holding nothing at all; that `authenticated` holds **`SELECT`, `INSERT` and `UPDATE` but neither `DELETE` nor `TRUNCATE`** on `public.papers`, with `anon` holding none of the five; and that `attachments_owner_delete` on `storage.objects` still carries its owner-prefix condition and now also calls `attachment_object_has_live_metadata`, with `idx_paper_attachments_user_file_path` present to serve it. The migration's own `DO $verify$` block asserts all of this inside the same transaction — plus that `finalize_attachment_upload` serializes before it reads, that no `queue_untracked_attachment_cleanup` function exists, and that all three cutover barriers — `SHARE ROW EXCLUSIVE` on `auth.users`, `SHARE` on `public.papers` and `ACCESS EXCLUSIVE` on `public.paper_attachments` — are still held, granted, by the migration's own backend at the moment the privilege posture is checked — so a successful apply already proves it; this is the read-back, not a second gate.
 
+### 6.5 No ordering constraint for `20260910212202` (Data API ACL reconciliation)
+
+**Not yet applied to Production.** This is the runbook for a future, separately
+authorized rollout; merging the PR does not perform it.
+
+**What it changes.** Client-role object privileges only: `PUBLIC`, `anon` and
+`authenticated` on the 28 ordinary `public` tables and the one sequence, plus the
+default privileges `postgres` hands to FUTURE tables and sequences in `public`.
+It changes no RLS policy, no function, no trigger, no column and no row.
+`service_role` is referenced by the preconditions and the verification, but it
+is named in no privilege-mutating `GRANT`, `REVOKE` or
+`ALTER DEFAULT PRIVILEGES` statement; its exact observed posture is preserved,
+and the migration refuses to commit if that posture moved.
+
+**Ordering: none required, in either direction.** Unlike §6.4, this migration
+needs no web-first deploy, no Edge deploy, no operator drain and no lock barrier.
+The reason is not that the risk was accepted — it is that the class of race §6.4
+guards against cannot arise here:
+
+- every privilege it removes is one the shipped bundle does not use: either RLS
+  already denies that role every row (no policy, or a policy `anon` can never
+  satisfy), or it is a non-DML privilege (`TRUNCATE`, `REFERENCES`, `TRIGGER`,
+  `MAINTAIN`) that no application path exercises;
+- the DML surface `authenticated` actually uses is **identical** before and
+  after — the re-`GRANT`s restate it inside the same transaction — so no
+  in-flight request can lose a privilege it was planned with.
+
+**Stale browser tabs are unaffected.** No shipped bundle issues a statement that
+uses a revoked privilege. The one observable difference is in operations that
+never worked: a hand-written request that today returns "0 rows affected"
+(RLS filtered it) will return `42501` instead.
+
+**Preflight (read-only).** The migration pins its own preconditions and refuses
+an unexpected schema, so the useful preflight is confirming you know which state
+Production is in:
+
+```sh
+supabase migration list --linked          # expect this migration local-only
+supabase db push --dry-run                # expect EXACTLY this one migration
+```
+
+```sql
+-- 28 ordinary tables, 1 sequence, all owned by postgres, and no other Data API relation
+select c.relkind, count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relkind in ('r','p','v','m','f','S') group by 1;
+-- the starting default-privilege entries — judged WHOLE, see below
+select d.defaclobjtype, d.defaclacl from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace
+ where n.nspname = 'public' and pg_get_userbyid(d.defaclrole) = 'postgres';
+```
+
+A table added since the audit **must** stop the rollout: its intended surface has
+never been reviewed, and the migration will refuse it rather than guess.
+
+The same holds for the default privileges. For TABLES (`r`) and SEQUENCES (`S`)
+the entry must be one of the two audited histories **as a whole**: `postgres`
+holds its full owner set; `anon` and `authenticated` both hold ALL / `rwU`
+(hosted, today) or both hold `Dxtm` / `w` (after Supabase's 2026-10-30 change);
+`service_role` holds either shape; and nothing else appears — no direct `PUBLIC`
+entry and no other role. Anything else — an `authenticated` entry that differs
+from `anon`'s, an unfamiliar grantee — makes the migration refuse before it
+changes anything. That is a reason to re-audit, never to relax the precondition.
+
+**Supabase's own 2026-10-30 change is compatible in both orders.** Supabase moves
+existing projects to opt-in Data API defaults on that date, keeping existing table
+grants. Its statements are `REVOKE`s and narrower than this migration's, so
+applying them after it restores nothing; and if they land first, the migration's
+preconditions accept that shape and simply remove the remainder. Suite 015 proves
+this by running Supabase's documented statements against the converged state.
+
+**Apply** with the standard §6.1 sequence. The file is wrapped in an explicit
+`BEGIN … COMMIT` and ends with a fail-closed verification block, so it either
+produces the reviewed matrix or leaves the database untouched.
+
+**Postflight (read-only).** Confirm on the linked project:
+
+```sql
+-- must return no rows: PUBLIC (grantee 0) and anon reach nothing
+select c.relname, a.grantee, a.privilege_type
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace,
+       aclexplode(coalesce(c.relacl, acldefault(case when c.relkind='S' then 's'::"char" else 'r'::"char" end, c.relowner))) a
+ where n.nspname = 'public' and c.relkind in ('r','p','v','m','f','S')
+   and a.grantee in (0, 'anon'::regrole);
+-- authenticated on the sequence must be USAGE only
+select relacl from pg_class where oid = 'public.papers_insert_order_seq'::regclass;
+-- must return no rows: only the owner and service_role remain in the defaults
+select d.defaclobjtype, a.grantee, a.privilege_type
+  from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+ where n.nspname = 'public' and pg_get_userbyid(d.defaclrole) = 'postgres' and d.defaclobjtype in ('r','S')
+   and a.grantee not in ('postgres'::regrole, 'service_role'::regrole);
+```
+
+Then a signed-in smoke pass: load the library, add/edit/delete a paper, edit tags
+and projects, add and remove a keyword and a study type, save a filter preset,
+open Analytics, and confirm the storage gauge and AI quota still render.
+
+**Rollback.** Re-`GRANT` the previous posture. Nothing here touches data, so
+recovery is a privilege statement, not a restore. The correct target is the
+intended matrix — if a real dependency surfaces, re-grant that one privilege on
+that one table and amend the matrix, its test and this runbook together, rather
+than restoring the legacy blanket ACL.
+
+---
+
 ---
 
 ## 7. Edge Function deployment
