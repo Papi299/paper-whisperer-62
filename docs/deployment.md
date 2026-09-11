@@ -287,8 +287,10 @@ authorized rollout; merging the PR does not perform it.
 `authenticated` on the 28 ordinary `public` tables and the one sequence, plus the
 default privileges `postgres` hands to FUTURE tables and sequences in `public`.
 It changes no RLS policy, no function, no trigger, no column and no row.
-`service_role` is not named in a single statement, and the migration refuses to
-commit if its privileges moved.
+`service_role` is referenced by the preconditions and the verification, but it
+is named in no privilege-mutating `GRANT`, `REVOKE` or
+`ALTER DEFAULT PRIVILEGES` statement; its exact observed posture is preserved,
+and the migration refuses to commit if that posture moved.
 
 **Ordering: none required, in either direction.** Unlike §6.4, this migration
 needs no web-first deploy, no Edge deploy, no operator drain and no lock barrier.

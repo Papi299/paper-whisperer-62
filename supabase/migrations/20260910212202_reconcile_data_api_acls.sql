@@ -59,10 +59,12 @@
 --     defaults). So this migration deliberately PRESERVES the exact
 --     pre-migration `service_role` posture rather than converging or narrowing
 --     it. It is the server boundary and it bypasses RLS; narrowing it would be a
---     new decision, taken without the evidence that would justify it. It is not
---     named in a single statement below, section 2 accepts only its recognised
---     platform shapes, and section 4 proves the exact observed posture did not
---     move.
+--     new decision, taken without the evidence that would justify it. It is
+--     deliberately REFERENCED by the preconditions (section 2) and the
+--     verification (section 4), but it is not named in any privilege-mutating
+--     GRANT, REVOKE or ALTER DEFAULT PRIVILEGES statement: section 2 accepts
+--     only its recognised platform shapes and snapshots them, and section 4
+--     proves the exact observed posture did not move.
 --   * Function EXECUTE privileges and function default privileges. The
 --     SECURITY DEFINER surface is already least-privilege and pinned by suite
 --     003. The residual question is the five SECURITY INVOKER helpers that carry
@@ -642,9 +644,10 @@ REVOKE ALL ON TABLE
 -- into `papers` evaluates its `nextval()` default, and USAGE is the minimum
 -- privilege for that. SELECT (currval / reading the sequence) and UPDATE are not
 -- needed — and UPDATE is what permits `setval()`, i.e. rewriting the library's
--- insert ordering. `service_role` is deliberately not named: its posture here is
--- environment-dependent (`rwU` on Production, `wU` on a clean replay) and
--- narrowing it belongs to the separate service-role question.
+-- insert ordering. `service_role` is deliberately absent from the REVOKE and
+-- GRANT below: its posture here is environment-dependent (`rwU` on Production,
+-- `wU` on a clean replay), it is preserved exactly, and narrowing it belongs to
+-- the separate service-role question.
 
 REVOKE ALL ON SEQUENCE public.papers_insert_order_seq FROM PUBLIC, anon, authenticated;
 GRANT USAGE ON SEQUENCE public.papers_insert_order_seq TO authenticated;
@@ -675,8 +678,8 @@ GRANT USAGE ON SEQUENCE public.papers_insert_order_seq TO authenticated;
 -- running them after these lines — which is what 2026-10-30 does — cannot undo
 -- anything here. The reverse is also handled: if Supabase has already run them,
 -- section 2g accepts that shape and these statements simply remove the remainder.
--- `service_role` is not named, so its default privileges are left exactly as the
--- platform maintains them.
+-- `service_role` is absent from both ALTER DEFAULT PRIVILEGES statements below,
+-- so its default privileges are left exactly as the platform maintains them.
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated;
