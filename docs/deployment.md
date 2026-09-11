@@ -314,10 +314,10 @@ guards against cannot arise here:
   after — the re-`GRANT`s restate it inside the same transaction — so no
   in-flight request can lose a privilege it was planned with.
 
-**Stale browser tabs are unaffected.** No shipped bundle issues a statement that
+**Stale browser tabs were unaffected.** No shipped bundle issues a statement that
 uses a revoked privilege. The one observable difference is in operations that
-never worked: a hand-written request that today returns "0 rows affected"
-(RLS filtered it) will return `42501` instead.
+never worked: a hand-written request that previously returned "0 rows affected"
+(RLS filtered it) now returns `42501` instead.
 
 **Preflight (read-only) — the historical rollout sequence.** The migration pins
 its own preconditions and refuses an unexpected schema, so the useful preflight
@@ -346,8 +346,8 @@ never been reviewed, and the migration will refuse it rather than guess.
 The same holds for the default privileges. For TABLES (`r`) and SEQUENCES (`S`)
 the entry must be one of the two audited histories **as a whole**: `postgres`
 holds its full owner set; `anon` and `authenticated` both hold ALL / `rwU`
-(hosted, today) or both hold `Dxtm` / `w` (after Supabase's 2026-10-30 change);
-`service_role` holds either shape; and nothing else appears — no direct `PUBLIC`
+(hosted, as Production stood before this rollout) or both hold `Dxtm` / `w`
+(after Supabase's 2026-10-30 change); `service_role` holds either shape; and nothing else appears — no direct `PUBLIC`
 entry and no other role. Anything else — an `authenticated` entry that differs
 from `anon`'s, an unfamiliar grantee — makes the migration refuse before it
 changes anything. That is a reason to re-audit, never to relax the precondition.
