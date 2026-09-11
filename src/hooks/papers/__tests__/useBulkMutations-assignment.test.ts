@@ -410,9 +410,8 @@ describe("useBulkMutations – bulkDeletePapers explicit user_id scoping (S2 def
   //
   // The client-side `.in("id", …).eq("user_id", …)` chain still exists in the
   // pre-migration compatibility path, and this suite keeps asserting it there:
-  // Production no longer takes that path — the cleanup RPC it probes for exists
-  // there — but the fallback still ships for any database that predates
-  // `20260904120000`, so its scoping predicate is not dead code.
+  // that path runs in Production until the migration is applied, so its scoping
+  // predicate is not historical.
 
   beforeEach(() => {
     vi.clearAllMocks();

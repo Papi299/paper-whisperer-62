@@ -1628,9 +1628,12 @@ migration, Edge Function, RLS, RPC, secret, or Production SQL).
 > of 2026-09-11. **The
 > extension package is byte-identical**: no manifest, permission, host-permission,
 > detection, popup, icon, version, ZIP, listing, privacy-answer, submission or
-> publication change, and the Store item's state is exactly as recorded elsewhere
-> in this document. The paragraph above stands as the accurate record of what
-> 001E1 / 001E2 / 001E2-CORRECTION-01 themselves did not change.
+> publication change. The extension package, listing materials and Store
+> configuration were not changed by `CHROME-EXTENSION-IMPORT-001D` or by its
+> Production-acceptance task; the Chrome Web Store review/publication lifecycle
+> is separate, and this note makes no claim about its current state. The
+> paragraph above stands as the accurate record of what 001E1 / 001E2 /
+> 001E2-CORRECTION-01 themselves did not change.
 
 001E2 additionally did **not** change: the Privacy Policy's wording; the
 manifest `description`; the popup's markup, styling or behaviour; any provider
