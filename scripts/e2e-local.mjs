@@ -20,8 +20,9 @@
  *                  under supabase/tests/database (isolated, extension state
  *                  restored) → run the framework-free 18-case verification →
  *                  prove true concurrent AI-quota consumption at the cap, the
- *                  author-identity merge-cycle refusal, and the attachment
- *                  upload-finalization linearization, each with bounded,
+ *                  author-identity merge-cycle refusal, the attachment
+ *                  upload-finalization linearization, and the AI model/
+ *                  reasoning preference serialization, each with bounded,
  *                  fail-closed coordinator/worker processes whose deadlines all
  *                  start at barrier release → verify no
  *                  row/catalog residue → stop the stack and delete its volumes →
@@ -2055,6 +2056,441 @@ async function runPaperDeleteFinalizationProbe(container) {
   }
 }
 
+// ── AI-MULTI-PROVIDER-001C-REVIEW-FIX-01 ─────────────────────────────────────
+// AI model / reasoning preference serialization. Its own users, its own
+// disposable catalog rows and its own barrier key, so it cannot interact with
+// any probe above.
+const PL_USER_A = "cc000000-0000-0000-0000-0000000000a1";
+const PL_USER_B = "cc000000-0000-0000-0000-0000000000a2";
+const PL_USER_C = "cc000000-0000-0000-0000-0000000000a3";
+const PL_USER_D = "cc000000-0000-0000-0000-0000000000a4";
+const PL_USERS = [PL_USER_A, PL_USER_B, PL_USER_C, PL_USER_D];
+const PL_USER_LIST = PL_USERS.map((u) => `'${u}'`).join(",");
+// Every real catalog row ships with reasoning_selectable = false, and opening
+// one would move its updated_at (a BEFORE UPDATE trigger owns that column), so
+// the probe brings two disposable rows and afterwards proves the real rows
+// byte-identical. WIDE lists `minimal` and NARROW does not — the same asymmetry
+// as Gemini 3.5 against 3.8.
+const PL_WIDE = "google/paperlume-lock-probe-wide";
+const PL_NARROW = "google/paperlume-lock-probe-narrow";
+const PL_BARRIER_KEY = 918273648;
+const PL_BARRIER_OBJID = PL_BARRIER_KEY & 0xffffffff;
+const PL_BARRIER_CLASSID = Math.floor(PL_BARRIER_KEY / 2 ** 32);
+const PL_RACE_ROUNDS = 10; // free-running rounds per scenario, after both forced orders.
+const PL_CATALOG_DIGEST_SQL =
+  "SELECT md5(COALESCE(string_agg(c::text, '|' ORDER BY c.id), '')) FROM public.ai_model_catalog c;";
+
+/**
+ * The preference RPCs as tagged SQL: each `sql(tag)` prints one `${tag}=…` line
+ * per call. The granted RPCs run as `authenticated`, exactly as a client calls
+ * them. The STAGED reasoning setter is granted to no role, so it runs as the
+ * function owner with the caller's claims — the same context suite 016 uses;
+ * auth.uid() reads the claims, not the role. Nothing here grants anything.
+ */
+const plCall = {
+  model: (model) => ({
+    label: `set_current_user_ai_model(${model === PL_WIDE ? "WIDE" : "NARROW"})`,
+    sql: (tag) =>
+      "SET ROLE authenticated;\n" +
+      `SELECT '${tag}=' || reason || ':' || reasoning_reset::text FROM public.set_current_user_ai_model('${model}');\n` +
+      "RESET ROLE;\n",
+  }),
+  reasoning: (level) => ({
+    label: `set_current_user_ai_reasoning(${level})`,
+    sql: (tag) =>
+      `SELECT '${tag}=' || reason || ':' || (updated_at IS NOT NULL)::text ` +
+      `FROM public.set_current_user_ai_reasoning('${level}');\n`,
+  }),
+  clearReasoning: () => ({
+    label: "clear_current_user_ai_reasoning()",
+    sql: (tag) =>
+      "SET ROLE authenticated;\n" +
+      `SELECT '${tag}=' || reason FROM public.clear_current_user_ai_reasoning();\n` +
+      "RESET ROLE;\n",
+  }),
+  clearModel: () => ({
+    label: "clear_current_user_ai_model()",
+    sql: (tag) =>
+      "SET ROLE authenticated;\n" +
+      `SELECT '${tag}=' || reason FROM public.clear_current_user_ai_model();\n` +
+      "RESET ROLE;\n",
+  }),
+  /** Several calls, committed together by whichever session runs them. */
+  together: (...calls) => ({
+    label: calls.map((c) => c.label).join(" + "),
+    sql: (tag) => calls.map((c) => c.sql(tag)).join(""),
+  }),
+};
+
+/**
+ * Each scenario is two calls, x and y, on one user's row. `xy` is exactly what
+ * the serial order "x commits, then y runs" produces — both call results and the
+ * final row — and `yx` the reverse. Those are the ONLY acceptable outcomes.
+ * `forbids` names what the pre-fix functions could produce instead. A reasoning
+ * result reads `reason:wrote`, where `wrote` is whether updated_at came back.
+ */
+const PL_SCENARIOS = [
+  {
+    name: "A",
+    title: "reasoning save vs incompatible model switch",
+    user: PL_USER_A,
+    start: { model: PL_WIDE, level: null },
+    x: plCall.reasoning("minimal"),
+    y: plCall.model(PL_NARROW),
+    xy: { x: "ok:true", y: "ok:true", final: `${PL_NARROW}:AUTOMATIC` },
+    yx: { x: "reasoning_level_not_supported:false", y: "ok:false", final: `${PL_NARROW}:AUTOMATIC` },
+    forbids: "NARROW stored with `minimal`, a level NARROW does not list",
+  },
+  {
+    name: "B",
+    title: "reasoning clear vs model switch",
+    user: PL_USER_B,
+    start: { model: PL_WIDE, level: "high" },
+    x: plCall.clearReasoning(),
+    y: plCall.model(PL_NARROW),
+    xy: { x: "ok", y: "ok:false", final: `${PL_NARROW}:AUTOMATIC` },
+    yx: { x: "ok", y: "ok:false", final: `${PL_NARROW}:AUTOMATIC` },
+    forbids: "an acknowledged clear resurrected from a stale read (NARROW with `high`)",
+  },
+  {
+    name: "C",
+    title: "reasoning save vs model clear",
+    user: PL_USER_C,
+    start: { model: PL_WIDE, level: null },
+    x: plCall.reasoning("medium"),
+    y: plCall.clearModel(),
+    xy: { x: "ok:true", y: "ok", final: "NO_ROW" },
+    yx: { x: "model_required:false", y: "ok", final: "NO_ROW" },
+    forbids: "saved = true for a row that had already been deleted (`ok:false`)",
+  },
+  {
+    name: "D",
+    title: "first-row creation race",
+    user: PL_USER_D,
+    start: null,
+    x: plCall.together(plCall.model(PL_NARROW), plCall.reasoning("high")),
+    y: plCall.model(PL_WIDE),
+    xy: { x: "ok:false,ok:true", y: "ok:false", final: `${PL_WIDE}:high` },
+    yx: { x: "ok:false,ok:true", y: "ok:false", final: `${PL_NARROW}:high` },
+    forbids: "a committed manual level overwritten by a stale no-row read (WIDE on Automatic)",
+  },
+];
+
+/** Session prelude: become the probe user and report this backend's pid. */
+function plPrelude(user) {
+  return (
+    `SELECT set_config('request.jwt.claims','{"sub":"${user}","role":"authenticated"}', false);\n` +
+    "SELECT 'PID=' || pg_backend_pid();\n"
+  );
+}
+
+/** The backend pid a session reported, or null before it has. */
+function plPid(out) {
+  const m = /^PID=(\d+)$/m.exec(`${out}`);
+  return m ? Number(m[1]) : null;
+}
+
+/** Every `${tag}=` line a session printed, in order, comma-joined. */
+function plOutcome(out, tag) {
+  return `${out}`.split("\n").map((s) => s.trim())
+    .filter((l) => l.startsWith(`${tag}=`)).map((l) => l.slice(tag.length + 1)).join(",");
+}
+
+/** Whether {x, y, final} is exactly one serial order's outcome. */
+function plMatches(expected, got) {
+  return ["x", "y", "final"].every((k) => expected[k] === got[k]);
+}
+
+/** `model:level` (AUTOMATIC for NULL), or NO_ROW — read on a fresh connection. */
+function plState(container, user) {
+  return dbScalar(
+    container,
+    `SELECT COALESCE((SELECT preferred_model_id || ':' || COALESCE(preferred_reasoning_level, 'AUTOMATIC') ` +
+      `FROM public.user_ai_preferences WHERE user_id='${user}'), 'NO_ROW');`,
+  );
+}
+
+/** Commit a scenario's starting row (or its absence), then prove it. */
+async function plReset(container, sc) {
+  const r = await dockerPsql(
+    container,
+    `DELETE FROM public.user_ai_preferences WHERE user_id='${sc.user}';\n` +
+      (sc.start
+        ? "INSERT INTO public.user_ai_preferences (user_id, preferred_model_id, preferred_reasoning_level) " +
+          `VALUES ('${sc.user}','${sc.start.model}',${sc.start.level ? `'${sc.start.level}'` : "NULL"});\n`
+        : ""),
+  );
+  if (r.code !== 0) throw new Error(`preference-lock ${sc.name}: resetting the starting row failed: ${r.err.trim()}`);
+  const expected = sc.start ? `${sc.start.model}:${sc.start.level ?? "AUTOMATIC"}` : "NO_ROW";
+  const actual = await plState(container, sc.user);
+  if (actual !== expected) {
+    throw new Error(`preference-lock ${sc.name}: the starting row is ${actual}, expected ${expected}.`);
+  }
+}
+
+/** Advisory locks on this probe's barrier key; `waiting` counts only ungranted ones. */
+async function countPlBarrierLocks(container, waiting) {
+  const n = await dbScalar(
+    container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${PL_BARRIER_CLASSID} ` +
+      `AND objid=${PL_BARRIER_OBJID}${waiting ? " AND NOT granted" : ""};`,
+  );
+  return parseInt(n || "0", 10);
+}
+
+/** Committed fixture: two disposable catalog rows and four entitled users. */
+async function plSetupFixture(container) {
+  const setup = await dockerPsql(
+    container,
+    "INSERT INTO public.ai_model_catalog (id, provider, provider_model, display_name, enabled, selectable, " +
+      "sort_order, reasoning_levels, auto_analyze_reasoning_level, auto_suggest_reasoning_level, reasoning_selectable) VALUES\n" +
+      `  ('${PL_WIDE}','google','${PL_WIDE.split("/")[1]}','Lock probe (wide)',true,true,9001,` +
+      "ARRAY['minimal','low','medium','high'],'minimal','medium',true),\n" +
+      `  ('${PL_NARROW}','google','${PL_NARROW.split("/")[1]}','Lock probe (narrow)',true,true,9002,` +
+      "ARRAY['low','medium','high'],'low','medium',true);\n" +
+      "INSERT INTO auth.users (id, email) VALUES " +
+      PL_USERS.map((u, i) => `('${u}','preference-lock-${i + 1}@paperlume.test')`).join(", ") +
+      " ON CONFLICT DO NOTHING;\n" +
+      "UPDATE public.user_entitlements SET plan='pro', plan_status='active', ai_model_selection_enabled=true " +
+      `WHERE user_id IN (${PL_USER_LIST});\n`,
+  );
+  if (setup.code !== 0) throw new Error(`preference-lock fixture setup failed: ${setup.err.trim()}`);
+  // Otherwise every scenario would stop at the entitlement check and prove nothing.
+  const entitled = parseInt(await dbScalar(
+    container,
+    `SELECT count(*) FROM public.user_entitlements WHERE user_id IN (${PL_USER_LIST}) ` +
+      "AND ai_model_selection_enabled AND plan_status = 'active';",
+  ), 10);
+  if (entitled !== PL_USERS.length) {
+    throw new Error(`preference-lock fixture: ${entitled} of ${PL_USERS.length} probe users are entitled.`);
+  }
+}
+
+/** Remove the fixture, prove it gone, and prove the real catalog byte-identical. */
+async function plRemoveFixture(container, catalogBefore) {
+  await waitUntil(async () => (await countPlBarrierLocks(container, false)) === 0, PROBE_KILL_WAIT_MS,
+    "preference-lock probe: advisory locks remain on its barrier key.");
+  const cleanup = await dockerPsql(
+    container,
+    `DELETE FROM public.user_ai_preferences WHERE user_id IN (${PL_USER_LIST});\n` +
+      `DELETE FROM auth.users WHERE id IN (${PL_USER_LIST});\n` +
+      `DELETE FROM public.ai_model_catalog WHERE id IN ('${PL_WIDE}','${PL_NARROW}');\n`,
+  );
+  if (cleanup.code !== 0) throw new Error(`preference-lock fixture cleanup failed: ${cleanup.err.trim()}`);
+  const residual = (await dbScalar(
+    container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id IN (${PL_USER_LIST})) || '|' || ` +
+      `(SELECT count(*) FROM public.user_entitlements WHERE user_id IN (${PL_USER_LIST})) || '|' || ` +
+      `(SELECT count(*) FROM public.user_ai_preferences WHERE user_id IN (${PL_USER_LIST})) || '|' || ` +
+      `(SELECT count(*) FROM public.ai_model_catalog WHERE id IN ('${PL_WIDE}','${PL_NARROW}')) || '|' || ` +
+      `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${PL_BARRIER_CLASSID} ` +
+      `AND objid=${PL_BARRIER_OBJID});`,
+  )).split("|").map((s) => parseInt(s, 10));
+  if (residual.some((c) => c !== 0)) {
+    throw new Error(
+      `preference-lock fixture not fully removed (users|entitlements|preferences|catalog rows|advisory = ${residual.join("|")}).`);
+  }
+  const catalogAfter = await dbScalar(container, PL_CATALOG_DIGEST_SQL);
+  if (catalogAfter !== catalogBefore) {
+    throw new Error("preference-lock probe: ai_model_catalog differs from its state before the probe.");
+  }
+  log("preference-lock fixture removed; ai_model_catalog is byte-identical to its pre-probe state.");
+}
+
+/**
+ * One forced ordering. `first` runs in a transaction that stays OPEN after its
+ * call returns, so it keeps every lock it took. `second` then starts and must be
+ * seen blocked BY that session — pg_blocking_pids names the holder's pid —
+ * before `first` commits. The results and final row must then be exactly the
+ * serial order first→second.
+ */
+async function runPlForcedOrder(container, sc, order) {
+  const [firstKey, secondKey] = order === "xy" ? ["x", "y"] : ["y", "x"];
+  const first = sc[firstKey];
+  const second = sc[secondKey];
+  const label = `preference-lock ${sc.name} [${first.label} holds; ${second.label} waits]`;
+  await plReset(container, sc);
+
+  let held = null;
+  let waiter = null;
+  try {
+    held = spawnDockerPsql(container);
+    held.child.stdin.write(plPrelude(sc.user) + "BEGIN;\n" + first.sql("HELD") + "SELECT 'HELD_READY';\n");
+    await waitUntil(() => /HELD_READY/.test(held.readOut()), PROBE_WORKER_MS,
+      `${label}: the held transaction never completed its call.`);
+    const heldPid = plPid(held.readOut());
+    if (heldPid === null) throw new Error(`${label}: the held session never reported its pid.`);
+
+    waiter = spawnDockerPsql(container);
+    waiter.child.stdin.write(
+      plPrelude(sc.user) + "BEGIN;\n" + second.sql("OUTCOME") + "COMMIT;\nSELECT 'WAITER_DONE';\n");
+    waiter.child.stdin.end();
+    await waitUntil(() => plPid(waiter.readOut()) !== null, PROBE_WORKER_MS,
+      `${label}: the waiting session never reported its pid.`);
+    const waiterPid = plPid(waiter.readOut());
+
+    let waitEvent = "";
+    await waitUntil(async () => {
+      const [blocked, event] = (await dbScalar(
+        container,
+        `SELECT (pg_blocking_pids(${waiterPid}) = ARRAY[${heldPid}])::text || '|' || ` +
+          `COALESCE((SELECT wait_event_type || '/' || wait_event FROM pg_stat_activity WHERE pid = ${waiterPid}), '');`,
+      )).split("|");
+      waitEvent = event;
+      return blocked === "true";
+    }, PROBE_BARRIER_MS, `${label}: the second call was never blocked by the held transaction.`);
+    if (/OUTCOME=|WAITER_DONE/.test(waiter.readOut())) {
+      throw new Error(`${label}: the second call returned while the first transaction was still open.`);
+    }
+
+    held.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n");
+    held.child.stdin.end();
+    const [heldRes, waitRes] = await Promise.all([
+      withTimeout(held.done, FIN_HOLD_MS, `${label} held-transaction exit`),
+      withTimeout(waiter.done, FIN_HOLD_MS, `${label} waiter exit`),
+    ]);
+    held = null;
+    waiter = null;
+    if (heldRes.code !== 0 || heldRes.signal !== null || !/HELD_COMMITTED/.test(heldRes.out)) {
+      throw new Error(`${label}: the held transaction did not commit cleanly (code=${heldRes.code}).`);
+    }
+    if (waitRes.code !== 0 || waitRes.signal !== null || !/WAITER_DONE/.test(waitRes.out)) {
+      throw new Error(`${label}: the second call did not commit cleanly (code=${waitRes.code}).`);
+    }
+
+    const got = {
+      [firstKey]: plOutcome(heldRes.out, "HELD"),
+      [secondKey]: plOutcome(waitRes.out, "OUTCOME"),
+      final: await plState(container, sc.user),
+    };
+    const want = sc[order];
+    if (!plMatches(want, got)) {
+      throw new Error(
+        `${label}: got x=${got.x}, y=${got.y}, final=${got.final}, but the serial order ${firstKey}→${secondKey} ` +
+          `gives x=${want.x}, y=${want.y}, final=${want.final}. Forbidden: ${sc.forbids}.`);
+    }
+    log(`${label} OK: blocked on ${waitEvent || "a lock"} held by the first session, then ` +
+      `x=${got.x}, y=${got.y}, final=${got.final} — exactly the serial order ${firstKey}→${secondKey}.`);
+  } catch (err) {
+    await killPsql(waiter);
+    await killPsql(held);
+    throw err;
+  }
+}
+
+/**
+ * One free-running round: both calls wait on a shared barrier and are released
+ * together, so Postgres — not the probe — chooses the interleaving. The result
+ * must be one of the scenario's two serial outcomes, and both sessions must
+ * commit: under ON_ERROR_STOP a deadlock (40P01) or serialization failure
+ * (40001) exits nonzero and fails the round. Returns which order it matched.
+ */
+async function runPlRaceRound(container, sc, round) {
+  const label = `preference-lock ${sc.name} race round ${round}`;
+  await plReset(container, sc);
+  let coord = null;
+  let wx = null;
+  let wy = null;
+  try {
+    coord = spawnDockerPsql(container);
+    coord.child.stdin.write(`SELECT pg_advisory_lock(${PL_BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
+    await waitUntil(() => /COORD_LOCKED/.test(coord.readOut()), PROBE_COORD_ACQUIRE_MS,
+      `${label}: the coordinator never acquired the barrier.`);
+    const startWorker = (call) => {
+      const w = spawnDockerPsql(container);
+      w.child.stdin.write(
+        plPrelude(sc.user) + `SELECT pg_advisory_lock_shared(${PL_BARRIER_KEY});\n` +
+          "BEGIN;\n" + call.sql("OUTCOME") + "COMMIT;\nSELECT 'WORKER_DONE';\n");
+      w.child.stdin.end();
+      return w;
+    };
+    wx = startWorker(sc.x);
+    wy = startWorker(sc.y);
+    await waitUntil(async () => (await countPlBarrierLocks(container, true)) >= 2, PROBE_BARRIER_MS,
+      `${label}: both calls did not reach the barrier.`);
+    coord.child.stdin.write(`SELECT 'UNLOCK=' || pg_advisory_unlock(${PL_BARRIER_KEY})::text;\n`);
+    coord.child.stdin.end();
+    const [cr, rx, ry] = await Promise.all([
+      withTimeout(coord.done, PROBE_COORD_EXIT_MS, `${label} coordinator exit`),
+      withTimeout(wx.done, PROBE_WORKER_MS, `${label} x exit`),
+      withTimeout(wy.done, PROBE_WORKER_MS, `${label} y exit`),
+    ]);
+    coord = null;
+    wx = null;
+    wy = null;
+    if (cr.code !== 0 || cr.signal !== null || !/UNLOCK=t/.test(cr.out)) {
+      throw new Error(`${label}: the coordinator did not release the barrier cleanly (code=${cr.code}).`);
+    }
+    for (const [key, r] of [["x", rx], ["y", ry]]) {
+      if (r.code !== 0 || r.signal !== null || !/WORKER_DONE/.test(r.out)) {
+        throw new Error(
+          `${label}: ${sc[key].label} did not commit cleanly (code=${r.code}, signal=${r.signal ?? "none"}); ` +
+            "a deadlock or serialization failure ends here.");
+      }
+    }
+    const got = {
+      x: plOutcome(rx.out, "OUTCOME"),
+      y: plOutcome(ry.out, "OUTCOME"),
+      final: await plState(container, sc.user),
+    };
+    const orders = ["xy", "yx"].filter((o) => plMatches(sc[o], got));
+    if (orders.length === 0) {
+      throw new Error(
+        `${label}: x=${got.x}, y=${got.y}, final=${got.final} matches neither serial order. Forbidden: ${sc.forbids}.`);
+    }
+    return orders.length === 2 ? "either" : orders[0];
+  } catch (err) {
+    await killPsql(wx);
+    await killPsql(wy);
+    await killPsql(coord);
+    throw err;
+  }
+}
+
+/**
+ * True-concurrency AI model / reasoning preference probe
+ * (AI-MULTI-PROVIDER-001C-REVIEW-FIX-01).
+ *
+ * set_current_user_ai_model decides whether a saved manual reasoning level
+ * survives a model switch; set_current_user_ai_reasoning decides whether a
+ * level is valid for the saved model. Each reads the preference row and writes
+ * it later. Under READ COMMITTED, sharing one transaction does not stop another
+ * writer committing in between, so the reviewed design could store a model
+ * with a level that model rejects, resurrect a level the user had just cleared,
+ * or answer saved = true for a row that had just been deleted. Both setters now
+ * lock the caller's row FOR UPDATE before deciding.
+ *
+ * A single-connection pgTAP suite cannot interleave anything, so this uses real
+ * sessions. In each scenario, each call is in turn made to commit first while
+ * the other is observed blocked BY it, and the results and final row must be
+ * exactly that serial order's. Then PL_RACE_ROUNDS free-running rounds release
+ * both calls from a barrier at once: every round must match one of the two
+ * serial outcomes, and both sessions must commit.
+ *
+ * Same fail-closed discipline as the probes above: every process tracked and
+ * bounded, blocking proven through pg_blocking_pids rather than inferred from a
+ * sleep, clean exits required, and the fixture proven absent afterwards — with
+ * the real catalog rows proven byte-identical. Nothing is granted: the staged
+ * reasoning setter is exercised as its owner.
+ */
+async function runPreferenceLockProbe(container) {
+  log("running true-concurrency AI model/reasoning preference probe…");
+  const catalogBefore = await dbScalar(container, PL_CATALOG_DIGEST_SQL);
+  await plSetupFixture(container);
+  for (const sc of PL_SCENARIOS) {
+    await runPlForcedOrder(container, sc, "xy");
+    await runPlForcedOrder(container, sc, "yx");
+    const seen = { xy: 0, yx: 0, either: 0 };
+    for (let round = 1; round <= PL_RACE_ROUNDS; round++) {
+      seen[await runPlRaceRound(container, sc, round)] += 1;
+    }
+    log(`preference-lock ${sc.name} (${sc.title}) races OK: ${PL_RACE_ROUNDS}/${PL_RACE_ROUNDS} rounds matched a ` +
+      `serial order (x first ${seen.xy}, y first ${seen.yx}, indistinguishable ${seen.either}); ` +
+      "no deadlock, no serialization failure.");
+  }
+  await plRemoveFixture(container, catalogBefore);
+}
+
 const CUT_PROBE_USER = "cc000000-0000-0000-0000-0000000000d0";
 const CUT_PAPER = "cc000000-0000-0000-0000-0000000000d1";
 
@@ -3802,6 +4238,7 @@ async function cmdDbTests() {
     await runMergeCycleProbe(container);
     await runAttachmentFinalizationProbe(container);
     await runPaperDeleteFinalizationProbe(container);
+    await runPreferenceLockProbe(container);
     await runAclParityProbe(container);
     await runMigrationCutoverProbe(container);
     await assertNoResidue(container, pgtapBefore, catalogBefore);

@@ -6,8 +6,13 @@
 --     integrity constraints, and the exact Automatic matrix seeded onto the four
 --     Gemini rows — with `reasoning_selectable = false` on every one;
 --   * `user_ai_preferences.preferred_reasoning_level`, where NULL is Automatic;
---   * `set_current_user_ai_model` resetting an incompatible manual level in the
---     SAME transaction as the model change, and reporting it;
+--   * `set_current_user_ai_model` resetting an incompatible manual level as
+--     part of the model change, and reporting it;
+--   * both setters deciding under a row lock on the caller's preference row,
+--     and neither answering saved = true for a write that did not land. The
+--     races themselves need two real sessions, so they are proven by the
+--     preference-lock probe in `scripts/e2e-local.mjs db-tests`; section 10
+--     proves what one connection can;
 --   * `set_current_user_ai_reasoning` — its business rules exercised in the
 --     database-owner context, and its STAGED privilege posture: granted to NO
 --     role, `authenticated` included;
@@ -77,7 +82,7 @@ CREATE FUNCTION pg_temp.pair(p_uid uuid) RETURNS text LANGUAGE sql STABLE AS $hl
     'NO_ROW');
 $hlp$;
 
-SELECT plan(95);
+SELECT plan(104);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. Catalog reasoning metadata — shape
@@ -497,6 +502,88 @@ SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e3000000-0000-0000
 SELECT is(pg_temp.errcode_as('anon', '',
   $q$SELECT reasoning_levels FROM public.ai_model_catalog$q$),
   '42501', 'anon cannot read the catalog');
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 10. Serialization and write truthfulness
+-- ════════════════════════════════════════════════════════════════════════════
+--
+-- One connection cannot interleave two transactions, so the races the row
+-- locks exist for are proven with real concurrent sessions by the
+-- preference-lock probe in `scripts/e2e-local.mjs db-tests`. The two source
+-- checks below complement that probe; they do not replace it. What a single
+-- connection CAN prove is the fail-closed half: a final write that lands on no
+-- row raises rather than answering saved = true, and the model setter's
+-- first-row path is bounded.
+--
+-- Nothing but a BEFORE trigger can make a write miss a row the function has
+-- just found and locked, so one is attached for a single fixture user and
+-- dropped again. It rolls back with the suite.
+
+SELECT ok((SELECT regexp_instr(d,
+             'SELECT p\.preferred_reasoning_level INTO v_saved_reasoning\s+'
+             'FROM public\.user_ai_preferences p\s+WHERE p\.user_id = v_uid\s+FOR UPDATE;')
+           BETWEEN 1 AND regexp_instr(d, 'UPDATE public\.user_ai_preferences AS p') - 1
+             FROM pg_get_functiondef('public.set_current_user_ai_model(text)'::regprocedure) AS d),
+  'set_current_user_ai_model reads the saved level FOR UPDATE before it writes the row');
+SELECT ok((SELECT regexp_instr(d,
+             'SELECT \* INTO v_preference\s+FROM public\.user_ai_preferences\s+'
+             'WHERE user_id = v_uid\s+FOR UPDATE;')
+           BETWEEN 1 AND regexp_instr(d, 'SELECT \* INTO v_model\s+FROM public\.ai_model_catalog') - 1
+             FROM pg_get_functiondef('public.set_current_user_ai_reasoning(text)'::regprocedure) AS d),
+  'set_current_user_ai_reasoning locks the preference row BEFORE it reads the model that row names');
+
+INSERT INTO auth.users (id, email)
+VALUES ('e3000000-0000-0000-0000-000000000007','r016-locked@paperlume.test');
+UPDATE public.user_entitlements
+   SET plan = 'pro', plan_status = 'active', ai_model_selection_enabled = true
+ WHERE user_id = 'e3000000-0000-0000-0000-000000000007';
+INSERT INTO public.user_ai_preferences (user_id, preferred_model_id, preferred_reasoning_level)
+VALUES ('e3000000-0000-0000-0000-000000000007', 'google/gemini-3.5-flash', 'low');
+
+CREATE FUNCTION public._r016_suppress_row() RETURNS trigger
+LANGUAGE plpgsql AS $trg$
+BEGIN
+  RETURN NULL;
+END;
+$trg$;
+
+CREATE TRIGGER _r016_suppress_update
+  BEFORE UPDATE ON public.user_ai_preferences
+  FOR EACH ROW WHEN (OLD.user_id = 'e3000000-0000-0000-0000-000000000007'::uuid)
+  EXECUTE FUNCTION public._r016_suppress_row();
+
+SELECT is(pg_temp.errcode_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000007'),
+  $q$SELECT * FROM public.set_current_user_ai_reasoning('high')$q$),
+  'XX000', 'a reasoning write that lands on no row raises instead of answering saved = true');
+SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000007'),
+  $q$SELECT * FROM public.set_current_user_ai_model('google/gemini-3.8-flash')$q$),
+  'XX000', 'a model write that lands on no row raises instead of answering saved = true');
+SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000007'), 'google/gemini-3.5-flash:low',
+  'neither refused write changed the saved pair');
+
+DROP TRIGGER _r016_suppress_update ON public.user_ai_preferences;
+
+-- The first-row path: a row that can never be created must end in a bounded,
+-- retryable failure — not an endless loop, and not a success.
+DELETE FROM public.user_ai_preferences WHERE user_id = 'e3000000-0000-0000-0000-000000000007';
+CREATE TRIGGER _r016_suppress_insert
+  BEFORE INSERT ON public.user_ai_preferences
+  FOR EACH ROW WHEN (NEW.user_id = 'e3000000-0000-0000-0000-000000000007'::uuid)
+  EXECUTE FUNCTION public._r016_suppress_row();
+
+SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000007'),
+  $q$SELECT * FROM public.set_current_user_ai_model('google/gemini-3.6-flash')$q$),
+  '40001', 'a first save whose row never appears fails closed after a bounded number of passes');
+SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000007'), 'NO_ROW',
+  'and it left no row behind');
+
+DROP TRIGGER _r016_suppress_insert ON public.user_ai_preferences;
+
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000007'),
+  $q$SELECT reason || ':' || reasoning_reset::text FROM public.set_current_user_ai_model('google/gemini-3.6-flash')$q$),
+  'ok:false', 'without the suppressing trigger the same first save succeeds');
+SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000007'), 'google/gemini-3.6-flash:AUTOMATIC',
+  'a first save creates the row on Automatic reasoning');
 
 SELECT * FROM finish();
 ROLLBACK;

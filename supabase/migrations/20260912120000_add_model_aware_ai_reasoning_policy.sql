@@ -14,8 +14,9 @@
 --      where NULL means "Automatic" and the literal 'automatic' is not a
 --      storable value.
 --   4. public.set_current_user_ai_model(text) gains an additive reasoning_reset
---      result column and, in the SAME transaction as the model change, keeps a
---      still-supported manual reasoning level or resets it to Automatic.
+--      result column and, while holding a row lock on the caller's preference
+--      row, keeps a still-supported manual reasoning level or resets it to
+--      Automatic as part of the model change.
 --   5. public.set_current_user_ai_reasoning(text) — the write path for a manual
 --      reasoning level. Created WITHOUT an EXECUTE grant to authenticated.
 --   6. public.clear_current_user_ai_reasoning() — return to Automatic without
@@ -330,8 +331,9 @@ COMMENT ON COLUMN public.user_ai_preferences.preferred_reasoning_level IS
 -- nothing, and the row upserted is still the caller's and only the caller's.
 --
 -- WHAT IS NEW: when the model changes, the caller's saved manual reasoning
--- level is re-validated against the NEW model in the SAME statement that writes
--- the new model.
+-- level is re-validated against the NEW model, and the outcome is written in
+-- the same statement as the new model — all while the caller's preference row
+-- is locked, so nothing can change the level between the check and the write.
 --
 --   * still supported by the new model  → preserved untouched;
 --   * not supported by the new model    → reset to NULL (Automatic), and
@@ -341,7 +343,19 @@ COMMENT ON COLUMN public.user_ai_preferences.preferred_reasoning_level IS
 -- this prevents. The runtime would have to defend against it on every request,
 -- the Settings UI would have to render a state the server considers impossible,
 -- and the next reader of the row could not tell a stale value from a chosen one.
--- One transaction, one row, one coherent pair.
+-- One locked row, one decision, one coherent pair.
+--
+-- LOCK ORDER. The caller's user_ai_preferences row is the only object that
+-- couples the saved model to the saved reasoning level, so it is the only row
+-- any of the four preference RPCs locks itself, and each locks it before it
+-- writes: this function and set_current_user_ai_reasoning with SELECT ... FOR
+-- UPDATE, clear_current_user_ai_reasoning and clear_current_user_ai_model with
+-- the UPDATE or DELETE that is their whole body. Each takes that one lock and no
+-- other of its own, so no two of them can wait on each other in opposite
+-- orders. ai_model_catalog and user_entitlements are only read, never locked:
+-- catalog rows change only by reviewed migration, and the foreign-key checks on
+-- a written row take the KEY SHARE locks Postgres always takes, which conflict
+-- with nothing these functions do.
 --
 -- Support is judged by reasoning_levels MEMBERSHIP alone, deliberately not by
 -- the new model's reasoning_selectable flag — the same distinction the model
@@ -379,6 +393,7 @@ DECLARE
   v_saved_reasoning TEXT;
   v_next_reasoning TEXT;
   v_reasoning_reset BOOLEAN := FALSE;
+  v_written BOOLEAN := FALSE;
 BEGIN
   -- S1: identity comes from the session, never from an argument.
   IF v_uid IS NULL THEN
@@ -449,33 +464,87 @@ BEGIN
     RETURN;
   END IF;
 
-  -- The caller's CURRENT manual reasoning level, if any. Read inside the same
-  -- transaction that is about to overwrite the row, so no concurrent change can
-  -- land between the decision and the write.
-  SELECT p.preferred_reasoning_level INTO v_saved_reasoning
-  FROM public.user_ai_preferences p
-  WHERE p.user_id = v_uid;
+  -- Decide and write under a ROW LOCK on the caller's preference row.
+  --
+  -- Being inside one transaction is not enough on its own. Under READ
+  -- COMMITTED a plain SELECT takes no lock, so a concurrent
+  -- clear_current_user_ai_reasoning or set_current_user_ai_reasoning could
+  -- commit between reading the saved level and writing the new pair — and the
+  -- write would then restore a level the user had just cleared, or overwrite
+  -- one they had just chosen, from a stale read. FOR UPDATE makes every other
+  -- writer of this row wait for this transaction to end, and makes this read
+  -- wait for a writer already in flight and then return the row it committed.
+  -- The level examined below is therefore the level that gets overwritten.
+  --
+  -- The loop exists only for the case where there is no row to lock. The row
+  -- is then created on Automatic, because no manual level can exist without a
+  -- row. If a concurrent call creates it first, ON CONFLICT DO NOTHING waits
+  -- for that call's transaction, inserts nothing, and the next pass locks the
+  -- row that call committed and decides against its real contents instead of
+  -- overwriting them. Only a second create-and-delete by the same account in
+  -- that window could defeat the next pass, so three passes is a bound rather
+  -- than a budget; exhausting it fails closed as a retryable serialization
+  -- failure.
+  FOR v_attempt IN 1..3 LOOP
+    SELECT p.preferred_reasoning_level INTO v_saved_reasoning
+    FROM public.user_ai_preferences p
+    WHERE p.user_id = v_uid
+    FOR UPDATE;
 
-  IF v_saved_reasoning IS NOT NULL
-     AND NOT (v_saved_reasoning = ANY (COALESCE(v_model.reasoning_levels, ARRAY[]::TEXT[]))) THEN
-    v_next_reasoning := NULL;
-    v_reasoning_reset := TRUE;
-  ELSE
-    v_next_reasoning := v_saved_reasoning;
+    IF FOUND THEN
+      IF v_saved_reasoning IS NOT NULL
+         AND NOT (v_saved_reasoning = ANY (COALESCE(v_model.reasoning_levels, ARRAY[]::TEXT[]))) THEN
+        v_next_reasoning := NULL;
+        v_reasoning_reset := TRUE;
+      ELSE
+        v_next_reasoning := v_saved_reasoning;
+        v_reasoning_reset := FALSE;
+      END IF;
+
+      -- The CALLER's locked row and no other, and only while it still holds
+      -- the level just examined. Both columns are written together, so the
+      -- model and the reasoning level can never disagree about which
+      -- transaction last decided them.
+      UPDATE public.user_ai_preferences AS p
+         SET preferred_model_id = v_model.id,
+             preferred_reasoning_level = v_next_reasoning,
+             updated_at = now()
+       WHERE p.user_id = v_uid
+         AND p.preferred_reasoning_level IS NOT DISTINCT FROM v_saved_reasoning
+      RETURNING p.updated_at INTO v_updated_at;
+
+      IF NOT FOUND THEN
+        -- Unreachable while the lock above is held. Fail closed rather than
+        -- report a save that did not land.
+        RAISE EXCEPTION USING
+          ERRCODE = 'internal_error',
+          MESSAGE = 'AI model preference was not saved: the locked preference row was not updated';
+      END IF;
+
+      v_written := TRUE;
+      EXIT;
+    END IF;
+
+    -- No row: nothing to lock and no manual level to carry. user_id is the
+    -- primary key, so this creates at most one row, belonging to exactly this
+    -- caller.
+    INSERT INTO public.user_ai_preferences AS p (user_id, preferred_model_id, preferred_reasoning_level)
+    VALUES (v_uid, v_model.id, NULL)
+    ON CONFLICT (user_id) DO NOTHING
+    RETURNING p.updated_at INTO v_updated_at;
+
+    IF FOUND THEN
+      v_reasoning_reset := FALSE;
+      v_written := TRUE;
+      EXIT;
+    END IF;
+  END LOOP;
+
+  IF NOT v_written THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'serialization_failure',
+      MESSAGE = 'AI model preference was not saved because it changed concurrently; retry';
   END IF;
-
-  -- Upsert the CALLER's row and no other. user_id is the primary key, so the
-  -- conflict target is the whole identity of the row: this can create or replace
-  -- exactly one row, belonging to exactly this caller. Both columns are written
-  -- explicitly, so the model and the reasoning level can never disagree about
-  -- which transaction last decided them.
-  INSERT INTO public.user_ai_preferences AS p (user_id, preferred_model_id, preferred_reasoning_level)
-  VALUES (v_uid, v_model.id, v_next_reasoning)
-  ON CONFLICT (user_id) DO UPDATE
-    SET preferred_model_id = EXCLUDED.preferred_model_id,
-        preferred_reasoning_level = EXCLUDED.preferred_reasoning_level,
-        updated_at = now()
-  RETURNING p.updated_at INTO v_updated_at;
 
   RETURN QUERY SELECT
     TRUE,
@@ -496,11 +565,14 @@ COMMENT ON FUNCTION public.set_current_user_ai_model(TEXT) IS
   'with enabled AND selectable — every failure returns saved = false with a '
   'reason (invalid_model_id | missing_entitlement | not_entitled | '
   'inactive_entitlement | unknown_model | model_disabled | '
-  'model_not_selectable) and writes nothing. Upserts at most one row. In the '
-  'SAME transaction it re-validates any saved manual reasoning level against '
-  'the new model: a level the new model supports is preserved, one it does not '
-  'is reset to NULL (Automatic) and reasoning_reset = true reports that '
-  '(AI-MULTI-PROVIDER-001C / C41). Calls no AI provider and returns no secret. '
+  'model_not_selectable) and writes nothing. Writes at most one row. Locks the '
+  'caller''s preference row (FOR UPDATE) and, under that lock, re-validates any '
+  'saved manual reasoning level against the new model: a level the new model '
+  'supports is preserved, one it does not is reset to NULL (Automatic) and '
+  'reasoning_reset = true reports that (AI-MULTI-PROVIDER-001C / C41). The '
+  'check and the write therefore serialize with every other writer of that '
+  'row, and a write that does not land raises instead of reporting '
+  'saved = true. Calls no AI provider and returns no secret. '
   'Saving a preference does NOT change which model any AI operation invokes — '
   'runtime routing re-checks authorization itself. SECURITY DEFINER + fixed '
   'search_path; EXECUTE granted to authenticated only. See decisions C33, C41.';
@@ -559,6 +631,13 @@ COMMENT ON FUNCTION public.clear_current_user_ai_model() IS
 --   7. the requested level is one THAT MODEL supports.
 -- Only then is the caller's own row updated, and only its reasoning column.
 --
+-- From step 4 onward the caller's preference row is locked FOR UPDATE, so
+-- steps 5–7 judge the model the row names when it is written, not a model it
+-- named a moment earlier: a concurrent model switch, model clear or reasoning
+-- clear either commits before step 4 reads the row, or waits for this
+-- transaction to end. The final UPDATE is also conditioned on that model, and a
+-- write that lands on no row raises instead of answering saved = true.
+--
 -- It calls no AI provider, reads no credential, knows no provider endpoint and
 -- returns no secret. The reasoning level it writes is a bounded literal that
 -- came out of the catalog's own capability list.
@@ -582,6 +661,7 @@ DECLARE
   v_preference public.user_ai_preferences%ROWTYPE;
   v_model public.ai_model_catalog%ROWTYPE;
   v_updated_at TIMESTAMPTZ;
+  v_saved_model_id TEXT;
 BEGIN
   IF v_uid IS NULL THEN
     RAISE EXCEPTION 'Unauthorized: no authenticated user';
@@ -624,9 +704,20 @@ BEGIN
   -- model there is nothing to validate the level against, and PaperLume's own
   -- default model may change server-side — so this is refused rather than
   -- stored against a moving target.
+  --
+  -- The row is LOCKED here, before the model it names is read, and the lock is
+  -- held through every check below and the write. Under READ COMMITTED a plain
+  -- SELECT takes no lock: a concurrent set_current_user_ai_model could switch
+  -- the model, or clear_current_user_ai_model delete the row, after the level
+  -- had been validated against the OLD model — storing a level the new model
+  -- does not support, or answering saved = true for a row that no longer
+  -- exists. With FOR UPDATE those writers wait for this transaction, and if one
+  -- is already in flight this read waits for it and then returns the row it
+  -- committed, or no row at all.
   SELECT * INTO v_preference
   FROM public.user_ai_preferences
-  WHERE user_id = v_uid;
+  WHERE user_id = v_uid
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RETURN QUERY SELECT
@@ -668,18 +759,30 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Only the caller's row, and only its reasoning column: the saved model is
-  -- read in the WHERE clause and never rewritten here.
+  -- Only the caller's locked row, only its reasoning column, and only while it
+  -- still names the model this level was just validated against. The saved
+  -- model is never rewritten here; the result reports what the write stored.
   UPDATE public.user_ai_preferences AS p
      SET preferred_reasoning_level = v_level,
          updated_at = now()
    WHERE p.user_id = v_uid
-  RETURNING p.updated_at INTO v_updated_at;
+     AND p.preferred_model_id = v_model.id
+  RETURNING p.preferred_model_id, p.updated_at INTO v_saved_model_id, v_updated_at;
+
+  IF NOT FOUND THEN
+    -- Unreachable while the lock above is held: the row was found, locked and
+    -- validated in this transaction. If it ever happens, fail closed — a
+    -- saved = true for a write that did not land is the one answer this
+    -- function must never give.
+    RAISE EXCEPTION USING
+      ERRCODE = 'internal_error',
+      MESSAGE = 'AI reasoning preference was not saved: the locked preference row was not updated';
+  END IF;
 
   RETURN QUERY SELECT
     TRUE,
     'ok'::TEXT,
-    v_preference.preferred_model_id,
+    v_saved_model_id,
     v_level,
     v_updated_at;
 END;
@@ -697,6 +800,10 @@ COMMENT ON FUNCTION public.set_current_user_ai_reasoning(TEXT) IS
   'inactive_entitlement | model_required | model_missing | model_disabled | '
   'reasoning_not_selectable | reasoning_level_not_supported) and writes '
   'nothing. Updates only the caller''s reasoning column; never the saved model. '
+  'Locks the caller''s preference row (FOR UPDATE) before reading the model it '
+  'names and holds it through validation and the write, so neither can race a '
+  'concurrent model switch, model clear or reasoning clear; a write that does '
+  'not land raises instead of reporting saved = true. '
   'Calls no AI provider and returns no secret. STAGED: EXECUTE is granted to NO '
   'role by AI-MULTI-PROVIDER-001C — a later, separately authorized '
   'user-enablement migration grants it to authenticated alongside flipping '
