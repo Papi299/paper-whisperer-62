@@ -193,11 +193,23 @@ async function safeRefund(
  * class and log detail. Nothing here is provider-specific — the adapter has
  * already reduced Google's outcome to a kind and, for HTTP, a status.
  *
- * The two 2xx kinds stay distinct on purpose, exactly as before 001A:
+ * The 2xx kinds stay distinct on purpose, exactly as before 001A:
  *
  *   * `unreadable_response` — a 200 whose body is not JSON at all. An unusable
  *     *response*, not a transport failure, so it is `parse` and is not retried.
  *   * `empty` — a well-formed envelope with no generated text.
+ *   * `incomplete_response` — a readable envelope in which the provider itself
+ *     reports the generation did not finish. AI-MULTI-PROVIDER-001B added this
+ *     kind for the two UNREGISTERED adapters, so Google cannot produce it and
+ *     nothing about this function's current behaviour changes. The branch is
+ *     written now anyway: `classifyProviderFailure` had a catch-all tail, and a
+ *     kind that fell through it would have been classified by accident rather
+ *     than by decision. It maps to `malformed_response` — the same class as an
+ *     unreadable body — because the defining case is a provider that answered
+ *     with a truncated or abandoned generation, which is an unusable response
+ *     rather than a provider-availability problem, and retrying an answer our
+ *     own output ceiling cut short would not help. 001C may revisit that when
+ *     it sets the real output budget.
  *
  * The retry/timeout policy behind all of this remains
  * `_shared/geminiTransport.ts`'s, which the Google adapter calls: one policy
@@ -218,6 +230,9 @@ function classifyProviderFailure(
   }
   if (failure.kind === "empty") {
     return { providerClass: classifyProviderError({ kind: "empty" }), detail: "empty" };
+  }
+  if (failure.kind === "incomplete_response") {
+    return { providerClass: classifyProviderError({ kind: "parse" }), detail: "incomplete" };
   }
   return { providerClass: classifyProviderError({ kind: failure.kind }), detail: failure.kind };
 }

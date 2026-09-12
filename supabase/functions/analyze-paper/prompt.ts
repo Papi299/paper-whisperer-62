@@ -15,7 +15,7 @@
 // Pure module: no Deno APIs, no remote imports, no provider knowledge. It names
 // no model, no endpoint, no credential and no response envelope.
 
-import type { AiGenerationRequest } from "../_shared/aiProvider.ts";
+import type { AiGenerationRequest, AiJsonOutputSchema } from "../_shared/aiProvider.ts";
 
 /** The analysis system instruction, unchanged since before 001A. */
 export const ANALYZE_SYSTEM_INSTRUCTION = `You are an expert academic data extractor. Analyze the provided title and abstract.
@@ -45,6 +45,43 @@ export function buildAnalyzeUserContent(title: unknown, abstract: string): strin
   return `Title: ${title || "Unknown"}\n\nAbstract: ${abstract}`;
 }
 
+/**
+ * The analysis output contract, as a JSON Schema — AI-MULTI-PROVIDER-001B.
+ *
+ * This is the SAME contract the system instruction above already states in
+ * prose ("exactly these three keys") and the same one `index.ts` parses. It is
+ * written here, beside that instruction, so the two cannot drift: a provider
+ * whose structured-output API enforces a schema gets the schema, and a provider
+ * without one still gets the prose, and both describe one product contract.
+ *
+ * It adds nothing and renames nothing. `tldr`, `studyType` and
+ * `statisticalMethods` are exactly the three fields the browser has always
+ * received, and the shape stays a flat object of strings so the existing parser
+ * keeps reading exactly what it always read.
+ *
+ * `additionalProperties: false` with all three listed in `required` is what
+ * both Anthropic's and OpenAI's current documentation require of an enforced
+ * schema, and it happens to say precisely what the instruction says.
+ *
+ * The schema is NOT a replacement for the parser. `index.ts` still strips
+ * markdown fencing, isolates the JSON object, parses it and coerces each field
+ * — because a provider's schema guarantee is a claim about a response body,
+ * and PaperLume's own validation is what actually decides what the user sees.
+ */
+export const ANALYZE_JSON_SCHEMA: AiJsonOutputSchema = {
+  name: "paperlume_paper_analysis",
+  schema: {
+    type: "object",
+    properties: {
+      tldr: { type: "string" },
+      studyType: { type: "string" },
+      statisticalMethods: { type: "string" },
+    },
+    required: ["tldr", "studyType", "statisticalMethods"],
+    additionalProperties: false,
+  },
+};
+
 /** The provider-neutral request `analyze-paper` hands to the resolved adapter. */
 export function buildAnalyzeGenerationRequest(
   title: unknown,
@@ -54,5 +91,6 @@ export function buildAnalyzeGenerationRequest(
     systemInstruction: ANALYZE_SYSTEM_INSTRUCTION,
     userContent: buildAnalyzeUserContent(title, abstract),
     responseFormat: "json",
+    jsonSchema: ANALYZE_JSON_SCHEMA,
   };
 }
