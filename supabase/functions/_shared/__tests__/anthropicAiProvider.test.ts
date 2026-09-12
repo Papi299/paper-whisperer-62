@@ -34,7 +34,7 @@ import {
   ANTHROPIC_MESSAGES_URL,
   ANTHROPIC_PROVIDER_ATTEMPTS,
   ANTHROPIC_PROVIDER_TIMEOUT_MS,
-  ANTHROPIC_PROVISIONAL_MAX_TOKENS,
+  ANTHROPIC_REASONING_LEVELS,
   ANTHROPIC_VERSION,
   buildAnthropicRequestBody,
   buildAnthropicRequestInit,
@@ -42,7 +42,12 @@ import {
   type AnthropicAiProviderModel,
 } from "../anthropicAiProvider.ts";
 import { GEMINI_PROVIDER_TIMEOUT_MS } from "../geminiTransport.ts";
-import type { AiGenerationRequest, AiProviderCallDeps } from "../aiProvider.ts";
+import type {
+  AiCallPolicy,
+  AiGenerationRequest,
+  AiProviderCallDeps,
+} from "../aiProvider.ts";
+import type { AnthropicReasoningLevel } from "../anthropicAiProvider.ts";
 
 // Sentinels: if any of these ever reaches a log line or a returned result, the
 // assertion fails on the literal string rather than on a shape.
@@ -137,12 +142,41 @@ function anthropicOk(
 
 const textBlock = (text: string) => ({ type: "text", text });
 
-const generate = (harness: Harness, request: AiGenerationRequest = REQUEST, model = MODEL) =>
-  ANTHROPIC_AI_PROVIDER_ADAPTER.generate(model, request, harness.deps);
+/**
+ * The default call policy for these tests — AI-MULTI-PROVIDER-001C.
+ *
+ * `high` is deliberately NOT the default here even though it is Anthropic's:
+ * `medium` is used so that a request asserted while sending an explicit level
+ * cannot be confused with one asserted while sending nothing. Every reasoning
+ * assertion names its level, and the provider-default case is exercised on its
+ * own.
+ *
+ * 4096 is Analyze's approved ceiling; the Suggest ceiling is exercised beside it.
+ */
+const POLICY: AiCallPolicy<AnthropicReasoningLevel> = {
+  reasoning: { kind: "level", level: "medium" },
+  maxOutputTokens: 4096,
+};
 
-async function captureRequest(request: AiGenerationRequest = REQUEST, model = MODEL) {
+const PROVIDER_DEFAULT_POLICY: AiCallPolicy<AnthropicReasoningLevel> = {
+  reasoning: { kind: "provider_default" },
+  maxOutputTokens: 4096,
+};
+
+const generate = (
+  harness: Harness,
+  request: AiGenerationRequest = REQUEST,
+  model = MODEL,
+  policy: AiCallPolicy<AnthropicReasoningLevel> = POLICY,
+) => ANTHROPIC_AI_PROVIDER_ADAPTER.generate(model, request, policy, harness.deps);
+
+async function captureRequest(
+  request: AiGenerationRequest = REQUEST,
+  model = MODEL,
+  policy: AiCallPolicy<AnthropicReasoningLevel> = POLICY,
+) {
   const harness = makeHarness([anthropicOk([textBlock("{}")])]);
-  const result = await generate(harness, request, model);
+  const result = await generate(harness, request, model, policy);
   const [url, init] = harness.fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
   return { url, init, body: JSON.parse(String(init.body)), raw: String(init.body), result, harness };
 }
@@ -233,11 +267,11 @@ describe("the request that reaches Anthropic", () => {
 
   it("translates the operation's schema into output_config.format", async () => {
     const { body } = await captureRequest();
-    expect(body.output_config).toEqual({
-      format: {
-        type: "json_schema",
-        schema: REQUEST.jsonSchema.schema,
-      },
+    // `effort` sits beside `format` since AI-MULTI-PROVIDER-001C; this test owns
+    // the format half, and the sibling relationship has its own test below.
+    expect((body.output_config as Record<string, unknown>).format).toEqual({
+      type: "json_schema",
+      schema: REQUEST.jsonSchema.schema,
     });
   });
 
@@ -255,13 +289,22 @@ describe("the request that reaches Anthropic", () => {
     expect(raw).not.toContain(SCHEMA_NAME);
   });
 
-  it("sends the 001B provisional output ceiling, which Anthropic requires", async () => {
+  it("sends the OPERATION's output ceiling, which Anthropic requires", async () => {
+    // AI-MULTI-PROVIDER-001C replaced the 001B flat adapter constant with a
+    // number the caller supplies. The adapter names no ceiling of its own, so
+    // it cannot have an opinion about which Edge Function called it.
     const { body } = await captureRequest();
-    expect(body.max_tokens).toBe(ANTHROPIC_PROVISIONAL_MAX_TOKENS);
-    expect(ANTHROPIC_PROVISIONAL_MAX_TOKENS).toBe(4096);
+    expect(body.max_tokens).toBe(4096);
+    for (const maxOutputTokens of [4096, 8192]) {
+      const built = buildAnthropicRequestBody(MODEL, REQUEST, {
+        reasoning: { kind: "level", level: "medium" },
+        maxOutputTokens,
+      });
+      expect(built.max_tokens).toBe(maxOutputTokens);
+    }
   });
 
-  it("pins the whole envelope: these five keys and no others", async () => {
+  it("pins the whole envelope: these six keys and no others", async () => {
     const { body } = await captureRequest();
     expect(Object.keys(body).sort()).toEqual([
       "max_tokens",
@@ -269,14 +312,12 @@ describe("the request that reaches Anthropic", () => {
       "model",
       "output_config",
       "system",
+      // AI-MULTI-PROVIDER-001C: PaperLume's explicit thinking configuration.
+      "thinking",
     ]);
   });
 
   it.each([
-    // 001B decides no reasoning policy — AI-MULTI-PROVIDER-001C owns it. The
-    // adapter stays unregistered precisely BECAUSE omitting this key leaves
-    // Sonnet 5's adaptive-thinking default in force.
-    "thinking",
     // Sonnet 5 returns 400 for a non-default sampling parameter, and PaperLume
     // sets none anywhere.
     "temperature",
@@ -300,19 +341,145 @@ describe("the request that reaches Anthropic", () => {
     expect(body).not.toHaveProperty(key);
   });
 
-  it("sends no reasoning/effort configuration of any kind", async () => {
+  it("never sends a manual thinking budget", async () => {
+    // `thinking: {type: "enabled", budget_tokens: N}` is a documented 400 on
+    // Sonnet 5, and a token budget would be a second, drifting expression of a
+    // policy the catalog already states in words.
     const { raw } = await captureRequest();
-    for (const term of ["effort", "budget_tokens", "adaptive", "reasoning"]) {
+    for (const term of ["budget_tokens", '"enabled"', "interleaved"]) {
       expect(raw).not.toContain(term);
     }
   });
 
   it("builds the same body through the exported helper as it sends", async () => {
     const { body } = await captureRequest();
-    expect(buildAnthropicRequestBody(MODEL, REQUEST)).toEqual(body);
-    expect(String(buildAnthropicRequestInit(MODEL, REQUEST, API_KEY).body)).toBe(
+    expect(buildAnthropicRequestBody(MODEL, REQUEST, POLICY)).toEqual(body);
+    expect(String(buildAnthropicRequestInit(MODEL, REQUEST, POLICY, API_KEY).body)).toBe(
       JSON.stringify(body),
     );
+  });
+
+  // ── PaperLume's explicit reasoning mapping — AI-MULTI-PROVIDER-001C (C41) ──
+
+  it("declares exactly the six levels Anthropic can express, in its order", () => {
+    expect(ANTHROPIC_AI_PROVIDER_ADAPTER.reasoningLevels).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(ANTHROPIC_REASONING_LEVELS).toEqual(ANTHROPIC_AI_PROVIDER_ADAPTER.reasoningLevels);
+  });
+
+  it("refuses the two canonical levels Anthropic does not have", () => {
+    // `minimal` is Google's and `none` is OpenAI's. Both are real canonical
+    // values and neither is an Anthropic effort — sending either would be a 400.
+    expect(ANTHROPIC_AI_PROVIDER_ADAPTER.supportsReasoningLevel("minimal")).toBe(false);
+    expect(ANTHROPIC_AI_PROVIDER_ADAPTER.supportsReasoningLevel("none")).toBe(false);
+    for (const level of ["off", "low", "medium", "high", "xhigh", "max"] as const) {
+      expect(ANTHROPIC_AI_PROVIDER_ADAPTER.supportsReasoningLevel(level)).toBe(true);
+    }
+  });
+
+  it("maps `off` to DISABLED thinking at the lowest effort", async () => {
+    // Two controls, both stated. Disabling thinking without lowering effort
+    // would turn thinking off while silently keeping Anthropic's `high` default
+    // output policy — the opposite of what a user choosing "Off" asked for. The
+    // lowest effort is also the safe pairing: Anthropic documents disabled
+    // thinking at `xhigh`/`max` as a 400 on Claude Opus 5 and later models.
+    const { body } = await captureRequest(REQUEST, MODEL, {
+      reasoning: { kind: "level", level: "off" },
+      maxOutputTokens: 4096,
+    });
+    expect(body.thinking).toEqual({ type: "disabled" });
+    expect((body.output_config as Record<string, unknown>).effort).toBe("low");
+  });
+
+  it.each([
+    ["low"],
+    ["medium"],
+    ["high"],
+    ["xhigh"],
+    ["max"],
+  ] as const)("maps `%s` to ADAPTIVE thinking at that exact effort", async (level) => {
+    const { body } = await captureRequest(REQUEST, MODEL, {
+      reasoning: { kind: "level", level },
+      maxOutputTokens: 4096,
+    });
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect((body.output_config as Record<string, unknown>).effort).toBe(level);
+  });
+
+  it("states `thinking` explicitly even where it matches Sonnet 5's default", async () => {
+    // The whole of C41 in one assertion. Sonnet 5 runs adaptive thinking by
+    // default, so omitting the key would produce the same behaviour TODAY — and
+    // would make PaperLume's product policy a function of Anthropic's release
+    // notes the day that default moves.
+    const { body } = await captureRequest(REQUEST, MODEL, {
+      reasoning: { kind: "level", level: "high" },
+      maxOutputTokens: 4096,
+    });
+    expect(body).toHaveProperty("thinking");
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect((body.output_config as Record<string, unknown>).effort).toBe("high");
+  });
+
+  it("keeps the structured-output format ALONGSIDE effort, never overwritten", async () => {
+    // `output_config` carries both. Setting effort by replacing the object
+    // would silently drop structured output, and the operations' parsers would
+    // then be the only thing between a prose answer and the user.
+    for (const level of ["off", "low", "medium", "high", "xhigh", "max"] as const) {
+      const { body } = await captureRequest(REQUEST, MODEL, {
+        reasoning: { kind: "level", level },
+        maxOutputTokens: 4096,
+      });
+      const outputConfig = body.output_config as Record<string, unknown>;
+      expect(Object.keys(outputConfig).sort()).toEqual(["effort", "format"]);
+      expect(outputConfig.format).toEqual({
+        type: "json_schema",
+        schema: REQUEST.jsonSchema.schema,
+      });
+    }
+  });
+
+  it("sends NEITHER thinking NOR effort on the provider-default fallback", async () => {
+    // The fail-open path for unusable policy metadata. The output contract and
+    // the safety ceiling still go — neither of them is reasoning policy.
+    const { body, raw } = await captureRequest(REQUEST, MODEL, PROVIDER_DEFAULT_POLICY);
+    expect(body).not.toHaveProperty("thinking");
+    expect(body.output_config).toEqual({
+      format: { type: "json_schema", schema: REQUEST.jsonSchema.schema },
+    });
+    expect(raw).not.toContain("effort");
+    expect(raw).not.toContain("adaptive");
+    expect(body.max_tokens).toBe(4096);
+  });
+
+  it("adds no sampling, cache, tool or identity field at any reasoning level", async () => {
+    for (const level of ["off", "low", "medium", "high", "xhigh", "max"] as const) {
+      const { body } = await captureRequest(REQUEST, MODEL, {
+        reasoning: { kind: "level", level },
+        maxOutputTokens: 8192,
+      });
+      for (const key of [
+        "temperature",
+        "top_p",
+        "top_k",
+        "tools",
+        "tool_choice",
+        "cache_control",
+        "metadata",
+        "user",
+        "user_id",
+        "stream",
+        "service_tier",
+      ]) {
+        expect(body).not.toHaveProperty(key);
+      }
+      expect(body.max_tokens).toBe(8192);
+    }
   });
 
   it("uses only the injected fetch, never a global one", async () => {
@@ -496,7 +663,7 @@ describe("normalizing provider failures", () => {
     const fetchImpl = vi.fn(async () => {
       throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
     });
-    const result = await ANTHROPIC_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, {
+    const result = await ANTHROPIC_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, POLICY, {
       apiKey: API_KEY,
       label: "test-op",
       fetchImpl: fetchImpl as unknown as AiProviderCallDeps["fetchImpl"],
@@ -727,7 +894,7 @@ describe("nothing provider-shaped or sensitive escapes", () => {
 
   it("is silent when no logger is supplied", async () => {
     const fetchImpl = vi.fn(async () => new Response("x", { status: 500 }));
-    const result = await ANTHROPIC_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, {
+    const result = await ANTHROPIC_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, POLICY, {
       apiKey: API_KEY,
       label: "test-op",
       fetchImpl: fetchImpl as unknown as AiProviderCallDeps["fetchImpl"],

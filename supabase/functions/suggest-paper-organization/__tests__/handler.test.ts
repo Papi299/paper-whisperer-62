@@ -15,28 +15,38 @@ import {
 } from "../handler.ts";
 import { NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, MAX_PROJECTS } from "../contract.ts";
 import { resolveSystemDefaultAiModel } from "../../_shared/aiProviderRegistry.ts";
-import type { AiProviderAdapter } from "../../_shared/aiProvider.ts";
 
-// AI-MULTI-PROVIDER-001B — a test-only seam onto the registry LOOKUP.
+// AI-MULTI-PROVIDER-001B/001C — a test-only seam onto the provider DISPATCH.
 //
-// `incomplete_response` is a failure kind only the two UNREGISTERED adapters
-// can produce; the Google adapter the real registry returns never does. To
-// exercise this handler's classification of it without registering anything,
-// the lookup is wrapped: while `registryOverride.adapter` is null — every test
-// but one — the real `getAiProviderAdapter` answers, so the rest of this suite
-// runs against exactly the shipped wiring. Nothing here widens the registry,
-// and the real registry's contents are asserted in
+// `incomplete_response` is a failure kind the Google adapter cannot produce:
+// Gemini's envelope carries no terminal-state field, so only the Anthropic and
+// OpenAI protocols report an unfinished generation. To exercise this handler's
+// classification of it without a catalog row for either — there is none — the
+// shared dispatch is wrapped: while `dispatchOverride.result` is null (every
+// test but one) the real `generateWithRegisteredAiProvider` answers, so the
+// rest of this suite runs against exactly the shipped wiring, through the real
+// registry, the real Google adapter and the real transport. Nothing here
+// widens the registry, and its contents are asserted in
 // `_shared/__tests__/aiProviderRegistry.test.ts`.
-const registryOverride = vi.hoisted(() => ({
-  adapter: null as null | AiProviderAdapter<"google">,
+const dispatchOverride = vi.hoisted(() => ({
+  result: null as null | { ok: false; kind: "incomplete_response"; attempts: number },
+  calls: 0,
 }));
 vi.mock("../../_shared/aiProviderRegistry.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../_shared/aiProviderRegistry.ts")>();
-  const getAiProviderAdapter: typeof real.getAiProviderAdapter = (provider) =>
-    (registryOverride.adapter ?? real.getAiProviderAdapter(provider)) as ReturnType<
-      typeof real.getAiProviderAdapter<typeof provider>
-    >;
-  return { ...real, getAiProviderAdapter };
+  const generateWithRegisteredAiProvider: typeof real.generateWithRegisteredAiProvider = (
+    model,
+    request,
+    policy,
+    deps,
+  ) => {
+    if (dispatchOverride.result !== null) {
+      dispatchOverride.calls += 1;
+      return Promise.resolve(dispatchOverride.result);
+    }
+    return real.generateWithRegisteredAiProvider(model, request, policy, deps);
+  };
+  return { ...real, generateWithRegisteredAiProvider };
 });
 
 /**
@@ -134,6 +144,8 @@ interface QueryRecord {
 }
 
 interface Harness {
+  /** Every environment-variable NAME the handler asked for, in order. */
+  credentialReads: string[];
   deps: SuggestOrganizationDeps;
   fetchImpl: ReturnType<typeof vi.fn>;
   rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>;
@@ -161,6 +173,11 @@ interface HarnessOptions {
   refundError?: { message: string } | null;
   refundThrows?: boolean;
   responses?: Array<Response | Error>;
+  /**
+   * The value every credential read returns, or `null` to simulate a
+   * misconfigured deployment. AI-MULTI-PROVIDER-001C: the handler now asks for
+   * ONE named variable, so the harness also records WHICH name it asked for.
+   */
   geminiKey?: string | null;
   /** AI-MODEL-SELECTION-001B. Default: NOT entitled, so the system default is used. */
   entitled?: boolean;
@@ -198,6 +215,8 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const warns: string[] = [];
   const errors: string[] = [];
   const sleeps: number[] = [];
+  /** Every environment-variable NAME the handler asked for, in order. */
+  const credentialReads: string[] = [];
   const forbidden: string[] = [];
   const signalTimeouts: number[] = [];
 
@@ -318,7 +337,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
         signalTimeouts.push(ms);
         return new AbortController().signal;
       },
-      getGeminiApiKey: () => (options.geminiKey === undefined ? GEMINI_KEY : options.geminiKey),
+      getProviderCredential: (envName: string) => {
+        credentialReads.push(envName);
+        return options.geminiKey === undefined ? GEMINI_KEY : options.geminiKey;
+      },
       // Built through the same helper `index.ts` uses, so the harness cannot
       // drift from the shipped system default (AI-MULTI-PROVIDER-001A).
       getSystemDefaultModel: () =>
@@ -330,6 +352,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       },
     },
     fetchImpl,
+    credentialReads,
     rpcCalls,
     queries,
     logs,
@@ -467,6 +490,13 @@ describe("authentication", () => {
 
     for (const query of harness.queries) {
       const userFilter = query.filters.find(([column]) => column === "user_id");
+      // `ai_model_catalog` is global product metadata and carries no user_id —
+      // the reasoning-policy read filters it by (provider, provider_model).
+      // Every OWNED read is still scoped to the authenticated id.
+      if (query.table === "ai_model_catalog") {
+        expect(userFilter).toBeUndefined();
+        continue;
+      }
       expect(userFilter?.[1]).toBe(USER_ID);
     }
     for (const call of harness.rpcCalls) {
@@ -595,8 +625,12 @@ describe("taxonomy loading", () => {
     expect(projects?.filters).toEqual([["user_id", USER_ID]]);
     expect(tags?.columns).toBe("id,name");
     expect(tags?.filters).toEqual([["user_id", USER_ID]]);
-    // Nothing outside these three tables is ever queried.
+    // Nothing outside these four tables is ever queried. `ai_model_catalog` is
+    // read on every request since AI-MULTI-PROVIDER-001C, to resolve the
+    // effective model's reasoning policy; it is global, read-only product
+    // metadata, and it is the only one of the four that is not the caller's own.
     expect([...new Set(harness.queries.map((q) => q.table))].sort()).toEqual([
+      "ai_model_catalog",
       "papers",
       "projects",
       "tags",
@@ -927,12 +961,39 @@ describe("AI quota", () => {
     expect(harness.fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("does not spend a unit when the Gemini key is missing", async () => {
+  it("does not spend a unit when the selected provider's credential is missing", async () => {
+    // The no-cost failure order AI-MULTI-PROVIDER-001C had to preserve: the
+    // credential is still checked BEFORE the quota unit, so a misconfigured
+    // deployment costs the user nothing and needs no refund. What changed is
+    // only WHICH variable is checked.
     const harness = makeHarness({ geminiKey: null });
     const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(response.status).toBe(500);
-    expect(harness.rpcCalls).toEqual([]);
+    // NO QUOTA UNIT — the property that matters, and the one the credential
+    // check's position exists to protect. `get_current_user_access` does run
+    // first now, because WHICH credential to check is a consequence of which
+    // provider was selected; it is a read that spends nothing.
+    expect(quotaRpcs(harness)).toEqual([]);
+    expect(harness.rpcCalls.map((c) => c.fn)).toEqual(["get_current_user_access"]);
     expect(harness.fetchImpl).not.toHaveBeenCalled();
+    // The log names the missing ENVIRONMENT VARIABLE and never a value.
+    expect(harness.errors).toEqual([
+      "suggest-organization provider_key_missing env=GEMINI_API_KEY",
+    ]);
+  });
+
+  it("reads exactly the SELECTED provider's credential, and only that one", async () => {
+    // The hazard AI-MULTI-PROVIDER-001C removed: with three registered
+    // providers, a request routed to one must never read another's secret.
+    const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.credentialReads).toEqual(["GEMINI_API_KEY"]);
+    expect(harness.credentialReads).not.toContain("ANTHROPIC_API_KEY");
+    expect(harness.credentialReads).not.toContain("OPENAI_API_KEY");
+    // And the value reaches the provider header, never a log line.
+    expect([...harness.logs, ...harness.warns, ...harness.errors].join("\n")).not.toContain(
+      GEMINI_KEY,
+    );
   });
 
   it("keeps the unit for a successful result", async () => {
@@ -1201,9 +1262,11 @@ describe("no application-domain mutation", () => {
     const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(response.status).toBe(200);
 
-    // Reads only, and only these three tables.
+    // Reads only, and only these four tables (see the taxonomy-loading suite
+    // for why `ai_model_catalog` is among them).
     expect(harness.queries.every((q) => q.columns.length > 0)).toBe(true);
     expect([...new Set(harness.queries.map((q) => q.table))].sort()).toEqual([
+      "ai_model_catalog",
       "papers",
       "projects",
       "tags",
@@ -1391,7 +1454,15 @@ describe("model routing", () => {
     const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(response.status).toBe(200);
     expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
-    expect(harness.queries.map((q) => q.table)).not.toContain("ai_model_catalog");
+    // The dormant preference is never resolved: the catalog is read exactly
+    // once, by (provider, provider_model) for the SYSTEM DEFAULT's reasoning
+    // policy, and never by the dormant row's id.
+    const catalogQueries = harness.queries.filter((q) => q.table === "ai_model_catalog");
+    expect(catalogQueries).toHaveLength(1);
+    expect(catalogQueries[0].filters).toEqual([
+      ["provider", "google"],
+      ["provider_model", SYSTEM_DEFAULT_MODEL],
+    ]);
   });
 
   it("ignores a retired model (enabled = false)", async () => {
@@ -1409,15 +1480,18 @@ describe("model routing", () => {
   });
 
   it("refuses to call a provider it has no adapter for", async () => {
+    // `azure`, not `anthropic`: since AI-MULTI-PROVIDER-001C both Anthropic and
+    // OpenAI are REGISTERED, so a row naming either is honoured. What still
+    // falls back is a provider PaperLume has never implemented.
     const harness = routing({
       ...MODEL_35,
-      provider: "anthropic",
-      provider_model: "claude-sentinel-model",
+      provider: "azure",
+      provider_model: "azure-sentinel-model",
     });
     await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
-    expect(sentUrl(harness)).not.toContain("claude-sentinel-model");
-    expect(sentUrl(harness)).not.toContain("anthropic");
+    expect(sentUrl(harness)).not.toContain("azure-sentinel-model");
+    expect(sentUrl(harness)).not.toContain("azure");
   });
 
   it.each<[string, HarnessOptions]>([
@@ -1459,11 +1533,25 @@ describe("model routing", () => {
       harness.deps,
     );
     const preference = harness.queries.find((q) => q.table === "user_ai_preferences");
-    const catalog = harness.queries.find((q) => q.table === "ai_model_catalog");
+    const catalogQueries = harness.queries.filter((q) => q.table === "ai_model_catalog");
     expect(preference?.filters).toEqual([["user_id", USER_ID]]);
-    expect(preference?.columns).toBe("preferred_model_id");
-    expect(catalog?.filters).toEqual([["id", MODEL_35.id]]);
-    expect(catalog?.columns).toBe("id,provider,provider_model,enabled,selectable");
+    expect(preference?.columns).toBe("preferred_model_id,preferred_reasoning_level");
+    // Two reads, for two different questions, each an explicit projection.
+    // Model selection asks "which model is this saved id?" by primary key;
+    // reasoning policy asks "what is this EFFECTIVE model's policy?" by the
+    // catalog's (provider, provider_model) UNIQUE key — which is the only key
+    // that also works for the system default, since it has no catalog id.
+    expect(catalogQueries).toHaveLength(2);
+    expect(catalogQueries[0].filters).toEqual([["id", MODEL_35.id]]);
+    expect(catalogQueries[0].columns).toBe("id,provider,provider_model,enabled,selectable");
+    expect(catalogQueries[1].filters).toEqual([
+      ["provider", "google"],
+      ["provider_model", "gemini-3.5-flash"],
+    ]);
+    expect(catalogQueries[1].columns).toBe(
+      "provider,provider_model,reasoning_levels," +
+        "auto_analyze_reasoning_level,auto_suggest_reasoning_level",
+    );
     // The extra body fields influenced nothing.
     expect(sentUrl(harness)).toBe(urlFor("gemini-3.5-flash"));
     expect(sentUrl(harness)).not.toContain("gemini-evil");
@@ -1558,8 +1646,7 @@ describe("model routing", () => {
   // registry, Google adapter, fake `fetch` — so "it fell back" is observed on
   // the wire rather than inferred from a return value.
   it.each([
-    ["anthropic", "hypothetical-anthropic-model"],
-    ["openai", "hypothetical-openai-model"],
+    ["azure", "hypothetical-azure-model"],
     ["unknown-provider-sentinel", "hypothetical-unknown-model"],
   ])(
     "falls back to the system default for an enabled %s row, and calls only Google",
@@ -1603,9 +1690,9 @@ describe("model routing", () => {
     // The fallback must be indistinguishable on the wire from an ordinary
     // system-default request: same body, same headers, same URL.
     const unsupported = routing({
-      id: "anthropic/hypothetical",
-      provider: "anthropic",
-      provider_model: "hypothetical-anthropic-model",
+      id: "azure/hypothetical",
+      provider: "azure",
+      provider_model: "hypothetical-azure-model",
       enabled: true,
       selectable: true,
     });
@@ -1670,7 +1757,7 @@ describe("model routing", () => {
     const unexpected = makeHarness({
       entitled: true,
       preference: { preferred_model_id: MODEL_35.id },
-      catalog: { ...MODEL_35, provider: "openai", provider_model: "gpt-sentinel" },
+      catalog: { ...MODEL_35, provider: "azure", provider_model: "azure-sentinel" },
       responses: [geminiOk(EMPTY_SUGGESTIONS)],
     });
     await handleSuggestOrganizationRequest(request(validBody()), unexpected.deps);
@@ -1678,7 +1765,7 @@ describe("model routing", () => {
       "suggest-organization model_selection_fallback reason=unsupported_provider",
     );
     const all = [...unexpected.logs, ...unexpected.warns, ...unexpected.errors].join("\n");
-    expect(all).not.toContain("gpt-sentinel");
+    expect(all).not.toContain("azure-sentinel");
     expect(all).not.toContain(USER_ID);
   });
 });
@@ -1688,12 +1775,8 @@ describe("model routing", () => {
 
 describe("the incomplete_response failure kind", () => {
   it("is classified malformed_response, refunded, logged boundedly and never parsed", async () => {
-    const generate = vi.fn(async () => ({
-      ok: false as const,
-      kind: "incomplete_response" as const,
-      attempts: 1,
-    }));
-    registryOverride.adapter = { provider: "google", generate };
+    dispatchOverride.result = { ok: false, kind: "incomplete_response", attempts: 1 };
+    dispatchOverride.calls = 0;
     try {
       const harness = makeHarness({});
       const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
@@ -1704,25 +1787,165 @@ describe("the incomplete_response failure kind", () => {
       expect(JSON.stringify(body)).toContain(NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE);
       // One unit consumed, one refunded: the user got no usable result.
       expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
-      // The stub stood in for the adapter; nothing reached a network.
-      expect(generate).toHaveBeenCalledTimes(1);
+      // The stub stood in for the dispatch; nothing reached a network.
+      expect(dispatchOverride.calls).toBe(1);
       expect(harness.fetchImpl).not.toHaveBeenCalled();
       // Classified by decision, not by falling through the catch-all tail.
       expect(harness.errors.join("\n")).toContain(
         "outcome=provider_failure class=malformed_response detail=incomplete provider_attempts=1 refund=attempted",
       );
     } finally {
-      registryOverride.adapter = null;
+      dispatchOverride.result = null;
     }
   });
 
   it("leaves the real registry answering for every other test", async () => {
     // The override is a no-op by default: with it cleared, an ordinary Gemini
-    // success flows through the real Google adapter and real transport.
-    expect(registryOverride.adapter).toBeNull();
+    // success flows through the real dispatch, adapter and transport.
+    expect(dispatchOverride.result).toBeNull();
     const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
     const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
     expect(response.status).toBe(200);
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+// ── AI-MULTI-PROVIDER-001C: PaperLume's reasoning policy, observed on the wire ──
+//
+// These run the whole shipped path — model selection, the shared reasoning
+// policy, the registry dispatch, the Google adapter, the fake `fetch` — so
+// "Suggest sent medium" is read off the request body rather than inferred from
+// a return value. The fake client returns the same catalog row for every
+// catalog read, which is why each fixture carries both the routing columns and
+// the reasoning columns.
+
+describe("reasoning policy reaches the provider request", () => {
+  const REASONING_35 = {
+    ...MODEL_35,
+    reasoning_levels: ["minimal", "low", "medium", "high"],
+    auto_analyze_reasoning_level: "minimal",
+    auto_suggest_reasoning_level: "medium",
+    reasoning_selectable: false,
+  };
+  const REASONING_38 = {
+    id: "google/gemini-3.8-flash",
+    provider: "google",
+    provider_model: "gemini-3.8-flash",
+    enabled: true,
+    selectable: true,
+    reasoning_levels: ["low", "medium", "high"],
+    auto_analyze_reasoning_level: "low",
+    auto_suggest_reasoning_level: "medium",
+    reasoning_selectable: false,
+  };
+
+  const thinkingOf = (harness: Harness) =>
+    JSON.parse(sentBody(harness)).generationConfig.thinkingConfig as
+      | { thinkingLevel: string }
+      | undefined;
+
+  it("sends Suggest's Automatic level — medium — explicitly", async () => {
+    const harness = routing(REASONING_35);
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(thinkingOf(harness)).toEqual({ thinkingLevel: "medium" });
+    expect(harness.logs).toContain(
+      "suggest-organization reasoning_policy operation=suggest source=automatic " +
+        "level=medium max_output_tokens=8192",
+    );
+  });
+
+  it("sends a saved manual level instead, for this operation too", async () => {
+    const harness = routing(REASONING_35, {
+      preference: { preferred_model_id: REASONING_35.id, preferred_reasoning_level: "high" },
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(thinkingOf(harness)).toEqual({ thinkingLevel: "high" });
+    expect(harness.logs).toContain(
+      "suggest-organization reasoning_policy operation=suggest source=manual " +
+        "level=high max_output_tokens=8192",
+    );
+  });
+
+  it("never sends a saved level the model rejects; falls back to its Automatic", async () => {
+    // `minimal` on Gemini 3.8 Flash is a documented 400.
+    const harness = routing(REASONING_38, {
+      preference: { preferred_model_id: REASONING_38.id, preferred_reasoning_level: "minimal" },
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(thinkingOf(harness)).toEqual({ thinkingLevel: "medium" });
+    expect(sentBody(harness)).not.toContain('"thinkingLevel":"minimal"');
+    expect(harness.warns).toContain(
+      "suggest-organization reasoning_policy_fallback reason=manual_level_unsupported " +
+        "provider=google model=gemini-3.8-flash",
+    );
+    // An ordinary success: one unit, no refund.
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+  });
+
+  it("drops a DORMANT manual level with the preference it belongs to", async () => {
+    // Not entitled, so model selection falls back to the system default — and
+    // the saved `high` must not follow the request onto a model it was never
+    // chosen for. The system default's own Automatic level is sent instead.
+    const systemRow = {
+      ...REASONING_35,
+      id: "google/system-default-fixture",
+      provider_model: SYSTEM_DEFAULT_MODEL,
+    };
+    const harness = makeHarness({
+      entitled: false,
+      preference: { preferred_model_id: MODEL_35.id, preferred_reasoning_level: "high" },
+      catalog: systemRow,
+      responses: [geminiOk(EMPTY_SUGGESTIONS)],
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+    expect(thinkingOf(harness)).toEqual({ thinkingLevel: "medium" });
+  });
+
+  it("omits the reasoning field entirely when policy metadata is missing", async () => {
+    // The fail-open path: the feature still works, the request is the one
+    // PaperLume sent before 001C, and one bounded line says why.
+    const harness = makeHarness({
+      entitled: false,
+      catalog: null,
+      responses: [geminiOk(EMPTY_SUGGESTIONS)],
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(thinkingOf(harness)).toBeUndefined();
+    expect(harness.warns).toContain(
+      "suggest-organization reasoning_policy_fallback reason=metadata_missing " +
+        `provider=google model=${SYSTEM_DEFAULT_MODEL}`,
+    );
+    expect(harness.logs).toContain(
+      "suggest-organization reasoning_policy operation=suggest " +
+        "source=provider_default_fallback level=provider_default max_output_tokens=8192",
+    );
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+  });
+
+  it("resolves reasoning before the quota unit, and spends nothing doing it", async () => {
+    const harness = routing(REASONING_35);
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    const reasoningLog = harness.logs.findIndex((l) => l.includes("reasoning_policy operation="));
+    expect(reasoningLog).toBeGreaterThanOrEqual(0);
+    // Exactly one unit for the whole request: the reasoning read cost none.
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+  });
+
+  it("sends no reasoning preference, row or user data to the provider", async () => {
+    // Reasoning becomes a request PARAMETER only — never user metadata.
+    const harness = routing(REASONING_35, {
+      preference: { preferred_model_id: REASONING_35.id, preferred_reasoning_level: "low" },
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    const body = sentBody(harness);
+    expect(body).not.toContain(USER_ID);
+    expect(body).not.toContain("preferred_reasoning_level");
+    expect(body).not.toContain(REASONING_35.id);
+    expect(body).not.toContain("reasoning_selectable");
   });
 });

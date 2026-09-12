@@ -36,6 +36,13 @@ const GEMINI_35 = {
   enabled: true,
   selectable: true,
   sort_order: 10,
+  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
+  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
+  // staged state every Production row is in.
+  reasoning_levels: ["minimal", "low", "medium", "high"],
+  auto_analyze_reasoning_level: "minimal",
+  auto_suggest_reasoning_level: "medium",
+  reasoning_selectable: false,
 };
 const GEMINI_36 = {
   id: "google/gemini-3.6-flash",
@@ -44,6 +51,13 @@ const GEMINI_36 = {
   enabled: true,
   selectable: true,
   sort_order: 20,
+  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
+  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
+  // staged state every Production row is in.
+  reasoning_levels: ["minimal", "low", "medium", "high"],
+  auto_analyze_reasoning_level: "minimal",
+  auto_suggest_reasoning_level: "medium",
+  reasoning_selectable: false,
 };
 const GEMINI_37 = {
   id: "google/gemini-3.7-flash",
@@ -52,6 +66,13 @@ const GEMINI_37 = {
   enabled: true,
   selectable: true,
   sort_order: 30,
+  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
+  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
+  // staged state every Production row is in.
+  reasoning_levels: ["low", "medium", "high"],
+  auto_analyze_reasoning_level: "low",
+  auto_suggest_reasoning_level: "medium",
+  reasoning_selectable: false,
 };
 const GEMINI_38 = {
   id: "google/gemini-3.8-flash",
@@ -60,6 +81,13 @@ const GEMINI_38 = {
   enabled: true,
   selectable: true,
   sort_order: 40,
+  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
+  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
+  // staged state every Production row is in.
+  reasoning_levels: ["low", "medium", "high"],
+  auto_analyze_reasoning_level: "low",
+  auto_suggest_reasoning_level: "medium",
+  reasoning_selectable: false,
 };
 
 type Result = { data: unknown; error: unknown };
@@ -108,11 +136,48 @@ function mockTables(catalog: Result, preference: Result): Stubs {
   return stubs;
 }
 
+/**
+ * The normalized shape the hook projects a Gemini fixture row into.
+ *
+ * A helper rather than four literals, so the reasoning metadata is asserted
+ * from the fixture rather than retyped — a projection that dropped a field
+ * would fail here instead of quietly agreeing with a copy of itself.
+ */
+function optionOf(row: {
+  id: string;
+  provider: string;
+  display_name: string;
+  enabled: boolean;
+  selectable: boolean;
+  reasoning_levels: string[];
+  auto_analyze_reasoning_level: string | null;
+  auto_suggest_reasoning_level: string | null;
+  reasoning_selectable: boolean;
+}) {
+  return {
+    id: row.id,
+    provider: row.provider,
+    displayName: row.display_name,
+    enabled: row.enabled,
+    selectable: row.selectable,
+    reasoningLevels: row.reasoning_levels,
+    automaticAnalyzeReasoningLevel: row.auto_analyze_reasoning_level,
+    automaticSuggestReasoningLevel: row.auto_suggest_reasoning_level,
+    reasoningSelectable: row.reasoning_selectable,
+  };
+}
+
 function rows(...list: unknown[]): Result {
   return { data: list, error: null };
 }
-function prefRow(modelId: string | null): Result {
-  return { data: modelId === null ? null : { preferred_model_id: modelId }, error: null };
+function prefRow(modelId: string | null, reasoningLevel: string | null = null): Result {
+  return {
+    data:
+      modelId === null
+        ? null
+        : { preferred_model_id: modelId, preferred_reasoning_level: reasoningLevel },
+    error: null,
+  };
 }
 
 function makeClient() {
@@ -156,7 +221,9 @@ describe("useAiModelSettings — reads", () => {
     await renderLoaded();
 
     expect(stubs.catalog.select).toHaveBeenCalledWith(
-      "id, provider, display_name, enabled, selectable, sort_order",
+      "id, provider, display_name, enabled, selectable, sort_order, " +
+        "reasoning_levels, auto_analyze_reasoning_level, auto_suggest_reasoning_level, " +
+        "reasoning_selectable",
     );
     const projection = stubs.catalog.select.mock.calls[0][0];
     expect(projection).not.toContain("provider_model");
@@ -177,7 +244,9 @@ describe("useAiModelSettings — reads", () => {
     const stubs = mockTables(rows(GEMINI_35), prefRow(null));
     await renderLoaded();
 
-    expect(stubs.preference.select).toHaveBeenCalledWith("preferred_model_id");
+    expect(stubs.preference.select).toHaveBeenCalledWith(
+      "preferred_model_id, preferred_reasoning_level",
+    );
     expect(stubs.preference.eq).toHaveBeenCalledWith("user_id", USER);
     expect(stubs.preference.maybeSingle).toHaveBeenCalled();
   });
@@ -225,10 +294,10 @@ describe("useAiModelSettings — reads", () => {
     const { result } = await renderLoaded();
 
     expect(result.current.options).toEqual([
-      { id: GEMINI_35.id, provider: "google", displayName: "Gemini 3.5 Flash", enabled: true, selectable: true },
-      { id: GEMINI_36.id, provider: "google", displayName: "Gemini 3.6 Flash", enabled: true, selectable: true },
-      { id: GEMINI_37.id, provider: "google", displayName: "Gemini 3.7 Flash", enabled: true, selectable: true },
-      { id: GEMINI_38.id, provider: "google", displayName: "Gemini 3.8 Flash", enabled: true, selectable: true },
+      optionOf(GEMINI_35),
+      optionOf(GEMINI_36),
+      optionOf(GEMINI_37),
+      optionOf(GEMINI_38),
     ]);
   });
 
@@ -257,7 +326,10 @@ describe("useAiModelSettings — reads", () => {
       modelId: GEMINI_38.id,
       displayName: "Gemini 3.8 Flash",
       selectable: true,
+      option: optionOf(GEMINI_38),
     });
+    // No manual level saved — Automatic.
+    expect(result.current.savedReasoning).toEqual({ status: "automatic" });
   });
 
   it("offers only enabled + selectable + supported-provider rows, in catalog order", async () => {
@@ -269,9 +341,9 @@ describe("useAiModelSettings — reads", () => {
         { ...GEMINI_35, id: "google/locked", display_name: "Locked", selectable: false },
         {
           ...GEMINI_35,
-          id: "anthropic/claude",
-          provider: "anthropic",
-          display_name: "Claude",
+          id: "azure/some-model",
+          provider: "azure",
+          display_name: "Azure",
         },
       ),
       prefRow(null),
@@ -284,12 +356,16 @@ describe("useAiModelSettings — reads", () => {
     ]);
   });
 
-  it("still offers no Anthropic or OpenAI row — AI-MULTI-PROVIDER-001B", async () => {
-    // 001B added real Anthropic and OpenAI adapter MODULES to the Edge code and
-    // registered neither. This filter mirrors the REGISTERED providers, not the
-    // adapter source files, so a seeded row for either provider — including the
-    // future target models by name — must still never be offered. Offering one
-    // would promise routing the server does not perform.
+  it("WOULD offer an Anthropic or OpenAI row — AI-MULTI-PROVIDER-001C", async () => {
+    // 001B added real Anthropic and OpenAI adapter modules and registered
+    // neither, so this filter excluded both. 001C registered them, so the
+    // filter moved with the runtime: a row for either provider would now be
+    // offered, because the runtime really can route it.
+    //
+    // These are FIXTURES and nothing else. No `anthropic/*` or `openai/*` row
+    // exists in `ai_model_catalog`, so this adds no option to anyone's Settings
+    // today — what it changes is that the UI would no longer silently hide a
+    // model the server had been told to serve.
     mockTables(
       rows(
         GEMINI_35,
@@ -298,41 +374,62 @@ describe("useAiModelSettings — reads", () => {
           id: "anthropic/claude-sonnet-5",
           provider: "anthropic",
           display_name: "Claude Sonnet 5",
+          reasoning_levels: ["off", "low", "medium", "high", "xhigh", "max"],
+          auto_analyze_reasoning_level: "off",
         },
         {
           ...GEMINI_35,
           id: "openai/gpt-5.6-terra",
           provider: "openai",
           display_name: "GPT-5.6 Terra",
+          reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max"],
+          auto_analyze_reasoning_level: "none",
         },
       ),
       prefRow(null),
     );
     const { result } = await renderLoaded();
 
-    expect(result.current.options.map((o) => o.id)).toEqual([GEMINI_35.id]);
-    const offeredNames = result.current.options.map((o) => o.displayName).join("|");
-    expect(offeredNames).not.toContain("Claude");
-    expect(offeredNames).not.toContain("GPT");
+    expect(result.current.options.map((o) => o.id)).toEqual([
+      GEMINI_35.id,
+      "anthropic/claude-sonnet-5",
+      "openai/gpt-5.6-terra",
+    ]);
   });
 
-  it("reports a saved OpenAI-provider model as unavailable, like any unsupported one", async () => {
+  it("still offers nothing from a provider the runtime cannot route", async () => {
+    mockTables(
+      rows(GEMINI_35, {
+        ...GEMINI_35,
+        id: "azure/some-model",
+        provider: "azure",
+        display_name: "Azure Model",
+      }),
+      prefRow(null),
+    );
+    const { result } = await renderLoaded();
+    expect(result.current.options.map((o) => o.id)).toEqual([GEMINI_35.id]);
+  });
+
+  it("reports a saved model from an unroutable provider as unavailable", async () => {
     mockTables(
       rows({
         ...GEMINI_35,
-        id: "openai/gpt-5.6-terra",
-        provider: "openai",
-        display_name: "GPT-5.6 Terra",
+        id: "azure/some-model",
+        provider: "azure",
+        display_name: "Azure Model",
       }),
-      prefRow("openai/gpt-5.6-terra"),
+      prefRow("azure/some-model"),
     );
     const { result } = await renderLoaded();
 
     expect(result.current.saved).toEqual({
       status: "unavailable",
-      modelId: "openai/gpt-5.6-terra",
-      displayName: "GPT-5.6 Terra",
+      modelId: "azure/some-model",
+      displayName: "Azure Model",
     });
+    // An unavailable model carries no reasoning choice in force.
+    expect(result.current.savedReasoning).toEqual({ status: "automatic" });
   });
 
   it("resolves an explicit preference to an active saved model", async () => {
@@ -344,11 +441,13 @@ describe("useAiModelSettings — reads", () => {
       modelId: GEMINI_36.id,
       displayName: "Gemini 3.6 Flash",
       selectable: true,
+      option: optionOf(GEMINI_36),
     });
   });
 
   it("keeps an enabled-but-unselectable saved model active, flagged unselectable", async () => {
-    mockTables(rows({ ...GEMINI_35, selectable: false }, GEMINI_36), prefRow(GEMINI_35.id));
+    const locked = { ...GEMINI_35, selectable: false };
+    mockTables(rows(locked, GEMINI_36), prefRow(GEMINI_35.id));
     const { result } = await renderLoaded();
 
     expect(result.current.saved).toEqual({
@@ -356,6 +455,7 @@ describe("useAiModelSettings — reads", () => {
       modelId: GEMINI_35.id,
       displayName: "Gemini 3.5 Flash",
       selectable: false,
+      option: optionOf(locked),
     });
     // …and it is not offered as a NEW choice.
     expect(result.current.options.map((o) => o.id)).toEqual([GEMINI_36.id]);
@@ -385,16 +485,85 @@ describe("useAiModelSettings — reads", () => {
 
   it("reports a saved unsupported-provider model as unavailable", async () => {
     mockTables(
-      rows({ ...GEMINI_35, id: "anthropic/claude", provider: "anthropic", display_name: "Claude" }),
-      prefRow("anthropic/claude"),
+      rows({ ...GEMINI_35, id: "azure/model", provider: "azure", display_name: "Azure Model" }),
+      prefRow("azure/model"),
     );
     const { result } = await renderLoaded();
 
     expect(result.current.saved).toEqual({
       status: "unavailable",
-      modelId: "anthropic/claude",
-      displayName: "Claude",
+      modelId: "azure/model",
+      displayName: "Azure Model",
     });
+  });
+
+  // ── Reasoning preference — AI-MULTI-PROVIDER-001C (C41) ──────────────────
+
+  it("reads a NULL reasoning level as Automatic, distinct from a failed read", async () => {
+    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id, null));
+    const { result } = await renderLoaded();
+    expect(result.current.savedReasoning).toEqual({ status: "automatic" });
+    expect(result.current.isError).toBe(false);
+  });
+
+  it("resolves a saved manual level the model still supports", async () => {
+    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id, "high"));
+    const { result } = await renderLoaded();
+    expect(result.current.savedReasoning).toEqual({ status: "manual", level: "high" });
+  });
+
+  it("reports a saved level the model no longer supports as unsupported", async () => {
+    // `minimal` is real, canonical and genuinely unavailable on 3.7/3.8 — the
+    // exact shape of the state a catalog change or a hand-written row produces.
+    // The runtime independently falls back to that model's Automatic policy and
+    // never sends the value; the UI reports the truth and offers the way back.
+    mockTables(rows(GEMINI_38), prefRow(GEMINI_38.id, "minimal"));
+    const { result } = await renderLoaded();
+    expect(result.current.savedReasoning).toEqual({ status: "unsupported", level: "minimal" });
+  });
+
+  it("fails closed to Automatic on a reasoning value this build cannot name", async () => {
+    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id, "ludicrous"));
+    const { result } = await renderLoaded();
+    expect(result.current.savedReasoning).toEqual({ status: "automatic" });
+  });
+
+  it("never reports a manual level while the account is on PaperLume default", async () => {
+    // There is no row to hold one, by construction; this pins the consequence.
+    mockTables(rows(GEMINI_35), prefRow(null));
+    const { result } = await renderLoaded();
+    expect(result.current.saved).toEqual({ status: "none" });
+    expect(result.current.savedReasoning).toEqual({ status: "automatic" });
+  });
+
+  it("leaves reasoning unresolved — not Automatic — when a read fails", async () => {
+    mockTables({ data: null, error: { message: "boom" } }, prefRow(null));
+    const { result } = await renderLoaded();
+    expect(result.current.isError).toBe(true);
+    expect(result.current.saved).toBeNull();
+    expect(result.current.savedReasoning).toBeNull();
+  });
+
+  it("projects each model's own reasoning metadata, from the catalog alone", async () => {
+    mockTables(rows(GEMINI_35, GEMINI_38), prefRow(null));
+    const { result } = await renderLoaded();
+    const [g35, g38] = result.current.options;
+    expect(g35.reasoningLevels).toEqual(["minimal", "low", "medium", "high"]);
+    expect(g35.automaticAnalyzeReasoningLevel).toBe("minimal");
+    expect(g35.automaticSuggestReasoningLevel).toBe("medium");
+    expect(g38.reasoningLevels).toEqual(["low", "medium", "high"]);
+    expect(g38.automaticAnalyzeReasoningLevel).toBe("low");
+    // The staged state: no model offers a manual choice yet.
+    expect(result.current.options.every((o) => o.reasoningSelectable === false)).toBe(true);
+  });
+
+  it("drops a catalog level this build cannot name, rather than offering it", async () => {
+    mockTables(
+      rows({ ...GEMINI_35, reasoning_levels: ["low", "ludicrous", "high"] }),
+      prefRow(null),
+    );
+    const { result } = await renderLoaded();
+    expect(result.current.options[0].reasoningLevels).toEqual(["low", "high"]);
   });
 });
 
@@ -581,22 +750,242 @@ describe("useAiModelSettings — writes", () => {
     expect(source).not.toMatch(/\.delete\(/);
     // Exactly the two approved RPCs, and no third.
     const rpcNames = [...source.matchAll(/supabase\.rpc\(\s*"([^"]+)"/g)].map((m) => m[1]);
+    // Exactly the four approved RPCs, and no fifth. The two reasoning ones were
+    // added by AI-MULTI-PROVIDER-001C; `set_current_user_ai_reasoning` is
+    // deliberately ungranted in the database, so calling it currently fails —
+    // which is why the UI never offers the choice that would call it.
     expect(rpcNames.sort()).toEqual([
       "clear_current_user_ai_model",
+      "clear_current_user_ai_reasoning",
       "set_current_user_ai_model",
+      "set_current_user_ai_reasoning",
     ]);
   });
 
-  it("keeps the provider-family filter at exactly google — AI-MULTI-PROVIDER-001B", () => {
-    // 001B added Anthropic and OpenAI adapter modules to the Edge code and
-    // registered neither. This list mirrors the REGISTERED providers, not the
-    // adapter source files, and it must move together with the Edge registry —
-    // never ahead of it. The next ordinary Vercel deploy ships this file, so a
-    // premature widening here would expose a provider the server cannot route.
+  it("keeps the provider-family filter exactly level with the Edge registry", () => {
+    // This list mirrors the REGISTERED providers, and must move together with
+    // the Edge registry — never ahead of it. The next ordinary Vercel deploy
+    // ships this file, so a premature widening here would expose a provider the
+    // server cannot route. AI-MULTI-PROVIDER-001C moved both in one task.
     const source = readFileSync(resolve(process.cwd(), "src/hooks/useAiModelSettings.ts"), "utf-8");
-    expect(source).toMatch(/const SUPPORTED_PROVIDERS: readonly string\[\] = \["google"\];/);
-    expect(source).not.toMatch(/["'`]anthropic["'`]/);
-    expect(source).not.toMatch(/["'`]openai["'`]/);
+    expect(source).toMatch(
+      /const SUPPORTED_PROVIDERS: readonly string\[\] = \["google", "anthropic", "openai"\];/,
+    );
+    // And still no model string anywhere: the catalog is the model allowlist.
+    expect(source).not.toMatch(/gemini-3/);
+    expect(source).not.toMatch(/claude-sonnet/);
+    expect(source).not.toMatch(/gpt-5/);
+  });
+});
+
+describe("useAiModelSettings — reasoning writes (AI-MULTI-PROVIDER-001C)", () => {
+  /** A catalog row whose reasoning control is OPEN — never the case in Production today. */
+  const OPEN_35 = { ...GEMINI_35, reasoning_selectable: true };
+
+  it("preserves a compatible level across a model change, with the ordinary toast", async () => {
+    mockTables(rows(GEMINI_35, GEMINI_36), prefRow(GEMINI_35.id, "high"));
+    mockRpc.mockResolvedValue({
+      data: [{ saved: true, reason: "ok", display_name: "Gemini 3.6 Flash", reasoning_reset: false }],
+      error: null,
+    });
+    const { result } = await renderLoaded();
+
+    await act(async () => {
+      result.current.saveModel(GEMINI_36.id);
+    });
+
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "AI model updated",
+        description: "Paperlume will use Gemini 3.6 Flash for this account.",
+      }),
+    );
+    // The model setter is still the only call: preservation happened server-side
+    // in the same transaction, and the hook did not second-guess it.
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledWith("set_current_user_ai_model", { p_model_id: GEMINI_36.id });
+  });
+
+  it("tells the user, in product words, when the server reset reasoning", async () => {
+    mockTables(rows(GEMINI_35, GEMINI_38), prefRow(GEMINI_35.id, "minimal"));
+    mockRpc.mockResolvedValue({
+      data: [{ saved: true, reason: "ok", display_name: "Gemini 3.8 Flash", reasoning_reset: true }],
+      error: null,
+    });
+    const { result } = await renderLoaded();
+
+    await act(async () => {
+      result.current.saveModel(GEMINI_38.id);
+    });
+
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "AI model updated",
+        description:
+          "Reasoning was reset to Automatic because the new model does not support your " +
+          "previous level.",
+      }),
+    );
+    // No provider vocabulary, and the dropped value is not named.
+    const description = String(mockToast.mock.calls.at(-1)?.[0]?.description);
+    expect(description).not.toMatch(/thinking|effort|minimal/i);
+  });
+
+  it("reports no reset when the flag is absent — nothing was reset", async () => {
+    // A database that predates the migration returns no `reasoning_reset`.
+    mockTables(rows(GEMINI_35, GEMINI_36), prefRow(GEMINI_35.id));
+    mockRpc.mockResolvedValue({
+      data: [{ saved: true, reason: "ok", display_name: "Gemini 3.6 Flash" }],
+      error: null,
+    });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveModel(GEMINI_36.id);
+    });
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    expect(String(mockToast.mock.calls.at(-1)?.[0]?.description)).not.toContain("reset");
+  });
+
+  it("never calls the reasoning setter while the account is on PaperLume default", async () => {
+    mockTables(rows(OPEN_35), prefRow(null));
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("high");
+    });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("never calls the reasoning setter while reasoning selection is staged off", async () => {
+    // The state of every Production catalog row after the 001C migration.
+    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id));
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("high");
+    });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("never calls the reasoning setter with a level the model does not list", async () => {
+    mockTables(rows({ ...OPEN_35, id: GEMINI_38.id, reasoning_levels: ["low", "medium", "high"] }),
+      prefRow(GEMINI_38.id));
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("minimal");
+    });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("saves through set_current_user_ai_reasoning with only p_reasoning_level", async () => {
+    mockTables(rows(OPEN_35), prefRow(GEMINI_35.id));
+    mockRpc.mockResolvedValue({
+      data: [{ saved: true, reason: "ok", preferred_model_id: GEMINI_35.id, preferred_reasoning_level: "high" }],
+      error: null,
+    });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("high");
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledTimes(1));
+    // No user id, no model id, no provider: the server derives all of it.
+    expect(mockRpc).toHaveBeenCalledWith("set_current_user_ai_reasoning", {
+      p_reasoning_level: "high",
+    });
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Reasoning level updated" }),
+      ),
+    );
+  });
+
+  it.each([
+    ["reasoning_not_selectable"],
+    ["reasoning_level_not_supported"],
+    ["model_required"],
+    ["model_disabled"],
+    ["model_missing"],
+  ])("reports '%s' as a reasoning problem, never as 'pick another model'", async (reason) => {
+    mockTables(rows(OPEN_35), prefRow(GEMINI_35.id));
+    mockRpc.mockResolvedValue({ data: [{ saved: false, reason }], error: null });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("high");
+    });
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Reasoning unchanged",
+        description:
+          "That reasoning level is not available for your current model. Refresh and try again.",
+        variant: "destructive",
+      }),
+    );
+  });
+
+  it.each([["missing_entitlement"], ["not_entitled"], ["inactive_entitlement"]])(
+    "reports '%s' as an access problem",
+    async (reason) => {
+      mockTables(rows(OPEN_35), prefRow(GEMINI_35.id));
+      mockRpc.mockResolvedValue({ data: [{ saved: false, reason }], error: null });
+      const { result } = await renderLoaded();
+      await act(async () => {
+        result.current.saveReasoning("high");
+      });
+      await waitFor(() =>
+        expect(mockToast).toHaveBeenCalledWith({
+          title: "Reasoning unchanged",
+          description: "Reasoning selection is not available for this account.",
+          variant: "destructive",
+        }),
+      );
+    },
+  );
+
+  it("never reports a success for a missing or malformed setter row", async () => {
+    mockTables(rows(OPEN_35), prefRow(GEMINI_35.id));
+    mockRpc.mockResolvedValue({ data: [], error: null });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("high");
+    });
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    expect(mockToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Reasoning level updated" }),
+    );
+  });
+
+  it("clears reasoning through clear_current_user_ai_reasoning, with no arguments", async () => {
+    // Deliberately allowed even while reasoning selection is staged off:
+    // leaving a manual level must never be blocked by the flag that controls
+    // entering one.
+    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id, "high"));
+    mockRpc.mockResolvedValue({ data: [{ cleared: true, reason: "ok" }], error: null });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.clearReasoning();
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith("clear_current_user_ai_reasoning"));
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Using automatic reasoning",
+        description: "Paperlume will choose a reasoning level for each task.",
+      }),
+    );
+  });
+
+  it("treats an idempotent clear ('no_reasoning_preference') as success", async () => {
+    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id));
+    mockRpc.mockResolvedValue({
+      data: [{ cleared: false, reason: "no_reasoning_preference" }],
+      error: null,
+    });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.clearReasoning();
+    });
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Using automatic reasoning" }),
+      ),
+    );
   });
 });
 

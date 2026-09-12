@@ -17,6 +17,17 @@ import { waitForDashboard } from "./helpers";
  *
  * No Gemini request is made anywhere in this file, and no Edge Function is
  * served: the spec exercises preference persistence and the rendered UI only.
+ *
+ * AI-MULTI-PROVIDER-001C adds the Reasoning level control, and this spec proves
+ * its STAGED state end to end: the helper text is built from the live local
+ * catalog's reasoning metadata (not from anything in the frontend), and the
+ * control offers no manual choice, because migration `20260912120000` leaves
+ * `reasoning_selectable = false` on every row and grants
+ * `set_current_user_ai_reasoning` to no role. The manual save/reset path is
+ * deliberately NOT driven from the browser here — making it reachable would
+ * mean granting that function locally, which is exactly the posture the
+ * migration withholds. It is exercised instead by pgTAP suite 016 (owner
+ * context) and by the focused hook/component tests.
  * The entitled test ends by resetting to Paperlume's default, and the lifecycle
  * then proves out-of-band that the preference row is really gone — by signing in
  * as that same disposable account and reading `user_ai_preferences` through its
@@ -33,6 +44,7 @@ const GEMINI_35_LABEL = "Gemini 3.5 Flash";
 const GEMINI_36_LABEL = "Gemini 3.6 Flash";
 const GEMINI_37_LABEL = "Gemini 3.7 Flash";
 const GEMINI_38_LABEL = "Gemini 3.8 Flash";
+const AUTOMATIC_REASONING_LABEL = "Automatic (Recommended)";
 
 /**
  * Exactly what the dropdown must contain after a full local migration replay:
@@ -102,6 +114,22 @@ async function closeSettings(page: Page) {
   const dialog = settingsDialog(page);
   await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).toHaveCount(0, { timeout: 5_000 });
+}
+
+/**
+ * The Reasoning level control and the text it points `aria-describedby` at.
+ *
+ * Resolved through the attribute rather than by a hard-coded id, so this also
+ * proves the accessible relation exists: the explanation a sighted user reads is
+ * the same element a screen reader announces with the control.
+ */
+async function reasoningControl(page: Page) {
+  const dialog = settingsDialog(page);
+  const trigger = dialog.getByRole("combobox", { name: "Reasoning level" });
+  await expect(trigger).toBeVisible();
+  const describedBy = await trigger.getAttribute("aria-describedby");
+  expect(describedBy, "the reasoning control must be described by visible text").toBeTruthy();
+  return { trigger, description: dialog.locator(`[id="${describedBy}"]`) };
 }
 
 /** Choose a value from the AI model Select and wait for the write to land. */
@@ -258,6 +286,21 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
     await expect(listbox.getByRole("option")).toHaveText(EXPECTED_OPTIONS);
     await page.keyboard.press("Escape");
 
+    // ── Reasoning on PaperLume default — AI-MULTI-PROVIDER-001C ─────────────
+    // Automatic, not changeable, and explained in visible text: PaperLume may
+    // change its default model server-side, so no manual level is offered here.
+    const reasoning = await reasoningControl(page);
+    await expect(reasoning.trigger).toHaveText(AUTOMATIC_REASONING_LABEL);
+    await expect(reasoning.trigger).toBeDisabled();
+    await expect(reasoning.description).toBeVisible();
+    await expect(reasoning.description).toContainText(
+      "Automatic (Recommended) is used with Paperlume default",
+    );
+    await expect(reasoning.description).toContainText("organization suggestions use Medium");
+    await expect(reasoning.description).toContainText(
+      "Choose a specific model to customize reasoning",
+    );
+
     await closeSettings(page);
   });
 
@@ -278,6 +321,23 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
       (await openSettings(page)).getByRole("combobox", { name: "AI model" }),
     ).toHaveText(GEMINI_38_LABEL);
 
+    // ── The EXACT Automatic policy, read from the live migrated catalog ─────
+    // Gemini 3.8 Flash has no Minimal, so its Analyze level is Low. Nothing in
+    // the frontend names this model's policy: if the catalog row changed, this
+    // line would change with no deploy.
+    let reasoning = await reasoningControl(page);
+    await expect(reasoning.trigger).toHaveText(AUTOMATIC_REASONING_LABEL);
+    await expect(reasoning.description).toContainText(
+      "Analyze: Low · Organization suggestions: Medium",
+    );
+    await expect(reasoning.description).toContainText("This balances quality, speed, and cost.");
+    // STAGED: every row has reasoning_selectable = false after 20260912120000,
+    // so there is no manual choice to make — and the page says so in text.
+    await expect(reasoning.trigger).toBeDisabled();
+    await expect(reasoning.description).toContainText(
+      "Choosing a reasoning level is not available for Gemini 3.8 Flash",
+    );
+
     // ── Save an explicit Gemini 3.6 preference ──────────────────────────────
     await chooseModel(page, GEMINI_36_LABEL);
     // Saving must NOT close Settings.
@@ -296,6 +356,13 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
     // An explicit 3.5 pin is not the same thing as "no preference", even though
     // both currently route to the same provider model.
     await expect(select).not.toHaveText(DEFAULT_LABEL);
+
+    // Gemini 3.5 Flash offers Minimal, and its Automatic Analyze level is it.
+    reasoning = await reasoningControl(page);
+    await expect(reasoning.description).toContainText(
+      "Analyze: Minimal · Organization suggestions: Medium",
+    );
+    await expect(reasoning.trigger).toBeDisabled();
 
     // ── Reset to Paperlume default ─────────────────────────────────────────
     await chooseModel(page, DEFAULT_LABEL);

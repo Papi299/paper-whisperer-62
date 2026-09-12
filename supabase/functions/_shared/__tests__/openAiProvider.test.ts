@@ -35,7 +35,7 @@ import {
   OPENAI_AI_PROVIDER_ADAPTER,
   OPENAI_PROVIDER_ATTEMPTS,
   OPENAI_PROVIDER_TIMEOUT_MS,
-  OPENAI_PROVISIONAL_MAX_OUTPUT_TOKENS,
+  OPENAI_REASONING_LEVELS,
   OPENAI_RESPONSES_URL,
   buildOpenAiRequestBody,
   buildOpenAiRequestInit,
@@ -43,7 +43,12 @@ import {
   type OpenAiProviderModel,
 } from "../openAiProvider.ts";
 import { GEMINI_PROVIDER_TIMEOUT_MS } from "../geminiTransport.ts";
-import type { AiGenerationRequest, AiProviderCallDeps } from "../aiProvider.ts";
+import type {
+  AiCallPolicy,
+  AiGenerationRequest,
+  AiProviderCallDeps,
+} from "../aiProvider.ts";
+import type { OpenAiReasoningLevel } from "../openAiProvider.ts";
 
 // Sentinels: if any of these ever reaches a log line or a returned result, the
 // assertion fails on the literal string rather than on a shape.
@@ -149,12 +154,38 @@ const reasoningItem = (text: string) => ({
   encrypted_content: `ENCRYPTED-${text}`,
 });
 
-const generate = (harness: Harness, request: AiGenerationRequest = REQUEST, model = MODEL) =>
-  OPENAI_AI_PROVIDER_ADAPTER.generate(model, request, harness.deps);
+/**
+ * The default call policy for these tests — AI-MULTI-PROVIDER-001C.
+ *
+ * `low` rather than Terra's own `medium` default, so a request asserted while
+ * sending an explicit effort can never be confused with one asserted while
+ * sending nothing. Every effort assertion names its level, and the
+ * provider-default case is exercised on its own.
+ */
+const POLICY: AiCallPolicy<OpenAiReasoningLevel> = {
+  reasoning: { kind: "level", level: "low" },
+  maxOutputTokens: 4096,
+};
 
-async function captureRequest(request: AiGenerationRequest = REQUEST, model = MODEL) {
+const PROVIDER_DEFAULT_POLICY: AiCallPolicy<OpenAiReasoningLevel> = {
+  reasoning: { kind: "provider_default" },
+  maxOutputTokens: 4096,
+};
+
+const generate = (
+  harness: Harness,
+  request: AiGenerationRequest = REQUEST,
+  model = MODEL,
+  policy: AiCallPolicy<OpenAiReasoningLevel> = POLICY,
+) => OPENAI_AI_PROVIDER_ADAPTER.generate(model, request, policy, harness.deps);
+
+async function captureRequest(
+  request: AiGenerationRequest = REQUEST,
+  model = MODEL,
+  policy: AiCallPolicy<OpenAiReasoningLevel> = POLICY,
+) {
   const harness = makeHarness([openAiOk([messageItem("{}")])]);
-  const result = await generate(harness, request, model);
+  const result = await generate(harness, request, model, policy);
   const [url, init] = harness.fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
   return { url, init, body: JSON.parse(String(init.body)), raw: String(init.body), result, harness };
 }
@@ -247,22 +278,134 @@ describe("the request that reaches OpenAI", () => {
     expect(JSON.stringify(format.schema)).toContain(SCHEMA_PROPERTY);
   });
 
-  it("sends the 001B provisional output ceiling", async () => {
+  it("sends the OPERATION's output ceiling", async () => {
+    // AI-MULTI-PROVIDER-001C replaced the 001B flat adapter constant with a
+    // number the caller supplies, so the adapter cannot have an opinion about
+    // which Edge Function called it. On a reasoning model this bound covers
+    // reasoning AND answer, which is what keeps `max` effort bounded.
     const { body } = await captureRequest();
-    expect(body.max_output_tokens).toBe(OPENAI_PROVISIONAL_MAX_OUTPUT_TOKENS);
-    expect(OPENAI_PROVISIONAL_MAX_OUTPUT_TOKENS).toBe(4096);
+    expect(body.max_output_tokens).toBe(4096);
+    for (const maxOutputTokens of [4096, 8192]) {
+      const built = buildOpenAiRequestBody(MODEL, REQUEST, {
+        reasoning: { kind: "level", level: "medium" },
+        maxOutputTokens,
+      });
+      expect(built.max_output_tokens).toBe(maxOutputTokens);
+    }
   });
 
-  it("pins the whole envelope: these six keys and no others", async () => {
+  it("pins the whole envelope: these seven keys and no others", async () => {
     const { body } = await captureRequest();
     expect(Object.keys(body).sort()).toEqual([
       "input",
       "instructions",
       "max_output_tokens",
       "model",
+      // AI-MULTI-PROVIDER-001C: PaperLume's explicit reasoning effort.
+      "reasoning",
       "store",
       "text",
     ]);
+  });
+});
+
+// ── 2b. PaperLume's explicit reasoning effort — AI-MULTI-PROVIDER-001C (C41) ──
+
+describe("the reasoning effort that reaches OpenAI", () => {
+  it("declares exactly the six efforts gpt-5.6-terra accepts, in OpenAI's order", () => {
+    expect(OPENAI_AI_PROVIDER_ADAPTER.reasoningLevels).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(OPENAI_REASONING_LEVELS).toEqual(OPENAI_AI_PROVIDER_ADAPTER.reasoningLevels);
+  });
+
+  it("refuses the two canonical levels OpenAI does not have", () => {
+    // `minimal` is not offered on gpt-5.6-terra, and `off` is Anthropic's word
+    // for the idea OpenAI spells `none`. The two spellings stay two values so
+    // neither adapter can be handed the other's and quietly send it.
+    expect(OPENAI_AI_PROVIDER_ADAPTER.supportsReasoningLevel("minimal")).toBe(false);
+    expect(OPENAI_AI_PROVIDER_ADAPTER.supportsReasoningLevel("off")).toBe(false);
+    for (const level of ["none", "low", "medium", "high", "xhigh", "max"] as const) {
+      expect(OPENAI_AI_PROVIDER_ADAPTER.supportsReasoningLevel(level)).toBe(true);
+    }
+  });
+
+  it.each([
+    ["none"],
+    ["low"],
+    ["medium"],
+    ["high"],
+    ["xhigh"],
+    ["max"],
+  ] as const)("sends reasoning.effort %s, verbatim", async (level) => {
+    const { body, raw } = await captureRequest(REQUEST, MODEL, {
+      reasoning: { kind: "level", level },
+      maxOutputTokens: 4096,
+    });
+    expect(body.reasoning).toEqual({ effort: level });
+    expect(raw).toContain(`"effort":"${level}"`);
+    // Still one stateless, unretained call at every effort.
+    expect(body.store).toBe(false);
+  });
+
+  it("states `medium` explicitly even though it is Terra's own default", async () => {
+    // The whole of C41 in one assertion. Omitting the key would produce the
+    // same behaviour TODAY and would make PaperLume's product policy a function
+    // of OpenAI's release notes the day that default moves.
+    const { body } = await captureRequest(REQUEST, MODEL, {
+      reasoning: { kind: "level", level: "medium" },
+      maxOutputTokens: 4096,
+    });
+    expect(body).toHaveProperty("reasoning");
+    expect(body.reasoning).toEqual({ effort: "medium" });
+  });
+
+  it("sends no reasoning key at all on the provider-default fallback", async () => {
+    // The fail-open path for unusable policy metadata. `store: false`, the
+    // ceiling and the structured-output format still go — none of them is
+    // reasoning policy.
+    const { body, raw } = await captureRequest(REQUEST, MODEL, PROVIDER_DEFAULT_POLICY);
+    expect(body).not.toHaveProperty("reasoning");
+    expect(raw).not.toContain("effort");
+    expect(body.store).toBe(false);
+    expect(body.max_output_tokens).toBe(4096);
+    expect((body.text as Record<string, unknown>).format).toMatchObject({
+      type: "json_schema",
+      strict: true,
+    });
+  });
+
+  it("keeps structured output and identity-freedom at every effort", async () => {
+    for (const level of ["none", "low", "medium", "high", "xhigh", "max"] as const) {
+      const { body } = await captureRequest(REQUEST, MODEL, {
+        reasoning: { kind: "level", level },
+        maxOutputTokens: 8192,
+      });
+      const format = (body.text as Record<string, unknown>).format as Record<string, unknown>;
+      expect(format.type).toBe("json_schema");
+      expect(format.strict).toBe(true);
+      expect(format.schema).toEqual(REQUEST.jsonSchema.schema);
+      expect(body.max_output_tokens).toBe(8192);
+      for (const key of [
+        "tools",
+        "tool_choice",
+        "metadata",
+        "safety_identifier",
+        "user",
+        "prompt_cache_key",
+        "conversation",
+        "previous_response_id",
+        "temperature",
+        "top_p",
+      ]) {
+        expect(body).not.toHaveProperty(key);
+      }
+    }
   });
 });
 
@@ -294,8 +437,8 @@ describe("store: false, on every single request", () => {
   });
 
   it("is present in the helper-built body too, not only the adapter path", () => {
-    expect(buildOpenAiRequestBody(MODEL, REQUEST).store).toBe(false);
-    expect(String(buildOpenAiRequestInit(MODEL, REQUEST, API_KEY).body)).toContain(
+    expect(buildOpenAiRequestBody(MODEL, REQUEST, POLICY).store).toBe(false);
+    expect(String(buildOpenAiRequestInit(MODEL, REQUEST, POLICY, API_KEY).body)).toContain(
       '"store":false',
     );
   });
@@ -305,10 +448,6 @@ describe("store: false, on every single request", () => {
 
 describe("fields this adapter never sends", () => {
   it.each([
-    // 001B decides no reasoning policy — AI-MULTI-PROVIDER-001C owns it. The
-    // adapter stays unregistered precisely BECAUSE omitting this key leaves
-    // Terra's default `medium` effort in force.
-    "reasoning",
     // No user identity of any kind reaches OpenAI.
     "metadata",
     "safety_identifier",
@@ -334,9 +473,14 @@ describe("fields this adapter never sends", () => {
     expect(body).not.toHaveProperty(key);
   });
 
-  it("sends no reasoning/effort configuration of any kind", async () => {
-    const { raw } = await captureRequest();
-    for (const term of ["effort", "reasoning", "summary", "verbosity"]) {
+  it("sends no reasoning SUMMARY or verbosity configuration", async () => {
+    // `reasoning.effort` is now sent deliberately (see the mapping tests); what
+    // stays absent is everything that would ask OpenAI to RETURN reasoning, or
+    // that would steer output length outside PaperLume's own ceiling.
+    const { body, raw } = await captureRequest();
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(Object.keys(body.reasoning as Record<string, unknown>)).toEqual(["effort"]);
+    for (const term of ["summary", "verbosity", "generate_summary"]) {
       expect(raw).not.toContain(term);
     }
   });
@@ -576,7 +720,7 @@ describe("normalizing provider failures", () => {
     const fetchImpl = vi.fn(async () => {
       throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
     });
-    const result = await OPENAI_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, {
+    const result = await OPENAI_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, POLICY, {
       apiKey: API_KEY,
       label: "test-op",
       fetchImpl: fetchImpl as unknown as AiProviderCallDeps["fetchImpl"],
@@ -802,7 +946,7 @@ describe("nothing provider-shaped or sensitive escapes", () => {
 
   it("is silent when no logger is supplied", async () => {
     const fetchImpl = vi.fn(async () => new Response("x", { status: 500 }));
-    const result = await OPENAI_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, {
+    const result = await OPENAI_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, POLICY, {
       apiKey: API_KEY,
       label: "test-op",
       fetchImpl: fetchImpl as unknown as AiProviderCallDeps["fetchImpl"],

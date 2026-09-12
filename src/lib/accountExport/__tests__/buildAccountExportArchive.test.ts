@@ -209,6 +209,9 @@ describe("buildAccountExportArchive — category completeness", () => {
     data.user_ai_preferences = {
       user_id: USER,
       preferred_model_id: "google/gemini-3.6-flash",
+      // AI-MULTI-PROVIDER-001C: a MANUAL reasoning level, exercised alongside
+      // the `null` (Automatic) case in its own test below.
+      preferred_reasoning_level: "high",
       created_at: "2026-09-02T00:00:00Z",
       updated_at: "2026-09-02T01:00:00Z",
     };
@@ -234,8 +237,9 @@ describe("buildAccountExportArchive — category completeness", () => {
       unknown
     >;
     expect(Object.keys(written).sort()).toEqual(
-      ["created_at", "preferred_model_id", "updated_at", "user_id"],
+      ["created_at", "preferred_model_id", "preferred_reasoning_level", "updated_at", "user_id"],
     );
+    expect(written.preferred_reasoning_level).toBe("high");
     for (const forbidden of [
       "provider",
       "provider_model",

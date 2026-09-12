@@ -196,7 +196,13 @@ SELECT set_eq(
   $$SELECT column_name::text FROM information_schema.columns
      WHERE table_schema='public' AND table_name='ai_model_catalog'$$,
   ARRAY['id','provider','provider_model','display_name','enabled','selectable',
-        'sort_order','created_at','updated_at'],
+        'sort_order','created_at','updated_at',
+        -- AI-MULTI-PROVIDER-001C (C41) reasoning capability metadata. Added to
+        -- this pinned set deliberately rather than by loosening the assertion:
+        -- all four are non-sensitive product metadata, and suite 016 owns what
+        -- they may contain.
+        'reasoning_levels','auto_analyze_reasoning_level',
+        'auto_suggest_reasoning_level','reasoning_selectable'],
   'catalog columns are exactly the intended non-sensitive metadata set');
 
 SELECT is(
@@ -445,7 +451,10 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d1000000-0000-0000-
 SELECT set_eq(
   $$SELECT unnest(p.proargnames) FROM pg_proc p
      WHERE p.oid = 'public.set_current_user_ai_model(text)'::regprocedure$$,
-  ARRAY['p_model_id','saved','reason','preferred_model_id','provider','display_name','updated_at'],
+  ARRAY['p_model_id','saved','reason','preferred_model_id','provider','display_name','updated_at',
+        -- AI-MULTI-PROVIDER-001C (C41): additive. Reports whether an incompatible
+        -- manual reasoning level was reset by the same transaction.
+        'reasoning_reset'],
   'the setter''s result carries no credential, key or provider-secret field');
 
 -- The preference table never duplicates the provider model string, so a catalog

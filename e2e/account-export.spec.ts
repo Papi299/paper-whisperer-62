@@ -42,13 +42,14 @@ const EXPECTED_JSON_PATHS = [
   "data/study_type_exclusion_pool.json",
   "data/paper_attachments.json",
   // AUTHOR-IDENTITY-RESOLUTION-001C. Four additive category files; no existing
-  // file changed shape, which is why the manifest version stays 2.
+  // file changed shape, so they did not bump the manifest version.
   "data/author_identities.json",
   "data/author_identity_aliases.json",
   "data/author_identity_links.json",
   "data/author_identity_merges.json",
-  // AI-MODEL-SELECTION-001A. One additive singleton file, same reasoning: no
-  // existing file changed shape, so the manifest version stays 2.
+  // AI-MODEL-SELECTION-001A. One additive singleton file, same reasoning. Its
+  // shape later CHANGED (AI-MULTI-PROVIDER-001C added
+  // `preferred_reasoning_level`), which is what moved the version to 3.
   "data/user_ai_preferences.json",
 ];
 
@@ -114,10 +115,12 @@ test.describe("Account data export", () => {
 
     const manifest = readJson("manifest.json") as Manifest;
     expect(manifest.format).toBe("paperlume-account-export");
-    // 2 since papers gained the persisted `author_provenance` field — a reshape
-    // of an existing archive file, which a reader must be able to notice.
-    // Literal on purpose, so a version change has to be made deliberately here.
-    expect(manifest.version).toBe(2);
+    // 2 since papers gained the persisted `author_provenance` field; 3 since
+    // `data/user_ai_preferences.json` gained `preferred_reasoning_level`
+    // (AI-MULTI-PROVIDER-001C). Both are reshapes of an existing archive file,
+    // which a reader must be able to notice. Literal on purpose, so a version
+    // change has to be made deliberately here.
+    expect(manifest.version).toBe(3);
     expect(manifest.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
     expect(manifest.user_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,

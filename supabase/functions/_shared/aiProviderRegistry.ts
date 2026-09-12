@@ -23,24 +23,63 @@
 //     request to a provider whose credentials, request contract, error
 //     semantics and privacy review do not exist yet.
 //
-// ## Registered providers: `google`, and nothing else
+// ## Registered providers: `google`, `anthropic`, `openai`
 //
-// There is deliberately no Anthropic entry, no OpenAI entry, no placeholder
-// that throws "not implemented", no endpoint and no credential accessor for
-// either. An unimplemented provider is absent, not stubbed: a stub is something
-// a future edit can accidentally complete, while an absent adapter fails the
+// AI-MULTI-PROVIDER-001C (C41) registered the two adapters 001B implemented and
+// deliberately left out. Registration became correct at exactly the moment
+// PaperLume had its own reasoning and output policy to send: before that, a
+// registered Anthropic or OpenAI adapter would have inherited that provider's
+// current reasoning default as PaperLume's product policy by omission, which is
+// the specific harm 001B refused.
+//
+// Registration is a statement about PROTOCOLS, and it is still not a route to
+// anything. Three separate things must also be true before a request can reach
+// a non-Google provider, and none of them is true today:
+//
+//   * `ai_model_catalog` must hold an enabled row naming that provider — there
+//     is no `anthropic/*` or `openai/*` row, and adding one is a reviewed
+//     migration;
+//   * that provider's credential must exist in the Edge environment — see
+//     `./aiProviderCredentials.ts`; neither secret is installed;
+//   * the Edge Functions must be deployed — Production still runs the pre-001A
+//     runtime.
+//
+// An unimplemented provider is still absent rather than stubbed: there is no
+// placeholder that throws "not implemented", because a stub is something a
+// future edit can accidentally complete, while an absent adapter fails the
 // registry lookup and falls back by construction.
 //
 // The Settings surface keeps its own provider-family filter
 // (`src/hooks/useAiModelSettings.ts`), which names providers rather than models
-// for the same reason. It mirrors this registry, and a task that registers a
-// second adapter must move both.
+// for the same reason. It mirrors this registry and moved with it.
 //
 // Pure module: no Deno APIs, no remote imports.
 
-import { GOOGLE_AI_PROVIDER, GOOGLE_AI_PROVIDER_ADAPTER } from "./googleAiProvider.ts";
+import {
+  ANTHROPIC_AI_PROVIDER,
+  ANTHROPIC_AI_PROVIDER_ADAPTER,
+  type AnthropicReasoningLevel,
+} from "./anthropicAiProvider.ts";
+import {
+  GOOGLE_AI_PROVIDER,
+  GOOGLE_AI_PROVIDER_ADAPTER,
+  type GoogleReasoningLevel,
+} from "./googleAiProvider.ts";
+import {
+  OPENAI_AI_PROVIDER,
+  OPENAI_AI_PROVIDER_ADAPTER,
+  type OpenAiReasoningLevel,
+} from "./openAiProvider.ts";
 import { resolveGeminiModel } from "./geminiModel.ts";
-import type { AiProviderAdapter, AiProviderModel } from "./aiProvider.ts";
+import type {
+  AiCallPolicy,
+  AiGenerationRequest,
+  AiProviderAdapter,
+  AiProviderCallDeps,
+  AiProviderModel,
+  AiProviderResult,
+  AiReasoningLevel,
+} from "./aiProvider.ts";
 
 /**
  * The providers PaperLume can actually call. Widening this union is the
@@ -53,7 +92,43 @@ import type { AiProviderAdapter, AiProviderModel } from "./aiProvider.ts";
  * it. The two still cannot disagree: a missing, extra or mismatched registry
  * entry is a compile error.
  */
-export type RegisteredAiProvider = typeof GOOGLE_AI_PROVIDER;
+export type RegisteredAiProvider =
+  | typeof GOOGLE_AI_PROVIDER
+  | typeof ANTHROPIC_AI_PROVIDER
+  | typeof OPENAI_AI_PROVIDER;
+
+/**
+ * Which slice of PaperLume's canonical reasoning vocabulary each registered
+ * provider's PROTOCOL can express.
+ *
+ * The binding lives here rather than in `aiProvider.ts` on purpose: the
+ * contract module names no provider, and this module already imports all three
+ * adapters, so this is the one place where "which provider" and "which levels"
+ * are both already in scope. Each union is re-exported from the adapter that
+ * owns it, so there is no second declaration of any provider's vocabulary.
+ *
+ * The mapped registry type below reads this, which is what makes "the Google
+ * entry is an adapter that speaks Google's levels" a compile-time fact rather
+ * than a convention.
+ */
+export interface RegisteredAiProviderReasoningLevel {
+  readonly google: GoogleReasoningLevel;
+  readonly anthropic: AnthropicReasoningLevel;
+  readonly openai: OpenAiReasoningLevel;
+}
+
+// The keys of the interface above must be exactly the registered providers —
+// no more, no fewer. Both directions are checked, so a provider added to the
+// union without a level row, or a level row left behind by a provider that was
+// removed, is a compile error in this file rather than a silent `never`.
+type _ReasoningLevelKeysCoverProviders =
+  Exclude<RegisteredAiProvider, keyof RegisteredAiProviderReasoningLevel> extends never ? true : never;
+type _ReasoningLevelKeysAreProviders =
+  Exclude<keyof RegisteredAiProviderReasoningLevel, RegisteredAiProvider> extends never ? true : never;
+const _REASONING_LEVEL_KEYS_COVER_PROVIDERS: _ReasoningLevelKeysCoverProviders = true;
+const _REASONING_LEVEL_KEYS_ARE_PROVIDERS: _ReasoningLevelKeysAreProviders = true;
+void _REASONING_LEVEL_KEYS_COVER_PROVIDERS;
+void _REASONING_LEVEL_KEYS_ARE_PROVIDERS;
 
 /**
  * Each registered provider id, mapped to the adapter FOR THAT provider.
@@ -65,7 +140,10 @@ export type RegisteredAiProvider = typeof GOOGLE_AI_PROVIDER;
  * was asked for, with no cast.
  */
 type AiProviderAdapterRegistry = {
-  readonly [Provider in RegisteredAiProvider]: AiProviderAdapter<Provider>;
+  readonly [Provider in RegisteredAiProvider]: AiProviderAdapter<
+    Provider,
+    RegisteredAiProviderReasoningLevel[Provider]
+  >;
 };
 
 // The explicit type argument is deliberate: it checks the object literal itself
@@ -74,6 +152,8 @@ type AiProviderAdapterRegistry = {
 // extra key would pass unnoticed.
 const AI_PROVIDER_ADAPTERS = Object.freeze<AiProviderAdapterRegistry>({
   [GOOGLE_AI_PROVIDER]: GOOGLE_AI_PROVIDER_ADAPTER,
+  [ANTHROPIC_AI_PROVIDER]: ANTHROPIC_AI_PROVIDER_ADAPTER,
+  [OPENAI_AI_PROVIDER]: OPENAI_AI_PROVIDER_ADAPTER,
 });
 
 /**
@@ -101,14 +181,115 @@ export function isRegisteredAiProvider(provider: unknown): provider is Registere
  * provider id — `resolveEffectiveAiModel` — narrows through
  * `isRegisteredAiProvider` first.
  *
- * Generic so that provider identity survives the lookup:
- * `getAiProviderAdapter("google")` is an `AiProviderAdapter<"google">`, whose
- * `generate` accepts Google models only.
+ * Generic so that provider identity survives the lookup, in BOTH dimensions:
+ * `getAiProviderAdapter("google")` is an
+ * `AiProviderAdapter<"google", GoogleReasoningLevel>`, whose `generate` accepts
+ * Google models and Google reasoning levels only.
+ *
+ * For DISPATCH on a provider that is only known at runtime, use
+ * `generateWithRegisteredAiProvider` below rather than this: a value of the
+ * whole `RegisteredAiProvider` union instantiates `Level` to the union of every
+ * provider's levels, which is exactly the precision the second type parameter
+ * exists to keep.
  */
 export function getAiProviderAdapter<Provider extends RegisteredAiProvider>(
   provider: Provider,
-): AiProviderAdapter<Provider> {
+): AiProviderAdapter<Provider, RegisteredAiProviderReasoningLevel[Provider]> {
   return AI_PROVIDER_ADAPTERS[provider];
+}
+
+/**
+ * Narrow a provider-neutral call policy to ONE adapter's reasoning vocabulary.
+ *
+ * The last structural guard before a request is built. Policy resolution has
+ * already refused any level the CATALOG does not list for this model, so
+ * reaching the rejection branch below means the catalog and the provider
+ * disagree — a hand-edited row, a stale seed, or a provider that withdrew a
+ * level. Sending it anyway would spend the user's quota unit on a 400.
+ *
+ * The refusal degrades to `provider_default` rather than failing the request,
+ * for the same reason every other metadata problem does: a policy outage must
+ * not become a feature outage. It emits one bounded line naming the provider
+ * and the public level, and nothing else.
+ */
+function narrowCallPolicy<Level extends AiReasoningLevel>(
+  adapter: { readonly supportsReasoningLevel: (level: AiReasoningLevel) => level is Level },
+  provider: RegisteredAiProvider,
+  policy: AiCallPolicy<AiReasoningLevel>,
+  deps: AiProviderCallDeps,
+): AiCallPolicy<Level> {
+  if (policy.reasoning.kind === "level") {
+    const level = policy.reasoning.level;
+    if (adapter.supportsReasoningLevel(level)) {
+      return { reasoning: { kind: "level", level }, maxOutputTokens: policy.maxOutputTokens };
+    }
+    deps.logger?.warn(
+      `${deps.label} reasoning_level_rejected_by_adapter provider=${provider} level=${level}`,
+    );
+  }
+  return { reasoning: { kind: "provider_default" }, maxOutputTokens: policy.maxOutputTokens };
+}
+
+/**
+ * Send one generation through the adapter for a resolved provider.
+ *
+ * The ONE place a provider-neutral decision becomes a provider-specific call,
+ * shared by both generation operations so they cannot drift in how they
+ * dispatch. It exists because the per-provider reasoning types deliberately do
+ * not unify: an `AiCallPolicy<AiReasoningLevel>` is not an
+ * `AiCallPolicy<GoogleReasoningLevel>`, and the narrowing that bridges them is
+ * a runtime check. Written once here, that check is reviewed once; written at
+ * each call site it would be two copies of a security-shaped decision.
+ *
+ * The `switch` is exhaustive over `RegisteredAiProvider` and the default branch
+ * assigns to `never`, so registering a fourth provider without teaching this
+ * function about it is a compile error rather than a silent fallthrough.
+ *
+ * The model is rebuilt per branch with a literal provider rather than passed
+ * through, which is what narrows `AiProviderModel<RegisteredAiProvider>` to the
+ * branch's own `AiProviderModel<"google">`. `providerModel` is carried
+ * unchanged: it originates only in trusted server configuration or the
+ * server-controlled catalog.
+ */
+export function generateWithRegisteredAiProvider(
+  model: AiProviderModel<RegisteredAiProvider>,
+  request: AiGenerationRequest,
+  policy: AiCallPolicy<AiReasoningLevel>,
+  deps: AiProviderCallDeps,
+): Promise<AiProviderResult> {
+  switch (model.provider) {
+    case GOOGLE_AI_PROVIDER: {
+      const adapter = AI_PROVIDER_ADAPTERS[GOOGLE_AI_PROVIDER];
+      return adapter.generate(
+        { provider: GOOGLE_AI_PROVIDER, providerModel: model.providerModel },
+        request,
+        narrowCallPolicy(adapter, GOOGLE_AI_PROVIDER, policy, deps),
+        deps,
+      );
+    }
+    case ANTHROPIC_AI_PROVIDER: {
+      const adapter = AI_PROVIDER_ADAPTERS[ANTHROPIC_AI_PROVIDER];
+      return adapter.generate(
+        { provider: ANTHROPIC_AI_PROVIDER, providerModel: model.providerModel },
+        request,
+        narrowCallPolicy(adapter, ANTHROPIC_AI_PROVIDER, policy, deps),
+        deps,
+      );
+    }
+    case OPENAI_AI_PROVIDER: {
+      const adapter = AI_PROVIDER_ADAPTERS[OPENAI_AI_PROVIDER];
+      return adapter.generate(
+        { provider: OPENAI_AI_PROVIDER, providerModel: model.providerModel },
+        request,
+        narrowCallPolicy(adapter, OPENAI_AI_PROVIDER, policy, deps),
+        deps,
+      );
+    }
+    default: {
+      const unreachable: never = model.provider;
+      return unreachable;
+    }
+  }
 }
 
 /** Every registered provider id, for tests and diagnostics. */

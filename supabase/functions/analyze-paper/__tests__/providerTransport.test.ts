@@ -54,8 +54,11 @@ describe("analyze-paper is wired to the shared provider policy", () => {
     // `_shared/__tests__/googleAiProvider.test.ts`), and this function calls
     // the adapter it was handed for the resolved provider.
     expect(SOURCE).toContain('from "../_shared/aiProviderRegistry.ts"');
-    expect(SOURCE).toContain("getAiProviderAdapter(modelSelection.provider)");
-    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
+    // AI-MULTI-PROVIDER-001C: the lookup-then-call pair became one shared
+    // dispatch, so both generation operations reach a provider the same way and
+    // the per-provider narrowing is reviewed in one place.
+    expect(SOURCE).toContain("generateWithRegisteredAiProvider(");
+    expect(SOURCE.match(/generateWithRegisteredAiProvider\(/g)?.length).toBe(1);
     expect(ADAPTER_SOURCE).toContain('from "./geminiTransport.ts"');
     expect(ADAPTER_SOURCE).toContain("callGeminiWithRetry(");
   });
@@ -150,7 +153,7 @@ describe("analyze-paper names the 001B failure kind explicitly", () => {
   });
 
   it("still makes exactly one provider call per request", () => {
-    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
+    expect(SOURCE.match(/generateWithRegisteredAiProvider\(/g)?.length).toBe(1);
   });
 });
 
@@ -159,7 +162,9 @@ describe("analyze-paper quota semantics are untouched", () => {
     // One `rpc("consume_ai_quota", …)` invocation — the other mentions in the
     // file are a comment and an error log.
     expect(SOURCE.match(/rpc\(\s*\n?\s*"consume_ai_quota"/g)?.length).toBe(1);
-    expect(SOURCE.indexOf('"consume_ai_quota"')).toBeLessThan(SOURCE.indexOf("providerAdapter.generate("));
+    expect(SOURCE.indexOf('"consume_ai_quota"')).toBeLessThan(
+      SOURCE.indexOf("generateWithRegisteredAiProvider("),
+    );
   });
 
   it("refunds best-effort on the provider-failure path", () => {
@@ -179,7 +184,9 @@ describe("analyze-paper quota semantics are untouched", () => {
     // The single 402 in this file is the quota wall, and it sits above the
     // provider call.
     expect(SOURCE.match(/status: 402/g)?.length).toBe(1);
-    expect(SOURCE.indexOf("status: 402")).toBeLessThan(SOURCE.indexOf("providerAdapter.generate("));
+    expect(SOURCE.indexOf("status: 402")).toBeLessThan(
+      SOURCE.indexOf("generateWithRegisteredAiProvider("),
+    );
   });
 });
 

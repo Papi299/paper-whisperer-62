@@ -231,6 +231,30 @@ const expectSystemDefault = (
   expect(selection.source).toBe("system_default");
   expect(selection.provider).toBe("google");
   expect(selection.fallbackReason).toBe(reason);
+  // AI-MULTI-PROVIDER-001C: a saved MANUAL reasoning level never survives a
+  // fallback. It was chosen for one specific model, and the model being called
+  // is not that model — asserted on EVERY fallback path rather than once,
+  // because the interesting cases are the ones where a preference row existed.
+  expect(selection.reasoningPreference).toBeNull();
+};
+
+/**
+ * A Gemini URL built from a selection this test has proven is Google's.
+ *
+ * `AiModelSelection.provider` is the three-member registered union since
+ * AI-MULTI-PROVIDER-001C, and `buildGeminiGenerateContentUrl` accepts Google
+ * models only — by design, so another provider's model cannot reach a Gemini
+ * endpoint. The narrowing is done here, once, and only after an assertion has
+ * established the provider really is `google`.
+ */
+const geminiUrlOf = (
+  selection: Awaited<ReturnType<typeof resolveEffectiveAiModel>>,
+): string => {
+  expect(selection.provider).toBe("google");
+  return buildGeminiGenerateContentUrl({
+    provider: "google",
+    providerModel: selection.providerModel,
+  });
 };
 
 // ── 1. System default ─────────────────────────────────────────────────────
@@ -326,12 +350,16 @@ describe("saved preference", () => {
     expect(harness.queries.map((q) => q.table)).toEqual(["user_ai_preferences"]);
   });
 
-  it("selects only the routing column it needs", async () => {
+  it("selects only the routing columns it needs", async () => {
+    // An explicit projection, never `select("*")`. It gained the reasoning
+    // column in AI-MULTI-PROVIDER-001C and nothing else: `created_at`,
+    // `updated_at` and any future column stay unread until someone admits them
+    // here deliberately.
     const harness = entitledWith(CATALOG_35);
     await resolve(harness);
     expect(harness.queries[0]).toMatchObject({
       table: "user_ai_preferences",
-      columns: "preferred_model_id",
+      columns: "preferred_model_id,preferred_reasoning_level",
     });
   });
 });
@@ -347,6 +375,8 @@ describe("catalog resolution", () => {
       providerModel: "gemini-3.5-flash",
       source: "user_preference",
       fallbackReason: null,
+      // No manual reasoning level saved — Automatic.
+      reasoningPreference: null,
     });
     expect(harness.warns).toEqual([]);
   });
@@ -359,6 +389,8 @@ describe("catalog resolution", () => {
       providerModel: "gemini-3.6-flash",
       source: "user_preference",
       fallbackReason: null,
+      // No manual reasoning level saved — Automatic.
+      reasoningPreference: null,
     });
     expect(harness.warns).toEqual([]);
   });
@@ -377,6 +409,8 @@ describe("catalog resolution", () => {
       providerModel: "gemini-3.7-flash",
       source: "user_preference",
       fallbackReason: null,
+      // No manual reasoning level saved — Automatic.
+      reasoningPreference: null,
     });
     expect(harness.warns).toEqual([]);
   });
@@ -389,6 +423,8 @@ describe("catalog resolution", () => {
       providerModel: "gemini-3.8-flash",
       source: "user_preference",
       fallbackReason: null,
+      // No manual reasoning level saved — Automatic.
+      reasoningPreference: null,
     });
     expect(harness.warns).toEqual([]);
   });
@@ -493,11 +529,104 @@ describe("catalog resolution", () => {
   });
 });
 
+// ── 3b. The saved reasoning preference — AI-MULTI-PROVIDER-001C (C41) ─────
+
+describe("reasoning preference", () => {
+  function withReasoning(level: unknown, catalog: Record<string, unknown> = CATALOG_35) {
+    return makeHarness({
+      preference: { preferred_model_id: catalog.id, preferred_reasoning_level: level },
+      catalog,
+    });
+  }
+
+  it("carries a saved canonical level on an HONOURED preference", async () => {
+    const selection = await resolve(withReasoning("high"));
+    expect(selection.source).toBe("user_preference");
+    expect(selection.reasoningPreference).toBe("high");
+  });
+
+  it("reads NULL as Automatic — the ordinary state, and quiet", async () => {
+    const harness = withReasoning(null);
+    const selection = await resolve(harness);
+    expect(selection.reasoningPreference).toBeNull();
+    expect(harness.warns).toEqual([]);
+  });
+
+  it.each([
+    ["the literal 'automatic'", "automatic"],
+    ["an unknown word", "ludicrous"],
+    ["a mis-cased level", "HIGH"],
+    ["a padded level", " high "],
+    ["a number", 3],
+    ["an object", { level: "high" }],
+  ])("treats %s as Automatic rather than failing the request", async (_label, value) => {
+    // A malformed reasoning value is not a reason to deny someone their
+    // analysis, and it must not reach a provider or a log line either way. The
+    // MODEL is still honoured: only the reasoning value is discarded.
+    const harness = withReasoning(value);
+    const selection = await resolve(harness);
+    expect(selection.source).toBe("user_preference");
+    expect(selection.reasoningPreference).toBeNull();
+    expect(JSON.stringify(harness.warns)).not.toContain(String(value));
+  });
+
+  it("does NOT validate the level against the model here", async () => {
+    // `minimal` is canonical and Gemini 3.8 rejects it — but judging that needs
+    // the catalog's reasoning metadata, which is the reasoning-policy module's
+    // read. Deciding it here too would be a second authority.
+    const selection = await resolve(withReasoning("minimal", CATALOG_38));
+    expect(selection.reasoningPreference).toBe("minimal");
+  });
+
+  it.each([
+    ["a lapsed entitlement", { access: [{ can_select_ai_model: false }] }, "not_entitled"],
+    [
+      "a retired model",
+      {
+        preference: { preferred_model_id: CATALOG_35.id, preferred_reasoning_level: "high" },
+        catalog: { ...CATALOG_35, enabled: false },
+      },
+      "model_disabled",
+    ],
+    [
+      "a missing catalog row",
+      {
+        preference: { preferred_model_id: CATALOG_35.id, preferred_reasoning_level: "high" },
+        catalog: null,
+      },
+      "model_missing",
+    ],
+    [
+      "an unregistered provider",
+      {
+        preference: { preferred_model_id: CATALOG_35.id, preferred_reasoning_level: "high" },
+        catalog: { ...CATALOG_35, provider: "azure" },
+      },
+      "unsupported_provider",
+    ],
+    [
+      "a catalog read failure",
+      {
+        preference: { preferred_model_id: CATALOG_35.id, preferred_reasoning_level: "high" },
+        catalogError: { message: "boom" },
+      },
+      "catalog_lookup_failed",
+    ],
+  ])("drops a saved manual level on %s", async (_label, options, reason) => {
+    // A manual level was chosen for ONE model. On any fallback the model being
+    // called is PaperLume's system default instead, so the level must not
+    // follow the request onto it.
+    const selection = await resolve(makeHarness(options as Options));
+    expectSystemDefault(selection, reason);
+    expect(selection.reasoningPreference).toBeNull();
+  });
+});
+
 // ── 4. Provider adapter boundary ──────────────────────────────────────────
 
 describe("provider adapter boundary", () => {
-  it.each(["anthropic", "openai", "azure", "GOOGLE", "google-vertex"])(
-    "refuses to route to the unimplemented provider %s",
+  it.each(["azure", "GOOGLE", "google-vertex", "cohere", "anthropic-vertex"])(
+    "refuses to route to the unregistered provider %s",
     async (provider) => {
       const harness = entitledWith(
         { ...CATALOG_35, provider, provider_model: "some-model" },
@@ -506,7 +635,7 @@ describe("provider adapter boundary", () => {
       const selection = await resolve(harness);
       expectSystemDefault(selection, "unsupported_provider");
       // And nothing about that other provider's model reaches the URL.
-      expect(buildGeminiGenerateContentUrl(selection)).not.toContain("some-model");
+      expect(geminiUrlOf(selection)).not.toContain("some-model");
     },
   );
 
@@ -523,18 +652,22 @@ describe("provider adapter boundary", () => {
     expectSystemDefault(await resolve(harness), "invalid_catalog_row");
   });
 
-  // AI-MULTI-PROVIDER-001A. The two providers the owner intends to add LATER,
-  // as hypothetical catalog rows that are enabled, selectable and perfectly
-  // well-formed — everything an entitled caller's saved preference needs except
-  // a registered adapter. Both must still fall back, and neither may leak a
-  // decision that could become a request.
+  // AI-MULTI-PROVIDER-001C reversed the 001A/001B expectation here, deliberately.
+  //
+  // Anthropic and OpenAI now have REGISTERED adapters, so a valid, enabled
+  // catalog row naming either must be HONOURED rather than refused on provider
+  // family alone. That is the point of registering a protocol: the database
+  // goes back to being the only thing that decides which models a user can be
+  // routed to (C33/C35/C39).
+  //
+  // These rows are hypothetical fixtures and nothing else. No `anthropic/*` or
+  // `openai/*` row exists in `ai_model_catalog`, so no user can reach this
+  // path today; adding one is a separate reviewed migration, and that migration
+  // — not this resolver — is what would make a non-Google model routable.
   it.each([
     ["anthropic", "hypothetical-anthropic-model"],
     ["openai", "hypothetical-openai-model"],
-  ])("refuses an enabled %s catalog row and falls back to the system default", async (
-    provider,
-    providerModel,
-  ) => {
+  ])("HONOURS a valid enabled %s catalog row", async (provider, providerModel) => {
     const row = {
       id: `${provider}/hypothetical`,
       provider,
@@ -545,22 +678,46 @@ describe("provider adapter boundary", () => {
     const harness = entitledWith(row, row.id);
     const selection = await resolve(harness);
 
-    // The whole decision: system default, and the bounded reason why.
+    expect(selection).toEqual({
+      provider,
+      providerModel,
+      source: "user_preference",
+      fallbackReason: null,
+      reasoningPreference: null,
+    });
+    // And the adapter it resolves to is that provider's own — never Google's
+    // with another provider's model string in it.
+    expect(isRegisteredAiProvider(provider)).toBe(true);
+    expect(getAiProviderAdapter(selection.provider).provider).toBe(provider);
+    // An honoured preference is an ordinary outcome and stays quiet.
+    expect(harness.warns).toEqual([]);
+  });
+
+  // The refusal that survives registration: a provider nobody has implemented.
+  it("refuses an enabled row from a provider with no adapter, and says why once", async () => {
+    const row = {
+      id: "azure/hypothetical",
+      provider: "azure",
+      provider_model: "hypothetical-azure-model",
+      enabled: true,
+      selectable: true,
+    };
+    const harness = entitledWith(row, row.id);
+    const selection = await resolve(harness);
+
     expect(selection).toEqual({
       provider: SYSTEM_DEFAULT_MODEL.provider,
       providerModel: SYSTEM_DEFAULT_MODEL.providerModel,
       source: "system_default",
       fallbackReason: "unsupported_provider",
+      reasoningPreference: null,
     });
-    // Nothing about that provider escapes into anything callable: the adapter
-    // the selection resolves to is Google's, and the URL such a request would
-    // take carries the system default rather than the row's model.
-    expect(isRegisteredAiProvider(provider)).toBe(false);
+    expect(isRegisteredAiProvider("azure")).toBe(false);
     expect(getAiProviderAdapter(selection.provider).provider).toBe("google");
-    const url = buildGeminiGenerateContentUrl(selection);
+    const url = geminiUrlOf(selection);
     expect(url).toContain(SYSTEM_DEFAULT);
-    expect(url).not.toContain(providerModel);
-    expect(url).not.toContain(provider);
+    expect(url).not.toContain(row.provider_model);
+    expect(url).not.toContain(row.provider);
     // And exactly one bounded warning, naming no model and no provider.
     expect(harness.warns).toEqual(["test-op model_selection_fallback reason=unsupported_provider"]);
   });
@@ -580,7 +737,7 @@ describe("provider adapter boundary", () => {
     // And no provider URL is assembled here any more.
     expect(code).not.toContain("generativelanguage");
     expect(code).not.toMatch(/https?:\/\//);
-    expect(registeredAiProviders()).toEqual(["google"]);
+    expect(registeredAiProviders()).toEqual(["google", "anthropic", "openai"]);
   });
 
   it("always reports provider google, even on every fallback path", async () => {
@@ -709,7 +866,9 @@ describe("bounded diagnostics", () => {
       "unsupported_provider",
       {
         preference: { preferred_model_id: CATALOG_35.id },
-        catalog: { ...CATALOG_35, provider: "anthropic" },
+        // A provider PaperLume has no adapter for. `anthropic` is registered
+        // since AI-MULTI-PROVIDER-001C and would be honoured here.
+        catalog: { ...CATALOG_35, provider: "azure" },
       },
       "unsupported_provider",
     ],
@@ -809,7 +968,7 @@ describe("routing log line", () => {
 describe("the Gemini URL boundary", () => {
   it("builds the default URL when the system default is in force", async () => {
     const selection = await resolve(makeHarness({ access: [{ can_select_ai_model: false }] }));
-    expect(buildGeminiGenerateContentUrl(selection)).toBe(
+    expect(geminiUrlOf(selection)).toBe(
       `https://generativelanguage.googleapis.com/v1beta/models/${SYSTEM_DEFAULT}:generateContent`,
     );
   });
@@ -817,8 +976,8 @@ describe("the Gemini URL boundary", () => {
   it("swaps ONLY the model component for an honoured preference", async () => {
     const preferred = await resolve(entitledWith(CATALOG_35, CATALOG_35.id));
     const fallbackSelection = await resolve(makeHarness({ preference: null }));
-    const preferredUrl = buildGeminiGenerateContentUrl(preferred);
-    const defaultUrl = buildGeminiGenerateContentUrl(fallbackSelection);
+    const preferredUrl = geminiUrlOf(preferred);
+    const defaultUrl = geminiUrlOf(fallbackSelection);
 
     expect(preferredUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
@@ -838,7 +997,7 @@ describe("the Gemini URL boundary", () => {
     ["gemini-3.8-flash", CATALOG_38],
   ])("builds the exact generateContent URL for a catalog-selected %s", async (model, row) => {
     const selection = await resolve(entitledWith(row, row.id));
-    expect(buildGeminiGenerateContentUrl(selection)).toBe(
+    expect(geminiUrlOf(selection)).toBe(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     );
   });
@@ -851,11 +1010,15 @@ describe("the Gemini URL boundary", () => {
       { preference: { preferred_model_id: CATALOG_37.id }, catalog: CATALOG_37 },
       { preference: { preferred_model_id: CATALOG_38.id }, catalog: CATALOG_38 },
       {
+        // A provider with no adapter falls back to the system default, which is
+        // Google — so the URL is still a Gemini one. `anthropic` would no
+        // longer serve here: since AI-MULTI-PROVIDER-001C it is REGISTERED, so
+        // such a row is honoured and routed to Anthropic rather than refused.
         preference: { preferred_model_id: CATALOG_35.id },
-        catalog: { ...CATALOG_35, provider: "anthropic", provider_model: "claude-sentinel" },
+        catalog: { ...CATALOG_35, provider: "azure", provider_model: "azure-sentinel" },
       },
     ] as Options[]) {
-      const url = buildGeminiGenerateContentUrl(await resolve(makeHarness(options)));
+      const url = geminiUrlOf(await resolve(makeHarness(options)));
       expect(url.startsWith("https://generativelanguage.googleapis.com/v1beta/models/")).toBe(true);
       expect(url.endsWith(":generateContent")).toBe(true);
     }

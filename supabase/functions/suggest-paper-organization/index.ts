@@ -63,7 +63,14 @@ Deno.serve((req) =>
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     // Read at request time, not module load, so a missing secret surfaces as a
     // 500 response rather than a worker that cannot boot.
-    getGeminiApiKey: () => Deno.env.get("GEMINI_API_KEY") ?? null,
+    //
+    // The NAME comes from the handler, which gets it from the one reviewed
+    // provider→credential mapping applied to the provider this request actually
+    // resolved to (AI-MULTI-PROVIDER-001C). This glue does not choose it and
+    // does not know which providers exist — it reads exactly the variable it is
+    // asked for and nothing else, so a request routed to one provider can never
+    // pick up another's secret here.
+    getProviderCredential: (envName: string) => Deno.env.get(envName) ?? null,
     // Paperlume's SYSTEM DEFAULT, as provider + model metadata, through the one
     // shared resolver, so this function and analyze-paper can never disagree
     // about the default. It is the starting point and the safe fallback — the

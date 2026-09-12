@@ -68,9 +68,25 @@ export const ACCOUNT_EXPORT_FORMAT = "paperlume-account-export" as const;
  * inherent to adding a category at all and therefore cannot be what makes an
  * addition non-additive.
  *
+ * BUMPED 2 -> 3 FOR AI-MULTI-PROVIDER-001C.
+ *
+ * This one IS a reshape, and the rule above decides it in one line:
+ * `data/user_ai_preferences.json` gains a `preferred_reasoning_level` field on
+ * the preference object. No new category file, no new directory — an EXISTING
+ * archive file changes shape, which is exactly what "removing or reshaping one
+ * is not [additive]" names.
+ *
+ * It matters here for a reason the 1 -> 2 bump shares: a v2 reader parsing a v3
+ * archive would silently discard the field, and the field is a setting the user
+ * chose. Worse, the omission is indistinguishable from its most common value —
+ * `null` means Automatic, so an archive that dropped the key and an archive
+ * from a user on Automatic would read identically. A reader has to be able to
+ * tell "this export predates reasoning" from "this user is on Automatic", and
+ * the version is the only thing that can tell it.
+ *
  * The next bump belongs to the next change that alters an existing file.
  */
-export const ACCOUNT_EXPORT_VERSION = 2 as const;
+export const ACCOUNT_EXPORT_VERSION = 3 as const;
 
 /** Root-relative path of the manifest inside the archive. */
 export const MANIFEST_PATH = "manifest.json";
@@ -466,16 +482,29 @@ export type AuthorIdentityMergeColumnsAreExported = Exclude<
  * (`google/gemini-3.5-flash`), which is the whole of the user's decision — it is
  * sufficient to restore the choice and it names a model, not a mechanism.
  *
+ * `preferred_reasoning_level` (AI-MULTI-PROVIDER-001C, C41) joins it for the
+ * same reason and on the same terms. It is a setting the user chose, it is
+ * theirs, and it is a bounded product word — `minimal`, `low`, `medium`,
+ * `high` — not a provider parameter: nothing in it names Google's
+ * `thinkingLevel`, Anthropic's `output_config.effort` or OpenAI's
+ * `reasoning.effort`, and the mapping between them stays server-side where it
+ * belongs. `null` is exported as JSON `null` and MEANS Automatic; it is the
+ * value most rows will carry, and it is a real answer rather than a missing
+ * one.
+ *
  * What deliberately does NOT travel with it: the `ai_model_catalog` row it
  * references (global product metadata — see `ACCOUNT_EXPORT_EXCLUDED_TABLES`),
- * the provider model string, any API key or secret name, and every entitlement
- * or commercial field. Joining the catalog in to "helpfully" resolve the id
- * would put Paperlume's product metadata into a user's personal archive and
- * would make the exported preference go stale the moment the catalog changed.
+ * that row's reasoning capability metadata, the provider model string, any API
+ * key or secret name, and every entitlement or commercial field. Joining the
+ * catalog in to "helpfully" resolve the id or list which levels the model
+ * supports would put Paperlume's product metadata into a user's personal
+ * archive and would make the exported preference go stale the moment the
+ * catalog changed.
  */
 export const USER_AI_PREFERENCE_EXPORT_COLUMNS = [
   "user_id",
   "preferred_model_id",
+  "preferred_reasoning_level",
   "created_at",
   "updated_at",
 ] as const;

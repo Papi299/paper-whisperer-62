@@ -1,22 +1,24 @@
 // The OpenAI (Responses API) provider adapter — AI-MULTI-PROVIDER-001B.
 //
-// ## THIS ADAPTER IS DELIBERATELY NOT REGISTERED
+// ## REGISTERED SINCE AI-MULTI-PROVIDER-001C — and still unreachable
 //
-// It implements a real, reviewed protocol, and nothing in PaperLume can reach
-// it. `_shared/aiProviderRegistry.ts` still registers `google` and only
-// `google`, so a catalog row naming `openai` still falls back to the system
-// default with `unsupported_provider`, the Settings surface still offers Google
-// models only, and no OpenAI credential exists on any server.
+// 001B implemented this protocol and deliberately left it out of the registry:
+// GPT-5.6 Terra is a reasoning model whose `reasoning.effort` defaults to
+// `medium`, and reasoning tokens are billed as output tokens and counted
+// against `max_output_tokens`, so registering it before PaperLume had decided
+// its own per-operation reasoning and output policy would have adopted OpenAI's
+// default as PaperLume's product policy by omission. 001C decides that policy
+// (C41), so `openai` is now a registered provider in
+// `_shared/aiProviderRegistry.ts`, every request this module builds carries an
+// EXPLICIT `reasoning.effort`, and the output ceiling arrives from the calling
+// operation instead of being invented here.
 //
-// That is a safety requirement, not unfinished work. GPT-5.6 Terra is a
-// reasoning model whose `reasoning.effort` defaults to `medium`, and reasoning
-// tokens are billed as output tokens and counted against `max_output_tokens`.
-// PaperLume intends to set reasoning deliberately and differently per
-// operation; registering this adapter first would adopt OpenAI's default as
-// PaperLume's product policy by omission. Choosing that policy is
-// AI-MULTI-PROVIDER-001C's job, and registration waits for it. This module
-// therefore sends NO `reasoning` key at all: 001B states no reasoning opinion,
-// rather than encoding a guess at one.
+// Registration is not the same as reachability, and nothing in Production can
+// reach this yet. There is no `openai/*` row in `ai_model_catalog`, so model
+// selection has nothing to route here; no `OPENAI_API_KEY` exists on any
+// server; and the Edge Functions that would import it are not deployed. Adding
+// a catalog row, installing the secret and deploying the functions are three
+// separate, separately authorized steps — see docs/deployment.md.
 //
 // ## Responses API, not Chat Completions
 //
@@ -57,9 +59,15 @@
 //
 // ## Official documentation this was written from
 //
-//   * Model `gpt-5.6-terra` — current model id; a reasoning model supporting
-//     effort `none | low | medium | high | xhigh | max`, default `medium`;
-//     supports the Responses API and structured outputs.
+//   * Model `gpt-5.6-terra` — current model id; a reasoning model whose model
+//     page lists `reasoning.effort` as "none, low, medium (default), high,
+//     xhigh, and max". Notably it does NOT offer the `minimal` that exists
+//     elsewhere in the family, which is why this adapter's vocabulary is six
+//     values and not seven. Supports the Responses API and structured outputs.
+//   * Reasoning tokens "occupy space in the model's context window and are
+//     billed as output tokens", and a response that exhausts `max_output_tokens`
+//     returns `status: "incomplete"` with reason `max_output_tokens` — possibly
+//     with no visible text at all.
 //   * Responses API — `POST https://api.openai.com/v1/responses`, headers
 //     `Authorization: Bearer …` and `Content-Type: application/json`;
 //     `instructions`, `input`, `max_output_tokens`, `store`.
@@ -76,11 +84,13 @@
 //     naming e.g. `max_output_tokens`.
 
 import type {
+  AiCallPolicy,
   AiGenerationRequest,
   AiProviderAdapter,
   AiProviderCallDeps,
   AiProviderModel,
   AiProviderResult,
+  AiReasoningLevel,
 } from "./aiProvider.ts";
 
 /** The provider id `ai_model_catalog.provider` would use for OpenAI. */
@@ -101,17 +111,30 @@ export type OpenAiProviderModel = AiProviderModel<typeof OPENAI_AI_PROVIDER>;
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
 /**
- * 001B PROVISIONAL ADAPTER CEILING — not a product budget.
+ * The reasoning levels this adapter can express — AI-MULTI-PROVIDER-001C.
  *
- * The same 4096 the Anthropic adapter uses, for consistency while both
- * protocols are being proved, and it is NOT a considered per-operation output
- * budget. On a reasoning model this bound is sharper than it looks: reasoning
- * tokens count against `max_output_tokens`, so a request that reasons at length
- * can exhaust the ceiling and return `status: "incomplete"` with no visible
- * answer at all. That is another reason this adapter must not be registered
- * before AI-MULTI-PROVIDER-001C sets an explicit output/reasoning policy.
+ * Exactly the six `reasoning.effort` values `gpt-5.6-terra` documents, in
+ * OpenAI's own order. Google's `minimal` is absent because Terra does not offer
+ * it, and Anthropic's `off` is absent because OpenAI spells the same idea
+ * `none` — two providers' words for "do not reason" stay two values in
+ * PaperLume's canonical vocabulary rather than being collapsed, so neither
+ * adapter can be handed the other's spelling and quietly send it.
  */
-export const OPENAI_PROVISIONAL_MAX_OUTPUT_TOKENS = 4096;
+export type OpenAiReasoningLevel = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+
+/** In OpenAI's own order of increasing effort. */
+export const OPENAI_REASONING_LEVELS: readonly OpenAiReasoningLevel[] = Object.freeze([
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const);
+
+export function isOpenAiReasoningLevel(level: AiReasoningLevel): level is OpenAiReasoningLevel {
+  return (OPENAI_REASONING_LEVELS as readonly string[]).includes(level);
+}
 
 /**
  * Per-attempt ceiling — this adapter's own, not the Gemini transport's and not
@@ -162,9 +185,9 @@ const OPENAI_TEXT_FORMAT_TYPE: Record<AiGenerationRequest["responseFormat"], str
  * The OpenAI request body.
  *
  * What is present is the documented minimum for one stateless generation, plus
- * the one privacy-load-bearing field. What is ABSENT is the reviewed part:
+ * the one privacy-load-bearing field and PaperLume's explicit reasoning and
+ * output policy. What is ABSENT is still the reviewed part:
  *
- *   * no `reasoning` — 001B states no reasoning policy (see the header);
  *   * no `tools`, no `tool_choice` — no function calling, no file search, no
  *     web search, no computer use;
  *   * no `conversation`, no `previous_response_id` — no conversation state;
@@ -179,16 +202,35 @@ const OPENAI_TEXT_FORMAT_TYPE: Record<AiGenerationRequest["responseFormat"], str
  *
  * `store: false` is not optional and not conditional. Omitting it would mean
  * OpenAI retains every paper title and abstract PaperLume sends.
+ *
+ * ## The reasoning mapping — AI-MULTI-PROVIDER-001C (C41)
+ *
+ * One field, and a direct one: PaperLume's canonical level IS OpenAI's effort
+ * value, so `none | low | medium | high | xhigh | max` pass through verbatim
+ * with nothing to translate. `reasoning.effort` is stated EXPLICITLY on every
+ * level, including `medium` where it happens to match Terra's current default,
+ * because a provider default is a fact about the provider on a given day and
+ * not PaperLume's product policy.
+ *
+ * A `provider_default` directive sends no `reasoning` key at all — the fail-open
+ * path for unusable policy metadata. `max_output_tokens`, `store: false` and
+ * the structured-output format still go: none of them is reasoning policy.
  */
 export function buildOpenAiRequestBody(
   model: OpenAiProviderModel,
   request: AiGenerationRequest,
+  policy: AiCallPolicy<OpenAiReasoningLevel>,
 ): Record<string, unknown> {
-  return {
+  const body: Record<string, unknown> = {
     model: model.providerModel,
     instructions: request.systemInstruction,
     input: request.userContent,
-    max_output_tokens: OPENAI_PROVISIONAL_MAX_OUTPUT_TOKENS,
+    // PaperLume's hard ceiling for THIS operation. On a reasoning model it
+    // bounds reasoning and answer together, so it is also what keeps `max`
+    // effort from running unbounded. It arrives from the caller rather than
+    // being a constant here, because how much room an answer needs is the
+    // operation's knowledge.
+    max_output_tokens: policy.maxOutputTokens,
     // The privacy term of this request. See the module header.
     store: false,
     text: {
@@ -206,6 +248,12 @@ export function buildOpenAiRequestBody(
       },
     },
   };
+
+  if (policy.reasoning.kind === "level") {
+    body.reasoning = { effort: policy.reasoning.level };
+  }
+
+  return body;
 }
 
 /**
@@ -216,6 +264,7 @@ export function buildOpenAiRequestBody(
 export function buildOpenAiRequestInit(
   model: OpenAiProviderModel,
   request: AiGenerationRequest,
+  policy: AiCallPolicy<OpenAiReasoningLevel>,
   apiKey: string,
 ): RequestInit {
   return {
@@ -224,7 +273,7 @@ export function buildOpenAiRequestInit(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(buildOpenAiRequestBody(model, request)),
+    body: JSON.stringify(buildOpenAiRequestBody(model, request, policy)),
   };
 }
 
@@ -312,6 +361,7 @@ export function extractOpenAiText(payload: unknown): string | null | undefined {
 async function generate(
   model: OpenAiProviderModel,
   request: AiGenerationRequest,
+  policy: AiCallPolicy<OpenAiReasoningLevel>,
   deps: AiProviderCallDeps,
 ): Promise<AiProviderResult> {
   const attempts = OPENAI_PROVIDER_ATTEMPTS;
@@ -322,7 +372,7 @@ async function generate(
   let response: Response;
   try {
     response = await deps.fetchImpl(OPENAI_RESPONSES_URL, {
-      ...buildOpenAiRequestInit(model, request, deps.apiKey),
+      ...buildOpenAiRequestInit(model, request, policy, deps.apiKey),
       signal,
     });
   } catch (error) {
@@ -408,14 +458,20 @@ function isTimeout(error: unknown, signal: AbortSignal): boolean {
 }
 
 /**
- * The OpenAI adapter — implemented, reviewed, and NOT registered.
+ * The OpenAI adapter — implemented, reviewed, and registered since
+ * AI-MULTI-PROVIDER-001C.
  *
- * `_shared/aiProviderRegistry.ts` does not import this constant, and
- * AI-MULTI-PROVIDER-001B must not make it do so. Tests import this module
- * directly; a registry entry is never needed to exercise an adapter, and if it
- * ever seemed to be, the design would be wrong.
+ * `_shared/aiProviderRegistry.ts` imports this constant, so a valid enabled
+ * `openai` catalog row would now be honoured rather than falling back with
+ * `unsupported_provider`. No such row exists, and creating one is a separate
+ * reviewed migration.
  */
-export const OPENAI_AI_PROVIDER_ADAPTER: AiProviderAdapter<typeof OPENAI_AI_PROVIDER> = {
+export const OPENAI_AI_PROVIDER_ADAPTER: AiProviderAdapter<
+  typeof OPENAI_AI_PROVIDER,
+  OpenAiReasoningLevel
+> = {
   provider: OPENAI_AI_PROVIDER,
+  reasoningLevels: OPENAI_REASONING_LEVELS,
+  supportsReasoningLevel: isOpenAiReasoningLevel,
   generate,
 };

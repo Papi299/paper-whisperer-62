@@ -35,17 +35,22 @@
  *   9. Model selection       — re-check entitlement, resolve a saved preference
  *                              through the server-controlled catalog, fail
  *                              closed to the system default.
- *  10. Consume quota         — one unit, and not before here.
- *  11. Provider call         — finite timeout, bounded retries, no retry
+ *  10. Reasoning policy      — PaperLume's own per-model, per-operation level.
+ *  11. Provider credential   — the SELECTED provider's, and only its.
+ *  12. Consume quota         — one unit, and not before here.
+ *  13. Provider call         — finite timeout, bounded retries, no retry
  *                              after a timeout.
- *  12. Strict parse          — unusable ⇒ refund + neutral 500.
+ *  14. Strict parse          — unusable ⇒ refund + neutral 500.
  *
- * Steps 1–9 can only fail *before* a unit is spent, so a malformed request, a
- * foreign paper, an oversized library and a stale client are all free. The
- * Gemini key is checked at step 10's doorstep for the same reason: a
- * misconfigured deployment must not bill the user. Step 9 cannot fail the
- * request at all — every problem it meets resolves to the system default — and
- * it costs neither a quota unit nor a provider request.
+ * Steps 1–11 can only fail *before* a unit is spent, so a malformed request, a
+ * foreign paper, an oversized library, a stale client and a misconfigured
+ * deployment are all free. The credential check MOVED from before model
+ * selection to after it (AI-MULTI-PROVIDER-001C) because which credential to
+ * check is now a consequence of which provider was selected — but it stayed on
+ * the free side of the quota boundary, which is the property that mattered.
+ * Steps 9 and 10 cannot fail the request at all — every problem they meet
+ * resolves to the system default or to a bounded provider-default reasoning
+ * fallback — and they cost neither a quota unit nor a provider request.
  *
  * ## Provider failure is never a Paperlume paywall
  *
@@ -62,7 +67,15 @@ import {
   resolveEffectiveAiModel,
   type AiModelSelectionClient,
 } from "../_shared/aiModelSelection.ts";
-import { getAiProviderAdapter, type RegisteredAiProvider } from "../_shared/aiProviderRegistry.ts";
+import {
+  generateWithRegisteredAiProvider,
+  type RegisteredAiProvider,
+} from "../_shared/aiProviderRegistry.ts";
+import { resolveAiProviderCredential } from "../_shared/aiProviderCredentials.ts";
+import {
+  formatReasoningPolicyLog,
+  resolveAiReasoningPolicy,
+} from "../_shared/aiReasoningPolicy.ts";
 import { classifyProviderError, type ProviderErrorClass } from "../_shared/providerError.ts";
 import type { AiProviderModel, AiProviderResult } from "../_shared/aiProvider.ts";
 import {
@@ -134,8 +147,21 @@ export interface SuggestOrganizationDeps {
    * the platform `AbortSignal.timeout`.
    */
   createTimeoutSignal?(ms: number): AbortSignal;
-  /** Read from Deno env by `index.ts`; `null`/empty means the function is misconfigured. */
-  getGeminiApiKey(): string | null;
+  /**
+   * Read ONE named environment variable — the credential for whichever provider
+   * this request resolved to (AI-MULTI-PROVIDER-001C).
+   *
+   * Replaces the previous `getGeminiApiKey()`, which was correct while Google
+   * was the only registered provider and is a hazard now that three are: a
+   * request routed to Anthropic while still reading Google's variable would put
+   * PaperLume's Gemini key in a header addressed to another provider.
+   *
+   * Deliberately takes a NAME and returns one value, rather than handing the
+   * handler a bag of secrets. The handler never chooses the name — that comes
+   * from the reviewed provider→credential mapping — and a test can prove that
+   * exactly one variable was read, and which.
+   */
+  getProviderCredential(envName: string): string | null;
   /**
    * Paperlume's SYSTEM DEFAULT model, as provider AND model metadata, resolved
    * by `index.ts` through the shared `_shared/aiProviderRegistry.ts` (which in
@@ -200,7 +226,7 @@ async function safeRefund(
  *   * `empty` — a well-formed envelope with no generated text.
  *   * `incomplete_response` — a readable envelope in which the provider itself
  *     reports the generation did not finish. AI-MULTI-PROVIDER-001B added this
- *     kind for the two UNREGISTERED adapters, so Google cannot produce it and
+ *     kind for the Anthropic and OpenAI adapters, so Google cannot produce it and
  *     nothing about this function's current behaviour changes. The branch is
  *     written now anyway: `classifyProviderFailure` had a catch-all tail, and a
  *     kind that fell through it would have been classified by accident rather
@@ -208,7 +234,8 @@ async function safeRefund(
  *     unreadable body — because the defining case is a provider that answered
  *     with a truncated or abandoned generation, which is an unusable response
  *     rather than a provider-availability problem, and retrying an answer our
- *     own output ceiling cut short would not help. 001C may revisit that when
+ *     own output ceiling cut short would not help. 001C set that ceiling per
+ *     operation (Suggest: 8192) and kept this classification; revisit it when
  *     it sets the real output budget.
  *
  * The retry/timeout policy behind all of this remains
@@ -393,15 +420,7 @@ export async function handleSuggestOrganizationRequest(
       return fail(400, "invalid_request", built.message, { reason: built.reason });
     }
 
-    // 9a. Configuration. Checked before the quota unit is spent so a
-    //     misconfigured deployment costs the user nothing and needs no refund.
-    const apiKey = deps.getGeminiApiKey();
-    if (apiKey === null || apiKey.trim() === "") {
-      logger.error("suggest-organization provider_key_missing");
-      return fail(500, "internal_error", "Something went wrong. Please try again.");
-    }
-
-    // 9b. Which model will this request use? AI-MODEL-SELECTION-001B (C33).
+    // 9a. Which model will this request use? AI-MODEL-SELECTION-001B (C33).
     //
     //     The last pre-provider boundary that is still BEFORE the quota unit is
     //     spent, and it spends nothing itself: no quota, no provider request.
@@ -425,7 +444,49 @@ export async function handleSuggestOrganizationRequest(
       logger,
     });
 
-    // 9c. Consume exactly one unit of the EXISTING Paperlume AI quota, through
+    // 9b. How hard should this request think? AI-MULTI-PROVIDER-001C (C41).
+    //
+    //     PaperLume's own reasoning policy for THIS model and THIS operation,
+    //     resolved from the server-controlled catalog and the caller's saved
+    //     preference — never inherited from whatever the provider currently
+    //     defaults to. Like model selection it spends nothing and cannot fail
+    //     the request: unusable policy metadata degrades to a bounded
+    //     provider-default fallback rather than costing the user a suggestion.
+    //
+    //     Organization suggestions take the HIGHER Automatic level of the two
+    //     operations (medium on every current model, against analyze's
+    //     minimal/low) because this one weighs a whole library rather than
+    //     extracting three fields from one abstract.
+    const reasoningDecision = await resolveAiReasoningPolicy({
+      client: client as AiModelSelectionClient,
+      operation: "suggest",
+      selection: modelSelection,
+      label: "suggest-organization",
+      logger,
+    });
+
+    // 9c. The SELECTED PROVIDER's credential, and only its.
+    //
+    //     Still checked BEFORE the quota unit is spent, so a misconfigured
+    //     deployment costs the user nothing and needs no refund — the property
+    //     this function has always had. What changed is only WHICH variable is
+    //     read: the name comes from the one reviewed provider→credential
+    //     mapping, applied to the provider step 9a actually resolved.
+    //
+    //     The log line names the missing ENVIRONMENT VARIABLE and never a
+    //     value. Without the name a misconfigured deployment is undiagnosable;
+    //     the name itself is not a secret. The user still sees the same neutral
+    //     internal-error message as before.
+    const credential = resolveAiProviderCredential(
+      modelSelection.provider,
+      (name) => deps.getProviderCredential(name),
+    );
+    if (!credential.ok) {
+      logger.error(`suggest-organization provider_key_missing env=${credential.envName}`);
+      return fail(500, "internal_error", "Something went wrong. Please try again.");
+    }
+
+    // 9d. Consume exactly one unit of the EXISTING Paperlume AI quota, through
     //     the caller-authenticated client so the RPC's `auth.uid()` guard sees
     //     the right user. The RPC is the enforcement authority: this code reads
     //     its `allowed` flag and does no quota arithmetic of its own, which is
@@ -479,19 +540,23 @@ export async function handleSuggestOrganizationRequest(
     //     turn into a user-visible error, and a catalog row naming an
     //     unimplemented provider was already resolved to the system default one
     //     step above rather than reaching this line.
-    const adapter = getAiProviderAdapter(modelSelection.provider);
     // One bounded routing line: operation, source, provider, public model name.
     // No user id, no paper id, no draft content, no Projects/Tags, no key.
     logger.log(formatModelRoutingLog("suggest-organization", modelSelection));
+    // One bounded reasoning line: operation, who decided, the concrete public
+    // level, and PaperLume's output ceiling.
+    logger.log(formatReasoningPolicyLog("suggest-organization", "suggest", reasoningDecision));
 
     // Provider-neutral: the system instruction, the serialized allow-listed
-    // input, and the demand for JSON. The endpoint, the request envelope, the
-    // credential header and the response envelope are the adapter's.
-    const call = await adapter.generate(
+    // input, the demand for JSON, and PaperLume's reasoning/output policy. The
+    // endpoint, the request envelope, the credential header, how that policy is
+    // spelled and the response envelope are the adapter's.
+    const call = await generateWithRegisteredAiProvider(
       modelSelection,
       buildSuggestGenerationRequest(built.serialized),
+      reasoningDecision.policy,
       {
-        apiKey,
+        apiKey: credential.apiKey,
         label: "suggest-organization",
         fetchImpl: deps.fetchImpl,
         sleep: deps.sleep,

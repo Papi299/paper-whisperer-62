@@ -49,6 +49,17 @@
 // Requiring both flags is the SETTER's job (`set_current_user_ai_model`, at the
 // moment a choice is made). Runtime requires `enabled` only.
 //
+// ## Reasoning preference travels with the model decision
+//
+// AI-MULTI-PROVIDER-001C. The preference row now also carries a manual
+// reasoning level, so this module reads it in the same round trip rather than
+// making the reasoning layer perform a second identical query. It does NOT
+// decide anything about it: whether that level is usable depends on the
+// effective model's catalog capability metadata, which is
+// `_shared/aiReasoningPolicy.ts`'s business. All this module does is refuse to
+// carry the level across a fallback, because a fallback means the model the
+// level was chosen for is not the model being called.
+//
 // ## Provider adapter boundary
 //
 // The catalog's `provider` column is deliberately unconstrained so a future
@@ -58,7 +69,12 @@
 // reviewed adapter exists for the row's provider and falls back when none does,
 // rather than routing to a provider whose credentials, request contract, error
 // semantics and privacy review do not exist. Since AI-MULTI-PROVIDER-001A (C39)
-// the registry is that authority and holds exactly one entry, `google`.
+// the registry is that authority; since AI-MULTI-PROVIDER-001C (C41) it holds
+// three entries — `google`, `anthropic` and `openai` — so a valid, enabled
+// catalog row naming any of them is now honoured rather than falling back on
+// provider family alone. Nothing else changed here: an unregistered provider
+// still falls back with `unsupported_provider`, and no `anthropic/*` or
+// `openai/*` catalog row exists for this to route.
 //
 // This module decides WHICH model; it no longer knows how to REACH one. It
 // builds no URL, sets no header and names no provider of its own — the Google
@@ -69,8 +85,8 @@
 //
 // There is deliberately no hard-coded list of model strings here. The DATABASE
 // catalog is the allowlist; duplicating it in TypeScript would create a second
-// authorization surface that could disagree with the first. Tests use the two
-// seeded ids as fixtures — that is fixture data, not a runtime rule.
+// authorization surface that could disagree with the first. Tests use seeded
+// ids as fixtures — that is fixture data, not a runtime rule.
 //
 // Pure module: no Deno APIs and no remote imports, so Node/Vitest exercises the
 // exact shipped code with a fake client rather than a re-implementation.
@@ -79,7 +95,7 @@ import {
   isRegisteredAiProvider,
   type RegisteredAiProvider,
 } from "./aiProviderRegistry.ts";
-import type { AiProviderModel } from "./aiProvider.ts";
+import { isAiReasoningLevel, type AiProviderModel, type AiReasoningLevel } from "./aiProvider.ts";
 
 /** Where the effective model came from. */
 export type AiModelSelectionSource = "system_default" | "user_preference";
@@ -119,6 +135,25 @@ export interface AiModelSelection extends AiProviderModel<RegisteredAiProvider> 
   source: AiModelSelectionSource;
   /** `null` exactly when the saved preference was honoured. */
   fallbackReason: AiModelFallbackReason | null;
+  /**
+   * The caller's saved MANUAL reasoning level, and `null` for Automatic —
+   * AI-MULTI-PROVIDER-001C (C41).
+   *
+   * `null` on EVERY fallback path, deliberately and without exception. A manual
+   * level was chosen for one specific model; when this decision falls back to
+   * PaperLume's system default — a lapsed entitlement, a retired model, an
+   * unreadable preference, a provider with no adapter — the model being called
+   * is not the model that level was chosen for, and carrying it across would
+   * apply a setting to something the user never saw. Automatic is the honest
+   * answer for a model they did not pick.
+   *
+   * A bounded canonical literal or `null`, never raw database text: a value
+   * that is not one of PaperLume's eight reasoning levels is read as no
+   * preference, so a malformed row cannot reach a provider request or a log
+   * line. It is deliberately NOT logged from here — `aiReasoningPolicy.ts` logs
+   * the RESOLVED level, which is the one that was actually sent.
+   */
+  reasoningPreference: AiReasoningLevel | null;
 }
 
 // ── The minimal database surface this module is allowed to reach ───────────
@@ -212,6 +247,9 @@ export async function resolveEffectiveAiModel(
       providerModel: systemDefault.providerModel,
       source: "system_default",
       fallbackReason: reason,
+      // Automatic. See the field's own documentation: a fallback model is never
+      // the model a saved manual level was chosen for.
+      reasoningPreference: null,
     };
   };
 
@@ -248,7 +286,10 @@ export async function resolveEffectiveAiModel(
   try {
     const { data, error } = await client
       .from("user_ai_preferences")
-      .select("preferred_model_id")
+      // `preferred_reasoning_level` joins an explicit projection rather than a
+      // `select("*")`: the columns this routing path reads are stated, so a
+      // future column on this table has to be admitted deliberately.
+      .select("preferred_model_id,preferred_reasoning_level")
       .eq("user_id", userId)
       .maybeSingle();
     if (error) return fallback("preference_lookup_failed");
@@ -267,6 +308,22 @@ export async function resolveEffectiveAiModel(
   // CHECK: a value that could not legally be a catalog id is malformed here
   // rather than something to go looking for.
   if (!isTrimmedNonEmpty(preferredModelId)) return fallback("invalid_preference");
+
+  // The saved manual reasoning level, read defensively.
+  //
+  // NULL is the ordinary and overwhelmingly common state, and it MEANS
+  // Automatic — it is not a missing value to go looking for. A non-null value
+  // that is not one of PaperLume's canonical literals is treated as Automatic
+  // too rather than failing the request: a malformed reasoning level is not a
+  // reason to deny someone their analysis, and the value must not reach a
+  // provider or a log line either way. The level is NOT validated against the
+  // model here — that needs the catalog's reasoning metadata, which is
+  // `aiReasoningPolicy.ts`'s read, and duplicating it would create the second
+  // authority this module exists to avoid.
+  const rawReasoning = preferenceRow.preferred_reasoning_level;
+  const reasoningPreference: AiReasoningLevel | null = isAiReasoningLevel(rawReasoning)
+    ? rawReasoning
+    : null;
 
   // Step 4 — authoritative catalog resolution. The catalog IS the allowlist.
   let catalogRow: Record<string, unknown> | null;
@@ -312,6 +369,9 @@ export async function resolveEffectiveAiModel(
     providerModel: catalogRow.provider_model,
     source: "user_preference",
     fallbackReason: null,
+    // Reached only when the saved preference was honoured in full, which is
+    // exactly the condition under which a manual reasoning level is meaningful.
+    reasoningPreference,
   };
 }
 
