@@ -15,6 +15,29 @@ import {
 } from "../handler.ts";
 import { NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, MAX_PROJECTS } from "../contract.ts";
 import { resolveSystemDefaultAiModel } from "../../_shared/aiProviderRegistry.ts";
+import type { AiProviderAdapter } from "../../_shared/aiProvider.ts";
+
+// AI-MULTI-PROVIDER-001B — a test-only seam onto the registry LOOKUP.
+//
+// `incomplete_response` is a failure kind only the two UNREGISTERED adapters
+// can produce; the Google adapter the real registry returns never does. To
+// exercise this handler's classification of it without registering anything,
+// the lookup is wrapped: while `registryOverride.adapter` is null — every test
+// but one — the real `getAiProviderAdapter` answers, so the rest of this suite
+// runs against exactly the shipped wiring. Nothing here widens the registry,
+// and the real registry's contents are asserted in
+// `_shared/__tests__/aiProviderRegistry.test.ts`.
+const registryOverride = vi.hoisted(() => ({
+  adapter: null as null | AiProviderAdapter<"google">,
+}));
+vi.mock("../../_shared/aiProviderRegistry.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../_shared/aiProviderRegistry.ts")>();
+  const getAiProviderAdapter: typeof real.getAiProviderAdapter = (provider) =>
+    (registryOverride.adapter ?? real.getAiProviderAdapter(provider)) as ReturnType<
+      typeof real.getAiProviderAdapter<typeof provider>
+    >;
+  return { ...real, getAiProviderAdapter };
+});
 
 /**
  * AI-PROJECT-TAG-SUGGESTIONS-001A — the real request path.
@@ -1657,5 +1680,49 @@ describe("model routing", () => {
     const all = [...unexpected.logs, ...unexpected.warns, ...unexpected.errors].join("\n");
     expect(all).not.toContain("gpt-sentinel");
     expect(all).not.toContain(USER_ID);
+  });
+});
+
+
+// ── AI-MULTI-PROVIDER-001B: a provider-reported unfinished generation ─────
+
+describe("the incomplete_response failure kind", () => {
+  it("is classified malformed_response, refunded, logged boundedly and never parsed", async () => {
+    const generate = vi.fn(async () => ({
+      ok: false as const,
+      kind: "incomplete_response" as const,
+      attempts: 1,
+    }));
+    registryOverride.adapter = { provider: "google", generate };
+    try {
+      const harness = makeHarness({});
+      const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+
+      expect(response.status).toBe(500);
+      const body = await response.json();
+      expect(body.code).toBe("malformed_response");
+      expect(JSON.stringify(body)).toContain(NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE);
+      // One unit consumed, one refunded: the user got no usable result.
+      expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+      // The stub stood in for the adapter; nothing reached a network.
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(harness.fetchImpl).not.toHaveBeenCalled();
+      // Classified by decision, not by falling through the catch-all tail.
+      expect(harness.errors.join("\n")).toContain(
+        "outcome=provider_failure class=malformed_response detail=incomplete provider_attempts=1 refund=attempted",
+      );
+    } finally {
+      registryOverride.adapter = null;
+    }
+  });
+
+  it("leaves the real registry answering for every other test", async () => {
+    // The override is a no-op by default: with it cleared, an ordinary Gemini
+    // success flows through the real Google adapter and real transport.
+    expect(registryOverride.adapter).toBeNull();
+    const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

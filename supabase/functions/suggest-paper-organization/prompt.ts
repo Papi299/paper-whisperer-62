@@ -66,7 +66,7 @@ import {
   type ProviderInput,
   type TaxonomyRefMap,
 } from "./contract.ts";
-import type { AiGenerationRequest } from "../_shared/aiProvider.ts";
+import type { AiGenerationRequest, AiJsonOutputSchema } from "../_shared/aiProvider.ts";
 
 export const PROJECT_REF_PREFIX = "P";
 export const TAG_REF_PREFIX = "T";
@@ -297,6 +297,99 @@ export const SYSTEM_INSTRUCTION =
   `most ${MAX_NEW_TAG_NAME_LENGTH}. Do not output any other key.`;
 
 /**
+ * The suggestion output contract, as a JSON Schema — AI-MULTI-PROVIDER-001B.
+ *
+ * The SAME four-key contract the OUTPUT section of the system instruction above
+ * already states and `parse.ts` already enforces, written beside the
+ * instruction so the two cannot drift. It adds no key, renames no key, and
+ * changes no cardinality: the caps stay `MAX_EXISTING_PROJECT_SUGGESTIONS` = 3,
+ * `MAX_EXISTING_TAG_SUGGESTIONS` = 5, `MAX_NEW_PROJECT_SUGGESTIONS` = 2 and
+ * `MAX_NEW_TAG_SUGGESTIONS` = 3, exactly as `contract.ts` defines them.
+ *
+ * ## What this schema deliberately does NOT express
+ *
+ * Every cap and length bound this feature has. Neither provider's current
+ * structured-output dialect supports `maxItems`, `minLength` or `maxLength`:
+ * OpenAI documents them as unsupported under `strict`, and Anthropic documents
+ * numeric and string-length constraints as unsupported. So the caps, the
+ * 400-character reason bound, the new-name length bounds, the hard
+ * `MAX_PROVIDER_ARRAY_ITEMS` ceiling, the ref-syntax rule and — crucially — the
+ * rule that a `ref` must name an entity from THIS request's taxonomy are all
+ * enforced where they always were: in `parse.ts`, against the request-local ref
+ * map. A schema cannot express the one that matters most, which is the clearest
+ * possible statement of why the parser, not the provider, is the authority.
+ *
+ * The schema is therefore strictly weaker than the parser, never the reverse.
+ * It is worth having anyway: it removes the whole class of responses that are
+ * the wrong SHAPE, before a single product rule is consulted.
+ *
+ * ## Two places it is deliberately stricter than the parser
+ *
+ *   * An existing-entity item is `{ ref, reason }`. `parse.ts` additionally
+ *     TOLERATES a `name` key and then ignores it, because models commonly echo
+ *     the entity name and rejecting a response over a redundant field would
+ *     spend a user's quota unit on pedantry. The instruction never asks for it,
+ *     so the schema does not offer it — a provider enforcing this schema simply
+ *     will not send it. Nothing about the product changes either way: that
+ *     field was never read.
+ *   * `description` is `["string", "null"]` and listed in `required`, which is
+ *     how a nullable field is expressed under a strict dialect that requires
+ *     every property to be required. `parse.ts` accepts a string, `null` or an
+ *     absent key, so every value this schema permits is a value the parser
+ *     already accepted.
+ */
+export const SUGGEST_JSON_SCHEMA: AiJsonOutputSchema = {
+  name: "paperlume_organization_suggestions",
+  schema: {
+    type: "object",
+    properties: {
+      existingProjects: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { ref: { type: "string" }, reason: { type: "string" } },
+          required: ["ref", "reason"],
+          additionalProperties: false,
+        },
+      },
+      existingTags: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { ref: { type: "string" }, reason: { type: "string" } },
+          required: ["ref", "reason"],
+          additionalProperties: false,
+        },
+      },
+      newProjects: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            description: { type: ["string", "null"] },
+            reason: { type: "string" },
+          },
+          required: ["name", "description", "reason"],
+          additionalProperties: false,
+        },
+      },
+      newTags: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { name: { type: "string" }, reason: { type: "string" } },
+          required: ["name", "reason"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["existingProjects", "existingTags", "newProjects", "newTags"],
+    additionalProperties: false,
+  },
+};
+
+/**
  * The generation request, expressed without naming a provider.
  *
  * AI-MULTI-PROVIDER-001A (C39): this used to be `buildGeminiRequestBody`, which
@@ -316,5 +409,6 @@ export function buildSuggestGenerationRequest(serializedInput: string): AiGenera
     systemInstruction: SYSTEM_INSTRUCTION,
     userContent: serializedInput,
     responseFormat: "json",
+    jsonSchema: SUGGEST_JSON_SCHEMA,
   };
 }

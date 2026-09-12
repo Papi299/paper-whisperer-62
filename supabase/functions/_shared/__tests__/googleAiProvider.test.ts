@@ -42,10 +42,24 @@ const MODEL: GoogleAiProviderModel = {
   providerModel: "gemini-3.5-flash",
 };
 
+// A schema the Google adapter must IGNORE. AI-MULTI-PROVIDER-001B added
+// `jsonSchema` to the provider-neutral request for the Anthropic and OpenAI
+// structured-output APIs; Gemini keeps its `responseMimeType` behaviour, and
+// the sentinel below is how the suite proves the schema never reaches the wire.
+const SCHEMA_SENTINEL = "SENTINEL-JSON-SCHEMA-PROPERTY";
 const REQUEST: AiGenerationRequest = {
   systemInstruction: SYSTEM_INSTRUCTION,
   userContent: USER_CONTENT,
   responseFormat: "json",
+  jsonSchema: {
+    name: "SENTINEL-JSON-SCHEMA-NAME",
+    schema: {
+      type: "object",
+      properties: { [SCHEMA_SENTINEL]: { type: "string" } },
+      required: [SCHEMA_SENTINEL],
+      additionalProperties: false,
+    },
+  },
 };
 
 interface Harness {
@@ -177,6 +191,41 @@ describe("the request that reaches Google", () => {
     for (const key of ["temperature", "topP", "topK", "top_p", "top_k", "seed", "candidateCount"]) {
       expect(generationConfig).not.toHaveProperty(key);
     }
+  });
+
+  it("ignores the operation's JSON schema entirely — AI-MULTI-PROVIDER-001B", async () => {
+    // Google's structured-output story is `responseMimeType`, and 001B did not
+    // change it. The schema exists for the Anthropic and OpenAI adapters; if it
+    // ever leaked into Gemini's envelope, the golden request hash in
+    // `analyze-paper/__tests__/geminiRequestGolden.test.ts` would move and
+    // PaperLume's live provider request would have changed under a task that
+    // promised it would not.
+    const body = buildGeminiRequestBody(REQUEST);
+    expect(body).not.toHaveProperty("output_config");
+    expect(body).not.toHaveProperty("text");
+    expect(body).not.toHaveProperty("jsonSchema");
+    expect(JSON.stringify(body)).not.toContain(SCHEMA_SENTINEL);
+    expect(JSON.stringify(body)).not.toContain("SENTINEL-JSON-SCHEMA-NAME");
+    expect(JSON.stringify(body)).not.toContain("json_schema");
+
+    // And the same, measured on the bytes that actually reach the transport.
+    const harness = makeHarness([geminiOk("{}")]);
+    await generate(harness);
+    const [url, init] = harness.fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(init.body)).not.toContain(SCHEMA_SENTINEL);
+    expect(String(init.body)).not.toContain("SENTINEL-JSON-SCHEMA-NAME");
+    expect(url).not.toContain(SCHEMA_SENTINEL);
+  });
+
+  it("builds the same bytes with or without a schema on the request", () => {
+    // The strongest form of "ignores": a request carrying a schema and one that
+    // could not carry one serialize identically.
+    const withSchema = buildGeminiRequestInit(REQUEST, API_KEY).body;
+    const withOther = buildGeminiRequestInit(
+      { ...REQUEST, jsonSchema: { name: "other", schema: { type: "object" } } },
+      API_KEY,
+    ).body;
+    expect(withSchema).toBe(withOther);
   });
 
   it("adds nothing of its own to the prompt strings", () => {

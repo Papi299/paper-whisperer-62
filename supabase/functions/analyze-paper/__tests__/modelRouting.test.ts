@@ -414,6 +414,11 @@ describe("model selection changes the model and nothing else", () => {
     // AI-MULTI-PROVIDER-001A moved the prompt into an importable module.
     const request = buildAnalyzeGenerationRequest("A title", "An abstract.");
     expect(Object.keys(request).sort()).toEqual([
+      // `jsonSchema` joined the provider-neutral request in
+      // AI-MULTI-PROVIDER-001B: the operation states its own output contract,
+      // and an adapter translates it. It is still model-independent — the same
+      // four keys for every model — which is what this assertion is about.
+      "jsonSchema",
       "responseFormat",
       "systemInstruction",
       "userContent",

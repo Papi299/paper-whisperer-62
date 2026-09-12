@@ -266,6 +266,18 @@ The runtime above is now provider-neutral by construction. Model selection decid
 - **All four selectable models remain Gemini**, served by the one existing `GEMINI_API_KEY`. No new secret, no migration, no catalog row and no Settings change was part of this work, and a future catalog row stays unusable until a real adapter is registered **and** given its own credential name.
 - **Repository-only, not deployed.** 001A leaves every provider request, user-visible response and quota/refund outcome unchanged — its one deliberate difference is a log-only privacy hardening (C39) — and has not been deployed: Production continues to run the pre-001A Edge artifacts until an authorized deploy of **both** generation functions (see [deployment.md](deployment.md) §7c for the bundle closure, which now includes the three new `_shared` modules).
 
+### 4.9b Anthropic and OpenAI adapters — implemented, deliberately unregistered (AI-MULTI-PROVIDER-001B, C40)
+
+`AI-MULTI-PROVIDER-001B` adds two complete provider protocols to the repository and makes neither reachable.
+
+- **Implemented in code:** `google` (registered), `anthropic` ([`_shared/anthropicAiProvider.ts`](../supabase/functions/_shared/anthropicAiProvider.ts), Claude Messages API) and `openai` ([`_shared/openAiProvider.ts`](../supabase/functions/_shared/openAiProvider.ts), OpenAI Responses API).
+- **Registered and routeable: `google` only.** The registry described in §4.9a is unchanged: it holds one entry and imports neither new module. A catalog row naming `anthropic` or `openai` still falls back with `unsupported_provider`, and the Settings provider filter (§4.10) still offers Google rows only. The one §4.9a phrase that no longer applies is "an unimplemented provider is absent": both providers are now implemented, and they are unregistered rather than absent.
+- **Why they are unregistered.** Both intended models reason by default: Claude Sonnet 5 runs adaptive thinking at effort `high`, and GPT-5.6 Terra reasons at effort `medium`. PaperLume intends its own per-operation policy, which does not exist yet. Registration waits for `AI-MULTI-PROVIDER-001C`.
+- **Catalog:** Gemini rows only. No Claude Sonnet 5 or GPT-5.6 Terra row exists.
+- **Secrets:** none added. The intended future names are `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; see [deployment.md](deployment.md) §3.2.
+- **Output contract:** each operation now states its output as a JSON Schema, which the two new adapters enforce natively. The Google request is byte-identical, and the existing parsers remain the final authority.
+- **User-visible behaviour:** unchanged. Production still runs the pre-001A Google-only artifacts.
+
 ### 4.10 Settings control — LIVE (AI-MODEL-SELECTION-001C)
 
 Settings gains an **AI Model** section ([`AiModelSettingsSection`](../src/components/settings/AiModelSettingsSection.tsx)) over a focused data hook ([`useAiModelSettings`](../src/hooks/useAiModelSettings.ts)), composed by `SettingsDialog`. It adds **no migration, no RPC and no Edge Function change** — it consumes exactly the surfaces 001A shipped.

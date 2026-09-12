@@ -297,6 +297,24 @@ Deno.serve(async (req) => {
           classified = true;
           throw new Error("gemini_unreadable_response");
         }
+        if (providerCall.kind === "incomplete_response") {
+          // A readable 2xx envelope in which the provider itself reports the
+          // generation did not finish. AI-MULTI-PROVIDER-001B added this kind
+          // for the two UNREGISTERED adapters (Anthropic's `stop_reason`,
+          // OpenAI's `status`); Google's envelope has no such field, so this
+          // branch is unreachable today and nothing about this function's
+          // current behaviour changes. It is written now because the tail below
+          // treats every remaining kind as `empty`, and a new kind falling into
+          // it would report a truncated or abandoned generation as "the model
+          // returned nothing" — in exactly the log line someone would use to
+          // diagnose it. Classified `malformed_response`, which is also what
+          // suggest-paper-organization does with it: unlike the two 001A kinds,
+          // this one has no divergent history to preserve.
+          console.log("5b. Provider reported an incomplete generation");
+          providerErrorClass = classifyProviderError({ kind: "parse" });
+          classified = true;
+          throw new Error("provider_incomplete_response");
+        }
         // A well-formed envelope carrying no generated text.
         console.log("6. Parsing Gemini response");
         console.log("6a. Empty Gemini response (no candidates/text)");

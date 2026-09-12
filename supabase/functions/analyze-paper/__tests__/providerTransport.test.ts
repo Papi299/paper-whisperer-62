@@ -127,6 +127,33 @@ describe("analyze-paper maps a transport failure the way it always did", () => {
   });
 });
 
+describe("analyze-paper names the 001B failure kind explicitly", () => {
+  // AI-MULTI-PROVIDER-001B added `incomplete_response` to the provider-neutral
+  // contract for the two UNREGISTERED adapters. Google cannot produce it, so
+  // this branch is unreachable today — which is exactly why it is pinned here:
+  // the tail below the branch treats every remaining kind as `empty`, and a new
+  // kind falling into it would report a truncated generation as "the model
+  // returned nothing".
+  it("handles incomplete_response before the empty tail, classified malformed", () => {
+    const branch = SOURCE.indexOf('providerCall.kind === "incomplete_response"');
+    const branchThrow = SOURCE.indexOf('throw new Error("provider_incomplete_response")');
+    const emptyTail = SOURCE.indexOf('throw new Error("gemini_empty")');
+    expect(branch).toBeGreaterThan(-1);
+    expect(branchThrow).toBeGreaterThan(branch);
+    expect(branchThrow).toBeLessThan(emptyTail);
+    expect(SOURCE.slice(branch, branchThrow)).toContain('classifyProviderError({ kind: "parse" })');
+    expect(classifyProviderError({ kind: "parse" })).toBe("malformed_response");
+  });
+
+  it("does not label it a Gemini failure — Google cannot produce it", () => {
+    expect(SOURCE).not.toContain("gemini_incomplete");
+  });
+
+  it("still makes exactly one provider call per request", () => {
+    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
+  });
+});
+
 describe("analyze-paper quota semantics are untouched", () => {
   it("consumes exactly one unit, from one call site, before the provider call", () => {
     // One `rpc("consume_ai_quota", …)` invocation — the other mentions in the

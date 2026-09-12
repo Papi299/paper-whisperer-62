@@ -284,6 +284,57 @@ describe("useAiModelSettings — reads", () => {
     ]);
   });
 
+  it("still offers no Anthropic or OpenAI row — AI-MULTI-PROVIDER-001B", async () => {
+    // 001B added real Anthropic and OpenAI adapter MODULES to the Edge code and
+    // registered neither. This filter mirrors the REGISTERED providers, not the
+    // adapter source files, so a seeded row for either provider — including the
+    // future target models by name — must still never be offered. Offering one
+    // would promise routing the server does not perform.
+    mockTables(
+      rows(
+        GEMINI_35,
+        {
+          ...GEMINI_35,
+          id: "anthropic/claude-sonnet-5",
+          provider: "anthropic",
+          display_name: "Claude Sonnet 5",
+        },
+        {
+          ...GEMINI_35,
+          id: "openai/gpt-5.6-terra",
+          provider: "openai",
+          display_name: "GPT-5.6 Terra",
+        },
+      ),
+      prefRow(null),
+    );
+    const { result } = await renderLoaded();
+
+    expect(result.current.options.map((o) => o.id)).toEqual([GEMINI_35.id]);
+    const offeredNames = result.current.options.map((o) => o.displayName).join("|");
+    expect(offeredNames).not.toContain("Claude");
+    expect(offeredNames).not.toContain("GPT");
+  });
+
+  it("reports a saved OpenAI-provider model as unavailable, like any unsupported one", async () => {
+    mockTables(
+      rows({
+        ...GEMINI_35,
+        id: "openai/gpt-5.6-terra",
+        provider: "openai",
+        display_name: "GPT-5.6 Terra",
+      }),
+      prefRow("openai/gpt-5.6-terra"),
+    );
+    const { result } = await renderLoaded();
+
+    expect(result.current.saved).toEqual({
+      status: "unavailable",
+      modelId: "openai/gpt-5.6-terra",
+      displayName: "GPT-5.6 Terra",
+    });
+  });
+
   it("resolves an explicit preference to an active saved model", async () => {
     mockTables(rows(GEMINI_35, GEMINI_36), prefRow(GEMINI_36.id));
     const { result } = await renderLoaded();
@@ -534,6 +585,18 @@ describe("useAiModelSettings — writes", () => {
       "clear_current_user_ai_model",
       "set_current_user_ai_model",
     ]);
+  });
+
+  it("keeps the provider-family filter at exactly google — AI-MULTI-PROVIDER-001B", () => {
+    // 001B added Anthropic and OpenAI adapter modules to the Edge code and
+    // registered neither. This list mirrors the REGISTERED providers, not the
+    // adapter source files, and it must move together with the Edge registry —
+    // never ahead of it. The next ordinary Vercel deploy ships this file, so a
+    // premature widening here would expose a provider the server cannot route.
+    const source = readFileSync(resolve(process.cwd(), "src/hooks/useAiModelSettings.ts"), "utf-8");
+    expect(source).toMatch(/const SUPPORTED_PROVIDERS: readonly string\[\] = \["google"\];/);
+    expect(source).not.toMatch(/["'`]anthropic["'`]/);
+    expect(source).not.toMatch(/["'`]openai["'`]/);
   });
 });
 

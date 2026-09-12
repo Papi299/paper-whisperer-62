@@ -389,6 +389,10 @@ describe("buildSuggestGenerationRequest — the operation's half", () => {
   it("asks for JSON, and names no provider, model, endpoint or credential", () => {
     expect(request.responseFormat).toBe("json");
     expect(Object.keys(request).sort()).toEqual([
+      // `jsonSchema` joined the provider-neutral request in
+      // AI-MULTI-PROVIDER-001B: the operation states its own output contract,
+      // and an adapter translates it into that provider's vocabulary.
+      "jsonSchema",
       "responseFormat",
       "systemInstruction",
       "userContent",

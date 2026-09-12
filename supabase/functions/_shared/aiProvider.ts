@@ -64,23 +64,59 @@ export interface AiProviderModel<Provider extends string = string> {
 }
 
 /**
+ * The JSON shape an operation requires back, in the one vocabulary every
+ * current provider's structured-output API speaks: a name and a JSON Schema.
+ *
+ * AI-MULTI-PROVIDER-001B. `responseFormat: "json"` alone says only "valid
+ * JSON"; Anthropic and OpenAI both offer native SCHEMA enforcement, and using
+ * prose instructions instead where the provider documents a real mechanism
+ * would be choosing the weaker contract on purpose.
+ *
+ * The schema belongs to the OPERATION, not to an adapter, and that is the whole
+ * reason it travels here. `tldr`, `studyType`, `ref`, `newTags` — those are
+ * PaperLume product semantics, and C39 keeps them out of provider modules.
+ * Adapters only translate this object into their provider's vocabulary.
+ *
+ * `name` exists because OpenAI's `text.format` requires one; Anthropic's
+ * `output_config.format` takes only the schema and ignores it. It is a fixed
+ * server-side label, never anything a user typed.
+ *
+ * A schema is NOT a second parser. Both operations keep their own strict
+ * parsers as the final authority on a response, because a provider's
+ * schema-compliance claim is a claim about syntax and because the dialects
+ * cannot express every PaperLume rule (see the suggestion caps).
+ */
+export interface AiJsonOutputSchema {
+  readonly name: string;
+  readonly schema: Record<string, unknown>;
+}
+
+/**
  * One generation request, expressed without naming any provider.
  *
  * Both operations send exactly this shape today: a fixed system instruction, a
- * single user-content part, and a demand for JSON. `responseFormat` is a
- * one-member union rather than a boolean because it is a contract term the
- * operations' parsers depend on — an adapter that cannot honour it must fail
- * rather than silently send prose.
+ * single user-content part, a demand for JSON, and the JSON Schema that demand
+ * means. `responseFormat` is a one-member union rather than a boolean because
+ * it is a contract term the operations' parsers depend on — an adapter that
+ * cannot honour it must fail rather than silently send prose.
  *
- * There is deliberately NO reasoning/thinking budget, temperature, token
- * ceiling, tool list or streaming flag here. PaperLume sets none of those today
- * (see `AI-PROVIDER-REQUEST-CONTRACT-001A`), and inventing fields for a
- * provider we have not implemented would be guessing at someone else's API.
+ * `jsonSchema` is REQUIRED rather than optional, so that "this operation never
+ * said what shape it wanted" is unexpressible: an operation that gains a
+ * provider call has to state its output contract. An adapter whose provider has
+ * no native schema mechanism may ignore it — the Google adapter does exactly
+ * that, deliberately, and its request is byte-for-byte what it always was.
+ *
+ * There is still deliberately NO reasoning/thinking budget, temperature, tool
+ * list or streaming flag here. PaperLume sets none of those
+ * (`AI-PROVIDER-REQUEST-CONTRACT-001A`), and 001B does not decide reasoning
+ * policy for anyone — that is AI-MULTI-PROVIDER-001C's, and it is why the two
+ * adapters 001B adds stay unregistered.
  */
 export interface AiGenerationRequest {
   readonly systemInstruction: string;
   readonly userContent: string;
   readonly responseFormat: "json";
+  readonly jsonSchema: AiJsonOutputSchema;
 }
 
 /**
@@ -97,16 +133,47 @@ export interface AiGenerationRequest {
  *   * `empty`   — a well-formed 2xx envelope carrying no generated text (a
  *                 blocked candidate, an empty candidate list, a missing text
  *                 part).
+ *   * `incomplete_response` — a readable 2xx envelope in which the provider
+ *                 ITSELF reports the generation did not complete.
  *
- * The two 2xx kinds are separate because the two operations classify them
+ * The first two 2xx kinds are separate because the two operations classify them
  * differently today and 001A preserves that exactly.
+ *
+ * ## Why `incomplete_response` was added (AI-MULTI-PROVIDER-001B)
+ *
+ * Adding a member to this union is not free, so it was done only after the
+ * alternative was checked and found dishonest. Both new provider protocols
+ * report a terminal state of their own INSIDE a 200 response:
+ *
+ *   * OpenAI's Responses API returns `status` — `"incomplete"` with
+ *     `incomplete_details.reason` (e.g. our own output ceiling), not only
+ *     `"completed"`.
+ *   * Anthropic's Messages API returns `stop_reason` — `"max_tokens"` when the
+ *     ceiling truncated the answer, `"refusal"` when a safeguard declined.
+ *
+ * None of the existing kinds describes that truthfully. It is not `http` (the
+ * status was 200), not `network` or `timeout` (ours is the only clock in this
+ * module), and not `unreadable_response` (the envelope read perfectly — it is
+ * the GENERATION that did not finish). The tempting one is `empty`, and that is
+ * the one worth refusing: `empty` means the model answered with nothing, while
+ * this means the model was cut off, declined, or failed part-way — frequently
+ * with truncated text still attached. Reporting a truncated answer as "the
+ * model returned nothing" would misdescribe the failure in exactly the logs
+ * someone would use to diagnose it.
+ *
+ * No REGISTERED provider can produce it today: Google is the only registered
+ * adapter and its envelope has no such field, so its behaviour is unchanged and
+ * both operations' existing classifications are untouched. The two operations
+ * nonetheless classify this kind explicitly, so the branch exists before the
+ * provider that needs it is ever routeable.
  */
 export type AiProviderFailureKind =
   | "http"
   | "network"
   | "timeout"
   | "unreadable_response"
-  | "empty";
+  | "empty"
+  | "incomplete_response";
 
 /**
  * The outcome of one provider-call sequence.

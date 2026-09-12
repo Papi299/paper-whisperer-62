@@ -37,6 +37,16 @@ import {
   GOOGLE_AI_PROVIDER_ADAPTER,
   type GoogleAiProviderModel,
 } from "../googleAiProvider.ts";
+import {
+  ANTHROPIC_AI_PROVIDER_ADAPTER,
+  buildAnthropicRequestBody,
+  type AnthropicAiProviderModel,
+} from "../anthropicAiProvider.ts";
+import {
+  OPENAI_AI_PROVIDER_ADAPTER,
+  buildOpenAiRequestBody,
+  type OpenAiProviderModel,
+} from "../openAiProvider.ts";
 
 /** `true` only when A and B are the same type, not merely assignable one way. */
 type Equal<A, B> =
@@ -123,6 +133,93 @@ describe("the Google adapter refuses another provider's model (compile time)", (
   });
 });
 
+describe("the two 001B adapters are bound to their own providers (compile time)", () => {
+  it("types each adapter for exactly its own provider", () => {
+    const anthropicIsExact: Equal<
+      typeof ANTHROPIC_AI_PROVIDER_ADAPTER,
+      AiProviderAdapter<"anthropic">
+    > = true;
+    const openAiIsExact: Equal<typeof OPENAI_AI_PROVIDER_ADAPTER, AiProviderAdapter<"openai">> =
+      true;
+    const anthropicModelIsExact: Equal<AnthropicAiProviderModel, AiProviderModel<"anthropic">> =
+      true;
+    const openAiModelIsExact: Equal<OpenAiProviderModel, AiProviderModel<"openai">> = true;
+    // Registration is unchanged by 001B: the registered set is still google.
+    const stillGoogleOnly: Equal<RegisteredAiProvider, "google"> = true;
+
+    expect([
+      anthropicIsExact,
+      openAiIsExact,
+      anthropicModelIsExact,
+      openAiModelIsExact,
+      stillGoogleOnly,
+    ]).toEqual([true, true, true, true, true]);
+  });
+
+  it("rejects every cross-provider pairing — checked by tsc, never executed", () => {
+    const neverCalled = (request: AiGenerationRequest, deps: AiProviderCallDeps) => {
+      const googleModel: GoogleAiProviderModel = { provider: "google", providerModel: "m" };
+      const anthropicModel: AnthropicAiProviderModel = {
+        provider: "anthropic",
+        providerModel: "m",
+      };
+      const openAiModel: OpenAiProviderModel = { provider: "openai", providerModel: "m" };
+      const unnarrowedModel: AiProviderModel<string> = { provider: "anthropic", providerModel: "m" };
+
+      // @ts-expect-error -- the Anthropic adapter cannot be handed a Google model.
+      void ANTHROPIC_AI_PROVIDER_ADAPTER.generate(googleModel, request, deps);
+      // @ts-expect-error -- nor an OpenAI model.
+      void ANTHROPIC_AI_PROVIDER_ADAPTER.generate(openAiModel, request, deps);
+      // @ts-expect-error -- nor a model whose provider was never narrowed.
+      void ANTHROPIC_AI_PROVIDER_ADAPTER.generate(unnarrowedModel, request, deps);
+      // @ts-expect-error -- the OpenAI adapter cannot be handed a Google model.
+      void OPENAI_AI_PROVIDER_ADAPTER.generate(googleModel, request, deps);
+      // @ts-expect-error -- nor an Anthropic model.
+      void OPENAI_AI_PROVIDER_ADAPTER.generate(anthropicModel, request, deps);
+      // @ts-expect-error -- nor a model whose provider was never narrowed.
+      void OPENAI_AI_PROVIDER_ADAPTER.generate(unnarrowedModel, request, deps);
+      // @ts-expect-error -- the Google adapter cannot be handed an Anthropic model.
+      void GOOGLE_AI_PROVIDER_ADAPTER.generate(anthropicModel, request, deps);
+      // @ts-expect-error -- the Anthropic body builder is Anthropic-only.
+      void buildAnthropicRequestBody(openAiModel, request);
+      // @ts-expect-error -- the OpenAI body builder is OpenAI-only.
+      void buildOpenAiRequestBody(anthropicModel, request);
+      // @ts-expect-error -- neither adapter widens into one that accepts any provider.
+      const anthropicWidened: AiProviderAdapter<string> = ANTHROPIC_AI_PROVIDER_ADAPTER;
+      // @ts-expect-error -- nor into one for a union it does not serve.
+      const openAiWidened: AiProviderAdapter<"openai" | "google"> = OPENAI_AI_PROVIDER_ADAPTER;
+      // @ts-expect-error -- an unregistered provider still has no adapter to look up.
+      void getAiProviderAdapter("anthropic");
+      // @ts-expect-error -- and neither does the other one.
+      void getAiProviderAdapter("openai");
+
+      // Positive controls: each adapter accepts its own provider's model, so the
+      // errors above are about the provider and nothing else.
+      void ANTHROPIC_AI_PROVIDER_ADAPTER.generate(anthropicModel, request, deps);
+      void OPENAI_AI_PROVIDER_ADAPTER.generate(openAiModel, request, deps);
+      void buildAnthropicRequestBody(anthropicModel, request);
+      void buildOpenAiRequestBody(openAiModel, request);
+
+      return [anthropicWidened, openAiWidened];
+    };
+
+    expect(typeof neverCalled).toBe("function");
+  });
+
+  it("requires every generation request to carry the operation's schema", () => {
+    const neverCalled = () => {
+      // @ts-expect-error -- `jsonSchema` is required: an operation must state its output contract.
+      const missingSchema: AiGenerationRequest = {
+        systemInstruction: "s",
+        userContent: "u",
+        responseFormat: "json",
+      };
+      return missingSchema;
+    };
+    expect(typeof neverCalled).toBe("function");
+  });
+});
+
 describe("the signatures that carry the invariant (pinned for CI)", () => {
   // CI never type-checks `supabase/functions/**`, so without these a revert to
   // a provider-agnostic signature would keep every CI job green.
@@ -144,6 +241,31 @@ describe("the signatures that carry the invariant (pinned for CI)", () => {
     expect(adapter).toMatch(
       /GOOGLE_AI_PROVIDER_ADAPTER: AiProviderAdapter<typeof GOOGLE_AI_PROVIDER> = \{/,
     );
+  });
+
+  it("keeps the Anthropic and OpenAI adapters bound to their own providers", () => {
+    const anthropic = codeOf("../anthropicAiProvider.ts");
+    expect(anthropic).toMatch(
+      /export type AnthropicAiProviderModel = AiProviderModel<typeof ANTHROPIC_AI_PROVIDER>;/,
+    );
+    expect(anthropic).toMatch(/async function generate\(\s*model: AnthropicAiProviderModel,/);
+    expect(anthropic).toMatch(
+      /ANTHROPIC_AI_PROVIDER_ADAPTER: AiProviderAdapter<typeof ANTHROPIC_AI_PROVIDER> = \{/,
+    );
+    const openai = codeOf("../openAiProvider.ts");
+    expect(openai).toMatch(
+      /export type OpenAiProviderModel = AiProviderModel<typeof OPENAI_AI_PROVIDER>;/,
+    );
+    expect(openai).toMatch(/async function generate\(\s*model: OpenAiProviderModel,/);
+    expect(openai).toMatch(
+      /OPENAI_AI_PROVIDER_ADAPTER: AiProviderAdapter<typeof OPENAI_AI_PROVIDER> = \{/,
+    );
+  });
+
+  it("keeps jsonSchema a REQUIRED member of the generation request", () => {
+    const contract = codeOf("../aiProvider.ts");
+    expect(contract).toMatch(/readonly jsonSchema: AiJsonOutputSchema;/);
+    expect(contract).not.toMatch(/readonly jsonSchema\?:/);
   });
 
   it("keys the registry by provider and returns that provider's adapter, with no cast", () => {

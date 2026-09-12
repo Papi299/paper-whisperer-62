@@ -61,11 +61,12 @@ describe("the registered provider set", () => {
   });
 });
 
-describe("providers PaperLume has no adapter for", () => {
-  // The two providers the owner intends to add LATER. 001A must not be able to
-  // route to either, and these are the assertions that would fail the moment a
-  // half-finished adapter or a placeholder appeared.
-  it.each(["anthropic", "openai"])("refuses the unimplemented provider %s", (provider) => {
+describe("providers PaperLume has no REGISTERED adapter for", () => {
+  // Anthropic and OpenAI. Since AI-MULTI-PROVIDER-001B both have a real,
+  // reviewed adapter module in this repository — and NEITHER is registered, so
+  // neither is reachable. That distinction is the whole point of 001B and is
+  // asserted directly in the dedicated block at the end of this file.
+  it.each(["anthropic", "openai"])("refuses the unregistered provider %s", (provider) => {
     expect(isRegisteredAiProvider(provider)).toBe(false);
     expect(registeredAiProviders()).not.toContain(provider);
   });
@@ -159,5 +160,75 @@ describe("the system default", () => {
     const systemDefault = resolveSystemDefaultAiModel("gemini-3.5-flash");
     expect(isRegisteredAiProvider(systemDefault.provider)).toBe(true);
     expect(getAiProviderAdapter(systemDefault.provider).provider).toBe(systemDefault.provider);
+  });
+});
+
+
+// ── The 001B registration gate ────────────────────────────────────────────
+
+describe("an implemented adapter is NOT a registered adapter — AI-MULTI-PROVIDER-001B", () => {
+  // The single most important acceptance criterion of 001B. Two real provider
+  // protocols now exist in `supabase/functions/_shared/`, fully tested, and
+  // PaperLume must still be unable to send a single request to either. The
+  // registry is the activation boundary; writing an adapter does not cross it.
+
+  it("registers exactly google, and nothing 001B added", () => {
+    expect(registeredAiProviders()).toEqual(["google"]);
+    expect(registeredAiProviders()).toHaveLength(1);
+  });
+
+  it("has real adapters for anthropic and openai that are NOT in the registry", async () => {
+    // Imported directly, which is exactly how they are tested: an adapter never
+    // needs a registry entry to be exercised. If it ever seemed to, the design
+    // would be wrong.
+    const { ANTHROPIC_AI_PROVIDER_ADAPTER } = await import("../anthropicAiProvider.ts");
+    const { OPENAI_AI_PROVIDER_ADAPTER } = await import("../openAiProvider.ts");
+
+    // They exist, and they are complete.
+    expect(ANTHROPIC_AI_PROVIDER_ADAPTER.provider).toBe("anthropic");
+    expect(OPENAI_AI_PROVIDER_ADAPTER.provider).toBe("openai");
+    expect(typeof ANTHROPIC_AI_PROVIDER_ADAPTER.generate).toBe("function");
+    expect(typeof OPENAI_AI_PROVIDER_ADAPTER.generate).toBe("function");
+
+    // And they are unreachable.
+    expect(isRegisteredAiProvider("anthropic")).toBe(false);
+    expect(isRegisteredAiProvider("openai")).toBe(false);
+    expect(registeredAiProviders()).not.toContain("anthropic");
+    expect(registeredAiProviders()).not.toContain("openai");
+  });
+
+  it("never hands back an adapter for an unregistered provider at runtime", () => {
+    // `getAiProviderAdapter` is total over REGISTERED providers by construction
+    // and the type refuses anything else; this is the runtime half of that.
+    for (const provider of ["anthropic", "openai"]) {
+      expect(
+        (getAiProviderAdapter as unknown as (p: string) => unknown)(provider),
+      ).toBeUndefined();
+    }
+  });
+
+  it("does not import either new adapter module", () => {
+    // A registry that merely IMPORTED them would be one edit away from
+    // registering them, and the import itself would be the misleading signal.
+    expect(REGISTRY_CODE).not.toMatch(/anthropicAiProvider/);
+    expect(REGISTRY_CODE).not.toMatch(/openAiProvider/i);
+    expect(REGISTRY_CODE).not.toMatch(/ANTHROPIC_AI_PROVIDER/);
+    expect(REGISTRY_CODE).not.toMatch(/OPENAI_AI_PROVIDER/);
+  });
+
+  it("declares its adapter table from the Google constant alone", () => {
+    // `RegisteredAiProvider` is `typeof GOOGLE_AI_PROVIDER`. Widening it is the
+    // explicit act of registering a provider, and `AI_PROVIDER_ADAPTERS` will
+    // not type-check until a real adapter is supplied for the new member.
+    expect(REGISTRY_CODE).toMatch(
+      /export type RegisteredAiProvider = typeof GOOGLE_AI_PROVIDER;/,
+    );
+    expect(REGISTRY_CODE).toMatch(/\[GOOGLE_AI_PROVIDER\]: GOOGLE_AI_PROVIDER_ADAPTER,/);
+    // Exactly one entry in the frozen table.
+    const table = REGISTRY_CODE.slice(
+      REGISTRY_CODE.indexOf("Object.freeze<AiProviderAdapterRegistry>({"),
+    );
+    const entries = table.slice(0, table.indexOf("});")).match(/GOOGLE_AI_PROVIDER_ADAPTER/g);
+    expect(entries).toHaveLength(1);
   });
 });
