@@ -231,7 +231,7 @@ Posture: SELECT-own policy plus a SELECT-only grant to `authenticated`; no clien
 
 **Downgrade semantics (durable).** A saved preference is **not** deleted when entitlement lapses; it goes **dormant**. The user keeps their choice if access returns, and no authorization gap is created because the runtime re-checks `can_select_ai_model` on every AI operation rather than inferring permission from the row's existence. Since 001B that is enforced, not merely required: a non-entitled caller's preference row is not even read.
 
-**Portability.** The saved preference is user-owned data and travels in the full account export as the singleton `data/user_ai_preferences.json` (`user_id`, `preferred_model_id`, `created_at`, `updated_at`), with JSON `null` when the user has no explicit choice. `ai_model_catalog` is not exported — it is Paperlume's product metadata, not the user's. See [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §12.7.
+**Portability.** The saved preference is user-owned data and travels in the full account export as the singleton `data/user_ai_preferences.json` (`user_id`, `preferred_model_id`, `preferred_reasoning_level` — added by AI-MULTI-PROVIDER-001C with export version 3 — `created_at`, `updated_at`), with JSON `null` when the user has no explicit choice. `ai_model_catalog` is not exported — it is Paperlume's product metadata, not the user's. See [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §12.7.
 
 ### 4.9 Runtime routing — LIVE for Google Gemini (AI-MODEL-SELECTION-001B)
 
@@ -277,6 +277,18 @@ The runtime above is now provider-neutral by construction. Model selection decid
 - **Secrets:** none added. The intended future names are `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`; see [deployment.md](deployment.md) §3.2.
 - **Output contract:** each operation now states its output as a JSON Schema, which the two new adapters enforce natively. The Google request is byte-identical, and the existing parsers remain the final authority.
 - **User-visible behaviour:** unchanged. Production still runs the pre-001A Google-only artifacts.
+
+### 4.9c Model-aware reasoning policy and provider activation — repository-only (AI-MULTI-PROVIDER-001C, C41)
+
+`AI-MULTI-PROVIDER-001C` gives PaperLume its own reasoning policy, registers the two adapters 001B held back, and stages every user-facing part of it **off**.
+
+- **Reasoning level is a PaperLume product control.** Settings → AI Model gains a **Reasoning level** control whose first option is always **Automatic (Recommended)**. Automatic is PaperLume's explicit per-model, per-operation choice, stored in `ai_model_catalog`: Analyze `minimal` (Gemini 3.5/3.6) or `low` (3.7/3.8), and organization suggestions `medium`. It is sent on every request and **never** inherited from a provider default. A manual level applies to both operations, and is available only once a specific model is pinned. On PaperLume default, the control shows Automatic and explains why it cannot be changed.
+- **The catalog is the capability authority.** Each row lists its own supported levels, its two Automatic levels, and `reasoning_selectable`. The UI offers exactly that row's levels, and nothing it does not list.
+- **Staged, not live.** `reasoning_selectable = false` on every row, and the manual-reasoning setter RPC is granted to **no role**. No user can create a manual level yet. A later, separately authorized migration flips both together.
+- **Providers registered: `google`, `anthropic`, `openai`.** The Settings provider filter moved with the runtime registry. This adds **no model option**: no Claude Sonnet 5 or GPT-5.6 Terra catalog row exists, and neither provider's secret is installed. Each provider reads only its own credential, and there is no generic key.
+- **Output ceilings for the paid providers:** Analyze 4,096 tokens and Suggest 8,192, covering reasoning plus answer. These are safety bounds, not expected usage. Gemini is sent no ceiling, as before.
+- **No commercial change.** One successful AI invocation is still one PaperLume AI quota unit at every reasoning level. There are no weighted credits, and the Pro baseline, the Free cap, the quota RPCs and pricing are untouched. Usage and cost telemetry is `AI-MULTI-PROVIDER-001D`.
+- **Not deployed, and merge-gated.** Migration `20260912120000` must be applied to Production **before** the 001C pull request merges ([deployment.md](deployment.md) §6.6). Production still runs the pre-001A `analyze-paper` v26 and `suggest-paper-organization` v10.
 
 ### 4.10 Settings control — LIVE (AI-MODEL-SELECTION-001C)
 
