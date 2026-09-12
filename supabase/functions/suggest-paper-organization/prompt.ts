@@ -66,6 +66,7 @@ import {
   type ProviderInput,
   type TaxonomyRefMap,
 } from "./contract.ts";
+import type { AiGenerationRequest } from "../_shared/aiProvider.ts";
 
 export const PROJECT_REF_PREFIX = "P";
 export const TAG_REF_PREFIX = "T";
@@ -296,18 +297,24 @@ export const SYSTEM_INSTRUCTION =
   `most ${MAX_NEW_TAG_NAME_LENGTH}. Do not output any other key.`;
 
 /**
- * The Gemini request body. Paperlume sets no sampling parameters: it leaves
- * temperature, top-p and top-k at the provider/model defaults and pins only the
- * JSON response mode, which is the part the parser actually depends on. Keeping
- * the request free of sampling overrides is what makes it portable across
- * Gemini model versions.
+ * The generation request, expressed without naming a provider.
+ *
+ * AI-MULTI-PROVIDER-001A (C39): this used to be `buildGeminiRequestBody`, which
+ * assembled Gemini's `system_instruction` / `contents` / `generationConfig`
+ * envelope here. That envelope is provider protocol and now lives in the Google
+ * adapter; what stays is the operation's own half — the instruction, the
+ * serialized input, and the demand for JSON. Neither string changed.
+ *
+ * `responseFormat: "json"` is a contract term rather than a preference: the
+ * strict parser in `parse.ts` depends on it. PaperLume still sets no sampling
+ * parameters anywhere — temperature, top-p and top-k stay at the provider/model
+ * defaults, which is what keeps the request portable across model versions
+ * (`AI-PROVIDER-REQUEST-CONTRACT-001A`).
  */
-export function buildGeminiRequestBody(serializedInput: string): Record<string, unknown> {
+export function buildSuggestGenerationRequest(serializedInput: string): AiGenerationRequest {
   return {
-    system_instruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-    contents: [{ parts: [{ text: serializedInput }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-    },
+    systemInstruction: SYSTEM_INSTRUCTION,
+    userContent: serializedInput,
+    responseFormat: "json",
   };
 }

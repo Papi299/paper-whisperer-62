@@ -20,13 +20,28 @@
 // an edit that tried to `insert()`/`update()`/`delete()` entitlement, preference
 // or catalog state would fail these tests rather than pass them quietly.
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
-  buildGeminiGenerateContentUrl,
   formatModelRoutingLog,
   resolveEffectiveAiModel,
-  SUPPORTED_AI_PROVIDER,
   type AiModelSelectionClient,
 } from "../aiModelSelection.ts";
+import {
+  getAiProviderAdapter,
+  isRegisteredAiProvider,
+  registeredAiProviders,
+} from "../aiProviderRegistry.ts";
+// The URL builder moved to the Google adapter in AI-MULTI-PROVIDER-001A. It is
+// imported here to assert the COMPOSITION — what a routing outcome would
+// actually send — which is the property that matters for an unsupported
+// provider.
+import { buildGeminiGenerateContentUrl } from "../googleAiProvider.ts";
+
+const SELECTION_SOURCE = readFileSync(
+  fileURLToPath(new URL("../aiModelSelection.ts", import.meta.url)),
+  "utf8",
+);
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 //
@@ -41,6 +56,13 @@ import {
 // `aiModelSelection.ts`, the database would have stopped being the allowlist.
 
 const SYSTEM_DEFAULT = "gemini-3.6-flash-SYSTEM-DEFAULT-SENTINEL";
+/**
+ * Paperlume's system default as the call sites supply it since
+ * AI-MULTI-PROVIDER-001A: provider AND model metadata, not a bare string. The
+ * resolver returns these two values verbatim on every fallback path, which is
+ * what proves it manufactures no provider of its own.
+ */
+const SYSTEM_DEFAULT_MODEL = { provider: "google", providerModel: SYSTEM_DEFAULT } as const;
 const USER_ID = "11111111-2222-4333-8444-555555555555";
 const OTHER_USER_ID = "99999999-8888-4777-8666-555555555555";
 
@@ -190,7 +212,7 @@ function resolve(harness: Harness) {
   return resolveEffectiveAiModel({
     client: harness.client,
     userId: USER_ID,
-    systemDefaultModel: SYSTEM_DEFAULT,
+    systemDefault: SYSTEM_DEFAULT_MODEL,
     label: "test-op",
     logger: { warn: (m: string) => harness.warns.push(m) },
   });
@@ -501,8 +523,64 @@ describe("provider adapter boundary", () => {
     expectSystemDefault(await resolve(harness), "invalid_catalog_row");
   });
 
-  it("names google as the one implemented adapter", () => {
-    expect(SUPPORTED_AI_PROVIDER).toBe("google");
+  // AI-MULTI-PROVIDER-001A. The two providers the owner intends to add LATER,
+  // as hypothetical catalog rows that are enabled, selectable and perfectly
+  // well-formed — everything an entitled caller's saved preference needs except
+  // a registered adapter. Both must still fall back, and neither may leak a
+  // decision that could become a request.
+  it.each([
+    ["anthropic", "hypothetical-anthropic-model"],
+    ["openai", "hypothetical-openai-model"],
+  ])("refuses an enabled %s catalog row and falls back to the system default", async (
+    provider,
+    providerModel,
+  ) => {
+    const row = {
+      id: `${provider}/hypothetical`,
+      provider,
+      provider_model: providerModel,
+      enabled: true,
+      selectable: true,
+    };
+    const harness = entitledWith(row, row.id);
+    const selection = await resolve(harness);
+
+    // The whole decision: system default, and the bounded reason why.
+    expect(selection).toEqual({
+      provider: SYSTEM_DEFAULT_MODEL.provider,
+      providerModel: SYSTEM_DEFAULT_MODEL.providerModel,
+      source: "system_default",
+      fallbackReason: "unsupported_provider",
+    });
+    // Nothing about that provider escapes into anything callable: the adapter
+    // the selection resolves to is Google's, and the URL such a request would
+    // take carries the system default rather than the row's model.
+    expect(isRegisteredAiProvider(provider)).toBe(false);
+    expect(getAiProviderAdapter(selection.provider).provider).toBe("google");
+    const url = buildGeminiGenerateContentUrl(selection);
+    expect(url).toContain(SYSTEM_DEFAULT);
+    expect(url).not.toContain(providerModel);
+    expect(url).not.toContain(provider);
+    // And exactly one bounded warning, naming no model and no provider.
+    expect(harness.warns).toEqual(["test-op model_selection_fallback reason=unsupported_provider"]);
+  });
+
+  it("defers to the registry rather than keeping its own provider list", () => {
+    // The module must not contain a provider literal of its own: the registry
+    // is the authority on which protocols exist, and a second copy here could
+    // disagree with it. Asserted on code, not comments.
+    const code = SELECTION_SOURCE.replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(code).toContain("isRegisteredAiProvider");
+    expect(code).not.toMatch(/["'`]google["'`]/);
+    expect(code).not.toMatch(/["'`]anthropic["'`]/i);
+    expect(code).not.toMatch(/["'`]openai["'`]/i);
+    // And no provider URL is assembled here any more.
+    expect(code).not.toContain("generativelanguage");
+    expect(code).not.toMatch(/https?:\/\//);
+    expect(registeredAiProviders()).toEqual(["google"]);
   });
 
   it("always reports provider google, even on every fallback path", async () => {
@@ -536,7 +614,7 @@ describe("user isolation", () => {
     await resolveEffectiveAiModel({
       client: harness.client,
       userId: OTHER_USER_ID,
-      systemDefaultModel: SYSTEM_DEFAULT,
+      systemDefault: SYSTEM_DEFAULT_MODEL,
       label: "test-op",
     });
     expect(harness.queries[0].filters).toEqual([["user_id", OTHER_USER_ID]]);
@@ -669,7 +747,7 @@ describe("bounded diagnostics", () => {
       await resolveEffectiveAiModel({
         client: harness.client,
         userId: USER_ID,
-        systemDefaultModel: SYSTEM_DEFAULT,
+        systemDefault: SYSTEM_DEFAULT_MODEL,
         label: "test-op",
         logger: { warn: (m: string) => harness.warns.push(m) },
       });
@@ -691,7 +769,7 @@ describe("bounded diagnostics", () => {
     const selection = await resolveEffectiveAiModel({
       client: harness.client,
       userId: USER_ID,
-      systemDefaultModel: SYSTEM_DEFAULT,
+      systemDefault: SYSTEM_DEFAULT_MODEL,
       label: "test-op",
     });
     expect(selection.providerModel).toBe(SYSTEM_DEFAULT);

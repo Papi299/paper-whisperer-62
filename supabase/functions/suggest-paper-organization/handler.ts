@@ -58,13 +58,13 @@
  */
 
 import {
-  buildGeminiGenerateContentUrl,
   formatModelRoutingLog,
   resolveEffectiveAiModel,
   type AiModelSelectionClient,
 } from "../_shared/aiModelSelection.ts";
-import { callGeminiWithRetry } from "../_shared/geminiTransport.ts";
+import { getAiProviderAdapter, type RegisteredAiProvider } from "../_shared/aiProviderRegistry.ts";
 import { classifyProviderError, type ProviderErrorClass } from "../_shared/providerError.ts";
+import type { AiProviderModel, AiProviderResult } from "../_shared/aiProvider.ts";
 import {
   NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE,
   PAPER_NOT_FOUND_MESSAGE,
@@ -74,8 +74,8 @@ import {
   MAX_PROJECTS,
   MAX_TAGS,
 } from "./contract.ts";
-import { buildGeminiRequestBody, buildProviderInput } from "./prompt.ts";
-import { extractProviderText, parseSuggestionsResponse } from "./parse.ts";
+import { buildProviderInput, buildSuggestGenerationRequest } from "./prompt.ts";
+import { parseSuggestionsResponse } from "./parse.ts";
 import { validateSuggestRequest } from "./validation.ts";
 
 export const corsHeaders = {
@@ -137,9 +137,14 @@ export interface SuggestOrganizationDeps {
   /** Read from Deno env by `index.ts`; `null`/empty means the function is misconfigured. */
   getGeminiApiKey(): string | null;
   /**
-   * Paperlume's SYSTEM DEFAULT model, resolved through the shared
-   * `_shared/geminiModel.ts` from `GEMINI_MODEL`, so this function and
-   * `analyze-paper` cannot disagree about the default.
+   * Paperlume's SYSTEM DEFAULT model, as provider AND model metadata, resolved
+   * by `index.ts` through the shared `_shared/aiProviderRegistry.ts` (which in
+   * turn resolves `GEMINI_MODEL` through `_shared/geminiModel.ts`), so this
+   * function and `analyze-paper` cannot disagree about the default.
+   *
+   * Provider/model metadata rather than a bare model string since
+   * AI-MULTI-PROVIDER-001A (C39): the handler no longer assumes the default is
+   * Google, it just routes to whatever registered provider the default names.
    *
    * This is the starting point and the safe fallback, NOT necessarily the model
    * used: step 9b re-checks the caller's entitlement and may route the request
@@ -149,7 +154,7 @@ export interface SuggestOrganizationDeps {
    * it happens inside the handler where both are already established and where
    * the tests can exercise it.
    */
-  getGeminiModel(): string;
+  getSystemDefaultModel(): AiProviderModel<RegisteredAiProvider>;
   /** Injected so tests can assert exactly what is (and is not) logged. */
   logger?: { log(message: string): void; warn(message: string): void; error(message: string): void };
 }
@@ -183,60 +188,38 @@ async function safeRefund(
 
 // ── Provider transport ────────────────────────────────────────────────────
 
-type ProviderCallResult =
-  | { ok: true; payload: unknown; attempts: number }
-  | { ok: false; kind: "http" | "network" | "timeout" | "parse"; status?: number; attempts: number };
-
 /**
- * Call Gemini through the shared transport, then read the body.
+ * Map one bounded adapter failure onto this function's existing provider-error
+ * class and log detail. Nothing here is provider-specific — the adapter has
+ * already reduced Google's outcome to a kind and, for HTTP, a status.
  *
- * The retry/timeout policy itself lives in `_shared/geminiTransport.ts` —
- * AI-PROVIDER-RESILIENCE-001A moved it there because 001A changes it in BOTH
- * Gemini callers at once, which is exactly the situation the two-copy
- * arrangement was chosen to avoid. (The previous note here argued that sharing
- * would drag `analyze-paper` into this function's deploy artifact for no
- * behavioural gain; that trade-off no longer holds when the behavioural change
- * is `analyze-paper`'s too, and one shared policy is now the cheaper way to keep
- * them honest.)
+ * The two 2xx kinds stay distinct on purpose, exactly as before 001A:
  *
- * What stays here is the part that is genuinely this function's own: a 2xx whose
- * body is not JSON is an unusable *response*, not a transport failure, and is
- * classified `parse` without a retry — unchanged.
+ *   * `unreadable_response` — a 200 whose body is not JSON at all. An unusable
+ *     *response*, not a transport failure, so it is `parse` and is not retried.
+ *   * `empty` — a well-formed envelope with no generated text.
+ *
+ * The retry/timeout policy behind all of this remains
+ * `_shared/geminiTransport.ts`'s, which the Google adapter calls: one policy
+ * for both Gemini callers, so they cannot drift in how long they wait for
+ * Google or how often they ask.
  */
-async function callProvider(
-  url: string,
-  apiKey: string,
-  body: Record<string, unknown>,
-  deps: SuggestOrganizationDeps,
-  logger: NonNullable<SuggestOrganizationDeps["logger"]>,
-): Promise<ProviderCallResult> {
-  const result = await callGeminiWithRetry(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify(body),
-    },
-    {
-      label: "suggest-organization",
-      fetchImpl: deps.fetchImpl,
-      sleep: deps.sleep,
-      createTimeoutSignal: deps.createTimeoutSignal,
-      logger,
-    },
-  );
-
-  if (!result.ok) {
-    return { ok: false, kind: result.kind, status: result.status, attempts: result.attempts };
+function classifyProviderFailure(
+  failure: Extract<AiProviderResult, { ok: false }>,
+): { providerClass: ProviderErrorClass; detail: string } {
+  if (failure.kind === "http") {
+    return {
+      providerClass: classifyProviderError({ kind: "http", status: failure.status }),
+      detail: `http_${failure.status}`,
+    };
   }
-
-  try {
-    return { ok: true, payload: await result.response.json(), attempts: result.attempts };
-  } catch {
-    // A 200 whose body is not JSON is an unusable response, not a transport
-    // failure — retrying it is unlikely to help.
-    return { ok: false, kind: "parse", attempts: result.attempts };
+  if (failure.kind === "unreadable_response") {
+    return { providerClass: classifyProviderError({ kind: "parse" }), detail: "parse" };
   }
+  if (failure.kind === "empty") {
+    return { providerClass: classifyProviderError({ kind: "empty" }), detail: "empty" };
+  }
+  return { providerClass: classifyProviderError({ kind: failure.kind }), detail: failure.kind };
 }
 
 // ── Taxonomy loading ──────────────────────────────────────────────────────
@@ -418,11 +401,11 @@ export async function handleSuggestOrganizationRequest(
     //     request body cannot influence any of it — `validateSuggestRequest`
     //     reads exactly `paperId`, `draft`, `currentProjectIds` and
     //     `currentTagIds`, and `userId` here is the `getUser()` identity.
-    const systemDefaultModel = deps.getGeminiModel();
+    const systemDefault = deps.getSystemDefaultModel();
     const modelSelection = await resolveEffectiveAiModel({
       client: client as AiModelSelectionClient,
       userId,
-      systemDefaultModel,
+      systemDefault,
       label: "suggest-organization",
       logger,
     });
@@ -470,43 +453,64 @@ export async function handleSuggestOrganizationRequest(
 
     // 10. The provider call. From here on, every failure path refunds.
     //
-    //     The model component of this URL is the ONLY thing per-user selection
-    //     changes: the request body, the `x-goog-api-key` auth with the one
-    //     shared key, the transport policy, the parse and the refund rule are
-    //     identical for the system default and for an honoured preference.
-    const url = buildGeminiGenerateContentUrl(modelSelection);
+    //     The model is the ONLY thing per-user selection changes: the request
+    //     content, the credential, the transport policy, the parse and the
+    //     refund rule are identical for the system default and for an honoured
+    //     preference.
+    //
+    //     The adapter lookup is total by construction — `resolveEffectiveAiModel`
+    //     can only name a provider the runtime registry has a reviewed adapter
+    //     for (AI-MULTI-PROVIDER-001A, C39) — so there is no lookup failure to
+    //     turn into a user-visible error, and a catalog row naming an
+    //     unimplemented provider was already resolved to the system default one
+    //     step above rather than reaching this line.
+    const adapter = getAiProviderAdapter(modelSelection.provider);
     // One bounded routing line: operation, source, provider, public model name.
     // No user id, no paper id, no draft content, no Projects/Tags, no key.
     logger.log(formatModelRoutingLog("suggest-organization", modelSelection));
 
-    const call = await callProvider(url, apiKey, buildGeminiRequestBody(built.serialized), deps, logger);
+    // Provider-neutral: the system instruction, the serialized allow-listed
+    // input, and the demand for JSON. The endpoint, the request envelope, the
+    // credential header and the response envelope are the adapter's.
+    const call = await adapter.generate(
+      modelSelection,
+      buildSuggestGenerationRequest(built.serialized),
+      {
+        apiKey,
+        label: "suggest-organization",
+        fetchImpl: deps.fetchImpl,
+        sleep: deps.sleep,
+        createTimeoutSignal: deps.createTimeoutSignal,
+        logger,
+      },
+    );
 
     let providerClass: ProviderErrorClass | null = null;
     let suggestions: OrganizationSuggestions | null = null;
     let failureDetail = "";
 
     if (!call.ok) {
-      providerClass = classifyProviderError(
-        call.kind === "http" ? { kind: "http", status: call.status } : { kind: call.kind },
-      );
-      failureDetail = call.kind === "http" ? `http_${call.status}` : call.kind;
+      const failure = classifyProviderFailure(call);
+      providerClass = failure.providerClass;
+      failureDetail = failure.detail;
+    } else if (call.text.trim() === "") {
+      // Generated text that is only whitespace is an empty answer rather than
+      // something to parse — the judgement this function has always made, kept
+      // on this side of the seam because "is this answer usable?" is product
+      // semantics while "did the provider return text?" is the adapter's.
+      providerClass = classifyProviderError({ kind: "empty" });
+      failureDetail = "empty";
     } else {
       // 11. Strict parse. A structurally valid response with four empty arrays
       //     is a SUCCESS, not a failure: "nothing here fits" is a real answer,
       //     and refunding it would be paying users to ask about papers that do
       //     not need organizing.
-      const text = extractProviderText(call.payload);
-      if (text === null) {
-        providerClass = classifyProviderError({ kind: "empty" });
-        failureDetail = "empty";
+      const parsed = parseSuggestionsResponse(call.text, built.refMap);
+      if (!parsed.ok) {
+        providerClass = classifyProviderError({ kind: "parse" });
+        failureDetail = parsed.detail;
       } else {
-        const parsed = parseSuggestionsResponse(text, built.refMap);
-        if (!parsed.ok) {
-          providerClass = classifyProviderError({ kind: "parse" });
-          failureDetail = parsed.detail;
-        } else {
-          suggestions = parsed.suggestions;
-        }
+        suggestions = parsed.suggestions;
       }
     }
 

@@ -14,6 +14,7 @@ import {
   type SuggestOrganizationDeps,
 } from "../handler.ts";
 import { NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, MAX_PROJECTS } from "../contract.ts";
+import { resolveSystemDefaultAiModel } from "../../_shared/aiProviderRegistry.ts";
 
 /**
  * AI-PROJECT-TAG-SUGGESTIONS-001A — the real request path.
@@ -295,7 +296,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
         return new AbortController().signal;
       },
       getGeminiApiKey: () => (options.geminiKey === undefined ? GEMINI_KEY : options.geminiKey),
-      getGeminiModel: () => options.systemDefaultModel ?? SYSTEM_DEFAULT_MODEL,
+      // Built through the same helper `index.ts` uses, so the harness cannot
+      // drift from the shipped system default (AI-MULTI-PROVIDER-001A).
+      getSystemDefaultModel: () =>
+        resolveSystemDefaultAiModel(options.systemDefaultModel ?? SYSTEM_DEFAULT_MODEL),
       logger: {
         log: (m: string) => logs.push(m),
         warn: (m: string) => warns.push(m),
@@ -1521,6 +1525,114 @@ describe("model routing", () => {
     for (const secret of [USER_ID, PAPER_ID, GEMINI_KEY, "SENTINEL-JWT", MODEL_35.id, DRAFT.title]) {
       expect(all).not.toContain(secret);
     }
+  });
+
+  // ── AI-MULTI-PROVIDER-001A: the provider-adapter seam ───────────────────
+  //
+  // A catalog row naming a provider PaperLume has no adapter for must not
+  // become a request to that provider, must not fail the user's request, and
+  // must not cost them anything. These run the whole shipped path — resolver,
+  // registry, Google adapter, fake `fetch` — so "it fell back" is observed on
+  // the wire rather than inferred from a return value.
+  it.each([
+    ["anthropic", "hypothetical-anthropic-model"],
+    ["openai", "hypothetical-openai-model"],
+    ["unknown-provider-sentinel", "hypothetical-unknown-model"],
+  ])(
+    "falls back to the system default for an enabled %s row, and calls only Google",
+    async (provider, providerModel) => {
+      const harness = routing({
+        id: `${provider}/hypothetical`,
+        provider,
+        provider_model: providerModel,
+        enabled: true,
+        selectable: true,
+      });
+      const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+
+      // The feature still works, on the system default model.
+      expect(response.status).toBe(200);
+      expect(sentUrl(harness)).toBe(urlFor(SYSTEM_DEFAULT_MODEL));
+      expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+
+      // Nothing about that provider reached the wire — not the host, not the
+      // model, not the provider name.
+      const wire = `${sentUrl(harness)}\n${sentBody(harness)}`;
+      expect(wire).not.toContain(providerModel);
+      expect(wire).not.toContain(provider);
+      expect(sentUrl(harness).startsWith("https://generativelanguage.googleapis.com/")).toBe(true);
+
+      // It is a model-selection fallback, not a provider error: one unit
+      // consumed, no refund, no 402, no 500.
+      expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+      expect(harness.warns).toContain(
+        "suggest-organization model_selection_fallback reason=unsupported_provider",
+      );
+      const all = [...harness.logs, ...harness.warns, ...harness.errors].join("\n");
+      expect(all).toContain(
+        `suggest-organization model_routing source=system_default provider=google model=${SYSTEM_DEFAULT_MODEL}`,
+      );
+      expect(all).not.toContain(providerModel);
+    },
+  );
+
+  it("sends a byte-identical request whether the fallback was unsupported_provider or no preference", async () => {
+    // The fallback must be indistinguishable on the wire from an ordinary
+    // system-default request: same body, same headers, same URL.
+    const unsupported = routing({
+      id: "anthropic/hypothetical",
+      provider: "anthropic",
+      provider_model: "hypothetical-anthropic-model",
+      enabled: true,
+      selectable: true,
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), unsupported.deps);
+
+    const plain = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    await handleSuggestOrganizationRequest(request(validBody()), plain.deps);
+
+    expect(sentUrl(unsupported)).toBe(sentUrl(plain));
+    expect(sentBody(unsupported)).toBe(sentBody(plain));
+    expect((unsupported.fetchImpl.mock.calls[0][1] as RequestInit).headers).toEqual(
+      (plain.fetchImpl.mock.calls[0][1] as RequestInit).headers,
+    );
+  });
+
+  it("treats whitespace-only generated text as an empty answer and refunds", async () => {
+    // The judgement that stayed on the operation's side of the seam.
+    const harness = makeHarness({ responses: [geminiOk("   ")] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    expect((await response.json()).code).toBe("malformed_response");
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+    expect(harness.errors.join("\n")).toContain("detail=empty");
+  });
+
+  it("treats a 2xx whose body is not JSON as an unusable response, not a transport failure", async () => {
+    const harness = makeHarness({
+      responses: [new Response("<html>not json</html>", { status: 200 })],
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    expect((await response.json()).code).toBe("malformed_response");
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.sleeps).toEqual([]);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+    expect(harness.errors.join("\n")).toContain("detail=parse");
+  });
+
+  it("never lets the provider's own error body reach a log through the new seam", async () => {
+    const harness = makeHarness({
+      responses: [
+        new Response("Google says: project 12345 quota exhausted for model X", { status: 429 }),
+      ],
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    const all = [...harness.logs, ...harness.warns, ...harness.errors].join("\n");
+    expect(all).toContain("class=provider_rate_limit");
+    expect(all).not.toContain("Google says");
+    expect(all).not.toContain("project 12345");
+    expect(all).not.toContain(GEMINI_KEY);
   });
 
   it("keeps the ordinary paths quiet and bounds the unexpected ones", async () => {

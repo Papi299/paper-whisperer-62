@@ -214,7 +214,7 @@ The server-controlled **allowlist** of AI models Paperlume has explicitly approv
 
 Adding a model is a reviewed migration and **nothing else**: 001D added 3.7 and 3.8 with zero changes to `_shared/aiModelSelection.ts`, `AiModelSettingsSection.tsx` and `useAiModelSettings.ts`, which is the property the two sections below describe.
 
-`provider` is deliberately **not** CHECK-constrained to a closed list so a future Anthropic or OpenAI model is a seed row plus a runtime adapter rather than a constraint migration. That is a schema affordance only — **no non-Google provider is implemented**, and adding one requires explicit provider, privacy, cost and runtime-adapter work. Since AI-MODEL-SELECTION-001B the runtime enforces that boundary rather than trusting the seed: a catalog row naming any provider other than `google` is **refused and falls back to the system default**, and no external URL is constructed for it.
+`provider` is deliberately **not** CHECK-constrained to a closed list so a future Anthropic or OpenAI model is a seed row plus a runtime adapter rather than a constraint migration. That is a schema affordance only — **no non-Google provider is implemented**, and adding one requires explicit provider, privacy, cost and runtime-adapter work. Since AI-MODEL-SELECTION-001B the runtime enforces that boundary rather than trusting the seed: a catalog row naming a provider PaperLume has no adapter for is **refused and falls back to the system default**, and no external URL is constructed for it. Since AI-MULTI-PROVIDER-001A (C39) the authority for that check is the runtime **provider-adapter registry** (§4.9a) rather than a string comparison — so this table authorizes **models**, and the registry authorizes **provider protocols**. A row alone can never make PaperLume call a provider.
 
 **This table is the runtime allowlist.** `_shared/aiModelSelection.ts` deliberately hard-codes **no** list of model strings — a TypeScript copy would be a second authorization surface that could disagree with this one. A saved preference is honoured only when its catalog row exists, its `id` matches the id that was requested, `enabled` is `true`, `provider` is `google`, and `provider_model` is a non-empty trimmed string.
 
@@ -243,7 +243,7 @@ The decision, in order:
 2. **Re-check entitlement** — `get_current_user_access()` through the caller's own client. Only `can_select_ai_model === true` permits going further. There is no `plan === 'pro'` comparison, no email check and no internal-role check in either Edge Function; the database access projection is the authority.
 3. **Read the saved preference** — `user_ai_preferences`, singleton, with an explicit `.eq("user_id", <authenticated id>)` as defence in depth on top of the SELECT-own policy. No row means the system default.
 4. **Resolve it through the catalog** — exact-id filter; the returned row's `id` must match, and `enabled` must be `true`.
-5. **Check the provider adapter** — `google` only.
+5. **Check the provider adapter** — the runtime registry must hold a reviewed adapter for the row's provider. Today exactly one is registered: `google` (§4.9a).
 
 **`enabled` vs `selectable` at runtime.** A saved preference requires `enabled = true` and deliberately **not** `selectable = true`: a model can be closed to *new* choices while the users who already chose it keep working. `enabled = false` retires it and falls back. Requiring **both** remains the setter's job at save time; `set_current_user_ai_model` is unchanged.
 
@@ -254,6 +254,17 @@ The decision, in order:
 **No caller-supplied model, ever.** Neither request contract has a model field, neither function reads a query parameter or a non-`Authorization` header, and the resolver reads no request input at all. The only two sources of a model string are the trusted `GEMINI_MODEL` environment default and the server-controlled catalog after entitlement verification.
 
 **`get-gemini-provider-quota` is unchanged and stays system-default observational monitoring.** It reports the *configured* model, not any caller's routed model, so it and the two generation functions may now legitimately name different models for the same request. Making it preference-aware would change what is being monitored and would need multi-model Monitoring calls; C29 remains deferred.
+
+### 4.9a Provider-adapter seam — repository-only (AI-MULTI-PROVIDER-001A, C39)
+
+The runtime above is now provider-neutral by construction. Model selection decides *which* model; a **provider adapter** decides *how* to speak to that provider; and a **runtime registry** decides which provider protocols PaperLume can speak at all.
+
+- **Registered providers: `google`, and nothing else.** [`_shared/aiProviderRegistry.ts`](../supabase/functions/_shared/aiProviderRegistry.ts) holds one entry. There is no Anthropic or OpenAI entry, no placeholder that throws "not implemented", no endpoint and no credential accessor for either — an unimplemented provider is **absent**, because a stub is something a later edit can finish by accident.
+- **Two allowlists, deliberately different.** `ai_model_catalog` authorizes **models** (§4.7); the registry authorizes **provider protocols**. The registry names no model string, so it is not a second copy of the catalog.
+- **The Google adapter owns the protocol.** [`_shared/googleAiProvider.ts`](../supabase/functions/_shared/googleAiProvider.ts) is the only code that knows the Gemini `generateContent` URL, the request envelope, the `x-goog-api-key` header and the `candidates[0].content.parts[0].text` response envelope. Both operations hand it a provider-neutral request (system instruction, one user-content string, JSON response format) and receive normalized text, which their own existing strict parsers consume. Failures cross as a bounded kind plus an HTTP status — never a `Response`, a provider header or a provider error body.
+- **The transport policy did not move and was not generalised.** The adapter calls `_shared/geminiTransport.ts`, whose temporary 90-second / zero-retry diagnostic policy is untouched and is explicitly *not* asserted to be correct for any future provider.
+- **All four selectable models remain Gemini**, served by the one existing `GEMINI_API_KEY`. No new secret, no migration, no catalog row and no Settings change was part of this work, and a future catalog row stays unusable until a real adapter is registered **and** given its own credential name.
+- **Repository-only, not deployed.** 001A is behaviour-preserving and has not been deployed: Production continues to run the pre-001A Edge artifacts until an authorized deploy of **both** generation functions (see [deployment.md](deployment.md) §7c for the bundle closure, which now includes the three new `_shared` modules).
 
 ### 4.10 Settings control — LIVE (AI-MODEL-SELECTION-001C)
 
