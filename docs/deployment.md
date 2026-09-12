@@ -288,13 +288,14 @@ The last row is the point of the three changes together: the destructive orderin
 > PENDING DEPLOY.** PR #275 merged as `9ca298ba14c32459200ea84db4fa16bd75e20057`
 > and the migration was applied **exactly once**, in a single successful
 > `supabase db push` that needed no retry. The ledger moved **80 → 81**, its
-> latest is now `20260910212202`, and ordinary `public` tables carrying a direct
+> latest became `20260910212202`, and ordinary `public` tables carrying a direct
 > `anon` grant moved **17 → 0**. A read-only postflight confirmed the full
 > contract below. **Nothing here is a pending step.** The procedure that follows
 > is retained as the record of how it was done and as generic
 > recovery/replay reference — not as something to execute again against this
 > project. Verify rather than trust this note: `supabase migration list --linked`
-> should show **81** rows with `20260910212202` latest.
+> should show `20260910212202` present exactly once. (The ledger has since moved
+> on: **82** rows, latest `20260912120000`, since 2026-09-12 — §6.6.)
 
 **What it changes.** Client-role object privileges only: `PUBLIC`, `anon` and
 `authenticated` on the 28 ordinary `public` tables and the one sequence, plus the
@@ -331,7 +332,7 @@ future ACL migration. **Against this project they are now satisfied** — the
 migration is applied, so a dry-run here proposes nothing:
 
 ```sh
-supabase migration list --linked          # then: this migration local-only. NOW: 81/81 aligned
+supabase migration list --linked          # then: this migration local-only. NOW: aligned (82/82 since 2026-09-12)
 supabase db push --dry-run                # then: EXACTLY this one migration. NOW: nothing to push
 ```
 
@@ -405,7 +406,12 @@ restore. The correct target is the intended matrix — if a real dependency surf
 that one table and amend the matrix, its test and this runbook together, rather
 than restoring the legacy blanket ACL.
 
-### 6.6 Migration-BEFORE-merge is required for `20260912120000` (model-aware reasoning policy) — NOT YET APPLIED
+### 6.6 Migration-BEFORE-merge is required for `20260912120000` (model-aware reasoning policy) — PHASE 1 COMPLETE: applied and verified 2026-09-12; application merge pending
+
+> **Status — Phase 1 COMPLETE; Phase 2 pending. Do not re-run the migration as a pending step.** `20260912120000` was applied to Production on 2026-09-12, exactly once, with `supabase db push --linked` from the approved PR head `8001fce8182859a7cfd1d597573112df502ef3fd`, and verified while the old frontend and the pre-001A Edge runtime stayed live. The ledger is aligned at **82** rows, latest `20260912120000`. Manual reasoning is still staged off, no provider secret was installed, and `analyze-paper` v26 / `suggest-paper-organization` v10 are unchanged. The procedure below is kept as the record of that rollout and as a reusable pattern.
+>
+> - **Completed:** independent approval of the implementation head; explicit authorization of the Production migration; its application; old-app verification (read-only — see the note after the procedure).
+> - **Pending, each separately authorized:** merge the exact approved 001C head (Phase 2), then 001D telemetry, paid-provider row staging, provider secrets, the Edge deployment of both generation functions, the controlled canary and user enablement (§6.6a).
 
 **The `AI-MULTI-PROVIDER-001C` pull request must not be merged until this migration has been separately authorized, applied to Production, and verified while the old application is still live** (decision C41). The merged frontend reads `ai_model_catalog.reasoning_levels`, `auto_analyze_reasoning_level`, `auto_suggest_reasoning_level` and `reasoning_selectable`, and the merged account export reads `user_ai_preferences.preferred_reasoning_level`. An ordinary merge redeploys the frontend on Vercel, so merging first would put code that names those columns in front of a database that has none of them.
 
@@ -422,8 +428,8 @@ than restoring the legacy blanket ACL.
 ```text
 1. independent review approves the exact 001C PR head
 2. obtain explicit owner authorization for the Production migration
-3. supabase migration list --linked              # ledger ends at 20260910212202
-   supabase db push --linked --dry-run           # lists ONLY 20260912120000
+3. supabase migration list --linked              # then: ledger ended at 20260910212202 (pre-application checkpoint; NOW 82 rows, latest 20260912120000)
+   supabase db push --linked --dry-run           # then: listed ONLY 20260912120000 (NOW: nothing to push)
 4. apply it while the OLD frontend and the OLD (pre-001A) Edge runtime are live:
    supabase db push --linked
 5. verify, read-only (see the checks below)
@@ -433,6 +439,8 @@ than restoring the legacy blanket ACL.
 8. only then merge that exact head; the automatic Vercel deploy then runs
    against the new schema
 ```
+
+**How steps 1–6 actually ran (2026-09-12).** Steps 1–5 ran as written, and every step-5 check below passed. Step 6 was performed **read-only**: the old frontend bundle kept serving unchanged, and its exact catalog and saved-preference reads succeeded as `authenticated`. Saving a model, Analyze, Suggest and the account export were **not** exercised, because that authorization permitted no preference write and no AI quota use. Steps 7–8 are the pending merge.
 
 Read-only post-apply checks (step 5):
 
@@ -447,11 +455,11 @@ Remember the Production legacy-ACL history (§6.5): assert grants on **exact pri
 
 **Rollback (reference only).** The migration writes no user data, so reverting it is a schema operation: drop the two new functions, restore the 001A `set_current_user_ai_model` signature, drop the five catalog constraints and four columns, and drop the preference column and its constraint. Do that only while no merged application depends on them. **Once the 001C head is merged, revert the application first.**
 
-#### 6.6a The full AI-MULTI-PROVIDER rollout order (reference — 001C executes none of it)
+#### 6.6a The full AI-MULTI-PROVIDER rollout order (reference — the 001C PR executes none of it; phase 1 complete 2026-09-12, phase 2 pending)
 
 ```text
-Phase 1  schema expansion             apply 20260912120000 (this section)
-Phase 2  application merge            merge the exact approved 001C head
+Phase 1  schema expansion             apply 20260912120000 (this section)   COMPLETE 2026-09-12
+Phase 2  application merge            merge the exact approved 001C head   NEXT (pending)
 Phase 3  telemetry foundation         AI-MULTI-PROVIDER-001D (usage/cost)
 Phase 4  stage paid-provider rows     separate migration: anthropic/claude-sonnet-5 and
                                       openai/gpt-5.6-terra with the C41 future values,
@@ -616,7 +624,7 @@ The three `_shared` modules were **not modified** by `001A`, so no other functio
 >
 > **`AI-MULTI-PROVIDER-001B` (C40) edits modules inside that closure, and it is also NOT deployed.** It changes `_shared/aiProvider.ts` (a required `jsonSchema` and one new failure kind, `incomplete_response`), both operations' `prompt.ts` (their output schemas), and `suggest-paper-organization/handler.ts` and `analyze-paper/index.ts` (an explicit branch for the new failure kind, which Google cannot produce). A future authorized deploy must therefore still cover **both** generation functions together. The two new adapter modules, `_shared/anthropicAiProvider.ts` and `_shared/openAiProvider.ts`, are **in neither closure**: no shipping function imports them, so deploying either function would not ship them. The Gemini request bytes are unchanged, and no new secret is required.
 >
-> **`AI-MULTI-PROVIDER-001C` (C41) changes the closure again, and it is NOT deployed.** Registering Anthropic and OpenAI means `_shared/aiProviderRegistry.ts` now **imports** `_shared/anthropicAiProvider.ts` and `_shared/openAiProvider.ts`, so all three adapters are now in the closure of **both** generation functions. So are two new shared modules: `_shared/aiReasoningPolicy.ts`, the per-model, per-operation reasoning policy, and `_shared/aiProviderCredentials.ts`, the provider→credential-name mapping. The deploy therefore still has to cover `analyze-paper` **and** `suggest-paper-organization` together, and it must come **after** migration `20260912120000` is live (§6.6a, phases 1 and 6). The Google request gains exactly one field, `generationConfig.thinkingConfig.thinkingLevel`. The fail-open `provider_default` path reproduces the pre-001C bytes exactly (golden SHA-256 `3285186f…`). With no non-Google catalog row, no new secret is required to deploy it.
+> **`AI-MULTI-PROVIDER-001C` (C41) changes the closure again, and it is NOT deployed.** Registering Anthropic and OpenAI means `_shared/aiProviderRegistry.ts` now **imports** `_shared/anthropicAiProvider.ts` and `_shared/openAiProvider.ts`, so all three adapters are now in the closure of **both** generation functions. So are two new shared modules: `_shared/aiReasoningPolicy.ts`, the per-model, per-operation reasoning policy, and `_shared/aiProviderCredentials.ts`, the provider→credential-name mapping. The deploy therefore still has to cover `analyze-paper` **and** `suggest-paper-organization` together, and it must come **after** migration `20260912120000` is live (§6.6a, phases 1 and 6; phase 1 completed 2026-09-12). The Google request gains exactly one field, `generationConfig.thinkingConfig.thinkingLevel`. The fail-open `provider_default` path reproduces the pre-001C bytes exactly (golden SHA-256 `3285186f…`). With no non-Google catalog row, no new secret is required to deploy it.
 
 **Required ordering for every FUTURE change — the endpoint must not lag the UI that calls it.** The initial deployment is done; this rule is durable and governs any later PR that changes this function, or any shared module inside its bundle, in a way that alters the request/response contract. Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge, so a frontend expecting a contract the deployed function does not serve yet would fail every request.
 
