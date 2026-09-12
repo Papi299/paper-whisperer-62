@@ -77,7 +77,7 @@ CREATE FUNCTION pg_temp.pair(p_uid uuid) RETURNS text LANGUAGE sql STABLE AS $hl
     'NO_ROW');
 $hlp$;
 
-SELECT plan(93);
+SELECT plan(95);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. Catalog reasoning metadata — shape
@@ -380,6 +380,19 @@ SELECT ok(NOT EXISTS (
      WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure
        AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
   'set_current_user_ai_reasoning carries no PUBLIC EXECUTE');
+-- Allowlists, judging EVERY grantee: the per-role checks above are a deny-list
+-- and would pass a function some other role could still execute.
+SELECT is(
+  (SELECT count(*)::int FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure
+      AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner),
+  0, 'STAGED: no role but its owner can execute set_current_user_ai_reasoning (every grantee judged)');
+SELECT is(
+  (SELECT count(*)::int FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = 'public.clear_current_user_ai_reasoning()'::regprocedure
+      AND a.privilege_type = 'EXECUTE'
+      AND a.grantee NOT IN (p.proowner, to_regrole('authenticated')::oid)),
+  0, 'clear_current_user_ai_reasoning is executable by its owner and authenticated only');
 SELECT set_eq(
   $$SELECT unnest(p.proargnames) FROM pg_proc p
      WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure$$,

@@ -1037,6 +1037,31 @@ BEGIN
     RAISE EXCEPTION 'ai_reasoning_001c: authenticated can execute set_current_user_ai_reasoning; 001C must leave it UNGRANTED';
   END IF;
 
+  -- ── Exact grantee ALLOWLISTS — every grantee judged, not just the named ones ──
+  -- The per-role checks above are a deny-list: they would pass a function that
+  -- some OTHER role could still execute — through a default-privilege entry
+  -- nobody expected, say. So the ACLs are also judged as allowlists: the staged
+  -- setter may name its owner and nobody else, and the two granted RPCs their
+  -- owner and `authenticated` and nobody else. PUBLIC appears as grantee 0 and
+  -- fails both tests, so it needs no separate clause here.
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure
+      AND a.privilege_type = 'EXECUTE'
+      AND a.grantee <> p.proowner
+  ) THEN
+    RAISE EXCEPTION 'ai_reasoning_001c: set_current_user_ai_reasoning is executable by a role other than its owner; 001C must leave it UNGRANTED';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid IN ('public.set_current_user_ai_model(text)'::regprocedure,
+                    'public.clear_current_user_ai_reasoning()'::regprocedure)
+      AND a.privilege_type = 'EXECUTE'
+      AND a.grantee NOT IN (p.proowner, 'authenticated'::regrole::oid)
+  ) THEN
+    RAISE EXCEPTION 'ai_reasoning_001c: a granted reasoning RPC is executable by a role other than its owner and authenticated';
+  END IF;
+
   -- ── The table posture is exactly as 001A left it ─────────────────────────
   IF has_table_privilege('anon', 'public.ai_model_catalog',
                          'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
