@@ -537,8 +537,9 @@ export async function handleSuggestOrganizationRequest(
     return new Response(JSON.stringify(suggestions), { status: 200, headers: jsonHeaders });
   } catch (error) {
     // The message originates in this function's own code paths; provider bodies
-    // and URLs are handled and discarded inside `callProvider` and never reach
-    // here.
+    // and URLs stay inside the provider adapter (`_shared/googleAiProvider.ts`),
+    // which returns only generated text or a bounded failure kind, and never
+    // reach here.
     logger.error(
       `suggest-organization error: ${error instanceof Error ? error.message : "Unknown error"}`,
     );

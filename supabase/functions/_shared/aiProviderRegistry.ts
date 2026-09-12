@@ -6,8 +6,10 @@
 // ## This is NOT a second model allowlist
 //
 // The database stays the authority on MODELS. `public.ai_model_catalog` decides
-// which models a user may be routed to, and adding one remains a reviewed
-// migration with no code change (C33/C35). This registry decides which provider
+// which models a user may be routed to, and adding one for a provider that is
+// already registered here remains a reviewed migration with no code change
+// (C33/C35); a model from a NEW provider first needs a reviewed adapter here and
+// that provider's own credential (C39). This registry decides which provider
 // PROTOCOLS the server can speak at all — a different question with a different
 // answer and a different review. A catalog row naming a provider that has no
 // entry here is not called; it falls back to the system default with
@@ -45,13 +47,34 @@ import type { AiProviderAdapter, AiProviderModel } from "./aiProvider.ts";
  * explicit act of registering a provider protocol, and `AI_PROVIDER_ADAPTERS`
  * below will not type-check until a real adapter is supplied for the new
  * member.
+ *
+ * Declared from the adapter's own provider constant rather than derived from
+ * the registry object, because the registry's type below is written in terms of
+ * it. The two still cannot disagree: a missing, extra or mismatched registry
+ * entry is a compile error.
  */
 export type RegisteredAiProvider = typeof GOOGLE_AI_PROVIDER;
 
-const AI_PROVIDER_ADAPTERS: Readonly<Record<RegisteredAiProvider, AiProviderAdapter>> =
-  Object.freeze({
-    [GOOGLE_AI_PROVIDER]: GOOGLE_AI_PROVIDER_ADAPTER,
-  });
+/**
+ * Each registered provider id, mapped to the adapter FOR THAT provider.
+ *
+ * This mapped type is the key/adapter invariant stated as a type: the entry
+ * under `google` must be an `AiProviderAdapter<"google">`, so registering one
+ * provider's adapter under another's id does not compile. It is also what lets
+ * `getAiProviderAdapter` hand back an adapter typed for exactly the provider it
+ * was asked for, with no cast.
+ */
+type AiProviderAdapterRegistry = {
+  readonly [Provider in RegisteredAiProvider]: AiProviderAdapter<Provider>;
+};
+
+// The explicit type argument is deliberate: it checks the object literal itself
+// against the mapped type, so an extra entry is rejected as an excess property.
+// An annotation on the const alone would only check the frozen result, and an
+// extra key would pass unnoticed.
+const AI_PROVIDER_ADAPTERS = Object.freeze<AiProviderAdapterRegistry>({
+  [GOOGLE_AI_PROVIDER]: GOOGLE_AI_PROVIDER_ADAPTER,
+});
 
 /**
  * Is this provider id one PaperLume has an adapter for?
@@ -69,7 +92,7 @@ export function isRegisteredAiProvider(provider: unknown): provider is Registere
 }
 
 /**
- * The adapter for a registered provider.
+ * The adapter for a registered provider, typed for exactly that provider.
  *
  * Total by construction: the parameter type admits only providers that have an
  * entry, so there is no lookup-failure branch for a caller to mishandle after
@@ -77,8 +100,14 @@ export function isRegisteredAiProvider(provider: unknown): provider is Registere
  * unregistered provider is a compile error, and the only runtime path to a
  * provider id — `resolveEffectiveAiModel` — narrows through
  * `isRegisteredAiProvider` first.
+ *
+ * Generic so that provider identity survives the lookup:
+ * `getAiProviderAdapter("google")` is an `AiProviderAdapter<"google">`, whose
+ * `generate` accepts Google models only.
  */
-export function getAiProviderAdapter(provider: RegisteredAiProvider): AiProviderAdapter {
+export function getAiProviderAdapter<Provider extends RegisteredAiProvider>(
+  provider: Provider,
+): AiProviderAdapter<Provider> {
   return AI_PROVIDER_ADAPTERS[provider];
 }
 

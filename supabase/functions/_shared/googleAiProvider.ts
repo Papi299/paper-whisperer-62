@@ -50,6 +50,13 @@ import type {
 /** The provider id used by `ai_model_catalog.provider` and by the registry. */
 export const GOOGLE_AI_PROVIDER = "google";
 
+/**
+ * A model this adapter can serve: provider `google`, nothing wider. The
+ * Google-only helpers below take this rather than a bare `AiProviderModel`, so
+ * a model resolved for any other provider cannot reach a Gemini URL.
+ */
+export type GoogleAiProviderModel = AiProviderModel<typeof GOOGLE_AI_PROVIDER>;
+
 /** The one Gemini endpoint this repository calls. */
 const GEMINI_GENERATE_CONTENT_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -66,13 +73,14 @@ const GEMINI_RESPONSE_MIME_TYPE: Record<AiGenerationRequest["responseFormat"], s
 /**
  * Build the Gemini `generateContent` URL for a resolved model.
  *
- * Takes the resolved model object rather than a bare string: the only way to
- * obtain one is `resolveEffectiveAiModel` (or the trusted system default it
- * falls back to), and neither reads request input at all — so "send this user's
- * request to an arbitrary model" stays unexpressible. The model component is
- * the ONLY part of the provider call that per-user selection changes.
+ * Takes the resolved Google model object rather than a bare string: the only
+ * way to obtain one is `resolveEffectiveAiModel` (or the trusted system default
+ * it falls back to), and neither reads request input at all — so "send this
+ * user's request to an arbitrary model" stays unexpressible, and a model
+ * resolved for another provider does not type-check here. The model component
+ * is the ONLY part of the provider call that per-user selection changes.
  */
-export function buildGeminiGenerateContentUrl(model: AiProviderModel): string {
+export function buildGeminiGenerateContentUrl(model: GoogleAiProviderModel): string {
   return `${GEMINI_GENERATE_CONTENT_BASE}/${model.providerModel}:generateContent`;
 }
 
@@ -157,7 +165,7 @@ export function extractGeminiText(payload: unknown): string | null {
  * reaches its own refund path.
  */
 async function generate(
-  model: AiProviderModel,
+  model: GoogleAiProviderModel,
   request: AiGenerationRequest,
   deps: AiProviderCallDeps,
 ): Promise<AiProviderResult> {

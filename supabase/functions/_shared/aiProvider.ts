@@ -48,9 +48,11 @@
  *
  * `providerModel` is what goes on the wire; it originates only in trusted
  * server configuration or in the server-controlled `ai_model_catalog`, never in
- * anything a client sent. The type parameter lets the model-selection layer
- * narrow `provider` to the set of providers that actually have an adapter (see
- * `aiProviderRegistry.ts`), while an adapter itself takes the widest form.
+ * anything a client sent. The type parameter is what binds a model to a
+ * provider: the model-selection layer narrows `provider` to the set of
+ * providers that actually have an adapter (see `aiProviderRegistry.ts`), and an
+ * `AiProviderAdapter<P>` accepts only an `AiProviderModel<P>` — its own
+ * provider's models, never another's.
  *
  * Deliberately carries no database id, no display name, no credential and no
  * per-user anything: a routing log line built from this object cannot become a
@@ -162,22 +164,36 @@ export interface AiProviderCallDeps {
 }
 
 /**
- * One reviewed provider protocol implementation.
+ * One reviewed provider protocol implementation, bound to its own provider.
  *
  * `provider` is the id the `ai_model_catalog.provider` column uses, and it is
  * what the registry keys on — so "does PaperLume have an adapter for this
  * catalog row?" is answered by the existence of an object satisfying this
  * interface, not by a second list of model strings.
  *
+ * `generate` accepts only models of THIS adapter's provider: handing the Google
+ * adapter an `AiProviderModel<"openai">` is a compile error, not a Gemini
+ * request carrying another provider's model name. Two details make that hold,
+ * and both are deliberate:
+ *
+ *   * `Provider` has no default. No provider-agnostic adapter exists, so no
+ *     type should describe one.
+ *   * `generate` is a function-typed PROPERTY, not a method. TypeScript checks
+ *     method parameters bivariantly even under `strictFunctionTypes`, which
+ *     would let an `AiProviderAdapter<"google">` be widened to
+ *     `AiProviderAdapter<string>` and then called with any provider's model. A
+ *     property's parameters are checked contravariantly, so that widening is
+ *     refused.
+ *
  * `generate` must not throw: every provider-side outcome is a value above, so a
  * transport problem can never become an unhandled rejection in an operation
  * that has already consumed a quota unit.
  */
-export interface AiProviderAdapter<Provider extends string = string> {
+export interface AiProviderAdapter<Provider extends string> {
   readonly provider: Provider;
-  generate(
-    model: AiProviderModel,
+  readonly generate: (
+    model: AiProviderModel<Provider>,
     request: AiGenerationRequest,
     deps: AiProviderCallDeps,
-  ): Promise<AiProviderResult>;
+  ) => Promise<AiProviderResult>;
 }

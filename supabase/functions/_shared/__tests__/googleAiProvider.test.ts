@@ -23,6 +23,7 @@ import {
   extractGeminiText,
   GOOGLE_AI_PROVIDER,
   GOOGLE_AI_PROVIDER_ADAPTER,
+  type GoogleAiProviderModel,
 } from "../googleAiProvider.ts";
 import {
   GEMINI_PROVIDER_MAX_RETRIES,
@@ -35,7 +36,11 @@ import type { AiGenerationRequest, AiProviderCallDeps } from "../aiProvider.ts";
 const API_KEY = "SENTINEL-GEMINI-API-KEY";
 const SYSTEM_INSTRUCTION = "SENTINEL-SYSTEM-INSTRUCTION: you are a test.";
 const USER_CONTENT = "SENTINEL-USER-CONTENT: a paper title and abstract.";
-const MODEL = { provider: GOOGLE_AI_PROVIDER, providerModel: "gemini-3.5-flash" };
+// Typed as a Google model: the adapter accepts nothing wider (C39).
+const MODEL: GoogleAiProviderModel = {
+  provider: GOOGLE_AI_PROVIDER,
+  providerModel: "gemini-3.5-flash",
+};
 
 const REQUEST: AiGenerationRequest = {
   systemInstruction: SYSTEM_INSTRUCTION,
