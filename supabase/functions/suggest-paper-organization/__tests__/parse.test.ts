@@ -12,7 +12,7 @@ import {
   MAX_REASON_LENGTH,
   type TaxonomyRefMap,
 } from "../contract.ts";
-import { extractProviderText, parseSuggestionsResponse } from "../parse.ts";
+import { parseSuggestionsResponse } from "../parse.ts";
 
 /**
  * AI-PROJECT-TAG-SUGGESTIONS-001A — strict provider-response parsing.
@@ -54,28 +54,13 @@ function expectUnusable(result: ReturnType<typeof parse>, detail?: string) {
   if (detail) expect(result.detail).toBe(detail);
 }
 
-// ── extractProviderText ───────────────────────────────────────────────────
-
-describe("extractProviderText", () => {
-  it("returns the model text from a well-formed envelope", () => {
-    expect(
-      extractProviderText({ candidates: [{ content: { parts: [{ text: "{}" }] } }] }),
-    ).toBe("{}");
-  });
-
-  it.each([
-    ["a non-object payload", "nope"],
-    ["a missing candidate list", {}],
-    ["an empty candidate list", { candidates: [] }],
-    ["a candidate with no content", { candidates: [{}] }],
-    ["a candidate with no parts", { candidates: [{ content: {} }] }],
-    ["an empty parts array", { candidates: [{ content: { parts: [] } }] }],
-    ["a non-string text", { candidates: [{ content: { parts: [{ text: 5 }] } }] }],
-    ["whitespace-only text", { candidates: [{ content: { parts: [{ text: "   " }] } }] }],
-  ])("returns null for %s", (_label, payload) => {
-    expect(extractProviderText(payload)).toBeNull();
-  });
-});
+// `extractProviderText` moved to the Google adapter in AI-MULTI-PROVIDER-001A:
+// reading `candidates[0].content.parts[0].text` is Gemini protocol, not
+// PaperLume semantics. Its cases — a blocked candidate, an empty candidate
+// list, a malformed envelope, a non-string text — are covered in
+// `_shared/__tests__/googleAiProvider.test.ts`, which asserts them through the
+// real adapter. The one judgement that stayed on this side, that whitespace-only
+// text is an empty (refundable) answer, is covered in `handler.test.ts`.
 
 // ── Valid responses ───────────────────────────────────────────────────────
 

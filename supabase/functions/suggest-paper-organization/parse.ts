@@ -145,26 +145,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Pull the model's text out of a Gemini `generateContent` payload. Returns
- * `null` for any shape that carries no text — a blocked candidate, an empty
- * candidate list, a malformed envelope — which the caller treats as an empty
- * (refundable) response.
- */
-export function extractProviderText(payload: unknown): string | null {
-  if (!isPlainObject(payload)) return null;
-  const candidates = payload.candidates;
-  if (!Array.isArray(candidates) || candidates.length === 0) return null;
-  const first = candidates[0];
-  if (!isPlainObject(first)) return null;
-  const content = first.content;
-  if (!isPlainObject(content)) return null;
-  const parts = content.parts;
-  if (!Array.isArray(parts) || parts.length === 0) return null;
-  const text = isPlainObject(parts[0]) ? parts[0].text : null;
-  if (typeof text !== "string" || text.trim() === "") return null;
-  return text;
-}
+// `extractProviderText` used to live here: it read the model's text out of a
+// Gemini `candidates[0].content.parts[0].text` envelope. That is provider
+// protocol, not PaperLume semantics, so AI-MULTI-PROVIDER-001A (C39) moved it
+// into the Google adapter (`_shared/googleAiProvider.ts`), which hands this
+// module the generated text and nothing provider-shaped. The one judgement that
+// stayed on this side is whether a blank answer is usable — the handler treats
+// whitespace-only text as an empty (refundable) response, exactly as before.
 
 /** Strip markdown fencing and isolate the outermost JSON object, as `analyze-paper` does. */
 function isolateJsonObject(rawText: string): string | null {

@@ -3,18 +3,20 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import {
-  buildGeminiGenerateContentUrl,
   formatModelRoutingLog,
   resolveEffectiveAiModel,
   type AiModelSelectionClient,
 } from "../_shared/aiModelSelection.ts";
-import { resolveGeminiModel } from "../_shared/geminiModel.ts";
-import { callGeminiWithRetry } from "../_shared/geminiTransport.ts";
+import {
+  getAiProviderAdapter,
+  resolveSystemDefaultAiModel,
+} from "../_shared/aiProviderRegistry.ts";
 import {
   classifyProviderError,
   NEUTRAL_ANALYSIS_UNAVAILABLE_MESSAGE,
   type ProviderErrorClass,
 } from "../_shared/providerError.ts";
+import { buildAnalyzeGenerationRequest } from "./prompt.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -133,11 +135,11 @@ Deno.serve(async (req) => {
     // either, because every failure mode falls back to the system default
     // rather than failing the request. This spends no quota and makes no
     // provider call.
-    const systemDefaultModel = resolveGeminiModel(Deno.env.get("GEMINI_MODEL"));
+    const systemDefault = resolveSystemDefaultAiModel(Deno.env.get("GEMINI_MODEL"));
     const modelSelection = await resolveEffectiveAiModel({
       client: supabase as unknown as AiModelSelectionClient,
       userId: user.id,
-      systemDefaultModel,
+      systemDefault,
       label: "analyze-paper",
       logger: console,
     });
@@ -209,47 +211,28 @@ Deno.serve(async (req) => {
     }
     console.log("4a. Gemini key present");
 
-    // The ONLY provider delta from per-user model selection: the model
-    // component of this URL. The request body, the auth mechanism
-    // (x-goog-api-key with the one shared GEMINI_API_KEY), the parsing and the
-    // quota semantics below are identical whether this is the system default or
-    // an honoured preference. `providerModel` is either the resolved
+    // The adapter for the provider this request resolved to. Total by
+    // construction: `resolveEffectiveAiModel` can only return a provider the
+    // runtime registry has a reviewed adapter for (AI-MULTI-PROVIDER-001A,
+    // C39), so there is no lookup-failure branch here to mishandle after the
+    // quota unit above has already been consumed.
+    //
+    // The ONLY provider delta from per-user model selection remains the model:
+    // the request content, the credential, the transport policy, the parsing
+    // and the quota semantics below are identical whether this is the system
+    // default or an honoured preference. `providerModel` is either the resolved
     // GEMINI_MODEL value or a catalog-supplied string — never anything the
     // client sent.
-    const geminiUrl = buildGeminiGenerateContentUrl(modelSelection);
+    const providerAdapter = getAiProviderAdapter(modelSelection.provider);
     // One bounded routing line: operation, source, provider, public model name.
     // No user id, no email, no token, no key, no title/abstract.
     console.log(formatModelRoutingLog("analyze-paper", modelSelection));
     console.log("5. Calling Gemini API");
 
-    const geminiBody = {
-      system_instruction: {
-        parts: [{
-          text: `You are an expert academic data extractor. Analyze the provided title and abstract.
-CRITICAL RULES:
-1. NO GUESSING. Only extract explicit information.
-2. ENGLISH ONLY.
-3. Return ONLY a valid JSON object with exactly these three keys:
-   - tldr: A concise narrative summary of the objective, the main comparison (e.g., Intervention A vs. Intervention B), and the core conclusion (~30-45 words). NARRATIVE RULE: Do not just list numbers. You MUST capture the physiological or clinical meaning of the findings (e.g., 'sustained for 5 hours', 'transient effect', 'greater amplitude than control'). RESULTS RULE: Include key numerical effect sizes to support the narrative, but STRICTLY EXCLUDE all statistical noise (95% CIs, SDs, exact p-values).
-   - studyType: The specific study design. TITLE OVERRIDE RULE: If the study design is explicitly stated in the paper's TITLE, you MUST use that exact design. Expand acronyms. Output 'Not specified' if unknown.
-   - statisticalMethods: A comma-separated list of analytical tests AND methodological features. VOCABULARY MATCHING RULE: You MUST explicitly check for and include any of the following terms if they are mentioned or implied:
-     * Blinding: 'double-blind', 'single-blind', 'triple-blind', 'blinded', 'blinding', 'masked', 'masking'
-     * Crossover: 'crossover', 'cross-over', 'crossover study', 'crossover trial'
-     * Placebo: 'placebo', 'placebo-controlled'
-     * Additional: 'multicenter', 'open-label'
-     * Assessment/Guidelines: 'grade', 'prisma', 'cochrane', 'robins-i', 'amstar', 'moose', 'quadas', 'consort', 'strobe', 'prospero'
-     Also include standard tests (ANOVA, Odds Ratio, etc.). Output 'Not specified' if none are found.`,
-        }],
-      },
-      contents: [{
-        parts: [{
-          text: `Title: ${title || "Unknown"}\n\nAbstract: ${abstract}`,
-        }],
-      }],
-      generationConfig: {
-        responseMimeType: "application/json",
-      },
-    };
+    // Provider-neutral: two prompt strings and a response format. How that
+    // becomes a Gemini URL, envelope and `x-goog-api-key` header is the Google
+    // adapter's business, and this function no longer knows any of it.
+    const generationRequest = buildAnalyzeGenerationRequest(title, abstract);
 
     // Gemini-call-and-parse block. Any failure triggers a best-effort refund of
     // the quota unit consumed above, then returns a NEUTRAL 500 carrying a
@@ -261,23 +244,20 @@ CRITICAL RULES:
     let classified = false;
     try {
       // AI-PROVIDER-RESILIENCE-001A: the timeout/retry policy lives in
-      // _shared/geminiTransport.ts, shared with suggest-paper-organization so
-      // the two Gemini callers cannot drift. TEMPORARY, per
-      // AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A: 90 s per attempt and ZERO
-      // retries, so every outcome — including a 429/5xx — resolves after a
-      // single attempt and no backoff is slept. (The established policy this
-      // will be restored to is 30 s with two bounded 2 s / 4 s retries; see the
-      // transport header.) A timeout is TERMINAL under either policy and is
-      // never automatically re-sent. This function pins none of it: it takes
-      // whatever the shared constants are.
-      const providerCall = await callGeminiWithRetry(
-        geminiUrl,
+      // _shared/geminiTransport.ts, which the Google adapter calls, shared with
+      // suggest-paper-organization so the two Gemini callers cannot drift.
+      // TEMPORARY, per AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A: 90 s per attempt
+      // and ZERO retries, so every outcome — including a 429/5xx — resolves
+      // after a single attempt and no backoff is slept. (The established policy
+      // this will be restored to is 30 s with two bounded 2 s / 4 s retries;
+      // see the transport header.) A timeout is TERMINAL under either policy
+      // and is never automatically re-sent. This function pins none of it, and
+      // neither does the adapter: both take whatever the shared constants are.
+      const providerCall = await providerAdapter.generate(
+        modelSelection,
+        generationRequest,
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey },
-          body: JSON.stringify(geminiBody),
-        },
-        {
+          apiKey: geminiKey,
           label: "analyze-paper",
           fetchImpl: (url, init) => fetch(url, init),
           sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -299,22 +279,37 @@ CRITICAL RULES:
           classified = true;
           throw new Error("gemini_http_" + providerCall.status);
         }
-        console.log("5b. Gemini transport failure:", providerCall.kind);
-        providerErrorClass = classifyProviderError({ kind: providerCall.kind });
-        classified = true;
-        throw new Error("gemini_" + providerCall.kind);
-      }
-
-      const geminiData = await providerCall.response.json();
-      console.log("6. Parsing Gemini response");
-
-      const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) {
+        if (providerCall.kind === "network" || providerCall.kind === "timeout") {
+          console.log("5b. Gemini transport failure:", providerCall.kind);
+          providerErrorClass = classifyProviderError({ kind: providerCall.kind });
+          classified = true;
+          throw new Error("gemini_" + providerCall.kind);
+        }
+        if (providerCall.kind === "unreadable_response") {
+          // A 2xx whose body the adapter could not read as a provider response.
+          // Classified `provider_unavailable`, which is what this function has
+          // always done with it: the body read used to happen here and its
+          // failure fell through to the catch-all below.
+          // suggest-paper-organization classifies the same case as
+          // malformed_response; aligning the two is a behaviour change
+          // AI-MULTI-PROVIDER-001A deliberately does not make.
+          providerErrorClass = classifyProviderError({ kind: "network" });
+          classified = true;
+          throw new Error("gemini_unreadable_response");
+        }
+        // A well-formed envelope carrying no generated text.
+        console.log("6. Parsing Gemini response");
         console.log("6a. Empty Gemini response (no candidates/text)");
         providerErrorClass = classifyProviderError({ kind: "empty" });
         classified = true;
         throw new Error("gemini_empty");
       }
+
+      console.log("6. Parsing Gemini response");
+
+      // Normalized by the adapter to the generated text this function's own
+      // parser has always received — never a provider envelope.
+      const rawText = providerCall.text;
       console.log("6b. Gemini response received");
 
       let cleanText = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();

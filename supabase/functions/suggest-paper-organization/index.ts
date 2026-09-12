@@ -41,7 +41,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
-import { resolveGeminiModel } from "../_shared/geminiModel.ts";
+import { resolveSystemDefaultAiModel } from "../_shared/aiProviderRegistry.ts";
 import { handleSuggestOrganizationRequest, type CallerClient } from "./handler.ts";
 
 Deno.serve((req) =>
@@ -64,12 +64,14 @@ Deno.serve((req) =>
     // Read at request time, not module load, so a missing secret surfaces as a
     // 500 response rather than a worker that cannot boot.
     getGeminiApiKey: () => Deno.env.get("GEMINI_API_KEY") ?? null,
-    // Paperlume's SYSTEM DEFAULT, through the shared resolver, so this function
-    // and analyze-paper can never disagree about the default. It is the
-    // starting point and the safe fallback — the handler re-checks the caller's
-    // entitlement and may route the request to their saved preference instead
-    // (AI-MODEL-SELECTION-001B). That per-user decision deliberately lives in
-    // the handler, not in this untested Deno glue.
-    getGeminiModel: () => resolveGeminiModel(Deno.env.get("GEMINI_MODEL")),
+    // Paperlume's SYSTEM DEFAULT, as provider + model metadata, through the one
+    // shared resolver, so this function and analyze-paper can never disagree
+    // about the default. It is the starting point and the safe fallback — the
+    // handler re-checks the caller's entitlement and may route the request to
+    // their saved preference instead (AI-MODEL-SELECTION-001B). That per-user
+    // decision deliberately lives in the handler, not in this untested Deno
+    // glue, and so does the choice of provider adapter
+    // (AI-MULTI-PROVIDER-001A).
+    getSystemDefaultModel: () => resolveSystemDefaultAiModel(Deno.env.get("GEMINI_MODEL")),
   }),
 );

@@ -36,18 +36,39 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  buildGeminiGenerateContentUrl,
   resolveEffectiveAiModel,
   type AiModelSelectionClient,
 } from "../../_shared/aiModelSelection.ts";
+import {
+  getAiProviderAdapter,
+  resolveSystemDefaultAiModel,
+} from "../../_shared/aiProviderRegistry.ts";
+import {
+  buildGeminiGenerateContentUrl,
+  GOOGLE_AI_PROVIDER_ADAPTER,
+} from "../../_shared/googleAiProvider.ts";
 import { resolveGeminiModel } from "../../_shared/geminiModel.ts";
 import {
   GEMINI_PROVIDER_MAX_RETRIES,
   GEMINI_PROVIDER_TIMEOUT_MS,
 } from "../../_shared/geminiTransport.ts";
+import { buildAnalyzeGenerationRequest } from "../prompt.ts";
 
 const INDEX_PATH = fileURLToPath(new URL("../index.ts", import.meta.url));
 const SOURCE = readFileSync(INDEX_PATH, "utf8");
+
+/**
+ * The shipped source with its comments removed.
+ *
+ * "This function no longer knows X" is a claim about code. A comment saying the
+ * Google adapter owns the `x-goog-api-key` header, or a preserved log string
+ * reading "no candidates/text", must not read as evidence that this file still
+ * speaks the protocol.
+ */
+const CODE = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "")
+  .split("\n")
+  .filter((line) => !line.trim().startsWith("//"))
+  .join("\n");
 
 // The model Production currently configures, resolved exactly as the function
 // resolves it. Written as a variable rather than a literal so this suite makes
@@ -131,16 +152,26 @@ function makeClient(scenario: Scenario, recorded: Recorded): AiModelSelectionCli
   };
 }
 
-/** Run the exact decision analyze-paper runs, and return the URL it would POST to. */
-async function routeToUrl(scenario: Scenario): Promise<{ url: string; recorded: Recorded }> {
+/**
+ * Run the exact decision analyze-paper runs, then resolve the adapter exactly
+ * as analyze-paper resolves it, and return the URL that adapter would POST to.
+ *
+ * Since AI-MULTI-PROVIDER-001A the URL is the Google adapter's to build, so
+ * this composition — resolver → registry → adapter → URL — is the real shipped
+ * path rather than a re-implementation of it.
+ */
+async function routeToUrl(
+  scenario: Scenario,
+): Promise<{ url: string; provider: string; recorded: Recorded }> {
   const recorded: Recorded = { rpcCalls: [], tables: [] };
   const selection = await resolveEffectiveAiModel({
     client: makeClient(scenario, recorded),
     userId: USER_ID,
-    systemDefaultModel: PRODUCTION_DEFAULT,
+    systemDefault: resolveSystemDefaultAiModel(PRODUCTION_DEFAULT),
     label: "analyze-paper",
   });
-  return { url: buildGeminiGenerateContentUrl(selection), recorded };
+  const adapter = getAiProviderAdapter(selection.provider);
+  return { url: buildGeminiGenerateContentUrl(selection), provider: adapter.provider, recorded };
 }
 
 const urlFor = (model: string) =>
@@ -269,8 +300,10 @@ describe("analyze-paper is wired to the shared selection module", () => {
   });
 
   it("keeps the system default as the resolver's fallback input", () => {
-    expect(SOURCE).toContain('resolveGeminiModel(Deno.env.get("GEMINI_MODEL"))');
-    expect(SOURCE).toContain("systemDefaultModel,");
+    // Provider + model metadata since AI-MULTI-PROVIDER-001A, still resolved
+    // from the one trusted GEMINI_MODEL environment value.
+    expect(SOURCE).toContain('resolveSystemDefaultAiModel(Deno.env.get("GEMINI_MODEL"))');
+    expect(SOURCE).toContain("systemDefault,");
   });
 
   it("passes the authoritative getUser() identity, never a body field", () => {
@@ -299,16 +332,40 @@ describe("analyze-paper is wired to the shared selection module", () => {
     expect(selection).toBeLessThan(quota);
   });
 
-  it("builds the URL through the one shared builder and nowhere else", () => {
-    expect(SOURCE).toContain("buildGeminiGenerateContentUrl(modelSelection)");
-    // No hand-assembled provider URL anywhere in the file.
-    expect(SOURCE).not.toContain("generativelanguage.googleapis.com");
+  it("reaches the provider only through the registered adapter", () => {
+    // AI-MULTI-PROVIDER-001A: the selection names a provider, the registry
+    // hands back that provider's adapter, and the adapter is the only way out.
+    expect(SOURCE).toContain('from "../_shared/aiProviderRegistry.ts"');
+    expect(SOURCE).toContain("getAiProviderAdapter(modelSelection.provider)");
+    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
+    // The lookup is total by construction, so there is no adapter-missing
+    // branch here that could turn routing metadata into a user-visible error.
+    expect(SOURCE).not.toMatch(/providerAdapter\s*===?\s*(null|undefined)/);
+    expect(SOURCE).not.toMatch(/if\s*\(\s*!\s*providerAdapter/);
   });
 
-  it("uses the selection for exactly two things: the URL and one log line", () => {
+  it("knows no Gemini URL, envelope, credential header or response envelope", () => {
+    // The four things AI-MULTI-PROVIDER-001A requires this function to stop
+    // knowing. Asserted against CODE: prose describing what the adapter owns,
+    // and the preserved "no candidates/text" log string, are not knowledge of
+    // the protocol.
+    expect(CODE).not.toContain("generativelanguage.googleapis.com");
+    expect(CODE).not.toContain("system_instruction");
+    expect(CODE).not.toContain("generationConfig");
+    expect(CODE).not.toContain("responseMimeType");
+    expect(CODE).not.toContain("x-goog-api-key");
+    expect(CODE).not.toContain(".candidates");
+    expect(CODE).not.toContain("content.parts");
+    expect(CODE).not.toContain("buildGeminiGenerateContentUrl");
+    // And it no longer calls the Gemini transport directly — the adapter does.
+    expect(CODE).not.toContain("callGeminiWithRetry");
+    expect(CODE).not.toContain('from "../_shared/geminiTransport.ts"');
+  });
+
+  it("uses the selection for exactly four things, all of them local", () => {
     const uses = SOURCE.match(/\bmodelSelection\b/g) ?? [];
-    // Declaration, URL, routing log — and nothing else.
-    expect(uses.length).toBe(3);
+    // Declaration, adapter lookup, routing log, and the generate() argument.
+    expect(uses.length).toBe(4);
     expect(SOURCE).toContain('formatModelRoutingLog("analyze-paper", modelSelection)');
   });
 });
@@ -351,39 +408,41 @@ describe("no model can enter from the request", () => {
 // ── 4. Everything else about the provider call is unchanged ───────────────
 
 describe("model selection changes the model and nothing else", () => {
-  it("leaves the request body independent of the model", () => {
-    // The body literal is built from `title` and `abstract` only. If it ever
-    // referenced the selection, a preference could change the prompt, not just
-    // the endpoint.
-    const start = SOURCE.indexOf("const geminiBody = {");
-    const end = SOURCE.indexOf("// Gemini-call-and-parse block");
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = SOURCE.slice(start, end);
-    for (const forbidden of [
-      "modelSelection",
-      "systemDefaultModel",
-      "providerModel",
-      "geminiUrl",
-      "GEMINI_MODEL",
-      "source",
-    ]) {
-      expect(body).not.toContain(forbidden);
+  it("leaves the request independent of the model — structurally, not by luck", () => {
+    // The request builder takes `title` and `abstract` and nothing else, so a
+    // preference cannot change the prompt, only the endpoint. Executable since
+    // AI-MULTI-PROVIDER-001A moved the prompt into an importable module.
+    const request = buildAnalyzeGenerationRequest("A title", "An abstract.");
+    expect(Object.keys(request).sort()).toEqual([
+      "responseFormat",
+      "systemInstruction",
+      "userContent",
+    ]);
+    expect(request.userContent).toBe("Title: A title\n\nAbstract: An abstract.");
+    expect(buildAnalyzeGenerationRequest.length).toBe(2);
+    const serialized = JSON.stringify(request);
+    for (const forbidden of ["gemini-3", "gemini-flash-latest", "GEMINI_MODEL", "provider"]) {
+      expect(serialized).not.toContain(forbidden);
     }
-    expect(body).toContain("Title: ${title || \"Unknown\"}");
-    expect(body).toContain("Abstract: ${abstract}");
+    // The call site passes exactly those two body fields.
+    expect(SOURCE).toContain("buildAnalyzeGenerationRequest(title, abstract)");
   });
 
   it("keeps JSON response mode and no sampling override", () => {
-    expect(SOURCE).toContain('responseMimeType: "application/json"');
+    // The mode is now stated provider-neutrally here and translated by the
+    // Google adapter (whose suite pins `responseMimeType: "application/json"`).
+    expect(buildAnalyzeGenerationRequest("t", "a").responseFormat).toBe("json");
     expect(SOURCE).not.toMatch(/\btemperature\s*:/);
     expect(SOURCE).not.toMatch(/\b(topP|topK|top_p|top_k)\s*:/);
   });
 
-  it("keeps one shared API key, sent the same way", () => {
+  it("keeps one shared API key, handed to the adapter rather than to a header", () => {
     expect(SOURCE.match(/Deno\.env\.get\("GEMINI_API_KEY"\)/g)?.length).toBe(1);
-    expect(SOURCE).toContain('"x-goog-api-key": geminiKey');
-    // No per-model or per-user credential was introduced.
+    expect(SOURCE).toContain("apiKey: geminiKey,");
+    // The credential header itself is the adapter's business now.
+    expect(CODE).not.toContain("x-goog-api-key");
+    // No per-model or per-user credential was introduced, and no second
+    // provider's credential exists.
     expect(SOURCE).not.toMatch(/GEMINI_API_KEY_/);
     expect(SOURCE).not.toMatch(/ANTHROPIC|OPENAI/);
   });
@@ -400,15 +459,17 @@ describe("model selection changes the model and nothing else", () => {
   });
 
   it("makes exactly one provider call site", () => {
-    expect(SOURCE.match(/callGeminiWithRetry\(/g)?.length).toBe(1);
+    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
   });
 
   it("inherits the 90-second, zero-retry transport policy unchanged", () => {
     expect(GEMINI_PROVIDER_TIMEOUT_MS).toBe(90_000);
     expect(GEMINI_PROVIDER_MAX_RETRIES).toBe(0);
-    // And pins none of it locally.
+    // And pins none of it locally — neither does the adapter it now calls
+    // through, which is asserted executably in the Google adapter suite.
     expect(SOURCE).not.toMatch(/90_?000/);
     expect(SOURCE).not.toMatch(/AbortSignal\.timeout/);
+    expect(GOOGLE_AI_PROVIDER_ADAPTER.provider).toBe("google");
   });
 
   it("keeps a metadata problem out of the quota and error paths", () => {
@@ -416,7 +477,9 @@ describe("model selection changes the model and nothing else", () => {
     // or 500 attributable to model selection. The only 402 remains the quota
     // wall, and it still sits above the provider call.
     expect(SOURCE.match(/status: 402/g)?.length).toBe(1);
-    expect(SOURCE.indexOf("status: 402")).toBeLessThan(SOURCE.indexOf("callGeminiWithRetry("));
+    expect(SOURCE.indexOf("status: 402")).toBeLessThan(
+      SOURCE.indexOf("providerAdapter.generate("),
+    );
     expect(SOURCE).not.toMatch(/model_selection[\s\S]{0,200}status: (402|500)/);
   });
 });

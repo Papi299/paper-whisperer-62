@@ -16,8 +16,8 @@
 //
 // ## The two — and only two — sources of a model string
 //
-//   1. Paperlume's system default: `resolveGeminiModel(GEMINI_MODEL)`, resolved
-//      by the Edge Function and handed in as `systemDefaultModel`.
+//   1. Paperlume's system default, resolved by the Edge Function and handed in
+//      as `systemDefault` — provider AND model metadata, not a bare string.
 //   2. The server-controlled `public.ai_model_catalog`, reached only after the
 //      caller's CURRENT entitlement has been proven server-side.
 //
@@ -51,12 +51,19 @@
 //
 // ## Provider adapter boundary
 //
-// 001B implements exactly one adapter: Google Gemini. The catalog's `provider`
-// column is deliberately unconstrained so a future Anthropic/OpenAI model is a
-// seed row plus an adapter rather than a schema change — but until that adapter
-// exists, a row naming any other provider must NOT be called. This module
-// refuses it and falls back, rather than constructing an external URL for a
-// provider whose credentials, request contract and privacy review do not exist.
+// The catalog's `provider` column is deliberately unconstrained so a future
+// Anthropic/OpenAI model is a seed row plus an adapter rather than a schema
+// change — but until that adapter exists, a row naming any other provider must
+// NOT be called. This module asks `_shared/aiProviderRegistry.ts` whether a
+// reviewed adapter exists for the row's provider and falls back when none does,
+// rather than routing to a provider whose credentials, request contract, error
+// semantics and privacy review do not exist. Since AI-MULTI-PROVIDER-001A (C39)
+// the registry is that authority and holds exactly one entry, `google`.
+//
+// This module decides WHICH model; it no longer knows how to REACH one. It
+// builds no URL, sets no header and names no provider of its own — the Google
+// endpoint now lives behind the Google adapter, which is why a second provider
+// does not mean a second copy of the decision below.
 //
 // ## No TypeScript allowlist
 //
@@ -67,6 +74,12 @@
 //
 // Pure module: no Deno APIs and no remote imports, so Node/Vitest exercises the
 // exact shipped code with a fake client rather than a re-implementation.
+
+import {
+  isRegisteredAiProvider,
+  type RegisteredAiProvider,
+} from "./aiProviderRegistry.ts";
+import type { AiProviderModel } from "./aiProvider.ts";
 
 /** Where the effective model came from. */
 export type AiModelSelectionSource = "system_default" | "user_preference";
@@ -97,19 +110,16 @@ export type AiModelFallbackReason =
  * The routing decision. Carries no database id, no user id and nothing else
  * that could turn a routing log line into a privacy problem: `providerModel` is
  * a public model name and `fallbackReason` is one of the bounded literals above.
+ *
+ * `provider` is narrowed to a REGISTERED provider, so "the decision names a
+ * provider we have a reviewed adapter for" is a property of the type: a caller
+ * can hand this straight to `getAiProviderAdapter` with no failure branch.
  */
-export interface AiModelSelection {
-  /** The only provider 001B can call. */
-  provider: "google";
-  /** The exact string that goes into the Gemini URL. */
-  providerModel: string;
+export interface AiModelSelection extends AiProviderModel<RegisteredAiProvider> {
   source: AiModelSelectionSource;
   /** `null` exactly when the saved preference was honoured. */
   fallbackReason: AiModelFallbackReason | null;
 }
-
-/** The single provider adapter implemented in 001B. */
-export const SUPPORTED_AI_PROVIDER = "google";
 
 // ── The minimal database surface this module is allowed to reach ───────────
 //
@@ -147,8 +157,16 @@ export interface AiModelSelectionInput {
    * first. A user id from a request body must never reach this parameter.
    */
   userId: string;
-  /** Already resolved by the caller from `GEMINI_MODEL`; the safe fallback. */
-  systemDefaultModel: string;
+  /**
+   * Paperlume's system default, already resolved by the caller, as provider
+   * AND model metadata — the safe fallback for every failure mode below.
+   *
+   * Deliberately not a bare model string and deliberately not assumed to be
+   * Google: this module never manufactures a provider id, it only ever returns
+   * the one it was given or one a catalog row named and the registry accepted.
+   * Today every caller supplies `resolveSystemDefaultAiModel(GEMINI_MODEL)`.
+   */
+  systemDefault: AiProviderModel<RegisteredAiProvider>;
   /** Log prefix, e.g. `"analyze-paper"`. */
   label: string;
   logger?: AiModelSelectionLogger;
@@ -179,7 +197,7 @@ function isTrimmedNonEmpty(value: unknown): value is string {
 export async function resolveEffectiveAiModel(
   input: AiModelSelectionInput,
 ): Promise<AiModelSelection> {
-  const { client, userId, systemDefaultModel, label, logger } = input;
+  const { client, userId, systemDefault, label, logger } = input;
 
   // Step 1 — the safe value, available from the first line onward.
   const fallback = (reason: AiModelFallbackReason): AiModelSelection => {
@@ -190,8 +208,8 @@ export async function resolveEffectiveAiModel(
       logger?.warn(`${label} model_selection_fallback reason=${reason}`);
     }
     return {
-      provider: SUPPORTED_AI_PROVIDER,
-      providerModel: systemDefaultModel,
+      provider: systemDefault.provider,
+      providerModel: systemDefault.providerModel,
       source: "system_default",
       fallbackReason: reason,
     };
@@ -278,41 +296,23 @@ export async function resolveEffectiveAiModel(
   // it.
   if (catalogRow.enabled !== true) return fallback("model_disabled");
 
-  // Step 5 — provider adapter boundary. Google is the only adapter that exists.
+  // Step 5 — provider adapter boundary. The runtime registry is asked whether a
+  // reviewed adapter exists for this row's provider; today exactly one does.
+  // A row naming anything else is refused HERE, before any URL, credential or
+  // request for that provider could be constructed.
   if (!isTrimmedNonEmpty(catalogRow.provider)) return fallback("invalid_catalog_row");
-  if (catalogRow.provider !== SUPPORTED_AI_PROVIDER) return fallback("unsupported_provider");
+  if (!isRegisteredAiProvider(catalogRow.provider)) return fallback("unsupported_provider");
 
   // Whatever this string is goes verbatim into the provider URL, so it must be
   // exactly what the catalog's own CHECK guarantees: non-empty and trimmed.
   if (!isTrimmedNonEmpty(catalogRow.provider_model)) return fallback("invalid_catalog_row");
 
   return {
-    provider: SUPPORTED_AI_PROVIDER,
+    provider: catalogRow.provider,
     providerModel: catalogRow.provider_model,
     source: "user_preference",
     fallbackReason: null,
   };
-}
-
-/** The one Gemini endpoint this repository calls. */
-const GEMINI_GENERATE_CONTENT_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-
-/**
- * Build the Gemini `generateContent` URL for a resolved selection.
- *
- * Takes the `AiModelSelection` object rather than a bare model string, and it is
- * the only place either AI function assembles a provider URL. Both halves of
- * that matter: a `string` parameter would happily accept something a client
- * sent, whereas the only way to obtain an `AiModelSelection` is to call
- * `resolveEffectiveAiModel`, which reads no request input at all. So "send this
- * user's request to an arbitrary model" has no expressible form.
- *
- * The model component is the ONLY part of the provider call that per-user
- * selection changes — body, auth header, transport policy and parsing are
- * identical either way.
- */
-export function buildGeminiGenerateContentUrl(selection: AiModelSelection): string {
-  return `${GEMINI_GENERATE_CONTENT_BASE}/${selection.providerModel}:generateContent`;
 }
 
 /**

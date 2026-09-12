@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   MAX_PROJECT_DESCRIPTION_LENGTH,
   MAX_PROJECT_NAME_LENGTH,
@@ -10,7 +11,9 @@ import {
   type OwnedProject,
   type OwnedTag,
 } from "../contract.ts";
-import { buildGeminiRequestBody, buildProviderInput, SYSTEM_INSTRUCTION } from "../prompt.ts";
+import { buildProviderInput, buildSuggestGenerationRequest, SYSTEM_INSTRUCTION } from "../prompt.ts";
+import { GOOGLE_AI_PROVIDER_ADAPTER } from "../../_shared/googleAiProvider.ts";
+import type { AiProviderCallDeps } from "../../_shared/aiProvider.ts";
 
 /**
  * AI-PROJECT-TAG-SUGGESTIONS-001A — the privacy boundary and the ephemeral refs.
@@ -364,41 +367,139 @@ describe("SYSTEM_INSTRUCTION", () => {
 });
 
 /**
- * AI-PROVIDER-REQUEST-CONTRACT-001A — the Gemini request contract.
+ * AI-PROVIDER-REQUEST-CONTRACT-001A + AI-MULTI-PROVIDER-001A — the request
+ * contract, now in two halves.
  *
- * `buildGeminiRequestBody` is pure, so this asserts on the object that will be
- * serialized onto the wire rather than on source text. Paperlume pins the JSON
- * response mode (the parser depends on it) and nothing else: sampling is left at
- * the provider/model defaults so the request stays portable across Gemini model
- * versions.
+ * The operation states WHAT to ask (`buildSuggestGenerationRequest`); the
+ * Google adapter states how to phrase that to Gemini. Both halves are asserted
+ * here, and the second is asserted by driving the REAL adapter with an injected
+ * `fetch` and comparing the captured bytes against values taken from the code
+ * as it stood BEFORE the refactor (commit 4998cf03, where
+ * `buildGeminiRequestBody` lived in this module).
  */
-describe("buildGeminiRequestBody — the wire contract", () => {
-  // The real serialized payload, so this exercises the same builder the handler
-  // calls rather than a stand-in string.
+describe("buildSuggestGenerationRequest — the operation's half", () => {
   const serialized = expectOk(build()).serialized;
-  const body = buildGeminiRequestBody(serialized);
-  const generationConfig = body.generationConfig as Record<string, unknown>;
+  const request = buildSuggestGenerationRequest(serialized);
 
   it("carries the system instruction and the serialized input unmodified", () => {
-    expect(body.system_instruction).toEqual({ parts: [{ text: SYSTEM_INSTRUCTION }] });
-    expect(body.contents).toEqual([{ parts: [{ text: serialized }] }]);
+    expect(request.systemInstruction).toBe(SYSTEM_INSTRUCTION);
+    expect(request.userContent).toBe(serialized);
   });
 
-  it("keeps JSON response mode", () => {
-    expect(generationConfig.responseMimeType).toBe("application/json");
+  it("asks for JSON, and names no provider, model, endpoint or credential", () => {
+    expect(request.responseFormat).toBe("json");
+    expect(Object.keys(request).sort()).toEqual([
+      "responseFormat",
+      "systemInstruction",
+      "userContent",
+    ]);
+    const asText = JSON.stringify(request);
+    for (const forbidden of [
+      "generativelanguage",
+      "generateContent",
+      "x-goog-api-key",
+      "system_instruction",
+      "generationConfig",
+      "gemini",
+      "google",
+    ]) {
+      expect(asText.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    }
+  });
+});
+
+describe("the exact request suggest-paper-organization sends to Google", () => {
+  // Golden values captured from the pre-001A implementation for these exact
+  // fixtures. A failure here means the bytes on the wire moved.
+  const GOLDEN_SERIALIZED_INPUT_SHA256 =
+    "4b02f46b2498386797be894e96d6d16f21d42af8d21724929974e7a5a2efb110";
+  const GOLDEN_SYSTEM_INSTRUCTION_SHA256 =
+    "69065f45bff1fce57cc2e53b01a186da4902587b693ac0efca01758726c3bf15";
+  const GOLDEN_BODY_SHA256 = "667b4e296d7bd071fc377128d0dbfd14dda6408bb6fe81994f79eff95198c38e";
+  const GOLDEN_BODY_BYTES = 3530;
+  const API_KEY = "SENTINEL-GEMINI-API-KEY";
+
+  const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+
+  async function capture(providerModel = "gemini-flash-latest") {
+    const serialized = expectOk(build()).serialized;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "{}" }] } }] }), {
+          status: 200,
+        }),
+    );
+    await GOOGLE_AI_PROVIDER_ADAPTER.generate(
+      { provider: "google", providerModel },
+      buildSuggestGenerationRequest(serialized),
+      {
+        apiKey: API_KEY,
+        label: "suggest-organization",
+        fetchImpl: fetchImpl as unknown as AiProviderCallDeps["fetchImpl"],
+        sleep: async () => {},
+        createTimeoutSignal: () => new AbortController().signal,
+      },
+    );
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    return { url, init, body: String(init.body), serialized };
+  }
+
+  it("POSTs to the same URL with the same method and the same two headers", async () => {
+    const { url, init } = await capture();
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+    );
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      "Content-Type": "application/json",
+      "x-goog-api-key": API_KEY,
+    });
   });
 
-  it("sets no explicit temperature", () => {
-    // `not.toHaveProperty` rather than a value check: an explicit
-    // `temperature: undefined` would still be a sampling override in the source.
-    expect(generationConfig).not.toHaveProperty("temperature");
+  it("serializes a byte-identical request body", async () => {
+    const { body } = await capture();
+    expect(sha256(body)).toBe(GOLDEN_BODY_SHA256);
+    expect(body.length).toBe(GOLDEN_BODY_BYTES);
   });
 
-  it("sets no replacement sampling override", () => {
-    for (const key of ["topP", "topK", "top_p", "top_k", "seed", "candidateCount"]) {
+  it("carries the same SYSTEM_INSTRUCTION and the same serialized input, to the byte", async () => {
+    const { body, serialized } = await capture();
+    const parsed = JSON.parse(body);
+    expect(parsed.system_instruction).toEqual({ parts: [{ text: SYSTEM_INSTRUCTION }] });
+    expect(parsed.contents).toEqual([{ parts: [{ text: serialized }] }]);
+    expect(sha256(SYSTEM_INSTRUCTION)).toBe(GOLDEN_SYSTEM_INSTRUCTION_SHA256);
+    expect(sha256(serialized)).toBe(GOLDEN_SERIALIZED_INPUT_SHA256);
+  });
+
+  it("keeps JSON response mode and no sampling override of any kind", async () => {
+    const { body } = await capture();
+    const generationConfig = JSON.parse(body).generationConfig as Record<string, unknown>;
+    expect(generationConfig).toEqual({ responseMimeType: "application/json" });
+    // Named explicitly: an explicit `temperature: undefined` would still be a
+    // sampling override in the source, and `toEqual` above forbids extras.
+    for (const key of ["temperature", "topP", "topK", "top_p", "top_k", "seed", "candidateCount"]) {
       expect(generationConfig).not.toHaveProperty(key);
     }
-    // JSON response mode is the only key the contract pins.
     expect(Object.keys(generationConfig)).toEqual(["responseMimeType"]);
+  });
+
+  it("keeps the same envelope shape and key order", async () => {
+    const { body } = await capture();
+    expect(Object.keys(JSON.parse(body))).toEqual([
+      "system_instruction",
+      "contents",
+      "generationConfig",
+    ]);
+  });
+
+  it("changes only the model component when a preference routes elsewhere", async () => {
+    const fallback = await capture("gemini-flash-latest");
+    const preferred = await capture("gemini-3.5-flash");
+    expect(preferred.url.replace("gemini-3.5-flash", "M")).toBe(
+      fallback.url.replace("gemini-flash-latest", "M"),
+    );
+    // Same bytes, same headers: only the endpoint moved.
+    expect(preferred.body).toBe(fallback.body);
+    expect(preferred.init.headers).toEqual(fallback.init.headers);
   });
 });

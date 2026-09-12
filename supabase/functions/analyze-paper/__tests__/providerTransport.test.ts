@@ -37,11 +37,27 @@ import {
 // Resolved from this file, not from the Vitest working directory.
 const INDEX_PATH = fileURLToPath(new URL("../index.ts", import.meta.url));
 const SOURCE = readFileSync(INDEX_PATH, "utf8");
+const PROMPT_SOURCE = readFileSync(
+  fileURLToPath(new URL("../prompt.ts", import.meta.url)),
+  "utf8",
+);
+const ADAPTER_SOURCE = readFileSync(
+  fileURLToPath(new URL("../../_shared/googleAiProvider.ts", import.meta.url)),
+  "utf8",
+);
 
 describe("analyze-paper is wired to the shared provider policy", () => {
-  it("calls Gemini through the shared transport", () => {
-    expect(SOURCE).toContain('from "../_shared/geminiTransport.ts"');
-    expect(SOURCE).toContain("callGeminiWithRetry(");
+  it("calls Gemini through the registered adapter, which calls the shared transport", () => {
+    // AI-MULTI-PROVIDER-001A put the Google adapter between this function and
+    // the transport. The policy is unchanged and still shared: the adapter
+    // calls `callGeminiWithRetry` (pinned executably in
+    // `_shared/__tests__/googleAiProvider.test.ts`), and this function calls
+    // the adapter it was handed for the resolved provider.
+    expect(SOURCE).toContain('from "../_shared/aiProviderRegistry.ts"');
+    expect(SOURCE).toContain("getAiProviderAdapter(modelSelection.provider)");
+    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
+    expect(ADAPTER_SOURCE).toContain('from "./geminiTransport.ts"');
+    expect(ADAPTER_SOURCE).toContain("callGeminiWithRetry(");
   });
 
   it("keeps no second copy of the retry loop", () => {
@@ -91,11 +107,23 @@ describe("analyze-paper maps a transport failure the way it always did", () => {
   });
 
   it("still treats an unusable 2xx body as malformed, without a retry", () => {
-    // The body is read by this function, outside the transport, so a 200 whose
-    // JSON is unusable cannot re-enter the retry loop.
-    expect(SOURCE).toContain("await providerCall.response.json()");
+    // The body is read by the adapter, outside the transport, so a 200 whose
+    // JSON is unusable still cannot re-enter the retry loop. The two 2xx
+    // outcomes keep the classifications this function has always given them:
+    //
+    //   * a well-formed envelope with no text → `empty` → malformed_response;
+    //   * a body that is not JSON at all → the historical catch-all →
+    //     provider_unavailable. (suggest-paper-organization calls that second
+    //     case malformed_response; the two have always differed here, and
+    //     AI-MULTI-PROVIDER-001A deliberately preserves both rather than
+    //     silently aligning them.)
     expect(SOURCE).toContain('classifyProviderError({ kind: "empty" })');
     expect(SOURCE).toContain('classifyProviderError({ kind: "parse" })');
+    expect(SOURCE).toContain('providerCall.kind === "unreadable_response"');
+    expect(SOURCE).toContain('classifyProviderError({ kind: "network" })');
+    expect(classifyProviderError({ kind: "empty" })).toBe("malformed_response");
+    expect(classifyProviderError({ kind: "parse" })).toBe("malformed_response");
+    expect(classifyProviderError({ kind: "network" })).toBe("provider_unavailable");
   });
 });
 
@@ -104,7 +132,7 @@ describe("analyze-paper quota semantics are untouched", () => {
     // One `rpc("consume_ai_quota", …)` invocation — the other mentions in the
     // file are a comment and an error log.
     expect(SOURCE.match(/rpc\(\s*\n?\s*"consume_ai_quota"/g)?.length).toBe(1);
-    expect(SOURCE.indexOf('"consume_ai_quota"')).toBeLessThan(SOURCE.indexOf("callGeminiWithRetry("));
+    expect(SOURCE.indexOf('"consume_ai_quota"')).toBeLessThan(SOURCE.indexOf("providerAdapter.generate("));
   });
 
   it("refunds best-effort on the provider-failure path", () => {
@@ -115,7 +143,7 @@ describe("analyze-paper quota semantics are untouched", () => {
 
   it("does not refund per provider attempt — the retry budget is the transport's", () => {
     // The only refund call sites are the two above, both outside the transport.
-    expect(SOURCE).not.toMatch(/safeRefundAiQuota[\s\S]{0,200}callGeminiWithRetry/);
+    expect(SOURCE).not.toMatch(/safeRefundAiQuota[\s\S]{0,200}providerAdapter\.generate/);
   });
 
   it("keeps a provider failure a neutral 500, never a Paperlume 402", () => {
@@ -124,7 +152,7 @@ describe("analyze-paper quota semantics are untouched", () => {
     // The single 402 in this file is the quota wall, and it sits above the
     // provider call.
     expect(SOURCE.match(/status: 402/g)?.length).toBe(1);
-    expect(SOURCE.indexOf("status: 402")).toBeLessThan(SOURCE.indexOf("callGeminiWithRetry("));
+    expect(SOURCE.indexOf("status: 402")).toBeLessThan(SOURCE.indexOf("providerAdapter.generate("));
   });
 });
 
@@ -135,7 +163,7 @@ describe("001A changes transport only", () => {
     // routing on top — GEMINI_MODEL remains the system default and the safe
     // fallback, and the routing itself lives in the shared module covered by
     // `modelRouting.test.ts` and `_shared/__tests__/aiModelSelection.test.ts`.
-    expect(SOURCE).toContain('resolveGeminiModel(Deno.env.get("GEMINI_MODEL"))');
+    expect(SOURCE).toContain('resolveSystemDefaultAiModel(Deno.env.get("GEMINI_MODEL"))');
     expect(SOURCE).not.toContain("gemini-3");
     expect(SOURCE).not.toContain("gemini-flash-latest");
   });
@@ -145,10 +173,18 @@ describe("001A changes transport only", () => {
     // explicit sampling override is gone, so the request now inherits the
     // provider/model defaults. JSON response mode is NOT a sampling knob — the
     // parser depends on it, so it stays pinned.
-    expect(SOURCE).toContain('responseMimeType: "application/json"');
-    // Any explicit temperature, at any value, on either spelling.
+    // Since AI-MULTI-PROVIDER-001A the mode is stated provider-neutrally by the
+    // operation (`responseFormat: "json"`) and translated to Gemini's
+    // `responseMimeType` by the adapter. Both halves are asserted, so the mode
+    // cannot be lost in the hand-off.
+    expect(PROMPT_SOURCE).toContain('responseFormat: "json"');
+    expect(ADAPTER_SOURCE).toContain('json: "application/json"');
+    // Any explicit temperature, at any value, on either spelling — in the
+    // operation and in the adapter that now builds the body.
     expect(SOURCE).not.toMatch(/\btemperature\s*:/);
+    expect(ADAPTER_SOURCE).not.toMatch(/\btemperature\s*:/);
     // And no sampling parameter smuggled in as a replacement.
     expect(SOURCE).not.toMatch(/\b(topP|topK|top_p|top_k)\s*:/);
+    expect(ADAPTER_SOURCE).not.toMatch(/\b(topP|topK|top_p|top_k)\s*:/);
   });
 });
