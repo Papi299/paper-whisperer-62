@@ -235,6 +235,18 @@ export const ACCOUNT_EXPORT_EXCLUDED_TABLES = [
   // from deletion or privacy accounting: it is user-scoped, it appears in the
   // privacy inventory, and it cascades with the account (pinned by suite 008).
   "attachment_cleanup_tombstone",
+  // AI-MULTI-PROVIDER-001D. `ai_provider_usage_events` is server-written
+  // operational accounting — which provider and model served an AI request, how
+  // many provider attempts it took, the token counts the provider reported and a
+  // list-price cost estimate — excluded under reason (1), like `usage_counters`.
+  // It holds no content the user authored and nothing a browser can read: no
+  // client role has any privilege on it, so the export (which reads through the
+  // user's own session) could not include it without a new read path. It IS
+  // user-associated data, so this is not an exclusion from deletion (it cascades
+  // with the account, pinned by suite 008) nor from privacy accounting (it is in
+  // the privacy inventory). Whether a subject-access request must include it is
+  // an owner/legal question recorded in the privacy audit, not settled here.
+  "ai_provider_usage_events",
 
   // (2) AI-MODEL-SELECTION-001A. The approved-model catalog is global product
   // metadata with no `user_id` — the same rows for every account, authored by

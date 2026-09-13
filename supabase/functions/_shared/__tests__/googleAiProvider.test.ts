@@ -117,6 +117,11 @@ function geminiOk(text: string): Response {
   });
 }
 
+// AI-MULTI-PROVIDER-001D. Every result carries `usage`. A failure that produced no
+// readable body — and any envelope without a usage block — carries this: unknown,
+// never zero.
+const NO_USAGE = { kind: "unavailable", reason: "not_returned" } as const;
+
 /**
  * The default call policy for these tests — AI-MULTI-PROVIDER-001C.
  *
@@ -397,7 +402,7 @@ describe("the request that reaches Google", () => {
 describe("extracting the generated text", () => {
   it("returns the model's text from a well-formed envelope", async () => {
     const harness = makeHarness([geminiOk('{"tldr":"x"}')]);
-    expect(await generate(harness)).toEqual({ ok: true, text: '{"tldr":"x"}', attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: '{"tldr":"x"}', attempts: 1, usage: NO_USAGE });
   });
 
   it("returns the text exactly as sent — no trimming, unwrapping or repair", async () => {
@@ -412,7 +417,7 @@ describe("extracting the generated text", () => {
     // answer it differently today. The adapter answers only "did the provider
     // return generated text?".
     const harness = makeHarness([geminiOk("   ")]);
-    expect(await generate(harness)).toEqual({ ok: true, text: "   ", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: "   ", attempts: 1, usage: NO_USAGE });
   });
 
   it.each([
@@ -429,7 +434,7 @@ describe("extracting the generated text", () => {
     ["a null payload", "null"],
   ])("reports %s as empty", async (_label, body) => {
     const harness = makeHarness([new Response(body, { status: 200 })]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1, usage: NO_USAGE });
   });
 
   it("reads only the first candidate and the first part, as it always has", () => {
@@ -451,6 +456,7 @@ describe("extracting the generated text", () => {
       ok: false,
       kind: "unreadable_response",
       attempts: 1,
+      usage: NO_USAGE,
     });
   });
 });
@@ -460,19 +466,19 @@ describe("extracting the generated text", () => {
 describe("normalizing a provider failure", () => {
   it.each([400, 401, 403, 404, 429, 500, 503])("carries the status of an HTTP %d", async (status) => {
     const harness = makeHarness([new Response("provider error body", { status })]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "http", status, attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "http", status, attempts: 1, usage: NO_USAGE });
   });
 
   it("normalizes a network failure", async () => {
     const harness = makeHarness([new Error("connection reset")]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "network", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "network", attempts: 1, usage: NO_USAGE });
   });
 
   it("normalizes a timeout, and keeps it distinct from a network failure", async () => {
     const harness = makeHarness([
       Object.assign(new Error("Signal timed out."), { name: "TimeoutError" }),
     ]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "timeout", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "timeout", attempts: 1, usage: NO_USAGE });
   });
 
   it("never throws, whatever the provider does", async () => {
@@ -526,7 +532,7 @@ describe("nothing provider-shaped escapes the adapter", () => {
       expect(serialized).not.toContain(API_KEY);
       // Only the bounded fields the contract names.
       expect(Object.keys(result).sort()).toEqual(
-        result.ok ? ["attempts", "ok", "text"] : expect.arrayContaining(["attempts", "kind", "ok"]),
+        result.ok ? ["attempts", "ok", "text", "usage"] : expect.arrayContaining(["attempts", "kind", "ok", "usage"]),
       );
     }
   });
@@ -576,6 +582,7 @@ describe("nothing provider-shaped escapes the adapter", () => {
       ok: true,
       text: '{"tldr":"t","studyType":"s","statisticalMethods":"m"}',
       attempts: 1,
+      usage: NO_USAGE,
     });
   });
 });

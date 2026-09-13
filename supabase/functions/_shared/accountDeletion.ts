@@ -312,33 +312,8 @@ export function checkDeletionConfirmation(body: unknown): ConfirmationCheck {
 }
 
 /**
- * Choose the elevated server-only key from the Edge runtime's auto-provided
- * environment, preferring the current secret-key mechanism.
- *
- * `SUPABASE_SECRET_KEYS` is a JSON dictionary keyed by key name (`default` for
- * the key Supabase creates first); `SUPABASE_SERVICE_ROLE_KEY` is the legacy
- * plain string. Both are injected by the platform, so neither requires a
- * manually managed Production secret. Returns `null` when neither is usable —
- * the caller turns that into a safe 500 rather than proceeding unprivileged.
- *
- * Pure: takes the two raw values, never reads the environment, and never logs.
+ * The elevated-key selector `delete-account` has always used. It now lives in
+ * `./edgeSecretKey.ts` (AI-MULTI-PROVIDER-001D gave it a second caller) and is
+ * re-exported here unchanged, so this function and its tests are untouched.
  */
-export function selectEdgeSecretKey(
-  secretKeysJson: string | null | undefined,
-  serviceRoleKey: string | null | undefined,
-): string | null {
-  if (typeof secretKeysJson === "string" && secretKeysJson.trim() !== "") {
-    try {
-      const parsed = JSON.parse(secretKeysJson);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        const preferred = (parsed as Record<string, unknown>).default;
-        if (typeof preferred === "string" && preferred.trim() !== "") return preferred;
-      }
-    } catch {
-      // Unparseable value: fall through to the legacy key rather than throwing
-      // an error whose message could quote the raw (secret-bearing) string.
-    }
-  }
-  if (typeof serviceRoleKey === "string" && serviceRoleKey.trim() !== "") return serviceRoleKey;
-  return null;
-}
+export { selectEdgeSecretKey } from "./edgeSecretKey.ts";

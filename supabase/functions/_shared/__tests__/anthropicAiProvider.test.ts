@@ -142,6 +142,27 @@ function anthropicOk(
 
 const textBlock = (text: string) => ({ type: "text", text });
 
+// AI-MULTI-PROVIDER-001D. Every result carries `usage`. A failure that produced no
+// readable body — and any envelope without a usage block — carries this: unknown,
+// never zero.
+const NO_USAGE = { kind: "unavailable", reason: "not_returned" } as const;
+
+// What `anthropicOk`'s usage block ({ input_tokens: 10, output_tokens: 20 })
+// reports. It sends no cache counts, so the input TOTAL is unreported rather than
+// guessed — Anthropic's total is the sum of three fields — while output is known.
+const FIXTURE_USAGE = {
+  kind: "reported",
+  dimensions: {
+    inputTokens: { state: "unreported" },
+    cachedInputTokens: { state: "unreported" },
+    cacheWriteInputTokens: { state: "unreported" },
+    outputTokens: { state: "reported", tokens: 20 },
+    reasoningOutputTokens: { state: "unreported" },
+    providerTotalTokens: { state: "not_applicable" },
+  },
+  unmodeledUsage: false,
+} as const;
+
 /**
  * The default call policy for these tests — AI-MULTI-PROVIDER-001C.
  *
@@ -502,7 +523,7 @@ describe("this adapter's own transport policy", () => {
     const result = await generate(harness);
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
     expect(harness.sleeps).toEqual([]);
-    expect(result).toEqual({ ok: false, kind: "http", status: 429, attempts: 1 });
+    expect(result).toEqual({ ok: false, kind: "http", status: 429, attempts: 1, usage: NO_USAGE });
     expect(ANTHROPIC_PROVIDER_ATTEMPTS).toBe(1);
   });
 
@@ -535,7 +556,7 @@ describe("this adapter's own transport policy", () => {
 describe("extracting the generated text", () => {
   it("returns the text of a single text block", async () => {
     const harness = makeHarness([anthropicOk([textBlock('{"tldr":"x"}')])]);
-    expect(await generate(harness)).toEqual({ ok: true, text: '{"tldr":"x"}', attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: '{"tldr":"x"}', attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("concatenates multiple text blocks in the order returned", async () => {
@@ -546,6 +567,7 @@ describe("extracting the generated text", () => {
       ok: true,
       text: '{"a":1,"b":2}',
       attempts: 1,
+      usage: FIXTURE_USAGE,
     });
   });
 
@@ -557,7 +579,7 @@ describe("extracting the generated text", () => {
       ]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1 });
+    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-REASONING");
   });
 
@@ -569,7 +591,7 @@ describe("extracting the generated text", () => {
       ]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1 });
+    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-REASONING");
   });
 
@@ -583,7 +605,7 @@ describe("extracting the generated text", () => {
       ]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: true, text: '{"a":1}', attempts: 1 });
+    expect(result).toEqual({ ok: true, text: '{"a":1}', attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-");
   });
 
@@ -598,21 +620,21 @@ describe("extracting the generated text", () => {
     const result = await generate(harness);
     // The future block carries a `text` field and is STILL ignored: the filter
     // is on `type`, not on the presence of a text-shaped property.
-    expect(result).toEqual({ ok: true, text: "real", attempts: 1 });
+    expect(result).toEqual({ ok: true, text: "real", attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED");
   });
 
   it("returns the text exactly as sent — no trimming, unwrapping or repair", async () => {
     const raw = '  ```json\n{"tldr":"x"}\n```  ';
     const harness = makeHarness([anthropicOk([textBlock(raw)])]);
-    expect(await generate(harness)).toEqual({ ok: true, text: raw, attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: raw, attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("hands back whitespace-only text rather than judging it empty", async () => {
     // Same contract as the Google adapter: whether a blank answer is usable is
     // the operation's judgement, not the adapter's.
     const harness = makeHarness([anthropicOk([textBlock("   ")])]);
-    expect(await generate(harness)).toEqual({ ok: true, text: "   ", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: "   ", attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("reads the envelope structurally, through the exported helper", () => {
@@ -639,14 +661,14 @@ describe("normalizing provider failures", () => {
         new Response(JSON.stringify({ error: { message: "PROVIDER-ERROR-BODY" } }), { status }),
       ]);
       const result = await generate(harness);
-      expect(result).toEqual({ ok: false, kind: "http", status, attempts: 1 });
+      expect(result).toEqual({ ok: false, kind: "http", status, attempts: 1, usage: NO_USAGE });
       expect(JSON.stringify(result)).not.toContain("PROVIDER-ERROR-BODY");
     },
   );
 
   it("normalizes a network failure", async () => {
     const harness = makeHarness([new TypeError("fetch failed for https://api.anthropic.com")]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "network", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "network", attempts: 1, usage: NO_USAGE });
   });
 
   it("normalizes a timeout, and keeps it distinct from a network failure", async () => {
@@ -654,7 +676,7 @@ describe("normalizing provider failures", () => {
     aborted.abort();
     const timeoutError = Object.assign(new Error("aborted"), { name: "TimeoutError" });
     const harness = makeHarness([timeoutError]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "timeout", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "timeout", attempts: 1, usage: NO_USAGE });
   });
 
   it("treats an AbortError raised on OUR aborted signal as a timeout", async () => {
@@ -670,7 +692,7 @@ describe("normalizing provider failures", () => {
       sleep: async () => {},
       createTimeoutSignal: () => controller.signal,
     });
-    expect(result).toEqual({ ok: false, kind: "timeout", attempts: 1 });
+    expect(result).toEqual({ ok: false, kind: "timeout", attempts: 1, usage: NO_USAGE });
   });
 
   it("reports a 2xx whose body is not JSON as unreadable, not as empty", async () => {
@@ -678,7 +700,7 @@ describe("normalizing provider failures", () => {
       new Response("<html>PROVIDER-HTML-BODY</html>", { status: 200 }),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: false, kind: "unreadable_response", attempts: 1 });
+    expect(result).toEqual({ ok: false, kind: "unreadable_response", attempts: 1, usage: NO_USAGE });
     expect(JSON.stringify(result)).not.toContain("PROVIDER-HTML-BODY");
   });
 
@@ -696,6 +718,7 @@ describe("normalizing provider failures", () => {
       ok: false,
       kind: "unreadable_response",
       attempts: 1,
+      usage: NO_USAGE,
     });
   });
 
@@ -712,25 +735,26 @@ describe("normalizing provider failures", () => {
         ok: false,
         kind: "unreadable_response",
         attempts: 1,
+        usage: NO_USAGE,
       });
     }
   });
 
   it("reports an empty content array as empty", async () => {
     const harness = makeHarness([anthropicOk([])]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("reports content with no TEXT block as empty", async () => {
     const harness = makeHarness([
       anthropicOk([{ type: "thinking", thinking: "only reasoning", signature: "s" }]),
     ]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("reports an empty-string text block as empty", async () => {
     const harness = makeHarness([anthropicOk([textBlock("")])]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("never throws, whatever the provider does", async () => {
@@ -769,6 +793,7 @@ describe("a 200 whose stop_reason is not end_turn", () => {
       ok: false,
       kind: "incomplete_response",
       attempts: 1,
+      usage: FIXTURE_USAGE,
     });
   });
 
@@ -789,6 +814,7 @@ describe("a 200 whose stop_reason is not end_turn", () => {
       ok: false,
       kind: "incomplete_response",
       attempts: 1,
+      usage: FIXTURE_USAGE,
     });
   });
 
@@ -846,9 +872,11 @@ describe("nothing provider-shaped or sensitive escapes", () => {
       for (const secret of SENSITIVE) expect(asText).not.toContain(secret);
       expect(asText).not.toContain("req_LEAKED");
       expect(asText).not.toContain("retry-after");
-      // The bounded shape, and nothing else.
+      // The bounded shape, and nothing else. `usage` joined it in
+      // AI-MULTI-PROVIDER-001D, as the sanitized provider-neutral vocabulary —
+      // never Anthropic's own usage object (asserted by `aiProviderUsage.test.ts`).
       expect(Object.keys(result).sort().join(",")).toMatch(
-        /^(attempts,kind,ok|attempts,kind,ok,status)$/,
+        /^(attempts,kind,ok,usage|attempts,kind,ok,status,usage)$/,
       );
     }
   });
@@ -913,6 +941,7 @@ describe("nothing provider-shaped or sensitive escapes", () => {
       ok: true,
       text: '{"tldr":"t","studyType":"s","statisticalMethods":"m"}',
       attempts: 1,
+      usage: FIXTURE_USAGE,
     });
     expect(result).not.toHaveProperty("tldr");
     expect(result).not.toHaveProperty("suggestions");

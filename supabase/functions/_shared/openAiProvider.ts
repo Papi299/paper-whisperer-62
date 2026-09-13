@@ -92,6 +92,13 @@ import type {
   AiProviderResult,
   AiReasoningLevel,
 } from "./aiProvider.ts";
+import {
+  AI_USAGE_INVALID,
+  AI_USAGE_NOT_RETURNED,
+  finalizeReportedUsage,
+  readCountOrUnreported,
+  type AiProviderUsage,
+} from "./aiUsage.ts";
 
 /** The provider id `ai_model_catalog.provider` would use for OpenAI. */
 export const OPENAI_AI_PROVIDER = "openai";
@@ -346,6 +353,77 @@ export function extractOpenAiText(payload: unknown): string | null | undefined {
 }
 
 /**
+ * Read the Responses API `usage` into PaperLume's usage vocabulary —
+ * AI-MULTI-PROVIDER-001D.
+ *
+ * Absent or `null` is UNREPORTED, never zero: this is a JSON API, not proto3.
+ * A `usage` that is itself absent or `null` — which an unfinished response can
+ * carry — is no report at all.
+ *
+ * ## Mapping (OpenAI reasoning and prompt-caching guides)
+ *
+ *     input_tokens                             -> inputTokens (all input)
+ *     input_tokens_details.cached_tokens       -> cachedInputTokens (a subset)
+ *     input_tokens_details.cache_write_tokens  -> cacheWriteInputTokens (a subset,
+ *                                                 disjoint from the cached one:
+ *                                                 "input tokens use the
+ *                                                 uncached-input, cached-input, or
+ *                                                 cache-write rate")
+ *     output_tokens                            -> outputTokens (reasoning tokens
+ *                                                 "are billed as output tokens"
+ *                                                 and are counted inside it)
+ *     output_tokens_details.reasoning_tokens   -> reasoningOutputTokens (a subset)
+ *     total_tokens                             -> providerTotalTokens (as reported)
+ *
+ * GPT-5.6 and later cache implicitly, so a cache write can happen on a request
+ * that asked for none; a response that omits `cache_write_tokens` leaves it
+ * UNREPORTED, and the estimate then refuses to guess at its 1.25x rate.
+ */
+export function readOpenAiUsage(payload: unknown): AiProviderUsage {
+  if (!isPlainObject(payload)) return AI_USAGE_NOT_RETURNED;
+  const usage = payload.usage;
+  if (usage === undefined || usage === null) return AI_USAGE_NOT_RETURNED;
+  if (!isPlainObject(usage)) return AI_USAGE_INVALID;
+
+  const inputDetailsRaw = usage.input_tokens_details;
+  const outputDetailsRaw = usage.output_tokens_details;
+  for (const details of [inputDetailsRaw, outputDetailsRaw]) {
+    if (details !== undefined && details !== null && !isPlainObject(details)) return AI_USAGE_INVALID;
+  }
+  const inputDetails: Record<string, unknown> = isPlainObject(inputDetailsRaw) ? inputDetailsRaw : {};
+  const outputDetails: Record<string, unknown> = isPlainObject(outputDetailsRaw) ? outputDetailsRaw : {};
+
+  const input = readCountOrUnreported(usage.input_tokens);
+  const cached = readCountOrUnreported(inputDetails.cached_tokens);
+  const cacheWrite = readCountOrUnreported(inputDetails.cache_write_tokens);
+  const output = readCountOrUnreported(usage.output_tokens);
+  const reasoning = readCountOrUnreported(outputDetails.reasoning_tokens);
+  const total = readCountOrUnreported(usage.total_tokens);
+  if (
+    input === null ||
+    cached === null ||
+    cacheWrite === null ||
+    output === null ||
+    reasoning === null ||
+    total === null
+  ) {
+    return AI_USAGE_INVALID;
+  }
+
+  return finalizeReportedUsage(
+    {
+      inputTokens: input,
+      cachedInputTokens: cached,
+      cacheWriteInputTokens: cacheWrite,
+      outputTokens: output,
+      reasoningOutputTokens: reasoning,
+      providerTotalTokens: total,
+    },
+    false,
+  );
+}
+
+/**
  * Send one generation request to OpenAI and normalize the outcome.
  *
  * Never throws: every provider-side outcome — transport, HTTP, unreadable body,
@@ -382,7 +460,7 @@ async function generate(
     // is discarded: a fetch error's message can quote the URL.
     const kind = isTimeout(error, signal) ? "timeout" : "network";
     deps.logger?.warn(`${deps.label} provider_${kind} attempt=${attempts} retry=0`);
-    return { ok: false, kind, attempts };
+    return { ok: false, kind, attempts, usage: AI_USAGE_NOT_RETURNED };
   }
 
   if (!response.ok) {
@@ -392,7 +470,13 @@ async function generate(
     deps.logger?.warn(
       `${deps.label} provider_status=${response.status} attempt=${attempts} retry=0`,
     );
-    return { ok: false, kind: "http", status: response.status, attempts };
+    return {
+      ok: false,
+      kind: "http",
+      status: response.status,
+      attempts,
+      usage: AI_USAGE_NOT_RETURNED,
+    };
   }
 
   let payload: unknown;
@@ -401,18 +485,18 @@ async function generate(
   } catch {
     // A 2xx whose body is not JSON at all. The parse error's message can quote
     // the body, so it is discarded rather than returned or logged.
-    return { ok: false, kind: "unreadable_response", attempts };
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
   }
 
   if (!isPlainObject(payload) || !Array.isArray(payload.output)) {
-    return { ok: false, kind: "unreadable_response", attempts };
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
   }
 
   const status = payload.status;
   if (typeof status !== "string") {
     // A 200 that does not carry the Responses terminal-state field is not a
     // Responses envelope this module knows how to trust.
-    return { ok: false, kind: "unreadable_response", attempts };
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
   }
   if (status !== OPENAI_COMPLETE_STATUS) {
     // Checked BEFORE the text is read, on purpose: an `incomplete` response can
@@ -421,14 +505,19 @@ async function generate(
     // successful generation; reporting it as `empty` would describe a cut-off
     // generation as "the model answered with nothing". Neither `status` nor
     // `incomplete_details` crosses the boundary — only the bounded kind does.
-    return { ok: false, kind: "incomplete_response", attempts };
+    // Its usage IS returned: an incomplete response was still billed for its
+    // input and whatever reasoning and output it produced.
+    return { ok: false, kind: "incomplete_response", attempts, usage: readOpenAiUsage(payload) };
   }
 
+  const usage = readOpenAiUsage(payload);
   const text = extractOpenAiText(payload);
-  if (text === undefined) return { ok: false, kind: "unreadable_response", attempts };
-  if (text === null) return { ok: false, kind: "empty", attempts };
+  if (text === undefined) {
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
+  }
+  if (text === null) return { ok: false, kind: "empty", attempts, usage };
 
-  return { ok: true, text, attempts };
+  return { ok: true, text, attempts, usage };
 }
 
 /**

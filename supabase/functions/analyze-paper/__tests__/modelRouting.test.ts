@@ -377,12 +377,14 @@ describe("analyze-paper is wired to the shared selection module", () => {
     expect(CODE).not.toContain('from "../_shared/geminiTransport.ts"');
   });
 
-  it("uses the selection for exactly five things, all of them local", () => {
+  it("uses the selection for exactly six things, all of them local", () => {
     const uses = SOURCE.match(/\bmodelSelection\b/g) ?? [];
     // Declaration, the reasoning-policy input, the credential lookup, the
-    // routing log, and the dispatch argument. AI-MULTI-PROVIDER-001C traded the
-    // adapter lookup for the reasoning-policy and credential uses.
-    expect(uses.length).toBe(5);
+    // routing log, the dispatch argument, and the usage-telemetry event.
+    // AI-MULTI-PROVIDER-001C traded the adapter lookup for the reasoning-policy
+    // and credential uses; AI-MULTI-PROVIDER-001D added the telemetry event,
+    // which records the provider and public model the request actually used.
+    expect(uses.length).toBe(6);
     expect(SOURCE).toContain('formatModelRoutingLog("analyze-paper", modelSelection)');
     expect(SOURCE).toContain("selection: modelSelection,");
     expect(SOURCE).toContain("resolveAiProviderCredential(\n      modelSelection.provider,");

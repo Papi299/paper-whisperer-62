@@ -137,6 +137,27 @@ function openAiOk(output: unknown[], status: string | null = "completed"): Respo
   });
 }
 
+// AI-MULTI-PROVIDER-001D. Every result carries `usage`. A failure that produced no
+// readable body — and any envelope without a usage block — carries this: unknown,
+// never zero.
+const NO_USAGE = { kind: "unavailable", reason: "not_returned" } as const;
+
+// What `openAiOk`'s usage block ({ input_tokens: 10, output_tokens: 20,
+// total_tokens: 30 }) reports. No breakdowns are sent, so cached, cache-write and
+// reasoning counts are unreported rather than zero.
+const FIXTURE_USAGE = {
+  kind: "reported",
+  dimensions: {
+    inputTokens: { state: "reported", tokens: 10 },
+    cachedInputTokens: { state: "unreported" },
+    cacheWriteInputTokens: { state: "unreported" },
+    outputTokens: { state: "reported", tokens: 20 },
+    reasoningOutputTokens: { state: "unreported" },
+    providerTotalTokens: { state: "reported", tokens: 30 },
+  },
+  unmodeledUsage: false,
+} as const;
+
 /** A `message` output item carrying one or more `output_text` blocks. */
 const messageItem = (...texts: string[]) => ({
   id: "msg_sentinel",
@@ -523,7 +544,7 @@ describe("this adapter's own transport policy", () => {
     const result = await generate(harness);
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
     expect(harness.sleeps).toEqual([]);
-    expect(result).toEqual({ ok: false, kind: "http", status: 429, attempts: 1 });
+    expect(result).toEqual({ ok: false, kind: "http", status: 429, attempts: 1, usage: NO_USAGE });
     expect(OPENAI_PROVIDER_ATTEMPTS).toBe(1);
   });
 
@@ -547,7 +568,7 @@ describe("this adapter's own transport policy", () => {
 describe("traversing the output array", () => {
   it("returns the text of an ordinary message/output_text response", async () => {
     const harness = makeHarness([openAiOk([messageItem('{"tldr":"x"}')])]);
-    expect(await generate(harness)).toEqual({ ok: true, text: '{"tldr":"x"}', attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: '{"tldr":"x"}', attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("ignores a reasoning item BEFORE the message — the reasoning-model shape", async () => {
@@ -555,7 +576,7 @@ describe("traversing the output array", () => {
       openAiOk([reasoningItem("LEAKED-REASONING"), messageItem('{"ok":true}')]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1 });
+    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-REASONING");
     expect(JSON.stringify(result)).not.toContain("ENCRYPTED-");
   });
@@ -565,7 +586,7 @@ describe("traversing the output array", () => {
       openAiOk([messageItem('{"ok":true}'), reasoningItem("LEAKED-REASONING")]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1 });
+    expect(result).toEqual({ ok: true, text: '{"ok":true}', attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-REASONING");
   });
 
@@ -580,13 +601,13 @@ describe("traversing the output array", () => {
       ]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: true, text: '{"a":1}', attempts: 1 });
+    expect(result).toEqual({ ok: true, text: '{"a":1}', attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-");
   });
 
   it("concatenates multiple output_text blocks within one message", async () => {
     const harness = makeHarness([openAiOk([messageItem('{"a":', '1,"b":', "2}")])]);
-    expect(await generate(harness)).toEqual({ ok: true, text: '{"a":1,"b":2}', attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: '{"a":1,"b":2}', attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("ignores non-output_text content, including a refusal block", async () => {
@@ -606,7 +627,7 @@ describe("traversing the output array", () => {
       ]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: true, text: "real", attempts: 1 });
+    expect(result).toEqual({ ok: true, text: "real", attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-REFUSAL-PROSE");
   });
 
@@ -621,7 +642,7 @@ describe("traversing the output array", () => {
       ]),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    expect(result).toEqual({ ok: false, kind: "empty", attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED-REFUSAL-PROSE");
   });
 
@@ -637,19 +658,19 @@ describe("traversing the output array", () => {
     const result = await generate(harness);
     // The future item carries an output_text-shaped block and is STILL ignored:
     // the filter is on the ITEM type first.
-    expect(result).toEqual({ ok: true, text: "real", attempts: 1 });
+    expect(result).toEqual({ ok: true, text: "real", attempts: 1, usage: FIXTURE_USAGE });
     expect(JSON.stringify(result)).not.toContain("LEAKED");
   });
 
   it("preserves the text exactly — no trimming, unwrapping or repair", async () => {
     const raw = '  ```json\n{"tldr":"x"}\n```  ';
     const harness = makeHarness([openAiOk([messageItem(raw)])]);
-    expect(await generate(harness)).toEqual({ ok: true, text: raw, attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: raw, attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("hands back whitespace-only text rather than judging it empty", async () => {
     const harness = makeHarness([openAiOk([messageItem("   ")])]);
-    expect(await generate(harness)).toEqual({ ok: true, text: "   ", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: true, text: "   ", attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("never uses a flattened top-level output_text convenience field", async () => {
@@ -666,7 +687,8 @@ describe("traversing the output array", () => {
       ),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    // This hand-built envelope carries no usage block, so none is reported.
+    expect(result).toEqual({ ok: false, kind: "empty", attempts: 1, usage: NO_USAGE });
     expect(JSON.stringify(result)).not.toContain("SDK-ONLY-CONVENIENCE-FIELD");
   });
 
@@ -698,20 +720,20 @@ describe("normalizing provider failures", () => {
         new Response(JSON.stringify({ error: { message: "PROVIDER-ERROR-BODY" } }), { status }),
       ]);
       const result = await generate(harness);
-      expect(result).toEqual({ ok: false, kind: "http", status, attempts: 1 });
+      expect(result).toEqual({ ok: false, kind: "http", status, attempts: 1, usage: NO_USAGE });
       expect(JSON.stringify(result)).not.toContain("PROVIDER-ERROR-BODY");
     },
   );
 
   it("normalizes a network failure", async () => {
     const harness = makeHarness([new TypeError("fetch failed for https://api.openai.com")]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "network", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "network", attempts: 1, usage: NO_USAGE });
   });
 
   it("normalizes a timeout, and keeps it distinct from a network failure", async () => {
     const timeoutError = Object.assign(new Error("aborted"), { name: "TimeoutError" });
     const harness = makeHarness([timeoutError]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "timeout", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "timeout", attempts: 1, usage: NO_USAGE });
   });
 
   it("treats an AbortError raised on OUR aborted signal as a timeout", async () => {
@@ -727,7 +749,7 @@ describe("normalizing provider failures", () => {
       sleep: async () => {},
       createTimeoutSignal: () => controller.signal,
     });
-    expect(result).toEqual({ ok: false, kind: "timeout", attempts: 1 });
+    expect(result).toEqual({ ok: false, kind: "timeout", attempts: 1, usage: NO_USAGE });
   });
 
   it("reports a 2xx whose body is not JSON as unreadable, not as empty", async () => {
@@ -735,7 +757,7 @@ describe("normalizing provider failures", () => {
       new Response("<html>PROVIDER-HTML-BODY</html>", { status: 200 }),
     ]);
     const result = await generate(harness);
-    expect(result).toEqual({ ok: false, kind: "unreadable_response", attempts: 1 });
+    expect(result).toEqual({ ok: false, kind: "unreadable_response", attempts: 1, usage: NO_USAGE });
     expect(JSON.stringify(result)).not.toContain("PROVIDER-HTML-BODY");
   });
 
@@ -753,6 +775,7 @@ describe("normalizing provider failures", () => {
       ok: false,
       kind: "unreadable_response",
       attempts: 1,
+      usage: NO_USAGE,
     });
   });
 
@@ -762,6 +785,7 @@ describe("normalizing provider failures", () => {
       ok: false,
       kind: "unreadable_response",
       attempts: 1,
+      usage: NO_USAGE,
     });
     const nonString = makeHarness([
       new Response(JSON.stringify({ output: [messageItem("x")], status: 42 }), { status: 200 }),
@@ -770,17 +794,18 @@ describe("normalizing provider failures", () => {
       ok: false,
       kind: "unreadable_response",
       attempts: 1,
+      usage: NO_USAGE,
     });
   });
 
   it("reports an empty output array as empty", async () => {
     const harness = makeHarness([openAiOk([])]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("reports a reasoning-only response as empty", async () => {
     const harness = makeHarness([openAiOk([reasoningItem("only reasoning")])]);
-    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1 });
+    expect(await generate(harness)).toEqual({ ok: false, kind: "empty", attempts: 1, usage: FIXTURE_USAGE });
   });
 
   it("never throws, whatever the provider does", async () => {
@@ -820,6 +845,7 @@ describe("a 200 whose status is not completed", () => {
       ok: false,
       kind: "incomplete_response",
       attempts: 1,
+      usage: FIXTURE_USAGE,
     });
   });
 
@@ -843,6 +869,7 @@ describe("a 200 whose status is not completed", () => {
       ok: false,
       kind: "incomplete_response",
       attempts: 1,
+      usage: FIXTURE_USAGE,
     });
   });
 
@@ -860,7 +887,8 @@ describe("a 200 whose status is not completed", () => {
     ]);
     const result = await generate(harness);
     const asText = JSON.stringify(result);
-    expect(result).toEqual({ ok: false, kind: "incomplete_response", attempts: 1 });
+    // This hand-built envelope carries no usage block, so none is reported.
+    expect(result).toEqual({ ok: false, kind: "incomplete_response", attempts: 1, usage: NO_USAGE });
     expect(asText).not.toContain("LEAKED-ERROR-MESSAGE");
     expect(asText).not.toContain("max_output_tokens");
     expect(asText).not.toContain("server_error");
@@ -902,8 +930,10 @@ describe("nothing provider-shaped or sensitive escapes", () => {
       for (const secret of SENSITIVE) expect(asText).not.toContain(secret);
       expect(asText).not.toContain("req_LEAKED");
       expect(asText).not.toContain("retry-after");
+      // `usage` joined the bounded shape in AI-MULTI-PROVIDER-001D, as the
+      // sanitized provider-neutral vocabulary — never OpenAI's own usage object.
       expect(Object.keys(result).sort().join(",")).toMatch(
-        /^(attempts,kind,ok|attempts,kind,ok,status)$/,
+        /^(attempts,kind,ok,usage|attempts,kind,ok,status,usage)$/,
       );
     }
   });
@@ -965,6 +995,7 @@ describe("nothing provider-shaped or sensitive escapes", () => {
       ok: true,
       text: '{"existingProjects":[],"existingTags":[]}',
       attempts: 1,
+      usage: FIXTURE_USAGE,
     });
     expect(result).not.toHaveProperty("existingProjects");
     expect(result).not.toHaveProperty("suggestions");

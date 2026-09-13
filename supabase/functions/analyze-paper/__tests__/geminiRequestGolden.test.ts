@@ -256,6 +256,14 @@ describe("the exact request analyze-paper sends to Google", () => {
 
   it("returns the model's text to the caller's own parser, unmodified", async () => {
     const { result } = await captureRequest(TITLE, ABSTRACT);
-    expect(result).toEqual({ ok: true, text: "{}", attempts: 1 });
+    // AI-MULTI-PROVIDER-001D: the result also carries usage. This fixture's
+    // envelope has no usageMetadata, so that usage is "not returned" — unknown,
+    // never zero. The request bytes pinned above are untouched by 001D.
+    expect(result).toEqual({
+      ok: true,
+      text: "{}",
+      attempts: 1,
+      usage: { kind: "unavailable", reason: "not_returned" },
+    });
   });
 });

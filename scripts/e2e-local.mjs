@@ -3790,11 +3790,19 @@ const ACL_DUMP_SQL = {
  * initiative must not move any of it, and the proof is equality against this
  * value captured before the migration, never against a hardcoded target.
  */
-const ACL_SERVICE_ROLE_SNAPSHOT_SQL =
+//
+// AI-MULTI-PROVIDER-001D: `migration up` applies EVERY pending migration, not
+// only the reconciliation, so a later migration's new relation (with its own
+// deliberately stated service_role grant) appears in the "after" state. NC4 is a
+// claim about relations the reconciliation found, so both snapshots are scoped
+// to the relations that existed at the baseline — a relation a later migration
+// creates is that migration's business and is pinned by suite 015 instead.
+const aclServiceRoleSnapshotSql = (baselineRelations) =>
   "SELECT coalesce((SELECT string_agg(c.relname || ':' || a.privilege_type, ',' ORDER BY c.relname, a.privilege_type) " +
   "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, " +
   "       aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind='S' THEN 's'::\"char\" ELSE 'r'::\"char\" END, c.relowner))) a " +
-  " WHERE n.nspname='public' AND c.relkind IN ('r','S') AND a.grantee = 'service_role'::regrole), '') " +
+  " WHERE n.nspname='public' AND c.relkind IN ('r','S') AND a.grantee = 'service_role'::regrole " +
+  `   AND c.relname = ANY(string_to_array('${baselineRelations}', ','))), '') ` +
   "|| ' // ' || " +
   "coalesce((SELECT string_agg(d.defaclobjtype::text || ':' || x.privilege_type, ',' ORDER BY d.defaclobjtype::text, x.privilege_type) " +
   "  FROM pg_default_acl d JOIN pg_namespace nn ON nn.oid = d.defaclnamespace, aclexplode(d.defaclacl) x " +
@@ -3962,7 +3970,14 @@ async function runHostedAclParityLane() {
   log("NC3 OK: the ACL matrix suite fails against hosted Production's legacy ACL.");
 
   // ── 6. Apply the real migration file, through the real CLI path ───────────
-  const serviceRoleBefore = await dbScalar(container, ACL_SERVICE_ROLE_SNAPSHOT_SQL);
+  // The relations present at the baseline — the set NC4 is a claim about.
+  const baselineRelations = await dbScalar(container,
+    "SELECT coalesce(string_agg(c.relname, ',' ORDER BY c.relname), '') FROM pg_class c " +
+      "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','S');");
+  if (!/^[a-z0-9_,]+$/.test(baselineRelations)) {
+    throw new Error("ACL parity lane: could not read the baseline relation set for NC4.");
+  }
+  const serviceRoleBefore = await dbScalar(container, aclServiceRoleSnapshotSql(baselineRelations));
   const upCode = await runInherit("supabase", ["migration", "up", "--local"]);
   if (upCode !== 0) throw new Error("ACL parity lane: `supabase migration up --local` failed.");
   const applied = await dbScalar(container,
@@ -3981,7 +3996,7 @@ async function runHostedAclParityLane() {
   }
   log("hosted-parity convergence OK: suite 015 passes from hosted Production's starting ACL.");
 
-  const serviceRoleAfter = await dbScalar(container, ACL_SERVICE_ROLE_SNAPSHOT_SQL);
+  const serviceRoleAfter = await dbScalar(container, aclServiceRoleSnapshotSql(baselineRelations));
   if (serviceRoleAfter !== serviceRoleBefore) {
     throw new Error(
       "ACL parity lane (NC4): service_role privileges changed across the migration. This initiative " +
@@ -4085,9 +4100,12 @@ async function assertNoResidue(container, pgtapBefore, catalogBefore) {
     // The permanent half of the same record. It outlives the queue row by
     // design, so a leftover here is just as much a leak.
     "(SELECT count(*) FROM public.attachment_cleanup_tombstone) || '|' || " +
+    // AI-MULTI-PROVIDER-001D: every telemetry fixture lives inside a rolled-back
+    // suite transaction, so a surviving event means one escaped.
+    "(SELECT count(*) FROM public.ai_provider_usage_events) || '|' || " +
     "(SELECT count(*) FROM pg_locks WHERE locktype='advisory');")).split("|").map((s) => parseInt(s, 10));
   if (counts.some((c) => c !== 0)) {
-    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|cleanup|tombstone|advisory = ${counts.join("|")}).`);
+    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|cleanup|tombstone|usage_events|advisory = ${counts.join("|")}).`);
   }
   const pgtapAfter = await pgtapState(container);
   if (pgtapAfter !== pgtapBefore) {

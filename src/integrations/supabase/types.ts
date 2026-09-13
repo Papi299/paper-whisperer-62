@@ -57,6 +57,105 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_provider_usage_events: {
+        Row: {
+          cache_write_input_tokens: number | null
+          cache_write_input_usd_per_mtok: number | null
+          cached_input_tokens: number | null
+          cached_input_usd_per_mtok: number | null
+          cost_status: string
+          has_unmodeled_usage: boolean
+          id: string
+          input_tokens: number | null
+          input_usd_per_mtok: number | null
+          list_price_estimate_usd: number | null
+          model_selection_source: string
+          occurred_at: string
+          operation: string
+          operation_outcome: string
+          output_tokens: number | null
+          output_usd_per_mtok: number | null
+          price_record_id: string | null
+          provider: string
+          provider_attempts: number
+          provider_http_status: number | null
+          provider_model: string
+          provider_outcome: string
+          provider_total_tokens: number | null
+          reasoning_output_tokens: number | null
+          reasoning_source: string
+          recorded_at: string
+          resolved_reasoning_level: string | null
+          telemetry_version: number
+          usage_status: string
+          user_id: string
+        }
+        Insert: {
+          cache_write_input_tokens?: number | null
+          cache_write_input_usd_per_mtok?: number | null
+          cached_input_tokens?: number | null
+          cached_input_usd_per_mtok?: number | null
+          cost_status: string
+          has_unmodeled_usage: boolean
+          id?: string
+          input_tokens?: number | null
+          input_usd_per_mtok?: number | null
+          list_price_estimate_usd?: number | null
+          model_selection_source: string
+          occurred_at: string
+          operation: string
+          operation_outcome: string
+          output_tokens?: number | null
+          output_usd_per_mtok?: number | null
+          price_record_id?: string | null
+          provider: string
+          provider_attempts: number
+          provider_http_status?: number | null
+          provider_model: string
+          provider_outcome: string
+          provider_total_tokens?: number | null
+          reasoning_output_tokens?: number | null
+          reasoning_source: string
+          recorded_at?: string
+          resolved_reasoning_level?: string | null
+          telemetry_version: number
+          usage_status: string
+          user_id: string
+        }
+        Update: {
+          cache_write_input_tokens?: number | null
+          cache_write_input_usd_per_mtok?: number | null
+          cached_input_tokens?: number | null
+          cached_input_usd_per_mtok?: number | null
+          cost_status?: string
+          has_unmodeled_usage?: boolean
+          id?: string
+          input_tokens?: number | null
+          input_usd_per_mtok?: number | null
+          list_price_estimate_usd?: number | null
+          model_selection_source?: string
+          occurred_at?: string
+          operation?: string
+          operation_outcome?: string
+          output_tokens?: number | null
+          output_usd_per_mtok?: number | null
+          price_record_id?: string | null
+          provider?: string
+          provider_attempts?: number
+          provider_http_status?: number | null
+          provider_model?: string
+          provider_outcome?: string
+          provider_total_tokens?: number | null
+          reasoning_output_tokens?: number | null
+          reasoning_source?: string
+          recorded_at?: string
+          resolved_reasoning_level?: string | null
+          telemetry_version?: number
+          usage_status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       attachment_cleanup_queue: {
         Row: {
           created_at: string

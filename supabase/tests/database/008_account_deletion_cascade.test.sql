@@ -108,7 +108,7 @@ BEGIN
 END;
 $hlp$;
 
-SELECT plan(94);
+SELECT plan(98);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Part 1 — catalog contract
@@ -171,6 +171,11 @@ SELECT is(pg_temp.auth_fk_action('attachment_cleanup_tombstone', 'user_id'), 'ca
 -- And it must NOT be reachable from papers: an intent that cascaded away with
 -- the paper whose deletion created it would be destroyed by the exact statement
 -- it exists to outlive.
+-- AI-MULTI-PROVIDER-001D. Provider-usage telemetry names the user it served, so
+-- it leaves with the account: no pseudonymous usage trace outlives a hard
+-- deletion. Retaining it would be an owner/privacy decision, not a default.
+SELECT is(pg_temp.auth_fk_action('ai_provider_usage_events', 'user_id'), 'cascade',
+  'ai_provider_usage_events.user_id cascades from auth.users');
 SELECT is(
   (SELECT count(*)::int FROM pg_constraint
     WHERE contype='f' AND conrelid='public.attachment_cleanup_queue'::regclass
@@ -345,6 +350,22 @@ INSERT INTO public.user_ai_preferences (user_id, preferred_model_id) VALUES
   ('c4000000-0000-0000-0000-0000000000d1', 'google/gemini-3.5-flash'),
   ('c4000000-0000-0000-0000-0000000000d2', 'google/gemini-3.5-flash');
 
+-- One provider-usage event for each user (AI-MULTI-PROVIDER-001D). Planted as
+-- the owner: in production only the generation functions' server key writes
+-- these. A content-free row, exactly as the runtime builds it.
+INSERT INTO public.ai_provider_usage_events
+  (occurred_at, user_id, telemetry_version, operation, provider, provider_model,
+   model_selection_source, reasoning_source, resolved_reasoning_level,
+   provider_outcome, provider_attempts, operation_outcome, usage_status,
+   input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens,
+   provider_total_tokens, has_unmodeled_usage, cost_status)
+SELECT '2026-10-01T12:00:00Z', u, 1, 'analyze', 'google', 'gemini-flash-latest',
+       'system_default', 'provider_default_fallback', NULL,
+       'completed', 1, 'succeeded', 'reported',
+       1200, 0, 190, 40, 1390, false, 'unpriced'
+  FROM unnest(ARRAY['c4000000-0000-0000-0000-0000000000d1',
+                    'c4000000-0000-0000-0000-0000000000d2']::uuid[]) AS u;
+
 -- Retained provider/audit history for the doomed user.
 INSERT INTO public.subscriptions (id, user_id, provider, status) VALUES
   ('c4000000-0000-0000-0000-0000000000e1', 'c4000000-0000-0000-0000-0000000000d1',
@@ -377,6 +398,8 @@ SELECT is(pg_temp.rows_for('attachment_cleanup_queue', 'c4000000-0000-0000-0000-
   'pre-delete: doomed pending attachment cleanup exists');
 SELECT is(pg_temp.rows_for('attachment_cleanup_tombstone', 'c4000000-0000-0000-0000-0000000000d1'), 1,
   'pre-delete: doomed cleanup tombstone exists');
+SELECT is(pg_temp.rows_for('ai_provider_usage_events', 'c4000000-0000-0000-0000-0000000000d1'), 1,
+  'pre-delete: doomed provider-usage event exists');
 SELECT is(
   (SELECT count(*)::int FROM public.paper_tags
     WHERE paper_id = 'c4000000-0000-0000-0000-0000000000a1'),
@@ -443,6 +466,8 @@ SELECT is(pg_temp.rows_for('attachment_cleanup_queue', 'c4000000-0000-0000-0000-
   'cascade: pending attachment-cleanup intent removed');
 SELECT is(pg_temp.rows_for('attachment_cleanup_tombstone', 'c4000000-0000-0000-0000-0000000000d1'), 0,
   'cascade: permanent cleanup tombstone removed');
+SELECT is(pg_temp.rows_for('ai_provider_usage_events', 'c4000000-0000-0000-0000-0000000000d1'), 0,
+  'cascade: provider-usage telemetry removed (no pseudonymous trace survives)');
 
 -- Junction rows own no user_id, so they are the easiest thing to leave behind.
 SELECT is(
@@ -519,6 +544,8 @@ SELECT is(pg_temp.rows_for('attachment_cleanup_queue', 'c4000000-0000-0000-0000-
   'blast radius: neighbour pending attachment cleanup intact');
 SELECT is(pg_temp.rows_for('attachment_cleanup_tombstone', 'c4000000-0000-0000-0000-0000000000d2'), 1,
   'blast radius: neighbour cleanup tombstone intact');
+SELECT is(pg_temp.rows_for('ai_provider_usage_events', 'c4000000-0000-0000-0000-0000000000d2'), 1,
+  'blast radius: neighbour provider-usage telemetry intact');
 -- The catalog is product metadata, not account data: deleting a user who had
 -- chosen a model must not retire the model for everyone else.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog

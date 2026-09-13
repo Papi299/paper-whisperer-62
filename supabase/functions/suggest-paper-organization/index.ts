@@ -2,12 +2,12 @@
 //
 // Advisory only. It answers "which of this user's existing Projects/Tags fit
 // this paper, and is anything new genuinely worth creating?" and returns
-// suggestions. It creates nothing, assigns nothing and persists nothing: the
-// user accepts or rejects each suggestion later, and the existing Project/Tag
-// mutation paths remain the sole authority for any change to the library. The
-// only writes it performs are the two pre-existing AI-quota RPCs
-// (`consume_ai_quota` / `refund_ai_quota`) — this feature adds no second quota
-// system, no new table and no migration.
+// suggestions. It creates nothing, assigns nothing and persists nothing in the
+// application domain: the user accepts or rejects each suggestion later, and
+// the existing Project/Tag mutation paths remain the sole authority for any
+// change to the library. Its writes are the two pre-existing AI-quota RPCs
+// (`consume_ai_quota` / `refund_ai_quota`) and, since AI-MULTI-PROVIDER-001D,
+// one content-free provider-usage telemetry row per provider call.
 //
 // There is deliberately no frontend caller yet. 001A ships and proves the
 // backend contract; the Edit Paper experience that will use it is 001B, and the
@@ -19,7 +19,8 @@
 // matters lives in the pure, Node-tested modules beside it:
 //   handler.ts    — CORS before auth, method gating, the authoritative
 //                   getUser() check, paper ownership, taxonomy loading, quota
-//                   consumption/refund, the bounded provider retry budget
+//                   consumption/refund, the bounded provider retry budget,
+//                   and when a provider-usage event is recorded
 //   validation.ts — request shape, bounds, and the eligibility rule
 //   prompt.ts     — the privacy boundary: allow-listed provider fields and the
 //                   ephemeral P1/T1 refs that replace database ids
@@ -42,6 +43,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import { resolveSystemDefaultAiModel } from "../_shared/aiProviderRegistry.ts";
+import { createAiUsageEventInsertClient } from "../_shared/aiUsageTelemetry.ts";
 import { handleSuggestOrganizationRequest, type CallerClient } from "./handler.ts";
 
 Deno.serve((req) =>
@@ -54,7 +56,8 @@ Deno.serve((req) =>
       const supabaseAnonKey = requireEdgeEnv("SUPABASE_ANON_KEY");
       // Anon key + the caller's own Authorization header: every read this
       // function performs is subject to the caller's RLS, and the quota RPCs
-      // see the caller's auth.uid(). No elevated key exists in this function.
+      // see the caller's auth.uid(). The one elevated client in this function
+      // is the telemetry writer below, and it reads nothing.
       return createClient(supabaseUrl, supabaseAnonKey, {
         global: { headers: { Authorization: authHeader } },
       }) as unknown as CallerClient;
@@ -80,5 +83,18 @@ Deno.serve((req) =>
     // glue, and so does the choice of provider adapter
     // (AI-MULTI-PROVIDER-001A).
     getSystemDefaultModel: () => resolveSystemDefaultAiModel(Deno.env.get("GEMINI_MODEL")),
+    // AI-MULTI-PROVIDER-001D. The provider-usage telemetry writer's client,
+    // built lazily — only after a provider call happened — from the
+    // platform-injected secret key. Its type allows one thing: INSERT into
+    // `ai_provider_usage_events`, and the database grants that role nothing
+    // else on it. It carries no caller header, never reaches the caller client,
+    // the quota RPCs or a provider adapter, and a missing key only means the
+    // event is not recorded (logged), never a failed request.
+    createUsageEventClient: () =>
+      createAiUsageEventInsertClient({
+        supabaseUrl: requireEdgeEnv("SUPABASE_URL"),
+        readEnv: (name) => Deno.env.get(name),
+        createSupabaseClient: (url, key, options) => createClient(url, key, options),
+      }),
   }),
 );

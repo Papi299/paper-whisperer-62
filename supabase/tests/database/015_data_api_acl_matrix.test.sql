@@ -45,20 +45,32 @@
 BEGIN;
 
 -- ── Helpers ─────────────────────────────────────────────────────────────────
+-- A classified relation that does not exist is reported, never crashed on.
+-- The per-table sections below resolve each `acl_expected` name with
+-- `to_regclass`, which yields NULL for a missing relation; both helpers answer
+-- that with a marker no privilege list can equal, so the row FAILS by name
+-- (ACL-C1/C2/F1) instead of aborting the whole suite at a `::regclass` cast.
+-- That matters on the hosted-parity lane, which runs this suite at an older
+-- migration baseline where a table classified by a later migration does not
+-- exist yet: an abort there looked like "failed for the wrong reason". The
+-- inventory guard ACL-A1 still fails independently, so nothing passes vacuously.
+
 -- Direct = what the object's own ACL grants this grantee (0 = PUBLIC).
 CREATE FUNCTION pg_temp.direct_privs(p_rel regclass, p_grantee oid) RETURNS text LANGUAGE sql STABLE AS $fn$
-  SELECT coalesce(string_agg(a.privilege_type, ',' ORDER BY a.privilege_type), '')
-    FROM pg_class c,
-         aclexplode(coalesce(c.relacl,
-           acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) a
-   WHERE c.oid = p_rel AND a.grantee = p_grantee;
+  SELECT CASE WHEN p_rel IS NULL THEN '<missing relation>' ELSE (
+    SELECT coalesce(string_agg(a.privilege_type, ',' ORDER BY a.privilege_type), '')
+      FROM pg_class c,
+           aclexplode(coalesce(c.relacl,
+             acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) a
+     WHERE c.oid = p_rel AND a.grantee = p_grantee) END;
 $fn$;
 
 -- Effective = what the role can actually do, PUBLIC-inherited privileges included.
 CREATE FUNCTION pg_temp.eff_table_privs(p_rel regclass, p_role oid) RETURNS text LANGUAGE sql STABLE AS $fn$
-  SELECT coalesce(string_agg(p, ',' ORDER BY p), '')
-    FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
-   WHERE has_table_privilege(p_role, p_rel, p);
+  SELECT CASE WHEN p_rel IS NULL THEN '<missing relation>' ELSE (
+    SELECT coalesce(string_agg(p, ',' ORDER BY p), '')
+      FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
+     WHERE has_table_privilege(p_role, p_rel, p)) END;
 $fn$;
 
 CREATE FUNCTION pg_temp.eff_seq_privs(p_rel regclass, p_role oid) RETURNS text LANGUAGE sql STABLE AS $fn$
@@ -85,6 +97,10 @@ $fn$;
 CREATE TEMP TABLE acl_expected (relname text PRIMARY KEY, auth_privs text NOT NULL, svc_privs text NOT NULL);
 INSERT INTO acl_expected (relname, auth_privs, svc_privs) VALUES
   ('ai_model_catalog',            'SELECT',                            ''),
+  -- AI-MULTI-PROVIDER-001D. Server-written telemetry: no browser role holds
+  -- anything, and service_role holds INSERT alone — it can append an event but
+  -- never read one back, rewrite, delete or truncate the record.
+  ('ai_provider_usage_events',    '',                                  'INSERT'),
   ('attachment_cleanup_queue',    'DELETE,SELECT',                     ''),
   ('attachment_cleanup_tombstone','',                                  ''),
   ('author_identities',           'SELECT',                            ''),
@@ -131,7 +147,7 @@ INSERT INTO acl_invoker_public_exec_allowlist VALUES
   ('set_updated_at()',                          'updated_at trigger function'),
   ('update_updated_at_column()',                'updated_at trigger function');
 
-SELECT plan(88);
+SELECT plan(90);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -221,13 +237,13 @@ SELECT is(
 
 -- ══ C. authenticated holds exactly the intended matrix ══════════════════════
 SELECT is(
-  pg_temp.direct_privs(('public.' || quote_ident(e.relname))::regclass, to_regrole('authenticated')::oid),
+  pg_temp.direct_privs(to_regclass('public.' || quote_ident(e.relname)), to_regrole('authenticated')::oid),
   e.auth_privs,
   'ACL-C1 authenticated DIRECT privileges on ' || e.relname
 ) FROM acl_expected e ORDER BY e.relname;
 
 SELECT is(
-  pg_temp.eff_table_privs(('public.' || quote_ident(e.relname))::regclass, to_regrole('authenticated')::oid),
+  pg_temp.eff_table_privs(to_regclass('public.' || quote_ident(e.relname)), to_regrole('authenticated')::oid),
   e.auth_privs,
   'ACL-C2 authenticated EFFECTIVE privileges on ' || e.relname
 ) FROM acl_expected e ORDER BY e.relname;
@@ -282,10 +298,10 @@ SELECT ok(
 -- ══ F. service_role table privileges are preserved, not narrowed ════════════
 SELECT is(
   (SELECT coalesce(string_agg(e.relname || ' expected[' || e.svc_privs || '] actual['
-                              || pg_temp.direct_privs(('public.' || quote_ident(e.relname))::regclass, to_regrole('service_role')::oid) || ']',
+                              || pg_temp.direct_privs(to_regclass('public.' || quote_ident(e.relname)), to_regrole('service_role')::oid) || ']',
                               '; ' ORDER BY e.relname), '')
      FROM acl_expected e
-    WHERE pg_temp.direct_privs(('public.' || quote_ident(e.relname))::regclass, to_regrole('service_role')::oid)
+    WHERE pg_temp.direct_privs(to_regclass('public.' || quote_ident(e.relname)), to_regrole('service_role')::oid)
           IS DISTINCT FROM e.svc_privs),
   '',
   'ACL-F1 service_role table privileges are exactly the posture this initiative preserved');

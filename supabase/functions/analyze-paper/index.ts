@@ -22,6 +22,12 @@ import {
   type ProviderErrorClass,
 } from "../_shared/providerError.ts";
 import { buildAnalyzeGenerationRequest } from "./prompt.ts";
+import type { AiProviderResult } from "../_shared/aiProvider.ts";
+import {
+  createAiUsageEventInsertClient,
+  recordAiProviderUsage,
+  type AiOperationOutcome,
+} from "../_shared/aiUsageTelemetry.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -275,6 +281,41 @@ Deno.serve(async (req) => {
     // manager-only provider panel) never leaks Google project detail.
     let providerErrorClass: ProviderErrorClass = "unknown";
     let classified = false;
+
+    // AI-MULTI-PROVIDER-001D. The provider call, once it has happened, and the
+    // one place its usage is recorded: exactly once per request that reached a
+    // provider — on the success return and in the failure catch — and only
+    // AFTER the outcome is decided, so telemetry can neither change nor shadow
+    // it. `recordAiProviderUsage` never throws and nothing reads its result.
+    // The quota refund is untouched: provider cost and PaperLume quota are
+    // different ledgers. The telemetry client is the only elevated client in
+    // this function; it is built lazily from the platform-injected secret key
+    // and can INSERT one telemetry row and nothing else.
+    let dispatchedCall: AiProviderResult | null = null;
+    const recordProviderUsage = async (operationOutcome: AiOperationOutcome): Promise<void> => {
+      if (dispatchedCall === null) return;
+      await recordAiProviderUsage(
+        {
+          userId: user.id,
+          operation: "analyze",
+          selection: modelSelection,
+          reasoning: reasoningDecision,
+          call: dispatchedCall,
+          operationOutcome,
+        },
+        {
+          label: "analyze-paper",
+          logger: console,
+          createClient: () =>
+            createAiUsageEventInsertClient({
+              supabaseUrl,
+              readEnv: (name) => Deno.env.get(name),
+              createSupabaseClient: (url, key, options) => createClient(url, key, options),
+            }),
+        },
+      );
+    };
+
     try {
       // AI-PROVIDER-RESILIENCE-001A: the timeout/retry policy lives in
       // _shared/geminiTransport.ts, which the Google adapter calls, shared with
@@ -299,6 +340,7 @@ Deno.serve(async (req) => {
         },
       );
 
+      dispatchedCall = providerCall;
       console.log("5a. Gemini provider attempts:", providerCall.attempts);
 
       if (!providerCall.ok) {
@@ -386,6 +428,7 @@ Deno.serve(async (req) => {
         throw new Error("gemini_parse_failed: " + (parseErr instanceof Error ? parseErr.message : "unknown"));
       }
       console.log("7. Success! Returning parsed result");
+      await recordProviderUsage("succeeded");
 
       // Success path — quota stays consumed (no refund). Response
       // shape and headers are bit-identical to the pre-quota version.
@@ -404,6 +447,10 @@ Deno.serve(async (req) => {
       }
       // Best-effort refund — the user did not receive a valid analysis.
       await safeRefundAiQuota(supabase, user.id);
+      // The provider's usage is recorded even though the user got nothing: a
+      // parse failure after a completed generation still cost the provider
+      // work. A request that never reached the provider records nothing.
+      await recordProviderUsage("failed");
       // Log the class + a bounded reason; never the raw Google body.
       console.error(
         "analyze-paper provider failure:",
