@@ -16,6 +16,7 @@ import {
   type AiProviderUsage,
   type AiUsageCount,
 } from "../aiUsage.ts";
+import { estimateAiListPriceCost } from "../aiCostEstimate.ts";
 import { GOOGLE_AI_PROVIDER_ADAPTER, readGeminiUsage } from "../googleAiProvider.ts";
 import { ANTHROPIC_AI_PROVIDER_ADAPTER, readAnthropicUsage } from "../anthropicAiProvider.ts";
 import { OPENAI_AI_PROVIDER_ADAPTER, readOpenAiUsage } from "../openAiProvider.ts";
@@ -172,11 +173,74 @@ describe("Google usageMetadata", () => {
     expect(readGeminiUsage({ usageMetadata: "1200" })).toBe(AI_USAGE_INVALID);
   });
 
-  it("flags tool-use prompt tokens as unmodeled — PaperLume sends no tools", () => {
+  // `toolUsePromptTokenCount` is "Number of tokens present in tool-use
+  // prompt(s)" in both the REST reference and the proto. Neither source counts
+  // it in `totalTokenCount`, and neither says whether it sits inside
+  // `promptTokenCount`, so it belongs to no dimension and to neither accepted
+  // total: a positive count only raises the unmodeled-usage flag. PaperLume
+  // sends no tools.
+  it.each([
+    ["the REST reference's total (prompt + thoughts + candidates)", 108],
+    ["the proto comment's total (prompt + candidates)", 103],
+  ])("flags positive tool-use prompt tokens as unmodeled under %s, and folds them into nothing", (_label, total) => {
     const usage = readGeminiUsage({
-      usageMetadata: { promptTokenCount: 100, toolUsePromptTokenCount: 7, candidatesTokenCount: 3, totalTokenCount: 110 },
+      usageMetadata: {
+        promptTokenCount: 100,
+        toolUsePromptTokenCount: 7,
+        candidatesTokenCount: 3,
+        thoughtsTokenCount: 5,
+        totalTokenCount: total,
+      },
     });
     expect(usage).toMatchObject({ kind: "reported", unmodeledUsage: true });
+    expect(dims(usage)).toEqual({
+      inputTokens: R(100),
+      cachedInputTokens: R(0),
+      cacheWriteInputTokens: NA,
+      outputTokens: R(8),
+      reasoningOutputTokens: R(5),
+      providerTotalTokens: R(total),
+    });
+    expectNestingHolds(usage);
+  });
+
+  it.each([
+    ["prompt + candidates + tool use", { promptTokenCount: 100, toolUsePromptTokenCount: 7, candidatesTokenCount: 3, totalTokenCount: 110 }],
+    [
+      "prompt + candidates + thoughts + tool use",
+      { promptTokenCount: 100, toolUsePromptTokenCount: 7, candidatesTokenCount: 3, thoughtsTokenCount: 5, totalTokenCount: 115 },
+    ],
+  ])("rejects a total that balances only once tool-use tokens are added: %s", (_label, metadata) => {
+    expect(readGeminiUsage({ usageMetadata: metadata })).toBe(AI_USAGE_INVALID);
+  });
+
+  it("does not let tool-use tokens stand in for a missing output count", () => {
+    // 120 tokens are unaccounted for. Adding the tool-use count would balance
+    // the total and read the missing output as a false zero.
+    expect(
+      readGeminiUsage({ usageMetadata: { promptTokenCount: 500, toolUsePromptTokenCount: 120, totalTokenCount: 620 } }),
+    ).toBe(AI_USAGE_INVALID);
+  });
+
+  it("prices none of the tool-use tokens: the flag changes the cost status, never the amount", () => {
+    const metadata = { promptTokenCount: 1000, candidatesTokenCount: 100, totalTokenCount: 1100 };
+    const cost = (usageMetadata: Record<string, number>) =>
+      estimateAiListPriceCost({
+        provider: "google",
+        providerModel: "gemini-3.5-flash",
+        at: new Date("2026-10-01T00:00:00Z"),
+        attempts: 1,
+        usage: readGeminiUsage({ usageMetadata }),
+      });
+
+    // 1,000 input tokens at $1.50/MTok + 100 output tokens at $9.00/MTok. The
+    // 400 tool-use tokens are priced as neither input nor output.
+    expect(cost(metadata)).toMatchObject({ status: "estimated", amountUsd: "0.002400000000000" });
+    expect(cost({ ...metadata, toolUsePromptTokenCount: 400 })).toMatchObject({
+      status: "estimated_lower_bound",
+      lowerBoundReasons: ["unmodeled_usage"],
+      amountUsd: "0.002400000000000",
+    });
   });
 });
 

@@ -271,12 +271,21 @@ const GEMINI_USAGE_COUNT_FIELDS = [
  *
  *   * `promptTokenCount` and `totalTokenCount` must be positive. PaperLume never
  *     sends an empty prompt, so a zero there is not a usage report.
- *   * `totalTokenCount` must equal its parts. Google's two first-party sources
- *     disagree on whether it includes thoughts — the REST reference says
- *     "prompt + thoughts + response candidates", the proto comment says
- *     "prompt + response candidates" — so either sum is accepted and anything
- *     else is rejected. This is what stops a renamed or missing
+ *   * `totalTokenCount` must equal one of its documented sums. Google's two
+ *     first-party sources disagree on whether it includes thoughts — the REST
+ *     reference says "prompt + thoughts + response candidates", the proto
+ *     comment says "prompt + response candidates" — so either sum is accepted
+ *     and anything else is rejected. This is what stops a renamed or missing
  *     `candidatesTokenCount` from being read as a false zero.
+ *
+ * ## Tool-use prompt tokens are observed, not modeled
+ *
+ * `toolUsePromptTokenCount` is "Number of tokens present in tool-use
+ * prompt(s)". Neither source counts it in `totalTokenCount`, and neither says
+ * whether it is part of `promptTokenCount`. So it is added to no dimension and
+ * to neither total sum. A report whose total balances only once it is added is
+ * rejected, never reconciled. A positive count only marks the report as
+ * carrying unmodeled usage, which makes any estimate a lower bound.
  *
  * The total is stored exactly as sent and is never treated as a parent.
  *
@@ -312,10 +321,9 @@ export function readGeminiUsage(payload: unknown): AiProviderUsage {
   const [prompt, cached, candidates, toolUse, thoughts, total] = counts;
 
   if (prompt === 0 || total === 0) return AI_USAGE_INVALID;
-  if (
-    total !== prompt + candidates + toolUse &&
-    total !== prompt + candidates + thoughts + toolUse
-  ) {
+  // The two documented totals. `toolUse` is in neither: no first-party source
+  // puts it there, so a total that balances only with it added is refused.
+  if (total !== prompt + candidates && total !== prompt + candidates + thoughts) {
     return AI_USAGE_INVALID;
   }
 
