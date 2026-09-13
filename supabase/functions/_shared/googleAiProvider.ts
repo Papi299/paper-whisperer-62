@@ -41,6 +41,15 @@
 // code.
 
 import { callGeminiWithRetry } from "./geminiTransport.ts";
+import {
+  AI_USAGE_INVALID,
+  AI_USAGE_NOT_APPLICABLE,
+  AI_USAGE_NOT_RETURNED,
+  finalizeReportedUsage,
+  readProviderTokenCount,
+  reportedTokens,
+  type AiProviderUsage,
+} from "./aiUsage.ts";
 import type {
   AiCallPolicy,
   AiGenerationRequest,
@@ -231,6 +240,98 @@ export function extractGeminiText(payload: unknown): string | null {
   return text;
 }
 
+/** The six `UsageMetadata` counts, in the order `readGeminiUsage` destructures them. */
+const GEMINI_USAGE_COUNT_FIELDS = [
+  "promptTokenCount",
+  "cachedContentTokenCount",
+  "candidatesTokenCount",
+  "toolUsePromptTokenCount",
+  "thoughtsTokenCount",
+  "totalTokenCount",
+] as const;
+
+/**
+ * Read Gemini's `usageMetadata` into PaperLume's usage vocabulary —
+ * AI-MULTI-PROVIDER-001D.
+ *
+ * ## Absent means zero HERE, and only here
+ *
+ * Every count in Google's `UsageMetadata` is a plain proto3 `int32` with no
+ * explicit presence (googleapis `generative_service.proto`), and ProtoJSON
+ * omits such a field when it holds its default. So inside a PRESENT
+ * `usageMetadata`, a missing `cachedContentTokenCount` or `thoughtsTokenCount`
+ * is the wire spelling of 0 — no cache hit, no thinking — not an unknown. The
+ * other adapters must not borrow this rule: their protocols are not proto3.
+ * A missing `usageMetadata` object is different: that is no report at all.
+ *
+ * ## The guards that make the zero rule safe
+ *
+ * Reading absence as zero is only honest if a genuinely missing number cannot
+ * masquerade as one, so two checks stand behind it:
+ *
+ *   * `promptTokenCount` and `totalTokenCount` must be positive. PaperLume never
+ *     sends an empty prompt, so a zero there is not a usage report.
+ *   * `totalTokenCount` must equal its parts. Google's two first-party sources
+ *     disagree on whether it includes thoughts — the REST reference says
+ *     "prompt + thoughts + response candidates", the proto comment says
+ *     "prompt + response candidates" — so either sum is accepted and anything
+ *     else is rejected. This is what stops a renamed or missing
+ *     `candidatesTokenCount` from being read as a false zero.
+ *
+ * The total is stored exactly as sent and is never treated as a parent.
+ *
+ * ## Mapping
+ *
+ *     promptTokenCount          -> inputTokens (includes cached content, per Google)
+ *     cachedContentTokenCount   -> cachedInputTokens (a subset of the prompt)
+ *     (no such dimension)       -> cacheWriteInputTokens: not applicable
+ *     candidatesTokenCount
+ *       + thoughtsTokenCount    -> outputTokens (disjoint counts; Google's price
+ *                                  row is "Output price (including thinking
+ *                                  tokens)")
+ *     thoughtsTokenCount        -> reasoningOutputTokens (a subset of output)
+ *     totalTokenCount           -> providerTotalTokens (as reported)
+ *     toolUsePromptTokenCount>0 -> unmodeled usage (PaperLume sends no tools)
+ *
+ * Nothing else is read — not `promptTokensDetails`, not `serviceTier` — and the
+ * raw object never leaves this module.
+ */
+export function readGeminiUsage(payload: unknown): AiProviderUsage {
+  if (!isPlainObject(payload)) return AI_USAGE_NOT_RETURNED;
+  const metadata = payload.usageMetadata;
+  if (metadata === undefined || metadata === null) return AI_USAGE_NOT_RETURNED;
+  if (!isPlainObject(metadata)) return AI_USAGE_INVALID;
+
+  const counts: number[] = [];
+  for (const field of GEMINI_USAGE_COUNT_FIELDS) {
+    const read = readProviderTokenCount(metadata[field]);
+    if (read.kind === "invalid") return AI_USAGE_INVALID;
+    // proto3 implicit presence: absent inside a present message is the default.
+    counts.push(read.kind === "value" ? read.tokens : 0);
+  }
+  const [prompt, cached, candidates, toolUse, thoughts, total] = counts;
+
+  if (prompt === 0 || total === 0) return AI_USAGE_INVALID;
+  if (
+    total !== prompt + candidates + toolUse &&
+    total !== prompt + candidates + thoughts + toolUse
+  ) {
+    return AI_USAGE_INVALID;
+  }
+
+  return finalizeReportedUsage(
+    {
+      inputTokens: reportedTokens(prompt),
+      cachedInputTokens: reportedTokens(cached),
+      cacheWriteInputTokens: AI_USAGE_NOT_APPLICABLE,
+      outputTokens: reportedTokens(candidates + thoughts),
+      reasoningOutputTokens: reportedTokens(thoughts),
+      providerTotalTokens: reportedTokens(total),
+    },
+    toolUse > 0,
+  );
+}
+
 /**
  * Send one generation request to Gemini and normalize the outcome.
  *
@@ -261,10 +362,17 @@ async function generate(
 
   if (!call.ok) {
     // Only the coarse kind and the status cross the boundary — never the
-    // provider's body, headers or URL.
+    // provider's body, headers or URL. No body was read, so there is no usage:
+    // a timeout in particular is UNKNOWN work, never zero work.
     return call.kind === "http"
-      ? { ok: false, kind: "http", status: call.status, attempts: call.attempts }
-      : { ok: false, kind: call.kind, attempts: call.attempts };
+      ? {
+          ok: false,
+          kind: "http",
+          status: call.status,
+          attempts: call.attempts,
+          usage: AI_USAGE_NOT_RETURNED,
+        }
+      : { ok: false, kind: call.kind, attempts: call.attempts, usage: AI_USAGE_NOT_RETURNED };
   }
 
   let payload: unknown;
@@ -273,13 +381,21 @@ async function generate(
   } catch {
     // A 2xx whose body is not Gemini JSON at all. The parse error's message can
     // quote the body, so it is discarded here rather than returned or logged.
-    return { ok: false, kind: "unreadable_response", attempts: call.attempts };
+    return {
+      ok: false,
+      kind: "unreadable_response",
+      attempts: call.attempts,
+      usage: AI_USAGE_NOT_RETURNED,
+    };
   }
 
+  // Read once, from the same payload the text comes from, and returned on the
+  // `empty` path too: a blocked candidate still consumed the prompt.
+  const usage = readGeminiUsage(payload);
   const text = extractGeminiText(payload);
-  if (text === null) return { ok: false, kind: "empty", attempts: call.attempts };
+  if (text === null) return { ok: false, kind: "empty", attempts: call.attempts, usage };
 
-  return { ok: true, text, attempts: call.attempts };
+  return { ok: true, text, attempts: call.attempts, usage };
 }
 
 /** The Google adapter — registered since AI-MULTI-PROVIDER-001A. */

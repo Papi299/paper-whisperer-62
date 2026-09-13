@@ -41,7 +41,7 @@
 2. **Account identity is minimal.** Email and an opaque user UUID, from Supabase Auth. Optional display name. One optional user-supplied credential: an NCBI PubMed API key.
 3. **Four external services receive data today**: Supabase (all storage/auth), Google Gemini (title/abstract, or title/abstract/keywords/study-type plus Project and Tag *names*), NCBI E-utilities (identifiers and search queries), Crossref (DOI or title). Two more receive no user content: Google Cloud Monitoring (aggregate provider metrics, owner/manager only) and Vercel (static hosting).
 4. **A fifth processor is live but configured outside this repository**: **Resend**, as Supabase Auth's custom SMTP, which handles transactional auth email and therefore the user's email address.
-5. **There is no application analytics, telemetry, error-reporting, advertising or fingerprinting of any kind.** See §10.
+5. **There is no application analytics, telemetry, error-reporting, advertising or fingerprinting of any kind.** See §10. *(Amended 2026-09-13 — repository code now contains an internal, server-written AI provider-usage record kept in Supabase: no content, no external recipient, and not deployed or applied in Production. This statement remains true of Production today. See §29.)*
 6. **The Chrome extension is exceptionally narrow**: `activeTab` only, no storage, no content scripts, no network capability at all. Re-verified against merged source in §11. *(Amended 2026-08-29 — the extension now also declares `scripting` and reads four bibliographic `<meta>` values from an invoked tab. It remains narrow: still no storage, still no content scripts, still no network capability, still no host permission. See §24.)*
 7. **Account deletion is implemented and is a hard delete**, with two evidenced exceptions (§12.4) and one class of external record it cannot reach (§12.5).
 8. **No retention period is defined anywhere in source.** Data is retained until the user deletes it or deletes their account.
@@ -1519,3 +1519,51 @@ Two further limits belong to the acceptance itself:
 
 - ❌ "the permanent tombstone-rejection path was proven in Production" — **false, and deliberately so.** No `upload_compensation` tombstone was manufactured in Production. That branch remains proven by the migration's own verification block, the pgTAP suite and deterministic local E2E, and creating permanent synthetic state in Production to demonstrate it was explicitly out of scope.
 - ❌ "Production is now free of orphaned attachment binaries" — **false.** The acceptance proved the new lifecycle's behaviour on objects it created itself. It performed **no** historical orphan hunt, and pre-feature orphans — objects no metadata row and no queue row ever described — are unaffected by this work and are still found only by the account-deletion Storage sweep.
+
+---
+
+## 29. Addendum — 2026-09-13 — `AI-MULTI-PROVIDER-001D` provider-usage telemetry
+
+**Scope.** Records a new **repository capability** and keeps it apart from **deployed Production behaviour**, which this addendum does not change. §8, §9, §10, §12 and §13 are preserved as written; this section amends them only where stated. Decision C42 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+
+### 29.1 Repository capability versus Production
+
+| | Repository `main` after 001D | Production today |
+|---|---|---|
+| Table `ai_provider_usage_events` | Defined by migration `20260913120000` | **Does not exist** — migration not applied |
+| Telemetry writes | `analyze-paper` and `suggest-paper-organization` write one event per provider call | **None** — Production runs the pre-001A generation runtime |
+| Elevated key in the generation functions | Used for that one INSERT | **Not used** |
+| Public Privacy Policy | Unchanged | Unchanged |
+
+**Class: VERIFIED** (repository source; Production state verified read-only on 2026-09-13: ledger 82 rows, no telemetry-like relation in any schema).
+
+### 29.2 What an event stores
+
+Per user, per AI request that reached a provider: when it finished; the user's opaque id (server-derived from `auth.getUser()`, never from the request); the operation (`analyze` or `suggest`); the provider and **public** model name; how the model and reasoning level were chosen and which level was sent; the bounded provider outcome and, for an HTTP failure, its status code; the real number of provider attempts; whether the user received a result; the token counts the provider reported (input, cached input, cache-write input, output, reasoning output, provider total); and a list-price cost estimate with the price-record id and rates used.
+
+### 29.3 What an event can never store
+
+No title, abstract, keywords, study type, statistical methods, notes or other paper metadata; no Project or Tag names or ids; no paper id; no prompt; no generated TLDR, suggestion or other model output; no provider response or error body; no email, bearer token, Supabase session, provider or PubMed API key; no URL; no attachment data. This is enforced by the row type in [`_shared/aiUsageTelemetry.ts`](../supabase/functions/_shared/aiUsageTelemetry.ts) and by CHECK constraints that restrict every string column to bounded enums or identifier shapes, and it is asserted by the Vitest privacy tests and pgTAP suite `017`. **Class: VERIFIED.**
+
+### 29.4 Recipients, access and logs
+
+- **No new external recipient.** The data stays in PaperLume's existing Supabase project. Nothing is sent to an analytics, observability or error-tracking service, and no provider receives anything new: usage is read from the response the provider already returns.
+- **No browser access.** `PUBLIC`, `anon` and `authenticated` hold no privilege on the table and it has no RLS policy, so a user cannot read their own events or anyone else's through the Data API. `service_role` holds `INSERT` only. Reading the data is an owner/operator activity.
+- **Logs.** The new Edge log lines name the operation, provider, public model, outcome, attempt count and statuses. They contain no user id, no content and no database error message — only a bounded SQLSTATE code on a failed write. This extends §10.1's "no user id … is written to any application log" rather than weakening it.
+
+### 29.5 Retention, deletion and export
+
+- **Retention:** no period is defined and no purge exists. An event lives for the life of the account (§13 applies: "retained for the life of the account; deleted with it").
+- **Account deletion:** `user_id` cascades from `auth.users`, so a hard deletion removes every event — no pseudonymous usage trace remains. Pinned by suite `008`. Keeping telemetry beyond deletion would be an owner/privacy decision, and none has been made.
+- **Export:** events are **not** in the account-export archive. They are server-written operational accounting that the client cannot read (excluded on the same ground as `usage_counters`). **OWNER / LEGAL INPUT REQUIRED:** whether a data-subject access or portability request must include them.
+
+### 29.6 Required before this is live in Production
+
+1. **Owner (and, where required, legal) review of the public Privacy Policy** ([`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx)) before the generation runtime that writes telemetry is deployed. The policy wording is owner-approved legal text and is deliberately **not** edited by this change. The facts a revised policy would need to reflect are §29.2–§29.5: an internal per-request AI usage record (provider, model, token counts, a cost estimate) kept in Supabase, linked to the account, not shared with third parties, and deleted with the account.
+2. The separately authorized migration and deployment steps in [deployment.md](deployment.md) §6.7 and §6.6a.
+
+### 29.7 What this addendum does NOT claim
+
+- ❌ "Production records AI usage" — **false** until §29.6 is complete.
+- ❌ "the cost estimate is what PaperLume is charged" — **false.** It is a list-price estimate; the Google project is on the Gemini Free Tier (C29).
+- ❌ "telemetry covers requests that never reached a provider" — **false.** Refusals before a provider call record nothing.

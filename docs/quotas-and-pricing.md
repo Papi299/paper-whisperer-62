@@ -118,6 +118,8 @@ The schema, Edge Functions, and observability layer must track the following fro
 
 Gemini does not currently bill per-token in a way visible at request time — the **estimated** cost per call is computed offline from observed token counts × the published rate per million tokens. Document the cost-estimation formula alongside the dashboard.
 
+> **Status (2026-09-13): per-call foundation implemented in repository code, not live.** `AI-MULTI-PROVIDER-001D` (C42) records, per provider call, the provider-reported token counts, outcome, attempt count and a list-price cost estimate with its formula and rate snapshot, in `ai_provider_usage_events`. Its migration is not applied and the runtime is not deployed ([deployment.md](deployment.md) §6.7). It records no latency and no per-user funnel metrics, and there is no dashboard.
+
 **Funnel metrics:**
 
 - Sign-ups (Free users created).

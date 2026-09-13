@@ -261,6 +261,11 @@ describe("account export category registry", () => {
         // so exclusion here is about portability, never about retention.
         "attachment_cleanup_queue",
       "attachment_cleanup_tombstone",
+        // AI-MULTI-PROVIDER-001D. Server-written provider usage and cost-estimate
+        // accounting: no client role can read it, it holds no user-authored
+        // content, and it is excluded on the same ground as `usage_counters`.
+        // It cascades on account deletion — pinned by suite 008.
+        "ai_provider_usage_events",
       ].sort(),
     );
 

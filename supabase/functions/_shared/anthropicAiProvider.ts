@@ -90,6 +90,17 @@ import type {
   AiProviderResult,
   AiReasoningLevel,
 } from "./aiProvider.ts";
+import {
+  AI_USAGE_INVALID,
+  AI_USAGE_NOT_APPLICABLE,
+  AI_USAGE_NOT_RETURNED,
+  AI_USAGE_UNREPORTED,
+  finalizeReportedUsage,
+  readCountOrUnreported,
+  readProviderTokenCount,
+  reportedTokens,
+  type AiProviderUsage,
+} from "./aiUsage.ts";
 
 /** The provider id `ai_model_catalog.provider` would use for Anthropic. */
 export const ANTHROPIC_AI_PROVIDER = "anthropic";
@@ -370,6 +381,113 @@ export function extractAnthropicText(payload: unknown): string | null | undefine
 }
 
 /**
+ * The one cache-write retention bucket a single cache-write rate can price:
+ * Anthropic's default 5-minute write (1.25x base input). A 1-hour write costs
+ * 2x, so any tokens in another bucket are unmodeled usage.
+ */
+const ANTHROPIC_DEFAULT_CACHE_WRITE_BUCKET = "ephemeral_5m_input_tokens";
+
+/**
+ * Report whether `usage` carries billable work outside the canonical
+ * dimensions, or `null` if a count in it is malformed.
+ *
+ * Only numeric members are counts; a member of some other shape is a field this
+ * reader does not know and is left alone rather than guessed at.
+ */
+function readAnthropicUnmodeledUsage(usage: Record<string, unknown>): boolean | null {
+  let unmodeled = false;
+  const scan = (value: unknown, modeledKey: string | null): boolean => {
+    if (value === undefined || value === null) return true;
+    if (!isPlainObject(value)) return false;
+    for (const [key, raw] of Object.entries(value)) {
+      if (typeof raw !== "number") continue;
+      const read = readProviderTokenCount(raw);
+      if (read.kind === "invalid") return false;
+      if (read.kind === "value" && read.tokens > 0 && key !== modeledKey) unmodeled = true;
+    }
+    return true;
+  };
+  if (!scan(usage.cache_creation, ANTHROPIC_DEFAULT_CACHE_WRITE_BUCKET)) return null;
+  if (!scan(usage.server_tool_use, null)) return null;
+  return unmodeled;
+}
+
+/**
+ * Read Anthropic's `usage` into PaperLume's usage vocabulary —
+ * AI-MULTI-PROVIDER-001D.
+ *
+ * Absent or `null` is UNREPORTED here, never zero: this is a JSON API, not
+ * proto3, so absence has no wire meaning of its own.
+ *
+ * ## Mapping (Anthropic prompt-caching and thinking documentation)
+ *
+ *     input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+ *                                  -> inputTokens. Anthropic's `input_tokens` is
+ *                                     only the input AFTER the last cache
+ *                                     breakpoint, and its documented total is
+ *                                     the sum of the three — so they are summed,
+ *                                     and only when all three are reported.
+ *     cache_read_input_tokens      -> cachedInputTokens
+ *     cache_creation_input_tokens  -> cacheWriteInputTokens
+ *     output_tokens                -> outputTokens — "the inclusive,
+ *                                     authoritative total used for billing",
+ *                                     thinking included
+ *     output_tokens_details.thinking_tokens
+ *                                  -> reasoningOutputTokens (≤ output_tokens)
+ *     (no total field)             -> providerTotalTokens: not applicable
+ *
+ * Unmodeled usage is a cache write outside the default 5-minute bucket, or any
+ * positive server-tool count. PaperLume sends no `cache_control` and no tools,
+ * and Anthropic caching is opt-in, so both should read zero; if they do not,
+ * the estimate says it is a lower bound.
+ */
+export function readAnthropicUsage(payload: unknown): AiProviderUsage {
+  if (!isPlainObject(payload)) return AI_USAGE_NOT_RETURNED;
+  const usage = payload.usage;
+  if (usage === undefined || usage === null) return AI_USAGE_NOT_RETURNED;
+  if (!isPlainObject(usage)) return AI_USAGE_INVALID;
+
+  const afterBreakpoint = readCountOrUnreported(usage.input_tokens);
+  const cacheWrite = readCountOrUnreported(usage.cache_creation_input_tokens);
+  const cacheRead = readCountOrUnreported(usage.cache_read_input_tokens);
+  const output = readCountOrUnreported(usage.output_tokens);
+  if (afterBreakpoint === null || cacheWrite === null || cacheRead === null || output === null) {
+    return AI_USAGE_INVALID;
+  }
+
+  let thinking = AI_USAGE_UNREPORTED;
+  const details = usage.output_tokens_details;
+  if (details !== undefined && details !== null) {
+    if (!isPlainObject(details)) return AI_USAGE_INVALID;
+    const read = readCountOrUnreported(details.thinking_tokens);
+    if (read === null) return AI_USAGE_INVALID;
+    thinking = read;
+  }
+
+  const unmodeled = readAnthropicUnmodeledUsage(usage);
+  if (unmodeled === null) return AI_USAGE_INVALID;
+
+  const input =
+    afterBreakpoint.state === "reported" &&
+    cacheWrite.state === "reported" &&
+    cacheRead.state === "reported"
+      ? reportedTokens(afterBreakpoint.tokens + cacheWrite.tokens + cacheRead.tokens)
+      : AI_USAGE_UNREPORTED;
+
+  return finalizeReportedUsage(
+    {
+      inputTokens: input,
+      cachedInputTokens: cacheRead,
+      cacheWriteInputTokens: cacheWrite,
+      outputTokens: output,
+      reasoningOutputTokens: thinking,
+      providerTotalTokens: AI_USAGE_NOT_APPLICABLE,
+    },
+    unmodeled,
+  );
+}
+
+/**
  * Send one generation request to Anthropic and normalize the outcome.
  *
  * Never throws: every provider-side outcome — transport, HTTP, unreadable body,
@@ -406,7 +524,7 @@ async function generate(
     // is discarded: a fetch error's message can quote the URL.
     const kind = isTimeout(error, signal) ? "timeout" : "network";
     deps.logger?.warn(`${deps.label} provider_${kind} attempt=${attempts} retry=0`);
-    return { ok: false, kind, attempts };
+    return { ok: false, kind, attempts, usage: AI_USAGE_NOT_RETURNED };
   }
 
   if (!response.ok) {
@@ -416,7 +534,13 @@ async function generate(
     deps.logger?.warn(
       `${deps.label} provider_status=${response.status} attempt=${attempts} retry=0`,
     );
-    return { ok: false, kind: "http", status: response.status, attempts };
+    return {
+      ok: false,
+      kind: "http",
+      status: response.status,
+      attempts,
+      usage: AI_USAGE_NOT_RETURNED,
+    };
   }
 
   let payload: unknown;
@@ -425,18 +549,18 @@ async function generate(
   } catch {
     // A 2xx whose body is not JSON at all. The parse error's message can quote
     // the body, so it is discarded rather than returned or logged.
-    return { ok: false, kind: "unreadable_response", attempts };
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
   }
 
   if (!isPlainObject(payload) || !Array.isArray(payload.content)) {
-    return { ok: false, kind: "unreadable_response", attempts };
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
   }
 
   const stopReason = payload.stop_reason;
   if (typeof stopReason !== "string") {
     // A 200 that does not carry Anthropic's terminal-state field is not an
     // Anthropic response envelope this module knows how to trust.
-    return { ok: false, kind: "unreadable_response", attempts };
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
   }
   if (stopReason !== ANTHROPIC_COMPLETE_STOP_REASON) {
     // Checked BEFORE the text is read, on purpose: a `max_tokens` response
@@ -444,14 +568,19 @@ async function generate(
     // would hand the operation's parser a half-written JSON object and call it
     // a successful generation. The reason itself does not cross the boundary —
     // only the bounded kind does.
-    return { ok: false, kind: "incomplete_response", attempts };
+    // Its usage IS returned: a truncated or declined generation was still
+    // billed, and a truthful cost record needs the numbers.
+    return { ok: false, kind: "incomplete_response", attempts, usage: readAnthropicUsage(payload) };
   }
 
+  const usage = readAnthropicUsage(payload);
   const text = extractAnthropicText(payload);
-  if (text === undefined) return { ok: false, kind: "unreadable_response", attempts };
-  if (text === null) return { ok: false, kind: "empty", attempts };
+  if (text === undefined) {
+    return { ok: false, kind: "unreadable_response", attempts, usage: AI_USAGE_NOT_RETURNED };
+  }
+  if (text === null) return { ok: false, kind: "empty", attempts, usage };
 
-  return { ok: true, text, attempts };
+  return { ok: true, text, attempts, usage };
 }
 
 /**

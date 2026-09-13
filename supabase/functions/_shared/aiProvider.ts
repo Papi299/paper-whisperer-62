@@ -43,6 +43,8 @@
 // Pure module: no Deno APIs, no remote imports, no I/O of its own. It declares
 // types and nothing else, so Node/Vitest exercises the real shipped contract.
 
+import type { AiProviderUsage } from "./aiUsage.ts";
+
 /**
  * A provider and the public model string that provider knows it by.
  *
@@ -296,15 +298,29 @@ export type AiProviderFailureKind =
  * unparseable answer is usable is the operation's judgement, not the adapter's.
  * An absent or non-textual answer is `empty` instead, so `text` is always a
  * non-empty string.
+ *
+ * `usage` is what the provider itself reported about the work it did —
+ * AI-MULTI-PROVIDER-001D. It is REQUIRED on both branches, so no adapter can
+ * leave "did the provider tell us?" unanswered, and it is present on failures
+ * too: a provider that answered `incomplete_response` or `empty` still did the
+ * work, and a truthful cost record needs it. It is sanitized by the adapter into
+ * the provider-neutral vocabulary of `aiUsage.ts` — never the provider's own
+ * usage object — and it is for telemetry only: no operation may branch on it.
  */
 export type AiProviderResult =
-  | { readonly ok: true; readonly text: string; readonly attempts: number }
+  | {
+      readonly ok: true;
+      readonly text: string;
+      readonly attempts: number;
+      readonly usage: AiProviderUsage;
+    }
   | {
       readonly ok: false;
       readonly kind: AiProviderFailureKind;
       /** Present only for `kind: "http"`. */
       readonly status?: number;
       readonly attempts: number;
+      readonly usage: AiProviderUsage;
     };
 
 /**

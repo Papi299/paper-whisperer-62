@@ -15,6 +15,7 @@ import {
 } from "../handler.ts";
 import { NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, MAX_PROJECTS } from "../contract.ts";
 import { resolveSystemDefaultAiModel } from "../../_shared/aiProviderRegistry.ts";
+import type { AiUsageEventInsertClient } from "../../_shared/aiUsageTelemetry.ts";
 
 // AI-MULTI-PROVIDER-001B/001C — a test-only seam onto the provider DISPATCH.
 //
@@ -29,7 +30,10 @@ import { resolveSystemDefaultAiModel } from "../../_shared/aiProviderRegistry.ts
 // widens the registry, and its contents are asserted in
 // `_shared/__tests__/aiProviderRegistry.test.ts`.
 const dispatchOverride = vi.hoisted(() => ({
-  result: null as null | { ok: false; kind: "incomplete_response"; attempts: number },
+  // Any provider-neutral result. AI-MULTI-PROVIDER-001D widened it from the one
+  // `incomplete_response` shape so a test can also inject the USAGE such a
+  // result carries — which the Google adapter cannot produce for that kind.
+  result: null as null | import("../../_shared/aiProvider.ts").AiProviderResult,
   calls: 0,
 }));
 vi.mock("../../_shared/aiProviderRegistry.ts", async (importOriginal) => {
@@ -157,6 +161,11 @@ interface Harness {
   forbidden: string[];
   /** The per-attempt timeout each provider attempt was armed with, in order. */
   signalTimeouts: number[];
+  /**
+   * AI-MULTI-PROVIDER-001D. Every telemetry row the handler asked to INSERT (and
+   * into which table), and how many times it asked for the telemetry client.
+   */
+  usage: { inserts: Array<{ table: string; row: Record<string, unknown> }>; clientRequests: number };
 }
 
 interface HarnessOptions {
@@ -190,6 +199,12 @@ interface HarnessOptions {
   catalogError?: { message: string } | null;
   /** Paperlume's configured system default, as `index.ts` would resolve it. */
   systemDefaultModel?: string;
+  /**
+   * AI-MULTI-PROVIDER-001D. How the telemetry write behaves: accepted (the
+   * default), refused by the database, thrown by the client, or impossible
+   * because no server key is available.
+   */
+  usageWrite?: "ok" | "rejected" | "throws" | "no_key";
 }
 
 /** Wrap an object so any property outside `allowed` records a violation and throws. */
@@ -219,6 +234,22 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const credentialReads: string[] = [];
   const forbidden: string[] = [];
   const signalTimeouts: number[] = [];
+  const usage: Harness["usage"] = { inserts: [], clientRequests: 0 };
+
+  // AI-MULTI-PROVIDER-001D. The telemetry writer's client, as its own fake: it
+  // is a separate dependency from the caller client, and the caller client's
+  // trap would record any attempt to write telemetry through it instead.
+  const usageClient: AiUsageEventInsertClient = {
+    from: (table) => ({
+      insert: (row) => {
+        usage.inserts.push({ table, row: { ...row } });
+        if (options.usageWrite === "throws") throw new Error(`insert exploded for ${USER_ID}`);
+        return Promise.resolve({
+          error: options.usageWrite === "rejected" ? { code: "42501", message: `denied for ${USER_ID}` } : null,
+        });
+      },
+    }),
+  };
 
   const projects = options.projects ?? [PROJECT_A, PROJECT_B];
   const tags = options.tags ?? [TAG_A, TAG_B];
@@ -345,6 +376,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       // drift from the shipped system default (AI-MULTI-PROVIDER-001A).
       getSystemDefaultModel: () =>
         resolveSystemDefaultAiModel(options.systemDefaultModel ?? SYSTEM_DEFAULT_MODEL),
+      createUsageEventClient: () => {
+        usage.clientRequests += 1;
+        return options.usageWrite === "no_key" ? null : usageClient;
+      },
       logger: {
         log: (m: string) => logs.push(m),
         warn: (m: string) => warns.push(m),
@@ -361,6 +396,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     sleeps,
     forbidden,
     signalTimeouts,
+    usage,
   };
 }
 
@@ -1775,7 +1811,12 @@ describe("model routing", () => {
 
 describe("the incomplete_response failure kind", () => {
   it("is classified malformed_response, refunded, logged boundedly and never parsed", async () => {
-    dispatchOverride.result = { ok: false, kind: "incomplete_response", attempts: 1 };
+    dispatchOverride.result = {
+      ok: false,
+      kind: "incomplete_response",
+      attempts: 1,
+      usage: { kind: "unavailable", reason: "not_returned" },
+    };
     dispatchOverride.calls = 0;
     try {
       const harness = makeHarness({});
@@ -1947,5 +1988,324 @@ describe("reasoning policy reaches the provider request", () => {
     expect(body).not.toContain("preferred_reasoning_level");
     expect(body).not.toContain(REASONING_35.id);
     expect(body).not.toContain("reasoning_selectable");
+  });
+});
+
+// ── AI-MULTI-PROVIDER-001D: provider-usage telemetry ─────────────────────────
+//
+// One content-free event per provider call, recorded after the outcome is
+// decided, never for a request refused before the provider, and never able to
+// change what the user receives or what the quota does.
+
+/** A Gemini success envelope that also carries `usageMetadata`. */
+function geminiOkWithUsage(payload: unknown, usageMetadata: Record<string, number>): Response {
+  const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+  return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }], usageMetadata }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const GEMINI_USAGE = {
+  promptTokenCount: 2400,
+  cachedContentTokenCount: 0,
+  candidatesTokenCount: 310,
+  thoughtsTokenCount: 120,
+  totalTokenCount: 2830,
+};
+
+describe("provider-usage telemetry — what one provider call records", () => {
+  it("records exactly one event for a successful suggestion, with operation, provider, model and usage", async () => {
+    const harness = makeHarness({ responses: [geminiOkWithUsage(EMPTY_SUGGESTIONS, GEMINI_USAGE)] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(harness.usage.clientRequests).toBe(1);
+    expect(harness.usage.inserts).toHaveLength(1);
+    expect(harness.usage.inserts[0].table).toBe("ai_provider_usage_events");
+    expect(harness.usage.inserts[0].row).toMatchObject({
+      user_id: USER_ID,
+      operation: "suggest",
+      provider: "google",
+      provider_model: SYSTEM_DEFAULT_MODEL,
+      model_selection_source: "system_default",
+      provider_outcome: "completed",
+      provider_http_status: null,
+      provider_attempts: 1,
+      operation_outcome: "succeeded",
+      usage_status: "reported",
+      input_tokens: 2400,
+      cached_input_tokens: 0,
+      output_tokens: 430,
+      reasoning_output_tokens: 120,
+      provider_total_tokens: 2830,
+      // The floating `gemini-flash-latest` alias has no verified price: its
+      // usage is kept, and its cost is honestly unpriced rather than guessed.
+      cost_status: "unpriced",
+      list_price_estimate_usd: null,
+      price_record_id: null,
+    });
+    expect(harness.logs.join("\n")).toContain(
+      "suggest-organization usage_telemetry recorded=1 operation=suggest provider=google",
+    );
+  });
+
+  it("records the model the request actually routed to, and the reasoning decision behind it", async () => {
+    const harness = makeHarness({
+      entitled: true,
+      preference: { preferred_model_id: MODEL_36.id },
+      catalog: MODEL_36,
+      responses: [geminiOkWithUsage(EMPTY_SUGGESTIONS, GEMINI_USAGE)],
+    });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.usage.inserts[0].row).toMatchObject({
+      provider_model: "gemini-3.6-flash",
+      model_selection_source: "user_preference",
+      // This fixture's catalog row carries no reasoning metadata, so the policy
+      // fell back — and the event says so rather than inventing a level.
+      reasoning_source: "provider_default_fallback",
+      resolved_reasoning_level: null,
+    });
+  });
+
+  it("records a provider HTTP failure truthfully, and the refund is unchanged", async () => {
+    const harness = makeHarness({ responses: [new Response("Google says: project 12345", { status: 429 })] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    expect((await response.json()).code).toBe("provider_rate_limit");
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+    expect(harness.usage.inserts).toHaveLength(1);
+    expect(harness.usage.inserts[0].row).toMatchObject({
+      provider_outcome: "http_error",
+      provider_http_status: 429,
+      operation_outcome: "failed",
+      usage_status: "absent",
+      cost_status: "usage_unavailable",
+      input_tokens: null,
+      list_price_estimate_usd: null,
+    });
+    expect(JSON.stringify(harness.usage.inserts)).not.toContain("Google says");
+  });
+
+  it("records a timeout as unknown work — no tokens and no amount, never zero", async () => {
+    const timeout = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    const harness = makeHarness({ responses: [timeout] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    expect(harness.usage.inserts[0].row).toMatchObject({
+      provider_outcome: "timeout",
+      provider_attempts: 1,
+      usage_status: "absent",
+      input_tokens: null,
+      output_tokens: null,
+      cost_status: "usage_unavailable",
+      list_price_estimate_usd: null,
+    });
+  });
+
+  it("keeps the provider's usage when PaperLume cannot use the answer, and still refunds", async () => {
+    const harness = makeHarness({
+      responses: [
+        geminiOkWithUsage(
+          { existingProjects: [{ ref: "P99", reason: "invented" }], existingTags: [], newProjects: [], newTags: [] },
+          GEMINI_USAGE,
+        ),
+      ],
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+    expect(harness.usage.inserts[0].row).toMatchObject({
+      provider_outcome: "completed",
+      operation_outcome: "failed",
+      usage_status: "reported",
+      input_tokens: 2400,
+      output_tokens: 430,
+    });
+  });
+
+  it("records an incomplete generation with the usage the provider reported for it", async () => {
+    dispatchOverride.result = {
+      ok: false,
+      kind: "incomplete_response",
+      attempts: 1,
+      usage: {
+        kind: "reported",
+        dimensions: {
+          inputTokens: { state: "reported", tokens: 900 },
+          cachedInputTokens: { state: "reported", tokens: 0 },
+          cacheWriteInputTokens: { state: "reported", tokens: 0 },
+          outputTokens: { state: "reported", tokens: 8192 },
+          reasoningOutputTokens: { state: "reported", tokens: 8000 },
+          providerTotalTokens: { state: "not_applicable" },
+        },
+        unmodeledUsage: false,
+      },
+    };
+    try {
+      const harness = makeHarness({});
+      const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+      expect(response.status).toBe(500);
+      expect(harness.usage.inserts[0].row).toMatchObject({
+        provider_outcome: "incomplete_response",
+        operation_outcome: "failed",
+        input_tokens: 900,
+        output_tokens: 8192,
+        reasoning_output_tokens: 8000,
+      });
+    } finally {
+      dispatchOverride.result = null;
+    }
+  });
+
+  it("records more than one attempt as it happened, however many the transport made", async () => {
+    dispatchOverride.result = {
+      ok: true,
+      text: JSON.stringify(EMPTY_SUGGESTIONS),
+      attempts: 3,
+      usage: { kind: "unavailable", reason: "not_returned" },
+    };
+    try {
+      const harness = makeHarness({});
+      const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+      expect(response.status).toBe(200);
+      expect(harness.usage.inserts).toHaveLength(1);
+      expect(harness.usage.inserts[0].row).toMatchObject({ provider_attempts: 3, operation_outcome: "succeeded" });
+    } finally {
+      dispatchOverride.result = null;
+    }
+  });
+});
+
+describe("provider-usage telemetry — never a second success gate", () => {
+  for (const usageWrite of ["rejected", "throws", "no_key"] as const) {
+    it(`returns the real suggestions, unchanged, when the telemetry write is ${usageWrite}`, async () => {
+      const ok = makeHarness({ responses: [geminiOkWithUsage(EMPTY_SUGGESTIONS, GEMINI_USAGE)] });
+      const okResponse = await handleSuggestOrganizationRequest(request(validBody()), ok.deps);
+      const broken = makeHarness({ usageWrite, responses: [geminiOkWithUsage(EMPTY_SUGGESTIONS, GEMINI_USAGE)] });
+      const brokenResponse = await handleSuggestOrganizationRequest(request(validBody()), broken.deps);
+      expect(brokenResponse.status).toBe(okResponse.status);
+      expect(await brokenResponse.json()).toEqual(await okResponse.json());
+      expect(quotaRpcs(broken)).toEqual(quotaRpcs(ok));
+      const failureLine = broken.errors.find((e) => e.includes("usage_telemetry recorded=0"));
+      expect(failureLine).toBeDefined();
+      expect(failureLine).not.toContain(USER_ID);
+    });
+
+    it(`keeps the provider failure as the user-visible truth when the telemetry write is ${usageWrite}`, async () => {
+      const broken = makeHarness({ usageWrite, responses: [new Response("x", { status: 503 })] });
+      const response = await handleSuggestOrganizationRequest(request(validBody()), broken.deps);
+      expect(response.status).toBe(500);
+      const body = await response.json();
+      expect(body.error).toBe("suggestions_unavailable");
+      expect(body.code).toBe("provider_unavailable");
+      expect(quotaRpcs(broken)).toEqual(["consume_ai_quota", "refund_ai_quota"]);
+    });
+  }
+});
+
+describe("provider-usage telemetry — nothing recorded before a provider call", () => {
+  const cases: Array<[string, () => { harness: Harness; req: Request }]> = [
+    ["a missing Authorization header", () => ({ harness: makeHarness(), req: request(validBody(), { auth: null }) })],
+    ["an invalid session", () => ({ harness: makeHarness({ user: null }), req: request(validBody()) })],
+    ["a malformed body", () => ({ harness: makeHarness(), req: request({ paperId: "nope" }) })],
+    ["a title-only paper", () => ({ harness: makeHarness(), req: request(validBody({ draft: { title: "Only a title" } })) })],
+    ["a foreign or missing paper", () => ({ harness: makeHarness({ paper: null }), req: request(validBody()) })],
+    [
+      "a PaperLume quota wall",
+      () => ({ harness: makeHarness({ quota: [{ allowed: false, reason: "quota_exceeded" }] }), req: request(validBody()) }),
+    ],
+    ["a missing provider credential", () => ({ harness: makeHarness({ geminiKey: null }), req: request(validBody()) })],
+  ];
+
+  for (const [label, setup] of cases) {
+    it(`records nothing for ${label}`, async () => {
+      const { harness, req } = setup();
+      const response = await handleSuggestOrganizationRequest(req, harness.deps);
+      expect(response.status).not.toBe(200);
+      expect(harness.fetchImpl).not.toHaveBeenCalled();
+      expect(harness.usage.clientRequests).toBe(0);
+      expect(harness.usage.inserts).toEqual([]);
+    });
+  }
+});
+
+describe("provider-usage telemetry — privacy and client boundary", () => {
+  it("puts no paper content, taxonomy, id, key, token or generated text in the event or its log", async () => {
+    const harness = makeHarness({
+      responses: [
+        geminiOkWithUsage(
+          {
+            existingProjects: [{ ref: "P1", reason: "SENTINEL-GENERATED-REASON" }],
+            existingTags: [],
+            newProjects: [],
+            newTags: [],
+          },
+          GEMINI_USAGE,
+        ),
+      ],
+    });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    const persisted = JSON.stringify(harness.usage.inserts);
+    const logged = [...harness.logs, ...harness.warns, ...harness.errors]
+      .filter((l) => l.includes("usage_telemetry"))
+      .join("\n");
+    for (const forbidden of [
+      DRAFT.title,
+      DRAFT.abstract,
+      DRAFT.studyType,
+      "protein",
+      PROJECT_A.name,
+      PROJECT_A.id,
+      TAG_B.name,
+      TAG_B.id,
+      PAPER_ID,
+      GEMINI_KEY,
+      AUTH_HEADER,
+      "SENTINEL",
+      "P1",
+    ]) {
+      expect(persisted).not.toContain(forbidden);
+      expect(logged).not.toContain(forbidden);
+    }
+    // The user id is the row's owner, and appears in the row alone.
+    expect(persisted).toContain(USER_ID);
+    expect(logged).not.toContain(USER_ID);
+  });
+
+  it("writes telemetry through its own client, never through the caller's", async () => {
+    const harness = makeHarness({ responses: [geminiOkWithUsage(EMPTY_SUGGESTIONS, GEMINI_USAGE)] });
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    // The caller client's trap throws on insert; nothing tripped it.
+    expect(harness.forbidden).toEqual([]);
+    expect(harness.queries.map((q) => q.table)).not.toContain("ai_provider_usage_events");
+    expect(allRpcs(harness)).toEqual(["get_current_user_access", "consume_ai_quota"]);
+  });
+
+  it("records after the outcome is decided — the refund precedes it on a failure", async () => {
+    const order: string[] = [];
+    const harness = makeHarness({ responses: [new Response("x", { status: 500 })] });
+    const createCallerClient = harness.deps.createCallerClient;
+    const deps: SuggestOrganizationDeps = {
+      ...harness.deps,
+      createCallerClient: (h) => {
+        const client = createCallerClient(h);
+        return {
+          ...client,
+          from: client.from.bind(client),
+          rpc: (fn, args) => {
+            order.push(fn);
+            return client.rpc(fn, args);
+          },
+        };
+      },
+      createUsageEventClient: () => {
+        order.push("usage_client");
+        return harness.deps.createUsageEventClient();
+      },
+    };
+    await handleSuggestOrganizationRequest(request(validBody()), deps);
+    expect(order.indexOf("refund_ai_quota")).toBeGreaterThan(-1);
+    expect(order.indexOf("usage_client")).toBeGreaterThan(order.indexOf("refund_ai_quota"));
   });
 });

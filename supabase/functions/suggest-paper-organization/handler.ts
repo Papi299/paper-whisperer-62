@@ -79,6 +79,11 @@ import {
 import { classifyProviderError, type ProviderErrorClass } from "../_shared/providerError.ts";
 import type { AiProviderModel, AiProviderResult } from "../_shared/aiProvider.ts";
 import {
+  recordAiProviderUsage,
+  type AiOperationOutcome,
+  type AiUsageEventInsertClient,
+} from "../_shared/aiUsageTelemetry.ts";
+import {
   NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE,
   PAPER_NOT_FOUND_MESSAGE,
   type OrganizationSuggestions,
@@ -181,6 +186,16 @@ export interface SuggestOrganizationDeps {
    * the tests can exercise it.
    */
   getSystemDefaultModel(): AiProviderModel<RegisteredAiProvider>;
+  /**
+   * Build the provider-usage telemetry writer's insert-only client, or return
+   * `null` when no server key is available — AI-MULTI-PROVIDER-001D.
+   *
+   * Called lazily, only after a provider call has happened, and used for one
+   * INSERT into `ai_provider_usage_events`. Deliberately a separate dependency
+   * from `createCallerClient`: the caller's client stays the only client that
+   * reads anything, and this one can write telemetry and nothing else.
+   */
+  createUsageEventClient(): AiUsageEventInsertClient | null;
   /** Injected so tests can assert exactly what is (and is not) logged. */
   logger?: { log(message: string): void; warn(message: string): void; error(message: string): void };
 }
@@ -594,6 +609,31 @@ export async function handleSuggestOrganizationRequest(
       }
     }
 
+    // 12. Provider-usage telemetry — AI-MULTI-PROVIDER-001D. Exactly one event
+    //     for this provider call, recorded after the outcome is decided and
+    //     before the response goes back, on both paths below. It cannot change
+    //     or shadow the outcome: `recordAiProviderUsage` never throws, and
+    //     nothing reads what it returns. A parse failure still records the
+    //     provider's usage — the provider did the work even though the answer
+    //     was unusable — while the quota refund stays exactly as it was.
+    const recordUsage = async (operationOutcome: AiOperationOutcome): Promise<void> => {
+      await recordAiProviderUsage(
+        {
+          userId,
+          operation: "suggest",
+          selection: modelSelection,
+          reasoning: reasoningDecision,
+          call,
+          operationOutcome,
+        },
+        {
+          label: "suggest-organization",
+          logger,
+          createClient: () => deps.createUsageEventClient(),
+        },
+      );
+    };
+
     if (suggestions === null) {
       // Best-effort refund — the user did not receive a usable result. Its own
       // failure is logged separately and never replaces the provider outcome.
@@ -602,6 +642,7 @@ export async function handleSuggestOrganizationRequest(
         `suggest-organization outcome=provider_failure class=${providerClass} ` +
           `detail=${failureDetail} provider_attempts=${call.attempts} refund=attempted`,
       );
+      await recordUsage("failed");
       return fail(500, "suggestions_unavailable", NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, {
         code: providerClass,
       });
@@ -614,6 +655,7 @@ export async function handleSuggestOrganizationRequest(
         `existing_tags=${suggestions.existingTags.length} new_projects=${suggestions.newProjects.length} ` +
         `new_tags=${suggestions.newTags.length}`,
     );
+    await recordUsage("succeeded");
     return new Response(JSON.stringify(suggestions), { status: 200, headers: jsonHeaders });
   } catch (error) {
     // The message originates in this function's own code paths; provider bodies
