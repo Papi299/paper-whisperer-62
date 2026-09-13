@@ -171,7 +171,16 @@ async function routeToUrl(
     label: "analyze-paper",
   });
   const adapter = getAiProviderAdapter(selection.provider);
-  return { url: buildGeminiGenerateContentUrl(selection), provider: adapter.provider, recorded };
+  // The URL is Gemini's, so this narrows to Google explicitly rather than
+  // passing the three-provider selection straight in — that boundary is what
+  // stops another provider's model reaching a Gemini endpoint, and it is not
+  // something a test should route around (AI-MULTI-PROVIDER-001C).
+  expect(selection.provider).toBe("google");
+  const url = buildGeminiGenerateContentUrl({
+    provider: "google",
+    providerModel: selection.providerModel,
+  });
+  return { url, provider: adapter.provider, recorded };
 }
 
 const urlFor = (model: string) =>
@@ -252,17 +261,21 @@ describe("analyze-paper routes to the right model", () => {
   });
 
   it("ignores a preference naming a provider with no adapter", async () => {
+    // `azure`, not `anthropic`: since AI-MULTI-PROVIDER-001C both Anthropic and
+    // OpenAI have registered adapters, so a row naming either is HONOURED
+    // rather than refused on provider family. What still falls back is a
+    // provider PaperLume has never implemented.
     const { url } = await routeToUrl({
       entitled: true,
       preferredModelId: "google/gemini-3.5-flash",
       catalogRow: {
         ...CATALOG["google/gemini-3.5-flash"],
-        provider: "anthropic",
-        provider_model: "claude-sentinel",
+        provider: "azure",
+        provider_model: "azure-sentinel",
       },
     });
     expect(url).toBe(urlFor(PRODUCTION_DEFAULT));
-    expect(url).not.toContain("claude-sentinel");
+    expect(url).not.toContain("azure-sentinel");
   });
 
   it("ignores a preference whose catalog row is missing", async () => {
@@ -332,16 +345,18 @@ describe("analyze-paper is wired to the shared selection module", () => {
     expect(selection).toBeLessThan(quota);
   });
 
-  it("reaches the provider only through the registered adapter", () => {
-    // AI-MULTI-PROVIDER-001A: the selection names a provider, the registry
-    // hands back that provider's adapter, and the adapter is the only way out.
+  it("reaches the provider only through the shared registered dispatch", () => {
+    // AI-MULTI-PROVIDER-001A/001C: the selection names a provider, and the ONE
+    // shared dispatch in the registry turns that into a call on that provider's
+    // adapter with that provider's narrowed reasoning policy. This function
+    // holds no per-provider branch of its own — if it did, it and
+    // suggest-paper-organization could dispatch differently.
     expect(SOURCE).toContain('from "../_shared/aiProviderRegistry.ts"');
-    expect(SOURCE).toContain("getAiProviderAdapter(modelSelection.provider)");
-    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
-    // The lookup is total by construction, so there is no adapter-missing
-    // branch here that could turn routing metadata into a user-visible error.
-    expect(SOURCE).not.toMatch(/providerAdapter\s*===?\s*(null|undefined)/);
-    expect(SOURCE).not.toMatch(/if\s*\(\s*!\s*providerAdapter/);
+    expect(SOURCE).toContain("generateWithRegisteredAiProvider(");
+    expect(SOURCE.match(/generateWithRegisteredAiProvider\(/g)?.length).toBe(1);
+    // No adapter lookup, no adapter-missing branch, and no switch on provider.
+    expect(SOURCE).not.toContain("getAiProviderAdapter(");
+    expect(SOURCE).not.toMatch(/case\s+"(google|anthropic|openai)"/);
   });
 
   it("knows no Gemini URL, envelope, credential header or response envelope", () => {
@@ -362,11 +377,15 @@ describe("analyze-paper is wired to the shared selection module", () => {
     expect(CODE).not.toContain('from "../_shared/geminiTransport.ts"');
   });
 
-  it("uses the selection for exactly four things, all of them local", () => {
+  it("uses the selection for exactly five things, all of them local", () => {
     const uses = SOURCE.match(/\bmodelSelection\b/g) ?? [];
-    // Declaration, adapter lookup, routing log, and the generate() argument.
-    expect(uses.length).toBe(4);
+    // Declaration, the reasoning-policy input, the credential lookup, the
+    // routing log, and the dispatch argument. AI-MULTI-PROVIDER-001C traded the
+    // adapter lookup for the reasoning-policy and credential uses.
+    expect(uses.length).toBe(5);
     expect(SOURCE).toContain('formatModelRoutingLog("analyze-paper", modelSelection)');
+    expect(SOURCE).toContain("selection: modelSelection,");
+    expect(SOURCE).toContain("resolveAiProviderCredential(\n      modelSelection.provider,");
   });
 });
 
@@ -441,15 +460,27 @@ describe("model selection changes the model and nothing else", () => {
     expect(SOURCE).not.toMatch(/\b(topP|topK|top_p|top_k)\s*:/);
   });
 
-  it("keeps one shared API key, handed to the adapter rather than to a header", () => {
-    expect(SOURCE.match(/Deno\.env\.get\("GEMINI_API_KEY"\)/g)?.length).toBe(1);
-    expect(SOURCE).toContain("apiKey: geminiKey,");
-    // The credential header itself is the adapter's business now.
+  it("reads the SELECTED provider's credential, and names none itself", () => {
+    // AI-MULTI-PROVIDER-001C. This function used to read `GEMINI_API_KEY`
+    // unconditionally, which was right while Google was the only registered
+    // provider and is a hazard now that three are. It now names no environment
+    // variable at all: the name comes from the one reviewed
+    // provider→credential mapping, applied to the provider this request
+    // actually resolved to.
+    expect(CODE).not.toContain('Deno.env.get("GEMINI_API_KEY")');
+    expect(CODE).not.toMatch(/ANTHROPIC_API_KEY|OPENAI_API_KEY/);
+    expect(SOURCE).toContain('from "../_shared/aiProviderCredentials.ts"');
+    expect(SOURCE).toContain("resolveAiProviderCredential(");
+    expect(SOURCE.match(/resolveAiProviderCredential\(/g)?.length).toBe(1);
+    expect(SOURCE).toContain("apiKey: credential.apiKey,");
+    // The credential header itself is the adapter's business.
     expect(CODE).not.toContain("x-goog-api-key");
-    // No per-model or per-user credential was introduced, and no second
-    // provider's credential exists.
+    // No per-model or per-user credential was introduced.
     expect(SOURCE).not.toMatch(/GEMINI_API_KEY_/);
-    expect(SOURCE).not.toMatch(/ANTHROPIC|OPENAI/);
+    // The credential VALUE is never logged; the missing variable's NAME is, and
+    // that is the whole point of logging it.
+    expect(CODE).not.toMatch(/credential\.apiKey[\s\S]{0,40}console\./);
+    expect(CODE).toContain("credential.envName");
   });
 
   it("still consumes exactly one quota unit, from one call site", () => {
@@ -464,7 +495,7 @@ describe("model selection changes the model and nothing else", () => {
   });
 
   it("makes exactly one provider call site", () => {
-    expect(SOURCE.match(/providerAdapter\.generate\(/g)?.length).toBe(1);
+    expect(SOURCE.match(/generateWithRegisteredAiProvider\(/g)?.length).toBe(1);
   });
 
   it("inherits the 90-second, zero-retry transport policy unchanged", () => {
@@ -483,7 +514,7 @@ describe("model selection changes the model and nothing else", () => {
     // wall, and it still sits above the provider call.
     expect(SOURCE.match(/status: 402/g)?.length).toBe(1);
     expect(SOURCE.indexOf("status: 402")).toBeLessThan(
-      SOURCE.indexOf("providerAdapter.generate("),
+      SOURCE.indexOf("generateWithRegisteredAiProvider("),
     );
     expect(SOURCE).not.toMatch(/model_selection[\s\S]{0,200}status: (402|500)/);
   });

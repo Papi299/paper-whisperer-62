@@ -12,8 +12,12 @@ import {
   type OwnedTag,
 } from "../contract.ts";
 import { buildProviderInput, buildSuggestGenerationRequest, SYSTEM_INSTRUCTION } from "../prompt.ts";
-import { GOOGLE_AI_PROVIDER_ADAPTER } from "../../_shared/googleAiProvider.ts";
-import type { AiProviderCallDeps } from "../../_shared/aiProvider.ts";
+import {
+  GOOGLE_AI_PROVIDER_ADAPTER,
+  type GoogleReasoningLevel,
+} from "../../_shared/googleAiProvider.ts";
+import type { AiCallPolicy, AiProviderCallDeps } from "../../_shared/aiProvider.ts";
+import { AI_OPERATION_MAX_OUTPUT_TOKENS } from "../../_shared/aiReasoningPolicy.ts";
 
 /**
  * AI-PROJECT-TAG-SUGGESTIONS-001A — the privacy boundary and the ephemeral refs.
@@ -419,13 +423,38 @@ describe("the exact request suggest-paper-organization sends to Google", () => {
     "4b02f46b2498386797be894e96d6d16f21d42af8d21724929974e7a5a2efb110";
   const GOLDEN_SYSTEM_INSTRUCTION_SHA256 =
     "69065f45bff1fce57cc2e53b01a186da4902587b693ac0efca01758726c3bf15";
+  // The PRE-001C bytes. AI-MULTI-PROVIDER-001C adds exactly one field —
+  // `generationConfig.thinkingConfig.thinkingLevel` — so these pins keep
+  // describing the provider-default fallback path, and the 001C pins below
+  // describe the ordinary one. Keeping both is what makes "the fail-open path
+  // degrades to the request that shipped" a tested claim.
   const GOLDEN_BODY_SHA256 = "667b4e296d7bd071fc377128d0dbfd14dda6408bb6fe81994f79eff95198c38e";
   const GOLDEN_BODY_BYTES = 3530;
+
+  // Organization suggestions take `medium` under PaperLume's approved Automatic
+  // matrix on every current model — the HIGHER of the two operations, because
+  // this one weighs a whole library rather than extracting three fields from an
+  // abstract.
+  const GOLDEN_SUGGEST_BODY_SHA256 =
+    "877315fa31471b03ab22f7e06cb7f2053bac5640d85a18f6309bb13c8aae6263";
+  const GOLDEN_SUGGEST_BODY_BYTES = 3574;
+
+  const SUGGEST_POLICY: AiCallPolicy<GoogleReasoningLevel> = {
+    reasoning: { kind: "level", level: "medium" },
+    maxOutputTokens: AI_OPERATION_MAX_OUTPUT_TOKENS.suggest,
+  };
+  const PROVIDER_DEFAULT_POLICY: AiCallPolicy<GoogleReasoningLevel> = {
+    reasoning: { kind: "provider_default" },
+    maxOutputTokens: AI_OPERATION_MAX_OUTPUT_TOKENS.suggest,
+  };
   const API_KEY = "SENTINEL-GEMINI-API-KEY";
 
   const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
-  async function capture(providerModel = "gemini-flash-latest") {
+  async function capture(
+    providerModel = "gemini-flash-latest",
+    policy: AiCallPolicy<GoogleReasoningLevel> = SUGGEST_POLICY,
+  ) {
     const serialized = expectOk(build()).serialized;
     const fetchImpl = vi.fn(
       async () =>
@@ -436,6 +465,7 @@ describe("the exact request suggest-paper-organization sends to Google", () => {
     await GOOGLE_AI_PROVIDER_ADAPTER.generate(
       { provider: "google", providerModel },
       buildSuggestGenerationRequest(serialized),
+      policy,
       {
         apiKey: API_KEY,
         label: "suggest-organization",
@@ -462,8 +492,23 @@ describe("the exact request suggest-paper-organization sends to Google", () => {
 
   it("serializes a byte-identical request body", async () => {
     const { body } = await capture();
-    expect(sha256(body)).toBe(GOLDEN_BODY_SHA256);
-    expect(body.length).toBe(GOLDEN_BODY_BYTES);
+    expect(sha256(body)).toBe(GOLDEN_SUGGEST_BODY_SHA256);
+    expect(body.length).toBe(GOLDEN_SUGGEST_BODY_BYTES);
+    // And the pre-001C bytes are exactly this body minus the one added field.
+    const withoutThinking = body.replace(',"thinkingConfig":{"thinkingLevel":"medium"}', "");
+    expect(sha256(withoutThinking)).toBe(GOLDEN_BODY_SHA256);
+    expect(withoutThinking.length).toBe(GOLDEN_BODY_BYTES);
+    // The fail-open path produces those bytes for real, not just by string
+    // surgery on this one.
+    const fallback = await capture("gemini-flash-latest", PROVIDER_DEFAULT_POLICY);
+    expect(sha256(fallback.body)).toBe(GOLDEN_BODY_SHA256);
+    // Asserted on generationConfig, not on the whole body: the system
+    // instruction itself contains the word "thinking" (it tells the model not
+    // to include its step-by-step thinking in a reason), so a substring check
+    // over the whole request would be testing the prompt, not the config.
+    expect(JSON.parse(fallback.body).generationConfig).toEqual({
+      responseMimeType: "application/json",
+    });
   });
 
   it("carries the same SYSTEM_INSTRUCTION and the same serialized input, to the byte", async () => {
@@ -478,13 +523,19 @@ describe("the exact request suggest-paper-organization sends to Google", () => {
   it("keeps JSON response mode and no sampling override of any kind", async () => {
     const { body } = await capture();
     const generationConfig = JSON.parse(body).generationConfig as Record<string, unknown>;
-    expect(generationConfig).toEqual({ responseMimeType: "application/json" });
+    expect(generationConfig).toEqual({
+      responseMimeType: "application/json",
+      thinkingConfig: { thinkingLevel: "medium" },
+    });
     // Named explicitly: an explicit `temperature: undefined` would still be a
     // sampling override in the source, and `toEqual` above forbids extras.
     for (const key of ["temperature", "topP", "topK", "top_p", "top_k", "seed", "candidateCount"]) {
       expect(generationConfig).not.toHaveProperty(key);
     }
-    expect(Object.keys(generationConfig)).toEqual(["responseMimeType"]);
+    expect(Object.keys(generationConfig)).toEqual(["responseMimeType", "thinkingConfig"]);
+    // PaperLume's 8192-token Suggest ceiling is deliberately NOT sent to Google.
+    expect(generationConfig).not.toHaveProperty("maxOutputTokens");
+    expect(body).not.toContain(String(AI_OPERATION_MAX_OUTPUT_TOKENS.suggest));
   });
 
   it("keeps the same envelope shape and key order", async () => {

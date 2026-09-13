@@ -49,9 +49,13 @@ describe("buildAccountExportManifest", () => {
     expect(manifest.format).toBe(ACCOUNT_EXPORT_FORMAT);
     // Literal on purpose, so a version change has to be made deliberately here
     // rather than tracking the constant silently. 2 since papers gained the
-    // persisted `author_provenance` field — a reshape of an existing archive
-    // file, which a reader must be able to notice.
-    expect(manifest.version).toBe(2);
+    // persisted `author_provenance` field; 3 since
+    // `data/user_ai_preferences.json` gained `preferred_reasoning_level`
+    // (AI-MULTI-PROVIDER-001C) — both reshapes of an EXISTING archive file,
+    // which a reader must be able to notice. A v2 reader could not otherwise
+    // tell "this export predates reasoning" from "this user is on Automatic",
+    // since Automatic is serialized as `null`.
+    expect(manifest.version).toBe(3);
     expect(manifest.version).toBe(ACCOUNT_EXPORT_VERSION);
   });
 
@@ -169,6 +173,7 @@ describe("buildAccountExportManifest", () => {
     withPreference.user_ai_preferences = {
       user_id: USER,
       preferred_model_id: "google/gemini-3.5-flash",
+      preferred_reasoning_level: null,
       created_at: "2026-09-02T00:00:00Z",
       updated_at: "2026-09-02T00:00:00Z",
     };

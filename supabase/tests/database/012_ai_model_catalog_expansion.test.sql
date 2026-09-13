@@ -150,7 +150,12 @@ SELECT set_eq(
   $$SELECT column_name::text FROM information_schema.columns
      WHERE table_schema='public' AND table_name='ai_model_catalog'$$,
   ARRAY['id','provider','provider_model','display_name','enabled','selectable',
-        'sort_order','created_at','updated_at'],
+        'sort_order','created_at','updated_at',
+        -- The four AI-MULTI-PROVIDER-001C reasoning columns. They are not part
+        -- of what 001D added — the claim this assertion makes is still that
+        -- adding a MODEL added no column, and suite 016 owns the 001C set.
+        'reasoning_levels','auto_analyze_reasoning_level',
+        'auto_suggest_reasoning_level','reasoning_selectable'],
   'the catalog column set is unchanged — adding models added no column');
 
 SELECT is(

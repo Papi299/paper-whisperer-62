@@ -29,7 +29,12 @@ import {
   GEMINI_PROVIDER_MAX_RETRIES,
   GEMINI_PROVIDER_TIMEOUT_MS,
 } from "../geminiTransport.ts";
-import type { AiGenerationRequest, AiProviderCallDeps } from "../aiProvider.ts";
+import type {
+  AiCallPolicy,
+  AiGenerationRequest,
+  AiProviderCallDeps,
+} from "../aiProvider.ts";
+import type { GoogleReasoningLevel } from "../googleAiProvider.ts";
 
 // Sentinels: if any of these ever reaches a log line or a returned result, the
 // assertion fails on the literal string rather than on a shape.
@@ -112,8 +117,35 @@ function geminiOk(text: string): Response {
   });
 }
 
-const generate = (harness: Harness, request: AiGenerationRequest = REQUEST, model = MODEL) =>
-  GOOGLE_AI_PROVIDER_ADAPTER.generate(model, request, harness.deps);
+/**
+ * The default call policy for these tests — AI-MULTI-PROVIDER-001C.
+ *
+ * `medium` is deliberately NOT special: it is Gemini's own default level, so a
+ * test that asserted the request while sending `medium` and a test that
+ * asserted it while sending nothing would look identical on the wire if the
+ * adapter quietly stopped sending the field. Every reasoning assertion below
+ * therefore names its level explicitly, and the provider-default case is
+ * exercised separately.
+ *
+ * `maxOutputTokens` is carried and deliberately never expected in the body —
+ * see the dedicated test.
+ */
+const POLICY: AiCallPolicy<GoogleReasoningLevel> = {
+  reasoning: { kind: "level", level: "medium" },
+  maxOutputTokens: 4096,
+};
+
+const PROVIDER_DEFAULT_POLICY: AiCallPolicy<GoogleReasoningLevel> = {
+  reasoning: { kind: "provider_default" },
+  maxOutputTokens: 4096,
+};
+
+const generate = (
+  harness: Harness,
+  request: AiGenerationRequest = REQUEST,
+  model = MODEL,
+  policy: AiCallPolicy<GoogleReasoningLevel> = POLICY,
+) => GOOGLE_AI_PROVIDER_ADAPTER.generate(model, request, policy, harness.deps);
 
 // ── 1. The wire contract ──────────────────────────────────────────────────
 
@@ -167,30 +199,46 @@ describe("the request that reaches Google", () => {
     expect(body).toEqual({
       system_instruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
       contents: [{ parts: [{ text: USER_CONTENT }] }],
-      generationConfig: { responseMimeType: "application/json" },
+      generationConfig: {
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingLevel: "medium" },
+      },
     });
   });
 
   it("serializes the envelope in the historical key order, byte for byte", () => {
     // The exact string that goes on the wire, not a deep-equal of a parse.
-    expect(buildGeminiRequestInit(REQUEST, API_KEY).body).toBe(
+    expect(buildGeminiRequestInit(REQUEST, POLICY, API_KEY).body).toBe(
       `{"system_instruction":{"parts":[{"text":${JSON.stringify(SYSTEM_INSTRUCTION)}}]},` +
         `"contents":[{"parts":[{"text":${JSON.stringify(USER_CONTENT)}}]}],` +
-        `"generationConfig":{"responseMimeType":"application/json"}}`,
+        `"generationConfig":{"responseMimeType":"application/json",` +
+        `"thinkingConfig":{"thinkingLevel":"medium"}}}`,
     );
   });
 
   it("pins JSON response mode and sets no sampling override of any kind", () => {
-    const generationConfig = buildGeminiRequestBody(REQUEST).generationConfig as Record<
+    const generationConfig = buildGeminiRequestBody(REQUEST, POLICY).generationConfig as Record<
       string,
       unknown
     >;
-    expect(generationConfig).toEqual({ responseMimeType: "application/json" });
+    expect(generationConfig).toEqual({
+      responseMimeType: "application/json",
+      thinkingConfig: { thinkingLevel: "medium" },
+    });
     // `toEqual` above already forbids extras; named explicitly because these
     // are the knobs AI-PROVIDER-REQUEST-CONTRACT-001A removed.
     for (const key of ["temperature", "topP", "topK", "top_p", "top_k", "seed", "candidateCount"]) {
       expect(generationConfig).not.toHaveProperty(key);
     }
+    // The LEGACY numeric control, named explicitly: `thinkingBudget` is the
+    // Gemini 2.5-era parameter, Google documents sending it alongside
+    // `thinkingLevel` as a 400, and a numeric budget would be a second
+    // expression of a policy the catalog already states in words.
+    for (const key of ["thinkingBudget", "thinking_budget", "maxOutputTokens"]) {
+      expect(generationConfig).not.toHaveProperty(key);
+    }
+    expect(generationConfig.thinkingConfig).not.toHaveProperty("thinkingBudget");
+    expect(generationConfig.thinkingConfig).not.toHaveProperty("includeThoughts");
   });
 
   it("ignores the operation's JSON schema entirely — AI-MULTI-PROVIDER-001B", async () => {
@@ -200,7 +248,7 @@ describe("the request that reaches Google", () => {
     // `analyze-paper/__tests__/geminiRequestGolden.test.ts` would move and
     // PaperLume's live provider request would have changed under a task that
     // promised it would not.
-    const body = buildGeminiRequestBody(REQUEST);
+    const body = buildGeminiRequestBody(REQUEST, POLICY);
     expect(body).not.toHaveProperty("output_config");
     expect(body).not.toHaveProperty("text");
     expect(body).not.toHaveProperty("jsonSchema");
@@ -220,16 +268,105 @@ describe("the request that reaches Google", () => {
   it("builds the same bytes with or without a schema on the request", () => {
     // The strongest form of "ignores": a request carrying a schema and one that
     // could not carry one serialize identically.
-    const withSchema = buildGeminiRequestInit(REQUEST, API_KEY).body;
+    const withSchema = buildGeminiRequestInit(REQUEST, POLICY, API_KEY).body;
     const withOther = buildGeminiRequestInit(
       { ...REQUEST, jsonSchema: { name: "other", schema: { type: "object" } } },
+      POLICY,
       API_KEY,
     ).body;
     expect(withSchema).toBe(withOther);
   });
 
+  // ── PaperLume's explicit reasoning level — AI-MULTI-PROVIDER-001C (C41) ──
+
+  it.each([
+    ["minimal"],
+    ["low"],
+    ["medium"],
+    ["high"],
+  ] as const)("sends thinkingLevel %s at generationConfig.thinkingConfig", async (level) => {
+    const harness = makeHarness([geminiOk("{}")]);
+    await generate(harness, REQUEST, MODEL, {
+      reasoning: { kind: "level", level },
+      maxOutputTokens: 4096,
+    });
+    const body = JSON.parse(String((harness.fetchImpl.mock.calls[0][1] as RequestInit).body));
+    expect(body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: level });
+    // Lowercase on the wire, exactly as Google's REST examples show, and
+    // exactly PaperLume's own canonical spelling — there is no translation.
+    expect(String((harness.fetchImpl.mock.calls[0][1] as RequestInit).body)).toContain(
+      `"thinkingLevel":"${level}"`,
+    );
+  });
+
+  it("declares exactly the four levels Gemini accepts, in Google's order", () => {
+    expect(GOOGLE_AI_PROVIDER_ADAPTER.reasoningLevels).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("refuses every canonical level Gemini does not have", () => {
+    for (const level of ["off", "none", "xhigh", "max"] as const) {
+      expect(GOOGLE_AI_PROVIDER_ADAPTER.supportsReasoningLevel(level)).toBe(false);
+    }
+    for (const level of ["minimal", "low", "medium", "high"] as const) {
+      expect(GOOGLE_AI_PROVIDER_ADAPTER.supportsReasoningLevel(level)).toBe(true);
+    }
+  });
+
+  it("omits thinkingConfig ENTIRELY on the provider-default fallback", async () => {
+    // The fail-open path for unusable policy metadata. It must produce exactly
+    // the request PaperLume sent before 001C — not a null, not an empty object,
+    // not a third shape — so a metadata outage degrades to the previously
+    // shipped behaviour and nothing else.
+    const harness = makeHarness([geminiOk("{}")]);
+    await generate(harness, REQUEST, MODEL, PROVIDER_DEFAULT_POLICY);
+    const raw = String((harness.fetchImpl.mock.calls[0][1] as RequestInit).body);
+    expect(raw).toBe(
+      `{"system_instruction":{"parts":[{"text":${JSON.stringify(SYSTEM_INSTRUCTION)}}]},` +
+        `"contents":[{"parts":[{"text":${JSON.stringify(USER_CONTENT)}}]}],` +
+        `"generationConfig":{"responseMimeType":"application/json"}}`,
+    );
+    expect(raw).not.toContain("thinking");
+  });
+
+  it("never sends PaperLume's output ceiling to Google", () => {
+    // 001C deliberately leaves Gemini's output limit exactly where it has always
+    // been: unstated by PaperLume. The policy still CARRIES a ceiling, because
+    // the type is provider-neutral and the paid adapters need it — this proves
+    // the Google adapter does not act on it.
+    for (const maxOutputTokens of [1, 4096, 8192, 65536]) {
+      const body = buildGeminiRequestBody(REQUEST, {
+        reasoning: { kind: "level", level: "low" },
+        maxOutputTokens,
+      });
+      const generationConfig = body.generationConfig as Record<string, unknown>;
+      expect(generationConfig).not.toHaveProperty("maxOutputTokens");
+      expect(generationConfig).not.toHaveProperty("max_output_tokens");
+      expect(JSON.stringify(body)).not.toContain(String(maxOutputTokens));
+    }
+  });
+
+  it("changes NOTHING but thinkingConfig between two reasoning levels", () => {
+    // The 001C claim, measured: the only delta in the bytes is the level.
+    const low = String(buildGeminiRequestInit(REQUEST, {
+      reasoning: { kind: "level", level: "low" },
+      maxOutputTokens: 4096,
+    }, API_KEY).body);
+    const high = String(buildGeminiRequestInit(REQUEST, {
+      reasoning: { kind: "level", level: "high" },
+      maxOutputTokens: 4096,
+    }, API_KEY).body);
+    expect(low.replace('"thinkingLevel":"low"', "X")).toBe(
+      high.replace('"thinkingLevel":"high"', "X"),
+    );
+  });
+
   it("adds nothing of its own to the prompt strings", () => {
-    const body = buildGeminiRequestBody(REQUEST);
+    const body = buildGeminiRequestBody(REQUEST, POLICY);
     const contents = body.contents as Array<{ parts: Array<{ text: string }> }>;
     const system = body.system_instruction as { parts: Array<{ text: string }> };
     expect(system.parts).toHaveLength(1);
@@ -423,7 +560,7 @@ describe("nothing provider-shaped escapes the adapter", () => {
 
   it("is silent when no logger is supplied", async () => {
     const harness = makeHarness([geminiOk("{}")]);
-    const result = await GOOGLE_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, {
+    const result = await GOOGLE_AI_PROVIDER_ADAPTER.generate(MODEL, REQUEST, POLICY, {
       ...harness.deps,
       logger: undefined,
     });

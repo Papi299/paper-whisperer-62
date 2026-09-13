@@ -200,6 +200,10 @@ describe("account export category registry", () => {
     expect([...USER_AI_PREFERENCE_EXPORT_COLUMNS]).toEqual([
       "user_id",
       "preferred_model_id",
+      // AI-MULTI-PROVIDER-001C (C41). A setting the user chose, expressed as a
+      // bounded PRODUCT word — `minimal`, `low`, `medium`, `high` — never a
+      // provider parameter. `null` is exported as JSON null and means Automatic.
+      "preferred_reasoning_level",
       "created_at",
       "updated_at",
     ]);

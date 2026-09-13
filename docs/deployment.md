@@ -49,7 +49,9 @@ For local dev, the same two values go in a local `.env.local` (or the existing `
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | Required. **One key serves both**, for their Gemini `generateContent` calls — `suggest-paper-organization` reuses the existing secret and introduced no new one, so rotating this value rotates it for both. Without it, each fails safely with a generic 500 **before** any provider call, naming the secret only in its Edge log — `analyze-paper` via its clear in-source throw (preserved by PR #139), which surfaces in the log rather than the response. `analyze-paper` refunds the unit it already consumed; `suggest-paper-organization` checks the key first and consumes nothing. **It is still the only AI provider credential after `AI-MULTI-PROVIDER-001A` (C39)**: the provider seam registers exactly one adapter (Google), which is what presents this key as `x-goog-api-key`. There is no generic `AI_API_KEY`, no `AI_PROVIDER`, and no Anthropic/OpenAI secret — a future provider brings its own explicitly named credential as part of registering its adapter. **`AI-MULTI-PROVIDER-001B` (C40) adds no secret either.** It documents the intended future names `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` for the Anthropic and OpenAI adapters it implemented. **Neither is set, and no shipping function reads either.** Neither is to be set before the task that registers those adapters (`AI-MULTI-PROVIDER-001C`) binds each provider to its own credential. Operator detail: §10.3. |
+| `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | Required. **One key serves both**, for their Gemini `generateContent` calls — `suggest-paper-organization` reuses the existing secret and introduced no new one, so rotating this value rotates it for both. Without it, each fails safely with a generic 500 **before** any provider call, naming the secret only in its Edge log — `analyze-paper` via its clear in-source throw (preserved by PR #139), which surfaces in the log rather than the response. `analyze-paper` refunds the unit it already consumed; `suggest-paper-organization` checks the key first and consumes nothing. **It is still the only AI provider credential after `AI-MULTI-PROVIDER-001A` (C39)**: the provider seam registers exactly one adapter (Google), which is what presents this key as `x-goog-api-key`. There is no generic `AI_API_KEY`, no `AI_PROVIDER`, and no Anthropic/OpenAI secret — a future provider brings its own explicitly named credential as part of registering its adapter. **`AI-MULTI-PROVIDER-001B` (C40) adds no secret either.** **`AI-MULTI-PROVIDER-001C` (C41) binds each registered provider to its own credential name** through the one reviewed mapping in `_shared/aiProviderCredentials.ts` — `google` → this key, `anthropic` → `ANTHROPIC_API_KEY`, `openai` → `OPENAI_API_KEY` — and, once the 001C runtime is deployed, each operation reads **only the selected provider's** variable. With no non-Google catalog row, that is this key for every request. Operator detail: §10.3. |
+| `ANTHROPIC_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `anthropic` catalog row | **Not set, and not to be set yet.** Named by `AI-MULTI-PROVIDER-001C` (C41) as the credential for the now-registered Anthropic adapter. No `anthropic/*` catalog row exists, so nothing reads it today, and a missing value never falls back to `GEMINI_API_KEY`. Install it only in the separately authorized paid-provider phase (§6.6, phase 5). Never under a generic name. |
+| `OPENAI_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `openai` catalog row | **Not set, and not to be set yet.** The same terms as `ANTHROPIC_API_KEY`, for the now-registered OpenAI adapter. |
 | `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota`, `suggest-paper-organization` | **Optional. This is the SYSTEM DEFAULT model**, not necessarily the model every request uses. All three resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never disagree about the *default*. Since `AI-MODEL-SELECTION-001B` the two generation functions may route an individual request to an entitled user's saved preference instead (`_shared/aiModelSelection.ts`), while `get-gemini-provider-quota` deliberately keeps reporting this configured default — it is system-wide observational monitoring, not a per-user routing report, so the three may legitimately name different models for the same request. This value remains the fallback for every caller who is not entitled, has no preference, or whose preference cannot be safely resolved. Unset = fallback. **Production currently sets `gemini-3.5-flash`** — the system default under decision **C34**. Changing the default is an environment change here and nothing else: it is not a frontend deploy, not a migration and not a catalog edit, because the Settings control represents "follow the default" as a *sentinel meaning no saved preference* rather than embedding a model string in the browser. `gemini-3.6-flash`, `gemini-3.7-flash` and `gemini-3.8-flash` are all `enabled` and `selectable` in the catalog as explicit choices for entitled users (3.7 and 3.8 added by migration `20260903120000`, C35, **applied to Production on 2026-09-03**). Adding a catalog model never changes this value: the catalog decides what is *selectable*, this variable decides what is *default*. |
 | `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated, and currently inert.** Google Cloud project that owns the Gemini API usage. Under C29 **no frontend surface calls this function**, so these three secrets affect nothing today; absent, the function's own response is a bounded "not configured" and ordinary analysis is unaffected. |
 | `GOOGLE_MONITORING_CLIENT_EMAIL` | `get-gemini-provider-quota` | Service-account email for the Monitoring reader (below). |
@@ -286,13 +288,14 @@ The last row is the point of the three changes together: the destructive orderin
 > PENDING DEPLOY.** PR #275 merged as `9ca298ba14c32459200ea84db4fa16bd75e20057`
 > and the migration was applied **exactly once**, in a single successful
 > `supabase db push` that needed no retry. The ledger moved **80 → 81**, its
-> latest is now `20260910212202`, and ordinary `public` tables carrying a direct
+> latest became `20260910212202`, and ordinary `public` tables carrying a direct
 > `anon` grant moved **17 → 0**. A read-only postflight confirmed the full
 > contract below. **Nothing here is a pending step.** The procedure that follows
 > is retained as the record of how it was done and as generic
 > recovery/replay reference — not as something to execute again against this
 > project. Verify rather than trust this note: `supabase migration list --linked`
-> should show **81** rows with `20260910212202` latest.
+> should show `20260910212202` present exactly once. (The ledger has since moved
+> on: **82** rows, latest `20260912120000`, since 2026-09-12 — §6.6.)
 
 **What it changes.** Client-role object privileges only: `PUBLIC`, `anon` and
 `authenticated` on the 28 ordinary `public` tables and the one sequence, plus the
@@ -329,7 +332,7 @@ future ACL migration. **Against this project they are now satisfied** — the
 migration is applied, so a dry-run here proposes nothing:
 
 ```sh
-supabase migration list --linked          # then: this migration local-only. NOW: 81/81 aligned
+supabase migration list --linked          # then: this migration local-only. NOW: aligned (82/82 since 2026-09-12)
 supabase db push --dry-run                # then: EXACTLY this one migration. NOW: nothing to push
 ```
 
@@ -402,6 +405,82 @@ Nothing here touches data, so recovery is a privilege statement, not a
 restore. The correct target is the intended matrix — if a real dependency surfaces, re-grant that one privilege on
 that one table and amend the matrix, its test and this runbook together, rather
 than restoring the legacy blanket ACL.
+
+### 6.6 Migration-BEFORE-merge is required for `20260912120000` (model-aware reasoning policy) — PHASE 1 COMPLETE: applied and verified 2026-09-12; application merge pending
+
+> **Status — Phase 1 COMPLETE; Phase 2 pending. Do not re-run the migration as a pending step.** `20260912120000` was applied to Production on 2026-09-12, exactly once, with `supabase db push --linked` from the approved PR head `8001fce8182859a7cfd1d597573112df502ef3fd`, and verified while the old frontend and the pre-001A Edge runtime stayed live. The ledger is aligned at **82** rows, latest `20260912120000`. Manual reasoning is still staged off, no provider secret was installed, and `analyze-paper` v26 / `suggest-paper-organization` v10 are unchanged. The procedure below is kept as the record of that rollout and as a reusable pattern.
+>
+> - **Completed:** independent approval of the implementation head; explicit authorization of the Production migration; its application; old-app verification (read-only — see the note after the procedure).
+> - **Pending, each separately authorized:** merge the exact approved 001C head (Phase 2), then 001D telemetry, paid-provider row staging, provider secrets, the Edge deployment of both generation functions, the controlled canary and user enablement (§6.6a).
+
+**The `AI-MULTI-PROVIDER-001C` pull request must not be merged until this migration has been separately authorized, applied to Production, and verified while the old application is still live** (decision C41). The merged frontend reads `ai_model_catalog.reasoning_levels`, `auto_analyze_reasoning_level`, `auto_suggest_reasoning_level` and `reasoning_selectable`, and the merged account export reads `user_ai_preferences.preferred_reasoning_level`. An ordinary merge redeploys the frontend on Vercel, so merging first would put code that names those columns in front of a database that has none of them.
+
+**Why pre-applying it to the OLD application is safe.** Every change is additive and backward compatible:
+
+- the four catalog columns are new and nothing deployed reads them;
+- `preferred_reasoning_level` is nullable with no backfill, so every existing preference row keeps its exact meaning;
+- `set_current_user_ai_model` only **gains** a result column (`reasoning_reset`). The deployed Settings hook reads `saved`, `reason` and `display_name` by name, so the extra field is invisible to it;
+- `clear_current_user_ai_model`'s body is untouched; only its comment changes;
+- `set_current_user_ai_reasoning` and `clear_current_user_ai_reasoning` are new objects that nothing deployed calls.
+
+**Applying it activates nothing.** Every Gemini row gets `reasoning_selectable = false`. `set_current_user_ai_reasoning` is granted to **no role**, and the migration's own self-check fails if `authenticated` can execute it. No `anthropic/*` or `openai/*` row is added. A user can neither create nor see a manual reasoning level afterwards.
+
+```text
+1. independent review approves the exact 001C PR head
+2. obtain explicit owner authorization for the Production migration
+3. supabase migration list --linked              # then: ledger ended at 20260910212202 (pre-application checkpoint; NOW 82 rows, latest 20260912120000)
+   supabase db push --linked --dry-run           # then: listed ONLY 20260912120000 (NOW: nothing to push)
+4. apply it while the OLD frontend and the OLD (pre-001A) Edge runtime are live:
+   supabase db push --linked
+5. verify, read-only (see the checks below)
+6. confirm the old application is healthy: Settings loads and saves a model,
+   Analyze succeeds, Suggest succeeds, the account export downloads
+7. re-read the PR head and confirm it is STILL the exact approved SHA
+8. only then merge that exact head; the automatic Vercel deploy then runs
+   against the new schema
+```
+
+**How steps 1–6 actually ran (2026-09-12).** Steps 1–5 ran as written, and every step-5 check below passed. Step 6 was performed **read-only**: the old frontend bundle kept serving unchanged, and its exact catalog and saved-preference reads succeeded as `authenticated`. Saving a model, Analyze, Suggest and the account export were **not** exercised, because that authorization permitted no preference write and no AI quota use. Steps 7–8 are the pending merge.
+
+Read-only post-apply checks (step 5):
+
+- the four Gemini rows carry exactly the C41 matrix: 3.5/3.6 `{minimal,low,medium,high}` with analyze `minimal`; 3.7/3.8 `{low,medium,high}` with analyze `low`; suggest `medium` on all four;
+- `count(*) WHERE reasoning_selectable` = 0, and `count(*) WHERE provider <> 'google'` = 0;
+- `count(*) FROM user_ai_preferences WHERE preferred_reasoning_level IS NOT NULL` = 0;
+- `has_function_privilege('authenticated', 'public.set_current_user_ai_reasoning(text)', 'EXECUTE')` = **false**;
+- `has_function_privilege('authenticated', 'public.clear_current_user_ai_reasoning()', 'EXECUTE')` = true;
+- neither new function is executable by `anon` or `service_role`.
+
+Remember the Production legacy-ACL history (§6.5): assert grants on **exact privileges**, not on privilege names that Production renders differently.
+
+**Rollback (reference only).** The migration writes no user data, so reverting it is a schema operation: drop the two new functions, restore the 001A `set_current_user_ai_model` signature, drop the five catalog constraints and four columns, and drop the preference column and its constraint. Do that only while no merged application depends on them. **Once the 001C head is merged, revert the application first.**
+
+#### 6.6a The full AI-MULTI-PROVIDER rollout order (reference — the 001C PR executes none of it; phase 1 complete 2026-09-12, phase 2 pending)
+
+```text
+Phase 1  schema expansion             apply 20260912120000 (this section)   COMPLETE 2026-09-12
+Phase 2  application merge            merge the exact approved 001C head   NEXT (pending)
+Phase 3  telemetry foundation         AI-MULTI-PROVIDER-001D (usage/cost)
+Phase 4  stage paid-provider rows     separate migration: anthropic/claude-sonnet-5 and
+                                      openai/gpt-5.6-terra with the C41 future values,
+                                      selectable = false, reasoning_selectable = false
+Phase 5  install provider secrets     ANTHROPIC_API_KEY, OPENAI_API_KEY (§3.2)
+Phase 6  deploy BOTH generation       analyze-paper AND suggest-paper-organization
+         Edge Functions together      (§7c) — never before Phase 1
+Phase 7  controlled live canary       per provider, per operation
+Phase 8  user enablement              separate migration: flip reasoning_selectable and
+                                      GRANT EXECUTE ON set_current_user_ai_reasoning
+                                      TO authenticated together; open paid models
+```
+
+Each phase needs its own explicit authorization. **Phase 6 must never precede Phase 1.** The 001C runtime reads `preferred_reasoning_level` in its preference query, and against the old schema that read fails. Every entitled user would then fall back to the system default with `preference_lookup_failed`, and saved model choices would silently stop being honoured.
+
+**Phase 6 changes Gemini behaviour on purpose.** Today Production sends no thinking level, so both operations run at Google's implicit `medium`. With the 001C runtime:
+
+- Analyze sends PaperLume's `minimal` (3.5/3.6) or `low` (3.7/3.8);
+- Suggest sends `medium` explicitly.
+
+This is approved product policy (C41), not a regression, and the canary should confirm Analyze quality at the lower level.
 
 ---
 
@@ -544,6 +623,8 @@ The three `_shared` modules were **not modified** by `001A`, so no other functio
 > **Bundle closure changed again with `AI-MULTI-PROVIDER-001A` (C39), and that change is NOT yet deployed.** The provider seam adds three shared modules to the closure of **both** generation functions — `_shared/aiProvider.ts` (the contract), `_shared/aiProviderRegistry.ts` (the adapter registry, which also resolves the system default) and `_shared/googleAiProvider.ts` (the Google adapter, which is now what calls `_shared/geminiTransport.ts`) — plus `analyze-paper/prompt.ts` for `analyze-paper` only. **Production currently runs the pre-001A artifacts**: the refactor is repository-only and leaves every provider request, user-visible response and quota/refund outcome unchanged, so nothing is broken by the delay, but until an authorized deploy the repository and the deployed bundles differ. When that deploy is authorized it must cover **both** `analyze-paper` and `suggest-paper-organization` in the same authorized set, because they share every one of those modules. **No new secret is required or permitted by it:** `GEMINI_API_KEY` remains the only AI provider credential, there is no `AI_API_KEY` and no `AI_PROVIDER`, and no Anthropic/OpenAI secret exists or may be added until an adapter for that provider is registered and reviewed.
 >
 > **`AI-MULTI-PROVIDER-001B` (C40) edits modules inside that closure, and it is also NOT deployed.** It changes `_shared/aiProvider.ts` (a required `jsonSchema` and one new failure kind, `incomplete_response`), both operations' `prompt.ts` (their output schemas), and `suggest-paper-organization/handler.ts` and `analyze-paper/index.ts` (an explicit branch for the new failure kind, which Google cannot produce). A future authorized deploy must therefore still cover **both** generation functions together. The two new adapter modules, `_shared/anthropicAiProvider.ts` and `_shared/openAiProvider.ts`, are **in neither closure**: no shipping function imports them, so deploying either function would not ship them. The Gemini request bytes are unchanged, and no new secret is required.
+>
+> **`AI-MULTI-PROVIDER-001C` (C41) changes the closure again, and it is NOT deployed.** Registering Anthropic and OpenAI means `_shared/aiProviderRegistry.ts` now **imports** `_shared/anthropicAiProvider.ts` and `_shared/openAiProvider.ts`, so all three adapters are now in the closure of **both** generation functions. So are two new shared modules: `_shared/aiReasoningPolicy.ts`, the per-model, per-operation reasoning policy, and `_shared/aiProviderCredentials.ts`, the provider→credential-name mapping. The deploy therefore still has to cover `analyze-paper` **and** `suggest-paper-organization` together, and it must come **after** migration `20260912120000` is live (§6.6a, phases 1 and 6; phase 1 completed 2026-09-12). The Google request gains exactly one field, `generationConfig.thinkingConfig.thinkingLevel`. The fail-open `provider_default` path reproduces the pre-001C bytes exactly (golden SHA-256 `3285186f…`). With no non-Google catalog row, no new secret is required to deploy it.
 
 **Required ordering for every FUTURE change — the endpoint must not lag the UI that calls it.** The initial deployment is done; this rule is durable and governs any later PR that changes this function, or any shared module inside its bundle, in a way that alters the request/response contract. Merging to `main` auto-deploys the frontend (§8); Edge Functions do **not** ship with that merge, so a frontend expecting a contract the deployed function does not serve yet would fail every request.
 
@@ -901,9 +982,11 @@ Finally, confirm the boundary held elsewhere:
 | Function | Client sees | Edge log line | Quota |
 |---|---|---|---|
 | `analyze-paper` | 500 `{"error": "Analysis failed. Please try again later."}` | `analyze-paper error: GEMINI_API_KEY not configured in Supabase secrets` | The unit is consumed **before** this check, so the missing-key path calls `refund_ai_quota` before throwing. The refund is **best-effort**: if it fails it is logged and swallowed so the original error still surfaces. |
-| `suggest-paper-organization` | 500 `{"error": "internal_error", "message": "Something went wrong. Please try again."}` | `suggest-organization provider_key_missing` | The key is checked **before** `consume_ai_quota`, so **no unit is consumed and no refund is required**. |
+| `suggest-paper-organization` | 500 `{"error": "internal_error", "message": "Something went wrong. Please try again."}` | `suggest-organization provider_key_missing env=GEMINI_API_KEY` | The key is checked **before** `consume_ai_quota`, so **no unit is consumed and no refund is required**. |
 
 Both fail before any Gemini provider call is made, so a missing key costs nothing upstream. The ordering difference is the useful diagnostic: if Analyze is failing you will also see a refund attempt in its log, whereas Suggest never reaches the quota RPC at all.
+
+**Since `AI-MULTI-PROVIDER-001C` (C41) the missing variable is the SELECTED provider's.** Each operation reads exactly the credential for the provider its request resolved to, via `_shared/aiProviderCredentials.ts`. For a request routed to Google, which is every request while the catalog is Google-only, both log lines above are unchanged apart from Suggest's added `env=` suffix. For a request routed to an Anthropic or OpenAI row, the same lines name `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` instead: `analyze-paper error: <NAME> not configured in Supabase secrets` and `suggest-organization provider_key_missing env=<NAME>`. **A missing non-Google key never falls back to `GEMINI_API_KEY`.** The quota behaviour above is preserved: Analyze refunds, and Suggest still fails before the quota unit. Suggest now calls `get_current_user_access` first, because which key to check depends on the selected provider, but that is a read and spends nothing.
 
 **Fix:**
 

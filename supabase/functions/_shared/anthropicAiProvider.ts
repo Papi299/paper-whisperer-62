@@ -1,24 +1,24 @@
 // The Anthropic (Claude Messages API) provider adapter — AI-MULTI-PROVIDER-001B.
 //
-// ## THIS ADAPTER IS DELIBERATELY NOT REGISTERED
+// ## REGISTERED SINCE AI-MULTI-PROVIDER-001C — and still unreachable
 //
-// It implements a real, reviewed protocol, and nothing in PaperLume can reach
-// it. `_shared/aiProviderRegistry.ts` still registers `google` and only
-// `google`, so a catalog row naming `anthropic` still falls back to the system
-// default with `unsupported_provider`, the Settings surface still offers Google
-// models only, and no Anthropic credential exists on any server.
+// 001B implemented this protocol and deliberately left it out of the registry,
+// because Claude Sonnet 5 runs ADAPTIVE THINKING BY DEFAULT at effort `high`
+// and `max_tokens` is a hard ceiling on thinking plus response text together:
+// registering it before PaperLume had decided its own reasoning and output
+// policy would have adopted Anthropic's defaults as PaperLume's product policy
+// by omission. 001C decides that policy (C41), so `anthropic` is now a
+// registered provider in `_shared/aiProviderRegistry.ts`, every request this
+// module builds carries an EXPLICIT PaperLume reasoning configuration, and the
+// output ceiling arrives from the calling operation instead of being invented
+// here.
 //
-// That is a safety requirement, not unfinished work. Claude Sonnet 5 runs
-// ADAPTIVE THINKING BY DEFAULT at effort `high` (Anthropic's Sonnet 5 migration
-// guide: "adaptive thinking is on by default"), and `max_tokens` is a hard
-// ceiling on thinking plus response text together. Registering this adapter
-// before PaperLume has decided its own per-operation reasoning and output
-// policy would not be "shipping a provider" — it would be adopting Anthropic's
-// defaults as PaperLume's product policy by omission, and at the provisional
-// ceiling below a long thinking pass could consume the budget the answer needs.
-// Choosing that policy is AI-MULTI-PROVIDER-001C's job, and registration waits
-// for it. This module therefore sends NO `thinking` key at all: 001B states no
-// reasoning opinion, rather than encoding a guess at one.
+// Registration is not the same as reachability, and nothing in Production can
+// reach this yet. There is no `anthropic/*` row in `ai_model_catalog`, so model
+// selection has nothing to route here; no `ANTHROPIC_API_KEY` exists on any
+// server; and the Edge Functions that would import it are not deployed. Adding
+// a catalog row, installing the secret and deploying the functions are three
+// separate, separately authorized steps — see docs/deployment.md.
 //
 // ## What this module owns, and only this module
 //
@@ -52,10 +52,23 @@
 //
 // ## Official documentation this was written from
 //
-//   * Model `claude-sonnet-5` — active; adaptive thinking on by default;
-//     `thinking: {type: "enabled", budget_tokens: N}` returns 400; sampling
-//     parameters (`temperature`, `top_p`, `top_k`) set to non-default values
-//     return 400; assistant prefill returns 400; effort defaults to `high`.
+//   * Model `claude-sonnet-5` — active; thinking mode "adaptive only", ON by
+//     default; `thinking: {type: "enabled", budget_tokens: N}` returns 400;
+//     `thinking: {type: "disabled"}` IS accepted (the per-model configuration
+//     table lists only `"enabled"` as rejected, and states that models marked
+//     `On` "default to thinking but accept `thinking: {type: "disabled"}`");
+//     sampling parameters (`temperature`, `top_p`, `top_k`) set to non-default
+//     values return 400; assistant prefill returns 400; effort defaults to
+//     `high`.
+//   * Effort — `output_config.effort` is `low | medium | high | xhigh | max`,
+//     all five supported on `claude-sonnet-5`, default `high`, and "effort
+//     applies to every output token … it works whether or not thinking is
+//     enabled". `adaptive` is explicitly NOT an effort value.
+//   * `output_config` carries BOTH `effort` and `format` as sibling fields; the
+//     Messages API request reference lists exactly those two.
+//   * `max_tokens` — a hard ceiling on the whole turn, thinking included; a
+//     long thinking pass that exhausts it returns `stop_reason: "max_tokens"`
+//     with truncated or missing text.
 //   * Messages API — `POST https://api.anthropic.com/v1/messages`, headers
 //     `x-api-key`, `anthropic-version: 2023-06-01`, `content-type`.
 //   * Structured outputs — `output_config.format` with `type: "json_schema"`
@@ -69,11 +82,13 @@
 //     by position is explicitly called out as wrong.
 
 import type {
+  AiCallPolicy,
   AiGenerationRequest,
   AiProviderAdapter,
   AiProviderCallDeps,
   AiProviderModel,
   AiProviderResult,
+  AiReasoningLevel,
 } from "./aiProvider.ts";
 
 /** The provider id `ai_model_catalog.provider` would use for Anthropic. */
@@ -97,17 +112,56 @@ export const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 export const ANTHROPIC_VERSION = "2023-06-01";
 
 /**
- * 001B PROVISIONAL ADAPTER CEILING — not a product budget.
+ * The reasoning levels this adapter can express — AI-MULTI-PROVIDER-001C.
  *
- * Anthropic's Messages API requires `max_tokens`, so this adapter cannot avoid
- * naming a number. 4096 is a conservative value chosen only to exercise the
- * protocol; it is NOT a considered per-operation output budget, and it is one
- * of the reasons this adapter must not be registered: with adaptive thinking on
- * by default, `max_tokens` bounds thinking and answer TOGETHER.
- * AI-MULTI-PROVIDER-001C replaces this with an explicit per-operation
- * output/reasoning policy.
+ * Six, and they are two different Anthropic controls wearing one PaperLume
+ * vocabulary:
+ *
+ *   * `off` is the THINKING control — `thinking: {type: "disabled"}`;
+ *   * `low` … `max` are the EFFORT control — `output_config.effort`, whose five
+ *     values Anthropic documents as exactly `low | medium | high | xhigh | max`
+ *     on `claude-sonnet-5`.
+ *
+ * Google's `minimal` and OpenAI's `none` are absent because Anthropic has no
+ * such values; an `AiCallPolicy<AnthropicReasoningLevel>` carrying either does
+ * not compile, so the mistake cannot reach a request builder.
  */
-export const ANTHROPIC_PROVISIONAL_MAX_TOKENS = 4096;
+export type AnthropicReasoningLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
+
+/** In Anthropic's own order of increasing reasoning. */
+export const ANTHROPIC_REASONING_LEVELS: readonly AnthropicReasoningLevel[] = Object.freeze([
+  "off",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const);
+
+export function isAnthropicReasoningLevel(
+  level: AiReasoningLevel,
+): level is AnthropicReasoningLevel {
+  return (ANTHROPIC_REASONING_LEVELS as readonly string[]).includes(level);
+}
+
+/**
+ * The effort PaperLume pairs with DISABLED thinking.
+ *
+ * `off` means "do not think", and Anthropic's effort parameter is a separate
+ * control that "applies to every output token … whether or not thinking is
+ * enabled". Sending `thinking: {type: "disabled"}` and nothing else would
+ * therefore leave effort at its `high` default: PaperLume would have turned
+ * thinking off while silently keeping the most expensive output policy the API
+ * has, which is the opposite of what a user choosing "Off" asked for.
+ *
+ * `low` is the documented floor and the semantically right partner for it.
+ *
+ * It is also the safe one. Anthropic documents that disabling thinking at
+ * effort `xhigh` or `max` is a 400 on Claude Opus 5 "and later models"; pairing
+ * `off` with the LOWEST effort keeps this mapping valid under that rule however
+ * it is extended, rather than depending on Sonnet 5 being outside it.
+ */
+const ANTHROPIC_DISABLED_THINKING_EFFORT = "low";
 
 /**
  * Per-attempt ceiling — this adapter's own, not the Gemini transport's.
@@ -156,42 +210,88 @@ const ANTHROPIC_OUTPUT_FORMAT_TYPE: Record<AiGenerationRequest["responseFormat"]
 /**
  * The Anthropic request body.
  *
- * What is present is the documented minimum for one stateless generation. What
- * is ABSENT is the reviewed part:
+ * What is present is the documented minimum for one stateless generation, plus
+ * PaperLume's explicit reasoning and output policy. What is ABSENT is still the
+ * reviewed part:
  *
- *   * no `thinking` — 001B states no reasoning policy (see the header);
  *   * no `temperature`, `top_p` or `top_k` — Sonnet 5 returns 400 for a
  *     non-default value, and PaperLume sets no sampling parameters anywhere;
  *   * no assistant prefill — Sonnet 5 returns 400, and the schema below is the
  *     documented replacement for prefill-as-JSON-coercion;
+ *   * no `budget_tokens` and no `thinking: {type: "enabled"}` — Sonnet 5
+ *     rejects manual extended thinking with a 400, and a token budget would be
+ *     a second, drifting expression of a policy the catalog states in words;
  *   * no `tools`, no `tool_choice` — this is a text generation, not an agent;
- *   * no `cache_control` — prompt caching is deliberately out of 001B's scope;
+ *   * no `cache_control` — prompt caching is deliberately out of scope;
  *   * no `metadata`, no `user_id` — no user-identifying field is sent at all;
  *   * no `stream`, no `service_tier`, no beta header.
  *
  * `system` is the top-level string field rather than a message, which is where
  * Anthropic puts a system instruction, and the user content is the single
  * message of the conversation.
+ *
+ * ## The reasoning mapping — AI-MULTI-PROVIDER-001C (C41)
+ *
+ *     off    ->  thinking: {type: "disabled"}, output_config.effort: "low"
+ *     low    ->  thinking: {type: "adaptive"},  output_config.effort: "low"
+ *     medium ->  thinking: {type: "adaptive"},  output_config.effort: "medium"
+ *     high   ->  thinking: {type: "adaptive"},  output_config.effort: "high"
+ *     xhigh  ->  thinking: {type: "adaptive"},  output_config.effort: "xhigh"
+ *     max    ->  thinking: {type: "adaptive"},  output_config.effort: "max"
+ *
+ * `thinking` is stated EXPLICITLY on every level, including the adaptive ones
+ * where it happens to match Sonnet 5's current default. That is the entire
+ * point of C41: a provider default is a fact about the provider on a given day,
+ * not PaperLume's product policy, and the day Anthropic changes it this request
+ * must not change with it.
+ *
+ * `output_config` carries `format` AND `effort` as siblings — the two fields
+ * the Messages API reference lists for that object. The format object is built
+ * once and the effort key is added beside it, never over it: overwriting
+ * `output_config` to set effort would silently drop structured output, and the
+ * operations' parsers would then be the only thing standing between a prose
+ * answer and the user.
+ *
+ * A `provider_default` directive sends NEITHER `thinking` NOR `effort` — the
+ * fail-open path for unusable policy metadata. `format` and `max_tokens` still
+ * go, because they are not reasoning policy: the operation's output contract
+ * and PaperLume's safety ceiling hold regardless of what the catalog could tell
+ * us about reasoning.
  */
 export function buildAnthropicRequestBody(
   model: AnthropicAiProviderModel,
   request: AiGenerationRequest,
+  policy: AiCallPolicy<AnthropicReasoningLevel>,
 ): Record<string, unknown> {
-  return {
-    model: model.providerModel,
-    max_tokens: ANTHROPIC_PROVISIONAL_MAX_TOKENS,
-    system: request.systemInstruction,
-    messages: [{ role: "user", content: request.userContent }],
-    output_config: {
-      format: {
-        type: ANTHROPIC_OUTPUT_FORMAT_TYPE[request.responseFormat],
-        // The operation's schema, passed through verbatim. This module does not
-        // inspect, extend or repair it: what the fields MEAN is PaperLume
-        // product semantics and stays on the operation's side of C39's line.
-        schema: request.jsonSchema.schema,
-      },
+  const outputConfig: Record<string, unknown> = {
+    format: {
+      type: ANTHROPIC_OUTPUT_FORMAT_TYPE[request.responseFormat],
+      // The operation's schema, passed through verbatim. This module does not
+      // inspect, extend or repair it: what the fields MEAN is PaperLume
+      // product semantics and stays on the operation's side of C39's line.
+      schema: request.jsonSchema.schema,
     },
   };
+
+  const body: Record<string, unknown> = {
+    model: model.providerModel,
+    // PaperLume's hard ceiling for THIS operation, bounding thinking and answer
+    // together. It arrives from the caller rather than being a constant here,
+    // because how much room an answer needs is the operation's knowledge and an
+    // adapter that guessed would be guessing about Projects and Tags.
+    max_tokens: policy.maxOutputTokens,
+    system: request.systemInstruction,
+    messages: [{ role: "user", content: request.userContent }],
+    output_config: outputConfig,
+  };
+
+  if (policy.reasoning.kind === "level") {
+    const level = policy.reasoning.level;
+    body.thinking = { type: level === "off" ? "disabled" : "adaptive" };
+    outputConfig.effort = level === "off" ? ANTHROPIC_DISABLED_THINKING_EFFORT : level;
+  }
+
+  return body;
 }
 
 /**
@@ -202,6 +302,7 @@ export function buildAnthropicRequestBody(
 export function buildAnthropicRequestInit(
   model: AnthropicAiProviderModel,
   request: AiGenerationRequest,
+  policy: AiCallPolicy<AnthropicReasoningLevel>,
   apiKey: string,
 ): RequestInit {
   return {
@@ -211,7 +312,7 @@ export function buildAnthropicRequestInit(
       "x-api-key": apiKey,
       "anthropic-version": ANTHROPIC_VERSION,
     },
-    body: JSON.stringify(buildAnthropicRequestBody(model, request)),
+    body: JSON.stringify(buildAnthropicRequestBody(model, request, policy)),
   };
 }
 
@@ -284,6 +385,7 @@ export function extractAnthropicText(payload: unknown): string | null | undefine
 async function generate(
   model: AnthropicAiProviderModel,
   request: AiGenerationRequest,
+  policy: AiCallPolicy<AnthropicReasoningLevel>,
   deps: AiProviderCallDeps,
 ): Promise<AiProviderResult> {
   const attempts = ANTHROPIC_PROVIDER_ATTEMPTS;
@@ -294,7 +396,7 @@ async function generate(
   let response: Response;
   try {
     response = await deps.fetchImpl(ANTHROPIC_MESSAGES_URL, {
-      ...buildAnthropicRequestInit(model, request, deps.apiKey),
+      ...buildAnthropicRequestInit(model, request, policy, deps.apiKey),
       signal,
     });
   } catch (error) {
@@ -379,14 +481,20 @@ function isTimeout(error: unknown, signal: AbortSignal): boolean {
 }
 
 /**
- * The Anthropic adapter — implemented, reviewed, and NOT registered.
+ * The Anthropic adapter — implemented, reviewed, and registered since
+ * AI-MULTI-PROVIDER-001C.
  *
- * `_shared/aiProviderRegistry.ts` does not import this constant, and
- * AI-MULTI-PROVIDER-001B must not make it do so. Tests import this module
- * directly; a registry entry is never needed to exercise an adapter, and if it
- * ever seemed to be, the design would be wrong.
+ * `_shared/aiProviderRegistry.ts` imports this constant, so a valid enabled
+ * `anthropic` catalog row would now be honoured rather than falling back with
+ * `unsupported_provider`. No such row exists, and creating one is a separate
+ * reviewed migration.
  */
-export const ANTHROPIC_AI_PROVIDER_ADAPTER: AiProviderAdapter<typeof ANTHROPIC_AI_PROVIDER> = {
+export const ANTHROPIC_AI_PROVIDER_ADAPTER: AiProviderAdapter<
+  typeof ANTHROPIC_AI_PROVIDER,
+  AnthropicReasoningLevel
+> = {
   provider: ANTHROPIC_AI_PROVIDER,
+  reasoningLevels: ANTHROPIC_REASONING_LEVELS,
+  supportsReasoningLevel: isAnthropicReasoningLevel,
   generate,
 };

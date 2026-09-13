@@ -11,34 +11,46 @@ export type Database = {
     Tables: {
       ai_model_catalog: {
         Row: {
+          auto_analyze_reasoning_level: string | null
+          auto_suggest_reasoning_level: string | null
           created_at: string
           display_name: string
           enabled: boolean
           id: string
           provider: string
           provider_model: string
+          reasoning_levels: string[]
+          reasoning_selectable: boolean
           selectable: boolean
           sort_order: number
           updated_at: string
         }
         Insert: {
+          auto_analyze_reasoning_level?: string | null
+          auto_suggest_reasoning_level?: string | null
           created_at?: string
           display_name: string
           enabled?: boolean
           id: string
           provider: string
           provider_model: string
+          reasoning_levels?: string[]
+          reasoning_selectable?: boolean
           selectable?: boolean
           sort_order?: number
           updated_at?: string
         }
         Update: {
+          auto_analyze_reasoning_level?: string | null
+          auto_suggest_reasoning_level?: string | null
           created_at?: string
           display_name?: string
           enabled?: boolean
           id?: string
           provider?: string
           provider_model?: string
+          reasoning_levels?: string[]
+          reasoning_selectable?: boolean
           selectable?: boolean
           sort_order?: number
           updated_at?: string
@@ -871,18 +883,21 @@ export type Database = {
         Row: {
           created_at: string
           preferred_model_id: string
+          preferred_reasoning_level: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
           created_at?: string
           preferred_model_id: string
+          preferred_reasoning_level?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
           created_at?: string
           preferred_model_id?: string
+          preferred_reasoning_level?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -1019,6 +1034,13 @@ export type Database = {
       bulk_update_keywords: { Args: { updates: Json }; Returns: undefined }
       bulk_update_study_types: { Args: { updates: Json }; Returns: undefined }
       clear_current_user_ai_model: {
+        Args: never
+        Returns: {
+          cleared: boolean
+          reason: string
+        }[]
+      }
+      clear_current_user_ai_reasoning: {
         Args: never
         Returns: {
           cleared: boolean
@@ -1204,6 +1226,17 @@ export type Database = {
           display_name: string
           preferred_model_id: string
           provider: string
+          reason: string
+          reasoning_reset: boolean
+          saved: boolean
+          updated_at: string
+        }[]
+      }
+      set_current_user_ai_reasoning: {
+        Args: { p_reasoning_level: string }
+        Returns: {
+          preferred_model_id: string
+          preferred_reasoning_level: string
           reason: string
           saved: boolean
           updated_at: string

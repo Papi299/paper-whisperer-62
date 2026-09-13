@@ -8,9 +8,14 @@ import {
   type AiModelSelectionClient,
 } from "../_shared/aiModelSelection.ts";
 import {
-  getAiProviderAdapter,
+  generateWithRegisteredAiProvider,
   resolveSystemDefaultAiModel,
 } from "../_shared/aiProviderRegistry.ts";
+import { resolveAiProviderCredential } from "../_shared/aiProviderCredentials.ts";
+import {
+  formatReasoningPolicyLog,
+  resolveAiReasoningPolicy,
+} from "../_shared/aiReasoningPolicy.ts";
 import {
   classifyProviderError,
   NEUTRAL_ANALYSIS_UNAVAILABLE_MESSAGE,
@@ -144,6 +149,24 @@ Deno.serve(async (req) => {
       logger: console,
     });
 
+    // ── Step 2c: How hard should this request think? ──
+    //
+    // AI-MULTI-PROVIDER-001C (C41). PaperLume's own reasoning policy, resolved
+    // from the effective model's server-controlled catalog metadata and the
+    // caller's saved preference — never inherited from whatever the provider
+    // currently defaults to. Placed here, beside model selection and still
+    // BEFORE the quota unit, for the same reasons: it is a read-only metadata
+    // lookup that spends nothing, makes no provider call, and cannot fail the
+    // request (every failure mode resolves to a bounded provider-default
+    // fallback that preserves the feature).
+    const reasoningDecision = await resolveAiReasoningPolicy({
+      client: supabase as unknown as AiModelSelectionClient,
+      operation: "analyze",
+      selection: modelSelection,
+      label: "analyze-paper",
+      logger: console,
+    });
+
     // ── Step 3: Consume AI quota (server-side enforcement) ──
     // Calls the SECURITY DEFINER consume_ai_quota RPC through the
     // caller-authenticated Supabase client, so the RPC sees the
@@ -202,32 +225,42 @@ Deno.serve(async (req) => {
     // RPC is best-effort: if it itself fails, we log and rethrow the
     // ORIGINAL Gemini error so the caller sees the real failure
     // reason, not a refund-side error.
-    console.log("4. Checking Gemini API key");
-    const geminiKey = Deno.env.get("GEMINI_API_KEY");
-    if (!geminiKey) {
-      // Refund before throwing — the user did not get the analysis.
-      await safeRefundAiQuota(supabase, user.id);
-      throw new Error("GEMINI_API_KEY not configured in Supabase secrets");
-    }
-    console.log("4a. Gemini key present");
-
-    // The adapter for the provider this request resolved to. Total by
-    // construction: `resolveEffectiveAiModel` can only return a provider the
-    // runtime registry has a reviewed adapter for (AI-MULTI-PROVIDER-001A,
-    // C39), so there is no lookup-failure branch here to mishandle after the
-    // quota unit above has already been consumed.
+    // ── Step 4: the SELECTED PROVIDER's credential ──
     //
-    // The ONLY provider delta from per-user model selection remains the model:
-    // the request content, the credential, the transport policy, the parsing
-    // and the quota semantics below are identical whether this is the system
-    // default or an honoured preference. `providerModel` is either the resolved
-    // GEMINI_MODEL value or a catalog-supplied string — never anything the
-    // client sent.
-    const providerAdapter = getAiProviderAdapter(modelSelection.provider);
+    // AI-MULTI-PROVIDER-001C. This used to read `GEMINI_API_KEY`
+    // unconditionally, which was correct while Google was the only registered
+    // provider and is a hazard now that three are: a request routed to
+    // Anthropic while still reading Google's variable would put PaperLume's
+    // Gemini key in a header addressed to another provider. The name comes from
+    // the one reviewed provider→credential mapping, and exactly that one
+    // variable is read.
+    //
+    // The ORDER is unchanged on purpose. The quota unit has already been
+    // consumed above, so a misconfigured deployment must refund before it
+    // fails — the pre-001C behaviour for a missing key, preserved exactly, just
+    // for whichever provider this request actually resolved to.
+    console.log("4. Checking provider credential");
+    const credential = resolveAiProviderCredential(
+      modelSelection.provider,
+      (name) => Deno.env.get(name),
+    );
+    if (!credential.ok) {
+      // Refund before throwing — the user did not get the analysis. The message
+      // names the missing ENVIRONMENT VARIABLE, never a value: without the name
+      // a misconfigured deployment is undiagnosable, and the name is not a
+      // secret.
+      await safeRefundAiQuota(supabase, user.id);
+      throw new Error(`${credential.envName} not configured in Supabase secrets`);
+    }
+    console.log("4a. Provider credential present:", credential.envName);
+
     // One bounded routing line: operation, source, provider, public model name.
     // No user id, no email, no token, no key, no title/abstract.
     console.log(formatModelRoutingLog("analyze-paper", modelSelection));
-    console.log("5. Calling Gemini API");
+    // One bounded reasoning line: operation, who decided, the concrete public
+    // level, and PaperLume's output ceiling.
+    console.log(formatReasoningPolicyLog("analyze-paper", "analyze", reasoningDecision));
+    console.log("5. Calling AI provider");
 
     // Provider-neutral: two prompt strings and a response format. How that
     // becomes a Gemini URL, envelope and `x-goog-api-key` header is the Google
@@ -253,11 +286,12 @@ Deno.serve(async (req) => {
       // see the transport header.) A timeout is TERMINAL under either policy
       // and is never automatically re-sent. This function pins none of it, and
       // neither does the adapter: both take whatever the shared constants are.
-      const providerCall = await providerAdapter.generate(
+      const providerCall = await generateWithRegisteredAiProvider(
         modelSelection,
         generationRequest,
+        reasoningDecision.policy,
         {
-          apiKey: geminiKey,
+          apiKey: credential.apiKey,
           label: "analyze-paper",
           fetchImpl: (url, init) => fetch(url, init),
           sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -300,9 +334,11 @@ Deno.serve(async (req) => {
         if (providerCall.kind === "incomplete_response") {
           // A readable 2xx envelope in which the provider itself reports the
           // generation did not finish. AI-MULTI-PROVIDER-001B added this kind
-          // for the two UNREGISTERED adapters (Anthropic's `stop_reason`,
+          // for the Anthropic and OpenAI adapters (Anthropic's `stop_reason`,
           // OpenAI's `status`); Google's envelope has no such field, so this
-          // branch is unreachable today and nothing about this function's
+          // branch is unreachable while the catalog is Google-only — both adapters
+          // are registered since AI-MULTI-PROVIDER-001C, but no row routes to either —
+          // and nothing about this function's
           // current behaviour changes. It is written now because the tail below
           // treats every remaining kind as `empty`, and a new kind falling into
           // it would report a truncated or abandoned generation as "the model

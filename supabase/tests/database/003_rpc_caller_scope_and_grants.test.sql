@@ -119,7 +119,13 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     -- authenticated-executable SECURITY DEFINER function, and the rule that it
     -- derives its caller from auth.uid() and takes no user id applies to it like
     -- every other entry here.
-    'public.attachment_object_has_live_metadata(text)'
+    'public.attachment_object_has_live_metadata(text)',
+    -- AI-MULTI-PROVIDER-001C (C41). Returns the caller's AI reasoning choice to
+    -- Automatic while preserving the saved model. Granted to authenticated from
+    -- the migration that creates it, because it can only REMOVE a manual choice
+    -- — it creates no user data and increases no capability. Its sibling
+    -- set_current_user_ai_reasoning is deliberately NOT here; see staged_fns().
+    'public.clear_current_user_ai_reasoning()'
   ]);
 $hlp$;
 
@@ -131,6 +137,22 @@ CREATE FUNCTION pg_temp.internal_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT * FROM (VALUES
     ('public.author_identity_effective_root(uuid,uuid)'),
     ('public.validate_author_mention_for_identity(uuid,uuid,integer,text)')
+  ) v(sig)
+$hlp$;
+
+-- STAGED SECURITY DEFINER functions: created and reviewed, granted to NO role.
+--
+-- A fourth classification, added by AI-MULTI-PROVIDER-001C, and the reason it
+-- has to exist rather than being folded into one of the three above:
+-- set_current_user_ai_reasoning is a real client RPC in every respect except
+-- that its EXECUTE grant is deliberately withheld until a later, separately
+-- authorized user-enablement migration. Listing it as a client RPC would assert
+-- `authenticated` CAN execute it and fail; listing it as internal- or
+-- trigger-only would misdescribe what it is. The staging is the claim worth
+-- testing, so it gets its own list and its own assertion.
+CREATE FUNCTION pg_temp.staged_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
+  SELECT * FROM (VALUES
+    ('public.set_current_user_ai_reasoning(text)')
   ) v(sig)
 $hlp$;
 
@@ -173,7 +195,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(281);
+SELECT plan(289);
 
 -- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
@@ -191,13 +213,16 @@ SELECT plan(281);
 -- old one could not provide. That feature's remaining function,
 -- attachment_cleanup_path_is_safe, is deliberately NOT here: it is SECURITY
 -- INVOKER and reads nothing, so it is out of this inventory's remit by
--- definition — its posture is pinned by suites 007 and 014.
+-- definition — its posture is pinned by suites 007 and 014. 40 after
+-- AI-MULTI-PROVIDER-001C added set_current_user_ai_reasoning (staged, granted to
+-- nobody) and clear_current_user_ai_reasoning; the directly-callable count goes
+-- 31 -> 32 for the second of those only.
 -- The count is deliberately exact: a new definer function that nobody registered
 -- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  38, 'exactly 38 SECURITY DEFINER functions in public');
+  40, 'exactly 40 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -239,11 +264,13 @@ SELECT is(
        'public.delete_papers_with_attachment_cleanup(uuid[])'::regprocedure,
        'public.finalize_attachment_upload(uuid,text,text,text,integer)'::regprocedure,
        'public.reject_attachment_over_cleanup_intent()'::regprocedure,
-       'public.attachment_object_has_live_metadata(text)'::regprocedure
+       'public.attachment_object_has_live_metadata(text)'::regprocedure,
+       'public.set_current_user_ai_reasoning(text)'::regprocedure,
+       'public.clear_current_user_ai_reasoning()'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
--- ══ 2. EXECUTE matrix over the 31 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 32 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -292,7 +319,30 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 31) ═══════════
+-- ══ 3d. Staged functions: reachable by NO role, including authenticated ═════
+-- The assertion that proves AI-MULTI-PROVIDER-001C shipped its reasoning write
+-- path without opening it. `authenticated` is checked explicitly and separately
+-- from anon/PUBLIC/service_role, because it is the only one of the four whose
+-- absence here is a deliberate product decision rather than the standing rule —
+-- and therefore the only one a well-meaning future edit might "correct".
+SELECT ok(
+  NOT has_function_privilege('authenticated', sig::regprocedure, 'EXECUTE'),
+  'staged not authenticated-executable: ' || sig
+) FROM pg_temp.staged_fns() sig;
+SELECT ok(
+  NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE')
+  AND NOT has_function_privilege('service_role', sig::regprocedure, 'EXECUTE')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = sig::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+  'staged not anon/service_role/PUBLIC-executable: ' || sig
+) FROM pg_temp.staged_fns() sig;
+SELECT ok(has_function_privilege(
+    (SELECT p.proowner::regrole::text FROM pg_proc p WHERE p.oid = sig::regprocedure),
+    sig::regprocedure, 'EXECUTE'),
+  'staged owner execution preserved: ' || sig) FROM pg_temp.staged_fns() sig;
+
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 32) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(

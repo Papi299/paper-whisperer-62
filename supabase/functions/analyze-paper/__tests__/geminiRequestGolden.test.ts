@@ -24,7 +24,9 @@ import { describe, it, expect, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { GOOGLE_AI_PROVIDER_ADAPTER } from "../../_shared/googleAiProvider.ts";
 import { resolveSystemDefaultAiModel } from "../../_shared/aiProviderRegistry.ts";
-import type { AiProviderCallDeps } from "../../_shared/aiProvider.ts";
+import type { AiProviderCallDeps, AiCallPolicy } from "../../_shared/aiProvider.ts";
+import type { GoogleReasoningLevel } from "../../_shared/googleAiProvider.ts";
+import { AI_OPERATION_MAX_OUTPUT_TOKENS } from "../../_shared/aiReasoningPolicy.ts";
 import {
   ANALYZE_SYSTEM_INSTRUCTION,
   buildAnalyzeGenerationRequest,
@@ -38,10 +40,40 @@ const API_KEY = "SENTINEL-GEMINI-API-KEY";
 const MODEL = { provider: "google", providerModel: "gemini-3.5-flash" } as const;
 
 // ── Golden values, captured from the pre-001A implementation ──────────────
+//
+// AI-MULTI-PROVIDER-001C adds ONE field to this request —
+// `generationConfig.thinkingConfig.thinkingLevel` — and the original pins stay
+// exactly where they were rather than being rewritten to match the new bytes.
+// They now describe the PROVIDER-DEFAULT path: the fail-open fallback for
+// unusable policy metadata, which must still produce the request PaperLume has
+// always sent. Keeping them makes that claim testable instead of assumed, and a
+// second set of pins below covers the ordinary path.
 const GOLDEN_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent";
 const GOLDEN_BODY_SHA256 = "3285186f0f12759b0f1b3c19e2d2866c0beafbfd12482cdc44da5670a04d1d31";
 const GOLDEN_BODY_BYTES = 1973;
+
+// ── The 001C request: the same bytes plus PaperLume's explicit thinking level ──
+//
+// `minimal` is Gemini 3.5/3.6 Flash's approved Automatic level for Analyze
+// (C41). These pins are NOT captured from anything historical — they are the
+// new contract, and a change to either means the request PaperLume will send
+// once the 001C Edge runtime is deployed has moved.
+const GOLDEN_ANALYZE_BODY_SHA256 =
+  "e26b9bca572e8e2fba3b177cbb35b9c0d822f58e62bae4aab5abf5b3bf132ea6";
+const GOLDEN_ANALYZE_BODY_BYTES = 2018;
+
+/** The ordinary 001C Analyze policy for a Gemini 3.5/3.6 Flash request. */
+const ANALYZE_POLICY: AiCallPolicy<GoogleReasoningLevel> = {
+  reasoning: { kind: "level", level: "minimal" },
+  maxOutputTokens: AI_OPERATION_MAX_OUTPUT_TOKENS.analyze,
+};
+
+/** The fail-open policy for unusable reasoning metadata. */
+const PROVIDER_DEFAULT_POLICY: AiCallPolicy<GoogleReasoningLevel> = {
+  reasoning: { kind: "provider_default" },
+  maxOutputTokens: AI_OPERATION_MAX_OUTPUT_TOKENS.analyze,
+};
 const GOLDEN_SYSTEM_INSTRUCTION_SHA256 =
   "636b4ff6327a9a3f17dd6666bded488b561286cd65e5cd27a47a5295b280a6f7";
 const GOLDEN_USER_CONTENT =
@@ -50,7 +82,11 @@ const GOLDEN_USER_CONTENT =
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
 /** Capture the request the real adapter would send, without any network. */
-async function captureRequest(title: unknown, abstract: string) {
+async function captureRequest(
+  title: unknown,
+  abstract: string,
+  policy: AiCallPolicy<GoogleReasoningLevel> = ANALYZE_POLICY,
+) {
   const fetchImpl = vi.fn(
     async () =>
       new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "{}" }] } }] }), {
@@ -69,6 +105,7 @@ async function captureRequest(title: unknown, abstract: string) {
   const result = await GOOGLE_AI_PROVIDER_ADAPTER.generate(
     MODEL,
     buildAnalyzeGenerationRequest(title, abstract),
+    policy,
     deps,
   );
 
@@ -88,10 +125,41 @@ describe("the exact request analyze-paper sends to Google", () => {
     });
   });
 
-  it("serializes a byte-identical request body", async () => {
+  it("serializes the 001C request body, byte for byte", async () => {
     const { body } = await captureRequest(TITLE, ABSTRACT);
+    expect(sha256(body)).toBe(GOLDEN_ANALYZE_BODY_SHA256);
+    expect(body.length).toBe(GOLDEN_ANALYZE_BODY_BYTES);
+  });
+
+  it("is the pre-001C body plus EXACTLY the thinking level, and nothing else", async () => {
+    // The whole claim of 001C's Google change, measured rather than asserted in
+    // prose: delete the one field this task added and the bytes are the bytes
+    // PaperLume has always sent.
+    const { body } = await captureRequest(TITLE, ABSTRACT);
+    expect(body).toContain('"thinkingConfig":{"thinkingLevel":"minimal"}');
+    const withoutThinking = body.replace(',"thinkingConfig":{"thinkingLevel":"minimal"}', "");
+    expect(sha256(withoutThinking)).toBe(GOLDEN_BODY_SHA256);
+    expect(withoutThinking.length).toBe(GOLDEN_BODY_BYTES);
+  });
+
+  it("serializes the PRE-001C body exactly on the provider-default fallback", async () => {
+    // The fail-open path for unusable reasoning metadata must degrade to the
+    // request that shipped, not to a third shape. This is the original golden
+    // hash, unchanged since AI-MULTI-PROVIDER-001A.
+    const { body, url } = await captureRequest(TITLE, ABSTRACT, PROVIDER_DEFAULT_POLICY);
+    expect(url).toBe(GOLDEN_URL);
     expect(sha256(body)).toBe(GOLDEN_BODY_SHA256);
     expect(body.length).toBe(GOLDEN_BODY_BYTES);
+    expect(body).not.toContain("thinking");
+  });
+
+  it("never sends PaperLume's output ceiling to Google", async () => {
+    // The policy carries one — the type is provider-neutral and the paid
+    // adapters need it — and the Google adapter deliberately does not act on
+    // it. Gemini's output limit stays exactly where it has always been.
+    const { body } = await captureRequest(TITLE, ABSTRACT);
+    expect(JSON.parse(body).generationConfig).not.toHaveProperty("maxOutputTokens");
+    expect(body).not.toContain(String(AI_OPERATION_MAX_OUTPUT_TOKENS.analyze));
   });
 
   it("carries the same system instruction, to the byte", async () => {
@@ -115,7 +183,16 @@ describe("the exact request analyze-paper sends to Google", () => {
 
   it("keeps the same JSON response mode and no sampling override", async () => {
     const { body } = await captureRequest(TITLE, ABSTRACT);
-    expect(JSON.parse(body).generationConfig).toEqual({ responseMimeType: "application/json" });
+    // `thinkingConfig` is the one field AI-MULTI-PROVIDER-001C added. Every
+    // sampling knob is still absent, and `responseMimeType` still comes first.
+    expect(JSON.parse(body).generationConfig).toEqual({
+      responseMimeType: "application/json",
+      thinkingConfig: { thinkingLevel: "minimal" },
+    });
+    expect(Object.keys(JSON.parse(body).generationConfig)).toEqual([
+      "responseMimeType",
+      "thinkingConfig",
+    ]);
   });
 
   it("keeps the same whole envelope shape", async () => {
@@ -153,9 +230,14 @@ describe("the exact request analyze-paper sends to Google", () => {
           status: 200,
         }),
     );
+    // The system default is typed as ANY registered provider since
+    // AI-MULTI-PROVIDER-001C; the Google adapter accepts Google models only, so
+    // the narrowing is explicit and follows an assertion that it holds.
+    expect(systemDefault.provider).toBe("google");
     await GOOGLE_AI_PROVIDER_ADAPTER.generate(
-      systemDefault,
+      { provider: "google", providerModel: systemDefault.providerModel },
       buildAnalyzeGenerationRequest(TITLE, ABSTRACT),
+      ANALYZE_POLICY,
       {
         apiKey: API_KEY,
         label: "analyze-paper",
@@ -168,7 +250,7 @@ describe("the exact request analyze-paper sends to Google", () => {
     // Same bytes on the wire either way: selection changes the endpoint, never
     // the request.
     expect(sha256(String((fetchImpl.mock.calls[0][1] as RequestInit).body))).toBe(
-      GOLDEN_BODY_SHA256,
+      GOLDEN_ANALYZE_BODY_SHA256,
     );
   });
 

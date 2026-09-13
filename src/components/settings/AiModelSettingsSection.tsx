@@ -13,7 +13,16 @@ import {
   PAPERLUME_DEFAULT_VALUE,
   useAiModelSettings,
   type SavedModelState,
+  type SavedReasoningState,
 } from "@/hooks/useAiModelSettings";
+import {
+  AUTOMATIC_REASONING_LABEL,
+  AUTOMATIC_REASONING_VALUE,
+  formatAutomaticReasoningSummary,
+  isAiReasoningLevel,
+  reasoningLevelDescription,
+  reasoningLevelLabel,
+} from "@/lib/aiReasoning";
 
 interface AiModelSettingsSectionProps {
   /**
@@ -28,6 +37,9 @@ interface AiModelSettingsSectionProps {
 
 const SELECT_ID = "ai-model-select";
 const STATUS_ID = "ai-model-status";
+const REASONING_SELECT_ID = "ai-reasoning-select";
+const REASONING_LABEL_ID = "ai-reasoning-label";
+const REASONING_STATUS_ID = "ai-reasoning-status";
 
 /**
  * Settings → AI Model (AI-MODEL-SELECTION-001C).
@@ -112,7 +124,16 @@ function AiModelSettingsBody({ access, model }: { access: AccessResult; model: M
     return <NonEntitledBody model={model} saved={model.saved} />;
   }
 
-  return <EntitledBody model={model} saved={model.saved} />;
+  return (
+    <div className="space-y-4">
+      <EntitledBody model={model} saved={model.saved} />
+      <ReasoningControl
+        model={model}
+        saved={model.saved}
+        savedReasoning={model.savedReasoning ?? { status: "automatic" }}
+      />
+    </div>
+  );
 }
 
 /**
@@ -135,6 +156,16 @@ function NonEntitledBody({ model, saved }: { model: ModelResult; saved: SavedMod
   return (
     <div className="space-y-2" aria-busy={model.isMutating || undefined}>
       <p className="text-sm">Paperlume is using its default model.</p>
+      {/*
+        Reasoning is stated even here, as visible text rather than a control.
+        An account on Paperlume's default model is on automatic reasoning by
+        construction, and leaving that unsaid would make the setting invisible
+        to exactly the users who cannot change it.
+      */}
+      <p className="text-xs text-muted-foreground">
+        Reasoning level: {AUTOMATIC_REASONING_LABEL}. Paperlume chooses the model and adjusts
+        reasoning for each task.
+      </p>
       {saved.status === "none" ? (
         <p className="text-xs text-muted-foreground">
           Model selection is available on eligible plans.
@@ -280,6 +311,234 @@ function SavedStatusText({
     <>
       {saved.displayName} is saved for this account. Switch to Paperlume default to follow
       Paperlume&apos;s recommended model instead.
+    </>
+  );
+}
+
+/**
+ * Settings → AI Model → Reasoning level (AI-MULTI-PROVIDER-001C, C41).
+ *
+ * How hard the model should think. One control, applying to BOTH Analyze and
+ * organization suggestions — deliberately not two — and three things it is
+ * carefully not:
+ *
+ *   • It is not a source of truth for what any model supports. The options come
+ *     from that model's own `reasoning_levels` catalog column, and this file
+ *     contains no model id: a component that branched on
+ *     `google/gemini-3.5-flash` to decide what Automatic means would be a
+ *     second copy of PaperLume's policy, in the browser, able to disagree with
+ *     the server that actually sends it.
+ *   • It is not an authorization boundary. `reasoning_selectable` decides
+ *     whether a manual choice is offered, and `set_current_user_ai_reasoning`
+ *     re-checks it — along with entitlement, the saved model and the level —
+ *     server-side. Today that RPC is granted to no role at all, and every
+ *     catalog row has `reasoning_selectable = false`, so the manual path is
+ *     implemented and not activated.
+ *   • It is not provider terminology. Nothing here says `thinkingLevel`,
+ *     `output_config.effort` or `reasoning.effort`; those are three providers'
+ *     spellings of one product idea and stay in the Edge adapters.
+ *
+ * ## Accessibility
+ *
+ * Every piece of load-bearing information is visible text with a programmatic
+ * relationship to the control: the label is real text referenced by
+ * `aria-labelledby`, and the status line — which carries the effective policy,
+ * including the exact Automatic levels — is referenced by `aria-describedby`.
+ * Nothing essential lives in a tooltip, a colour, an icon or a disabled
+ * outline, so the whole state is reachable by a screen reader without
+ * inspecting the control.
+ */
+function ReasoningControl({
+  model,
+  saved,
+  savedReasoning,
+}: {
+  model: ModelResult;
+  saved: SavedModelState;
+  savedReasoning: SavedReasoningState;
+}) {
+  const option = saved.status === "active" ? saved.option : null;
+
+  // A manual level is offerable only for a named, active model whose reasoning
+  // control the server has opened. `reasoning_selectable = false` — the state
+  // of every catalog row today — leaves the choice unoffered rather than
+  // offered-and-refused, so the UI never implies a save that cannot happen.
+  const canChooseManual = option !== null && option.reasoningSelectable;
+
+  // A manual level that is already saved. It must stay visible and must stay
+  // leavable even when new selection is closed, mirroring how an
+  // `enabled, not selectable` MODEL behaves: switching away is permitted,
+  // switching sideways is not.
+  const savedLevel =
+    savedReasoning.status === "automatic" ? null : savedReasoning.level;
+
+  const value = savedLevel ?? AUTOMATIC_REASONING_VALUE;
+  // Enabled when there is either a choice to make or a choice to leave.
+  const controlEnabled = canChooseManual || savedLevel !== null;
+
+  const handleChange = (next: string) => {
+    if (next === value) return;
+    if (next === AUTOMATIC_REASONING_VALUE) {
+      // The sentinel is a UI value, never a reasoning level — clearing is its
+      // only meaning, and it is never handed to the setter RPC.
+      model.clearReasoning();
+      return;
+    }
+    // Fail closed on anything this build cannot name. The hook refuses it too,
+    // and so does the database; this is the first of the three.
+    if (!isAiReasoningLevel(next)) return;
+    model.saveReasoning(next);
+  };
+
+  return (
+    <div className="space-y-2">
+      <p id={REASONING_LABEL_ID} className="text-sm font-medium">
+        Reasoning level
+      </p>
+      <Select
+        value={value}
+        onValueChange={handleChange}
+        disabled={model.isMutating || !controlEnabled}
+      >
+        <SelectTrigger
+          id={REASONING_SELECT_ID}
+          aria-labelledby={REASONING_LABEL_ID}
+          aria-describedby={REASONING_STATUS_ID}
+          disabled={model.isMutating || !controlEnabled}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={AUTOMATIC_REASONING_VALUE}>{AUTOMATIC_REASONING_LABEL}</SelectItem>
+          {/*
+            Exactly this model's own levels, in the catalog's order, and only
+            when new selection is open. Levels a model does not support are
+            simply absent — never rendered disabled, which would advertise a
+            capability that does not exist.
+          */}
+          {canChooseManual &&
+            option.reasoningLevels.map((level) => (
+              <SelectItem key={level} value={level}>
+                {reasoningLevelLabel(level)}
+              </SelectItem>
+            ))}
+          {/*
+            A saved level while new selection is closed. Disabled, so leaving it
+            is a one-way move — which is exactly what `reasoning_selectable =
+            false` means on the server — and present at all because the trigger
+            needs an item to draw its label from.
+          */}
+          {!canChooseManual && savedLevel !== null && (
+            <SelectItem value={savedLevel} disabled>
+              {reasoningLevelLabel(savedLevel)}
+            </SelectItem>
+          )}
+        </SelectContent>
+      </Select>
+
+      <div id={REASONING_STATUS_ID} className="space-y-1 text-xs text-muted-foreground">
+        <ReasoningStatusText
+          saved={saved}
+          savedReasoning={savedReasoning}
+          canChooseManual={canChooseManual}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The text that explains what the current reasoning value actually means.
+ *
+ * This is what `aria-describedby` points at, so every state below is reachable
+ * by a screen reader without inspecting the control — and it is where the
+ * question "what does Automatic do?" is answered concretely rather than by
+ * adjective. For a named model the exact effective policy is printed
+ * ("Analyze: Minimal · Organization suggestions: Medium"), built from that
+ * model's catalog metadata.
+ */
+function ReasoningStatusText({
+  saved,
+  savedReasoning,
+  canChooseManual,
+}: {
+  saved: SavedModelState;
+  savedReasoning: SavedReasoningState;
+  canChooseManual: boolean;
+}) {
+  // Paperlume's default model. Manual reasoning is deliberately unavailable
+  // here: Paperlume may change its default model server-side at any time, and a
+  // level saved against "whatever the default happens to be" could silently
+  // become invalid. The explanation says so rather than leaving a disabled
+  // control unexplained.
+  if (saved.status === "none") {
+    return (
+      <p>
+        {AUTOMATIC_REASONING_LABEL} is used with Paperlume default. Paperlume chooses the model and
+        adjusts reasoning for each task: Analyze uses a lighter reasoning setting, and organization
+        suggestions use Medium. Choose a specific model to customize reasoning.
+      </p>
+    );
+  }
+
+  if (saved.status === "unavailable") {
+    return (
+      <p>
+        Your saved model is no longer available, so Paperlume is using its default model and
+        choosing a reasoning level for each task.
+      </p>
+    );
+  }
+
+  const { option } = saved;
+  const automaticSummary = formatAutomaticReasoningSummary(
+    option.automaticAnalyzeReasoningLevel,
+    option.automaticSuggestReasoningLevel,
+  );
+
+  // A saved level this model no longer lists. The runtime already falls back to
+  // this model's automatic policy and never sends the stale value; the honest
+  // thing is to say that and offer the way back, not to quietly rewrite what
+  // the user chose.
+  if (savedReasoning.status === "unsupported") {
+    return (
+      <>
+        <p>
+          {reasoningLevelLabel(savedReasoning.level)} is saved but {option.displayName} no longer
+          supports it. Paperlume is choosing a reasoning level for each task instead. Switch to{" "}
+          {AUTOMATIC_REASONING_LABEL} to clear it.
+        </p>
+        {automaticSummary && <p>{automaticSummary}</p>}
+      </>
+    );
+  }
+
+  if (savedReasoning.status === "manual") {
+    return (
+      <>
+        <p>{reasoningLevelDescription(savedReasoning.level)}</p>
+        {!canChooseManual && (
+          <p>
+            {option.displayName} is no longer accepting new reasoning choices, so switching away
+            from {reasoningLevelLabel(savedReasoning.level)} is permanent.
+          </p>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <p>Recommended. Paperlume adjusts reasoning to the task.</p>
+      {automaticSummary ? (
+        <p>{automaticSummary}</p>
+      ) : (
+        <p>Paperlume chooses a reasoning level for each task.</p>
+      )}
+      <p>This balances quality, speed, and cost.</p>
+      {!canChooseManual && (
+        <p>Choosing a reasoning level is not available for {option.displayName}.</p>
+      )}
     </>
   );
 }

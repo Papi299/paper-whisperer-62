@@ -7,8 +7,10 @@
 // Everything it does was already being done — 001A moved it out of
 // `analyze-paper/index.ts`, `suggest-paper-organization/handler.ts`,
 // `suggest-paper-organization/prompt.ts` and `_shared/aiModelSelection.ts` and
-// behind the provider-neutral contract in `aiProvider.ts`, without changing a
-// byte of what goes on the wire.
+// behind the provider-neutral contract in `aiProvider.ts`, without changing a byte of what went on the wire.
+// AI-MULTI-PROVIDER-001C (C41) then made exactly one deliberate addition —
+// `generationConfig.thinkingConfig.thinkingLevel`, PaperLume's explicit reasoning
+// level — and the provider-default fallback still emits the pre-001C bytes.
 //
 // ## What this module deliberately does NOT own
 //
@@ -40,11 +42,13 @@
 
 import { callGeminiWithRetry } from "./geminiTransport.ts";
 import type {
+  AiCallPolicy,
   AiGenerationRequest,
   AiProviderAdapter,
   AiProviderCallDeps,
   AiProviderModel,
   AiProviderResult,
+  AiReasoningLevel,
 } from "./aiProvider.ts";
 
 /** The provider id used by `ai_model_catalog.provider` and by the registry. */
@@ -56,6 +60,40 @@ export const GOOGLE_AI_PROVIDER = "google";
  * a model resolved for any other provider cannot reach a Gemini URL.
  */
 export type GoogleAiProviderModel = AiProviderModel<typeof GOOGLE_AI_PROVIDER>;
+
+/**
+ * The reasoning levels Gemini's `thinkingLevel` accepts — AI-MULTI-PROVIDER-001C.
+ *
+ * Exactly four, and exactly the four Google publishes for the `generateContent`
+ * API: `minimal`, `low`, `medium`, `high`. The canonical vocabulary's other
+ * members are other providers' words — `off` and `none` are Anthropic's and
+ * OpenAI's ways of saying "do not reason", and `xhigh`/`max` exist only on the
+ * paid providers — and none of them is a value this endpoint would accept.
+ *
+ * Declared as a type as well as a list so the compiler enforces it: an
+ * `AiCallPolicy<GoogleReasoningLevel>` carrying `off` does not type-check, so a
+ * mapping mistake is caught before a request is ever built.
+ *
+ * Note that this is the PROTOCOL's vocabulary, not any model's capability.
+ * `gemini-3.7-flash` and `gemini-3.8-flash` reject `minimal` specifically, which
+ * is a per-MODEL fact and therefore lives in `ai_model_catalog.reasoning_levels`
+ * — an adapter-level allowlist of model strings is exactly what C33/C35/C39
+ * forbid, and a second copy of that per-model matrix here could disagree with
+ * the database.
+ */
+export type GoogleReasoningLevel = "minimal" | "low" | "medium" | "high";
+
+/** In Google's own order of increasing thinking. */
+export const GOOGLE_REASONING_LEVELS: readonly GoogleReasoningLevel[] = Object.freeze([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+] as const);
+
+export function isGoogleReasoningLevel(level: AiReasoningLevel): level is GoogleReasoningLevel {
+  return (GOOGLE_REASONING_LEVELS as readonly string[]).includes(level);
+}
 
 /** The one Gemini endpoint this repository calls. */
 const GEMINI_GENERATE_CONTENT_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -88,22 +126,58 @@ export function buildGeminiGenerateContentUrl(model: GoogleAiProviderModel): str
  * The Gemini request body.
  *
  * PaperLume sets no sampling parameters: temperature, top-p and top-k are left
- * at the provider/model defaults and only the JSON response mode is pinned,
- * because that is the part the operations' parsers actually depend on. Keeping
- * the request free of sampling overrides is what makes it portable across
- * Gemini model versions (`AI-PROVIDER-REQUEST-CONTRACT-001A`).
+ * at the provider/model defaults and only the JSON response mode and the
+ * reasoning level are pinned. Keeping the request free of sampling overrides is
+ * what makes it portable across Gemini model versions
+ * (`AI-PROVIDER-REQUEST-CONTRACT-001A`).
  *
  * Key order is load-bearing for nothing except reviewability, but it is the
- * historical order — `system_instruction`, `contents`, `generationConfig` — so
- * the serialized body is byte-identical to what both functions sent before.
+ * historical order — `system_instruction`, `contents`, `generationConfig` — and
+ * `responseMimeType` still comes first inside `generationConfig`, so the only
+ * difference from the pre-001C body is the added `thinkingConfig`.
+ *
+ * ## `thinkingConfig.thinkingLevel` — AI-MULTI-PROVIDER-001C (C41)
+ *
+ * The one field 001C adds, and the whole of what it adds. Google's current
+ * `generateContent` documentation puts the reasoning control at
+ * `generationConfig.thinkingConfig.thinkingLevel` with lowercase string values,
+ * so PaperLume's canonical spelling passes through verbatim rather than through
+ * a translation table — there is nothing to translate.
+ *
+ * The LEGACY `thinkingBudget` is deliberately not used and must not be added:
+ * it is the Gemini 2.5-era numeric control, Google documents `thinkingLevel` as
+ * the control for these models, and sending both in one request is a documented
+ * 400. A numeric budget would also be a second, drifting expression of a policy
+ * the catalog already states in words.
+ *
+ * A `provider_default` directive omits `thinkingConfig` ENTIRELY — no key, not
+ * a null, not an empty object. That is the fail-open path for unusable policy
+ * metadata, and it must produce exactly the request PaperLume sent before 001C
+ * so that a metadata outage degrades to the previously shipped behaviour rather
+ * than to some third thing.
+ *
+ * `maxOutputTokens` is deliberately NOT sent, even though the policy carries a
+ * ceiling. Google's default output limit already bounds these models, this
+ * adapter has never sent one, and 001C's reasoning levels move Analyze DOWN
+ * (to `minimal`/`low`), so nothing about this change makes an explicit Gemini
+ * ceiling necessary for correctness. Adding one would be an unmeasured
+ * behaviour change to the one provider PaperLume actually serves traffic with;
+ * the usage telemetry that would justify a number belongs to 001D.
  */
-export function buildGeminiRequestBody(request: AiGenerationRequest): Record<string, unknown> {
+export function buildGeminiRequestBody(
+  request: AiGenerationRequest,
+  policy: AiCallPolicy<GoogleReasoningLevel>,
+): Record<string, unknown> {
+  const generationConfig: Record<string, unknown> = {
+    responseMimeType: GEMINI_RESPONSE_MIME_TYPE[request.responseFormat],
+  };
+  if (policy.reasoning.kind === "level") {
+    generationConfig.thinkingConfig = { thinkingLevel: policy.reasoning.level };
+  }
   return {
     system_instruction: { parts: [{ text: request.systemInstruction }] },
     contents: [{ parts: [{ text: request.userContent }] }],
-    generationConfig: {
-      responseMimeType: GEMINI_RESPONSE_MIME_TYPE[request.responseFormat],
-    },
+    generationConfig,
   };
 }
 
@@ -114,12 +188,13 @@ export function buildGeminiRequestBody(request: AiGenerationRequest): Record<str
  */
 export function buildGeminiRequestInit(
   request: AiGenerationRequest,
+  policy: AiCallPolicy<GoogleReasoningLevel>,
   apiKey: string,
 ): RequestInit {
   return {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify(buildGeminiRequestBody(request)),
+    body: JSON.stringify(buildGeminiRequestBody(request, policy)),
   };
 }
 
@@ -167,13 +242,14 @@ export function extractGeminiText(payload: unknown): string | null {
 async function generate(
   model: GoogleAiProviderModel,
   request: AiGenerationRequest,
+  policy: AiCallPolicy<GoogleReasoningLevel>,
   deps: AiProviderCallDeps,
 ): Promise<AiProviderResult> {
   // The retry/timeout policy is the transport's, not this adapter's, and not
   // this adapter's to generalise to other providers.
   const call = await callGeminiWithRetry(
     buildGeminiGenerateContentUrl(model),
-    buildGeminiRequestInit(request, deps.apiKey),
+    buildGeminiRequestInit(request, policy, deps.apiKey),
     {
       label: deps.label,
       fetchImpl: deps.fetchImpl,
@@ -206,8 +282,13 @@ async function generate(
   return { ok: true, text, attempts: call.attempts };
 }
 
-/** The single real provider adapter PaperLume implements. */
-export const GOOGLE_AI_PROVIDER_ADAPTER: AiProviderAdapter<typeof GOOGLE_AI_PROVIDER> = {
+/** The Google adapter — registered since AI-MULTI-PROVIDER-001A. */
+export const GOOGLE_AI_PROVIDER_ADAPTER: AiProviderAdapter<
+  typeof GOOGLE_AI_PROVIDER,
+  GoogleReasoningLevel
+> = {
   provider: GOOGLE_AI_PROVIDER,
+  reasoningLevels: GOOGLE_REASONING_LEVELS,
+  supportsReasoningLevel: isGoogleReasoningLevel,
   generate,
 };

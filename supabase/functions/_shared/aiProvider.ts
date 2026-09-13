@@ -104,19 +104,123 @@ export interface AiJsonOutputSchema {
  * said what shape it wanted" is unexpressible: an operation that gains a
  * provider call has to state its output contract. An adapter whose provider has
  * no native schema mechanism may ignore it — the Google adapter does exactly
- * that, deliberately, and its request is byte-for-byte what it always was.
+ * that, deliberately: a Google request carries no schema at all.
  *
- * There is still deliberately NO reasoning/thinking budget, temperature, tool
- * list or streaming flag here. PaperLume sets none of those
- * (`AI-PROVIDER-REQUEST-CONTRACT-001A`), and 001B does not decide reasoning
- * policy for anyone — that is AI-MULTI-PROVIDER-001C's, and it is why the two
- * adapters 001B adds stay unregistered.
+ * There is deliberately NO temperature, top-p, tool list or streaming flag
+ * here. PaperLume sets none of those (`AI-PROVIDER-REQUEST-CONTRACT-001A`).
+ *
+ * Reasoning is deliberately NOT here either, and that is a boundary rather than
+ * an omission: this type is what the OPERATION asks for, and reasoning is what
+ * PAPERLUME'S POLICY decided. They have different authors, different authorities
+ * and different lifetimes — the prompt and schema come from the operation's own
+ * modules, while the reasoning level comes from the server-controlled catalog
+ * and the user's saved preference. Merging them would let an operation state a
+ * reasoning opinion it has no business having. Reasoning travels beside this, in
+ * `AiCallPolicy` below (AI-MULTI-PROVIDER-001C, C41).
  */
 export interface AiGenerationRequest {
   readonly systemInstruction: string;
   readonly userContent: string;
   readonly responseFormat: "json";
   readonly jsonSchema: AiJsonOutputSchema;
+}
+
+/**
+ * PaperLume's canonical reasoning vocabulary — AI-MULTI-PROVIDER-001C (C41).
+ *
+ * The UNION of what every reviewed adapter can express, not any one provider's
+ * list, and the exact set `ai_model_catalog` may store. Each member exists
+ * because some provider PaperLume has reviewed has it:
+ *
+ *   * `minimal`       — Google's lowest thinking level; no other provider has it.
+ *   * `off`           — Anthropic's thinking disabled.
+ *   * `none`          — OpenAI's zero-reasoning effort.
+ *   * `low` … `high`  — all three.
+ *   * `xhigh`, `max`  — the two paid providers only.
+ *
+ * `automatic` is deliberately NOT a member. Automatic is PaperLume's POLICY —
+ * "choose a level from the catalog for this model and this operation" — and it
+ * always resolves to one of the levels above before anything reaches a
+ * provider. Making it a reasoning value would erase the difference between
+ * "PaperLume chose medium" and "the user chose medium", which is the whole
+ * distinction the reasoning design is built on.
+ *
+ * Which subset a given provider accepts is that ADAPTER's business (each
+ * declares its own narrowing of this union), and which subset a given MODEL
+ * offers is the database's.
+ */
+export type AiReasoningLevel =
+  | "minimal"
+  | "off"
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+/** Every canonical level, in the order the vocabulary is documented. */
+export const AI_REASONING_LEVELS: readonly AiReasoningLevel[] = Object.freeze([
+  "minimal",
+  "off",
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const);
+
+/** Is this value one of PaperLume's canonical reasoning levels? */
+export function isAiReasoningLevel(value: unknown): value is AiReasoningLevel {
+  return typeof value === "string" && (AI_REASONING_LEVELS as readonly string[]).includes(value);
+}
+
+/**
+ * What an adapter is told to do about reasoning on ONE request.
+ *
+ * Two members, and the second is not a third reasoning level:
+ *
+ *   * `level` — send this provider's expression of this level, explicitly. This
+ *     is the ordinary case and covers BOTH Automatic (PaperLume chose it from
+ *     the catalog) and manual (the user chose it). The adapter is not told
+ *     which, because the wire bytes are identical and the distinction is a
+ *     product fact that belongs in the policy log, not in the request.
+ *
+ *   * `provider_default` — send NO reasoning parameter at all, for this request
+ *     only. This is the fail-open compatibility path for unusable policy
+ *     metadata (a catalog lookup that failed, a row that is missing, an
+ *     Automatic level its own model does not support). It deliberately does not
+ *     mean "PaperLume chose the provider's default": PaperLume chose nothing,
+ *     which is exactly why it is a distinct member with its own bounded log
+ *     reason rather than an absent `level`.
+ *
+ * `Level` is the ADAPTER's own narrowing of `AiReasoningLevel`, so a directive
+ * carrying `off` does not type-check against the Google adapter and one
+ * carrying `minimal` does not type-check against Anthropic's.
+ */
+export type AiReasoningDirective<Level extends AiReasoningLevel> =
+  | { readonly kind: "level"; readonly level: Level }
+  | { readonly kind: "provider_default" };
+
+/**
+ * The per-request policy an operation hands to an adapter alongside the prompt.
+ *
+ * Everything here is PaperLume's decision about HOW to spend a request, as
+ * opposed to `AiGenerationRequest`, which is WHAT to ask. Keeping them apart is
+ * what lets an adapter stay ignorant of the operation: no adapter has to infer
+ * from prompt text whether it is serving Analyze or Suggest, because the one
+ * thing that differs between them arrives as a number.
+ *
+ * `maxOutputTokens` is a hard PaperLume safety ceiling, not an expected usage
+ * figure. On every current provider it bounds reasoning AND answer together, so
+ * it is the backstop that keeps even `max` effort from running unbounded. An
+ * adapter whose protocol has no place for it — or which has a reviewed reason
+ * not to send one — documents that decision in its own module.
+ */
+export interface AiCallPolicy<Level extends AiReasoningLevel> {
+  readonly reasoning: AiReasoningDirective<Level>;
+  readonly maxOutputTokens: number;
 }
 
 /**
@@ -161,7 +265,11 @@ export interface AiGenerationRequest {
  * model returned nothing" would misdescribe the failure in exactly the logs
  * someone would use to diagnose it.
  *
- * No REGISTERED provider can produce it today: Google is the only registered
+ * Google cannot produce it: its envelope has no such field. Anthropic and OpenAI
+ * can, and both have been REGISTERED since AI-MULTI-PROVIDER-001C (C41) — but no
+ * `anthropic/*` or `openai/*` catalog row exists, so no request can reach either
+ * yet. The original note, kept for history: when it was written, Google was the
+ * only registered
  * adapter and its envelope has no such field, so its behaviour is unchanged and
  * both operations' existing classifications are untouched. The two operations
  * nonetheless classify this kind explicitly, so the branch exists before the
@@ -211,12 +319,13 @@ export interface AiProviderCallDeps {
   /**
    * The credential for the provider being called, and for no other.
    *
-   * 001A registers exactly one adapter (Google) and both operations supply the
-   * one existing `GEMINI_API_KEY`, so a credential cannot reach the wrong
-   * provider. **A task that registers a second adapter owns binding each
-   * provider to its own server-side credential name before it can route to
-   * one** — that is why this is a per-call value rather than a bag of secrets,
-   * and why no generic `AI_API_KEY` exists.
+   * Since AI-MULTI-PROVIDER-001C (C41) each registered provider is bound to its
+   * OWN server-side credential name by `aiProviderCredentials.ts` — `google` →
+   * `GEMINI_API_KEY`, `anthropic` → `ANTHROPIC_API_KEY`, `openai` →
+   * `OPENAI_API_KEY` — and each operation reads exactly the selected provider's
+   * variable. That is why this is a per-call value rather than a bag of secrets,
+   * and why no generic `AI_API_KEY` exists: a credential can only ever reach the
+   * provider whose adapter the request was dispatched to.
    */
   readonly apiKey: string;
   /** Log prefix, e.g. `"analyze-paper"` or `"suggest-organization"`. */
@@ -238,13 +347,17 @@ export interface AiProviderCallDeps {
  * catalog row?" is answered by the existence of an object satisfying this
  * interface, not by a second list of model strings.
  *
- * `generate` accepts only models of THIS adapter's provider: handing the Google
- * adapter an `AiProviderModel<"openai">` is a compile error, not a Gemini
- * request carrying another provider's model name. Two details make that hold,
- * and both are deliberate:
+ * `generate` accepts only models of THIS adapter's provider AND only reasoning
+ * levels of this adapter's own vocabulary: handing the Google adapter an
+ * `AiProviderModel<"openai">` is a compile error, not a Gemini request carrying
+ * another provider's model name, and handing it a directive for `off`, `none`,
+ * `xhigh` or `max` is a compile error rather than a 400 from Google. Two
+ * details make that hold, and both are deliberate:
  *
- *   * `Provider` has no default. No provider-agnostic adapter exists, so no
- *     type should describe one.
+ *   * `Provider` has no default, and neither does `Level`. No provider-agnostic
+ *     adapter exists, so no type should describe one — and a `Level` default of
+ *     the full canonical union would silently re-admit every combination the
+ *     second parameter exists to reject.
  *   * `generate` is a function-typed PROPERTY, not a method. TypeScript checks
  *     method parameters bivariantly even under `strictFunctionTypes`, which
  *     would let an `AiProviderAdapter<"google">` be widened to
@@ -256,11 +369,35 @@ export interface AiProviderCallDeps {
  * transport problem can never become an unhandled rejection in an operation
  * that has already consumed a quota unit.
  */
-export interface AiProviderAdapter<Provider extends string> {
+export interface AiProviderAdapter<Provider extends string, Level extends AiReasoningLevel> {
   readonly provider: Provider;
+  /**
+   * Exactly the canonical reasoning levels this PROVIDER'S PROTOCOL accepts, in
+   * the provider's own order of increasing effort.
+   *
+   * This is not a second model allowlist and not a product decision: it is what
+   * the wire format can express, which is why it lives beside the code that
+   * writes the wire format. The DATABASE still decides which levels a given
+   * MODEL offers a user (`ai_model_catalog.reasoning_levels`), and that set is
+   * necessarily a subset of this one — a catalog row that promised more would
+   * be caught by `supportsReasoningLevel` below rather than sent.
+   */
+  readonly reasoningLevels: readonly Level[];
+  /**
+   * Narrow a canonical level to one this adapter can actually send.
+   *
+   * The structural guard between PaperLume's vocabulary and this provider's.
+   * Policy resolution already refuses a level the CATALOG does not list; this
+   * catches the remaining case — catalog metadata that lists a level the
+   * PROVIDER does not have (corrupt data, a hand-edited row, a provider that
+   * removed a level) — so the failure is a bounded fallback rather than a 400
+   * on a request the user has already paid a quota unit for.
+   */
+  readonly supportsReasoningLevel: (level: AiReasoningLevel) => level is Level;
   readonly generate: (
     model: AiProviderModel<Provider>,
     request: AiGenerationRequest,
+    policy: AiCallPolicy<Level>,
     deps: AiProviderCallDeps,
   ) => Promise<AiProviderResult>;
 }
