@@ -278,7 +278,7 @@ The runtime above is now provider-neutral by construction. Model selection decid
 - **Output contract:** each operation now states its output as a JSON Schema, which the two new adapters enforce natively. The Google request is byte-identical, and the existing parsers remain the final authority.
 - **User-visible behaviour:** unchanged. Production still runs the pre-001A Google-only artifacts.
 
-### 4.9c Model-aware reasoning policy and provider activation — schema LIVE, application pending (AI-MULTI-PROVIDER-001C, C41)
+### 4.9c Model-aware reasoning policy and provider activation — schema + frontend LIVE; generation Edge pending (AI-MULTI-PROVIDER-001C, C41)
 
 `AI-MULTI-PROVIDER-001C` gives PaperLume its own reasoning policy, registers the two adapters 001B held back, and stages every user-facing part of it **off**.
 
@@ -288,7 +288,7 @@ The runtime above is now provider-neutral by construction. Model selection decid
 - **Providers registered: `google`, `anthropic`, `openai`.** The Settings provider filter moved with the runtime registry. This adds **no model option**: no Claude Sonnet 5 or GPT-5.6 Terra catalog row exists, and neither provider's secret is installed. Each provider reads only its own credential, and there is no generic key.
 - **Output ceilings for the paid providers:** Analyze 4,096 tokens and Suggest 8,192, covering reasoning plus answer. These are safety bounds, not expected usage. Gemini is sent no ceiling, as before.
 - **No commercial change.** One successful AI invocation is still one PaperLume AI quota unit at every reasoning level. There are no weighted credits, and the Pro baseline, the Free cap, the quota RPCs and pricing are untouched. Usage and cost telemetry is `AI-MULTI-PROVIDER-001D`.
-- **Schema live; application not merged or deployed.** Migration `20260912120000` was applied to Production on 2026-09-12, **before** the 001C pull request merges, as the rollout order requires ([deployment.md](deployment.md) §6.6). It activated nothing: every staging lock above is still in place. The 001C frontend and Edge code are neither merged nor deployed, and Production still runs the pre-001A `analyze-paper` v26 and `suggest-paper-organization` v10.
+- **Schema and frontend live; generation Edge not deployed.** Migration `20260912120000` was applied to Production on 2026-09-12, **before** the 001C pull request merged, as the rollout order requires ([deployment.md](deployment.md) §6.6). PR #280 then merged on 2026-09-13, and the automatic Vercel deployment put the 001C frontend — the Reasoning level control and account export v3 — live on `app.paperlume.app`. Neither step activated anything: every staging lock above is still in place, so the control shows Automatic and offers no manual choice. The generation Edge Functions were not deployed, so Production still runs the pre-001A `analyze-paper` v26 and `suggest-paper-organization` v10. Anthropic and OpenAI are registered in repository code only and are **not live providers**.
 
 ### 4.10 Settings control — LIVE (AI-MODEL-SELECTION-001C)
 
