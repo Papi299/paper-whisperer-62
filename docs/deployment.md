@@ -78,12 +78,14 @@ supabase secrets list --project-ref <project-ref>
 |---|---|---|
 | `SUPABASE_URL` | Edge Functions | Auto-injected by the runtime. No manual setup. |
 | `SUPABASE_ANON_KEY` | Edge Functions | Auto-injected by the runtime. No manual setup. |
-| `SUPABASE_SECRET_KEYS` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, JSON dictionary keyed by key name; the function reads `default`. Preferred over the legacy key below. |
-| `SUPABASE_SERVICE_ROLE_KEY` | `delete-account` | Auto-injected by the runtime. **Server-only elevated key**, legacy plain string; used only as a compatibility fallback when the project has not created the newer secret keys. |
+| `SUPABASE_SECRET_KEYS` | `delete-account`; in repository `main` also `analyze-paper` and `suggest-paper-organization`, for the telemetry INSERT only (not deployed) | Auto-injected by the runtime. **Server-only elevated key**, JSON dictionary keyed by key name; the function reads `default`. Preferred over the legacy key below. |
+| `SUPABASE_SERVICE_ROLE_KEY` | as above | Auto-injected by the runtime. **Server-only elevated key**, legacy plain string; used only as a compatibility fallback when the project has not created the newer secret keys. |
 
 Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function fails safely — a request that reaches the environment check is refused rather than served by an empty-string client — and the actionable message naming the variable goes to its **Edge log**. The caller receives a neutral generic 500 that does not name the variable; the body differs per function. Operator detail: §10.2.
 
-**About the elevated key (PFA-C04).** `delete-account` is the only function that needs one: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. Every other function remains caller-authenticated and uses no elevated key.
+**About the elevated key (PFA-C04).** `delete-account` is the only function that needs one: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. In deployed Production every other function remains caller-authenticated and uses no elevated key.
+
+**The telemetry writer (AI-MULTI-PROVIDER-001D, C42 — repository code, not deployed).** Once the 001D generation runtime is deployed, `analyze-paper` and `suggest-paper-organization` each build a second, server-only client from the same two platform-injected keys, through the same `selectEdgeSecretKey` rule. It is created lazily, only after a provider call has happened; carries no caller Authorization header and no session; is typed to one `insert` into `ai_provider_usage_events`; and the database grants `service_role` exactly `INSERT` on that table and nothing else on it. Authentication, model selection, entitlement, quota and every product read stay on the caller-authenticated client. No manual secret is added, and a missing key only means the event is not recorded (one bounded log line) — never a failed AI request.
 
 ---
 
@@ -412,7 +414,8 @@ than restoring the legacy blanket ACL.
 >
 > - **Phase 1 completed (2026-09-12):** independent approval of the implementation head; explicit authorization of the Production migration; its application; old-app verification (read-only — see the note after the procedure).
 > - **Phase 2 completed (2026-09-13):** PR #280 merged at its independently approved head `d62994ef67ff8f27763a442bd9f63f4d7f7b54f5` as the regular two-parent merge `1c4c9b5882628cbe6ab7bead60e7f4eac0bed0b4`, whose tree is identical to that head. Merged-main CI passed, and the automatic Vercel Production deployment of that commit reached READY, putting the 001C frontend live. **No Edge Function was deployed**: `analyze-paper` v26 and `suggest-paper-organization` v10 are unchanged, and manual reasoning is still staged off.
-> - **Pending, each separately authorized:** 001D telemetry (Phase 3, next), paid-provider row staging, provider secrets, the Edge deployment of both generation functions, the controlled canary and user enablement (§6.6a).
+> - **Phase 3 (001D telemetry) — repository implementation complete; its migration `20260913120000` is NOT applied (§6.7).**
+> - **Pending, each separately authorized:** applying `20260913120000`, paid-provider row staging, provider secrets, the Edge deployment of both generation functions, the controlled canary and user enablement (§6.6a).
 
 **The `AI-MULTI-PROVIDER-001C` pull request must not be merged until this migration has been separately authorized, applied to Production, and verified while the old application is still live** (decision C41). The merged frontend reads `ai_model_catalog.reasoning_levels`, `auto_analyze_reasoning_level`, `auto_suggest_reasoning_level` and `reasoning_selectable`, and the merged account export reads `user_ai_preferences.preferred_reasoning_level`. An ordinary merge redeploys the frontend on Vercel, so merging first would put code that names those columns in front of a database that has none of them.
 
@@ -461,7 +464,9 @@ Remember the Production legacy-ACL history (§6.5): assert grants on **exact pri
 ```text
 Phase 1  schema expansion             apply 20260912120000 (this section)   COMPLETE 2026-09-12
 Phase 2  application merge            merge the exact approved 001C head   COMPLETE 2026-09-13 (PR #280, 1c4c9b5)
-Phase 3  telemetry foundation         AI-MULTI-PROVIDER-001D (usage/cost)   NEXT (not started)
+Phase 3  telemetry foundation         AI-MULTI-PROVIDER-001D (usage/cost)   REPOSITORY IMPLEMENTED;
+                                      migration 20260913120000 NOT applied (§6.7) — it
+                                      must be applied before Phase 6
 Phase 4  stage paid-provider rows     separate migration: anthropic/claude-sonnet-5 and
                                       openai/gpt-5.6-terra with the C41 future values,
                                       selectable = false, reasoning_selectable = false
@@ -482,6 +487,41 @@ Each phase needs its own explicit authorization. **Phase 6 must never precede Ph
 - Suggest sends `medium` explicitly.
 
 This is approved product policy (C41), not a regression, and the canary should confirm Analyze quality at the lower level.
+
+### 6.7 `20260913120000` (provider-usage telemetry) — apply BEFORE the generation Edge deploy; NOT APPLIED
+
+> **Status: not applied to Production.** The ledger is still 82 rows, latest `20260912120000`. No Production mutation of any kind was made by `AI-MULTI-PROVIDER-001D`. Applying this migration is its own separately authorized step.
+
+**What it adds.** One table, `public.ai_provider_usage_events` (C42), with RLS enabled and forced, no policy, two indexes, and a fail-closed verify block. It touches no existing table, backfills nothing, adds no function, sequence or trigger, and adds no catalog row. Creating the `user_id` foreign key takes a brief `SHARE ROW EXCLUSIVE` lock on `auth.users` for the (catalog-only) duration of the transaction, so signups and account deletions wait out that moment and it waits for any open `auth.users` write; no application table is locked.
+
+**Ordering.**
+
+- **Merge before migration is safe.** No frontend code reads or writes the table (the regenerated `types.ts` only describes it), and nothing deployed today writes it.
+- **Migration before the generation Edge deploy is required.** The 001D runtime writes one event per provider call. Deployed against a database without the table, every write is refused and logged as `usage_telemetry recorded=0 reason=write_rejected` — the user response and quota are unaffected, but the telemetry record is empty from day one. Apply this migration before §6.6a Phase 6.
+- **The public Privacy Policy must be reviewed before telemetry is live.** Once the 001D runtime is deployed, PaperLume persists a per-user record of each AI request's provider, model and token usage. That is internal operational data kept in Supabase, but [`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx) is owner-approved legal text and must be reviewed by the owner (and legal, where required) before Phase 6. See [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §29.
+
+**Why the grant statements are sufficient on hosted Production.** Read-only inspection on 2026-09-13 found `postgres`'s TABLE default in `public` granting `service_role=arwdDxtm` (and nothing to `PUBLIC`, `anon` or `authenticated`, per C38). The migration revokes by **role** from `PUBLIC, anon, authenticated, service_role` and then grants `INSERT` to `service_role`, and its verify block is an allowlist over the whole ACL, so a default-privilege entry the audit did not see fails the migration rather than shipping.
+
+```text
+1. obtain explicit owner authorization
+2. supabase migration list --linked         # expect 82 rows, latest 20260912120000
+   supabase db push --linked --dry-run      # expect ONLY 20260913120000
+3. supabase db push --linked
+4. read-only verification (below)
+```
+
+Read-only post-apply checks:
+
+- ledger 83 rows, latest `20260913120000`, present exactly once;
+- `relrowsecurity` and `relforcerowsecurity` both true; zero rows in `pg_policy` for the table;
+- the non-owner ACL is exactly `service_role:INSERT`;
+- `has_table_privilege('anon' | 'authenticated', 'public.ai_provider_usage_events', …)` false for all eight privileges;
+- `count(*) = 0` (the migration creates no row);
+- the `user_id` FK cascades from `auth.users`.
+
+**Phase 7 canary expectations.** Each canary request should produce exactly one event whose `provider`, `provider_model`, `operation` and `provider_attempts` match the request; a Gemini success should read `usage_status = reported`; and the Edge log should contain `usage_telemetry recorded=1` and no `recorded=0` line. A `recorded=0` line during the canary is a telemetry reliability failure to resolve before any paid provider is activated.
+
+**Rollback (reference only).** `DROP TABLE public.ai_provider_usage_events;` — nothing depends on it. If a runtime that writes it is already deployed, dropping it degrades that runtime to logged `write_rejected` lines, with no user-visible change.
 
 ---
 
