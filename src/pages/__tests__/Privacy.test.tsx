@@ -52,6 +52,12 @@ const PAGE_TITLE = "PaperLume Privacy Policy";
 const CANONICAL_URL = "https://app.paperlume.app/privacy";
 const PRIVACY_EMAIL = "mutrisport@gmail.com";
 
+/**
+ * The date the current approved copy is published. The one place to change if
+ * publication moves to a later calendar day.
+ */
+const EFFECTIVE_DATE = "Effective date: September 17, 2026";
+
 /** The twenty section headings, in the order the approved copy establishes. */
 const SECTION_HEADINGS = [
   "1. Scope of this Privacy Policy",
@@ -89,7 +95,7 @@ const SENTINELS = [
   "18 years of age or older",
   "Do not use PaperLume's AI features with personal, sensitive, confidential, proprietary, unpublished, or otherwise private information while PaperLume uses Gemini's Free tier.",
   "pre-commercial beta service",
-  "Effective date: August 30, 2026",
+  EFFECTIVE_DATE,
   "Mumbai, India",
   "Supabase Free tier",
   "Hobby plan",
@@ -140,6 +146,43 @@ const SECTION_4_APPROVED = [
  */
 const RETIRED_CLAIM = "read the contents of the webpage or its DOM";
 
+/**
+ * AI-MULTI-PROVIDER-001D — the AI usage records disclosure, owner-approved for
+ * publication before provider-usage telemetry is collected in Production.
+ *
+ * Four additions: a §2 subsection, a §5 purpose, a §13 retention sentence and a
+ * §15 export/access sentence. The §2 subsection is guarded the way the rest of
+ * the document is — by sentinels, not a transcript — but scoped to that
+ * subsection, so a phrase cannot pass by surviving somewhere else on the page.
+ * The three single-sentence additions are pinned whole, in their own sections.
+ *
+ * Several sentinels include a qualifier the approval chose on purpose: "when
+ * available", "not an invoice or a record of actual charges", "Subject to
+ * applicable law". Dropping a qualifier is a material rewrite, so it fails.
+ */
+const AI_USAGE_RECORDS_HEADING = "AI usage records";
+
+const AI_USAGE_RECORDS_SENTINELS = [
+  "PaperLume keeps an internal record of that request linked to your account.",
+  "the AI provider and AI model selected for the request;",
+  "token counts reported by the AI provider, when available; and",
+  "an estimate of the request's cost at the AI provider's published standard prices.",
+  "The record does not include the content sent to the AI provider or the AI-generated result.",
+  "to measure the usage and reliability of its AI-assisted features and to estimate provider costs.",
+  "is not an invoice or a record of actual charges, and is not a charge to you.",
+  "These records are stored in PaperLume's Supabase database.",
+  "PaperLume does not send these internal records to a separate analytics service.",
+] as const;
+
+const AI_USAGE_PURPOSE =
+  "measure the usage and reliability of AI-assisted features and estimate provider costs;";
+
+const AI_USAGE_RETENTION =
+  "AI usage records described in Section 2 are kept for as long as your PaperLume account exists and are deleted when your account is deleted.";
+
+const AI_USAGE_EXPORT_AND_ACCESS =
+  "AI usage records described in Section 2 are not included in the account-data export. Subject to applicable law, you may contact us to request access to information about you contained in those records.";
+
 function renderPolicy() {
   const { container, unmount } = render(
     <MemoryRouter initialEntries={["/privacy"]}>
@@ -152,6 +195,38 @@ function renderPolicy() {
 /** Visible text with runs of whitespace collapsed, so JSX line wrapping is invisible. */
 function visibleText(container: HTMLElement): string {
   return (container.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** One element's text with runs of whitespace collapsed. */
+function collapse(text: string | null): string {
+  return (text ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** The `<section>` a numbered heading opens, found by the heading's stable anchor id. */
+function sectionById(container: HTMLElement, id: string): HTMLElement {
+  const section = container.querySelector(`h2#${id}`)?.closest("section");
+  expect(section).toBeTruthy();
+  return section as HTMLElement;
+}
+
+/**
+ * The rendered `<p>` and `<li>` blocks of one `<h3>` subsection: everything after
+ * the subheading, up to the next subheading or the end of its section.
+ */
+function subsectionBlocks(section: HTMLElement, subheading: string): string[] {
+  const children = Array.from(section.children);
+  const start = children.findIndex(
+    (el) => el.tagName === "H3" && collapse(el.textContent) === subheading,
+  );
+  expect(start).toBeGreaterThanOrEqual(0);
+
+  const blocks: string[] = [];
+  for (const el of children.slice(start + 1)) {
+    if (el.tagName === "H3") break;
+    const parts = el.matches("p, li") ? [el] : Array.from(el.querySelectorAll("p, li"));
+    blocks.push(...parts.map((part) => collapse(part.textContent)));
+  }
+  return blocks;
 }
 
 describe("Privacy policy page", () => {
@@ -349,6 +424,73 @@ describe("Privacy policy page", () => {
     // Subsections exist (§2 and §6 have them) and none of them outranks an h2.
     expect(container.querySelectorAll("h3").length).toBeGreaterThan(0);
     expect(container.querySelectorAll("h4, h5, h6")).toHaveLength(0);
+
+    unmount();
+  });
+
+  it("carries exactly one effective date, the current approved one", () => {
+    const { container, unmount } = renderPolicy();
+
+    // A positive sentinel alone would still pass with a stale date left beside it.
+    const dates = visibleText(container).match(/Effective date: [A-Z][a-z]+ \d{1,2}, \d{4}/g);
+    expect(dates).toEqual([EFFECTIVE_DATE]);
+
+    unmount();
+  });
+
+  it("discloses AI usage records as the last subsection of Section 2", () => {
+    const { container, unmount } = renderPolicy();
+
+    const section = sectionById(container, "information-processed");
+    const subheadings = Array.from(section.querySelectorAll("h3")).map((h) => collapse(h.textContent));
+    expect(subheadings.slice(-2)).toEqual(["Attachments", AI_USAGE_RECORDS_HEADING]);
+
+    const text = subsectionBlocks(section, AI_USAGE_RECORDS_HEADING).join(" ");
+    for (const sentinel of AI_USAGE_RECORDS_SENTINELS) {
+      expect(text).toContain(sentinel);
+    }
+
+    unmount();
+  });
+
+  it("lists measuring AI usage and estimating provider costs as a Section 5 purpose", () => {
+    const { container, unmount } = renderPolicy();
+
+    const purposes = Array.from(
+      sectionById(container, "how-we-use-information").querySelectorAll("li"),
+    ).map((li) => collapse(li.textContent));
+    expect(purposes).toContain(AI_USAGE_PURPOSE);
+
+    unmount();
+  });
+
+  it("keeps AI usage records for the life of the account, stated before third-party retention", () => {
+    const { container, unmount } = renderPolicy();
+
+    const paragraphs = Array.from(sectionById(container, "retention").querySelectorAll("p")).map(
+      (p) => collapse(p.textContent),
+    );
+    const own = paragraphs.indexOf(AI_USAGE_RETENTION);
+    const thirdParty = paragraphs.findIndex((p) =>
+      p.startsWith("Third-party service providers may separately retain"),
+    );
+    expect(own).toBeGreaterThanOrEqual(0);
+    expect(thirdParty).toBeGreaterThan(own);
+
+    unmount();
+  });
+
+  it("excludes AI usage records from the export, right after the PubMed key exclusion", () => {
+    const { container, unmount } = renderPolicy();
+
+    const paragraphs = Array.from(
+      sectionById(container, "access-and-export").querySelectorAll("p"),
+    ).map((p) => collapse(p.textContent));
+    const pubmedKey = paragraphs.findIndex((p) =>
+      p.includes("an optional NCBI/PubMed API key is not included in that account-data export"),
+    );
+    expect(pubmedKey).toBeGreaterThanOrEqual(0);
+    expect(paragraphs[pubmedKey + 1]).toBe(AI_USAGE_EXPORT_AND_ACCESS);
 
     unmount();
   });
