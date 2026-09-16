@@ -101,7 +101,7 @@ const Privacy = () => {
         <article>
           <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PaperLume Privacy Policy</h1>
 
-          <p className="mt-4 font-semibold leading-7">Effective date: August 30, 2026</p>
+          <p className="mt-4 font-semibold leading-7">Effective date: September 17, 2026</p>
 
           <P>
             PaperLume is operated by <strong>Maor Pichadza</strong>, an individual sole proprietor in
@@ -204,6 +204,38 @@ const Privacy = () => {
               PaperLume's current AI features do <strong>not</strong> send uploaded attachment files
               to Google Gemini.
             </P>
+
+            <Subheading>AI usage records</Subheading>
+            <P>
+              When you use an AI-assisted feature and PaperLume sends a request to an AI provider,
+              PaperLume keeps an internal record of that request linked to your account. The record
+              includes:
+            </P>
+            <Bullets>
+              <li>the date and time of the request;</li>
+              <li>which AI-assisted feature was used;</li>
+              <li>the AI provider and AI model selected for the request;</li>
+              <li>whether the request succeeded;</li>
+              <li>token counts reported by the AI provider, when available; and</li>
+              <li>
+                where one can be calculated, an estimate of the request's cost at the AI provider's
+                published standard prices.
+              </li>
+            </Bullets>
+            <P>
+              The record does not include the content sent to the AI provider or the AI-generated
+              result.
+            </P>
+            <P>
+              PaperLume uses these records to measure the usage and reliability of its AI-assisted
+              features and to estimate provider costs. The cost estimate is for PaperLume's
+              internal operational accounting, is not an invoice or a record of actual charges, and
+              is not a charge to you.
+            </P>
+            <P>
+              These records are stored in PaperLume's Supabase database. PaperLume does not send
+              these internal records to a separate analytics service.
+            </P>
           </Section>
 
           <Section id="browser-storage" title="3. Browser storage and cookies">
@@ -303,6 +335,10 @@ const Privacy = () => {
               <li>store attachments;</li>
               <li>enforce service quotas and technical limits;</li>
               <li>generate AI-assisted results when requested;</li>
+              <li>
+                measure the usage and reliability of AI-assisted features and estimate provider
+                costs;
+              </li>
               <li>send account-related transactional email;</li>
               <li>maintain service security and reliability;</li>
               <li>troubleshoot technical problems; and</li>
@@ -565,6 +601,10 @@ const Privacy = () => {
               <li>you delete your PaperLume account.</li>
             </Bullets>
             <P>
+              AI usage records described in Section 2 are kept for as long as your PaperLume account
+              exists and are deleted when your account is deleted.
+            </P>
+            <P>
               Some temporary, technical, or browser-stored information may expire earlier.
             </P>
             <P>
@@ -632,6 +672,11 @@ const Privacy = () => {
             <P>
               For security reasons, an optional NCBI/PubMed API key is not included in that
               account-data export.
+            </P>
+            <P>
+              AI usage records described in Section 2 are not included in the account-data export.
+              Subject to applicable law, you may contact us to request access to information about
+              you contained in those records.
             </P>
             <P>Privacy requests may be sent to:</P>
             <p className="mt-4 leading-7">
