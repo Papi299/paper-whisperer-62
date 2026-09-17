@@ -118,7 +118,13 @@ The schema, Edge Functions, and observability layer must track the following fro
 
 Gemini does not currently bill per-token in a way visible at request time — the **estimated** cost per call is computed offline from observed token counts × the published rate per million tokens. Document the cost-estimation formula alongside the dashboard.
 
-> **Status (verified 2026-09-17): per-call foundation implemented; schema live in Production, collection not live.** `AI-MULTI-PROVIDER-001D` (C42) records, per provider call, the provider-reported token counts, outcome, attempt count and a list-price cost estimate with its formula and rate snapshot, in `ai_provider_usage_events`. The table has been live in Production since 2026-09-13 (migration `20260913120000`), and the Privacy Policy disclosure is published. The writer lives in the generation runtime, which is **not deployed**, so the table holds no events yet ([deployment.md](deployment.md) §6.7).
+> **Status (verified 2026-09-17): per-call foundation implemented; schema and writer live in Production, collection live.** `AI-MULTI-PROVIDER-001D` (C42) records, per provider call, the provider-reported token counts, outcome, attempt count and a list-price cost estimate with its formula and rate snapshot, in `ai_provider_usage_events`. The table has been live in Production since 2026-09-13 (migration `20260913120000`), the Privacy Policy disclosure is published, and the writer went live with the Phase 6 deploy of both generation functions on 2026-09-17 ([deployment.md](deployment.md) §6.7). The bounded acceptance that followed demonstrated the accounting on real Gemini 3.5 Flash calls:
+>
+> - two successful calls carried provider-reported token usage and got exact list-price estimates (Analyze $0.001392, Suggest $0.0110505);
+> - one Google HTTP 503 carried no usage, and it stayed **unknown** — NULL token fields, `usage_unavailable`, no estimate — rather than becoming zero;
+> - quota behaved as before: the failed call was refunded, and telemetry changed no quota decision.
+>
+> What the records are, and are not:
 >
 > - The estimate is a **list-price estimate**, not a provider invoice or actual spend.
 > - Unknown or unpriced usage is recorded as unknown, **never as zero**.
