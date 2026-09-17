@@ -114,10 +114,18 @@ The fix was applied with a name-scoped, lockfile-only update (`npm update nanoid
 
 | Package | Advisory | Severity | Affected → patched floor | Installed → resolved | Existing range that permits it | Graph |
 |---|---|---|---|---|---|---|
-| `browserslist` | [GHSA-c83g-rgw3-j3cx](https://github.com/advisories/GHSA-c83g-rgw3-j3cx) (CVE-2026-73089) — unbounded memory growth via distinct query results · [GHSA-73wf-gq98-2v4g](https://github.com/advisories/GHSA-73wf-gq98-2v4g) (CVE-2026-73088) — crash / prototype write via untrusted custom stats | **High** ×2 | `<=4.28.6` → 4.28.7 | 4.25.1 → **4.29.0** | `autoprefixer@10.4.21`: `^4.24.4` (`update-browserslist-db` peer: `>= 4.21.0`) | dev only |
+| `browserslist` | [GHSA-c83g-rgw3-j3cx](https://github.com/advisories/GHSA-c83g-rgw3-j3cx) (CVE-2026-73089) — unbounded memory growth via distinct query results · [GHSA-73wf-gq98-2v4g](https://github.com/advisories/GHSA-73wf-gq98-2v4g) (CVE-2026-73088) — crash / prototype write via untrusted custom stats | **High** (npm package aggregate; advisory attribution differs — see note) | `<=4.28.6` → 4.28.7 | 4.25.1 → **4.29.0** | `autoprefixer@10.4.21`: `^4.24.4` (`update-browserslist-db` peer: `>= 4.21.0`) | dev only |
 | `js-yaml` | [GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh) (CVE-2026-84375) — `maxTotalMergeKeys` does not limit CPU for empty merge sources | **High** | `>=4.0.0 <4.3.2` → 4.3.2 | 4.3.1 → **4.3.2** | `@eslint/eslintrc@3.3.1`: `^4.1.0` | dev only |
 | `@humanfs/node` | [GHSA-p498-v437-472g](https://github.com/advisories/GHSA-p498-v437-472g) (no CVE) — recursive copy follows symlinked files outside the source tree | Moderate | `<0.16.8` → 0.16.8 | 0.16.6 → **0.16.8** | `eslint@9.32.0`: `^0.16.6` (i.e. `>=0.16.6 <0.17.0`) | dev only |
 | `postcss-selector-parser` | [GHSA-w9m9-85wc-3x92](https://github.com/advisories/GHSA-w9m9-85wc-3x92) (CVE-2026-9358) — DoS through uncontrolled AST recursion | Low | `>=6.1.0 <6.1.3` → 6.1.3 (also `>=7.1.0 <7.1.3`) | 6.1.2 → **6.1.4** | `tailwindcss@3.4.17`: `^6.1.2` · `postcss-nested@6.2.0`: `^6.1.1` | **production graph** |
+
+**Severity attribution for `browserslist`:** the table's **High** is the severity `npm audit` assigns to the `browserslist` package entry as a whole. The two advisories behind it are not rated the same way by every source:
+
+- [GHSA-73wf-gq98-2v4g](https://github.com/advisories/GHSA-73wf-gq98-2v4g) is **High** in the upstream `browserslist/browserslist` repository advisory and **High** in GitHub's central Advisory Database.
+- [GHSA-c83g-rgw3-j3cx](https://github.com/advisories/GHSA-c83g-rgw3-j3cx) is labelled **Moderate** by the upstream repository advisory, while GitHub's central reviewed Advisory Database rates it **High**. `npm audit`'s per-advisory entry carries the central rating.
+- The remediation threshold is unaffected: both advisories affect `<=4.28.6` and are patched from `4.28.7`, and `browserslist` now resolves to `4.29.0`.
+
+As with [GHSA-qwww-vcr4-c8h2](#advisories-cleared), both attributions are preserved rather than collapsed (as observed 2026-09-17).
 
 Each resolution is the **newest version its existing range permits**, not the bare patched floor: 4.29.0 is the newest 4.x `browserslist` (`latest`), 4.3.2 the newest 4.x `js-yaml` (`v4-legacy`; the range excludes 5.x), 0.16.8 the newest `@humanfs/node` below 0.17.0, and 6.1.4 the newest 6.x `postcss-selector-parser` (`legacy-v6`; the range excludes 7.x). None of the four crossed a major version.
 
