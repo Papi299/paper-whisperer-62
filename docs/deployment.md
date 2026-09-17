@@ -297,7 +297,7 @@ The last row is the point of the three changes together: the destructive orderin
 > recovery/replay reference — not as something to execute again against this
 > project. Verify rather than trust this note: `supabase migration list --linked`
 > should show `20260910212202` present exactly once. (The ledger has since moved
-> on: **82** rows, latest `20260912120000`, since 2026-09-12 — §6.6.)
+> on: **83** rows, latest `20260913120000`, since 2026-09-13 — §6.6, §6.7.)
 
 **What it changes.** Client-role object privileges only: `PUBLIC`, `anon` and
 `authenticated` on the 28 ordinary `public` tables and the one sequence, plus the
@@ -408,14 +408,15 @@ restore. The correct target is the intended matrix — if a real dependency surf
 that one table and amend the matrix, its test and this runbook together, rather
 than restoring the legacy blanket ACL.
 
-### 6.6 Migration-BEFORE-merge is required for `20260912120000` (model-aware reasoning policy) — PHASES 1–2 COMPLETE: applied 2026-09-12, merged 2026-09-13; Phase 3 (001D) next
+### 6.6 Migration-BEFORE-merge is required for `20260912120000` (model-aware reasoning policy) — PHASES 1–2 COMPLETE: applied 2026-09-12, merged 2026-09-13; Phase 3 (001D) foundation COMPLETE
 
-> **Status — Phases 1 and 2 COMPLETE; Phase 3 next. Do not re-run the migration or the merge as a pending step.** `20260912120000` was applied to Production on 2026-09-12, exactly once, with `supabase db push --linked` from the approved PR head `8001fce8182859a7cfd1d597573112df502ef3fd`, and verified while the old frontend and the pre-001A Edge runtime stayed live. The ledger is aligned at **82** rows, latest `20260912120000`. Manual reasoning is still staged off, no provider secret was installed, and `analyze-paper` v26 / `suggest-paper-organization` v10 are unchanged. The procedure below is kept as the record of that rollout and as a reusable pattern.
+> **Status — Phases 1 and 2 COMPLETE; the Phase 3 foundation is COMPLETE too (§6.7). Do not re-run the migration or the merge as a pending step.** `20260912120000` was applied to Production on 2026-09-12, exactly once, with `supabase db push --linked` from the approved PR head `8001fce8182859a7cfd1d597573112df502ef3fd`, and verified while the old frontend and the pre-001A Edge runtime stayed live. That left the ledger aligned at **82** rows, latest `20260912120000`; it is now **83** rows, latest `20260913120000` (§6.7). Manual reasoning is still staged off, no provider secret was installed, and `analyze-paper` v26 / `suggest-paper-organization` v10 are unchanged. The procedure below is kept as the record of that rollout and as a reusable pattern.
 >
 > - **Phase 1 completed (2026-09-12):** independent approval of the implementation head; explicit authorization of the Production migration; its application; old-app verification (read-only — see the note after the procedure).
 > - **Phase 2 completed (2026-09-13):** PR #280 merged at its independently approved head `d62994ef67ff8f27763a442bd9f63f4d7f7b54f5` as the regular two-parent merge `1c4c9b5882628cbe6ab7bead60e7f4eac0bed0b4`, whose tree is identical to that head. Merged-main CI passed, and the automatic Vercel Production deployment of that commit reached READY, putting the 001C frontend live. **No Edge Function was deployed**: `analyze-paper` v26 and `suggest-paper-organization` v10 are unchanged, and manual reasoning is still staged off.
-> - **Phase 3 (001D telemetry) — repository implementation complete; its migration `20260913120000` is NOT applied (§6.7).**
-> - **Pending, each separately authorized:** applying `20260913120000`, paid-provider row staging, provider secrets, the Edge deployment of both generation functions, the controlled canary and user enablement (§6.6a).
+> - **Phase 3 (001D telemetry foundation) — COMPLETE:** the repository implementation merged on 2026-09-13 (PR #282), migration `20260913120000` was applied to Production on 2026-09-13, and the Privacy Policy disclosure was published with effective date September 17, 2026 (PR #283) (§6.7). **Telemetry collection is not live**, because the generation runtime that writes it is not deployed.
+> - **Next:** the Edge deployment of both generation functions (Phase 6), followed by a bounded Production telemetry canary (§6.6a, §6.7).
+> - **Later, each separately authorized:** paid-provider row staging, provider secrets, paid-provider canaries and user enablement (§6.6a).
 
 **The `AI-MULTI-PROVIDER-001C` pull request must not be merged until this migration has been separately authorized, applied to Production, and verified while the old application is still live** (decision C41). The merged frontend reads `ai_model_catalog.reasoning_levels`, `auto_analyze_reasoning_level`, `auto_suggest_reasoning_level` and `reasoning_selectable`, and the merged account export reads `user_ai_preferences.preferred_reasoning_level`. An ordinary merge redeploys the frontend on Vercel, so merging first would put code that names those columns in front of a database that has none of them.
 
@@ -432,7 +433,7 @@ than restoring the legacy blanket ACL.
 ```text
 1. independent review approves the exact 001C PR head
 2. obtain explicit owner authorization for the Production migration
-3. supabase migration list --linked              # then: ledger ended at 20260910212202 (pre-application checkpoint; NOW 82 rows, latest 20260912120000)
+3. supabase migration list --linked              # then: ledger ended at 20260910212202 (pre-application checkpoint; after it 82 rows, latest 20260912120000; NOW 83 rows, latest 20260913120000)
    supabase db push --linked --dry-run           # then: listed ONLY 20260912120000 (NOW: nothing to push)
 4. apply it while the OLD frontend and the OLD (pre-001A) Edge runtime are live:
    supabase db push --linked
@@ -459,14 +460,15 @@ Remember the Production legacy-ACL history (§6.5): assert grants on **exact pri
 
 **Rollback (reference only).** The migration writes no user data, so reverting it is a schema operation: drop the two new functions, restore the 001A `set_current_user_ai_model` signature, drop the five catalog constraints and four columns, and drop the preference column and its constraint. Do that only while no merged application depends on them. **Once the 001C head is merged, revert the application first.**
 
-#### 6.6a The full AI-MULTI-PROVIDER rollout order (reference — the 001C PR executes none of it; phases 1–2 complete, phase 3 next)
+#### 6.6a The full AI-MULTI-PROVIDER rollout order (reference — the 001C PR executes none of it; phases 1–3 complete, Phase 6 and a bounded telemetry canary next)
 
 ```text
 Phase 1  schema expansion             apply 20260912120000 (this section)   COMPLETE 2026-09-12
 Phase 2  application merge            merge the exact approved 001C head   COMPLETE 2026-09-13 (PR #280, 1c4c9b5)
-Phase 3  telemetry foundation         AI-MULTI-PROVIDER-001D (usage/cost)   REPOSITORY IMPLEMENTED;
-                                      migration 20260913120000 NOT applied (§6.7) — it
-                                      must be applied before Phase 6
+Phase 3  telemetry foundation         AI-MULTI-PROVIDER-001D (usage/cost)   COMPLETE: merged 2026-09-13 (PR #282);
+                                      migration 20260913120000 applied 2026-09-13;
+                                      Privacy Policy disclosure published 2026-09-17
+                                      (PR #283) (§6.7). Collection starts at Phase 6
 Phase 4  stage paid-provider rows     separate migration: anthropic/claude-sonnet-5 and
                                       openai/gpt-5.6-terra with the C41 future values,
                                       selectable = false, reasoning_selectable = false
@@ -479,6 +481,8 @@ Phase 8  user enablement              separate migration: flip reasoning_selecta
                                       TO authenticated together; open paid models
 ```
 
+**Next: Phase 6, followed by a bounded Production telemetry canary on the live Gemini models (the Google part of Phase 7).** Phases 4 and 5 are not prerequisites of Phase 6: no paid-provider catalog row or credential exists, so the deployed runtime cannot route a request to Anthropic or OpenAI. Phases 4 and 5, the paid-provider canaries and Phase 8 follow later.
+
 Each phase needs its own explicit authorization. **Phase 6 must never precede Phase 1.** The 001C runtime reads `preferred_reasoning_level` in its preference query, and against the old schema that read fails. Every entitled user would then fall back to the system default with `preference_lookup_failed`, and saved model choices would silently stop being honoured.
 
 **Phase 6 changes Gemini behaviour on purpose.** Today Production sends no thinking level, so both operations run at Google's implicit `medium`. With the 001C runtime:
@@ -488,29 +492,44 @@ Each phase needs its own explicit authorization. **Phase 6 must never precede Ph
 
 This is approved product policy (C41), not a regression, and the canary should confirm Analyze quality at the lower level.
 
-### 6.7 `20260913120000` (provider-usage telemetry) — apply BEFORE the generation Edge deploy; NOT APPLIED
+### 6.7 `20260913120000` (provider-usage telemetry) — apply BEFORE the generation Edge deploy; COMPLETE: applied 2026-09-13, Privacy Policy published 2026-09-17
 
-> **Status: not applied to Production.** The ledger is still 82 rows, latest `20260912120000`. No Production mutation of any kind was made by `AI-MULTI-PROVIDER-001D`. Applying this migration is its own separately authorized step.
+> **Status — migration COMPLETE and Privacy Policy prerequisite COMPLETE; telemetry collection NOT live. Do not re-run the migration as a pending step.**
+>
+> - **Applied 2026-09-13, exactly once.** One `supabase db push --linked` from `main` `96777816` (PR #282, merged 2026-09-13 20:33:47Z). The operator's record shows a read-only preflight at 21:23:22Z that found the ledger at 82 rows with the version absent, then one push from 21:23:22Z to 21:23:35Z that exited 0. The Production ledger stores no application time and commit timestamps are off, so that window comes from the operator record, not the database.
+> - **Re-verified read-only on 2026-09-17 (03:17:59Z, inside `SET TRANSACTION READ ONLY`):**
+>   - the ledger holds **83** rows, latest `20260913120000`, which is present exactly once;
+>   - `public.ai_provider_usage_events` exists, owned by `postgres`, with RLS enabled and forced and zero policies;
+>   - its ACL is `{postgres=arwdDxtm/postgres,service_role=a/postgres}` with no column ACL, so `anon` and `authenticated` hold no privilege and `service_role` holds `INSERT` only;
+>   - `user_id` cascades from `auth.users`;
+>   - it holds **0 rows** (`n_tup_ins` 0);
+>   - the catalog is still the four Google rows with `reasoning_selectable` false on all of them, and the reasoning setter is still ungranted;
+>   - Edge is still `analyze-paper` v26 and `suggest-paper-organization` v10.
+> - **Privacy Policy published, effective September 17, 2026.**
+>   - What changed: the owner-approved amendment added the "AI usage records" disclosure (§2), its purpose (§5), account-lifetime retention (§13), and the export exclusion with access on request, "Subject to applicable law" (§15).
+>   - How it went live: PR #283 merged as the two-parent `24591dfd` (2026-09-16 22:47:20Z UTC, 01:47 on September 17 in Israel), and its automatic Vercel Production deployment put it on `app.paperlume.app/privacy`.
+>   - Verification: the live page was checked signed out right after that deployment, and again on 2026-09-17.
+> - **Not live: telemetry collection.** Nothing deployed writes the table. **Next:** the §6.6a Phase 6 deploy of both generation functions, followed by the bounded canary below. The procedure that follows is the record of the migration step.
 
 **What it adds.** One table, `public.ai_provider_usage_events` (C42), with RLS enabled and forced, no policy, two indexes, and a fail-closed verify block. It touches no existing table, backfills nothing, adds no function, sequence or trigger, and adds no catalog row. Creating the `user_id` foreign key takes a brief `SHARE ROW EXCLUSIVE` lock on `auth.users` for the (catalog-only) duration of the transaction, so signups and account deletions wait out that moment and it waits for any open `auth.users` write; no application table is locked.
 
 **Ordering.**
 
 - **Merge before migration is safe.** No frontend code reads or writes the table (the regenerated `types.ts` only describes it), and nothing deployed today writes it.
-- **Migration before the generation Edge deploy is required.** The 001D runtime writes one event per provider call. Deployed against a database without the table, every write is refused and logged as `usage_telemetry recorded=0 reason=write_rejected` — the user response and quota are unaffected, but the telemetry record is empty from day one. Apply this migration before §6.6a Phase 6.
-- **The public Privacy Policy must be reviewed before telemetry is live.** Once the 001D runtime is deployed, PaperLume persists a per-user record of each AI request's provider, model and token usage. That is internal operational data kept in Supabase, but [`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx) is owner-approved legal text and must be reviewed by the owner (and legal, where required) before Phase 6. See [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §29.
+- **Migration before the generation Edge deploy is required — satisfied (applied 2026-09-13).** The 001D runtime writes one event per provider call. Deployed against a database without the table, every write is refused and logged as `usage_telemetry recorded=0 reason=write_rejected` — the user response and quota are unaffected, but the telemetry record is empty from day one. That is why this migration had to precede §6.6a Phase 6.
+- **The public Privacy Policy had to disclose telemetry before it is live — satisfied (published, effective September 17, 2026).** Once the 001D runtime is deployed, PaperLume persists a per-user record of each AI request's provider, model and token usage. [`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx) is owner-approved legal text, so the disclosure was owner-approved before publication (PR #283). The amendment is provider-neutral, and enabling a paid provider remains a new recipient that needs its own privacy review ([privacy-data-flow-audit.md](privacy-data-flow-audit.md) §8). See [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §29 for the telemetry itself.
 
 **Why the grant statements are sufficient on hosted Production.** Read-only inspection on 2026-09-13 found `postgres`'s TABLE default in `public` granting `service_role=arwdDxtm` (and nothing to `PUBLIC`, `anon` or `authenticated`, per C38). The migration revokes by **role** from `PUBLIC, anon, authenticated, service_role` and then grants `INSERT` to `service_role`, and its verify block is an allowlist over the whole ACL, so a default-privilege entry the audit did not see fails the migration rather than shipping.
 
 ```text
 1. obtain explicit owner authorization
-2. supabase migration list --linked         # expect 82 rows, latest 20260912120000
-   supabase db push --linked --dry-run      # expect ONLY 20260913120000
+2. supabase migration list --linked         # then: 82 rows, latest 20260912120000 (NOW 83 rows, latest 20260913120000)
+   supabase db push --linked --dry-run      # then: listed ONLY 20260913120000 (NOW: nothing to push)
 3. supabase db push --linked
 4. read-only verification (below)
 ```
 
-Read-only post-apply checks:
+Read-only post-apply checks (all passed again on 2026-09-17; see the status above):
 
 - ledger 83 rows, latest `20260913120000`, present exactly once;
 - `relrowsecurity` and `relforcerowsecurity` both true; zero rows in `pg_policy` for the table;
@@ -519,7 +538,7 @@ Read-only post-apply checks:
 - `count(*) = 0` (the migration creates no row);
 - the `user_id` FK cascades from `auth.users`.
 
-**Phase 7 canary expectations.** Each canary request should produce exactly one event whose `provider`, `provider_model`, `operation` and `provider_attempts` match the request; a Gemini success should read `usage_status = reported`; and the Edge log should contain `usage_telemetry recorded=1` and no `recorded=0` line. A `recorded=0` line during the canary is a telemetry reliability failure to resolve before any paid provider is activated.
+**Canary expectations (the next step, after Phase 6).** Re-read the row count immediately before the deploy. It was 0 at the 2026-09-17 verification, so any later event can be attributed to the new runtime. Each canary request should produce exactly one event whose `provider`, `provider_model`, `operation` and `provider_attempts` match the request; a Gemini success should read `usage_status = reported`; and the Edge log should contain `usage_telemetry recorded=1` and no `recorded=0` line. A `recorded=0` line during the canary is a telemetry reliability failure to resolve before any paid provider is activated.
 
 **Rollback (reference only).** `DROP TABLE public.ai_provider_usage_events;` — nothing depends on it. If a runtime that writes it is already deployed, dropping it degrades that runtime to logged `write_rejected` lines, with no user-visible change.
 

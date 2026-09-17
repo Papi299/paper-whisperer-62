@@ -118,7 +118,13 @@ The schema, Edge Functions, and observability layer must track the following fro
 
 Gemini does not currently bill per-token in a way visible at request time — the **estimated** cost per call is computed offline from observed token counts × the published rate per million tokens. Document the cost-estimation formula alongside the dashboard.
 
-> **Status (2026-09-13): per-call foundation implemented in repository code, not live.** `AI-MULTI-PROVIDER-001D` (C42) records, per provider call, the provider-reported token counts, outcome, attempt count and a list-price cost estimate with its formula and rate snapshot, in `ai_provider_usage_events`. Its migration is not applied and the runtime is not deployed ([deployment.md](deployment.md) §6.7). It records no latency and no per-user funnel metrics, and there is no dashboard.
+> **Status (verified 2026-09-17): per-call foundation implemented; schema live in Production, collection not live.** `AI-MULTI-PROVIDER-001D` (C42) records, per provider call, the provider-reported token counts, outcome, attempt count and a list-price cost estimate with its formula and rate snapshot, in `ai_provider_usage_events`. The table has been live in Production since 2026-09-13 (migration `20260913120000`), and the Privacy Policy disclosure is published. The writer lives in the generation runtime, which is **not deployed**, so the table holds no events yet ([deployment.md](deployment.md) §6.7).
+>
+> - The estimate is a **list-price estimate**, not a provider invoice or actual spend.
+> - Unknown or unpriced usage is recorded as unknown, **never as zero**.
+> - Telemetry changes nothing in PaperLume's quota accounting.
+> - It records no latency and no per-user funnel metrics.
+> - There is no dashboard.
 
 **Funnel metrics:**
 
@@ -131,7 +137,7 @@ Gemini does not currently bill per-token in a way visible at request time — th
 - 30-day-active rate by tier.
 - Labs / Teams contact-form submissions and source (which pricing-page row was clicked).
 
-**Privacy.** No abstract text, no notes content, no identifier values appear in telemetry payloads. Telemetry events carry IDs and counts, not user content. This is non-negotiable; mishandling it would breach the privacy policy that hasn't been written yet but absolutely will say "we don't share your research with third parties beyond the AI provider you explicitly opted into."
+**Privacy.** No abstract text, no notes content, no identifier values appear in telemetry payloads. Telemetry events carry IDs and counts, not user content. This is non-negotiable. For AI usage records, the published Privacy Policy (effective September 17, 2026) states that the record "does not include the content sent to the AI provider or the AI-generated result" (§2).
 
 ---
 
