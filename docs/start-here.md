@@ -177,10 +177,11 @@ Operational procedures, secrets, migration sequence, smoke checklists: [deployme
 
 Authoritative current state, remediation policy, and re-evaluation triggers: [dependency-security.md](dependency-security.md). `npm audit` (full and `--omit=dev`) on the current checkout is the live source — **do not treat a count written in any document as current**.
 
-- **All five dependency clusters are complete, and `npm audit` is at zero in both the full and the production-only graph.** In Clusters 1–4 the implementation delta was confined to `package-lock.json`; Cluster 5 additionally changed `package.json` and six import specifiers, because clearing it required crossing a major version.
+- **All five dependency clusters are complete.** In Clusters 1–4 the implementation delta was confined to `package-lock.json`; Cluster 5 additionally changed `package.json` and six import specifiers, because clearing it required crossing a major version.
+- **As measured on 2026-09-17, the production-only graph is clean, and the full graph holds only a dev-only Vitest-family residual** ([GHSA-82fw-gwwq-j7x9](dependency-security.md#vitest-residual--open-separate-major-version-decision), 2 moderate entries). The 3.x line has no patched release, so clearing it needs a **separately decided Vitest major upgrade**. The in-range advisories published or revised in September 2026 (`browserslist`, `js-yaml`, `@humanfs/node`, `postcss-selector-parser`) were remediated by a lockfile-only update.
 - **React Router Cluster 5 is implemented**: `react-router` **7.18.2** is now the single declared Router dependency, and `react-router-dom` and `@remix-run/router` have left the graph entirely. It was a direct-package migration of import provenance only — **React and ReactDOM stay 18.3.1**, the route tree and every navigation target are unchanged, and no future flag was enabled. React Router v8 remains **out of scope** (it requires React 19.2.7+ and Node 22.22+).
 - The **`nanoid` high advisory remains remediated** by a name-scoped, lockfile-only update within its parent's existing semver range.
-- **Zero is a measurement, not a guarantee.** Advisory databases move, so a new finding can appear without any repository change. Never restate a count from memory — run `npm audit` and read [dependency-security.md](dependency-security.md).
+- **A count is a measurement, not a guarantee.** Advisory databases move, so a new finding can appear without any repository change. Never restate a count from memory — run `npm audit` and read [dependency-security.md](dependency-security.md).
 
 ## 9. Active decisions and constraints — do not casually reopen
 

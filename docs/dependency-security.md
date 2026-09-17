@@ -10,16 +10,18 @@
 
 ## Current audit state
 
-`npm audit` measured on a clean `npm ci` (which did not mutate `package-lock.json`):
+`npm audit` measured **2026-09-17**, on a clean `npm ci` that did not mutate `package-lock.json`, against `main` `20b57562dbdcdc2b130286388f17ca86676f81e0` plus the [Advisory remediation 002](#advisory-remediation-002--remediated) lockfile (`package-lock.json` SHA-256 `ecd63ddf9a13d9e19cb06670c2b47b3dcc781331002f78d2ab9613ef4c7cf436`, `package.json` unchanged):
 
 | Graph | Total | Low | Moderate | High | Critical |
 |---|---|---|---|---|---|
-| Full (incl. dev) | **0** | 0 | 0 | 0 | 0 |
+| Full (incl. dev) | **2** | 0 | 2 | 0 | 0 |
 | Production only | **0** | 0 | 0 | 0 | 0 |
 
-**The audit is at zero in both graphs.** The last residual family — React Router — was cleared by [Cluster 5](#react-router-cluster-5--complete), which crossed to the v7 line. No advisory of any severity is outstanding.
+**The production graph is at zero. The full graph holds one dev-only residual:** [GHSA-82fw-gwwq-j7x9](#vitest-residual--open-separate-major-version-decision), which npm reports as two moderate package entries, `vitest` and `@vitest/mocker`. It has no patched release on the installed 3.x line, so clearing it needs a Vitest major upgrade, which is a **separately bounded task**. No high or critical finding is outstanding.
 
-Zero is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
+**How the graphs got here.** After [Cluster 5](#react-router-cluster-5--complete) both graphs measured zero, and that was true at the time. Advisories published or revised between 2026-09-01 and 2026-09-08 then reopened them with no change to this repository: on `main` `20b57562` the full graph measured **6 (2 high / 3 moderate / 1 low)** and the production graph **1 low**. Advisory remediation 002 cleared every finding that had a compatible in-range fix, and only the Vitest family is left.
+
+A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
 The previously recorded `nanoid` high remains **remediated** by a lockfile-only in-range resolution — see [NanoID finding](#nanoid-finding--remediated).
 
@@ -35,7 +37,7 @@ All five bounded clusters are complete. In Clusters 1–4 the **dependency imple
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 | 5 | React Router **v6 → v7 direct-package migration** | Complete | Audit/design PR #224 · implementation PR #225 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta.
 
 ## Current resolved security baseline
 
@@ -45,8 +47,9 @@ These resolutions must not regress. A change that moves any of them backwards re
 |---|---|
 | 1 | `vite` 7.3.6 · `vitest` 3.2.7 · `postcss` 8.5.26 |
 | 2 | `lodash` 4.18.1 · `ws` 8.21.3 · `yaml` 2.9.0 · `picomatch` 4.0.5 (nested v2 line 2.3.2) · `brace-expansion` 1.1.18 (nested v2 line 2.1.4) |
-| 3 | `js-yaml` 4.3.1 · `flatted` 3.4.4 · `form-data` 4.0.6 · `@tootallnate/once` 2.0.1 · `esbuild` 0.28.1 |
+| 3 | `js-yaml` 4.3.1 — **superseded by 4.3.2** (remediation 002) · `flatted` 3.4.4 · `form-data` 4.0.6 · `@tootallnate/once` 2.0.1 · `esbuild` 0.28.1 |
 | 5 | `react-router` **7.18.2** (declared `^7.18.2`) · `cookie` 1.1.1 · `set-cookie-parser` 2.7.2 |
+| Remediation 002 | `browserslist` **4.29.0** · `js-yaml` **4.3.2** · `@humanfs/node` **0.16.8** · `postcss-selector-parser` **6.1.4** (hoisted line; the nested exact-pinned 6.0.10 is outside the affected range) |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
@@ -104,6 +107,99 @@ The fix was applied with a name-scoped, lockfile-only update (`npm update nanoid
 - no application-source, test, config, or workflow change was required;
 - `npm ci` reproduces the tree from the committed lockfile without mutating it;
 - both the full and `--omit=dev` audits no longer report GHSA-2v37-7h3g-55p8.
+
+## Advisory remediation 002 — REMEDIATED
+
+**Status: REMEDIATED** (`DEPENDENCY-ADVISORY-REMEDIATION-002`, 2026-09-17). Like the `nanoid` fix, this was a standalone bounded task, not a cluster. It cleared every advisory from the September 2026 re-measurement that had a fix inside an existing semver range. All five advisories below are now absent from **both** the full and the production audit graph. The one advisory it left open is the [Vitest residual](#vitest-residual--open-separate-major-version-decision).
+
+| Package | Advisory | Severity | Affected → patched floor | Installed → resolved | Existing range that permits it | Graph |
+|---|---|---|---|---|---|---|
+| `browserslist` | [GHSA-c83g-rgw3-j3cx](https://github.com/advisories/GHSA-c83g-rgw3-j3cx) (CVE-2026-73089) — unbounded memory growth via distinct query results · [GHSA-73wf-gq98-2v4g](https://github.com/advisories/GHSA-73wf-gq98-2v4g) (CVE-2026-73088) — crash / prototype write via untrusted custom stats | **High** (npm package aggregate; advisory attribution differs — see note) | `<=4.28.6` → 4.28.7 | 4.25.1 → **4.29.0** | `autoprefixer@10.4.21`: `^4.24.4` (`update-browserslist-db` peer: `>= 4.21.0`) | dev only |
+| `js-yaml` | [GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh) (CVE-2026-84375) — `maxTotalMergeKeys` does not limit CPU for empty merge sources | **High** | `>=4.0.0 <4.3.2` → 4.3.2 | 4.3.1 → **4.3.2** | `@eslint/eslintrc@3.3.1`: `^4.1.0` | dev only |
+| `@humanfs/node` | [GHSA-p498-v437-472g](https://github.com/advisories/GHSA-p498-v437-472g) (no CVE) — recursive copy follows symlinked files outside the source tree | Moderate | `<0.16.8` → 0.16.8 | 0.16.6 → **0.16.8** | `eslint@9.32.0`: `^0.16.6` (i.e. `>=0.16.6 <0.17.0`) | dev only |
+| `postcss-selector-parser` | [GHSA-w9m9-85wc-3x92](https://github.com/advisories/GHSA-w9m9-85wc-3x92) (CVE-2026-9358) — DoS through uncontrolled AST recursion | Low | `>=6.1.0 <6.1.3` → 6.1.3 (also `>=7.1.0 <7.1.3`) | 6.1.2 → **6.1.4** | `tailwindcss@3.4.17`: `^6.1.2` · `postcss-nested@6.2.0`: `^6.1.1` | **production graph** |
+
+**Severity attribution for `browserslist`:** the table's **High** is the severity `npm audit` assigns to the `browserslist` package entry as a whole. The two advisories behind it are not rated the same way by every source:
+
+- [GHSA-73wf-gq98-2v4g](https://github.com/advisories/GHSA-73wf-gq98-2v4g) is **High** in the upstream `browserslist/browserslist` repository advisory and **High** in GitHub's central Advisory Database.
+- [GHSA-c83g-rgw3-j3cx](https://github.com/advisories/GHSA-c83g-rgw3-j3cx) is labelled **Moderate** by the upstream repository advisory, while GitHub's central reviewed Advisory Database rates it **High**. `npm audit`'s per-advisory entry carries the central rating.
+- The remediation threshold is unaffected: both advisories affect `<=4.28.6` and are patched from `4.28.7`, and `browserslist` now resolves to `4.29.0`.
+
+As with [GHSA-qwww-vcr4-c8h2](#advisories-cleared), both attributions are preserved rather than collapsed (as observed 2026-09-17).
+
+Each resolution is the **newest version its existing range permits**, not the bare patched floor: 4.29.0 is the newest 4.x `browserslist` (`latest`), 4.3.2 the newest 4.x `js-yaml` (`v4-legacy`; the range excludes 5.x), 0.16.8 the newest `@humanfs/node` below 0.17.0, and 6.1.4 the newest 6.x `postcss-selector-parser` (`legacy-v6`; the range excludes 7.x). None of the four crossed a major version.
+
+`postcss-selector-parser` is the only one in the production graph, and it has the same **packaging-artifact** path as `nanoid`: `tailwindcss-animate` (root `dependencies`) → `tailwindcss` (peer) → `postcss-selector-parser`. It is build-time CSS tooling, not shipped runtime code. A second, nested copy, **6.0.10**, is exact-pinned by `@tailwindcss/typography@0.5.16` (`"6.0.10"`). It lies outside both affected ranges, npm does not report it, and it was left unchanged.
+
+### Applied remediation
+
+One name-scoped, lockfile-only update per package, each diffed and re-audited before the next:
+
+```bash
+npm update browserslist --package-lock-only
+npm update js-yaml --package-lock-only
+npm update @humanfs/node --package-lock-only
+npm update postcss-selector-parser --package-lock-only
+```
+
+`js-yaml` and `postcss-selector-parser` moved with **no collateral** (`version`, `resolved` and `integrity` only). The two other updates moved exactly eight further lockfile entries. Each move is required by the new target's own published `dependencies`, and each lands on the newest version the new range permits:
+
+| Collateral entry | Change | Why it moved | Range now satisfied |
+|---|---|---|---|
+| `caniuse-lite` | 1.0.30001727 → 1.0.30001810 | `browserslist@4.29.0` raised its floor from `^1.0.30001726` | `^1.0.30001810` (and `autoprefixer`'s `^1.0.30001702`) |
+| `electron-to-chromium` | 1.5.192 → 1.5.430 | floor raised from `^1.5.173` | `^1.5.427` |
+| `node-releases` | 2.0.19 → 2.0.56 | floor raised from `^2.0.19`; the entry also records that release's own `engines` (`node >=18`) | `^2.0.55` |
+| `update-browserslist-db` | 1.1.3 → 1.3.3 | floor raised from `^1.1.3`; its own dependencies are unchanged | `^1.3.3` |
+| `baseline-browser-mapping` | *added* 2.11.24 | new dependency of `browserslist@4.29.0` | `^2.11.23` |
+| `@humanfs/core` | 0.19.1 → 0.19.2 | `@humanfs/node@0.16.8` raised its floor from `^0.19.1` | `^0.19.2` |
+| `@humanfs/types` | *added* 0.15.0 | new dependency of `@humanfs/node@0.16.8` and `@humanfs/core@0.19.2` | `^0.15.0` |
+| `@humanfs/node/node_modules/@humanwhocodes/retry` | *removed* 0.3.1 | `@humanfs/node@0.16.8` moved its range from `^0.3.0` to `^0.4.0`, which the already-hoisted, unchanged 0.4.3 (also used by `eslint`) satisfies, so the nested duplicate is gone | `^0.4.0` |
+
+All eight are dev-only. No new or moved entry is flagged `hasInstallScript` in the lockfile. `browserslist@4.29.0` was published on 2026-09-15. It, `update-browserslist-db@1.3.3` and `baseline-browser-mapping@2.11.24` carry npm provenance attestations.
+
+Per the [Remediation policy](#remediation-policy):
+
+- the dependency delta is confined to `package-lock.json`. `package.json` was **not** modified (verified byte-identical by SHA-256), no `overrides` entry was added, and no package became a direct dependency;
+- no application-source, test, config or workflow change was required;
+- **shipped output changed in exactly one CSS rule.** Built side by side, `main` `20b57562` and this lockfile give byte-identical `dist-extension/` output and byte-identical web JavaScript content (only its hashed file name moves, and `index.html` changes only to reference the renamed assets). In the web CSS, the refreshed `caniuse-lite` data drops the `-webkit-backdrop-filter` fallback from the Tailwind `.transition` utility's `transition-property`. The repository has no browserslist config, and autoprefixer's `defaults` query no longer includes iOS Safari 16.6–17.7. The one element using a backdrop utility (`backdrop-blur` in `BulkActionsToolbar`) keeps Tailwind's own `-webkit-backdrop-filter` declaration and does not use `.transition`;
+- no blanket `npm update` and no `npm audit fix` (forced or otherwise) was run;
+- after `node_modules` was removed, `npm ci` reproduced the tree from the committed lockfile without mutating it, and `npm ls --all` reports no invalid, missing or extraneous node;
+- the full audit went from **6 (2 high / 3 moderate / 1 low)** to **2 moderate**, and the production audit from **1 low** to **zero**.
+
+## Vitest residual — OPEN (separate major-version decision)
+
+**Status: OPEN — deliberately not remediated by remediation 002.** It is dev/test scope only and absent from the production graph.
+
+| Field | Value |
+|---|---|
+| Advisory | [GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9) (CVE-2026-84373) — "Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock" (CWE-22) |
+| Severity | Moderate (CVSS 3.1 5.9, `AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N`) |
+| Affected | `vitest` and `@vitest/mocker` `>=2.1.0 <4.1.11`, plus the 5.0.0 pre-releases before `5.0.0-rc.2` |
+| Patched | **4.1.11** (v4 line) and **5.0.0**. Upstream states that older majors (2.1.x, 3.x) "are not maintained and are not planned to receive the fix" |
+| Installed | `vitest` **3.2.7** (root `devDependencies`, declared `^3.2.4`; 3.2.7 is the `V3` dist-tag, the newest 3.x) · `@vitest/mocker` **3.2.7** (exact-pinned `"3.2.7"` by `vitest`) |
+| Audit representation | Two moderate entries: `@vitest/mocker`, and `vitest` through it. `npm audit fix --force` proposes `vitest@5.0.1`, a breaking move across two majors, and was not used |
+
+### Applicability — what was and was not established (2026-09-17)
+
+Per the advisory, the file-read sink is the `interceptorPlugin` `load` hook in `@vitest/mocker`. For a registered redirect mock it returns `readFile(mock.redirect)` with no `server.fs` boundary check. That registration is **unauthenticated** only through the public `mockerPlugin` / standalone `interceptorPlugin` exports, which listen for `vitest:interceptor:register` on Vite's HMR WebSocket. Vitest browser mode registers mocks over a token-authenticated RPC instead.
+
+- **Established: the vulnerable code is installed.** `@vitest/mocker@3.2.7`'s `dist/node.js` contains both the `readFile(mock.redirect, …)` sink and the `server.ws.on("vitest:interceptor:register", …)` registration.
+- **Established: no use of the plugin exports.** No first-party source, config, script or workflow imports `@vitest/mocker`, `mockerPlugin` or `interceptorPlugin`, and no other installed package references them. On its own node/jsdom path, Vitest 3.2.7 wires in only `hoistMocksPlugin` and `automockPlugin`.
+- **Established: no browser mode, UI or API server.** `@vitest/browser` and `@vitest/ui` are not installed. `vitest.config.ts` sets no `browser`, `api` or `server` option. `npm test` is `vitest run` and `npm run test:watch` is `vitest`, and no `--browser`, `--ui` or `--api` flag appears anywhere.
+- **Established: Vitest opens no network listener here.** Without an API port, Vitest 3.2.7 builds its Vite server in middleware mode with `hmr: false` and never calls `listen()`. A live probe of `vitest --watch` found no inet socket of any kind anywhere in its process tree. A positive control with `--api.port 51299` produced a `[::1]:51299` LISTEN socket, which shows the probe does detect listeners.
+- **Established: the suite registers no redirect mocks.** A TypeScript AST scan found 139 `vi.mock` calls across 52 files. Every call passes an inline factory. There is no factory-less `vi.mock`, no `{ spy: true }` option, no `vi.doMock`, and no `__mocks__` directory.
+- **Recorded, but not a path to this advisory:** the application dev-server config `vite.config.ts` sets `host: "::"` (port 8080), so `npm run dev` is reachable beyond loopback. That server loads only `@vitejs/plugin-react-swc`, not the interceptor plugin, so the unauthenticated registration handler is never attached to its HMR socket. Vitest itself reads `vitest.config.ts`, which takes precedence and sets no host.
+- **Not established:** that the advisory can never apply. Adopting browser mode, `@vitest/browser`, the mocker plugin exports, a Vitest UI or API server, or redirect mocks would change this conclusion, and the sink stays in the installed package until the upgrade.
+
+These findings **bound the exposure** while the residual is open. They are not a claim that the advisory is inapplicable, and they are not why it remains open. It remains open because **no compatible patched release exists**.
+
+### Why remediation 002 did not upgrade it
+
+- There is no in-range fix: every patched release crosses a major (`^3.2.4` → ≥ 4.1.11 or 5.x), so any fix changes `package.json`.
+- Under the [Remediation policy](#remediation-policy), a major upgrade is separate bounded work. A test-runner major can require configuration and test changes and must be verified against the whole suite on its own terms. It also should not ride along with a lockfile-only fix.
+- No `overrides` entry was added, and a patched 4.x `@vitest/mocker` was not forced under the 3.x `vitest`, because that would silence the finding rather than fix it.
+
+Clearing this residual needs a **separately authorized Vitest-major task**, which should choose the target line (≥ 4.1.11 or 5.x) and re-measure first. For orientation only, as of 2026-09-17: `vitest@4.1.11` declares a `vite` peer of `^6.0.0 || ^7.0.0 || ^8.0.0` (installed: 7.3.6) and `node` engines of `^20.0.0 || ^22.0.0 || >=24.0.0`.
 
 ## React Router Cluster 5 — COMPLETE
 
@@ -175,13 +271,14 @@ npm ls <package> --all       # every installed occurrence
 npm explain <package>        # introduction path and parent semver range
 ```
 
-`npm audit` currently exits zero. A **nonzero** exit now means a new advisory has appeared — investigate it rather than treating it as normal.
+`npm audit --omit=dev` currently exits zero, and a **nonzero** exit there means a new advisory has appeared. The full `npm audit` currently exits nonzero **only** because of the [Vitest residual](#vitest-residual--open-separate-major-version-decision) (GHSA-82fw-gwwq-j7x9, reported against `vitest` and `@vitest/mocker`). Any other entry in the full graph is new — investigate it rather than treating the nonzero exit as normal.
 
 ## Re-evaluation triggers
 
 Revisit this document when any of the following occurs:
 
-- **any** advisory appears in either graph. With the audit at zero this is the primary trigger, and a new high or critical fires it urgently;
+- **any** advisory appears in the production graph, or any advisory other than the Vitest residual appears in the full graph. This is the primary trigger, and a new high or critical fires it urgently;
+- the Vitest residual's standing changes: a Vitest-major task is authorized, the advisory is revised or a patched 3.x release appears, or the project adopts anything that invalidates the [applicability findings](#applicability--what-was-and-was-not-established-2026-09-17) — browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config, or factory-less `vi.mock` / `__mocks__` redirect mocks;
 - a **new React Router advisory** is published, particularly one whose affected range reaches **7.18.2** — that would move the floor again and require re-measuring the v7 line (and re-examining whether v8, still out of scope today, has become necessary);
 - Paperlume's Router usage changes in a way that alters the exposure profile — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
