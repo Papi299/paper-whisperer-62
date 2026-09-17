@@ -3472,3 +3472,80 @@ Decision C42. The implementation itself made no Production mutation of any kind.
   - Paid providers and manual reasoning: **staged off**.
   - Telemetry UI: **none**.
   - **Next:** deploy both generation functions together, followed by a bounded Production telemetry canary ([deployment.md](deployment.md) §6.6a).
+
+## 2026-09-17 — AI-MULTI-PROVIDER-001D Phase 6: both generation Edge Functions deployed; bounded Gemini telemetry canary passed — **generation runtime LIVE; telemetry collection LIVE**
+
+The §6.6a Phase 6 deploy and the Google part of Phase 7, run as one separately authorized operation. It deployed the 001A–001D generation runtime already merged in `main`. No application merge, migration or catalog change accompanied it, and no secret was set. Two evidence classes are used below. **Verified** facts were read back from Production afterwards (read-only SQL, the function list, source read-back). **Operator record** facts come from the rollout session itself: CLI output, request timings, pre-deploy checks and Edge logs, which Supabase retains only briefly.
+
+- **Source (verified).** `main` `f962b44d2694e0e4fbd57bfcf37bb94633d7336b`, tree `bca40dde227b9b6fb2d2b931948db2d79b80b8f2`, with merged-main Validate, DB Tests and Extension green.
+  - Deployed from a clean, detached worktree at that commit.
+  - Each function's closure was discovered recursively from its entrypoint: 19 files for `analyze-paper` and 23 for `suggest-paper-organization`, including all three provider adapters and the five 001D modules.
+  - Every file was byte-identical to the commit.
+- **Preflight (operator record, read-only).**
+  - Ledger 83 (latest `20260913120000`, present once).
+  - Telemetry table: RLS forced, no policy, `service_role` `INSERT` only, **0 rows**.
+  - Catalog: four Google rows, none `reasoning_selectable`.
+  - Reasoning: the setter is not executable by `authenticated`, and no manual preference exists.
+  - Secrets: `GEMINI_API_KEY` and `GEMINI_MODEL` present; no Anthropic, OpenAI or generic AI secret.
+  - `verify_jwt = false` on both functions.
+  - A final gate re-ran these checks immediately before the deploy.
+- **Rollback readiness (operator record).** Before the deploy, the live `analyze-paper` v26 and `suggest-paper-organization` v10 sources were captured with `supabase functions download --use-api` into scratch directories outside the repository. They were byte-identical to `c106c84812a02d1679f329305b6287b05c795397`, the `main` commit of their 2026-09-02 deploy (6 and 11 files), and self-contained, so a restore would have been a redeploy of those closures. No rollback was needed.
+- **Deployment (operator record; outcome verified).** `supabase functions deploy analyze-paper --project-ref lioxtgiputfniqbktcsz --no-verify-jwt`, then the same for `suggest-paper-organization` (CLI 2.111.0), one attempt each, 07:59:03–07:59:18Z:
+
+  | Function | Before | After |
+  |---|---|---|
+  | `analyze-paper` | v26 `0a8f62208c4746b471c4169cdfb762d3084e5a12ffc64f98f514a23b121fc045` | **v27** `50ef85df0d142fea7063bbce724d7da42ba3989cec282d6ba4522cfa0386965e`, ACTIVE |
+  | `suggest-paper-organization` | v10 `26dd30ae8d1eaa9a02d9a0f2e0c27ac36c66c2f0925c3029ad4c45a0688313ab` | **v11** `2aaaf87d114bdcdef0bd442335dc26b1cd3ebbaf43857f92d2f35a89fffdc097`, ACTIVE |
+
+  Both kept `verify_jwt = false`. Downloaded again after the deploy, both live artifacts were byte-identical to the `f962b44d` closures. The Gemini transport remains the temporary 90 s / zero-retry diagnostic.
+- **Unaffected functions (verified).** Each kept its version, bundle hash, `updated_at` and entrypoint: `delete-account` v5 (`796f579b0212c6b372be498cd7d9409e4383e82ea3a8cbee96a381fbc2cd0113`), `fetch-paper-metadata` v20 (`155ba78bc31317f4d77b90557112c52d0717430079857b421fcaecb72189fe1d`), `get-gemini-provider-quota` v8 (`a4f5d8e5a356682f7872ac8d7b83b79452496bef2297db4bd67919e3c604063a`) and `search-pubmed` v5 (`2d8dacaca2e280c139e9b4915278c03435025fff0aeb67ce7bd4220560dd3af4`). A read-only source comparison during the docs closure compared each with `main`:
+  - `fetch-paper-metadata` and `search-pubmed` are byte-identical.
+  - `get-gemini-provider-quota` differs only by comments added by `AI-MODEL-SELECTION-001B`.
+  - `delete-account` differs only by 001D's extraction of `selectEdgeSecretKey` into `_shared/edgeSecretKey.ts`, re-exported unchanged.
+
+  Neither difference changes behaviour.
+- **Canary account and fixture.**
+  - **Account.** Every authenticated step used the dedicated Production acceptance account (identifiers withheld here).
+  - **Auth.** The steps used ordinary password sign-ins, each ended with a local-scope sign-out, which caused normal Auth session bookkeeping. No Auth account was created or deleted, and no administrative Auth change was made.
+  - **Fixture.** The account held 0 papers, so exactly **one synthetic, non-sensitive paper** ("PaperLume Phase 6 Canary — Synthetic Sleep and Memory Study") was created at 07:56:41Z. It was written through the account's own authenticated Data API session, under RLS, with the same `papers` insert contract as Add Papers' manual entry.
+  - **Verified.** It has no Project, Tag or assignment. The insert caused no secondary write: `papers` has no INSERT trigger, and a read-only before/after comparison showed the account's quota counter, entitlement and telemetry, and the aggregate data of every other account, unchanged.
+  - It is **retained deliberately** for future bounded Analyze/Suggest canaries ([deployment.md](deployment.md) §6.7).
+- **Pre-provider smokes (operator record).**
+  - Analyze: `OPTIONS` 200 with CORS, `POST` without Authorization 401, authenticated `POST` without an abstract 400.
+  - Suggest: `OPTIONS` 200, unauthenticated `POST` 401, and an authenticated title-only draft for the canary paper 400 `insufficient_evidence`.
+  - Quota and telemetry were unchanged, and no routing, reasoning, quota or provider log line appeared.
+- **Canary A — Analyze.** HTTP 200 in 5.4 s, one provider attempt, the full `tldr` / `studyType` / `statisticalMethods` contract, nothing persisted.
+  - **Event (verified):** `google` / `gemini-3.5-flash`, `system_default`, `automatic` → `minimal`, `completed`, `succeeded`, usage `reported`.
+  - **Tokens:** input 520, cached 0, cache-write NULL, output 68, reasoning 0, provider total 588.
+  - **Cost:** `estimated` at `$0.001392000000000` under `google/gemini-3.5-flash@2026-09-13`, matched by an independent integer recomputation.
+- **Canary B — Suggest, with the one permitted retry.**
+  - **First request:** Google **HTTP 503** after 5.8 s on its single attempt. The user-facing answer was the neutral 500 `suggestions_unavailable` / `provider_unavailable`, and the quota unit was refunded.
+  - **Failure event (verified):** `http_error`, status 503, 1 attempt, `failed`, usage `absent`, every token field NULL, `usage_unavailable`, no estimate and no price record — unknown, not zero.
+  - That provider-side transient exercised the failure, refund and telemetry path and qualified for the single authorized retry.
+  - **Retry:** HTTP 200 in 11.0 s — `existingProjects` 0, `existingTags` 0, `newProjects` 2, `newTags` 3. None was accepted or persisted.
+  - **Retry event (verified):** `automatic` → `medium`, `completed`, 1 attempt, `succeeded`, usage `reported`.
+  - **Tokens:** input 755, cached 0, cache-write NULL, output 1,102 (835 reasoning), provider total 1,857.
+  - **Cost:** `estimated` at `$0.011050500000000`, recomputed exactly.
+- **Non-mutation.** Across both Suggest requests, the canary paper row, Projects, Tags, `paper_projects` and `paper_tags` were identical before and after. This was checked through the account's RLS client and through read-only SQL.
+- **Totals.**
+  - Provider-call sequences: **3**, all Google; no Anthropic or OpenAI request.
+  - Telemetry: **0 → 3**, all from the acceptance account.
+  - AI quota: the account's lifetime counter went **0 → 2** of 15 (three consumes, one refund).
+  - Edge logs (operator record): exactly three `usage_telemetry recorded=1` lines, no `recorded=0` and no refund failure. Checked line by line, they held no title, abstract, keywords, generated text, provider body, user or paper id, email, token or key.
+- **Excluded from the operation.**
+  - No migration: the ledger stayed at 83.
+  - No catalog change: four Google rows, none `reasoning_selectable`.
+  - No manual reasoning: the setter is still ungranted, and no manual preference exists.
+  - No secret was set. The seven platform-injected `SUPABASE_*` entries show an `updated_at` at the deploy time, as after earlier deploys; the five manually managed secrets kept theirs.
+  - No Vercel action.
+- **Closure re-verification (2026-09-17, 08:32Z, read-only).**
+  - Ledger 83.
+  - Telemetry: 3 rows, matching the three events above field for field.
+  - Catalog, setter ACL and manual-preference count unchanged.
+  - All six functions at the versions and hashes above.
+  - The acceptance account holds exactly the one synthetic paper, with no Project, Tag or assignment.
+- **State after Phase 6.**
+  - Generation runtime: **live**.
+  - Telemetry collection: **live**.
+  - Google is the only reachable provider; paid providers and manual reasoning remain staged off, and no telemetry UI exists.
+  - The remaining rollout phases — paid-provider staging, credentials and canaries, then user enablement — each need separate authorization ([deployment.md](deployment.md) §6.6a).
