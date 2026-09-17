@@ -291,7 +291,7 @@ The runtime above is now provider-neutral by construction. Model selection decid
 - **No commercial change.** One successful AI invocation is still one PaperLume AI quota unit at every reasoning level. There are no weighted credits, and the Pro baseline, the Free cap, the quota RPCs and pricing are untouched. Usage and cost telemetry is `AI-MULTI-PROVIDER-001D` (§4.9d).
 - **Schema and frontend live; generation Edge not deployed.** Migration `20260912120000` was applied to Production on 2026-09-12, **before** the 001C pull request merged, as the rollout order requires ([deployment.md](deployment.md) §6.6). PR #280 then merged on 2026-09-13, and the automatic Vercel deployment put the 001C frontend — the Reasoning level control and account export v3 — live on `app.paperlume.app`. Neither step activated anything: every staging lock above is still in place, so the control shows Automatic and offers no manual choice. The generation Edge Functions were not deployed, so Production still runs the pre-001A `analyze-paper` v26 and `suggest-paper-organization` v10. Anthropic and OpenAI are registered in repository code only and are **not live providers**.
 
-### 4.9d Provider usage and cost-estimate telemetry — repository only; migration NOT applied (AI-MULTI-PROVIDER-001D, C42)
+### 4.9d Provider usage and cost-estimate telemetry — schema LIVE; generation runtime NOT deployed, collection NOT live (AI-MULTI-PROVIDER-001D, C42)
 
 The measurement foundation PaperLume needs before it spends money across heterogeneous providers. It is **accounting, not billing**, and it changes no commercial rule.
 
@@ -300,7 +300,7 @@ The measurement foundation PaperLume needs before it spends money across heterog
 - **Prices are versioned and snapshotted.** An append-only, effective-dated price book in code supplies rates; every estimated row stores the record id **and** the rates it used, so a later price change never re-prices history. Only the four routeable Gemini models are priced; Anthropic and OpenAI stay unpriced until their staging phase.
 - **Server-trusted.** No browser role can read or write the table; `service_role` holds `INSERT` alone. Rows cascade with the account and are not in the export archive.
 - **No commercial change.** One successful AI invocation is still one PaperLume quota unit; nothing reads telemetry to decide quota, entitlement, pricing or access. No dashboard or billing UI exists.
-- **Not live.** Migration `20260913120000` is not applied and the generation Edge runtime that writes it is not deployed ([deployment.md](deployment.md) §6.7).
+- **Schema live; collection not live.** Migration `20260913120000` has been applied to Production since 2026-09-13, and the Privacy Policy disclosure is published (effective September 17, 2026). The generation Edge runtime that writes the table is **not deployed**: Production still runs `analyze-paper` v26 and `suggest-paper-organization` v10, which write no telemetry, and the table held no rows at the 2026-09-17 read-only verification. Collection begins only with the separately authorized deploy of both generation functions ([deployment.md](deployment.md) §6.6a, §6.7).
 
 ### 4.10 Settings control — LIVE (AI-MODEL-SELECTION-001C)
 

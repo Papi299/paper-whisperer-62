@@ -3424,9 +3424,9 @@ Closes the chronology opened by the record above: that entry described a reviewe
 - **Deployment state.** **Generation Edge not deployed.** Production still runs the pre-001A `analyze-paper` v26 and `suggest-paper-organization` v10, unchanged in version and bundle hash across both the migration and the merge, so Gemini requests do not yet carry the 001C thinking level. Once authorized, the deploy must cover both generation functions together (§6.6a). No Anthropic/OpenAI secret is installed, no catalog row names either provider, and no live Anthropic/OpenAI request has been made.
 - **Closure (2026-09-13).** 001C repository/application work: **complete**. Production schema: **live**. Production frontend: **live**. Production generation Edge runtime: **still pre-001A**. Manual reasoning activation: **deferred**. Paid-provider rollout: **deferred**. The multi-provider rollout as a whole is not complete; Phase 3, `AI-MULTI-PROVIDER-001D`, is next ([deployment.md](deployment.md) §6.6a).
 
-## 2026-09-13 — AI-MULTI-PROVIDER-001D: provider usage, token and cost-estimate telemetry foundation (`20260913120000`) — **implemented; Production migration NOT applied; generation Edge NOT deployed**
+## 2026-09-13 — AI-MULTI-PROVIDER-001D: provider usage, token and cost-estimate telemetry foundation (`20260913120000`) — **merged; schema LIVE (2026-09-13); Privacy Policy disclosure LIVE (effective 2026-09-17); generation Edge NOT deployed; telemetry collection NOT live**
 
-Decision C42. Repository implementation only; no Production mutation of any kind.
+Decision C42. The implementation itself made no Production mutation of any kind. The migration's application and the Privacy Policy publication recorded below were separate, authorized steps.
 
 - **Schema.** `20260913120000_add_ai_provider_usage_telemetry.sql` adds `public.ai_provider_usage_events`: one content-free row per AI operation that reached a provider. RLS enabled and forced, **no policy**; `PUBLIC`/`anon`/`authenticated` hold nothing and `service_role` holds `INSERT` only (REVOKE by role first, then the grant, with an allowlist verify block). `user_id` cascades from `auth.users`. Two indexes: `(occurred_at)` and `(user_id, occurred_at)`. CHECK constraints enforce the vocabulary, identifier-shaped provider/model strings, unknown-is-not-zero, disjoint input subsets, reasoning ⊆ output, the estimate/record/rate consistency, a price record that names the row's own model, and an exact `numeric` re-proof of the amount from the row's tokens and rates. No function, sequence, trigger, catalog row or backfill.
 - **Runtime.**
@@ -3439,4 +3439,36 @@ Decision C42. Repository implementation only; no Production mutation of any kind
 - **Suite 015 robustness.** The first relation added to the ACL matrix after the parity lane's `20260904120000` baseline exposed a latent abort: the per-table assertions cast each classified name with `::regclass`, which raises for a table that does not exist yet at that baseline, so NC1 aborted instead of failing on its expected assertions. Those assertions now resolve names with `to_regclass`, and both privilege helpers report a missing relation as `<missing relation>`, so it fails ACL-C1/C2/F1 by name. ACL-A1's inventory check is unchanged, so nothing can pass vacuously.
 - **Client.** `src/integrations/supabase/types.ts` regenerated (`--local --schema public`, +99 lines, the new table only). The account-export registry excludes the table (server-written accounting, unreadable by the client).
 - **Tests.** New Vitest suites `aiUsage`-reader/adapter (`aiProviderUsage.test.ts`), `aiCostEstimate`, `aiPriceBook`, `aiUsageTelemetry`, and `analyze-paper/__tests__/usageTelemetry.test.ts`; the suggest handler suite gains telemetry, failure-isolation, pre-provider and privacy cases; adapter suites now pin `usage` on every result. New pgTAP suite `017_ai_provider_usage_telemetry` (grants, forgery and read attempts per role, constraints); suites `008` (cascade + blast radius) and `015` (matrix row) extended. A clean local replay from zero passed every suite, including the hosted-parity lane.
-- **Deployment state.** Production ledger unchanged at 82 rows (latest `20260912120000`); Production generation Edge still pre-001A. Applying `20260913120000` must precede the generation Edge deploy, and the public Privacy Policy needs owner review before telemetry is live ([deployment.md](deployment.md) §6.7).
+- **Deployment state at implementation (2026-09-13).** The Production ledger was 82 rows (latest `20260912120000`), and Production generation Edge was pre-001A. Applying `20260913120000` had to precede the generation Edge deploy, and the public Privacy Policy needed owner review before telemetry could be live ([deployment.md](deployment.md) §6.7).
+- **Application merge — 2026-09-13.** PR #282 merged at 20:33:47Z as `96777816a74fe59e1bc72d6fc7ed84cc1220bb1a`.
+- **Production schema phase — applied 2026-09-13.** One `supabase db push --linked` ran from that `main` commit, with no repair, no `--include-all` and no hand-run SQL. The operator record shows:
+  - a read-only preflight at 21:23:22Z that found the ledger at 82 rows with `20260913120000` absent;
+  - one push from 21:23:22Z to 21:23:35Z that exited 0.
+
+  `supabase_migrations.schema_migrations` stores no applied-at time, and `track_commit_timestamp` is off. The application window therefore comes from that operator record, not from the database.
+- **Independent read-only re-verification — 2026-09-17, 03:17:59Z** (`SET TRANSACTION READ ONLY`, `transaction_read_only = on` at both ends):
+  - **Ledger 83 rows**, latest `20260913120000` (previous `20260912120000`), present **exactly once**, name `add_ai_provider_usage_telemetry`, 20 statements.
+  - `public.ai_provider_usage_events` is an ordinary table owned by `postgres`.
+    - RLS is enabled and forced, with **0 policies**.
+    - `relacl` is `{postgres=arwdDxtm/postgres,service_role=a/postgres}`, with no column-level ACL.
+    - `anon` and `authenticated` hold none of `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`TRUNCATE`, and `service_role` holds `INSERT` only.
+    - `user_id` → `auth.users(id)` is `ON DELETE CASCADE`.
+    - The table holds **0 rows** (`n_tup_ins` 0).
+  - **Unchanged:**
+    - The catalog is still four `google` rows (Gemini 3.5–3.8 Flash), with no non-Google row and `reasoning_selectable = true` on none. Its latest `updated_at` is still 001C's `2026-09-12T21:50:09.898Z`.
+    - `set_current_user_ai_reasoning` is `{postgres=X/postgres}` and not executable by `authenticated`.
+    - No preference row holds a manual reasoning level.
+    - Edge is still `analyze-paper` v26 and `suggest-paper-organization` v10, last updated 2026-09-02.
+- **Privacy Policy publication — effective September 17, 2026.**
+  - **Merge:** PR #283 carries the owner-approved amendment: AI usage records (§2), purpose (§5), account-lifetime retention (§13), and export exclusion with access on request "Subject to applicable law" (§15). It merged on 2026-09-16 at 22:47:20Z (01:47 on September 17 in Israel) as the regular two-parent merge `24591dfde411a2904ea462813b74d907c6fe3383`, with parents `96777816…` and `c92924ba…` and a tree identical to the approved head. Merged-main Validate, DB Tests and Extension passed.
+  - **Deployment:** the automatic Vercel Production deployment of that commit (`dpl_EQEajqH4FYf1N1HgLoPgp7YYWjNJ`) reached READY, and `app.paperlume.app` points to it.
+  - **Live check:** signed out, `/privacy` rendered the new effective date, the approved §2/§5/§13/§15 wording, all twenty sections, and §4 exactly as approved. A second read-only check on 2026-09-17 matched.
+  - **Effect on data:** the publication changed no Production data.
+- **Closure (2026-09-17).**
+  - Repository implementation: **complete**.
+  - Production telemetry schema: **live**.
+  - Privacy Policy disclosure: **live**.
+  - Production generation Edge: **still pre-001A**, so **telemetry collection is not live** and the table holds no events.
+  - Paid providers and manual reasoning: **staged off**.
+  - Telemetry UI: **none**.
+  - **Next:** deploy both generation functions together, followed by a bounded Production telemetry canary ([deployment.md](deployment.md) §6.6a).

@@ -1524,18 +1524,21 @@ Two further limits belong to the acceptance itself:
 
 ## 29. Addendum — 2026-09-13 — `AI-MULTI-PROVIDER-001D` provider-usage telemetry
 
-**Scope.** Records a new **repository capability** and keeps it apart from **deployed Production behaviour**, which this addendum does not change. §8, §9, §10, §12 and §13 are preserved as written; this section amends them only where stated. Decision C42 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+**Scope.** Records a new **repository capability** and keeps it apart from **deployed Production behaviour**. §8, §9, §10, §12 and §13 are preserved as written; this section amends them only where stated. Decision C42 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority. **Updated 2026-09-17** to record two Production facts: the telemetry schema is applied, and the public Privacy Policy disclosure is published. The generation runtime that writes telemetry is still not deployed, so deployed Production still records no AI usage event.
 
-### 29.1 Repository capability versus Production
+### 29.1 Repository, Production database and Production generation runtime
 
-| | Repository `main` after 001D | Production today |
-|---|---|---|
-| Table `ai_provider_usage_events` | Defined by migration `20260913120000` | **Does not exist** — migration not applied |
-| Telemetry writes | `analyze-paper` and `suggest-paper-organization` write one event per provider call | **None** — Production runs the pre-001A generation runtime |
-| Elevated key in the generation functions | Used for that one INSERT | **Not used** |
-| Public Privacy Policy | Unchanged | Unchanged |
+| | Repository `main` | Production database and public policy | Production generation runtime |
+|---|---|---|---|
+| Table `ai_provider_usage_events` | Defined by migration `20260913120000` | **Exists**, applied 2026-09-13. RLS enabled and forced, no policy, no privilege for `PUBLIC`/`anon`/`authenticated`, `service_role` `INSERT` only | — |
+| Telemetry writes | `analyze-paper` and `suggest-paper-organization` write one event per provider call | **0 rows** at the 2026-09-17 verification | **None** — Production runs the pre-001A `analyze-paper` v26 and `suggest-paper-organization` v10 |
+| Elevated key in the generation functions | Used for that one INSERT | — | **Not used** |
+| Public Privacy Policy | Amended by PR #283 (merge `24591dfd`) | **Live, effective September 17, 2026:** AI usage records (§2), their purpose (§5), account-lifetime retention (§13), export exclusion and access on request (§15) | — |
 
-**Class: VERIFIED** (repository source; Production state verified read-only on 2026-09-13: ledger 82 rows, no telemetry-like relation in any schema).
+**Class: VERIFIED.**
+- **Sources:** the repository source; a read-only Production check on 2026-09-17 inside `SET TRANSACTION READ ONLY`; and a signed-out read of the live `https://app.paperlume.app/privacy`.
+- **What the Production check found:** ledger 83 rows with `20260913120000` present exactly once, the table empty, ACL `{postgres=arwdDxtm/postgres,service_role=a/postgres}`, Edge v26/v10.
+- **The earlier snapshot this table replaces:** when this addendum was first written (2026-09-13, before the migration was applied), Production held 82 ledger rows, no telemetry-like relation in any schema, and the unamended policy.
 
 ### 29.2 What an event stores
 
@@ -1553,17 +1556,19 @@ No title, abstract, keywords, study type, statistical methods, notes or other pa
 
 ### 29.5 Retention, deletion and export
 
-- **Retention:** no period is defined and no purge exists. An event lives for the life of the account (§13 applies: "retained for the life of the account; deleted with it").
+- **Retention:** no period is defined and no purge exists. An event lives for the life of the account (§13 applies: "retained for the life of the account; deleted with it"). The published Privacy Policy states this in its §13.
 - **Account deletion:** `user_id` cascades from `auth.users`, so a hard deletion removes every event — no pseudonymous usage trace remains. Pinned by suite `008`. Keeping telemetry beyond deletion would be an owner/privacy decision, and none has been made.
-- **Export:** events are **not** in the account-export archive. They are server-written operational accounting that the client cannot read (excluded on the same ground as `usage_counters`). **OWNER / LEGAL INPUT REQUIRED:** whether a data-subject access or portability request must include them.
+- **Export:** events are **not** in the account-export archive. They are server-written operational accounting that the client cannot read (excluded on the same ground as `usage_counters`). **Owner decision, published in the Privacy Policy (§15, effective September 17, 2026):** the records are not included in the account-data export, and, subject to applicable law, a user may contact PaperLume to request access to information about them contained in those records. Access is by request, not through the in-app export.
 
-### 29.6 Required before this is live in Production
+### 29.6 Required before this is live in Production — status (2026-09-17)
 
-1. **Owner (and, where required, legal) review of the public Privacy Policy** ([`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx)) before the generation runtime that writes telemetry is deployed. The policy wording is owner-approved legal text and is deliberately **not** edited by this change. The facts a revised policy would need to reflect are §29.2–§29.5: an internal per-request AI usage record (provider, model, token counts, a cost estimate) kept in Supabase, linked to the account, not shared with third parties, and deleted with the account.
-2. The separately authorized migration and deployment steps in [deployment.md](deployment.md) §6.7 and §6.6a.
+1. **Owner review of the public Privacy Policy — COMPLETE.** The 001D implementation deliberately left [`src/pages/Privacy.tsx`](../src/pages/Privacy.tsx) untouched, because it is owner-approved legal text. The facts §29.2–§29.5 describe were then disclosed in a separate, owner-approved amendment (PR #283, merge `24591dfd`), published with effective date **September 17, 2026** and verified live signed out.
+2. **Migration `20260913120000` — COMPLETE:** applied to Production on 2026-09-13 ([deployment.md](deployment.md) §6.7).
+3. **Deployment of the generation runtime that writes telemetry — PENDING**, separately authorized: both generation functions together, followed by a bounded Production telemetry canary ([deployment.md](deployment.md) §6.6a).
 
 ### 29.7 What this addendum does NOT claim
 
-- ❌ "Production records AI usage" — **false** until §29.6 is complete.
+- ❌ "Production records AI usage" — **false** until §29.6 item 3 is complete.
+- ❌ "the telemetry table's presence in Production means events are being collected" — **false.** The table exists, but nothing deployed writes it.
 - ❌ "the cost estimate is what PaperLume is charged" — **false.** It is a list-price estimate; the Google project is on the Gemini Free Tier (C29).
 - ❌ "telemetry covers requests that never reached a provider" — **false.** Refusals before a provider call record nothing.
