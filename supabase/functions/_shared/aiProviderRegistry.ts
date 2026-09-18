@@ -34,15 +34,19 @@
 //
 // Registration is a statement about PROTOCOLS, and it is still not a route to
 // anything. Three separate things must also be true before a request can reach
-// a non-Google provider, and none of them is true today:
+// a non-Google provider:
 //
-//   * `ai_model_catalog` must hold an enabled row naming that provider — there
-//     is no `anthropic/*` or `openai/*` row, and adding one is a reviewed
-//     migration;
+//   * the Edge Functions must be deployed — since the AI-MULTI-PROVIDER-001D
+//     Phase 6 rollout (2026-09-17) they are: the deployed `analyze-paper` and
+//     `suggest-paper-organization` bundles contain this registry and both
+//     adapters. This is the one of the three that is now satisfied;
+//   * `ai_model_catalog` must hold an enabled row naming that provider —
+//     AI-MULTI-PROVIDER-001E stages `anthropic/claude-sonnet-5` and
+//     `openai/gpt-5.6-terra` as `enabled` but NOT `selectable`, and that
+//     migration is applied to Production only as a separate rollout step;
 //   * that provider's credential must exist in the Edge environment — see
-//     `./aiProviderCredentials.ts`; neither secret is installed;
-//   * the Edge Functions must be deployed — Production still runs the pre-001A
-//     runtime.
+//     `./aiProviderCredentials.ts`; neither secret is installed, so both
+//     providers fail closed even once their catalog rows exist.
 //
 // An unimplemented provider is still absent rather than stubbed: there is no
 // placeholder that throws "not implemented", because a stub is something a

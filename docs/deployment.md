@@ -1223,3 +1223,87 @@ Rotation takes effect on the next function invocation **because both in-memory c
 - **Minute usage combines only synchronized buckets.** Each contributing series' newest complete 60-second bucket is grouped by its `interval.endTime`; the value shown sums **only the newest bucket-end timestamp that every contributing series shares**. Data from different minute intervals is never combined (a 12:03–12:04 value is never added to a 12:04–12:05 value), and an absent/forming series is never treated as zero. When the series share no common complete bucket, usage/exceeded is null (never fabricated), and `remaining` stays null unless both usage and limit are known for a reliable window.
 - **Pagination never silently truncates.** Each metric's pages are followed to completion. If the safety page bound is reached while a `nextPageToken` still remains, the collector fails that collection rather than presenting partial data as complete — it becomes the bounded `unavailable` result below (the token and raw body are never exposed).
 - **Fail-soft:** missing credentials, a disabled API, an HTTP failure, a timeout, or pagination overflow yield a bounded `status: "unavailable"` result (HTTP 200) with no raw Google body — the panel is observational only and never blocks user analysis. Values are approximate and may lag; do not present them as real-time or guaranteed.
+
+---
+
+## 14. Paid provider activation (AI-MULTI-PROVIDER-001E) — NOT YET AUTHORIZED
+
+**Current state (2026-09-17): nothing below has been done.** Production's `ai_model_catalog` holds four Google rows; no `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` exists; no request has been sent to Anthropic or OpenAI.
+
+The deployed generation runtime already **contains** both adapters (Phase 6), so this is not an adapter rollout. It is a credential + catalog rollout, and each step below is separately authorized.
+
+### 14.1 Ordered rollout
+
+1. Independent exact-head review of the Draft PR.
+2. **Owner approval of the exact Privacy Policy wording**, and correction of the effective date if publication slips past the drafted date (§14.5).
+3. Merge. The Vercel deploy publishes the amended policy.
+4. Apply migration `20260917201856` (`supabase db push --linked`). Verify six rows, both paid rows `selectable = false`.
+5. Install `ANTHROPIC_API_KEY` (`supabase secrets set`, value read from the operator environment, never echoed).
+6. Install `OPENAI_API_KEY`, the same way.
+7. **Deploy both generation functions together** from the exact accepted merge (§6.6a). Required even though the adapters are already deployed: the new **price records** live in the bundle, and without them every paid estimate would be `unpriced`.
+8. Phase 7 Claude canaries (§14.2).
+9. Phase 7 OpenAI canaries.
+10. Inspect routing, quota, telemetry, usage and cost.
+11. Phase 8: create and apply the selectable-activation migration (§14.4).
+12. Verify Settings discovery and one live user-selected invocation per provider.
+
+> Secrets note: one `supabase secrets set` bumps **every** Edge Function's version with no redeploy. Record versions before and after, and gate any "did a secret change?" check on the manual subset rather than an all-rows fingerprint.
+
+### 14.2 Phase 7 canary design — routing a non-selectable model
+
+**The constraint.** Both staged rows are `selectable = false` on purpose (C43), so `set_current_user_ai_model` refuses them and Settings never lists them. A canary must therefore route the model **without** making it selectable.
+
+**The mechanism.** `enabled = true` means the resolver honours a saved preference; `selectable = false` only stops the **setter**. So an operator writes the preference row directly, as the `postgres` role, for the **dedicated acceptance account only**:
+
+```sql
+-- Capture and restore. Run inside one transaction per step.
+-- The account is identified from PAPERLUME_PROD_ACCEPT_* in the operator
+-- environment; its email and UUID are never printed into a report or doc.
+BEGIN;
+  -- 1. capture the existing preference (may be no row at all)
+  SELECT preferred_model_id, preferred_reasoning_level
+    FROM public.user_ai_preferences WHERE user_id = :acceptance_uid;
+  -- 2. point it at the staged model
+  INSERT INTO public.user_ai_preferences (user_id, preferred_model_id)
+  VALUES (:acceptance_uid, 'anthropic/claude-sonnet-5')
+  ON CONFLICT (user_id) DO UPDATE SET preferred_model_id = EXCLUDED.preferred_model_id;
+COMMIT;
+```
+
+**Why this is the safest bounded mechanism, and not a shortcut.** It adds no code, no flag and no second authorization surface. It touches exactly one row belonging to exactly one account. It leaves `selectable = false` untouched, so **no other user's reachable set changes at any point** — which a temporary `selectable = true` flip would not achieve, since a preference saved during the window would survive the revert.
+
+**Restore.** Replay the captured value, or `DELETE` the row if there was none. Verify the restore by re-reading. Do this even if a canary fails.
+
+**Per-provider canary checklist** (run on the acceptance account, one operation at a time):
+
+- exactly **one** provider call per operation (`attempts = 1` in telemetry; no retry on Anthropic by design);
+- telemetry row records the expected `provider` and `provider_model`;
+- reasoning source and level match the catalog row (Analyze `off`/`none`, Suggest `medium`);
+- usage dimensions present and internally consistent (subsets ≤ parents);
+- cost estimate is `estimated` with the expected record id — **not** `unpriced`, which would mean step 7 was skipped;
+- quota: one unit consumed; refunded on an induced failure;
+- Suggest mutates **no** library data (it returns suggestions; the user applies them);
+- **no content** appears in telemetry or logs;
+- the acceptance account's canary paper is not deleted.
+
+### 14.3 What a canary must never do
+
+Flip `selectable`; grant `set_current_user_ai_reasoning`; touch a non-acceptance account; print a secret, the acceptance email or its UUID; delete the durable canary paper.
+
+### 14.4 Phase 8 — the final activation mutation
+
+After both canaries pass, one migration sets exactly this and nothing else:
+
+```sql
+UPDATE public.ai_model_catalog
+   SET selectable = true
+ WHERE id IN ('anthropic/claude-sonnet-5', 'openai/gpt-5.6-terra');
+```
+
+It must **not** change `enabled`, reasoning metadata, `reasoning_selectable`, the system default, or any grant. Its verify block should assert both rows are now selectable, that `reasoning_selectable` is still false everywhere, that the four Google rows are untouched, and that no preference or entitlement row was written.
+
+This migration is **deliberately not committed by 001E**, so it cannot be applied by a `db push` that runs before the canaries.
+
+### 14.5 Privacy Policy effective date
+
+The amendment is drafted with effective date **September 17, 2026**. If it is published later, that date is **false on publication**. Advance it to the real publication date — and update `EFFECTIVE_DATE` in `src/pages/__tests__/Privacy.test.tsx`, which pins it — before merging.

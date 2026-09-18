@@ -148,13 +148,18 @@ SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE reasoning_selectable),
   0, 'no catalog row offers manual reasoning selection — 001C activates nothing');
 
--- Metadata, never a model: no Sonnet, no Terra, nothing non-Google.
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE provider <> 'google'),
-  0, 'the catalog holds no non-Google row');
+-- 001C seeded no non-Google model; AI-MULTI-PROVIDER-001E later staged exactly
+-- two. What 001C still owns is the SAFETY half of that claim, and it is
+-- asserted here unchanged in force: whatever non-Google rows exist, none of
+-- them may offer manual reasoning. Suite 018 owns their full metadata.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
-            WHERE id ~ '^(anthropic|openai)/'
-               OR provider_model ~* '(claude|gpt|terra|sonnet)'),
-  0, 'neither claude-sonnet-5 nor gpt-5.6-terra was seeded');
+            WHERE provider <> 'google'
+              AND id NOT IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
+  0, 'the catalog holds no non-Google row beyond the two staged paid models');
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE provider <> 'google'
+              AND reasoning_selectable),
+  0, 'no staged paid model offers manual reasoning selection');
 
 -- The per-model fact Google publishes: 3.7 and 3.8 reject `minimal`.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
@@ -214,7 +219,7 @@ SELECT is(pg_temp.errcode_as('postgres','',
              ARRAY['off','low','medium','high','xhigh','max'],'off','medium',false)$q$),
   '00000', 'a well-formed future-provider row is accepted (fixture, deleted next)');
 DELETE FROM public.ai_model_catalog WHERE id = 'anthropic/suite-016-fixture';
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 4,
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 6,
   'the positive-control fixture left nothing behind');
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -302,8 +307,13 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-
   'not_entitled:false', 'a Free user is still refused, before the catalog is consulted');
 SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000002'), 'NO_ROW',
   'the refused Free user wrote nothing');
+-- AI-MULTI-PROVIDER-001E seeded anthropic/claude-sonnet-5, which this
+-- assertion previously used as its example of an absent id. The claim is
+-- unchanged — an id the catalog does not hold is refused as `unknown_model` —
+-- so only the example moved to one that really is absent. The setter's refusal
+-- of the now-seeded, non-selectable Sonnet row is asserted in suite 018.
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
-  $q$SELECT reason || ':' || reasoning_reset::text FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5')$q$),
+  $q$SELECT reason || ':' || reasoning_reset::text FROM public.set_current_user_ai_model('anthropic/claude-not-a-real-model')$q$),
   'unknown_model:false', 'an unseeded future model is refused as unknown');
 SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000001'),
   'google/gemini-3.5-flash:high', 'a refused model switch left the saved pair untouched');

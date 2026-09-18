@@ -201,8 +201,8 @@ const Privacy = () => {
             <P>You may upload supported files associated with papers.</P>
             <P>Attachments are stored in private storage associated with your account.</P>
             <P>
-              PaperLume's current AI features do <strong>not</strong> send uploaded attachment files
-              to Google Gemini.
+              PaperLume's AI features do <strong>not</strong> send uploaded attachment files to any
+              AI provider.
             </P>
 
             <Subheading>AI usage records</Subheading>
@@ -355,11 +355,26 @@ const Privacy = () => {
 
           <Section
             id="gemini-free-tier"
-            title="6. Google Gemini AI — important Free-tier disclosure"
+            title="6. AI providers — what is sent, and to whom"
           >
             <P>
-              PaperLume currently uses the{" "}
-              <strong>Free / Unpaid tier of the Google Gemini API</strong> for AI-assisted features.
+              PaperLume's AI-assisted features are provided by third-party AI providers.{" "}
+              <strong>
+                Which provider receives your content depends on which AI model is selected for the
+                request.
+              </strong>{" "}
+              PaperLume controls which models are available, and the available models may change.
+            </P>
+            <P>
+              PaperLume supports models from <strong>Google (Gemini)</strong>,{" "}
+              <strong>Anthropic (Claude)</strong>, and <strong>OpenAI</strong>. The data-processing
+              terms that apply to a request are the terms of the provider whose model was selected,
+              and they are <strong>not the same across providers</strong>. Each provider is
+              described separately below.
+            </P>
+            <P>
+              What PaperLume sends does not change when the model changes. The two AI-assisted
+              features send the same fields to whichever provider is selected:
             </P>
 
             <Subheading>Paper analysis</Subheading>
@@ -368,7 +383,7 @@ const Privacy = () => {
               <li>title; and</li>
               <li>abstract</li>
             </Bullets>
-            <P>to Google Gemini.</P>
+            <P>to the selected AI provider.</P>
 
             <Subheading>Project and Tag suggestions</Subheading>
             <P>When you request AI-assisted organization suggestions, PaperLume may send:</P>
@@ -386,8 +401,19 @@ const Privacy = () => {
               authentication credentials, uploaded attachment files, internal user ID, or unrelated
               papers.
             </P>
+            <P>
+              <strong>
+                Selecting a Google, Anthropic, or OpenAI model causes the research content described
+                above to be transmitted to that provider.
+              </strong>{" "}
+              PaperLume does not send your uploaded attachment files to any AI provider.
+            </P>
 
-            <Subheading>How Google may use Free-tier Gemini data</Subheading>
+            <Subheading>Google Gemini — how Google may use Free-tier data</Subheading>
+            <P>
+              PaperLume uses the{" "}
+              <strong>Free / Unpaid tier of the Google Gemini API</strong> for Gemini models.
+            </P>
             <P>
               PaperLume currently uses Google's <strong>Unpaid Services</strong>, not Gemini's paid
               API tier.
@@ -432,6 +458,67 @@ const Privacy = () => {
             <P>
               Accordingly, PaperLume's current Free-tier Gemini functionality is{" "}
               <strong>not intended for users in those regions</strong>.
+            </P>
+
+            <Subheading>Anthropic (Claude) — how Anthropic may use API data</Subheading>
+            <P>
+              When a Claude model is selected, PaperLume sends the request to the{" "}
+              <strong>Anthropic API</strong> as a commercial API customer. Anthropic's commercial
+              terms are <strong>not the same</strong> as Google's Free-tier terms, and the Free-tier
+              warning above does not describe Anthropic.
+            </P>
+            <P>
+              Under Anthropic's current commercial terms, Anthropic states that it{" "}
+              <strong>may not train its models on customer content</strong> submitted through its
+              commercial services.
+            </P>
+            <P>
+              Anthropic states that it automatically deletes API inputs and outputs within{" "}
+              <strong>30 days</strong> of receipt or generation, except where a longer retention
+              period has been separately agreed, where a feature under the customer's own control
+              retains data for longer, or where Anthropic needs to retain data longer to enforce its
+              usage policies.
+            </P>
+            <P>
+              This is a stated deletion practice with exceptions. It is{" "}
+              <strong>not a zero-retention guarantee</strong>, and PaperLume does not claim one.
+            </P>
+
+            <Subheading>OpenAI — how OpenAI may use API data</Subheading>
+            <P>
+              When an OpenAI model is selected, PaperLume sends the request to the{" "}
+              <strong>OpenAI API</strong>. PaperLume does{" "}
+              <strong>not</strong> use the consumer ChatGPT product, and consumer ChatGPT terms do
+              not apply to these requests.
+            </P>
+            <P>
+              PaperLume sends stateless requests to OpenAI's Responses API. Each request is
+              self-contained: PaperLume does not send prior requests, conversation history, or
+              references to earlier responses.
+            </P>
+            <P>
+              PaperLume explicitly sets <code>store: false</code> on every request, which instructs
+              OpenAI not to retain the response object for later retrieval.
+            </P>
+            <P>
+              Under OpenAI's current API terms, data submitted through the API is{" "}
+              <strong>not used to train or improve OpenAI models by default</strong>, unless the API
+              organization explicitly opts in to sharing data. PaperLume has not opted in.
+            </P>
+            <P>
+              <strong>
+                Setting <code>store: false</code> is not the same as a blanket zero-retention
+                promise.
+              </strong>{" "}
+              OpenAI states that abuse-monitoring logs may still be generated for API usage and
+              retained for up to 30 days, unless longer retention is required by law, and that
+              excluding content from those logs requires a separate Zero Data Retention arrangement
+              that OpenAI must approve in advance.
+            </P>
+            <P>
+              PaperLume does <strong>not</strong> claim to have a Zero Data Retention arrangement
+              with OpenAI. Unless and until this Privacy Policy says otherwise, you should assume
+              that ordinary OpenAI abuse-monitoring retention applies.
             </P>
           </Section>
 
@@ -581,7 +668,11 @@ const Privacy = () => {
               <li>Vercel operates infrastructure in the United States and other locations; and</li>
               <li>
                 Google may process Gemini-related information in locations where Google and its
-                service providers operate.
+                service providers operate; and
+              </li>
+              <li>
+                Anthropic and OpenAI may process AI request information in locations where they and
+                their service providers operate, including the United States.
               </li>
             </Bullets>
             <P>Your information may therefore be processed outside Israel.</P>
@@ -625,8 +716,12 @@ const Privacy = () => {
               </li>
             </Bullets>
             <P>
-              Information submitted through Gemini's current Free tier may be retained and used by
-              Google under the Free-tier terms described in Section 6.
+              Information submitted to an AI provider is retained by that provider under its own
+              terms, which differ by provider and are described in Section 6. In particular,
+              information submitted through Gemini's current Free tier may be retained and used by
+              Google under the Free-tier terms described there, while Anthropic and OpenAI state
+              shorter default retention periods for API data, subject to the exceptions described in
+              that section.
             </P>
           </Section>
 

@@ -386,3 +386,244 @@ describe("free tier is not a price", () => {
     expect(e.prices?.recordId).toBe("google/gemini-3.5-flash@2026-09-13");
   });
 });
+
+describe("the staged paid providers — AI-MULTI-PROVIDER-001E", () => {
+  it("selects the Claude Sonnet 5 record and prices it exactly", () => {
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(3000),
+        outputTokens: reportedTokens(500),
+        providerTotalTokens: AI_USAGE_NOT_APPLICABLE,
+      }),
+    });
+    // 3,000 x $2.00/M + 500 x $10.00/M = $0.006 + $0.005
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.011000000000000" });
+    expect(e.prices?.recordId).toBe("anthropic/claude-sonnet-5@2026-09-17");
+    expect(e.prices?.outputUsdPerMTok).toBe("10.00");
+  });
+
+  it("selects the GPT-5.6 Terra record and prices it exactly", () => {
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-5.6-terra",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(3000),
+        outputTokens: reportedTokens(500),
+      }),
+    });
+    // 3,000 x $2.00/M + 500 x $12.00/M = $0.006 + $0.006
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.012000000000000" });
+    expect(e.prices?.recordId).toBe("openai/gpt-5.6-terra@2026-09-17");
+    // Same input rate, different output rate: the two records are not one
+    // record wearing two names.
+    expect(e.prices?.outputUsdPerMTok).toBe("12.00");
+  });
+
+  it("refuses to price ANY positive Anthropic cache write, at any rate", () => {
+    // The ambiguity this record exists to refuse. Anthropic's 5-minute write is
+    // $2.50/MTok and its 1-hour write $4.00/MTok; `cache_creation_input_tokens`
+    // is the sum of both, so a single number cannot be priced without knowing a
+    // split the response does not always report. One token is enough.
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(3000),
+        cacheWriteInputTokens: reportedTokens(1),
+        outputTokens: reportedTokens(500),
+        providerTotalTokens: AI_USAGE_NOT_APPLICABLE,
+      }),
+    });
+    expect(e.status).toBe("unpriced");
+    expect(e.amountUsd).toBeNull();
+    expect(e.prices).toBeNull();
+  });
+
+  it("does not let a missing cache-creation breakdown become a confident estimate", () => {
+    // The specific trap: `readAnthropicUnmodeledUsage` raises `unmodeledUsage`
+    // from the per-TTL `cache_creation` object, which Anthropic only sometimes
+    // sends. A response with cache-write tokens but no breakdown therefore
+    // arrives here with unmodeled=false — and must STILL not be priced, which
+    // is what the null rate guarantees and a $2.50 rate would not.
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5",
+      at: AT,
+      attempts: 1,
+      usage: usage(
+        {
+          inputTokens: reportedTokens(5000),
+          cacheWriteInputTokens: reportedTokens(2000),
+          outputTokens: reportedTokens(400),
+          providerTotalTokens: AI_USAGE_NOT_APPLICABLE,
+        },
+        false,
+      ),
+    });
+    expect(e.status).toBe("unpriced");
+  });
+
+  it("prices an Anthropic cache READ, which has only one rate", () => {
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(3000),
+        cachedInputTokens: reportedTokens(1000),
+        outputTokens: reportedTokens(500),
+        providerTotalTokens: AI_USAGE_NOT_APPLICABLE,
+      }),
+    });
+    // 2,000 uncached x $2.00/M + 1,000 cached x $0.20/M + 500 x $10.00/M
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.009200000000000" });
+  });
+
+  it("prices an OpenAI cache write, which has exactly one rate", () => {
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-5.6-terra",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(4000),
+        cachedInputTokens: reportedTokens(1000),
+        cacheWriteInputTokens: reportedTokens(1000),
+        outputTokens: reportedTokens(200),
+      }),
+    });
+    // 2,000 uncached x $2.00/M + 1,000 x $0.20/M + 1,000 x $2.50/M + 200 x $12.00/M
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.009100000000000" });
+  });
+
+  it("leaves a long-context Terra request unpriced rather than using the short-context rate", () => {
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-5.6-terra",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(272_001),
+        outputTokens: reportedTokens(500),
+      }),
+    });
+    expect(e.status).toBe("unpriced");
+    expect(e.amountUsd).toBeNull();
+  });
+
+  it("prices a Terra request of exactly the threshold — the tier boundary is inclusive", () => {
+    // `maxInputTokens` is compared with `>`, matching OpenAI's "exceeding 272K".
+    // Asserted as a pair with the test above so neither an off-by-one that
+    // over-prices nor one that under-serves can pass.
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-5.6-terra",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(272_000),
+        outputTokens: reportedTokens(0),
+      }),
+    });
+    expect(e.status).toBe("estimated");
+    expect(e.amountUsd).toBe("0.544000000000000");
+  });
+
+  it("never adds reasoning tokens to output for either paid model", () => {
+    // Reasoning is a SUBSET of output on both providers, and both records price
+    // output once. The same request priced with and without a reported
+    // reasoning count must cost exactly the same.
+    for (const [provider, model] of [
+      ["anthropic", "claude-sonnet-5"],
+      ["openai", "gpt-5.6-terra"],
+    ]) {
+      const base = {
+        provider,
+        providerModel: model,
+        at: AT,
+        attempts: 1,
+      };
+      const without = estimateAiListPriceCost({
+        ...base,
+        usage: usage({ inputTokens: reportedTokens(1000), outputTokens: reportedTokens(800) }),
+      });
+      const with_ = estimateAiListPriceCost({
+        ...base,
+        usage: usage({
+          inputTokens: reportedTokens(1000),
+          outputTokens: reportedTokens(800),
+          reasoningOutputTokens: reportedTokens(600),
+        }),
+      });
+      expect(without.status).toBe("estimated");
+      expect(with_.amountUsd).toBe(without.amountUsd);
+    }
+  });
+
+  it("degrades a paid request with unmodeled billable work to a lower bound", () => {
+    // An unpriceable dimension must never silently complete an estimate. With
+    // no cache write in play the arithmetic is exact, but `unmodeledUsage` says
+    // the true cost may be higher, so the status says so too.
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5",
+      at: AT,
+      attempts: 1,
+      usage: usage(
+        {
+          inputTokens: reportedTokens(3000),
+          outputTokens: reportedTokens(500),
+          providerTotalTokens: AI_USAGE_NOT_APPLICABLE,
+        },
+        true,
+      ),
+    });
+    expect(e.status).toBe("estimated_lower_bound");
+    expect(e.lowerBoundReasons).toContain("unmodeled_usage");
+    expect(e.amountUsd).toBe("0.011000000000000");
+  });
+
+  it("reports no usage as usage_unavailable for a paid model, never as zero", () => {
+    for (const [provider, model] of [
+      ["anthropic", "claude-sonnet-5"],
+      ["openai", "gpt-5.6-terra"],
+    ]) {
+      const e = estimateAiListPriceCost({
+        provider,
+        providerModel: model,
+        at: AT,
+        attempts: 1,
+        usage: AI_USAGE_NOT_RETURNED,
+      });
+      expect(e.status).toBe("usage_unavailable");
+      expect(e.amountUsd).toBeNull();
+    }
+  });
+
+  it("refuses an incomplete paid report rather than assuming an unreported dimension is zero", () => {
+    // OpenAI caches implicitly, so an omitted `cache_write_tokens` is genuinely
+    // unknown rather than genuinely none.
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-5.6-terra",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(3000),
+        cacheWriteInputTokens: AI_USAGE_UNREPORTED,
+        outputTokens: reportedTokens(500),
+      }),
+    });
+    expect(e.status).toBe("usage_incomplete");
+    expect(e.amountUsd).toBeNull();
+  });
+});

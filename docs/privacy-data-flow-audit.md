@@ -192,7 +192,7 @@ Model: the **system default** is resolved from the optional `GEMINI_MODEL` secre
 `AI-MULTI-PROVIDER-001B` (C40) also changes **nothing in this section's disclosure findings, and adds no recipient.** It is recorded here because it makes one clause of the paragraph above no longer literally true: repository code now contains a reviewed Anthropic adapter ([`_shared/anthropicAiProvider.ts`](../supabase/functions/_shared/anthropicAiProvider.ts), Claude Messages API) and a reviewed OpenAI adapter ([`_shared/openAiProvider.ts`](../supabase/functions/_shared/openAiProvider.ts), OpenAI Responses API), and each names its provider's endpoint. Three things need to be kept apart:
 
 - **Repository capability:** adapter code for both providers exists and is tested only with injected fakes.
-- **Runtime capability:** none. Neither adapter is registered, no shipping Edge Function imports either module, no Anthropic or OpenAI credential is set, and no catalog row names either provider. A database row still cannot make PaperLume send data to them.
+- **Runtime capability:** none *at 001B*. Neither adapter was registered, no shipping Edge Function imported either module, no credential was set, and no catalog row named either provider. *(Superseded: C41 registered both adapters, the 2026-09-17 Phase 6 deploy put both modules in the deployed generation bundles, and `AI-MULTI-PROVIDER-001E` stages a catalog row for each — see §30. Both remain unreachable because no credential is installed and neither row is `selectable`.)*
 - **Production data flow:** unchanged. At 001B, Production ran the pre-001A Google-only artifacts. **Google remains the only AI recipient, and PaperLume does not send data to Anthropic or OpenAI.** No request was sent to either provider during 001B.
 
 **Prospective data shape — FUTURE / NOT ACTIVE.** If a later, separately authorized initiative enables them, each adapter would receive the same provider-neutral prompt strings already sent to Google, and nothing more. For `analyze-paper` that is the title and abstract (§8.1). For `suggest-paper-organization` it is the allowlisted draft fields and the bounded Projects/Tags taxonomy described in its subsection below. Neither adapter sends a user id, email, paper id or any user-identifying metadata. The OpenAI adapter sends `store: false` on every request, because the Responses API otherwise stores responses by default. Enabling either provider would add a new recipient and a new transfer, which would need its own privacy review; this note does not pre-approve it.
@@ -1573,3 +1573,84 @@ No title, abstract, keywords, study type, statistical methods, notes or other pa
 - ❌ "every AI request is guaranteed a record" — **false.** A telemetry write that fails is logged (`usage_telemetry recorded=0`) and not retried, and it never fails or alters the user's response.
 - ❌ "the cost estimate is what PaperLume is charged" — **false.** It is a list-price estimate; the Google project is on the Gemini Free Tier (C29).
 - ❌ "telemetry covers requests that never reached a provider" — **false.** Refusals before a provider call record nothing.
+
+
+---
+
+## 30. Addendum — paid-provider activation review (AI-MULTI-PROVIDER-001E, 2026-09-17)
+
+**Status: REPOSITORY PREPARATION. No paid provider is reachable, and no request has been sent to Anthropic or OpenAI.**
+
+This section is the privacy review that must precede real paid-provider traffic. It was written against the **current source**, not against the prospective description in §8, and it re-verifies the payload boundary rather than assuming it.
+
+### 30.1 What changes, and what does not
+
+`AI-MULTI-PROVIDER-001E` adds one migration staging two `ai_model_catalog` rows — `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` — as `enabled = true, selectable = false`, plus list-price records for both models. It adds **no new data category, no new field, and no change to any request builder.**
+
+Three states, kept apart:
+
+- **Repository capability:** both adapters exist, are registered, are priced, and now have a staging migration.
+- **Runtime capability:** both adapters are in the **deployed** generation bundles (Phase 6, 2026-09-17). They are unreachable for two independent reasons: no `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` exists on any server, and neither staged row is `selectable`, so `set_current_user_ai_model` refuses it for every caller.
+- **Production data flow:** **unchanged. Google remains the only AI recipient.** The staging migration is not auto-applied; Production's catalog still holds four Google rows.
+
+### 30.2 Verified payload boundary — Analyze
+
+Verified in [`analyze-paper/prompt.ts`](../supabase/functions/analyze-paper/prompt.ts). The operation builds a **provider-neutral** `AiGenerationRequest`, so the payload is identical whichever provider is selected — there is no per-provider branch that could add a field.
+
+`userContent` is exactly `` `Title: ${title || "Unknown"}\n\nAbstract: ${abstract}` ``, plus the fixed `ANALYZE_SYSTEM_INSTRUCTION`.
+
+| | Value |
+|---|---|
+| **Provider receives** | the paper's title; the paper's abstract; a fixed system instruction |
+| **Provider does NOT receive** | email; Supabase user id; paper id; PMID or DOI (unless the user embedded one in the title or abstract); authors; journal; notes; attachments; Projects; Tags; keywords; plan or quota metadata; any other paper; any token |
+
+### 30.3 Verified payload boundary — Suggest
+
+Verified in [`suggest-paper-organization/prompt.ts`](../supabase/functions/suggest-paper-organization/prompt.ts). The payload is an allow-list built field by field, then `JSON.stringify`-ed — nothing is spread from a database row.
+
+| | Value |
+|---|---|
+| **Provider receives** | paper title; abstract (omitted when empty); keywords (omitted when empty); study type (omitted when empty); **all** Project names; Project descriptions where present; **all** Tag names; each Project/Tag's `alreadySelected` flag, carried on an **ephemeral ref** (`P1`, `T1`, …) |
+| **Provider does NOT receive** | database ids; email; Supabase user id; plan; quota state; attachments; notes; unrelated papers |
+
+The ref indirection is the mechanism, not a convention: real Project and Tag UUIDs stay in a server-side `refMap` and are never serialized. A provider sees `P1`, not a row id.
+
+### 30.4 Per-provider processing terms (first-party, read 2026-09-17)
+
+| | Anthropic (Claude API) | OpenAI (API) |
+|---|---|---|
+| Product | Commercial API, **not** a consumer product | OpenAI **API**, **not** consumer ChatGPT |
+| Training on customer content | Anthropic's commercial terms state it **may not train models on Customer Content** | **Not used to train by default**; requires explicit org opt-in, which PaperLume has not made |
+| Statelessness | One stateless Messages request; no `metadata`, no `user_id` | One stateless Responses request; adapter sets **`store: false`**; no `metadata`, `safety_identifier`, `user`, `conversation` or `previous_response_id` |
+| Retention | API inputs/outputs deleted within **30 days**, with exceptions (longer agreed retention, customer-controlled features, Usage Policy enforcement) | Abuse-monitoring logs retained **up to 30 days** unless longer retention is legally required |
+| Zero retention | Not claimed. The 30-day practice has exceptions and is **not** a zero-retention guarantee | **ZDR is NOT enabled.** It requires OpenAI's prior approval; PaperLume has none, so ordinary abuse-monitoring retention applies |
+| Prompt caching | PaperLume sends no `cache_control`; caching is opt-in | GPT-5.6 and later cache implicitly; PaperLume requests none |
+
+`store: false` is **not** a blanket zero-retention promise, and the published Privacy Policy says so explicitly. Conflating the two would be the most likely material misstatement in this area, which is why a test pins it.
+
+### 30.5 Findings
+
+- ✅ **No new data category.** Both paid providers receive exactly the fields Google already receives.
+- ✅ **No user-identifying metadata** reaches any provider on any path.
+- ✅ **No attachment** is sent to any AI provider, and the policy does not imply otherwise.
+- ✅ **The provider is a function of the selected model**, which the policy now states plainly.
+- ⚠️ **New recipients.** Anthropic and OpenAI become recipients of research content the moment a paid model is actually routed. That is a new transfer, disclosed in the amended Privacy Policy §6, and it is why the amendment must be published **before** the first paid request.
+- ⚠️ **Retention differs by provider**, and none of the three offers zero retention to PaperLume today.
+
+### 30.6 Required before paid traffic is live
+
+1. **Owner approval of the exact Privacy Policy wording** — the Draft PR is the review surface. **PENDING.**
+2. **Publication of the amendment** with a correct effective date (§30.7).
+3. Apply the staging migration; install both credentials; deploy from the accepted merge; run bounded canaries.
+
+### 30.7 Effective-date handling
+
+The policy's displayed effective date is **September 17, 2026**, the date this amendment was drafted. If the amendment is published on a later calendar date, that date becomes **false on publication** and must be advanced to the real publication date before merge. This is flagged rather than guessed.
+
+### 30.8 What this addendum does NOT claim
+
+- ❌ "Anthropic or OpenAI is a live recipient" — **false.** No credential, no selectable row, no request.
+- ❌ "PaperLume has zero data retention with either provider" — **false.** Neither is claimed and ZDR is not enabled.
+- ❌ "`store: false` means OpenAI retains nothing" — **false.** Abuse-monitoring retention may still apply.
+- ❌ "the paid providers share Google's Free-tier terms" — **false.** The Free-tier data-use and geographic warnings describe Google only.
+- ❌ "this review approves activation" — **false.** It is a prerequisite for it.

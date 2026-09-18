@@ -14,11 +14,19 @@
 // operation instead of being invented here.
 //
 // Registration is not the same as reachability, and nothing in Production can
-// reach this yet. There is no `openai/*` row in `ai_model_catalog`, so model
-// selection has nothing to route here; no `OPENAI_API_KEY` exists on any
-// server; and the Edge Functions that would import it are not deployed. Adding
-// a catalog row, installing the secret and deploying the functions are three
-// separate, separately authorized steps — see docs/deployment.md.
+// reach this yet. This module IS in the deployed generation bundles — the
+// AI-MULTI-PROVIDER-001D Phase 6 rollout (2026-09-17) shipped them — so the
+// remaining two barriers are the ones that matter:
+//
+//   * no `OPENAI_API_KEY` exists on any server, so
+//     `_shared/aiProviderCredentials.ts` fails closed before a request is built;
+//   * AI-MULTI-PROVIDER-001E stages `openai/gpt-5.6-terra` in
+//     `ai_model_catalog` as `enabled` but NOT `selectable`, so the Settings
+//     control does not offer it and no ordinary user can save a preference for
+//     it — and that migration reaches Production only as a separate step.
+//
+// Installing the secret and making the row selectable remain separate,
+// separately authorized steps — see docs/deployment.md.
 //
 // ## Responses API, not Chat Completions
 //
@@ -551,9 +559,10 @@ function isTimeout(error: unknown, signal: AbortSignal): boolean {
  * AI-MULTI-PROVIDER-001C.
  *
  * `_shared/aiProviderRegistry.ts` imports this constant, so a valid enabled
- * `openai` catalog row would now be honoured rather than falling back with
- * `unsupported_provider`. No such row exists, and creating one is a separate
- * reviewed migration.
+ * `openai` catalog row is honoured rather than falling back with
+ * `unsupported_provider`. AI-MULTI-PROVIDER-001E stages exactly one such row,
+ * `openai/gpt-5.6-terra`, as `enabled` but NOT `selectable` — and a missing
+ * `OPENAI_API_KEY` still fails the call closed before this adapter is reached.
  */
 export const OPENAI_AI_PROVIDER_ADAPTER: AiProviderAdapter<
   typeof OPENAI_AI_PROVIDER,
