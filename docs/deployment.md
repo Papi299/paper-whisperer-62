@@ -49,9 +49,9 @@ For local dev, the same two values go in a local `.env.local` (or the existing `
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | Required. **One key serves both**, for their Gemini `generateContent` calls — `suggest-paper-organization` reuses the existing secret and introduced no new one, so rotating this value rotates it for both. Without it, each fails safely with a generic 500 **before** any provider call, naming the secret only in its Edge log — `analyze-paper` via its clear in-source throw (preserved by PR #139), which surfaces in the log rather than the response. `analyze-paper` refunds the unit it already consumed; `suggest-paper-organization` checks the key first and consumes nothing. **It is the only AI provider credential installed.** Repository `main` — and, since the 2026-09-17 Phase 6 deploy, the live generation runtime — registers `google`, `anthropic` and `openai` (C41), and `AI-MULTI-PROVIDER-001C` binds each to its own credential name through the one reviewed mapping in `_shared/aiProviderCredentials.ts` — `google` → this key, `anthropic` → `ANTHROPIC_API_KEY`, `openai` → `OPENAI_API_KEY`. Neither of the other two is installed (rows below). Each operation reads **only the selected provider's** variable; with no non-Google catalog row that is this key, presented as `x-goog-api-key`, for every request, so **every live generation request today uses this key** and nothing deployed can reach Anthropic or OpenAI. A missing selected-provider credential never falls back to another provider's key. There is no generic `AI_API_KEY` and no `AI_PROVIDER`. Installing either paid-provider secret is a separately authorized phase (§6.6a, phase 5). *Historical checkpoints:* at `AI-MULTI-PROVIDER-001A` (C39) completion the seam registered only the Google adapter, and `AI-MULTI-PROVIDER-001B` (C40) added the Anthropic/OpenAI adapters unregistered and no secret. Operator detail: §10.3. |
-| `ANTHROPIC_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `anthropic` catalog row | **Not set, and not to be set yet.** Named by `AI-MULTI-PROVIDER-001C` (C41) as the credential for the now-registered Anthropic adapter. No `anthropic/*` catalog row exists, so nothing reads it today, and a missing value never falls back to `GEMINI_API_KEY`. Install it only in the separately authorized paid-provider phase (§6.6, phase 5). Never under a generic name. |
-| `OPENAI_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `openai` catalog row | **Not set, and not to be set yet.** The same terms as `ANTHROPIC_API_KEY`, for the now-registered OpenAI adapter. |
+| `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | Required. **One key serves both**, for their Gemini `generateContent` calls — `suggest-paper-organization` reuses the existing secret and introduced no new one, so rotating this value rotates it for both. Without it, each fails safely with a generic 500 **before** any provider call, naming the secret only in its Edge log — `analyze-paper` via its clear in-source throw (preserved by PR #139), which surfaces in the log rather than the response. `analyze-paper` refunds the unit it already consumed; `suggest-paper-organization` checks the key first and consumes nothing. **It was the only AI provider credential installed until 2026-09-18, when the two paid-provider keys were added (rows below).** Repository `main` — and, since the 2026-09-17 Phase 6 deploy, the live generation runtime — registers `google`, `anthropic` and `openai` (C41), and `AI-MULTI-PROVIDER-001C` binds each to its own credential name through the one reviewed mapping in `_shared/aiProviderCredentials.ts` — `google` → this key, `anthropic` → `ANTHROPIC_API_KEY`, `openai` → `OPENAI_API_KEY`. Both of the other two are installed since 2026-09-18 (rows below), so a request that resolves to a paid catalog row now reaches that provider with that provider's own key. Each operation reads **only the selected provider's** variable; for a request that resolves to a Google row that is this key, presented as `x-goog-api-key`. Since the paid rows are staged but `selectable = false`, **every ordinary user's generation request still uses this key**; only an operator-written preference on the dedicated acceptance account routes elsewhere (§14.2). A missing selected-provider credential never falls back to another provider's key. There is no generic `AI_API_KEY` and no `AI_PROVIDER`. Installing either paid-provider secret is a separately authorized phase (§6.6a, phase 5). *Historical checkpoints:* at `AI-MULTI-PROVIDER-001A` (C39) completion the seam registered only the Google adapter, and `AI-MULTI-PROVIDER-001B` (C40) added the Anthropic/OpenAI adapters unregistered and no secret. Operator detail: §10.3. |
+| `ANTHROPIC_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `anthropic` catalog row | **Installed in Production on 2026-09-18** (§6.6a phase 5, §14.1). Named by `AI-MULTI-PROVIDER-001C` (C41) as the credential for the registered Anthropic adapter, and read only when a request resolves to an `anthropic` catalog row; a missing value never falls back to `GEMINI_API_KEY`. The `anthropic/claude-sonnet-5` row exists but is `selectable = false`, so today only an operator-written preference on the acceptance account reaches it (§14.2). Never store it under a generic name. |
+| `OPENAI_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `openai` catalog row | **Installed in Production on 2026-09-18.** The same terms as `ANTHROPIC_API_KEY`, for the registered OpenAI adapter and the `openai/gpt-5.6-terra` row. |
 | `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota`, `suggest-paper-organization` | **Optional. This is the SYSTEM DEFAULT model**, not necessarily the model every request uses. All three resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never disagree about the *default*. Since `AI-MODEL-SELECTION-001B` the two generation functions may route an individual request to an entitled user's saved preference instead (`_shared/aiModelSelection.ts`), while `get-gemini-provider-quota` deliberately keeps reporting this configured default — it is system-wide observational monitoring, not a per-user routing report, so the three may legitimately name different models for the same request. This value remains the fallback for every caller who is not entitled, has no preference, or whose preference cannot be safely resolved. Unset = fallback. **Production currently sets `gemini-3.5-flash`** — the system default under decision **C34**. Changing the default is an environment change here and nothing else: it is not a frontend deploy, not a migration and not a catalog edit, because the Settings control represents "follow the default" as a *sentinel meaning no saved preference* rather than embedding a model string in the browser. `gemini-3.6-flash`, `gemini-3.7-flash` and `gemini-3.8-flash` are all `enabled` and `selectable` in the catalog as explicit choices for entitled users (3.7 and 3.8 added by migration `20260903120000`, C35, **applied to Production on 2026-09-03**). Adding a catalog model never changes this value: the catalog decides what is *selectable*, this variable decides what is *default*. |
 | `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated, and currently inert.** Google Cloud project that owns the Gemini API usage. Under C29 **no frontend surface calls this function**, so these three secrets affect nothing today; absent, the function's own response is a bounded "not configured" and ordinary analysis is unaffected. |
 | `GOOGLE_MONITORING_CLIENT_EMAIL` | `get-gemini-provider-quota` | Service-account email for the Monitoring reader (below). |
@@ -469,18 +469,20 @@ Phase 3  telemetry foundation         AI-MULTI-PROVIDER-001D (usage/cost)   COMP
                                       migration 20260913120000 applied 2026-09-13;
                                       Privacy Policy disclosure published 2026-09-17
                                       (PR #283) (§6.7). Collection started at Phase 6
-Phase 4  stage paid-provider rows     separate migration: anthropic/claude-sonnet-5 and   PENDING
-                                      openai/gpt-5.6-terra with the C41 future values,
+Phase 4  stage paid-provider rows     separate migration: anthropic/claude-sonnet-5 and   COMPLETE 2026-09-18:
+                                      openai/gpt-5.6-terra with the C41 future values,    20260917201856 applied (ledger 84)
                                       selectable = false, reasoning_selectable = false
-Phase 5  install provider secrets     ANTHROPIC_API_KEY, OPENAI_API_KEY (§3.2)            PENDING
+Phase 5  install provider secrets     ANTHROPIC_API_KEY, OPENAI_API_KEY (§3.2)            COMPLETE 2026-09-18
 Phase 6  deploy BOTH generation       analyze-paper AND suggest-paper-organization        COMPLETE 2026-09-17: from main f962b44d;
          Edge Functions together      (§7c) — never before Phase 1                        analyze-paper v27, suggest v11 (§6.7)
-Phase 7  controlled live canary       per provider, per operation                         Google/Gemini COMPLETE 2026-09-17 (§6.7);
-                                                                                          Anthropic, OpenAI PENDING
-Phase 8  user enablement              separate migration: flip reasoning_selectable and   PENDING
+Phase 7  controlled live canary       per provider, per operation                         COMPLETE: Google/Gemini 2026-09-17 (§6.7);
+                                                                                          Anthropic + OpenAI 2026-09-18 (§14.1a)
+Phase 8  user enablement              separate migration: flip reasoning_selectable and   PENDING — the only remaining step
                                       GRANT EXECUTE ON set_current_user_ai_reasoning
                                       TO authenticated together; open paid models
 ```
+
+**Phases 4, 5, 6 and all of Phase 7 are complete; only Phase 8 remains.** The paid-provider rows were staged and both credentials installed on 2026-09-18, the generation functions were redeployed from `ef8ad768` (`analyze-paper` v29, `suggest-paper-organization` v13), and the Claude Sonnet 5 and GPT-5.6 Terra canaries passed that day (§14.1a). Both paid rows remain `selectable = false`. The paragraph below records the earlier Phase 6 milestone.
 
 **Phase 6 and the Google part of Phase 7 are complete (2026-09-17).** Both generation functions were deployed together from `main` `f962b44d`, and the bounded Production telemetry canary on the live Gemini models passed (§6.7; [migration-history.md](migration-history.md)). Phases 4 and 5 were not prerequisites of Phase 6: no paid-provider catalog row or credential exists, so the deployed runtime cannot route a request to Anthropic or OpenAI. Phases 4 and 5, the paid-provider canaries and Phase 8 remain, each needing its own authorization.
 
@@ -1226,53 +1228,92 @@ Rotation takes effect on the next function invocation **because both in-memory c
 
 ---
 
-## 14. Paid provider activation (AI-MULTI-PROVIDER-001E) — NOT YET AUTHORIZED
+## 14. Paid provider activation (AI-MULTI-PROVIDER-001E) — PHASE 7 COMPLETE; PHASE 8 NOT AUTHORIZED
 
-**Current state (2026-09-17): nothing below has been done.** Production's `ai_model_catalog` holds four Google rows; no `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` exists; no request has been sent to Anthropic or OpenAI.
+**Current state (2026-09-18): steps 1–10 below are done, and Phase 8 is not.** The owner authorized the rollout; PR #287 merged as `ef8ad768`; the Privacy Policy amendment is live with effective date September 18, 2026; migration `20260917201856` is applied (ledger 84, six catalog rows); both paid-provider secrets are installed; both generation functions were redeployed from `ef8ad768`; and the Claude Sonnet 5 and GPT-5.6 Terra Phase-7 canaries passed. **Both paid models remain `selectable = false` and manual reasoning remains disabled, so no ordinary user can select or reach either provider.**
 
-The deployed generation runtime already **contains** both adapters (Phase 6), so this is not an adapter rollout. It is a credential + catalog rollout, and each step below is separately authorized.
+The deployed generation runtime already **contained** both adapters (Phase 6), so this was not an adapter rollout. It is a credential + catalog rollout, and each step below was separately authorized.
 
 ### 14.1 Ordered rollout
 
-1. Independent exact-head review of the Draft PR.
-2. **Owner approval of the exact Privacy Policy wording**, and re-checking the effective date against the actual publication date (§14.5) — it is currently September 18, 2026.
-3. Merge. The Vercel deploy publishes the amended policy.
-4. Apply migration `20260917201856` (`supabase db push --linked`). Verify six rows, both paid rows `selectable = false`.
-5. Install `ANTHROPIC_API_KEY` (`supabase secrets set`, value read from the operator environment, never echoed).
-6. Install `OPENAI_API_KEY`, the same way.
-7. **Deploy both generation functions together** from the exact accepted merge (§6.6a). Required even though the adapters are already deployed: the new **price records** live in the bundle, and without them every paid estimate would be `unpriced`.
-8. Phase 7 Claude canaries (§14.2).
-9. Phase 7 OpenAI canaries.
-10. Inspect routing, quota, telemetry, usage and cost.
-11. Phase 8: create and apply the selectable-activation migration (§14.4).
-12. Verify Settings discovery and one live user-selected invocation per provider.
+1. ~~Independent exact-head review of the Draft PR.~~ **DONE.**
+2. ~~**Owner approval of the exact Privacy Policy wording**, and re-checking the effective date against the actual publication date (§14.5).~~ **DONE** — September 18, 2026.
+3. ~~Merge. The Vercel deploy publishes the amended policy.~~ **DONE** — PR #287, merge `ef8ad768`.
+4. ~~Apply migration `20260917201856`.~~ **DONE 2026-09-18** — ledger 83 → 84, six rows, both paid rows `selectable = false`.
+5. ~~Install `ANTHROPIC_API_KEY`.~~ **DONE 2026-09-18.**
+6. ~~Install `OPENAI_API_KEY`.~~ **DONE 2026-09-18** — both installed in one `secrets set --env-file`, values read from the operator environment and never echoed; 12 → 14 secrets, no other secret changed.
+7. ~~**Deploy both generation functions together** from the exact accepted merge (§6.6a).~~ **DONE 2026-09-18** — from `ef8ad768`: `analyze-paper` → **v29**, `suggest-paper-organization` → **v13**, read back byte-identical to the commit. Required even though the adapters were already deployed: the new **price records** live in the bundle, and without them every paid estimate would be `unpriced` — the canaries confirm they are not.
+8. ~~Phase 7 Claude canaries (§14.2).~~ **PASSED 2026-09-18** — Analyze (`automatic` → `off`) and Suggest (`automatic` → `medium`), one attempt each.
+9. ~~Phase 7 OpenAI canaries.~~ **PASSED 2026-09-18** — Analyze (`automatic` → `none`) and Suggest (`automatic` → `medium`), one attempt each.
+10. ~~Inspect routing, quota, telemetry, usage and cost.~~ **DONE** — see the acceptance record below.
+11. **Phase 8 — NOT DONE and not yet authorized**: create and apply the selectable-activation migration (§14.4).
+12. **NOT DONE**: verify Settings discovery and one live user-selected invocation per provider.
 
-> Secrets note: one `supabase secrets set` bumps **every** Edge Function's version with no redeploy. Record versions before and after, and gate any "did a secret change?" check on the manual subset rather than an all-rows fingerprint.
+> Secrets note: one `supabase secrets set` bumps **every** Edge Function's version with no redeploy — observed again on 2026-09-18, when all six went +1 with byte-identical bundles. Record versions before and after, and gate any "did a secret change?" check on the manual subset rather than an all-rows fingerprint.
+
+#### 14.1a Phase-7 acceptance record (2026-09-18)
+
+Four provider calls, one attempt each, on the dedicated acceptance account's retained synthetic canary paper. Telemetry went 3 → 7 events with no event from any other account in either window; the account's lifetime AI quota went 2 → 6 (+1 per successful operation); every estimate was `estimated` (never `unpriced`), and each amount recomputed exactly from the stored rates.
+
+| Provider / model | Operation | Reasoning | Input / output tokens | Estimated list price | Price record |
+|---|---|---|---|---|---|
+| `anthropic/claude-sonnet-5` | Analyze | `automatic` → `off` | 1,105 / 102 | $0.003230 | `anthropic/claude-sonnet-5@2026-09-17` |
+| `anthropic/claude-sonnet-5` | Suggest | `automatic` → `medium` | 1,863 / 200 | $0.005726 | `anthropic/claude-sonnet-5@2026-09-17` |
+| `openai/gpt-5.6-terra` | Analyze | `automatic` → `none` | 555 / 67 | $0.001914 | `openai/gpt-5.6-terra@2026-09-17` |
+| `openai/gpt-5.6-terra` | Suggest | `automatic` → `medium` | 887 / 125 | $0.003274 | `openai/gpt-5.6-terra@2026-09-17` |
+
+Total $0.014144. Other properties verified: `model_selection_source = user_preference` on all four; `provider_attempts = 1` on all four; `usage_status = reported` with `has_unmodeled_usage = false`; Suggest mutated no paper, Project, Tag or assignment; the canary paper was unchanged; and the bounded Edge log windows contained no key, identity, token, title/abstract fragment or provider body, with `usage_telemetry recorded=1` for each call and no `recorded=0`.
+
+Two provider behaviours worth recording, neither a failure: **both** providers reported zero reasoning tokens even at `medium` (a requested level is not spent thinking), and Terra reported `cache_write_tokens` explicitly as 0 — had it omitted the field the estimate would have been `usage_incomplete` rather than `estimated`.
+
+After both blocks the acceptance account was restored to its exact pre-canary state (§14.2).
 
 ### 14.2 Phase 7 canary design — routing a non-selectable model
 
 **The constraint.** Both staged rows are `selectable = false` on purpose (C43), so `set_current_user_ai_model` refuses them and Settings never lists them. A canary must therefore route the model **without** making it selectable.
 
-**The mechanism.** `enabled = true` means the resolver honours a saved preference; `selectable = false` only stops the **setter**. So an operator writes the preference row directly, as the `postgres` role, for the **dedicated acceptance account only**:
+**A saved preference alone is NOT enough, and the failure is silent.** This was discovered during the 2026-09-18 run and corrected here. `resolveEffectiveAiModel` (`supabase/functions/_shared/aiModelSelection.ts`) applies three gates **in this order**:
+
+```text
+1. entitlement   rpc get_current_user_access() → can_select_ai_model must be true
+2. preference    user_ai_preferences.preferred_model_id must exist and be well-formed
+3. catalog row   ai_model_catalog: must exist, be enabled, and name a REGISTERED provider
+```
+
+Entitlement is checked **before** the preference is ever read, and `can_select_ai_model` is `user_entitlements.ai_model_selection_enabled AND plan_status IN ('active','trialing')` (`20260902120000`). The dedicated acceptance account is a **free** account, and free rows keep the column's `DEFAULT false`. A preference written for a non-entitled account is therefore ignored with `fallback("not_entitled")` — which is in `QUIET_REASONS`, so **nothing is logged**. The request silently runs on the Google system default instead, spends a quota unit, and writes a telemetry row that says `provider = google`. Every surface looks healthy; only the telemetry's provider column reveals that the "paid canary" never reached the paid provider.
+
+**The approved bounded mechanism.** An operator, as the `postgres` role, temporarily grants the capability **and** writes the preference, for the **dedicated acceptance account only**, per provider block:
 
 ```sql
--- Capture and restore. Run inside one transaction per step.
+-- One transaction per step; ideally one DO block so preconditions, both
+-- writes and the postconditions commit together or not at all.
 -- The account is identified from PAPERLUME_PROD_ACCEPT_* in the operator
 -- environment; its email and UUID are never printed into a report or doc.
+-- Matching it by sha256(user_id) keeps the UUID out of the SQL text too.
 BEGIN;
-  -- 1. capture the existing preference (may be no row at all)
+  -- 1. capture the pre-canary state: the entitlement flag AND the preference
+  --    row (which may not exist at all)
+  SELECT ai_model_selection_enabled FROM public.user_entitlements WHERE user_id = :acceptance_uid;
   SELECT preferred_model_id, preferred_reasoning_level
     FROM public.user_ai_preferences WHERE user_id = :acceptance_uid;
-  -- 2. point it at the staged model
+  -- 2. temporarily grant the capability — this account only
+  UPDATE public.user_entitlements
+     SET ai_model_selection_enabled = true
+   WHERE user_id = :acceptance_uid;
+  -- 3. point it at the staged model, leaving reasoning Automatic (NULL)
   INSERT INTO public.user_ai_preferences (user_id, preferred_model_id)
   VALUES (:acceptance_uid, 'anthropic/claude-sonnet-5')
   ON CONFLICT (user_id) DO UPDATE SET preferred_model_id = EXCLUDED.preferred_model_id;
 COMMIT;
 ```
 
-**Why this is the safest bounded mechanism, and not a shortcut.** It adds no code, no flag and no second authorization surface. It touches exactly one row belonging to exactly one account. It leaves `selectable = false` untouched, so **no other user's reachable set changes at any point** — which a temporary `selectable = true` flip would not achieve, since a preference saved during the window would survive the revert.
+**Why this is the safest bounded mechanism, and not a shortcut.** It adds no code, no flag and no second authorization surface. It touches exactly two rows belonging to exactly one disposable acceptance account. It leaves `selectable = false` untouched, so **no other user's reachable set changes at any point** — which a temporary `selectable = true` flip would not achieve, since a preference saved during the window would survive the revert. And it does not weaken the product rule: entitlement still gates model selection for everyone, including this account, outside the window.
 
-**Restore.** Replay the captured value, or `DELETE` the row if there was none. Verify the restore by re-reading. Do this even if a canary fails.
+**What must NOT be done instead:** changing `can_select_ai_model`'s definition, granting the capability to a real user's account, adding an operator allowlist to the resolver, or flipping `selectable`. Entitlement semantics are a product rule; do not redefine them to make a canary convenient.
+
+**Restore, on every exit path — success or failure.** Replay the captured preference value, or `DELETE` the row if there was none; then set `ai_model_selection_enabled` back to its captured value. Verify by re-reading through **both** the operator connection and the account's own RLS session (`get_current_user_access().can_select_ai_model` must be `false` again). Run the restore even if the provider call failed, and keep it idempotent so it can be retried — the one-attempt rule governs provider calls, not cleanup.
+
+**One column cannot be restored exactly.** `user_entitlements` carries a `BEFORE UPDATE` trigger (`update_user_entitlements_updated_at`), so the row's `updated_at` moves and stays moved. Prove restoration on the substantive fields instead — e.g. `md5(to_jsonb(e) - 'updated_at' - 'ai_model_selection_enabled')` for that row, plus a whole-table md5 of `user_ai_preferences`, which does return byte-identical when the pre-canary state had no row.
 
 **Per-provider canary checklist** (run on the acceptance account, one operation at a time):
 
@@ -1288,11 +1329,13 @@ COMMIT;
 
 ### 14.3 What a canary must never do
 
-Flip `selectable`; grant `set_current_user_ai_reasoning`; touch a non-acceptance account; print a secret, the acceptance email or its UUID; delete the durable canary paper.
+Flip `selectable`; grant `set_current_user_ai_reasoning`; touch a non-acceptance account; print a secret, the acceptance email or its UUID; delete the durable canary paper; **leave the temporary `ai_model_selection_enabled` capability in place after the block, or grant it to any account other than the dedicated acceptance one**.
 
 ### 14.4 Phase 8 — the final activation mutation
 
-After both canaries pass, one migration sets exactly this and nothing else:
+**Status: not done, and not yet authorized.** The Phase-7 canaries passed on 2026-09-18 (§14.1a), so this is the remaining paid-provider step. Before it runs, the known Edge-log privacy hardening (EDGE-LOG-PRIVACY-HARDENING-001) should be reviewed, merged **and deployed** — a synthetic canary exercised no failure path, so it did not close that debt.
+
+One migration sets exactly this and nothing else:
 
 ```sql
 UPDATE public.ai_model_catalog

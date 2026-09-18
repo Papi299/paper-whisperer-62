@@ -332,7 +332,13 @@ describe("analyze-paper is wired to the shared selection module", () => {
     // caller-token one. (The other `createClient(` in the file is inside a
     // comment, hence the anchored match rather than a bare count.)
     expect(SOURCE.match(/const supabase = createClient\(/g)?.length).toBe(1);
-    expect(SOURCE).toContain('requireEdgeEnv("SUPABASE_ANON_KEY")');
+    // EDGE-LOG-PRIVACY-HARDENING-001 routed both reads through a wrapper that
+    // logs the missing variable's NAME instead of letting the outer catch log
+    // `requireEdgeEnv`'s thrown message. Still the anon key, still that one
+    // helper — both halves asserted so the wrapper cannot become a second way
+    // of reading the environment.
+    expect(SOURCE).toContain('requireEdgeEnvLogged("SUPABASE_ANON_KEY")');
+    expect(SOURCE).toContain("return requireEdgeEnv(name);");
     expect(SOURCE).not.toContain("SERVICE_ROLE");
   });
 
