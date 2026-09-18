@@ -31,6 +31,14 @@
  * non-object becomes `non_error`. Even a hostile value that sets its own `name`
  * can only ever select a list entry — it cannot introduce text.
  *
+ * It is also **total**: reading a property is executable code, so a value whose
+ * `name` is an accessor or a `Proxy` trap can throw on being read. That read is
+ * guarded, and a value that cannot be read safely collapses to
+ * `unknown_error_name`. The reducer therefore never throws — which matters
+ * because it is called from `catch` blocks, where a secondary exception would
+ * escape past the bounded log line it was building and carry its own message
+ * out instead.
+ *
  * What survives is the part that is actually diagnostic: `SyntaxError` says a
  * body did not parse, `TimeoutError` says we stopped waiting, `TypeError` says
  * the connection failed. Callers pair it with their own server-generated
@@ -83,12 +91,35 @@ function isBoundedErrorName(value: string): value is BoundedErrorName {
  * naming. The allowlist is what makes that safe: an unrecognised `name` — set
  * by a library or by an attacker — collapses to `unknown_error_name`.
  *
- * Never reads `message`, `stack`, `cause`, or any other property, and never
- * stringifies the value.
+ * **Total, and non-throwing for every JavaScript value.** That is a property of
+ * this function, not a hope about its callers: it runs inside `catch` blocks
+ * whose whole purpose is to fail safely, so an exception escaping from *here*
+ * would defeat the boundary — it would abandon the bounded log line and carry
+ * its own message up instead. Reading `.name` is not a passive lookup: it is a
+ * property access, and a property access runs code. An accessor or a `Proxy`
+ * `get` trap may throw, and the value it throws is arbitrary. So the read is
+ * guarded, and a read that cannot complete safely collapses to
+ * `unknown_error_name` like any other unusable name.
+ *
+ * The guard is deliberately narrow: only the `name` read is wrapped, so a
+ * well-behaved accessor (a real `DOMException` exposes `name` on its
+ * prototype) still yields its allow-listed name.
+ *
+ * Never reads `message`, `stack`, `cause`, or any other property; never
+ * stringifies or serializes the value; and never lets a thrown value's own text
+ * reach the result — the caught exception is discarded unexamined.
  */
 export function boundedErrorName(error: unknown): BoundedErrorName {
   if (typeof error !== "object" || error === null) return "non_error";
-  const name: unknown = (error as { name?: unknown }).name;
+
+  let name: unknown;
+  try {
+    name = (error as { name?: unknown }).name;
+  } catch {
+    // A throwing getter or Proxy trap. Whatever it threw is not inspected.
+    return "unknown_error_name";
+  }
+
   if (typeof name !== "string") return "unknown_error_name";
   return isBoundedErrorName(name) ? name : "unknown_error_name";
 }

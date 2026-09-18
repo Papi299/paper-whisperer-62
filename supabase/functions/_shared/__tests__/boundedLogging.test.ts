@@ -140,3 +140,94 @@ describe("boundedErrorName returns only allow-listed literals", () => {
     expect(Object.isFrozen(BOUNDED_ERROR_NAMES)).toBe(true);
   });
 });
+
+describe("the reducer is total: reading `name` is itself executable code", () => {
+  // EDGE-LOG-PRIVACY-HARDENING-001A, from independent review of PR #288.
+  //
+  // `(error as {name?: unknown}).name` is a property ACCESS, and a property
+  // access can run code: a getter or a Proxy `get` trap may throw. A throwable
+  // that makes the logging reducer throw defeats the whole point of a
+  // content-free failure path — the secondary exception escapes the catch block
+  // that was trying to log safely, and carries its own message with it.
+  //
+  // These cases are the hostile inputs, not hypotheticals: each one throws an
+  // Error whose message is exactly the material that must never be logged.
+
+  it("does not throw, and leaks nothing, when the `name` getter throws", () => {
+    const hostile = {};
+    Object.defineProperty(hostile, "name", {
+      get() {
+        throw new Error(`${SECRETS.apiKeyUrl} ${SECRETS.abstractFragment}`);
+      },
+    });
+
+    expect(() => boundedErrorName(hostile)).not.toThrow();
+    const name = boundedErrorName(hostile);
+    expect(name).toBe("unknown_error_name");
+    expectNoContent(name);
+  });
+
+  it("does not throw, and leaks nothing, when a Proxy `get` trap throws", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          throw new Error(`proxy trap read ${String(property)}: ${SECRETS.apiKeyUrl}`);
+        },
+      },
+    );
+
+    expect(() => boundedErrorName(hostile)).not.toThrow();
+    const name = boundedErrorName(hostile);
+    expect(name).toBe("unknown_error_name");
+    expectNoContent(name);
+  });
+
+  it("survives a getter that throws a non-Error value", () => {
+    const hostile = {};
+    Object.defineProperty(hostile, "name", {
+      get() {
+        throw SECRETS.bearerToken;
+      },
+    });
+    expect(() => boundedErrorName(hostile)).not.toThrow();
+    expectNoContent(boundedErrorName(hostile));
+  });
+
+  it("still reads a well-behaved getter that returns an allow-listed name", () => {
+    // The guard must not degrade the ordinary case into `unknown_error_name`:
+    // a real `DOMException` exposes `name` as a prototype getter.
+    const wellBehaved = {};
+    Object.defineProperty(wellBehaved, "name", { get: () => "TimeoutError" });
+    expect(boundedErrorName(wellBehaved)).toBe("TimeoutError");
+  });
+
+  it("is total across a hostile corpus — never throws, always an allow-listed literal", () => {
+    const throwingGetter = {};
+    Object.defineProperty(throwingGetter, "name", {
+      get() {
+        throw new Error(SECRETS.titleFragment);
+      },
+    });
+    const corpus: unknown[] = [
+      throwingGetter,
+      new Proxy({}, { get() { throw new Error(SECRETS.doiUrl); } }),
+      new Proxy({}, { get: () => SECRETS.apiKeyUrl }),
+      Object.create(null),
+      new Error(SECRETS.abstractFragment),
+      SECRETS.apiKey,
+      0,
+      false,
+      null,
+      undefined,
+    ];
+    for (const value of corpus) {
+      let result: string | undefined;
+      expect(() => {
+        result = boundedErrorName(value);
+      }).not.toThrow();
+      expect(BOUNDED_ERROR_NAMES).toContain(result);
+      expectNoContent(String(result));
+    }
+  });
+});

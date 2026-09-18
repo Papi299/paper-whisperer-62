@@ -111,6 +111,39 @@ describe("analyze-paper log lines carry no throwable text", () => {
     }
   });
 
+  it("stays total when the throwable's `name` getter throws", () => {
+    // EDGE-LOG-PRIVACY-HARDENING-001A. Reading `.name` runs code, so a hostile
+    // throwable could make the reducer throw — inside the outer catch, which
+    // would abandon this log line and propagate the getter's own message.
+    // Asserted here, at the shipped formatter, not only on the helper.
+    const hostile = {};
+    Object.defineProperty(hostile, "name", {
+      get() {
+        throw new Error(`${SECRETS.urlWithQuery} ${SECRETS.abstractFragment}`);
+      },
+    });
+
+    expect(() => analyzeRequestFailureLog(hostile)).not.toThrow();
+    const line = analyzeRequestFailureLog(hostile);
+    expect(line).toBe("analyze-paper request_failed error=unknown_error_name");
+    expectNoContent(line);
+  });
+
+  it("stays total when a Proxy trap throws on every read", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error(SECRETS.bearerToken);
+        },
+      },
+    );
+    expect(() => analyzeRequestFailureLog(hostile)).not.toThrow();
+    expect(analyzeRequestFailureLog(hostile)).toBe(
+      "analyze-paper request_failed error=unknown_error_name",
+    );
+  });
+
   it("names a missing variable without quoting the thrown message", () => {
     expect(analyzeEnvMissingLog("SUPABASE_URL")).toBe("analyze-paper env_missing env=SUPABASE_URL");
     expect(analyzeEnvMissingLog("SUPABASE_ANON_KEY")).toBe(

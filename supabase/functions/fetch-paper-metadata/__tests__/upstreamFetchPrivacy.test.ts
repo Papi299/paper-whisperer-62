@@ -122,6 +122,48 @@ describe("a failing upstream fetch leaks nothing into the logs", () => {
     expect(h.warnings.at(-1)).toContain("error=non_error");
   });
 
+  it("stays total when the rejection's `name` getter throws", async () => {
+    // EDGE-LOG-PRIVACY-HARDENING-001A. The transport reduces every rejection
+    // through `boundedErrorName`, so a hostile throwable reaching it must not
+    // turn a bounded failure into an escaping secondary exception — the caller
+    // would then see the getter's message instead of `upstream_fetch_failed`.
+    const hostile = {};
+    Object.defineProperty(hostile, "name", {
+      get() {
+        throw new Error(`${SECRETS.pubmedUrl} ${SECRETS.title}`);
+      },
+    });
+    const h = harness(() => Promise.reject(hostile));
+
+    await expect(
+      h.fetchWithRetry(SECRETS.pubmedUrl, { source: "pubmed", maxRetries: 1 }),
+    ).rejects.toThrow(UPSTREAM_FETCH_FAILED_MESSAGE);
+
+    // Both the retry line and the exhaustion line were still produced.
+    expect(h.warnings).toHaveLength(2);
+    for (const line of h.warnings) expectNoContent(line);
+    expect(h.warnings.at(-1)).toBe(
+      "upstream_fetch_failed source=pubmed attempts=2 error=unknown_error_name retry=0",
+    );
+  });
+
+  it("stays total when a Proxy trap throws on every read", async () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error(SECRETS.crossrefUrl);
+        },
+      },
+    );
+    const h = harness(() => Promise.reject(hostile));
+    await expect(
+      h.fetchWithRetry(SECRETS.crossrefUrl, { source: "crossref", maxRetries: 0 }),
+    ).rejects.toThrow(UPSTREAM_FETCH_FAILED_MESSAGE);
+    for (const line of h.warnings) expectNoContent(line);
+    expect(h.warnings.at(-1)).toContain("error=unknown_error_name");
+  });
+
   it("reduces a timeout to its name", async () => {
     const h = harness(() => Promise.reject(Object.assign(new Error("x"), { name: "TimeoutError" })));
     await expect(h.fetchWithRetry(SECRETS.pubmedUrl, { source: "pubmed", maxRetries: 0 })).rejects.toThrow();
