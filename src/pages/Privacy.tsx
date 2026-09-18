@@ -366,11 +366,14 @@ const Privacy = () => {
               PaperLume controls which models are available, and the available models may change.
             </P>
             <P>
-              PaperLume supports models from <strong>Google (Gemini)</strong>,{" "}
-              <strong>Anthropic (Claude)</strong>, and <strong>OpenAI</strong>. The data-processing
-              terms that apply to a request are the terms of the provider whose model was selected,
-              and they are <strong>not the same across providers</strong>. Each provider is
-              described separately below.
+              PaperLume <strong>may make</strong> AI models from{" "}
+              <strong>Google (Gemini)</strong>, <strong>Anthropic (Claude)</strong>, and{" "}
+              <strong>OpenAI</strong> available. Which providers and models are available may
+              change, and not every provider named here is necessarily available to you at any
+              given time. The data-processing terms that apply to a request are the terms of the
+              provider whose model was selected, and they are{" "}
+              <strong>not the same across providers</strong>. Each provider is described separately
+              below.
             </P>
             <P>
               What PaperLume sends does not change when the model changes. The two AI-assisted
@@ -403,8 +406,8 @@ const Privacy = () => {
             </P>
             <P>
               <strong>
-                Selecting a Google, Anthropic, or OpenAI model causes the research content described
-                above to be transmitted to that provider.
+                When you select a model from Google, Anthropic, or OpenAI, the research content
+                described above is transmitted to that model's provider.
               </strong>{" "}
               PaperLume does not send your uploaded attachment files to any AI provider.
             </P>
@@ -497,8 +500,10 @@ const Privacy = () => {
             </P>
             <P>
               These are stated practices with exceptions, not a guarantee. PaperLume{" "}
-              <strong>does not promise that Anthropic retains nothing</strong> and has no
-              zero-retention arrangement with Anthropic.
+              <strong>does not promise that Anthropic retains nothing</strong>, and does{" "}
+              <strong>not</strong> claim to have a zero-retention arrangement with Anthropic.
+              Unless this Privacy Policy states otherwise, you should assume that Anthropic's
+              ordinary API retention practices described above apply.
             </P>
 
             <Subheading>OpenAI — how OpenAI may use API data</Subheading>

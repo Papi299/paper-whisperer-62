@@ -106,7 +106,7 @@ const SENTINELS = [
   // a future edit that collapses the three into one generic "AI provider"
   // paragraph removes a sentinel rather than merely rewording one.
   "Which provider receives your content depends on which AI model is selected for the request.",
-  "Selecting a Google, Anthropic, or OpenAI model causes the research content described above to be transmitted to that provider.",
+  "When you select a model from Google, Anthropic, or OpenAI, the research content described above is transmitted to that model's provider.",
   "PaperLume does not send your uploaded attachment files to any AI provider.",
   "not, by default, use inputs or outputs from its commercial products",
   "does not promise that Anthropic retains nothing",
@@ -471,6 +471,51 @@ describe("Privacy policy page", () => {
     unmount();
   });
 
+  it("describes provider availability conditionally, never as a current fact", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // This policy publishes on merge, but the approved rollout order means only
+    // Google is reachable at that moment: the paid-provider migration is not
+    // applied, neither credential is installed, no canary has run, and neither
+    // paid model is selectable. So the copy must promise availability of none
+    // of them, while staying true after activation and if one is withdrawn.
+    expect(text).toContain("may make AI models from");
+    expect(text).toContain("Which providers and models are available may change");
+    expect(text).toContain(
+      "not every provider named here is necessarily available to you at any given time",
+    );
+
+    // The regression this guards: a flat present-tense availability claim.
+    expect(text).not.toMatch(
+      /PaperLume (currently )?(supports|offers|provides|uses) (AI )?models from/i,
+    );
+    // And it must never assert a paid provider is selectable right now.
+    expect(text).not.toMatch(
+      /(Anthropic|Claude|OpenAI|GPT)[^.]{0,80}(is|are) (currently |now )?(available|selectable)/i,
+    );
+
+    unmount();
+  });
+
+  it("needs no further amendment when a staged model becomes selectable", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // The disclosure is written against the ACT of selecting a model, not
+    // against which models happen to be selectable today — so flipping
+    // selectable = true changes nothing this page says.
+    expect(text).toContain("When you select a model from Google, Anthropic, or OpenAI");
+    expect(text).toContain("PaperLume controls which models are available");
+
+    // No count, list or enumeration of "the available models" that activation
+    // would falsify.
+    expect(text).not.toMatch(/the (two|three|four|five|six) (AI )?models (you|users) can select/i);
+    expect(text).not.toMatch(/only (Google|Gemini) models are (currently )?available/i);
+
+    unmount();
+  });
+
   it("keeps the Gemini Free-tier warning intact and scoped to Google", () => {
     const { container, unmount } = renderPolicy();
     const text = visibleText(container);
@@ -532,7 +577,34 @@ describe("Privacy policy page", () => {
 
     // And no guarantee, in either direction.
     expect(text).toContain("does not promise that Anthropic retains nothing");
-    expect(text).toContain("no zero-retention arrangement with Anthropic");
+
+    unmount();
+  });
+
+  it("does not claim an Anthropic ZDR arrangement — and does not deny one either", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // The non-claim, matching the shape already used for OpenAI.
+    expect(text).toContain(
+      "does not claim to have a zero-retention arrangement with Anthropic",
+    );
+    expect(text).toContain(
+      "you should assume that Anthropic's ordinary API retention practices described above apply",
+    );
+
+    // The correction this test exists for. The previous copy asserted as FACT
+    // that PaperLume "has no zero-retention arrangement with Anthropic" — an
+    // account/contract claim nothing in this rollout evidences. A missing
+    // ANTHROPIC_API_KEY is not proof about what agreements exist, so the policy
+    // must neither assert nor deny one.
+    expect(text).not.toMatch(
+      /PaperLume[^.]{0,120}(has no|does not have|holds no)[^.]{0,60}zero[- ]retention/i,
+    );
+    // Nor may it claim to HAVE one.
+    expect(text).not.toMatch(
+      /PaperLume (has|uses|holds|maintains) (a |an )?zero[- ]retention/i,
+    );
 
     unmount();
   });
@@ -653,8 +725,8 @@ describe("Privacy policy page", () => {
     const text = visibleText(container);
 
     expect(text).toContain(
-      "Selecting a Google, Anthropic, or OpenAI model causes the research content described " +
-        "above to be transmitted to that provider.",
+      "When you select a model from Google, Anthropic, or OpenAI, the research content " +
+        "described above is transmitted to that model's provider.",
     );
 
     unmount();
