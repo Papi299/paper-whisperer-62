@@ -131,6 +131,17 @@ Gemini does not currently bill per-token in a way visible at request time — th
 > - Telemetry changes nothing in PaperLume's quota accounting.
 > - It records no latency and no per-user funnel metrics.
 > - There is no dashboard.
+>
+> **Paid-provider list prices (`AI-MULTI-PROVIDER-001E`, verified 2026-09-17; repository only — no paid request has been made).** The price book now also covers the two staged models, so that the first paid request is measured rather than guessed:
+>
+> | Model | Input | Cached input | Cache write | Output | Priced up to |
+> |---|---|---|---|---|---|
+> | `anthropic/claude-sonnet-5` | $2.00 / MTok | $0.20 / MTok | **unpriced** | $10.00 / MTok | no limit |
+> | `openai/gpt-5.6-terra` | $2.00 / MTok | $0.20 / MTok | $2.50 / MTok | $12.00 / MTok | 272,000 input tokens |
+>
+> Two deliberate refusals to guess (C44): Anthropic publishes **two** cache-write rates ($2.50 for a 5-minute write, $4.00 for a 1-hour one) against a single summed usage field, so any positive Anthropic cache write is `unpriced` rather than priced at the cheaper rate; and an OpenAI request above 272K input tokens is `unpriced` rather than priced at the short-context rate, because OpenAI applies 2x input **and** 1.5x output to the whole request above that threshold. PaperLume requests no caching and its prompts sit far below the threshold, so both are correctness properties rather than expected cases.
+>
+> These rates reach the estimator only when the generation functions are redeployed from the accepted merge ([deployment.md](deployment.md) §14.1 step 7); until then a paid request would be `unpriced`.
 
 **Funnel metrics:**
 

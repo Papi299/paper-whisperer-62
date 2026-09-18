@@ -1146,3 +1146,40 @@ The remaining steps — paid-provider staging, credentials and canaries, then us
 - Prompt caching or tools are introduced: the unmodeled-usage flags start firing and the cache-write classes need real rates. For Gemini, first establish from first-party evidence how `toolUsePromptTokenCount` relates to `promptTokenCount` and `totalTokenCount`: until then, a report whose total includes tool-use tokens is refused as `invalid`.
 - A spending limit or cost-based control is proposed: that is a new decision about using this data as a gate.
 - An owner or legal decision on retaining telemetry beyond account deletion, or on including it in the export or a subject-access response.
+
+## Paid provider activation (2026-09-17)
+
+### C43. A paid provider is staged `enabled` but NOT `selectable`, canaried through an operator-written preference, and made selectable only afterwards (2026-09-17)
+
+**Decision.** Bringing a paid AI provider to users is **three** separately authorized steps, not one: stage the catalog row, canary it, then make it selectable. `AI-MULTI-PROVIDER-001E` performs only the first, in the repository.
+
+**The mechanism.** `ai_model_catalog.enabled` and `.selectable` are independent flags and this decision uses the gap between them:
+
+- `enabled = true` — the **resolver** honours a saved preference naming the model, so a real request can reach the real provider through the real endpoints.
+- `selectable = false` — the **setter** (`set_current_user_ai_model`) refuses the model with `model_not_selectable`, and the Settings control never lists it, so no ordinary user can acquire that preference.
+
+The only way to hold such a preference is for an operator to write the `user_ai_preferences` row directly. That is precisely the bounded canary surface Phase 7 needs, and it is unavailable to everyone else by construction rather than by policy.
+
+**Why not canary with `selectable = true` and revert.** Because the window is real. Between the flip and the revert, every entitled user can select an un-canaried paid model, and any preference saved in that window **survives the revert** — `enabled` still routes it. A "brief" exposure would therefore be permanent for whoever used it.
+
+**Why not a code-level operator allowlist.** It would be a second authorization surface that could disagree with the catalog, which C33/C35/C39 exist to forbid. The preference row is already the authorized mechanism; it needs no new code.
+
+**What the staged rows are.** `anthropic/claude-sonnet-5` (sort 50) and `openai/gpt-5.6-terra` (sort 60), each `enabled`, not `selectable`, `reasoning_selectable = false`, carrying its own provider vocabulary (C41): Anthropic `{off,low,medium,high,xhigh,max}` with Analyze `off`; OpenAI `{none,low,medium,high,xhigh,max}` with Analyze `none`; Suggest `medium` on both.
+
+**What it explicitly is not.** Not manual reasoning (C41's staging lock holds: no row is `reasoning_selectable`, and `set_current_user_ai_reasoning` stays ungranted). Not an entitlement change — `can_select_ai_model` decides **who** may choose, and this decides **what** is choosable. Not a system-default change (C34). Not a Google change.
+
+**Phase 8, stated now so it is not improvised later.** After successful canaries, a separate migration sets `selectable = true` on both rows and changes **nothing else** — not `enabled`, not reasoning metadata, not the system default, not the manual-reasoning grant. It is deliberately **not** committed by 001E: a migration on disk is a migration `supabase db push` can apply, and one that activates a paid provider must not be appliable before the canaries that justify it.
+
+**Trigger to revisit.** A provider withdrawing a model or changing its reasoning vocabulary; a price change (the price book is effective-dated, so this is a new record, never an edit); or evidence that the operator-preference canary route is reachable by a non-operator.
+
+### C44. A price dimension with two published rates and one reported number is left unpriced, never priced at the cheaper one (2026-09-17)
+
+**Decision.** `aiPriceBook.ts` holds a single `cacheWriteInputUsdPerMTok` per record. Where a provider publishes **more than one** cache-write rate and the adapter cannot always tell which applied, the rate is `null` — making any positive cache write `unpriced` — rather than a plausible guess.
+
+**Applied.** Anthropic publishes $2.50/MTok for a 5-minute cache write and $4.00/MTok for a 1-hour one, and `readAnthropicUsage` maps the **flat** `cache_creation_input_tokens` (documented as the sum over both buckets) into one dimension. The per-TTL `cache_creation` breakdown that would split them is only **conditionally** present in Anthropic's response. So the `unmodeledUsage` flag — which is raised *from that breakdown* — reads `false` in exactly the case where the split is unknowable, and a $2.50 rate would return a confident `estimated` for an unknown mixture. `null` fails closed instead.
+
+**Not applied to OpenAI.** OpenAI publishes one cache-write rate (1.25x input = $2.50/MTok) and reports the dimension in its own `input_tokens_details.cache_write_tokens` field. One rate, one unambiguous count: it is priced.
+
+**Corollary for prompt-size tiers.** `openai/gpt-5.6-terra` stops at `maxInputTokens = 272_000`, because above it OpenAI applies 2x input **and** 1.5x output to the whole request — two multipliers the four-rate record shape cannot express. A larger request is `unpriced`, never priced at the short-context rate.
+
+**The through-line.** Both are the same rule the module was built on: unknown is never zero, and a cheaper-than-true number is worse than no number, because a number gets believed.

@@ -56,7 +56,7 @@ const PRIVACY_EMAIL = "mutrisport@gmail.com";
  * The date the current approved copy is published. The one place to change if
  * publication moves to a later calendar day.
  */
-const EFFECTIVE_DATE = "Effective date: September 17, 2026";
+const EFFECTIVE_DATE = "Effective date: September 18, 2026";
 
 /** The twenty section headings, in the order the approved copy establishes. */
 const SECTION_HEADINGS = [
@@ -65,7 +65,7 @@ const SECTION_HEADINGS = [
   "3. Browser storage and cookies",
   "4. PaperLume Chrome extension",
   "5. How we use information",
-  "6. Google Gemini AI — important Free-tier disclosure",
+  "6. AI providers — what is sent, and to whom",
   "7. PubMed and NCBI",
   "8. Crossref",
   "9. Supabase",
@@ -101,6 +101,18 @@ const SENTINELS = [
   "Hobby plan",
   "no active billing integration and no current user billing records",
   "not intended for users in those regions",
+  // AI-MULTI-PROVIDER-001E. Each of these is a disclosure the amended policy
+  // exists to make, and each names a fact that differs BETWEEN providers — so
+  // a future edit that collapses the three into one generic "AI provider"
+  // paragraph removes a sentinel rather than merely rewording one.
+  "Which provider receives your content depends on which AI model is selected for the request.",
+  "When you select a model from Google, Anthropic, or OpenAI, the research content described above is transmitted to that model's provider.",
+  "PaperLume does not send your uploaded attachment files to any AI provider.",
+  "not, by default, use inputs or outputs from its commercial products",
+  "does not promise that Anthropic retains nothing",
+  "PaperLume sends stateless requests to OpenAI's Responses API.",
+  "does not use API inputs or outputs to train or improve its models by default",
+  "PaperLume does not claim to have either Modified Abuse Monitoring or Zero Data Retention with OpenAI.",
 ];
 
 /**
@@ -434,6 +446,288 @@ describe("Privacy policy page", () => {
     // A positive sentinel alone would still pass with a stale date left beside it.
     const dates = visibleText(container).match(/Effective date: [A-Z][a-z]+ \d{1,2}, \d{4}/g);
     expect(dates).toEqual([EFFECTIVE_DATE]);
+
+    unmount();
+  });
+
+  // ── AI-MULTI-PROVIDER-001E: the paid-provider amendment ──────────────────
+  //
+  // Focused text assertions, matching the conventions above rather than a
+  // whole-page snapshot. Each test pins a claim that would be WRONG if the
+  // policy regressed in a specific, nameable way.
+
+  it("names all three AI providers, so Google is never again the only recipient", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("Google (Gemini)");
+    expect(text).toContain("Anthropic (Claude)");
+    expect(text).toContain("OpenAI");
+    // The provider-dependent routing rule itself, not merely the three names.
+    expect(text).toContain(
+      "Which provider receives your content depends on which AI model is selected for the request.",
+    );
+
+    unmount();
+  });
+
+  it("describes provider availability conditionally, never as a current fact", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // This policy publishes on merge, but the approved rollout order means only
+    // Google is reachable at that moment: the paid-provider migration is not
+    // applied, neither credential is installed, no canary has run, and neither
+    // paid model is selectable. So the copy must promise availability of none
+    // of them, while staying true after activation and if one is withdrawn.
+    expect(text).toContain("may make AI models from");
+    expect(text).toContain("Which providers and models are available may change");
+    expect(text).toContain(
+      "not every provider named here is necessarily available to you at any given time",
+    );
+
+    // The regression this guards: a flat present-tense availability claim.
+    expect(text).not.toMatch(
+      /PaperLume (currently )?(supports|offers|provides|uses) (AI )?models from/i,
+    );
+    // And it must never assert a paid provider is selectable right now.
+    expect(text).not.toMatch(
+      /(Anthropic|Claude|OpenAI|GPT)[^.]{0,80}(is|are) (currently |now )?(available|selectable)/i,
+    );
+
+    unmount();
+  });
+
+  it("needs no further amendment when a staged model becomes selectable", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // The disclosure is written against the ACT of selecting a model, not
+    // against which models happen to be selectable today — so flipping
+    // selectable = true changes nothing this page says.
+    expect(text).toContain("When you select a model from Google, Anthropic, or OpenAI");
+    expect(text).toContain("PaperLume controls which models are available");
+
+    // No count, list or enumeration of "the available models" that activation
+    // would falsify.
+    expect(text).not.toMatch(/the (two|three|four|five|six) (AI )?models (you|users) can select/i);
+    expect(text).not.toMatch(/only (Google|Gemini) models are (currently )?available/i);
+
+    unmount();
+  });
+
+  it("keeps the Gemini Free-tier warning intact and scoped to Google", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // The warning must survive the amendment verbatim...
+    expect(text).toContain(
+      "Do not use PaperLume's AI features with personal, sensitive, confidential, " +
+        "proprietary, unpublished, or otherwise private information while PaperLume uses " +
+        "Gemini's Free tier.",
+    );
+    expect(text).toContain("Free / Unpaid tier of the Google Gemini API");
+    expect(text).toContain("not intended for users in those regions");
+    // ...and must not have been generalised into a claim about Anthropic or
+    // OpenAI, who do not share Google's Free-tier data-use terms.
+    expect(text).toContain(
+      "Anthropic's commercial terms are not the same as Google's Free-tier terms, and the " +
+        "Free-tier warning above does not describe Anthropic.",
+    );
+
+    unmount();
+  });
+
+  it("states Anthropic's training position as a default, not an absolute", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain(
+      "not, by default, use inputs or outputs from its commercial products",
+    );
+    expect(text).toContain("Anthropic API");
+    // The exception Anthropic itself publishes: explicit feedback / opt-in.
+    expect(text).toContain("explicitly submits feedback or otherwise chooses to allow it");
+    expect(text).toContain("PaperLume does not submit your content to Anthropic as feedback.");
+
+    unmount();
+  });
+
+  it("presents Anthropic's 30 days as a practice with exceptions, not a ceiling", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("automatically deletes API inputs and outputs within 30 days");
+    // The correction this test exists for: the old wording could be read as an
+    // unconditional 30-day ceiling. It must say plainly that it is not one.
+    expect(text).toContain("not an absolute ceiling");
+
+    // Each published exception, named.
+    expect(text).toContain("under the customer's own control retains data for longer");
+    expect(text).toContain("separately agreed");
+    expect(text).toContain("enforce its Usage Policy");
+    expect(text).toContain("required by law");
+
+    // The specific duration that makes "30 days" misleading on its own.
+    expect(text).toContain(
+      "flagged as violating its Usage Policy may be retained for up to two years",
+    );
+    expect(text).toContain("anonymize");
+    expect(text).toContain("research or statistical purposes");
+
+    // And no guarantee, in either direction.
+    expect(text).toContain("does not promise that Anthropic retains nothing");
+
+    unmount();
+  });
+
+  it("does not claim an Anthropic ZDR arrangement — and does not deny one either", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // The non-claim, matching the shape already used for OpenAI.
+    expect(text).toContain(
+      "does not claim to have a zero-retention arrangement with Anthropic",
+    );
+    expect(text).toContain(
+      "you should assume that Anthropic's ordinary API retention practices described above apply",
+    );
+
+    // The correction this test exists for. The previous copy asserted as FACT
+    // that PaperLume "has no zero-retention arrangement with Anthropic" — an
+    // account/contract claim nothing in this rollout evidences. A missing
+    // ANTHROPIC_API_KEY is not proof about what agreements exist, so the policy
+    // must neither assert nor deny one.
+    expect(text).not.toMatch(
+      /PaperLume[^.]{0,120}(has no|does not have|holds no)[^.]{0,60}zero[- ]retention/i,
+    );
+    // Nor may it claim to HAVE one.
+    expect(text).not.toMatch(
+      /PaperLume (has|uses|holds|maintains) (a |an )?zero[- ]retention/i,
+    );
+
+    unmount();
+  });
+
+  it("describes the OpenAI API correctly and never as consumer ChatGPT", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("OpenAI API");
+    expect(text).toContain("does not use the consumer ChatGPT product");
+    expect(text).toContain("PaperLume sends stateless requests to OpenAI's Responses API.");
+
+    unmount();
+  });
+
+  it("states store: false exactly, and states what it is not", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("store: false");
+    expect(text).toContain(
+      "PaperLume explicitly sets store: false on every request",
+    );
+    // The misstatement this pins against: presenting store:false as a blanket
+    // zero-retention promise.
+    expect(text).toContain(
+      "Setting store: false is not the same as a blanket zero-retention promise.",
+    );
+    expect(text).toContain("abuse-monitoring logs");
+    expect(text).toContain("does not switch off OpenAI's separate abuse monitoring");
+
+    unmount();
+  });
+
+  it("states what OpenAI abuse-monitoring logs hold and how long", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("may contain customer content");
+    expect(text).toContain("up to 30 days");
+    // Both longer-retention triggers. The old copy named only the legal one,
+    // which is the omission this test exists to prevent recurring.
+    expect(text).toContain("required by law");
+    expect(text).toContain(
+      "reasonably necessary to protect OpenAI's services or any third party from harm",
+    );
+
+    unmount();
+  });
+
+  it("names BOTH approved OpenAI retention controls, not only ZDR", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("Modified Abuse Monitoring");
+    expect(text).toContain("Zero Data Retention");
+    expect(text).toContain("prior approval");
+    // ZDR's extra effect is what makes it different from PaperLume's own
+    // request-level store: false, so the policy must not conflate the two.
+    expect(text).toContain("treat the request-level store setting as false at all times");
+
+    unmount();
+  });
+
+  it("never claims PaperLume holds MAM or ZDR with OpenAI", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain(
+      "PaperLume does not claim to have either Modified Abuse Monitoring or Zero Data " +
+        "Retention with OpenAI.",
+    );
+    expect(text).toContain("ordinary OpenAI abuse-monitoring retention applies");
+    // Neither control may ever appear as something PaperLume DOES have.
+    expect(text).not.toMatch(
+      /PaperLume (has|uses|holds|maintains) (a |an )?(Zero Data Retention|Modified Abuse Monitoring)/i,
+    );
+
+    unmount();
+  });
+
+  it("makes no account-specific claim about OpenAI data-sharing opt-in", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // The durable provider-level fact stays...
+    expect(text).toContain(
+      "does not use API inputs or outputs to train or improve its models by default",
+    );
+    expect(text).toContain("unless the API organization explicitly opts in to sharing data");
+    // ...but the unverified account-specific assertion must not return. It was
+    // published from OpenAI's DEFAULT behaviour rather than from any evidence
+    // about PaperLume's own organization settings.
+    expect(text).not.toContain("PaperLume has not opted in");
+    expect(text).not.toMatch(/PaperLume[^.]{0,60}(has not|did not|never) opted in/i);
+
+    unmount();
+  });
+
+  it("never suggests attachments reach an AI provider", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain(
+      "PaperLume does not send your uploaded attachment files to any AI provider.",
+    );
+    expect(text).toContain(
+      "PaperLume's AI features do not send uploaded attachment files to any AI provider.",
+    );
+    // The Suggest exclusion list still names attachments as not sent.
+    expect(text).toContain("uploaded attachment files, internal user ID, or unrelated papers");
+
+    unmount();
+  });
+
+  it("states the common transmission disclosure for a selected paid model", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain(
+      "When you select a model from Google, Anthropic, or OpenAI, the research content " +
+        "described above is transmitted to that model's provider.",
+    );
 
     unmount();
   });

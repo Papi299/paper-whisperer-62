@@ -80,7 +80,7 @@ describe("every shipped record", () => {
 });
 
 describe("the seeded set is exactly what was verified", () => {
-  it("prices the four routable Gemini models and nothing else", () => {
+  it("prices the four routable Gemini models and the two staged paid models", () => {
     expect(AI_LIST_PRICE_RECORDS.map((r) => r.id)).toEqual([
       "google/gemini-3.5-flash@2026-09-13",
       "google/gemini-3.6-flash@2026-09-13",
@@ -89,11 +89,27 @@ describe("the seeded set is exactly what was verified", () => {
       "google/gemini-3.7-flash@2027-01-01",
       "google/gemini-3.8-flash@2026-09-13",
       "google/gemini-3.8-flash@2027-01-01",
+      "anthropic/claude-sonnet-5@2026-09-17",
+      "openai/gpt-5.6-terra@2026-09-17",
     ]);
   });
 
-  it("prices no Anthropic or OpenAI model — neither is routable yet", () => {
-    expect(AI_LIST_PRICE_RECORDS.filter((r) => r.provider !== "google")).toEqual([]);
+  it("prices exactly one record per paid model — no duplicate and no second tier", () => {
+    // The uniqueness and non-overlap suites above run over the whole book, so
+    // this is the narrower claim they cannot make: each paid model got ONE
+    // record, so a lookup at any instant is never a choice between two rates.
+    for (const [provider, model] of [
+      ["anthropic", "claude-sonnet-5"],
+      ["openai", "gpt-5.6-terra"],
+    ]) {
+      const matches = AI_LIST_PRICE_RECORDS.filter(
+        (r) => r.provider === provider && r.providerModel === model,
+      );
+      expect(matches).toHaveLength(1);
+      expect(matches[0].validUntil).toBeNull();
+      expect(matches[0].verifiedOn).toBe("2026-09-17");
+      expect(matches[0].validFrom).toBe("2026-09-17T00:00:00Z");
+    }
   });
 
   it("carries Google's published rates, read 2026-09-13", () => {
@@ -115,7 +131,12 @@ describe("the seeded set is exactly what was verified", () => {
         outputUsdPerMTok: "7.50",
       });
     }
-    for (const r of AI_LIST_PRICE_RECORDS) {
+    // Scoped to the Google records: the book now holds paid-provider records
+    // read from other pages on another day. The claim itself is unweakened —
+    // every Google record still has to carry Google's page and Google's date.
+    const googleRecords = AI_LIST_PRICE_RECORDS.filter((r) => r.provider === "google");
+    expect(googleRecords).toHaveLength(7);
+    for (const r of googleRecords) {
       expect(r.sourceUrl).toBe("https://ai.google.dev/gemini-api/docs/pricing");
       expect(r.verifiedOn).toBe("2026-09-13");
       // Google's usage has no cache-write dimension; there is no rate to hold.
@@ -123,6 +144,90 @@ describe("the seeded set is exactly what was verified", () => {
       // No prompt-size tier is published for these models.
       expect(r.maxInputTokens).toBeNull();
     }
+  });
+
+  it("carries Anthropic's published Claude Sonnet 5 rates, read 2026-09-17", () => {
+    const record = findAiListPriceRecord(
+      "anthropic",
+      "claude-sonnet-5",
+      new Date("2026-10-01T00:00:00Z"),
+    );
+    expect(record).toMatchObject({
+      id: "anthropic/claude-sonnet-5@2026-09-17",
+      inputUsdPerMTok: "2.00",
+      // Cache hits and refreshes: one rate whatever the write's TTL was.
+      cachedInputUsdPerMTok: "0.20",
+      outputUsdPerMTok: "10.00",
+      sourceUrl: "https://platform.claude.com/docs/en/about-claude/pricing",
+    });
+    // THE decision this record turns on. Anthropic publishes $2.50 for a
+    // 5-minute cache write and $4.00 for a 1-hour one; the adapter maps the
+    // FLAT `cache_creation_input_tokens` sum into one dimension, and the
+    // per-bucket breakdown that would split them is only conditionally present.
+    // One field cannot hold two rates honestly, so it holds neither.
+    expect(record!.cacheWriteInputUsdPerMTok).toBeNull();
+    // Anthropic prices the full 1M context window at standard rates.
+    expect(record!.maxInputTokens).toBeNull();
+  });
+
+  it("carries OpenAI's published GPT-5.6 Terra rates, read 2026-09-17", () => {
+    const record = findAiListPriceRecord(
+      "openai",
+      "gpt-5.6-terra",
+      new Date("2026-10-01T00:00:00Z"),
+    );
+    expect(record).toMatchObject({
+      id: "openai/gpt-5.6-terra@2026-09-17",
+      inputUsdPerMTok: "2.00",
+      cachedInputUsdPerMTok: "0.20",
+      // OpenAI publishes ONE cache-write rate — 1.25x uncached input — and the
+      // Responses API reports the dimension in its own field, so unlike
+      // Anthropic this one can be priced truthfully.
+      cacheWriteInputUsdPerMTok: "2.50",
+      outputUsdPerMTok: "12.00",
+      sourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+    });
+    // The documented long-context threshold: above 272K input tokens OpenAI
+    // applies 2x input AND 1.5x output to the whole request, which this
+    // four-rate shape cannot express.
+    expect(record!.maxInputTokens).toBe(272_000);
+  });
+
+  it("gives the two paid models different rates — neither was copied from the other", () => {
+    // They happen to share an input and a cached-input rate, which is exactly
+    // the coincidence that would hide a copy-paste. Output and cache-write are
+    // where they differ, so those are what this pins.
+    const sonnet = findAiListPriceRecord(
+      "anthropic",
+      "claude-sonnet-5",
+      new Date("2026-10-01T00:00:00Z"),
+    )!;
+    const terra = findAiListPriceRecord(
+      "openai",
+      "gpt-5.6-terra",
+      new Date("2026-10-01T00:00:00Z"),
+    )!;
+    expect(sonnet.outputUsdPerMTok).not.toBe(terra.outputUsdPerMTok);
+    expect(sonnet.cacheWriteInputUsdPerMTok).not.toBe(terra.cacheWriteInputUsdPerMTok);
+    expect(sonnet.maxInputTokens).not.toBe(terra.maxInputTokens);
+    expect(sonnet.sourceUrl).not.toBe(terra.sourceUrl);
+  });
+
+  it("is unpriced for either paid model before its rates were verified", () => {
+    // A record never predates the day somebody read the page it cites.
+    const before = new Date("2026-09-16T23:59:59Z");
+    expect(findAiListPriceRecord("anthropic", "claude-sonnet-5", before)).toBeNull();
+    expect(findAiListPriceRecord("openai", "gpt-5.6-terra", before)).toBeNull();
+  });
+
+  it("prices no paid model PaperLume did not stage", () => {
+    // The catalog is the allowlist, and the book must not quietly imply a
+    // wider one: a sibling model of either provider has no record here.
+    const at = new Date("2026-10-01T00:00:00Z");
+    expect(findAiListPriceRecord("anthropic", "claude-opus-5", at)).toBeNull();
+    expect(findAiListPriceRecord("anthropic", "claude-sonnet-4-6", at)).toBeNull();
+    expect(findAiListPriceRecord("openai", "gpt-5.6", at)).toBeNull();
+    expect(findAiListPriceRecord("openai", "gpt-5.6-terra-mini", at)).toBeNull();
   });
 
   it("never records a free tier as a zero price", () => {

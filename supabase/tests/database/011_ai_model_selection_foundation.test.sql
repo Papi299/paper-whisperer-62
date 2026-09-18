@@ -181,14 +181,20 @@ SELECT ok(
   'both 001A models are still enabled AND selectable');
 
 -- Every model still arrives by explicit product acceptance. Gemini 3.7 and 3.8
--- cleared that bar under C35 and are asserted exhaustively in suite 012; a
--- Claude / GPT / o-series / preview model or the floating `gemini-flash-latest`
--- alias has not, and none may appear by a seed nobody reviewed. A floating alias
--- stays excluded on its own terms: it is not a stable thing to have chosen.
+-- cleared that bar under C35 and are asserted exhaustively in suite 012;
+-- claude-sonnet-5 and gpt-5.6-terra cleared it under C43 and are asserted
+-- exhaustively in suite 018. Any OTHER Claude / GPT / o-series / preview model,
+-- or the floating `gemini-flash-latest` alias, has not, and none may appear by a
+-- seed nobody reviewed. A floating alias stays excluded on its own terms: it is
+-- not a stable thing to have chosen.
+--
+-- The two approved ids are named exceptions rather than a relaxed pattern, so
+-- the guard keeps its full force: a third Claude or GPT model still fails here.
 SELECT is(
   (SELECT count(*)::int FROM public.ai_model_catalog
-    WHERE provider_model ~* '(claude|gpt|o[0-9]|preview|latest)'),
-  0, 'no Claude / GPT / o-series / preview / -latest model reached the catalog');
+    WHERE provider_model ~* '(claude|gpt|o[0-9]|preview|latest)'
+      AND id NOT IN ('anthropic/claude-sonnet-5', 'openai/gpt-5.6-terra')),
+  0, 'no unreviewed Claude / GPT / o-series / preview / -latest model reached the catalog');
 
 -- The catalog is product metadata. Its column set is pinned so a future change
 -- cannot quietly add a place to put an API key, secret name or credential.

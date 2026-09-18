@@ -74,7 +74,7 @@ CREATE FUNCTION pg_temp.claims(p_uid text) RETURNS text LANGUAGE sql IMMUTABLE A
   SELECT '{"sub":"' || p_uid || '","role":"authenticated"}';
 $hlp$;
 
-SELECT plan(50);
+SELECT plan(51);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. The catalog is exactly the four approved models
@@ -83,43 +83,56 @@ SELECT plan(50);
 -- Asserted BEFORE any fixture row is inserted, so these counts describe the
 -- migrated catalog and nothing this suite manufactured.
 
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 4,
-  'the catalog holds exactly the four approved models');
+-- AI-MULTI-PROVIDER-001E appended two PAID-provider rows (staged enabled but
+-- NOT selectable). This suite still owns "the catalog as a list", so the list
+-- it asserts is the whole list; the Google-specific claims below are scoped to
+-- Google rather than softened.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 6,
+  'the catalog holds exactly the six approved models');
 
 -- Ordered by the two keys the Settings control itself orders by (`sort_order`
 -- then `id`), so this is the order a user actually sees in the dropdown.
 SELECT is(
   (SELECT array_agg(id ORDER BY sort_order, id) FROM public.ai_model_catalog),
   ARRAY['google/gemini-3.5-flash','google/gemini-3.6-flash',
-        'google/gemini-3.7-flash','google/gemini-3.8-flash'],
-  'catalog ids are provider-qualified and ordered 3.5, 3.6, 3.7, 3.8');
+        'google/gemini-3.7-flash','google/gemini-3.8-flash',
+        'anthropic/claude-sonnet-5','openai/gpt-5.6-terra'],
+  'catalog ids are provider-qualified and ordered 3.5, 3.6, 3.7, 3.8, Sonnet, Terra');
 
 SELECT is(
   (SELECT array_agg(provider_model ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY['gemini-3.5-flash','gemini-3.6-flash','gemini-3.7-flash','gemini-3.8-flash'],
-  'provider model strings are exactly the four approved Gemini models');
+  ARRAY['gemini-3.5-flash','gemini-3.6-flash','gemini-3.7-flash','gemini-3.8-flash',
+        'claude-sonnet-5','gpt-5.6-terra'],
+  'provider model strings are exactly the six approved models');
 
 SELECT is(
   (SELECT array_agg(display_name ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY['Gemini 3.5 Flash','Gemini 3.6 Flash','Gemini 3.7 Flash','Gemini 3.8 Flash'],
-  'display names are exactly the four approved labels');
+  ARRAY['Gemini 3.5 Flash','Gemini 3.6 Flash','Gemini 3.7 Flash','Gemini 3.8 Flash',
+        'Claude Sonnet 5','GPT-5.6 Terra'],
+  'display names are exactly the six approved labels');
 
 SELECT is(
   (SELECT array_agg(provider ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY['google','google','google','google'],
-  'all four models are served by the one implemented provider adapter');
+  ARRAY['google','google','google','google','anthropic','openai'],
+  'each model names one of the three registered provider adapters');
 
 -- Sparse and unchanged: 001D appended 30 and 40 rather than renumbering 3.5 or
 -- 3.6, so a preference someone already saved keeps its position in the list.
 SELECT is(
   (SELECT array_agg(sort_order ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY[10,20,30,40],
-  'sort order is exactly 10 / 20 / 30 / 40');
+  ARRAY[10,20,30,40,50,60],
+  'sort order is exactly 10 / 20 / 30 / 40 / 50 / 60');
 
 SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog),
-  'all four models are enabled');
-SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog),
-  'all four models are selectable');
+  'all six models are enabled');
+-- Scoped to Google, because this is where the two model classes part company:
+-- every Google row is selectable, and neither staged paid row is. Asserting
+-- selectability over the whole catalog would now be false; asserting it over
+-- Google keeps the original claim exactly as strong for the rows it was about.
+SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog WHERE provider = 'google'),
+  'all four Google models are selectable');
+SELECT ok((SELECT NOT bool_or(selectable) FROM public.ai_model_catalog WHERE provider <> 'google'),
+  'neither staged paid model is selectable');
 
 -- Whole-row identity, so a column cannot drift onto the wrong model while every
 -- individual array above still lines up.
@@ -230,11 +243,11 @@ UPDATE public.user_entitlements
 
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d2000000-0000-0000-0000-000000000002'),
   $q$SELECT count(*)::text FROM public.ai_model_catalog$q$),
-  '4', 'an ordinary signed-in user can read all four catalog rows');
+  '6', 'an ordinary signed-in user can read all six catalog rows');
 
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d2000000-0000-0000-0000-000000000001'),
   $q$SELECT string_agg(id, ',' ORDER BY sort_order, id) FROM public.ai_model_catalog$q$),
-  'google/gemini-3.5-flash,google/gemini-3.6-flash,google/gemini-3.7-flash,google/gemini-3.8-flash',
+  'google/gemini-3.5-flash,google/gemini-3.6-flash,google/gemini-3.7-flash,google/gemini-3.8-flash,anthropic/claude-sonnet-5,openai/gpt-5.6-terra',
   'an entitled user reads the expanded catalog in the rendered order');
 
 SELECT is(pg_temp.errcode_as('anon','',
