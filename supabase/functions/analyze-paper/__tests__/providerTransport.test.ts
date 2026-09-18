@@ -93,7 +93,13 @@ describe("analyze-paper maps a transport failure the way it always did", () => {
     // §7: the kind is passed through rather than collapsed into "network", so a
     // future incident can tell "we stopped waiting" from "the connection died".
     expect(SOURCE).toContain("classifyProviderError({ kind: providerCall.kind })");
-    expect(SOURCE).toContain('throw new Error("gemini_" + providerCall.kind)');
+    // The spelling changed with EDGE-LOG-PRIVACY-HARDENING-001 (the thrown
+    // message is now one of the bounded `AnalyzeProviderFailureReason`
+    // literals, and provider-neutral), but the distinction it protects is the
+    // same one: timeout and network are recorded separately.
+    expect(SOURCE).toContain(
+      'failureReason = providerCall.kind === "timeout" ? "provider_timeout" : "provider_network"',
+    );
   });
 
   it("still resolves both of them to the same externally visible class", () => {
@@ -139,8 +145,10 @@ describe("analyze-paper names the 001B failure kind explicitly", () => {
   // returned nothing".
   it("handles incomplete_response before the empty tail, classified malformed", () => {
     const branch = SOURCE.indexOf('providerCall.kind === "incomplete_response"');
-    const branchThrow = SOURCE.indexOf('throw new Error("provider_incomplete_response")');
-    const emptyTail = SOURCE.indexOf('throw new Error("gemini_empty")');
+    // Anchored on the bounded reason each branch records
+    // (EDGE-LOG-PRIVACY-HARDENING-001 made the thrown message that reason).
+    const branchThrow = SOURCE.indexOf('failureReason = "provider_incomplete_response"');
+    const emptyTail = SOURCE.indexOf('failureReason = "provider_empty_response"');
     expect(branch).toBeGreaterThan(-1);
     expect(branchThrow).toBeGreaterThan(branch);
     expect(branchThrow).toBeLessThan(emptyTail);

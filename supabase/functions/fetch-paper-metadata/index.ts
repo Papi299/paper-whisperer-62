@@ -17,6 +17,8 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
+import { boundedErrorName } from "../_shared/boundedLogging.ts";
+import { createFetchWithRetry } from "./upstreamFetch.ts";
 import { canonicalDoiUrl, detectIdentifier } from "../_shared/identifierDetection.ts";
 import type { AuthorProvenance } from "../_shared/authorProvenance.ts";
 import { extractCrossrefAuthors } from "../_shared/crossrefAuthors.ts";
@@ -95,58 +97,43 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Read a runtime-required variable, logging only its NAME when it is missing.
+ *
+ * EDGE-LOG-PRIVACY-HARDENING-001, and the same wrapper `analyze-paper` uses.
+ * `requireEdgeEnv` throws an actionable message naming the variable, and the
+ * outer catch used to log that message — so a documented operator diagnostic
+ * (docs/deployment.md §10.2) shared a channel with arbitrary throwable text.
+ * The name is stated here instead, from a literal argument.
+ */
+function requireEdgeEnvLogged(name: "SUPABASE_URL" | "SUPABASE_ANON_KEY"): string {
+  try {
+    return requireEdgeEnv(name);
+  } catch {
+    console.error(`fetch-paper-metadata env_missing env=${name}`);
+    throw new Error("env_missing");
+  }
+}
+
 // `decodeHTMLEntities` moved to `../_shared/htmlEntities.ts` unchanged: the
 // PubMed author extractor needs the same decoding, and a second copy is how two
 // subtly different decoders begin.
 
 // ── Rate Limiting & Retry ──
-
-/**
- * Fetch wrapper with retry and exponential backoff.
- * Retries on network errors, 429 (rate limit), and 5xx (server errors).
- */
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit = {},
-  maxRetries = 3,
-  baseDelayMs = 1000
-): Promise<Response> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: AbortSignal.timeout(15_000), // 15s timeout per request
-      });
-
-      // Retry on rate limit or server errors
-      if (response.status === 429 || response.status >= 500) {
-        if (attempt < maxRetries) {
-          const delay = baseDelayMs * Math.pow(2, attempt);
-          console.warn(
-            `HTTP ${response.status} on attempt ${attempt + 1}, retrying in ${delay}ms...`
-          );
-          await sleep(delay);
-          continue;
-        }
-      }
-
-      return response;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxRetries) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        console.warn(
-          `Network error on attempt ${attempt + 1}, retrying in ${delay}ms...`
-        );
-        await sleep(delay);
-      }
-    }
-  }
-
-  throw lastError ?? new Error("fetchWithRetry: all attempts failed");
-}
+//
+// The retrying fetch moved to `./upstreamFetch.ts` unchanged in behaviour
+// (EDGE-LOG-PRIVACY-HARDENING-001): same retry budget, same backoff schedule,
+// same 15 s per-attempt timeout, same retry conditions. What changed is that it
+// no longer retains and rethrows the runtime's own `fetch` error, whose message
+// can embed the request URL — and these URLs carry the PMID, the DOI or title
+// being searched, and the user's `api_key`. Living beside this file rather than
+// inside it also makes that guarantee executable: Vitest drives it with a fake
+// `fetch` that rejects with a URL-bearing error.
+const fetchWithRetry = createFetchWithRetry({
+  fetchImpl: (url, init) => fetch(url, init),
+  sleep,
+  logger: console,
+});
 
 // ── Identifier Detection ──
 //
@@ -172,7 +159,7 @@ async function fetchFromPubMed(
     // wall-clock cost inside the Edge Function's CPU budget. PubMed-only —
     // Crossref keeps the default elsewhere.
     const tFetchStart = performance.now();
-    const response = await fetchWithRetry(url, {}, 1);
+    const response = await fetchWithRetry(url, { source: "pubmed", maxRetries: 1 });
     if (!response.ok) return null;
 
     const xml = await response.text();
@@ -291,7 +278,11 @@ async function fetchFromPubMed(
       source: "pubmed",
     };
   } catch (error) {
-    console.error("PubMed fetch error:", error instanceof Error ? error.message : "Unknown error");
+    // EDGE-LOG-PRIVACY-HARDENING-001: an allow-listed error NAME only. A fetch
+    // failure's message can embed this request's URL, which carries the PMID
+    // and the user's `api_key`; a body/parse failure's message quotes the
+    // response. The transport already logged the bounded upstream detail.
+    console.error(`fetch-paper-metadata pubmed_fetch_failed error=${boundedErrorName(error)}`);
     return null;
   }
 }
@@ -301,7 +292,7 @@ async function searchPubMedByDoi(doi: string, apiKey?: string): Promise<string |
     const apiParam = apiKey ? `&api_key=${apiKey}` : "";
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(doi)}[doi]&retmode=json${apiParam}`;
     // Reduced retry budget (1) for PubMed paths inside the Edge Function.
-    const response = await fetchWithRetry(url, {}, 1);
+    const response = await fetchWithRetry(url, { source: "pubmed", maxRetries: 1 });
     if (!response.ok) return null;
     const data = await response.json();
     return data.esearchresult?.idlist?.[0] || null;
@@ -315,7 +306,7 @@ async function searchPubMedByTitle(title: string, apiKey?: string): Promise<stri
     const apiParam = apiKey ? `&api_key=${apiKey}` : "";
     const url = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(title)}&retmode=json&retmax=1${apiParam}`;
     // Reduced retry budget (1) for PubMed paths inside the Edge Function.
-    const response = await fetchWithRetry(url, {}, 1);
+    const response = await fetchWithRetry(url, { source: "pubmed", maxRetries: 1 });
     if (!response.ok) return null;
     const data = await response.json();
     return data.esearchresult?.idlist?.[0] || null;
@@ -411,15 +402,19 @@ async function fetchFromCrossrefByDoi(
     // exactly once here — it arrives unencoded, never as a resolver URL.
     const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
     const response = await fetchWithRetry(url, {
-      headers: {
-        "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)",
+      source: "crossref",
+      init: {
+        headers: {
+          "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)",
+        },
       },
     });
     if (!response.ok) return null;
     const data = await response.json();
     return mapCrossrefToSchema(data.message, doi);
   } catch (error) {
-    console.error("Crossref DOI fetch error:", error instanceof Error ? error.message : "Unknown error");
+    // Bounded name only: the URL this failure may quote carries the DOI.
+    console.error(`fetch-paper-metadata crossref_doi_fetch_failed error=${boundedErrorName(error)}`);
     return null;
   }
 }
@@ -430,8 +425,11 @@ async function searchCrossrefByTitle(
   try {
     const url = `https://api.crossref.org/works?query.title=${encodeURIComponent(title)}&rows=1`;
     const response = await fetchWithRetry(url, {
-      headers: {
-        "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)",
+      source: "crossref",
+      init: {
+        headers: {
+          "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)",
+        },
       },
     });
     if (!response.ok) return null;
@@ -440,7 +438,9 @@ async function searchCrossrefByTitle(
     if (!items || items.length === 0) return null;
     return mapCrossrefToSchema(items[0], title);
   } catch (error) {
-    console.error("Crossref title search error:", error instanceof Error ? error.message : "Unknown error");
+    // Bounded name only: the URL this failure may quote carries the search
+    // title, which is the user's own text.
+    console.error(`fetch-paper-metadata crossref_title_search_failed error=${boundedErrorName(error)}`);
     return null;
   }
 }
@@ -594,8 +594,8 @@ Deno.serve(async (req) => {
     // is missing — replaces the previous `?? ""` fallback. Auto-injected
     // by the Supabase Edge runtime in production; same safety-net
     // pattern as `analyze-paper`.
-    const supabaseUrl = requireEdgeEnv("SUPABASE_URL");
-    const supabaseAnonKey = requireEdgeEnv("SUPABASE_ANON_KEY");
+    const supabaseUrl = requireEdgeEnvLogged("SUPABASE_URL");
+    const supabaseAnonKey = requireEdgeEnvLogged("SUPABASE_ANON_KEY");
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -672,7 +672,11 @@ Deno.serve(async (req) => {
       headers: jsonHeaders,
     });
   } catch (error: unknown) {
-    console.error("fetch-paper-metadata error:", error instanceof Error ? error.message : "Unknown error");
+    // EDGE-LOG-PRIVACY-HARDENING-001: an allow-listed error NAME, never the
+    // message. This is the catch a malformed `req.json()` body reaches, and
+    // V8's SyntaxError quotes that body — which here is the caller's list of
+    // identifiers (PMIDs, DOIs, titles).
+    console.error(`fetch-paper-metadata request_failed error=${boundedErrorName(error)}`);
     return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,
       headers: jsonHeaders,

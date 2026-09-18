@@ -953,7 +953,7 @@ Specifically, and durably:
 
 **Behavioural claim, and its one stated exception.** 001A is a refactor: for every response Google's `generateContent` API can produce, both operations' URL, method, headers, request bytes, parsing, quota consumption and refund behaviour, provider-error classification and user-visible responses are identical to the pre-refactor code, and so are their log lines apart from the one log-only change below. This was verified mechanically by running the pre- and post-refactor implementations of **both** operations side by side across 24 scenarios each — success, fenced output, unparseable output, whitespace output, empty envelope, non-JSON 2xx body, HTTP 429/503/400, network failure, timeout, an honoured Gemini preference, hypothetical Anthropic/OpenAI rows, a retired model, metadata failures, quota denial and a missing key — comparing status, response body, response headers, the exact provider URL/method/headers/request-body hash, the RPC sequence, the database reads and the emitted log lines.
 
-The single deliberate difference is one **log line**, in `analyze-paper` only: a 2xx whose body is not JSON used to be logged with the JSON parse error's own message, which quotes a fragment of the provider's body, and is now logged as the bounded `gemini_unreadable_response`. The HTTP status, the response body, the `provider_unavailable` classification and the refund are unchanged. This is required by the adapter contract above — a provider error body may not cross the boundary — and it narrows what can be logged rather than widening it.
+The single deliberate difference is one **log line**, in `analyze-paper` only: a 2xx whose body is not JSON used to be logged with the JSON parse error's own message, which quotes a fragment of the provider's body, and is now logged as a bounded reason (spelled `gemini_unreadable_response` until EDGE-LOG-PRIVACY-HARDENING-001 renamed it `provider_unreadable_response`, since all three providers can produce it). The HTTP status, the response body, the `provider_unavailable` classification and the refund are unchanged. This is required by the adapter contract above — a provider error body may not cross the boundary — and it narrows what can be logged rather than widening it.
 
 Two further facts are recorded rather than fixed. `analyze-paper` classifies an unreadable 2xx body as `provider_unavailable` while `suggest-paper-organization` classifies the same case as `malformed_response`; that divergence predates 001A, is preserved exactly, and aligning it would be a behaviour change needing its own decision. And the two functions' envelope readers were consolidated onto the stricter of the two, so envelopes that violate Google's documented response schema — a non-string `text`, or `candidates`/`parts` encoded as JSON objects rather than arrays — are now `empty` for `analyze-paper` where they were previously a crash-classified `provider_unavailable` or (for the object-as-array case) a success. Google's proto3 JSON serialization cannot emit either shape, so no reachable Gemini response is affected.
 
@@ -1160,6 +1160,24 @@ The remaining steps — paid-provider staging, credentials and canaries, then us
 
 The only way to hold such a preference is for an operator to write the `user_ai_preferences` row directly. That is precisely the bounded canary surface Phase 7 needs, and it is unavailable to everyone else by construction rather than by policy.
 
+> **CORRECTION — 2026-09-18, from the Phase-7 run. A written preference alone does not route, and the shortfall is silent.**
+>
+> `resolveEffectiveAiModel` applies **three gates in a fixed order**, and the catalog is the *last* of them:
+>
+> ```text
+> 1. entitlement   get_current_user_access() → can_select_ai_model must be true
+> 2. preference    user_ai_preferences.preferred_model_id must exist and be well-formed
+> 3. catalog row   ai_model_catalog: exists, enabled, provider has a registered adapter
+> ```
+>
+> Entitlement is read **before** the preference. `can_select_ai_model` is `ai_model_selection_enabled AND plan_status IN ('active','trialing')`, and the dedicated acceptance account is a **free** account, where that column keeps its `DEFAULT false`. A preference written for it was therefore ignored with `fallback("not_entitled")` — a member of `QUIET_REASONS`, so **nothing is logged**. The request would have run on the Google system default, spent a quota unit, and recorded telemetry reading `provider = google`, while every log line looked healthy. A canary built on the preference alone would have "passed" without ever reaching the paid provider.
+>
+> **The corrected mechanism** (owner-approved, and the one the 2026-09-18 canaries used) adds a temporary capability grant on the **same single acceptance account**, per provider block: capture the entitlement flag and the preference row → set `ai_model_selection_enabled = true` → write the preference → run the two operations → delete the preference → restore the flag → verify through both the operator connection and the account's own RLS session, on every exit path including failure. Full procedure in [deployment.md](deployment.md) §14.2.
+>
+> **This does not weaken the decision below.** `selectable` stays `false` throughout, so no other user's reachable set changes at any moment, and the capability is restored immediately after the block. What the correction shows is that "what is choosable" and "who may choose" are **both** gates on the route to a provider — the canary has to satisfy both, and it must do so without redefining either. Changing `can_select_ai_model`'s meaning, granting the capability to a real user's account, or adding an operator allowlist to the resolver all remain forbidden.
+>
+> One field cannot be restored: `user_entitlements` has a `BEFORE UPDATE` trigger, so that row's `updated_at` moves and stays moved. Restoration is proven on the substantive columns instead.
+
 **Why not canary with `selectable = true` and revert.** Because the window is real. Between the flip and the revert, every entitled user can select an un-canaried paid model, and any preference saved in that window **survives the revert** — `enabled` still routes it. A "brief" exposure would therefore be permanent for whoever used it.
 
 **Why not a code-level operator allowlist.** It would be a second authorization surface that could disagree with the catalog, which C33/C35/C39 exist to forbid. The preference row is already the authorized mechanism; it needs no new code.
@@ -1168,7 +1186,7 @@ The only way to hold such a preference is for an operator to write the `user_ai_
 
 **What it explicitly is not.** Not manual reasoning (C41's staging lock holds: no row is `reasoning_selectable`, and `set_current_user_ai_reasoning` stays ungranted). Not an entitlement change — `can_select_ai_model` decides **who** may choose, and this decides **what** is choosable. Not a system-default change (C34). Not a Google change.
 
-**Phase 8, stated now so it is not improvised later.** After successful canaries, a separate migration sets `selectable = true` on both rows and changes **nothing else** — not `enabled`, not reasoning metadata, not the system default, not the manual-reasoning grant. It is deliberately **not** committed by 001E: a migration on disk is a migration `supabase db push` can apply, and one that activates a paid provider must not be appliable before the canaries that justify it.
+**Phase 8, stated now so it is not improvised later. The canaries passed on 2026-09-18 ([deployment.md](deployment.md) §14.1a), so this is the remaining step, and it has not been authorized.** A separate migration sets `selectable = true` on both rows and changes **nothing else** — not `enabled`, not reasoning metadata, not the system default, not the manual-reasoning grant. It is deliberately **not** committed by 001E: a migration on disk is a migration `supabase db push` can apply, and one that activates a paid provider must not be appliable before the canaries that justify it.
 
 **Trigger to revisit.** A provider withdrawing a model or changing its reasoning vocabulary; a price change (the price book is effective-dated, so this is a new record, never an edit); or evidence that the operator-preference canary route is reachable by a non-operator.
 

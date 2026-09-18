@@ -28,6 +28,13 @@ import {
   recordAiProviderUsage,
   type AiOperationOutcome,
 } from "../_shared/aiUsageTelemetry.ts";
+import {
+  analyzeEnvMissingLog,
+  analyzeProviderFailureLog,
+  analyzeRequestFailureLog,
+  type AnalyzeProviderFailureReason,
+  type AnalyzeRequiredEnvName,
+} from "./logging.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -39,7 +46,7 @@ const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
 
 /**
  * Best-effort refund of one AI quota unit. Swallows any error so the
- * caller can still surface the ORIGINAL Gemini failure without being
+ * caller can still surface the ORIGINAL provider failure without being
  * shadowed by a refund-side issue. The refund_ai_quota RPC itself is
  * also tolerant (returns refunded=false on missing counter), so the
  * combination is layered defense-in-depth.
@@ -58,14 +65,37 @@ type RpcClient = {
   ) => Promise<{ error: { message: string } | null }>;
 };
 
+/**
+ * Read a runtime-required variable, logging only its NAME when it is missing.
+ *
+ * EDGE-LOG-PRIVACY-HARDENING-001. `requireEdgeEnv` throws an actionable message
+ * naming the variable, and the outer catch used to log that message — which is
+ * how a documented operator diagnostic (docs/deployment.md §10.2) rode the same
+ * channel as arbitrary throwable text. Now the name is stated here, as a
+ * bounded line built from a literal argument, and the thrown message is not
+ * logged by anyone.
+ */
+function requireEdgeEnvLogged(name: AnalyzeRequiredEnvName): string {
+  try {
+    return requireEdgeEnv(name);
+  } catch {
+    console.error(analyzeEnvMissingLog(name));
+    throw new Error("env_missing");
+  }
+}
+
 async function safeRefundAiQuota(supabase: RpcClient, userId: string): Promise<void> {
   try {
     const { error } = await supabase.rpc("refund_ai_quota", { p_user_id: userId });
+    // EDGE-LOG-PRIVACY-HARDENING-001: the failure is reported as a bounded flag
+    // rather than the database's own message, which is arbitrary text from
+    // outside this function. Same spelling as `suggest-paper-organization`'s
+    // `safeRefund`, so the two refund paths report failure identically.
     if (error) {
-      console.error("refund_ai_quota RPC returned error (swallowed):", error.message);
+      console.error("analyze-paper refund_failed rpc_error=1");
     }
-  } catch (refundErr) {
-    console.error("refund_ai_quota threw (swallowed):", refundErr instanceof Error ? refundErr.message : "unknown");
+  } catch {
+    console.error("analyze-paper refund_failed threw=1");
   }
 }
 
@@ -94,8 +124,8 @@ Deno.serve(async (req) => {
     // produced a broken `createClient("", "")` whose downstream
     // `auth.getUser()` failure was hard to attribute. Auto-injected by
     // the Supabase Edge runtime in production; the throw is a safety net.
-    const supabaseUrl = requireEdgeEnv("SUPABASE_URL");
-    const supabaseAnonKey = requireEdgeEnv("SUPABASE_ANON_KEY");
+    const supabaseUrl = requireEdgeEnvLogged("SUPABASE_URL");
+    const supabaseAnonKey = requireEdgeEnvLogged("SUPABASE_ANON_KEY");
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -187,7 +217,9 @@ Deno.serve(async (req) => {
       { p_user_id: user.id },
     );
     if (quotaError) {
-      console.error("3c. consume_ai_quota RPC error:", quotaError.message);
+      // Bounded: the RPC's own message is arbitrary external text. Mirrors
+      // `suggest-organization quota_rpc_error`.
+      console.error("3c. analyze-paper quota_rpc_error");
       return new Response(
         JSON.stringify({
           error: "Analysis failed. Please try again later.",
@@ -225,12 +257,14 @@ Deno.serve(async (req) => {
     }
     console.log("3e. Quota consumed; remaining:", quotaRow.remaining);
 
-    // ── Step 4: Call Gemini ──
-    // Wrapped in an inner try so a Gemini / parsing failure triggers a
+    // ── Step 4: Call the selected provider ──
+    // Wrapped in an inner try so a provider / parsing failure triggers a
     // best-effort refund of the quota unit just consumed. The refund
-    // RPC is best-effort: if it itself fails, we log and rethrow the
-    // ORIGINAL Gemini error so the caller sees the real failure
-    // reason, not a refund-side error.
+    // RPC is best-effort: if it itself fails, it is logged as its own bounded
+    // line and the ORIGINAL provider failure still decides the response, so a
+    // refund-side problem never masks the real outcome. Since
+    // EDGE-LOG-PRIVACY-HARDENING-001 the failure is reported by its bounded
+    // class and reason, never by the thrown error's message.
     // ── Step 4: the SELECTED PROVIDER's credential ──
     //
     // AI-MULTI-PROVIDER-001C. This used to read `GEMINI_API_KEY`
@@ -251,10 +285,13 @@ Deno.serve(async (req) => {
       (name) => Deno.env.get(name),
     );
     if (!credential.ok) {
-      // Refund before throwing — the user did not get the analysis. The message
-      // names the missing ENVIRONMENT VARIABLE, never a value: without the name
-      // a misconfigured deployment is undiagnosable, and the name is not a
-      // secret.
+      // Refund before throwing — the user did not get the analysis. The log
+      // line names the missing ENVIRONMENT VARIABLE, never a value: without the
+      // name a misconfigured deployment is undiagnosable, and the name is not a
+      // secret. It is stated here, as its own bounded line (the spelling
+      // `suggest-paper-organization` already uses), because the outer catch no
+      // longer logs the thrown message.
+      console.error(`analyze-paper provider_key_missing env=${credential.envName}`);
       await safeRefundAiQuota(supabase, user.id);
       throw new Error(`${credential.envName} not configured in Supabase secrets`);
     }
@@ -273,7 +310,7 @@ Deno.serve(async (req) => {
     // adapter's business, and this function no longer knows any of it.
     const generationRequest = buildAnalyzeGenerationRequest(title, abstract);
 
-    // Gemini-call-and-parse block. Any failure triggers a best-effort refund of
+    // Provider-call-and-parse block. Any failure triggers a best-effort refund of
     // the quota unit consumed above, then returns a NEUTRAL 500 carrying a
     // machine-readable provider-error `code` (Part F). A provider rate-limit /
     // quota event is NEVER converted into a Paperlume 402 — it stays a 500, the
@@ -281,6 +318,12 @@ Deno.serve(async (req) => {
     // manager-only provider panel) never leaks Google project detail.
     let providerErrorClass: ProviderErrorClass = "unknown";
     let classified = false;
+    // EDGE-LOG-PRIVACY-HARDENING-001. The bounded reason the failure log will
+    // carry, set beside the classification at each branch below. It replaces
+    // reading the caught throwable's message: every value it can hold is one of
+    // the closed `AnalyzeProviderFailureReason` literals, so no branch can put
+    // generated text, a request fragment or a URL into an operational log.
+    let failureReason: AnalyzeProviderFailureReason = "provider_unknown";
 
     // AI-MULTI-PROVIDER-001D. The provider call, once it has happened, and the
     // one place its usage is recorded: exactly once per request that reached a
@@ -341,7 +384,7 @@ Deno.serve(async (req) => {
       );
 
       dispatchedCall = providerCall;
-      console.log("5a. Gemini provider attempts:", providerCall.attempts);
+      console.log("5a. Provider attempts:", providerCall.attempts);
 
       if (!providerCall.ok) {
         // A timeout is distinguished from a generic network failure here rather
@@ -350,16 +393,20 @@ Deno.serve(async (req) => {
         // been generating". Both still classify to `provider_unavailable`, so
         // nothing the user or the provider panel sees changes.
         if (providerCall.kind === "http") {
-          console.log("5b. Gemini error, status:", providerCall.status);
+          console.log("5b. Provider HTTP error, status:", providerCall.status);
           providerErrorClass = classifyProviderError({ kind: "http", status: providerCall.status });
           classified = true;
-          throw new Error("gemini_http_" + providerCall.status);
+          failureReason = typeof providerCall.status === "number"
+            ? `provider_http_${providerCall.status}`
+            : "provider_http_unknown";
+          throw new Error(failureReason);
         }
         if (providerCall.kind === "network" || providerCall.kind === "timeout") {
-          console.log("5b. Gemini transport failure:", providerCall.kind);
+          console.log("5b. Provider transport failure:", providerCall.kind);
           providerErrorClass = classifyProviderError({ kind: providerCall.kind });
           classified = true;
-          throw new Error("gemini_" + providerCall.kind);
+          failureReason = providerCall.kind === "timeout" ? "provider_timeout" : "provider_network";
+          throw new Error(failureReason);
         }
         if (providerCall.kind === "unreadable_response") {
           // A 2xx whose body the adapter could not read as a provider response.
@@ -371,61 +418,72 @@ Deno.serve(async (req) => {
           // AI-MULTI-PROVIDER-001A deliberately does not make.
           providerErrorClass = classifyProviderError({ kind: "network" });
           classified = true;
-          throw new Error("gemini_unreadable_response");
+          failureReason = "provider_unreadable_response";
+          throw new Error(failureReason);
         }
         if (providerCall.kind === "incomplete_response") {
           // A readable 2xx envelope in which the provider itself reports the
           // generation did not finish. AI-MULTI-PROVIDER-001B added this kind
           // for the Anthropic and OpenAI adapters (Anthropic's `stop_reason`,
-          // OpenAI's `status`); Google's envelope has no such field, so this
-          // branch is unreachable while the catalog is Google-only — both adapters
-          // are registered since AI-MULTI-PROVIDER-001C, but no row routes to either —
-          // and nothing about this function's
-          // current behaviour changes. It is written now because the tail below
-          // treats every remaining kind as `empty`, and a new kind falling into
-          // it would report a truncated or abandoned generation as "the model
-          // returned nothing" — in exactly the log line someone would use to
-          // diagnose it. Classified `malformed_response`, which is also what
-          // suggest-paper-organization does with it: unlike the two 001A kinds,
-          // this one has no divergent history to preserve.
+          // OpenAI's `status`); Google's envelope has no such field, so a
+          // Gemini request cannot produce it. It became genuinely reachable with
+          // AI-MULTI-PROVIDER-001E: both paid rows are staged `enabled` in
+          // Production (Phase 7 routed a real request to each), so a truncated
+          // Claude or OpenAI generation lands here. It was written before that
+          // was possible, because the tail below treats every remaining kind as
+          // `empty`, and a new kind falling into it would report a truncated or
+          // abandoned generation as "the model returned nothing" — in exactly
+          // the log line someone would use to diagnose it. Classified
+          // `malformed_response`, which is also what suggest-paper-organization
+          // does with it: unlike the two 001A kinds, this one has no divergent
+          // history to preserve.
           console.log("5b. Provider reported an incomplete generation");
           providerErrorClass = classifyProviderError({ kind: "parse" });
           classified = true;
-          throw new Error("provider_incomplete_response");
+          failureReason = "provider_incomplete_response";
+          throw new Error(failureReason);
         }
         // A well-formed envelope carrying no generated text.
-        console.log("6. Parsing Gemini response");
-        console.log("6a. Empty Gemini response (no candidates/text)");
+        console.log("6. Parsing provider response");
+        console.log("6a. Empty provider response (no generated text)");
         providerErrorClass = classifyProviderError({ kind: "empty" });
         classified = true;
-        throw new Error("gemini_empty");
+        failureReason = "provider_empty_response";
+        throw new Error(failureReason);
       }
 
-      console.log("6. Parsing Gemini response");
+      console.log("6. Parsing provider response");
 
       // Normalized by the adapter to the generated text this function's own
       // parser has always received — never a provider envelope.
       const rawText = providerCall.text;
-      console.log("6b. Gemini response received");
+      console.log("6b. Provider response received");
 
       let cleanText = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
       const startIndex = cleanText.indexOf("{");
       const endIndex = cleanText.lastIndexOf("}");
       if (startIndex === -1 || endIndex === -1) {
-        console.log("6c. No JSON object found in Gemini response");
+        console.log("6c. No JSON object found in provider response");
         providerErrorClass = classifyProviderError({ kind: "parse" });
         classified = true;
-        throw new Error("gemini_no_json");
+        failureReason = "provider_no_json";
+        throw new Error(failureReason);
       }
       cleanText = cleanText.substring(startIndex, endIndex + 1);
       let parsed;
       try {
         parsed = JSON.parse(cleanText);
-      } catch (parseErr) {
+      } catch {
+        // EDGE-LOG-PRIVACY-HARDENING-001: the parser's own exception is
+        // DISCARDED, not logged. V8 quotes the input it choked on, so that
+        // message is a fragment of the generated answer — the paper's content,
+        // in an operational log. The fact worth keeping is that the answer did
+        // not parse, which the bounded reason states.
         console.log("6c. JSON parse failed");
         providerErrorClass = classifyProviderError({ kind: "parse" });
         classified = true;
-        throw new Error("gemini_parse_failed: " + (parseErr instanceof Error ? parseErr.message : "unknown"));
+        failureReason = "provider_json_parse_failed";
+        throw new Error(failureReason);
       }
       console.log("7. Success! Returning parsed result");
       await recordProviderUsage("succeeded");
@@ -440,8 +498,12 @@ Deno.serve(async (req) => {
         }),
         { status: 200, headers: jsonHeaders },
       );
-    } catch (geminiErr) {
+    } catch {
       // Reached without an HTTP/empty/parse classification → network / timeout.
+      // The throwable itself is deliberately not bound: every branch above
+      // already recorded a bounded `failureReason`, and anything unexpected
+      // that lands here keeps `provider_unknown` rather than contributing its
+      // own text.
       if (!classified) {
         providerErrorClass = classifyProviderError({ kind: "network" });
       }
@@ -451,12 +513,9 @@ Deno.serve(async (req) => {
       // parse failure after a completed generation still cost the provider
       // work. A request that never reached the provider records nothing.
       await recordProviderUsage("failed");
-      // Log the class + a bounded reason; never the raw Google body.
-      console.error(
-        "analyze-paper provider failure:",
-        providerErrorClass,
-        geminiErr instanceof Error ? geminiErr.message : "unknown",
-      );
+      // Log the class + a bounded reason; never the raw provider body, and
+      // never the throwable's own message.
+      console.error(analyzeProviderFailureLog(providerErrorClass, failureReason));
       // Neutral, non-operational wording for the user. A provider limit is NOT a
       // Paperlume plan wall — this stays a 500, never a 402.
       return new Response(
@@ -469,7 +528,11 @@ Deno.serve(async (req) => {
       );
     }
   } catch (err) {
-    console.error("analyze-paper error:", err instanceof Error ? err.message : "Unknown error");
+    // EDGE-LOG-PRIVACY-HARDENING-001: an allow-listed error NAME, never the
+    // message. This is the catch a malformed `req.json()` body reaches, and
+    // V8's SyntaxError quotes that body — so logging the message let a caller
+    // put a fragment of their own request into the Edge log.
+    console.error(analyzeRequestFailureLog(err));
     return new Response(
       JSON.stringify({ error: "Analysis failed. Please try again later." }),
       { status: 500, headers: jsonHeaders },

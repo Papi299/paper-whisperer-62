@@ -305,11 +305,21 @@ These are ordinary server-side operational logs, not application analytics. A po
 
 | Log | What it contains | Class |
 |---|---|---|
-| **Supabase Edge Function logs** | Structured operational lines written by the functions. Audited line by line: `search-pubmed` logs `q_len=<length>` and **never the query text** ([`handler.ts:317-336`](../supabase/functions/search-pubmed/handler.ts#L317-L336)); `suggest-paper-organization` logs outcomes and counts only; `analyze-paper` logs step markers, HTTP statuses and a provider-error class; `delete-account` logs a removed-object **count** and a failure code. **`fetch-paper-metadata` logs the PMID being parsed** (`pubmed-parse pmid=… bytes=… fetch_ms=…`) — a public catalogue number, but one that reveals which paper a request concerned | VERIFIED |
+| **Supabase Edge Function logs** | Structured operational lines written by the functions. Audited line by line: `search-pubmed` logs `q_len=<length>` and **never the query text** ([`handler.ts:317-336`](../supabase/functions/search-pubmed/handler.ts#L317-L336)); `suggest-paper-organization` logs outcomes and counts only; `analyze-paper` logs step markers, HTTP statuses, a provider-error class and a bounded failure reason; `delete-account` logs a removed-object **count** and a failure code. **`fetch-paper-metadata` logs the PMID being parsed** (`pubmed-parse pmid=… bytes=… fetch_ms=…`) — a public catalogue number, but one that reveals which paper a request concerned | VERIFIED |
 | **Supabase platform logs** | Postgres, Auth, Storage and API-gateway logs kept by Supabase. Retention and content are Supabase's, not this repository's | EXTERNAL POLICY VERIFICATION REQUIRED |
 | **Vercel access logs** | Standard hosting request logs (IP, user agent, path, timing) | EXTERNAL POLICY VERIFICATION REQUIRED |
 
-**No user id, email, token, key, title, abstract, note, Project name or Tag name is written to any application log.** That was checked against all 50 `console.*` call sites across `supabase/functions/**` (excluding tests).
+**No user id, email, token, key, title, abstract, note, Project name or Tag name is written to any application log.**
+
+> **CORRECTION — EDGE-LOG-PRIVACY-HARDENING-001 (2026-09-18).** The sentence above was originally justified by checking all 50 `console.*` call sites across `supabase/functions/**` for **which variables were passed**. That method could not see the real exposure, and the claim was therefore stronger than the evidence: two functions interpolated a caught throwable's `.message`, and a message is not content-free.
+>
+> - **V8 `JSON.parse` quotes its input.** `analyze-paper` threw `gemini_parse_failed: <parseErr.message>` when a generated answer would not parse, and logged that message — so a ~20-character fragment of the paper's own generated content could reach the log. Reproduced, not theorised: parsing `{"tldr": Sleep deprivation…}` yields `Unexpected token 'S', "{"tldr": Sleep depr"... is not valid JSON`.
+> - **`fetch` errors can embed the request URL.** `fetch-paper-metadata`'s `fetchWithRetry` retained the runtime's own error and rethrew it after the retry budget; each caller then logged `error.message`. A PubMed URL carries the PMID, the DOI or title being searched, and the user's `api_key`; a Crossref URL carries the DOI or title.
+> - The outer `catch` of each function logged `error.message` too, which is the catch a malformed `req.json()` body reaches — so a caller could put a fragment of their own request (identifiers, or an abstract) into the log by sending broken JSON.
+>
+> **What changed.** No arbitrary throwable text can now reach a log from either function. Every caught value is reduced to an allow-listed error **name** by `_shared/boundedLogging.ts`, and failure lines are built from server-generated bounded facts only (operation, upstream, HTTP status, attempt number, error class, and one of a closed set of reason literals). The transport reports its own bounded failure and throws a fixed message instead of the provider's error. `err.message`, `String(err)`, `stack` and `cause` are read by nothing. Regression tests feed real V8 parse failures and URL-bearing transport errors through the shipped code and assert none of that material appears.
+>
+> **Status: PARTIALLY VERIFIED — verified in repository source, pending deployment.** `analyze-paper` and `fetch-paper-metadata` must be redeployed for Production logs to gain the hardening, and until then the pre-hardening behaviour described above remains live. The claim is re-verified unchanged for `suggest-paper-organization`, `search-pubmed` and `delete-account`, none of which ever logged a throwable message.
 
 ---
 
