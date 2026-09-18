@@ -1620,13 +1620,13 @@ The ref indirection is the mechanism, not a convention: real Project and Tag UUI
 | | Anthropic (Claude API) | OpenAI (API) |
 |---|---|---|
 | Product | Commercial API, **not** a consumer product | OpenAI **API**, **not** consumer ChatGPT |
-| Training on customer content | Anthropic's commercial terms state it **may not train models on Customer Content** | **Not used to train by default**; requires explicit org opt-in, which PaperLume has not made |
+| Training on customer content | **Not used by default.** Anthropic states it will not, by default, use inputs or outputs from its commercial products (Claude for Work, Anthropic API, …) to train its models, and does so only on explicit feedback/opt-in. PaperLume submits no feedback | **Not used to train by default**; requires an explicit org opt-in. PaperLume publishes only this provider-level default — it makes **no account-specific opt-in claim**, because no direct evidence of the organization setting has been verified |
 | Statelessness | One stateless Messages request; no `metadata`, no `user_id` | One stateless Responses request; adapter sets **`store: false`**; no `metadata`, `safety_identifier`, `user`, `conversation` or `previous_response_id` |
-| Retention | API inputs/outputs deleted within **30 days**, with exceptions (longer agreed retention, customer-controlled features, Usage Policy enforcement) | Abuse-monitoring logs retained **up to 30 days** unless longer retention is legally required |
-| Zero retention | Not claimed. The 30-day practice has exceptions and is **not** a zero-retention guarantee | **ZDR is NOT enabled.** It requires OpenAI's prior approval; PaperLume has none, so ordinary abuse-monitoring retention applies |
+| Retention | API inputs/outputs automatically deleted within **30 days** — **not an absolute ceiling.** Published exceptions: a customer-controlled longer-retention feature (e.g. Files API); a separately agreed arrangement; Usage Policy enforcement, under which flagged content may be kept **up to 2 years** (trust-and-safety classification scores longer); retention required by law; and, where the contract permits, anonymized org data kept longer for research/statistical purposes | Abuse-monitoring logs **may contain customer content** (prompts, responses, derived metadata), normally retained **up to 30 days**, and longer where **required by law OR reasonably necessary to protect OpenAI's services or any third party from harm** |
+| Zero retention | Not claimed. The 30-day practice has exceptions and is **not** a guarantee; PaperLume has no zero-retention arrangement with Anthropic | **Neither MAM nor ZDR is enabled.** OpenAI documents **two** approved controls that exclude customer content from abuse logs — **Modified Abuse Monitoring** and **Zero Data Retention** — both requiring prior approval, eligibility and additional requirements. PaperLume holds neither, so ordinary abuse-monitoring retention applies |
 | Prompt caching | PaperLume sends no `cache_control`; caching is opt-in | GPT-5.6 and later cache implicitly; PaperLume requests none |
 
-`store: false` is **not** a blanket zero-retention promise, and the published Privacy Policy says so explicitly. Conflating the two would be the most likely material misstatement in this area, which is why a test pins it.
+`store: false` is **not** a blanket zero-retention promise, and the published Privacy Policy says so explicitly. It governs response-object persistence, not abuse monitoring. The sharpest way to see the difference: **ZDR itself forces `store` to `false` server-side** on `/v1/responses` and `/v1/chat/completions` regardless of what the request asks for — so sending `store: false` is a strict subset of what ZDR does, never equivalent to it. Conflating the two would be the most likely material misstatement in this area, which is why tests pin it.
 
 ### 30.5 Findings
 
@@ -1645,12 +1645,19 @@ The ref indirection is the mechanism, not a convention: real Project and Tag UUI
 
 ### 30.7 Effective-date handling
 
-The policy's displayed effective date is **September 17, 2026**, the date this amendment was drafted. If the amendment is published on a later calendar date, that date becomes **false on publication** and must be advanced to the real publication date before merge. This is flagged rather than guessed.
+The policy's displayed effective date is **September 18, 2026**, advanced from the original September 17 drafting date during the 001A privacy correction. It is pinned by `EFFECTIVE_DATE` in `src/pages/__tests__/Privacy.test.tsx`.
+
+The September 17 date attached to the **earlier** 001D telemetry amendment (PR #283) is historical and unchanged; only this pending amendment's date moved.
+
+**If this amendment is not published on September 18, 2026, the displayed date is false on publication** and must be advanced again, in both the page and the test, before merge. The merge gate must treat the date as stale rather than assume it.
 
 ### 30.8 What this addendum does NOT claim
 
 - ❌ "Anthropic or OpenAI is a live recipient" — **false.** No credential, no selectable row, no request.
-- ❌ "PaperLume has zero data retention with either provider" — **false.** Neither is claimed and ZDR is not enabled.
+- ❌ "PaperLume has zero data retention with either provider" — **false.** Neither is claimed; PaperLume holds no Anthropic zero-retention arrangement and neither OpenAI MAM nor ZDR.
+- ❌ "Anthropic deletes everything after 30 days" — **false.** 30 days is the ordinary practice; Usage Policy enforcement can retain flagged content for up to 2 years, and legal, customer-controlled, separately-agreed and contract-permitted anonymized retention are all documented exceptions.
+- ❌ "ZDR is the only way to keep content out of OpenAI's abuse logs" — **false.** Modified Abuse Monitoring does the same for the logs; ZDR adds forced `store: false`.
+- ❌ "PaperLume's OpenAI organization has not opted in to data sharing" — **not established.** The policy states OpenAI's default only. No account-level evidence was verified, so no account-specific claim is published.
 - ❌ "`store: false` means OpenAI retains nothing" — **false.** Abuse-monitoring retention may still apply.
 - ❌ "the paid providers share Google's Free-tier terms" — **false.** The Free-tier data-use and geographic warnings describe Google only.
 - ❌ "this review approves activation" — **false.** It is a prerequisite for it.

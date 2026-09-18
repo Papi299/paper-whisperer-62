@@ -101,7 +101,7 @@ const Privacy = () => {
         <article>
           <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PaperLume Privacy Policy</h1>
 
-          <p className="mt-4 font-semibold leading-7">Effective date: September 17, 2026</p>
+          <p className="mt-4 font-semibold leading-7">Effective date: September 18, 2026</p>
 
           <P>
             PaperLume is operated by <strong>Maor Pichadza</strong>, an individual sole proprietor in
@@ -468,20 +468,37 @@ const Privacy = () => {
               warning above does not describe Anthropic.
             </P>
             <P>
-              Under Anthropic's current commercial terms, Anthropic states that it{" "}
-              <strong>may not train its models on customer content</strong> submitted through its
-              commercial services.
+              Anthropic states that it will{" "}
+              <strong>not, by default, use inputs or outputs from its commercial products</strong>{" "}
+              — including the Anthropic API — to train its models, and that it uses them for
+              training only where a customer explicitly submits feedback or otherwise chooses to
+              allow it. PaperLume does not submit your content to Anthropic as feedback.
             </P>
             <P>
               Anthropic states that it automatically deletes API inputs and outputs within{" "}
-              <strong>30 days</strong> of receipt or generation, except where a longer retention
-              period has been separately agreed, where a feature under the customer's own control
-              retains data for longer, or where Anthropic needs to retain data longer to enforce its
-              usage policies.
+              <strong>30 days</strong> of receipt or generation. That 30-day practice is{" "}
+              <strong>not an absolute ceiling</strong> — Anthropic publishes exceptions to it:
+            </P>
+            <Bullets>
+              <li>
+                where a service or feature under the customer's own control retains data for longer;
+              </li>
+              <li>where a different retention arrangement has been separately agreed;</li>
+              <li>where Anthropic needs to retain data longer to enforce its Usage Policy;</li>
+              <li>where retention is required by law.</li>
+            </Bullets>
+            <P>
+              In particular, Anthropic's current published practice is that content{" "}
+              <strong>flagged as violating its Usage Policy may be retained for up to two years</strong>,
+              with the associated trust-and-safety classification scores retained for longer. Where
+              its contract with a customer permits it, Anthropic may also anonymize that customer's
+              data for research or statistical purposes and retain the anonymized information for
+              longer than the ordinary window.
             </P>
             <P>
-              This is a stated deletion practice with exceptions. It is{" "}
-              <strong>not a zero-retention guarantee</strong>, and PaperLume does not claim one.
+              These are stated practices with exceptions, not a guarantee. PaperLume{" "}
+              <strong>does not promise that Anthropic retains nothing</strong> and has no
+              zero-retention arrangement with Anthropic.
             </P>
 
             <Subheading>OpenAI — how OpenAI may use API data</Subheading>
@@ -501,24 +518,45 @@ const Privacy = () => {
               OpenAI not to retain the response object for later retrieval.
             </P>
             <P>
-              Under OpenAI's current API terms, data submitted through the API is{" "}
-              <strong>not used to train or improve OpenAI models by default</strong>, unless the API
-              organization explicitly opts in to sharing data. PaperLume has not opted in.
+              Under OpenAI's current API terms, OpenAI{" "}
+              <strong>
+                does not use API inputs or outputs to train or improve its models by default
+              </strong>
+              , unless the API organization explicitly opts in to sharing data.
             </P>
             <P>
               <strong>
                 Setting <code>store: false</code> is not the same as a blanket zero-retention
                 promise.
               </strong>{" "}
-              OpenAI states that abuse-monitoring logs may still be generated for API usage and
-              retained for up to 30 days, unless longer retention is required by law, and that
-              excluding content from those logs requires a separate Zero Data Retention arrangement
-              that OpenAI must approve in advance.
+              It controls whether OpenAI keeps the response object for later retrieval. It does not
+              switch off OpenAI's separate abuse monitoring.
             </P>
             <P>
-              PaperLume does <strong>not</strong> claim to have a Zero Data Retention arrangement
-              with OpenAI. Unless and until this Privacy Policy says otherwise, you should assume
-              that ordinary OpenAI abuse-monitoring retention applies.
+              OpenAI states that abuse-monitoring logs are generated for API usage by default, that
+              they <strong>may contain customer content</strong> such as prompts and responses along
+              with metadata derived from it, and that they are normally retained for{" "}
+              <strong>up to 30 days</strong>. OpenAI states that they may be retained longer where
+              doing so is <strong>required by law</strong>, or is{" "}
+              <strong>
+                reasonably necessary to protect OpenAI's services or any third party from harm
+              </strong>
+              .
+            </P>
+            <P>
+              OpenAI offers approved controls that exclude customer content from those
+              abuse-monitoring logs. The currently documented alternatives are{" "}
+              <strong>Modified Abuse Monitoring</strong> and{" "}
+              <strong>Zero Data Retention</strong>. Both require OpenAI's prior approval, eligibility
+              and acceptance of additional requirements. Zero Data Retention additionally causes
+              OpenAI to treat the request-level <code>store</code> setting as{" "}
+              <code>false</code> at all times, which is why PaperLume sending{" "}
+              <code>store: false</code> itself is not equivalent to having it.
+            </P>
+            <P>
+              PaperLume does <strong>not</strong> claim to have either Modified Abuse Monitoring or
+              Zero Data Retention with OpenAI. Unless and until this Privacy Policy says otherwise,
+              you should assume that ordinary OpenAI abuse-monitoring retention applies.
             </P>
           </Section>
 

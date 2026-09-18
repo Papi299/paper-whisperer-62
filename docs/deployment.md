@@ -1235,7 +1235,7 @@ The deployed generation runtime already **contains** both adapters (Phase 6), so
 ### 14.1 Ordered rollout
 
 1. Independent exact-head review of the Draft PR.
-2. **Owner approval of the exact Privacy Policy wording**, and correction of the effective date if publication slips past the drafted date (§14.5).
+2. **Owner approval of the exact Privacy Policy wording**, and re-checking the effective date against the actual publication date (§14.5) — it is currently September 18, 2026.
 3. Merge. The Vercel deploy publishes the amended policy.
 4. Apply migration `20260917201856` (`supabase db push --linked`). Verify six rows, both paid rows `selectable = false`.
 5. Install `ANTHROPIC_API_KEY` (`supabase secrets set`, value read from the operator environment, never echoed).
@@ -1306,4 +1306,11 @@ This migration is **deliberately not committed by 001E**, so it cannot be applie
 
 ### 14.5 Privacy Policy effective date
 
-The amendment is drafted with effective date **September 17, 2026**. If it is published later, that date is **false on publication**. Advance it to the real publication date — and update `EFFECTIVE_DATE` in `src/pages/__tests__/Privacy.test.tsx`, which pins it — before merging.
+The amendment now carries effective date **September 18, 2026**, advanced from the original September 17 drafting date during the 001A privacy correction. Two places hold it and must always agree:
+
+- `src/pages/Privacy.tsx` — the rendered `Effective date:` line;
+- `EFFECTIVE_DATE` in `src/pages/__tests__/Privacy.test.tsx`, which pins it and also asserts that **exactly one** effective date is rendered.
+
+**This is a standing merge gate, not a one-off.** If the amendment is not published on September 18, 2026, the displayed date is false on publication and must be advanced again in both places before merge. Do not assume the date is still correct because it was correct when written.
+
+The September 17, 2026 date on the **earlier** 001D telemetry amendment (PR #283) is historical and must not be rewritten.

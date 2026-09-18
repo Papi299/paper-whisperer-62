@@ -56,7 +56,7 @@ const PRIVACY_EMAIL = "mutrisport@gmail.com";
  * The date the current approved copy is published. The one place to change if
  * publication moves to a later calendar day.
  */
-const EFFECTIVE_DATE = "Effective date: September 17, 2026";
+const EFFECTIVE_DATE = "Effective date: September 18, 2026";
 
 /** The twenty section headings, in the order the approved copy establishes. */
 const SECTION_HEADINGS = [
@@ -108,11 +108,11 @@ const SENTINELS = [
   "Which provider receives your content depends on which AI model is selected for the request.",
   "Selecting a Google, Anthropic, or OpenAI model causes the research content described above to be transmitted to that provider.",
   "PaperLume does not send your uploaded attachment files to any AI provider.",
-  "may not train its models on customer content",
-  "not a zero-retention guarantee",
+  "not, by default, use inputs or outputs from its commercial products",
+  "does not promise that Anthropic retains nothing",
   "PaperLume sends stateless requests to OpenAI's Responses API.",
-  "not used to train or improve OpenAI models by default",
-  "PaperLume does not claim to have a Zero Data Retention arrangement with OpenAI.",
+  "does not use API inputs or outputs to train or improve its models by default",
+  "PaperLume does not claim to have either Modified Abuse Monitoring or Zero Data Retention with OpenAI.",
 ];
 
 /**
@@ -493,16 +493,46 @@ describe("Privacy policy page", () => {
     unmount();
   });
 
-  it("states Anthropic's training and retention terms without overclaiming", () => {
+  it("states Anthropic's training position as a default, not an absolute", () => {
     const { container, unmount } = renderPolicy();
     const text = visibleText(container);
 
-    expect(text).toContain("may not train its models on customer content");
-    expect(text).toContain("30 days");
-    // The honesty clause: a stated deletion practice with exceptions is not a
-    // guarantee, and the policy must not be edited into claiming one.
-    expect(text).toContain("not a zero-retention guarantee");
-    expect(text).not.toMatch(/Anthropic[^.]{0,80}zero data retention agreement/i);
+    expect(text).toContain(
+      "not, by default, use inputs or outputs from its commercial products",
+    );
+    expect(text).toContain("Anthropic API");
+    // The exception Anthropic itself publishes: explicit feedback / opt-in.
+    expect(text).toContain("explicitly submits feedback or otherwise chooses to allow it");
+    expect(text).toContain("PaperLume does not submit your content to Anthropic as feedback.");
+
+    unmount();
+  });
+
+  it("presents Anthropic's 30 days as a practice with exceptions, not a ceiling", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("automatically deletes API inputs and outputs within 30 days");
+    // The correction this test exists for: the old wording could be read as an
+    // unconditional 30-day ceiling. It must say plainly that it is not one.
+    expect(text).toContain("not an absolute ceiling");
+
+    // Each published exception, named.
+    expect(text).toContain("under the customer's own control retains data for longer");
+    expect(text).toContain("separately agreed");
+    expect(text).toContain("enforce its Usage Policy");
+    expect(text).toContain("required by law");
+
+    // The specific duration that makes "30 days" misleading on its own.
+    expect(text).toContain(
+      "flagged as violating its Usage Policy may be retained for up to two years",
+    );
+    expect(text).toContain("anonymize");
+    expect(text).toContain("research or statistical purposes");
+
+    // And no guarantee, in either direction.
+    expect(text).toContain("does not promise that Anthropic retains nothing");
+    expect(text).toContain("no zero-retention arrangement with Anthropic");
 
     unmount();
   });
@@ -532,31 +562,72 @@ describe("Privacy policy page", () => {
       "Setting store: false is not the same as a blanket zero-retention promise.",
     );
     expect(text).toContain("abuse-monitoring logs");
+    expect(text).toContain("does not switch off OpenAI's separate abuse monitoring");
 
     unmount();
   });
 
-  it("says OpenAI API data is not used for training by default", () => {
+  it("states what OpenAI abuse-monitoring logs hold and how long", () => {
     const { container, unmount } = renderPolicy();
     const text = visibleText(container);
 
-    expect(text).toContain("not used to train or improve OpenAI models by default");
-    expect(text).toContain("unless the API organization explicitly opts in");
-    expect(text).toContain("PaperLume has not opted in.");
+    expect(text).toContain("may contain customer content");
+    expect(text).toContain("up to 30 days");
+    // Both longer-retention triggers. The old copy named only the legal one,
+    // which is the omission this test exists to prevent recurring.
+    expect(text).toContain("required by law");
+    expect(text).toContain(
+      "reasonably necessary to protect OpenAI's services or any third party from harm",
+    );
 
     unmount();
   });
 
-  it("never claims PaperLume holds Zero Data Retention with OpenAI", () => {
+  it("names BOTH approved OpenAI retention controls, not only ZDR", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    expect(text).toContain("Modified Abuse Monitoring");
+    expect(text).toContain("Zero Data Retention");
+    expect(text).toContain("prior approval");
+    // ZDR's extra effect is what makes it different from PaperLume's own
+    // request-level store: false, so the policy must not conflate the two.
+    expect(text).toContain("treat the request-level store setting as false at all times");
+
+    unmount();
+  });
+
+  it("never claims PaperLume holds MAM or ZDR with OpenAI", () => {
     const { container, unmount } = renderPolicy();
     const text = visibleText(container);
 
     expect(text).toContain(
-      "PaperLume does not claim to have a Zero Data Retention arrangement with OpenAI.",
+      "PaperLume does not claim to have either Modified Abuse Monitoring or Zero Data " +
+        "Retention with OpenAI.",
     );
     expect(text).toContain("ordinary OpenAI abuse-monitoring retention applies");
-    // ZDR must only ever appear as something PaperLume does NOT have.
-    expect(text).not.toMatch(/PaperLume (has|uses|holds|maintains) (a )?Zero Data Retention/i);
+    // Neither control may ever appear as something PaperLume DOES have.
+    expect(text).not.toMatch(
+      /PaperLume (has|uses|holds|maintains) (a |an )?(Zero Data Retention|Modified Abuse Monitoring)/i,
+    );
+
+    unmount();
+  });
+
+  it("makes no account-specific claim about OpenAI data-sharing opt-in", () => {
+    const { container, unmount } = renderPolicy();
+    const text = visibleText(container);
+
+    // The durable provider-level fact stays...
+    expect(text).toContain(
+      "does not use API inputs or outputs to train or improve its models by default",
+    );
+    expect(text).toContain("unless the API organization explicitly opts in to sharing data");
+    // ...but the unverified account-specific assertion must not return. It was
+    // published from OpenAI's DEFAULT behaviour rather than from any evidence
+    // about PaperLume's own organization settings.
+    expect(text).not.toContain("PaperLume has not opted in");
+    expect(text).not.toMatch(/PaperLume[^.]{0,60}(has not|did not|never) opted in/i);
 
     unmount();
   });
