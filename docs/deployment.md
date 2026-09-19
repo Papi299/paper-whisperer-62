@@ -410,10 +410,10 @@ than restoring the legacy blanket ACL.
 
 ### 6.6 Migration-BEFORE-merge is required for `20260912120000` (model-aware reasoning policy) — PHASES 1–2 COMPLETE: applied 2026-09-12, merged 2026-09-13; Phase 3 (001D) foundation COMPLETE
 
-> **Status — Phases 1 and 2 COMPLETE; the Phase 3 foundation is COMPLETE too (§6.7); Phase 6 is COMPLETE (§6.6a). Do not re-run the migration or the merge as a pending step.** `20260912120000` was applied to Production on 2026-09-12, exactly once, with `supabase db push --linked` from the approved PR head `8001fce8182859a7cfd1d597573112df502ef3fd`, and verified while the old frontend and the pre-001A Edge runtime stayed live. That left the ledger aligned at **82** rows, latest `20260912120000`; it is now **83** rows, latest `20260913120000` (§6.7). Manual reasoning is still staged off and no provider secret was installed. `analyze-paper` v26 / `suggest-paper-organization` v10 were unchanged by this migration and advanced only at the separately authorized Phase 6 deploy on 2026-09-17 (§6.6a). The procedure below is kept as the record of that rollout and as a reusable pattern.
+> **Status — Phases 1 and 2 COMPLETE; the Phase 3 foundation is COMPLETE too (§6.7); Phase 6 is COMPLETE (§6.6a). Do not re-run the migration or the merge as a pending step.** `20260912120000` was applied to Production on 2026-09-12, exactly once, with `supabase db push --linked` from the approved PR head `8001fce8182859a7cfd1d597573112df502ef3fd`, and verified while the old frontend and the pre-001A Edge runtime stayed live. That left the ledger aligned at **82** rows, latest `20260912120000`; it went to **83** rows, latest `20260913120000` (§6.7), and stands at **86** today (§15). Manual reasoning stayed staged off at that point and no provider secret was installed; both were released later, by `AI-MULTI-PROVIDER-001E` (§14) and `AI-MANUAL-REASONING-001` (§15) respectively. `analyze-paper` v26 / `suggest-paper-organization` v10 were unchanged by this migration and advanced only at the separately authorized Phase 6 deploy on 2026-09-17 (§6.6a). The procedure below is kept as the record of that rollout and as a reusable pattern.
 >
 > - **Phase 1 completed (2026-09-12):** independent approval of the implementation head; explicit authorization of the Production migration; its application; old-app verification (read-only — see the note after the procedure).
-> - **Phase 2 completed (2026-09-13):** PR #280 merged at its independently approved head `d62994ef67ff8f27763a442bd9f63f4d7f7b54f5` as the regular two-parent merge `1c4c9b5882628cbe6ab7bead60e7f4eac0bed0b4`, whose tree is identical to that head. Merged-main CI passed, and the automatic Vercel Production deployment of that commit reached READY, putting the 001C frontend live. **No Edge Function was deployed** by the merge: `analyze-paper` v26 and `suggest-paper-organization` v10 were unchanged, and manual reasoning is still staged off.
+> - **Phase 2 completed (2026-09-13):** PR #280 merged at its independently approved head `d62994ef67ff8f27763a442bd9f63f4d7f7b54f5` as the regular two-parent merge `1c4c9b5882628cbe6ab7bead60e7f4eac0bed0b4`, whose tree is identical to that head. Merged-main CI passed, and the automatic Vercel Production deployment of that commit reached READY, putting the 001C frontend live. **No Edge Function was deployed** by the merge: `analyze-paper` v26 and `suggest-paper-organization` v10 were unchanged, and manual reasoning remained staged off at that date.
 > - **Phase 3 (001D telemetry foundation) — COMPLETE:** the repository implementation merged on 2026-09-13 (PR #282), migration `20260913120000` was applied to Production on 2026-09-13, and the Privacy Policy disclosure was published with effective date September 17, 2026 (PR #283) (§6.7). Telemetry collection started with Phase 6.
 > - **Phase 6 and the Google part of Phase 7 — COMPLETE (2026-09-17):** both generation functions were deployed together from `main` `f962b44d` (`analyze-paper` v27, `suggest-paper-organization` v11), followed by a bounded Gemini telemetry canary that passed (§6.6a, §6.7).
 > - **Later, each separately authorized:** paid-provider row staging, provider secrets, paid-provider canaries and user enablement (§6.6a).
@@ -428,7 +428,7 @@ than restoring the legacy blanket ACL.
 - `clear_current_user_ai_model`'s body is untouched; only its comment changes;
 - `set_current_user_ai_reasoning` and `clear_current_user_ai_reasoning` are new objects that nothing deployed calls.
 
-**Applying it activates nothing.** Every Gemini row gets `reasoning_selectable = false`. `set_current_user_ai_reasoning` is granted to **no role**, and the migration's own self-check fails if `authenticated` can execute it. No `anthropic/*` or `openai/*` row is added. A user can neither create nor see a manual reasoning level afterwards.
+**Applying it activates nothing** — a permanent property of `20260912120000` itself, not of Production today. Every Gemini row gets `reasoning_selectable = false`. `set_current_user_ai_reasoning` is granted to **no role**, and the migration's own self-check fails if `authenticated` can execute it. No `anthropic/*` or `openai/*` row is added. A user could neither create nor see a manual reasoning level after this migration alone; the separately authorized `AI-MANUAL-REASONING-001` opened both locks on 2026-09-19 (§15).
 
 ```text
 1. independent review approves the exact 001C PR head
@@ -480,10 +480,13 @@ Phase 7  controlled live canary       per provider, per operation               
 Phase 8  user enablement              separate migration: open the paid models to user    COMPLETE 2026-09-19:
                                       selection (selectable = true on the two paid rows)  20260918210017 applied (ledger 85).
                                                                                           Manual reasoning + the reasoning
-                                                                                          setter grant remain DEFERRED
+                                                                                          setter grant were DEFERRED out of
+                                                                                          001E and completed separately the
+                                                                                          same day by AI-MANUAL-REASONING-001
+                                                                                          (20260919075655, ledger 86 — §15)
 ```
 
-**All eight phases are complete.** The paid-provider rows were staged and both credentials installed on 2026-09-18, the generation functions were redeployed from `ef8ad768` (`analyze-paper` v29, `suggest-paper-organization` v13), and the Claude Sonnet 5 and GPT-5.6 Terra canaries passed that day (§14.1a). Phase 8 followed on 2026-09-19: `20260918210017` set `selectable = true` on exactly those two rows, so both models are now offered to entitled users. **What the original Phase-8 line also contemplated — flipping `reasoning_selectable` and granting `set_current_user_ai_reasoning` — was deliberately NOT done.** Manual reasoning remains staged off catalog-wide and is a separate initiative, not leftover 001E work. That initiative is now `AI-MANUAL-REASONING-001` (C45, §15): its migration is **prepared and not applied**, so Production is still Automatic-only. The paragraph below records the earlier Phase 6 milestone.
+**All eight phases are complete.** The paid-provider rows were staged and both credentials installed on 2026-09-18, the generation functions were redeployed from `ef8ad768` (`analyze-paper` v29, `suggest-paper-organization` v13), and the Claude Sonnet 5 and GPT-5.6 Terra canaries passed that day (§14.1a). Phase 8 followed on 2026-09-19: `20260918210017` set `selectable = true` on exactly those two rows, so both models are now offered to entitled users. **What the original Phase-8 line also contemplated — flipping `reasoning_selectable` and granting `set_current_user_ai_reasoning` — was deliberately NOT done by 001E.** Manual reasoning was a separate initiative, not leftover 001E work. That initiative is `AI-MANUAL-REASONING-001` (C45, §15), and it completed later the same day: `20260919075655` was applied on 2026-09-19 (ledger 85 → 86), so manual reasoning is now live and Production-accepted. The paragraph below records the earlier Phase 6 milestone.
 
 **Phase 6 and the Google part of Phase 7 are complete (2026-09-17).** Both generation functions were deployed together from `main` `f962b44d`, and the bounded Production telemetry canary on the live Gemini models passed (§6.7; [migration-history.md](migration-history.md)). Phases 4 and 5 were not prerequisites of Phase 6: no paid-provider catalog row or credential exists, so the deployed runtime cannot route a request to Anthropic or OpenAI. Phases 4 and 5, the paid-provider canaries and Phase 8 remain, each needing its own authorization.
 
@@ -507,7 +510,7 @@ This is approved product policy (C41), not a regression. The Phase 6 canary conf
 >   - its ACL is `{postgres=arwdDxtm/postgres,service_role=a/postgres}` with no column ACL, so `anon` and `authenticated` hold no privilege and `service_role` holds `INSERT` only;
 >   - `user_id` cascades from `auth.users`;
 >   - it held **0 rows** (`n_tup_ins` 0) — before Phase 6;
->   - the catalog is still the four Google rows with `reasoning_selectable` false on all of them, and the reasoning setter is still ungranted;
+>   - the catalog is still the four Google rows with `reasoning_selectable` false on all of them, and the reasoning setter is still ungranted — both before `AI-MULTI-PROVIDER-001E` and before `AI-MANUAL-REASONING-001` (§15);
 >   - Edge was still `analyze-paper` v26 and `suggest-paper-organization` v10 — before Phase 6.
 > - **Privacy Policy published, effective September 17, 2026.**
 >   - What changed: the owner-approved amendment added the "AI usage records" disclosure (§2), its purpose (§5), account-lifetime retention (§13), and the export exclusion with access on request, "Subject to applicable law" (§15).
@@ -1231,7 +1234,7 @@ Rotation takes effect on the next function invocation **because both in-memory c
 
 ## 14. Paid provider activation (AI-MULTI-PROVIDER-001E) — COMPLETE (Phase 8 applied 2026-09-19)
 
-**Current state (2026-09-19): the rollout is COMPLETE. Claude Sonnet 5 and GPT-5.6 Terra are user-selectable for entitled accounts.** Phase 8 was owner-authorized and applied on 2026-09-19: PR #289 merged as the two-parent commit `38b22c209591a5f5ac2d80498bb55d082dde6d22`, and one `supabase db push --linked` applied `20260918210017_activate_paid_provider_model_selection.sql` (ledger **84 → 85**). It moved exactly two catalog flags — `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra`, `selectable` **false → true** — and nothing else: the four Google rows are byte-unchanged, `reasoning_selectable` is still false on all six rows, `set_current_user_ai_reasoning` is still granted to nobody, the system default is still Google, and no preference, entitlement or quota row was written. **Entitlement remains the authority for WHO may select a model**; activation only changed WHAT is choosable, and a non-entitled account still resolves to the system default. No new provider canary was required — Phase 7 had already exercised all four operations live — and no Edge deployment or secret change accompanied Phase 8. The steps below are the executed record.
+**Current state (2026-09-19): the rollout is COMPLETE. Claude Sonnet 5 and GPT-5.6 Terra are user-selectable for entitled accounts.** Phase 8 was owner-authorized and applied on 2026-09-19: PR #289 merged as the two-parent commit `38b22c209591a5f5ac2d80498bb55d082dde6d22`, and one `supabase db push --linked` applied `20260918210017_activate_paid_provider_model_selection.sql` (ledger **84 → 85**). It moved exactly two catalog flags — `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra`, `selectable` **false → true** — and nothing else: the four Google rows are byte-unchanged, `reasoning_selectable` was still false on all six rows and `set_current_user_ai_reasoning` still granted to nobody **when this phase finished** (both were released later the same day by `AI-MANUAL-REASONING-001`, §15), the system default is still Google, and no preference, entitlement or quota row was written. **Entitlement remains the authority for WHO may select a model**; activation only changed WHAT is choosable, and a non-entitled account still resolves to the system default. No new provider canary was required — Phase 7 had already exercised all four operations live — and no Edge deployment or secret change accompanied Phase 8. The steps below are the executed record.
 
 **Earlier state, for the record (2026-09-18): steps 1–10 were done and Phase 8 was not.** The owner authorized the rollout; PR #287 merged as `ef8ad768`; the Privacy Policy amendment is live with effective date September 18, 2026; migration `20260917201856` is applied (ledger 84, six catalog rows); both paid-provider secrets are installed; both generation functions were redeployed from `ef8ad768`; and the Claude Sonnet 5 and GPT-5.6 Terra Phase-7 canaries passed. **Both paid models remain `selectable = false` and manual reasoning remains disabled, so no ordinary user can select or reach either provider.**
 
@@ -1340,7 +1343,7 @@ Flip `selectable`; grant `set_current_user_ai_reasoning`; touch a non-acceptance
 
 **Status: APPLIED to Production on 2026-09-19 — this section is now an executed operator record.** Both prerequisites were met first: the Phase-7 canaries passed on 2026-09-18 (§14.1a), and the Edge-log privacy hardening that gated broad activation was merged and deployed the same day (EDGE-LOG-PRIVACY-HARDENING-001, `analyze-paper` v30 / `fetch-paper-metadata` v22).
 
-**What was done.** PR #289 was reviewed at its exact head and merged as the two-parent commit `38b22c209591a5f5ac2d80498bb55d082dde6d22`; required merged-main CI (Validate, DB Tests) passed; `supabase migration list --linked` and a dry run each showed **exactly one** pending migration; a final read-only gate re-confirmed both rows still `selectable = false`; then **one** `supabase db push --linked --yes`, one attempt, exit 0, applied `20260918210017_activate_paid_provider_model_selection.sql`. Ledger **84 → 85**. Verified afterwards: both paid rows `selectable = true` with every other field unchanged, the four Google rows byte-identical, `reasoning_selectable` false on all six, the reasoning setter still ungranted, entitlements and preferences unwritten, and no Edge deployment or secret change.
+**What was done.** PR #289 was reviewed at its exact head and merged as the two-parent commit `38b22c209591a5f5ac2d80498bb55d082dde6d22`; required merged-main CI (Validate, DB Tests) passed; `supabase migration list --linked` and a dry run each showed **exactly one** pending migration; a final read-only gate re-confirmed both rows still `selectable = false`; then **one** `supabase db push --linked --yes`, one attempt, exit 0, applied `20260918210017_activate_paid_provider_model_selection.sql`. Ledger **84 → 85**. Verified afterwards, as the state stood at that point: both paid rows `selectable = true` with every other field unchanged, the four Google rows byte-identical, `reasoning_selectable` false on all six, the reasoning setter still ungranted (both released later the same day by `AI-MANUAL-REASONING-001`, §15), entitlements and preferences unwritten, and no Edge deployment or secret change.
 
 The migration set exactly this and nothing else:
 
@@ -1365,46 +1368,52 @@ The amendment now carries effective date **September 18, 2026**, advanced from t
 
 The September 17, 2026 date on the **earlier** 001D telemetry amendment (PR #283) is historical and must not be rewritten.
 
-## 15. Manual AI reasoning activation (AI-MANUAL-REASONING-001) — PREPARED, NOT APPLIED
+## 15. Manual AI reasoning activation (AI-MANUAL-REASONING-001) — COMPLETE (applied and Production-accepted 2026-09-19)
 
-**Current state: Production is Automatic-only.** `reasoning_selectable` is `false` on all six catalog rows and `set_current_user_ai_reasoning` is granted to nobody, exactly as C41 staged it. Migration `20260919075655_activate_manual_ai_reasoning_selection.sql` exists in the repository and has **not** been applied to Production. Nothing about this initiative has been deployed, and no provider call has been made for it.
+**Current state: manual reasoning is LIVE.** `reasoning_selectable` is `true` on all six catalog rows and `set_current_user_ai_reasoning` is executable by `authenticated` — the two locks C41 staged, released together on 2026-09-19. An entitled user (`can_select_ai_model`) who has pinned a named model may choose any level that model's catalog row lists; **Automatic stays the default and the recommended choice**, and PaperLume's own default model remains Automatic-only by design, because the setter still refuses a level with no pinned model (`model_required`). One saved manual level applies to **both** Analyze and organization suggestions.
 
-**What applying it will change — and only this.**
+**What was done.** PR #291 was merged as the two-parent commit `96cca6fbe46651790aeffd6a278c65b653cc510b`, and one `supabase db push --linked` applied `20260919075655_activate_manual_ai_reasoning_selection.sql` (ledger **85 → 86**). The migration made exactly two changes:
 
 1. `reasoning_selectable` **false → true** on exactly the six existing rows: Gemini 3.5, 3.6, 3.7 and 3.8 Flash, Claude Sonnet 5 and GPT-5.6 Terra.
 2. `GRANT EXECUTE ON FUNCTION public.set_current_user_ai_reasoning(text) TO authenticated` — that role and no other.
 
-It also rewrites two catalog COMMENTs whose text would otherwise still say the control is staged off. There is no Edge deploy, no secret change, no function-body change, no entitlement change, no backfill and no default-model change; the column DEFAULT stays `false`, so a future model still starts closed.
+It also rewrote two catalog COMMENTs whose text would otherwise still say the control is staged off. There was **no Edge deploy, no secret change, no function-body change, no entitlement change, no preference backfill and no system-default change**; the column DEFAULT stays `false`, so a future model still starts closed until its own reviewed migration opens it. The Automatic matrix is exactly what C41 approved and did not move: Analyze `minimal` (Gemini 3.5/3.6), `low` (3.7/3.8), `off` (Claude Sonnet 5), `none` (GPT-5.6 Terra); organization suggestions `medium` everywhere. The bounded Production acceptance then passed across all three provider families (§15.2).
 
-### 15.1 Ordered rollout (each step separately authorized)
+### 15.1 Ordered rollout — EXECUTED (each step was separately authorized)
 
-1. Independent exact-head review of the Draft PR.
-2. Merge the exact approved head as a regular two-parent GitHub merge. The Vercel deploy that follows ships **no behaviour change**: the Settings control still reads `reasoning_selectable` from Production, which is still false.
-3. Wait for required merged-main CI (Validate, DB Tests, E2E (local)).
-4. Prove exactly **one** pending migration with a read-only preflight: the ledger is at **85**, and `20260919075655` is absent.
-5. Dry-run `supabase db push --linked --dry-run`; it must list that one file and nothing else.
-6. Apply exactly that one migration with one `supabase db push --linked` (ledger **85 → 86**).
-7. Verify, read-only: all six rows `reasoning_selectable = true`; the setter's ACL is exactly `{<owner>=X/<owner>,authenticated=X/<owner>}`; `anon`, `service_role` and PUBLIC still cannot execute it; every other catalog field byte-unchanged (levels, both Automatic columns, `enabled`, `selectable`, `sort_order`); no preference row written and no manual level backfilled; no entitlement row written; the system default unchanged.
-8. Verify in the live UI that the Reasoning control enables for a pinned model and offers exactly that model's levels.
-9. Run the separately authorized bounded Production acceptance (§15.2).
-10. Restore the acceptance account to its exact prior model and reasoning state.
-11. Document the live activation and close the initiative.
+1. ~~Independent exact-head review of the Draft PR.~~ **DONE.**
+2. ~~Merge the exact approved head as a regular two-parent GitHub merge.~~ **DONE** — PR #291, merge `96cca6fbe46651790aeffd6a278c65b653cc510b`. The Vercel deploy that followed shipped **no behaviour change**: the Settings control reads `reasoning_selectable` from Production, which was still false at that moment.
+3. ~~Wait for required merged-main CI (Validate, DB Tests, E2E (local)).~~ **DONE.**
+4. ~~Prove exactly **one** pending migration with a read-only preflight.~~ **DONE** — the ledger was at **85** with `20260919075655` absent.
+5. ~~Dry-run `supabase db push --linked --dry-run`.~~ **DONE** — it listed that one file and nothing else.
+6. ~~Apply exactly that one migration with one `supabase db push --linked`.~~ **DONE 2026-09-19** — ledger **85 → 86**, latest `20260919075655`.
+7. ~~Verify, read-only.~~ **DONE** — all six rows `reasoning_selectable = true`; the setter's ACL is exactly `{postgres=X/postgres,authenticated=X/postgres}` with no grant option; `anon`, `service_role` and PUBLIC cannot execute it; every other catalog field byte-unchanged (levels, both Automatic columns, `enabled`, `selectable`, `sort_order`); the setter body still `md5(prosrc) = 2f3db664…`; no preference row written and no manual level backfilled; no entitlement row written; the system default unchanged.
+8. ~~Verify that the Reasoning control enables for a pinned model and offers exactly that model's levels.~~ **DONE** — verified through the acceptance account's own RLS session, which is the read the Settings control performs: all six rows come back `reasoning_selectable = true` with their own level lists.
+9. ~~Run the separately authorized bounded Production acceptance (§15.2).~~ **PASSED 2026-09-19** — six operations, one attempt each.
+10. ~~Restore the acceptance account to its exact prior model and reasoning state.~~ **DONE** — see §15.2.
+11. Document the live activation and close the initiative. *(This section, and the closure PR that carries it.)*
 
-### 15.2 Bounded Production acceptance — PLAN ONLY, needs its own authorization
+### 15.2 Bounded Production acceptance — PASSED 2026-09-19
 
-Use the dedicated acceptance account, never the owner's library, and record its exact prior model and reasoning level first so it can be restored.
+Run on the dedicated acceptance account, never the owner's library, against its retained synthetic canary paper, with its exact prior model and reasoning state captured first so it could be restored.
 
-**Read-only first, for all six models:** each appears in the model dropdown; the reasoning control enables once the model is pinned; the level list is exactly that model's, with `minimal` present on Gemini 3.5/3.6 and absent on 3.7/3.8, `Off` on Claude and `None` on Terra.
+**Read-only first, for all six models:** each row was confirmed `reasoning_selectable = true` through the account's own RLS session — the same read the Settings control performs — with the level list exactly that model's: `minimal` present on Gemini 3.5/3.6 and absent on 3.7/3.8, `off` on Claude Sonnet 5 and `none` on GPT-5.6 Terra.
 
-**Then six provider operations, and no more** — enough to prove the UI saves it, the database stores it, the resolver carries it, both operation types honour it, and all three adapters express it:
+**Then six provider operations, and no more** — enough to prove the preference path saves it, the database stores it, the resolver carries it, both operation types honour it, and all three adapters express it. **Every one of the six resolved `model_selection_source = user_preference`, `reasoning_source = manual` and the exact saved level, with `provider_attempts = 1` and no retry:**
 
-| # | Model | Manual level | Operations | What it proves |
-|---|-------|--------------|------------|----------------|
-| A | Gemini 3.5 Flash | `minimal` | Analyze | the Google vocabulary including `minimal`; resolved `source=manual level=minimal` |
-| B | Gemini 3.8 Flash | `high` | Analyze | the Google vocabulary without `minimal` |
-| C | Claude Sonnet 5 | `low` | Analyze + Suggest | BOTH operations use manual `low`, not Automatic `off`/`medium` |
-| D | GPT-5.6 Terra | `low` | Analyze + Suggest | BOTH operations use manual `low`, not Automatic `none`/`medium` |
+| # | Model | Manual level | Operations | Result |
+|---|-------|--------------|------------|--------|
+| A | Gemini 3.5 Flash | `minimal` | Analyze | **PASS** — routed to `google/gemini-3.5-flash`, `manual`/`minimal`, provider completed |
+| B | Gemini 3.8 Flash | `high` | Analyze | **reasoning path PASS; provider HTTP 503** — routed to `google/gemini-3.8-flash` at `manual`/`high`, one attempt, quota consumed then refunded. A provider-availability exception, **not** a manual-reasoning routing failure: the intended model and manual level reached the provider boundary, and Gemini 3.8 did **not** generate a response |
+| C | Claude Sonnet 5 | `low` | Analyze + Suggest | **PASS both** — `manual`/`low` on each, overriding the Automatic split (Analyze `off`, Suggest `medium`) |
+| D | GPT-5.6 Terra | `low` | Analyze + Suggest | **PASS both** — `manual`/`low` on each, overriding the Automatic split (Analyze `none`, Suggest `medium`) |
 
-Do **not** sweep every level against every provider: the per-level encoding is already pinned by the adapter suites and the activation chain test. Use synthetic canary content only, verify each run from telemetry (`reasoning_source = manual`, the resolved level) and the Edge logs, and expect exactly one quota unit per success — reasoning level changes no quota accounting.
+C and D are the load-bearing cases: one saved level overrode **both** halves of each provider's Automatic split, which is what "manual applies to both operations" means in practice.
 
-Production provider calls require this rollout's own authorization; none is carried by the Draft PR.
+**Quota.** Five successes consumed one PaperLume quota unit each; the 503 consumed a unit and it was refunded, so that operation's net effect was zero. Net acceptance delta **+5**. Reasoning effort introduced no weighted quota accounting — one successful AI operation is one unit at every level, exactly as before.
+
+**Telemetry.** Each of the six operations recorded one content-free event carrying the reasoning source and the resolved level, alongside provider, model, outcome, attempts, usage dimensions and the list-price estimate. Absolute row counts are volatile and deliberately not recorded here as an architectural fact.
+
+**Restoration, verified.** The temporary `ai_model_selection_enabled = true` was returned to its prior `false`; the account's original preference state was the **absence** of a preference row, and that absence was restored rather than merely setting reasoning to Automatic; the substantive entitlement fields matched the captured baseline afterwards (`updated_at` moved normally because of its trigger, which cannot be restored); the durable synthetic canary paper remained; and no non-acceptance account was intentionally changed.
+
+Do **not** sweep every level against every provider: the per-level encoding is already pinned by the adapter suites and the activation chain test.
