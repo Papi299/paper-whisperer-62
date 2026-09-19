@@ -1038,17 +1038,17 @@ Specifically, and durably:
 - **Account export v3.** `preferred_reasoning_level` is user-owned portable data, so `data/user_ai_preferences.json` includes it, with Automatic serialized as JSON `null`. Because this reshapes an existing archive file, `ACCOUNT_EXPORT_VERSION` goes 2 → 3. The global catalog, including its reasoning metadata, stays excluded.
 - **Quota is unchanged.** One successful AI invocation is one existing PaperLume quota unit at every reasoning level. There are no weighted credits, and plan quotas and pricing are untouched. Usage and cost telemetry belong to `AI-MULTI-PROVIDER-001D`.
 
-**Staging — nothing is activated by this decision.** Five locks applied, and each alone kept manual reasoning and non-Google providers unreachable. Lock 5 was released on 2026-09-17; locks 1–4 still apply, and each alone still does:
+**Staging — nothing is activated by this decision.** Five locks applied, and each alone kept manual reasoning and non-Google providers unreachable. Locks 3, 4 and 5 have since been released by `AI-MULTI-PROVIDER-001E` and the Phase 6 deploy. Locks 1 and 2 are the manual-reasoning pair, and **both are still in force in Production**:
 
 1. `reasoning_selectable = false` on every catalog row.
 2. `set_current_user_ai_reasoning` holds **no EXECUTE grant for any role**, `authenticated` included, and a replay-time self-check fails if one appears. Only `clear_current_user_ai_reasoning`, which can only remove a manual choice, is granted.
-3. No `anthropic/*` or `openai/*` catalog row exists.
-4. No `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is installed.
+3. No `anthropic/*` or `openai/*` catalog row exists. *Released 2026-09-18: `20260917201856` staged both rows.*
+4. No `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is installed. *Released 2026-09-18: both credentials were installed for the Phase 7 canaries.*
 5. No generation Edge Function was deployed. *Released 2026-09-17: the Phase 6 deploy put the 001C runtime live (`analyze-paper` v27, `suggest-paper-organization` v11), so Gemini requests now carry the Automatic reasoning level.*
 
-The missing grant is deliberate. Creating user-owned reasoning data before the merged application contains the matching export, UI and runtime would be the ordering error. A later, separately authorized user-enablement migration flips `reasoning_selectable` and grants EXECUTE **together**.
+The missing grant is deliberate. Creating user-owned reasoning data before the merged application contains the matching export, UI and runtime would be the ordering error. A later, separately authorized user-enablement migration flips `reasoning_selectable` and grants EXECUTE **together** — which is exactly what `AI-MANUAL-REASONING-001` (C45) does. Its migration `20260919075655` is **prepared in the repository and not applied**: locks 1 and 2 hold in Production until that migration is separately reviewed, merged and applied.
 
-**Migration-before-merge dependency.** The merged frontend and export read the new columns, so the 001C pull request **must not be merged until migration `20260912120000` has been separately authorized, applied to Production, and verified while the old application is still live**. The migration is additive and backward compatible with the deployed app: the new columns are unread by it, the new preference column is nullable with no backfill, the model setter only gains a result column, and the two new functions are uncalled. Applying it alone activates nothing. Order: approve the exact PR head → authorize and apply the migration → verify the old app → merge. See [deployment.md](deployment.md) §6.6. **Status: satisfied, then merged.** `20260912120000` was applied to Production on 2026-09-12 and verified with the old application still live, and the pull request (#280) merged on 2026-09-13, so the 001C schema and frontend are live. The generation Edge rollout is still pending, and manual reasoning remains staged off.
+**Migration-before-merge dependency.** The merged frontend and export read the new columns, so the 001C pull request **must not be merged until migration `20260912120000` has been separately authorized, applied to Production, and verified while the old application is still live**. The migration is additive and backward compatible with the deployed app: the new columns are unread by it, the new preference column is nullable with no backfill, the model setter only gains a result column, and the two new functions are uncalled. Applying it alone activates nothing. Order: approve the exact PR head → authorize and apply the migration → verify the old app → merge. See [deployment.md](deployment.md) §6.6. **Status: satisfied, then merged.** `20260912120000` was applied to Production on 2026-09-12 and verified with the old application still live, and the pull request (#280) merged on 2026-09-13, so the 001C schema and frontend are live. The generation Edge rollout followed on 2026-09-17, and manual reasoning remains staged off in Production until `AI-MANUAL-REASONING-001` (C45) is applied.
 
 **An approved behaviour change for Gemini, stated plainly.** Production currently sends Gemini no thinking level, so both operations run at Google's `medium` default. Once the 001C Edge runtime is deployed:
 
@@ -1065,7 +1065,7 @@ That is intended product behaviour, not a regression. 001C is **not** Google beh
 
 **Re-evaluation trigger:**
 - The catalog-staging migration for Sonnet 5 / Terra, which must carry the future values above.
-- The user-enablement migration that flips `reasoning_selectable` and grants the setter.
+- The user-enablement migration that flips `reasoning_selectable` and grants the setter. *Fired: `AI-MANUAL-REASONING-001` (C45) prepares exactly that migration for all six models.*
 - `AI-MULTI-PROVIDER-001D` usage telemetry showing a ceiling or an Automatic level is wrong for real traffic, or that Gemini needs an explicit output ceiling.
 - A provider changing its reasoning vocabulary, default or field path, which requires re-reviewing that adapter's mapping and possibly the catalog rows.
 - Any proposal to express Automatic by omitting a provider parameter, which this decision forbids.
@@ -1131,7 +1131,7 @@ Specifically, and durably:
 - **Runtime telemetry is live.** Both generation functions were deployed together on 2026-09-17 from `main` `f962b44d` (Phase 6: `analyze-paper` v27, `suggest-paper-organization` v11), and each provider call they make writes one event (a failed write is logged, never retried, and never changes the response).
 - **The Phase 6 Gemini acceptance passed** with three content-free events: an Analyze success, a Suggest Google HTTP 503 recorded with unknown usage and refunded, and a Suggest success on the one permitted retry. Each was logged `recorded=1`, and both estimates recompute exactly ([deployment.md](deployment.md) §6.7).
 - No telemetry UI exists, and nothing reads telemetry to decide quota, entitlement, pricing or access.
-- Paid providers and manual reasoning remain staged off exactly as C41 left them.
+- Paid providers went live on 2026-09-19 (C43). Manual reasoning remains staged off in Production exactly as C41 left it; its activation is prepared but unapplied (C45).
 
 The remaining steps — paid-provider staging, credentials and canaries, then user enablement — each need separate authorization ([deployment.md](deployment.md) §6.6a).
 
@@ -1186,7 +1186,7 @@ The only way to hold such a preference is for an operator to write the `user_ai_
 
 **What it explicitly is not.** Not manual reasoning (C41's staging lock holds: no row is `reasoning_selectable`, and `set_current_user_ai_reasoning` stays ungranted). Not an entitlement change — `can_select_ai_model` decides **who** may choose, and this decides **what** is choosable. Not a system-default change (C34). Not a Google change.
 
-**Phase 8 — DONE, 2026-09-19. The decision is now fully executed.** Staging completed 2026-09-18 (`20260917201856`); the paid canaries passed the same day, one attempt per operation; the Edge-log privacy hardening that gated broad activation was merged and deployed the same day. Phase 8 then applied `20260918210017` (ledger 84 → 85), setting `selectable = true` on both rows and changing **nothing else** — not `enabled`, not the reasoning metadata, not the system default, not the manual-reasoning grant. Both paid models are now offered to entitled users; the four Google rows are byte-unchanged; and no preference or entitlement row was written, so nobody was migrated onto a paid model. **Manual reasoning is still separately staged off** — `reasoning_selectable` is false on all six rows and `set_current_user_ai_reasoning` is granted to nobody. That remains a distinct future decision, not unfinished 001E work.
+**Phase 8 — DONE, 2026-09-19. The decision is now fully executed.** Staging completed 2026-09-18 (`20260917201856`); the paid canaries passed the same day, one attempt per operation; the Edge-log privacy hardening that gated broad activation was merged and deployed the same day. Phase 8 then applied `20260918210017` (ledger 84 → 85), setting `selectable = true` on both rows and changing **nothing else** — not `enabled`, not the reasoning metadata, not the system default, not the manual-reasoning grant. Both paid models are now offered to entitled users; the four Google rows are byte-unchanged; and no preference or entitlement row was written, so nobody was migrated onto a paid model. **Manual reasoning is still separately staged off** — `reasoning_selectable` is false on all six rows and `set_current_user_ai_reasoning` is granted to nobody. That remained a distinct decision, and it is now C45: `AI-MANUAL-REASONING-001` prepares the activation migration for all six rows. Until it is applied, this paragraph describes Production exactly.
 
 The three-step shape this decision established — **stage → canary → activate**, each separately authorized — held end to end and is the reusable recipe for any future paid model. So is the canary-entitlement correction above: the resolver checks entitlement before it reads a preference, and that is a property of the runtime, not of these two rows.
 
@@ -1203,3 +1203,26 @@ The three-step shape this decision established — **stage → canary → activa
 **Corollary for prompt-size tiers.** `openai/gpt-5.6-terra` stops at `maxInputTokens = 272_000`, because above it OpenAI applies 2x input **and** 1.5x output to the whole request — two multipliers the four-rate record shape cannot express. A larger request is `unpriced`, never priced at the short-context rate.
 
 **The through-line.** Both are the same rule the module was built on: unknown is never zero, and a cheaper-than-true number is worse than no number, because a number gets believed.
+
+## Manual AI reasoning activation (2026-09-19)
+
+### C45. Manual reasoning activates for every currently selectable model at once, through one migration that flips the catalog flag and grants the setter together (2026-09-19)
+
+**Owner decision.** Manual reasoning is to be user-selectable for **all six** models the catalog currently offers — Gemini 3.5, 3.6, 3.7 and 3.8 Flash, Claude Sonnet 5 and GPT-5.6 Terra — not for one provider first. The final intended state is `reasoning_selectable = true` on exactly those six rows.
+
+**One migration, two changes, nothing else.** `20260919075655_activate_manual_ai_reasoning_selection.sql` sets the flag on exactly six ids and grants `EXECUTE ON FUNCTION public.set_current_user_ai_reasoning(text)` to `authenticated` — the two locks C41 staged, released **together**, because either alone is a half-open state: the flag without the grant offers a choice the database refuses, and the grant without the flag opens a write path every row still rejects.
+
+**What it deliberately does not do.**
+- It does not change PaperLume's **Automatic** policy. The per-model, per-operation matrix is exactly what C41 approved, Automatic stays the first option and the recommended one, and Automatic remains `preferred_reasoning_level = NULL`.
+- It does not backfill. No existing user receives a level; everyone stays on Automatic until they choose.
+- It does not change the column DEFAULT, which stays `false`: a **future** model starts closed until its own reviewed migration opens it. Nothing is activated by simply existing.
+- It does not introduce a second entitlement. Manual reasoning uses `can_select_ai_model` — the same capability as model selection — with no plan-name comparison, allowlist, role bypass or browser gate, and `get_current_user_access()` is untouched.
+- It does not change the system default (C34), any function body, the Edge runtime, any provider adapter, telemetry, quota or pricing. One successful AI operation remains one quota unit at every level.
+
+**Why no code changes with it.** C41 built the whole feature behind the two locks, and C33/C35/C39 keep capability in reviewed catalog data rather than in TypeScript: the Settings control renders whatever `reasoning_levels` a row lists, the runtime reads `preferred_reasoning_level` and applies it to **both** operations, and the three adapters already express every level. So activation is data, and the only repository changes are tests, comments and documentation.
+
+**Provider vocabularies, re-verified 2026-09-19.** Gemini 3.5/3.6 `minimal | low | medium | high`; Gemini 3.7/3.8 `low | medium | high` (both **reject** `minimal`); Claude Sonnet 5 `off` plus effort `low | medium | high | xhigh | max`; GPT-5.6 Terra `none | low | medium | high | xhigh | max`. The catalog matches each provider's current first-party documentation exactly. A vocabulary is never widened inside an activation task: a disagreement stops the task for an owner decision instead.
+
+**Rollout posture.** The migration is prepared and **not applied**. Production remains Automatic-only — `reasoning_selectable` false on all six rows, the setter granted to nobody — until it is separately reviewed, merged and applied, in the same stage-then-activate shape C43 established for paid providers.
+
+**Trigger to revisit.** A provider changing a reasoning vocabulary, default or field path; telemetry showing a level users choose is systematically wrong for an operation; a future model needing its own activation (which is a new migration, never an inherited default); or any proposal to attach a manual level to PaperLume's default model, which C41 forbids because the default can move server-side.

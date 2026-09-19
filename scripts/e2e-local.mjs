@@ -170,13 +170,16 @@ const DEFAULT_SPECS = [
   // seed within its own run and is order-independent. No papers, projects or
   // tags are touched; no import and no Edge Function.
   "e2e/scrollarea-reachability.spec.ts",
-  // AI-MODEL-SELECTION-001C Settings model-selection coverage. Mutating, but
-  // only within a disposable per-run account it owns outright: the entitled
-  // cases save and then clear a real `user_ai_preferences` row for that account
-  // alone, and the lifecycle proves afterwards that the row is gone. The
-  // deterministic primary fixture is used read-only, for the NON-entitled case,
-  // and never acquires a preference. No Edge Function is served and no provider
-  // request is made — this spec tests preference persistence and UI only.
+  // AI-MODEL-SELECTION-001C Settings model-selection coverage, extended by
+  // AI-MANUAL-REASONING-001 to the manual reasoning control. Mutating, but only
+  // within a disposable per-run account it owns outright: the entitled cases
+  // save a model AND a reasoning level, exercise the reset paths, and then
+  // clear the real `user_ai_preferences` row for that account alone, and the
+  // lifecycle proves afterwards that the row is gone. The deterministic primary
+  // fixture is used for the NON-entitled cases and never acquires a preference:
+  // its one RPC call is refused (`not_entitled`) and writes nothing. No Edge
+  // Function is served and no provider request is made — this spec tests
+  // preference persistence and UI only.
   "e2e/ai-model-settings.spec.ts",
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
@@ -2066,11 +2069,11 @@ const PL_USER_C = "cc000000-0000-0000-0000-0000000000a3";
 const PL_USER_D = "cc000000-0000-0000-0000-0000000000a4";
 const PL_USERS = [PL_USER_A, PL_USER_B, PL_USER_C, PL_USER_D];
 const PL_USER_LIST = PL_USERS.map((u) => `'${u}'`).join(",");
-// Every real catalog row ships with reasoning_selectable = false, and opening
-// one would move its updated_at (a BEFORE UPDATE trigger owns that column), so
-// the probe brings two disposable rows and afterwards proves the real rows
-// byte-identical. WIDE lists `minimal` and NARROW does not — the same asymmetry
-// as Gemini 3.5 against 3.8.
+// The probe brings its own two disposable catalog rows rather than using the
+// real ones, so its WIDE/NARROW asymmetry is fixed by the probe itself and it
+// never writes a real row (a BEFORE UPDATE trigger would move its updated_at);
+// afterwards it proves the real rows byte-identical. WIDE lists `minimal` and
+// NARROW does not — the same asymmetry as Gemini 3.5 against 3.8.
 const PL_WIDE = "google/paperlume-lock-probe-wide";
 const PL_NARROW = "google/paperlume-lock-probe-narrow";
 const PL_BARRIER_KEY = 918273648;
@@ -2082,10 +2085,10 @@ const PL_CATALOG_DIGEST_SQL =
 
 /**
  * The preference RPCs as tagged SQL: each `sql(tag)` prints one `${tag}=…` line
- * per call. The granted RPCs run as `authenticated`, exactly as a client calls
- * them. The STAGED reasoning setter is granted to no role, so it runs as the
- * function owner with the caller's claims — the same context suite 016 uses;
- * auth.uid() reads the claims, not the role. Nothing here grants anything.
+ * per call. Every one runs as `authenticated` with the caller's claims, exactly
+ * as a client calls it. Until AI-MANUAL-REASONING-001 granted it, the reasoning
+ * setter had to run here as its owner; it now takes the same real client path
+ * as the other three. Nothing here grants anything.
  */
 const plCall = {
   model: (model) => ({
@@ -2098,8 +2101,10 @@ const plCall = {
   reasoning: (level) => ({
     label: `set_current_user_ai_reasoning(${level})`,
     sql: (tag) =>
+      "SET ROLE authenticated;\n" +
       `SELECT '${tag}=' || reason || ':' || (updated_at IS NOT NULL)::text ` +
-      `FROM public.set_current_user_ai_reasoning('${level}');\n`,
+      `FROM public.set_current_user_ai_reasoning('${level}');\n` +
+      "RESET ROLE;\n",
   }),
   clearReasoning: () => ({
     label: "clear_current_user_ai_reasoning()",
@@ -2470,8 +2475,8 @@ async function runPlRaceRound(container, sc, round) {
  * Same fail-closed discipline as the probes above: every process tracked and
  * bounded, blocking proven through pg_blocking_pids rather than inferred from a
  * sleep, clean exits required, and the fixture proven absent afterwards — with
- * the real catalog rows proven byte-identical. Nothing is granted: the staged
- * reasoning setter is exercised as its owner.
+ * the real catalog rows proven byte-identical. Nothing is granted: every call,
+ * the reasoning setter included, runs as `authenticated`.
  */
 async function runPreferenceLockProbe(container) {
   log("running true-concurrency AI model/reasoning preference probe…");

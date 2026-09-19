@@ -36,13 +36,13 @@ const GEMINI_35 = {
   enabled: true,
   selectable: true,
   sort_order: 10,
-  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
-  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
-  // staged state every Production row is in.
+  // AI-MULTI-PROVIDER-001C reasoning metadata as migration `20260912120000`
+  // seeds it, with `reasoning_selectable: true` — the state
+  // AI-MANUAL-REASONING-001's migration `20260919075655` leaves every row in.
   reasoning_levels: ["minimal", "low", "medium", "high"],
   auto_analyze_reasoning_level: "minimal",
   auto_suggest_reasoning_level: "medium",
-  reasoning_selectable: false,
+  reasoning_selectable: true,
 };
 const GEMINI_36 = {
   id: "google/gemini-3.6-flash",
@@ -51,13 +51,13 @@ const GEMINI_36 = {
   enabled: true,
   selectable: true,
   sort_order: 20,
-  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
-  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
-  // staged state every Production row is in.
+  // AI-MULTI-PROVIDER-001C reasoning metadata as migration `20260912120000`
+  // seeds it, with `reasoning_selectable: true` — the state
+  // AI-MANUAL-REASONING-001's migration `20260919075655` leaves every row in.
   reasoning_levels: ["minimal", "low", "medium", "high"],
   auto_analyze_reasoning_level: "minimal",
   auto_suggest_reasoning_level: "medium",
-  reasoning_selectable: false,
+  reasoning_selectable: true,
 };
 const GEMINI_37 = {
   id: "google/gemini-3.7-flash",
@@ -66,13 +66,13 @@ const GEMINI_37 = {
   enabled: true,
   selectable: true,
   sort_order: 30,
-  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
-  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
-  // staged state every Production row is in.
+  // AI-MULTI-PROVIDER-001C reasoning metadata as migration `20260912120000`
+  // seeds it, with `reasoning_selectable: true` — the state
+  // AI-MANUAL-REASONING-001's migration `20260919075655` leaves every row in.
   reasoning_levels: ["low", "medium", "high"],
   auto_analyze_reasoning_level: "low",
   auto_suggest_reasoning_level: "medium",
-  reasoning_selectable: false,
+  reasoning_selectable: true,
 };
 const GEMINI_38 = {
   id: "google/gemini-3.8-flash",
@@ -81,14 +81,45 @@ const GEMINI_38 = {
   enabled: true,
   selectable: true,
   sort_order: 40,
-  // AI-MULTI-PROVIDER-001C reasoning metadata, exactly as migration
-  // `20260912120000` seeds it — including `reasoning_selectable: false`, the
-  // staged state every Production row is in.
+  // AI-MULTI-PROVIDER-001C reasoning metadata as migration `20260912120000`
+  // seeds it, with `reasoning_selectable: true` — the state
+  // AI-MANUAL-REASONING-001's migration `20260919075655` leaves every row in.
   reasoning_levels: ["low", "medium", "high"],
   auto_analyze_reasoning_level: "low",
   auto_suggest_reasoning_level: "medium",
-  reasoning_selectable: false,
+  reasoning_selectable: true,
 };
+
+/**
+ * The two paid-provider rows, as `20260917201856` stages them and
+ * `20260918210017` / `20260919075655` open them. Fixtures only: the hook names
+ * no model, and these exist here so the per-model assertions cover all six.
+ */
+const CLAUDE_SONNET_5 = {
+  id: "anthropic/claude-sonnet-5",
+  provider: "anthropic",
+  display_name: "Claude Sonnet 5",
+  enabled: true,
+  selectable: true,
+  sort_order: 50,
+  reasoning_levels: ["off", "low", "medium", "high", "xhigh", "max"],
+  auto_analyze_reasoning_level: "off",
+  auto_suggest_reasoning_level: "medium",
+  reasoning_selectable: true,
+};
+const GPT_56_TERRA = {
+  id: "openai/gpt-5.6-terra",
+  provider: "openai",
+  display_name: "GPT-5.6 Terra",
+  enabled: true,
+  selectable: true,
+  sort_order: 60,
+  reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max"],
+  auto_analyze_reasoning_level: "none",
+  auto_suggest_reasoning_level: "medium",
+  reasoning_selectable: true,
+};
+const ALL_SIX = [GEMINI_35, GEMINI_36, GEMINI_37, GEMINI_38, CLAUDE_SONNET_5, GPT_56_TERRA];
 
 type Result = { data: unknown; error: unknown };
 
@@ -545,16 +576,34 @@ describe("useAiModelSettings — reads", () => {
   });
 
   it("projects each model's own reasoning metadata, from the catalog alone", async () => {
-    mockTables(rows(GEMINI_35, GEMINI_38), prefRow(null));
+    mockTables(rows(...ALL_SIX), prefRow(null));
     const { result } = await renderLoaded();
-    const [g35, g38] = result.current.options;
-    expect(g35.reasoningLevels).toEqual(["minimal", "low", "medium", "high"]);
-    expect(g35.automaticAnalyzeReasoningLevel).toBe("minimal");
-    expect(g35.automaticSuggestReasoningLevel).toBe("medium");
-    expect(g38.reasoningLevels).toEqual(["low", "medium", "high"]);
-    expect(g38.automaticAnalyzeReasoningLevel).toBe("low");
-    // The staged state: no model offers a manual choice yet.
-    expect(result.current.options.every((o) => o.reasoningSelectable === false)).toBe(true);
+    // The whole projection for all six models, in catalog order: the levels in
+    // the catalog's own order, both Automatic levels, and the open flag.
+    expect(
+      result.current.options.map((o) => [
+        o.id,
+        o.reasoningLevels.join(","),
+        o.automaticAnalyzeReasoningLevel,
+        o.automaticSuggestReasoningLevel,
+        o.reasoningSelectable,
+      ]),
+    ).toEqual([
+      ["google/gemini-3.5-flash", "minimal,low,medium,high", "minimal", "medium", true],
+      ["google/gemini-3.6-flash", "minimal,low,medium,high", "minimal", "medium", true],
+      ["google/gemini-3.7-flash", "low,medium,high", "low", "medium", true],
+      ["google/gemini-3.8-flash", "low,medium,high", "low", "medium", true],
+      ["anthropic/claude-sonnet-5", "off,low,medium,high,xhigh,max", "off", "medium", true],
+      ["openai/gpt-5.6-terra", "none,low,medium,high,xhigh,max", "none", "medium", true],
+    ]);
+  });
+
+  it("projects a closed reasoning control as closed", async () => {
+    // Every row was closed before AI-MANUAL-REASONING-001, and a future row
+    // starts closed. The flag is read, never assumed.
+    mockTables(rows({ ...GEMINI_35, reasoning_selectable: false }), prefRow(null));
+    const { result } = await renderLoaded();
+    expect(result.current.options[0].reasoningSelectable).toBe(false);
   });
 
   it("drops a catalog level this build cannot name, rather than offering it", async () => {
@@ -752,8 +801,7 @@ describe("useAiModelSettings — writes", () => {
     const rpcNames = [...source.matchAll(/supabase\.rpc\(\s*"([^"]+)"/g)].map((m) => m[1]);
     // Exactly the four approved RPCs, and no fifth. The two reasoning ones were
     // added by AI-MULTI-PROVIDER-001C; `set_current_user_ai_reasoning` is
-    // deliberately ungranted in the database, so calling it currently fails —
-    // which is why the UI never offers the choice that would call it.
+    // granted to authenticated by AI-MANUAL-REASONING-001.
     expect(rpcNames.sort()).toEqual([
       "clear_current_user_ai_model",
       "clear_current_user_ai_reasoning",
@@ -779,8 +827,10 @@ describe("useAiModelSettings — writes", () => {
 });
 
 describe("useAiModelSettings — reasoning writes (AI-MULTI-PROVIDER-001C)", () => {
-  /** A catalog row whose reasoning control is OPEN — never the case in Production today. */
-  const OPEN_35 = { ...GEMINI_35, reasoning_selectable: true };
+  /** Gemini 3.5 Flash with its reasoning control open — every row after AI-MANUAL-REASONING-001. */
+  const OPEN_35 = GEMINI_35;
+  /** The same row CLOSED to new manual choices: every row before activation, and any future row. */
+  const CLOSED_35 = { ...GEMINI_35, reasoning_selectable: false };
 
   it("preserves a compatible level across a model change, with the ordinary toast", async () => {
     mockTables(rows(GEMINI_35, GEMINI_36), prefRow(GEMINI_35.id, "high"));
@@ -804,6 +854,40 @@ describe("useAiModelSettings — reasoning writes (AI-MULTI-PROVIDER-001C)", () 
     // in the same transaction, and the hook did not second-guess it.
     expect(mockRpc).toHaveBeenCalledTimes(1);
     expect(mockRpc).toHaveBeenCalledWith("set_current_user_ai_model", { p_model_id: GEMINI_36.id });
+  });
+
+  // The incompatible switches the server resets, across providers as well as
+  // within Google. The hook decides nothing here: it reports the server's
+  // `reasoning_reset` and refetches.
+  it.each([
+    ["Claude off -> Terra", CLAUDE_SONNET_5, "off", GPT_56_TERRA],
+    ["Terra none -> Claude", GPT_56_TERRA, "none", CLAUDE_SONNET_5],
+    ["Terra xhigh -> Gemini 3.7", GPT_56_TERRA, "xhigh", GEMINI_37],
+  ] as const)("reports the server's reset for %s", async (_label, from, level, to) => {
+    const client = makeClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    mockTables(rows(...ALL_SIX), prefRow(from.id, level));
+    mockRpc.mockResolvedValue({
+      data: [{ saved: true, reason: "ok", display_name: to.display_name, reasoning_reset: true }],
+      error: null,
+    });
+    const { result } = await renderLoaded(client);
+    await act(async () => {
+      result.current.saveModel(to.id);
+    });
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "AI model updated",
+        description:
+          "Reasoning was reset to Automatic because the new model does not support your " +
+          "previous level.",
+      }),
+    );
+    // One model-setter call and no reasoning call: the reset happened inside it.
+    expect(mockRpc.mock.calls.map((c) => c[0])).toEqual(["set_current_user_ai_model"]);
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.aiModelSettings.preference(USER),
+    });
   });
 
   it("tells the user, in product words, when the server reset reasoning", async () => {
@@ -855,9 +939,9 @@ describe("useAiModelSettings — reasoning writes (AI-MULTI-PROVIDER-001C)", () 
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it("never calls the reasoning setter while reasoning selection is staged off", async () => {
-    // The state of every Production catalog row after the 001C migration.
-    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id));
+  it("never calls the reasoning setter while the saved model is closed to new choices", async () => {
+    // Every catalog row before AI-MANUAL-REASONING-001, and any future row.
+    mockTables(rows(CLOSED_35), prefRow(GEMINI_35.id));
     const { result } = await renderLoaded();
     await act(async () => {
       result.current.saveReasoning("high");
@@ -876,12 +960,14 @@ describe("useAiModelSettings — reasoning writes (AI-MULTI-PROVIDER-001C)", () 
   });
 
   it("saves through set_current_user_ai_reasoning with only p_reasoning_level", async () => {
+    const client = makeClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
     mockTables(rows(OPEN_35), prefRow(GEMINI_35.id));
     mockRpc.mockResolvedValue({
       data: [{ saved: true, reason: "ok", preferred_model_id: GEMINI_35.id, preferred_reasoning_level: "high" }],
       error: null,
     });
-    const { result } = await renderLoaded();
+    const { result } = await renderLoaded(client);
     await act(async () => {
       result.current.saveReasoning("high");
     });
@@ -890,11 +976,124 @@ describe("useAiModelSettings — reasoning writes (AI-MULTI-PROVIDER-001C)", () 
     expect(mockRpc).toHaveBeenCalledWith("set_current_user_ai_reasoning", {
       p_reasoning_level: "high",
     });
+    const args = mockRpc.mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(args)).toEqual(["p_reasoning_level"]);
+    expect(JSON.stringify(args)).not.toContain(USER);
+    // Not optimistic: success refetches the authoritative saved preference.
     await waitFor(() =>
-      expect(mockToast).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Reasoning level updated" }),
-      ),
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.aiModelSettings.preference(USER),
+      }),
     );
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Reasoning level updated",
+        description: "Reasoning level set to High for Analyze and organization suggestions.",
+      }),
+    );
+  });
+
+  // Every level of every model reaches the setter as its CANONICAL value, and
+  // the confirmation names it by its product label — never the wire word.
+  it.each([
+    ["Gemini 3.5 Flash", "minimal", "Minimal", GEMINI_35],
+    ["Gemini 3.5 Flash", "high", "High", GEMINI_35],
+    ["Gemini 3.6 Flash", "minimal", "Minimal", GEMINI_36],
+    ["Gemini 3.6 Flash", "low", "Low", GEMINI_36],
+    ["Gemini 3.7 Flash", "low", "Low", GEMINI_37],
+    ["Gemini 3.7 Flash", "high", "High", GEMINI_37],
+    ["Gemini 3.8 Flash", "medium", "Medium", GEMINI_38],
+    ["Gemini 3.8 Flash", "high", "High", GEMINI_38],
+    ["Claude Sonnet 5", "off", "Off", CLAUDE_SONNET_5],
+    ["Claude Sonnet 5", "xhigh", "Extra High", CLAUDE_SONNET_5],
+    ["Claude Sonnet 5", "max", "Max", CLAUDE_SONNET_5],
+    ["GPT-5.6 Terra", "none", "None", GPT_56_TERRA],
+    ["GPT-5.6 Terra", "xhigh", "Extra High", GPT_56_TERRA],
+    ["GPT-5.6 Terra", "max", "Max", GPT_56_TERRA],
+  ] as const)("%s saves %s as the canonical value", async (_name, level, label, model) => {
+    mockTables(rows(...ALL_SIX), prefRow(model.id));
+    mockRpc.mockResolvedValue({ data: [{ saved: true, reason: "ok" }], error: null });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning(level);
+    });
+    await waitFor(() =>
+      expect(mockRpc).toHaveBeenCalledWith("set_current_user_ai_reasoning", {
+        p_reasoning_level: level,
+      }),
+    );
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Reasoning level updated",
+        description: `Reasoning level set to ${label} for Analyze and organization suggestions.`,
+      }),
+    );
+  });
+
+  // The other provider's spelling, and Google's `minimal` on the two models that
+  // reject it, never leave the browser — the server would refuse them anyway.
+  it.each([
+    ["Gemini 3.7 Flash", "minimal", GEMINI_37],
+    ["Gemini 3.8 Flash", "minimal", GEMINI_38],
+    ["Claude Sonnet 5", "none", CLAUDE_SONNET_5],
+    ["GPT-5.6 Terra", "off", GPT_56_TERRA],
+    ["Gemini 3.5 Flash", "xhigh", GEMINI_35],
+  ] as const)("%s never sends %s, a level it does not list", async (_name, level, model) => {
+    mockTables(rows(...ALL_SIX), prefRow(model.id));
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning(level);
+    });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("never reports a success when the setter call itself fails", async () => {
+    mockTables(rows(OPEN_35), prefRow(GEMINI_35.id));
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: "permission denied for function set_current_user_ai_reasoning" },
+    });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("high");
+    });
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Could not update reasoning level",
+        description: "Please try again.",
+        variant: "destructive",
+      }),
+    );
+    expect(mockToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Reasoning level updated" }),
+    );
+    // And the raw database text never reaches the screen.
+    expect(JSON.stringify(mockToast.mock.calls)).not.toContain("permission denied");
+  });
+
+  it("never writes either table directly on the reasoning path", async () => {
+    const stubs = mockTables(rows(OPEN_35), prefRow(GEMINI_35.id, "low"));
+    mockRpc.mockResolvedValue({ data: [{ saved: true, reason: "ok" }], error: null });
+    const { result } = await renderLoaded();
+    await act(async () => {
+      result.current.saveReasoning("high");
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledTimes(1));
+    mockRpc.mockResolvedValue({ data: [{ cleared: true, reason: "ok" }], error: null });
+    await act(async () => {
+      result.current.clearReasoning();
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledTimes(2));
+    // Both writes went through the two reasoning RPCs, and nothing else.
+    expect(mockRpc.mock.calls.map((c) => c[0])).toEqual([
+      "set_current_user_ai_reasoning",
+      "clear_current_user_ai_reasoning",
+    ]);
+    for (const stub of [stubs.catalog, stubs.preference] as unknown as Record<string, unknown>[]) {
+      for (const verb of ["insert", "update", "upsert", "delete"]) {
+        expect(stub[verb]).toBeUndefined();
+      }
+    }
   });
 
   it.each([
@@ -953,10 +1152,10 @@ describe("useAiModelSettings — reasoning writes (AI-MULTI-PROVIDER-001C)", () 
   });
 
   it("clears reasoning through clear_current_user_ai_reasoning, with no arguments", async () => {
-    // Deliberately allowed even while reasoning selection is staged off:
+    // Deliberately allowed even on a model closed to new reasoning choices:
     // leaving a manual level must never be blocked by the flag that controls
     // entering one.
-    mockTables(rows(GEMINI_35), prefRow(GEMINI_35.id, "high"));
+    mockTables(rows(CLOSED_35), prefRow(GEMINI_35.id, "high"));
     mockRpc.mockResolvedValue({ data: [{ cleared: true, reason: "ok" }], error: null });
     const { result } = await renderLoaded();
     await act(async () => {
