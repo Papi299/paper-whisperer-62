@@ -51,8 +51,10 @@
 // that Google stopped generating, so automatically re-sending is how one user
 // action becomes two provider requests — and, on a busy provider, how a
 // rate-limited project rate-limits itself further. A timeout therefore ends the
-// provider-call sequence here; the caller refunds the Paperlume unit and
-// returns its existing neutral provider-unavailable failure.
+// provider-call sequence here; the caller then invokes its existing
+// best-effort refund path and returns its existing neutral
+// provider-unavailable failure. This module performs no quota mutation of its
+// own, and a refund-side failure never replaces the provider failure.
 //
 // ## Why zero retries, including for 429 and 5xx
 //
@@ -64,11 +66,13 @@
 //     90 + 2 + 90 + 4 + 90 = 276 s, well past the documented 150-second request
 //     envelope. Ninety seconds and two retries cannot both be had.
 //
-//   * Duplicate generation work. PaperLume's quota/refund semantics already
-//     handle a provider failure correctly — the unit is refunded and a neutral
-//     provider-unavailable failure is returned. Surfacing that failure after one
-//     attempt is preferred to automatically creating a second generation request
-//     on the user's behalf.
+//   * Duplicate generation work. PaperLume's caller-side quota/refund
+//     semantics already handle a provider failure separately: the caller
+//     invokes its existing best-effort refund path and returns a neutral
+//     provider-unavailable failure. Surfacing that failure after one attempt is
+//     preferred to automatically creating a second generation request on the
+//     user's behalf — re-generating is not the mechanism used to repair quota
+//     accounting.
 //
 // ## How this policy was reached (history)
 //
@@ -113,8 +117,8 @@ export const GEMINI_PROVIDER_TIMEOUT_MS = 90_000;
  * at most one Gemini generation request. At a 90 s per-attempt ceiling, two
  * retries would allow 90 + 2 + 90 + 4 + 90 = 276 s, far past the documented
  * 150 s request envelope, and would automatically create duplicate generation
- * work that PaperLume's quota/refund semantics already handle correctly
- * without.
+ * work that PaperLume's caller-side quota/refund semantics already handle
+ * separately, without a second provider request.
  *
  * Consequently the 429/5xx and ordinary-network retry branches implemented
  * below are DORMANT: they are intact, reachable-by-construction code that this

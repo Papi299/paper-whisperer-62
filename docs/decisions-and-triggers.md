@@ -1242,7 +1242,7 @@ The three-step shape this decision established — **stage → canary → activa
 - `GEMINI_PROVIDER_MAX_RETRIES = 0` — no automatic retry of any kind.
 - It applies to **both** Analyze and organization suggestions, because both go through the one [`_shared/geminiTransport.ts`](../supabase/functions/_shared/geminiTransport.ts). Neither function pins a policy of its own, and neither does the Google adapter.
 - A timeout, an ordinary network failure, an HTTP 429 and an HTTP 5xx all **terminate after the one provider attempt**. No backoff is slept, because there is never a second attempt to sleep before.
-- PaperLume's existing quota/refund semantics are unchanged and remain the caller's responsibility: the unit is consumed, and refunded on a provider failure, exactly as before.
+- PaperLume's existing quota/refund semantics are unchanged and remain the caller's responsibility: the unit is consumed before the provider call, and on a provider failure the caller invokes the existing **best-effort** refund path, exactly as before. C46 changes no refund behaviour. That path deliberately swallows its own errors so a refund-side problem cannot replace the provider failure surfaced to the user, which also means a refund is **attempted**, not guaranteed — the transport itself performs no quota mutation.
 - The policy is **Gemini-specific**. `anthropicAiProvider.ts` and `openAiProvider.ts` keep their own independent 60-second constants and single attempt; C39's rule that a shared *adapter contract* is asserted while a shared *transport policy* is not still holds.
 
 **History — how this value was reached.**
@@ -1255,7 +1255,7 @@ The three-step shape this decision established — **stage → canary → activa
 - **One user action, at most one Gemini generation request.** A client-side timeout proves only that *we* stopped waiting — not that Google stopped generating. Automatically re-sending is how one click became two provider requests on 2026-08-31, moving Google's daily counter by two for a single user action.
 - **No premature cancellation.** Thirty seconds was demonstrated to be capable of ending a request before a valid Gemini response arrived. Ninety seconds gives a slow provider request substantially more room.
 - **Bounded execution is preserved.** Supabase documents a 150 s Free-plan wall-clock limit and a 150 s request idle timeout for hosted Edge Functions. At one 90 s attempt with no backoff the transport cannot exceed 90 s inside that envelope. Ninety seconds and two retries cannot both be had: that combination would allow 90 + 2 + 90 + 4 + 90 = 276 s.
-- **Explicit failure over automatic duplicate generation.** A 429 or 5xx is surfaced after the first attempt rather than silently creating another generation request; PaperLume's refund semantics already make that outcome cost the user nothing.
+- **Explicit failure over automatic duplicate generation.** A 429 or 5xx is surfaced after the first attempt rather than silently creating another generation request. PaperLume already invokes its existing best-effort refund path on provider failure, so automatic re-generation is not the mechanism used to repair quota accounting.
 
 Ninety seconds is **not** claimed to be universally optimal. It is the owner's selected PaperLume policy on the accumulated evidence above.
 

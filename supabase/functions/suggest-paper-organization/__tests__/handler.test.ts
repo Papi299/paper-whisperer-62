@@ -1107,7 +1107,9 @@ describe("refund behaviour", () => {
   });
 
   // PaperLume's permanent Gemini policy (C46) is zero automatic retries, so a
-  // 429 or 5xx ends the sequence after ONE attempt and the unit is refunded.
+  // 429 or 5xx ends the sequence after ONE attempt and the caller invokes its
+  // best-effort refund path (these tests assert the RPC is CALLED, which is
+  // what the product contract guarantees — not that it succeeded).
   // Under the superseded 30 s / two-retry policy each bought up to two further
   // attempts (backoff 2 s then 4 s, honouring a bounded Retry-After on a 429),
   // so a transient 503 could still succeed and keep the unit. Those branches
@@ -1128,8 +1130,8 @@ describe("refund behaviour", () => {
   it("cannot recover from a 503, and refunds the unit instead", async () => {
     // The superseded 30 s / two-retry policy answered 200 here on attempt 2 and
     // kept the unit. The permanent zero-retry policy gives up on attempt 1 — the
-    // user still pays nothing, because the refund path is untouched and remains
-    // the caller's responsibility rather than the transport's.
+    // refund path is invoked exactly as before — it is untouched, and remains
+    // the caller's best-effort responsibility rather than the transport's.
     const harness = makeHarness({
       responses: [new Response("", { status: 503 }), geminiOk(EMPTY_SUGGESTIONS)],
     });
