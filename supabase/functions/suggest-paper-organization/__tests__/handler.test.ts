@@ -1127,7 +1127,7 @@ describe("refund behaviour", () => {
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("cannot recover from a 503, and refunds the unit instead", async () => {
+  it("cannot recover from a 503 and invokes the best-effort refund path", async () => {
     // The superseded 30 s / two-retry policy answered 200 here on attempt 2 and
     // kept the unit. The permanent zero-retry policy gives up on attempt 1 — the
     // refund path is invoked exactly as before — it is untouched, and remains
