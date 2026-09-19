@@ -77,11 +77,23 @@ export const PAPERLUME_DEFAULT_VALUE = "__paperlume_default__";
  * registered their adapters in the same task. The two lists are two halves of
  * one decision and move together.
  *
- * This adds NO model option today, and cannot: there is no `anthropic/*` or
- * `openai/*` row in `ai_model_catalog`, and the catalog remains the only source
- * of models. What it changes is what would happen IF such a row were seeded —
- * it would be offered, instead of being silently filtered out by a UI that had
- * not caught up with the runtime.
+ * When 001C added them there was no `anthropic/*` or `openai/*` catalog row, so
+ * the entry offered nothing: it only decided what WOULD happen once such a row
+ * was seeded — it would be offered, rather than silently filtered out by a UI
+ * that had not caught up with the runtime. `AI-MULTI-PROVIDER-001E` then seeded
+ * both rows (`20260917201856`, staged `enabled` but not `selectable`) and, after
+ * the Production canaries, made them selectable (`20260918210017`, Phase 8,
+ * 2026-09-19). Both are now offered here, and that took no change to this file
+ * — which is the point of keeping this a provider boundary rather than a model
+ * list.
+ *
+ * The invariant is unchanged: **model ids still come exclusively from
+ * `ai_model_catalog`**. This list only says which provider families the shipped
+ * UI and runtime can route to, the catalog decides which models exist and which
+ * are offered (`enabled AND selectable`), and entitlement decides who may
+ * choose at all. Adding a fourth provider still requires explicit UI and
+ * runtime support — an adapter in the Edge registry and an entry here — not just
+ * a catalog row.
  */
 const SUPPORTED_PROVIDERS: readonly string[] = ["google", "anthropic", "openai"];
 
