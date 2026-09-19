@@ -19,8 +19,9 @@
 // matters lives in the pure, Node-tested modules beside it:
 //   handler.ts    — CORS before auth, method gating, the authoritative
 //                   getUser() check, paper ownership, taxonomy loading, quota
-//                   consumption/refund, the bounded provider retry budget,
-//                   and when a provider-usage event is recorded
+//                   consumption/refund, the provider transport policy it
+//                   inherits (90 s, zero retries for Gemini — C46), and when
+//                   a provider-usage event is recorded
 //   validation.ts — request shape, bounds, and the eligibility rule
 //   prompt.ts     — the privacy boundary: allow-listed provider fields and the
 //                   ephemeral P1/T1 refs that replace database ids

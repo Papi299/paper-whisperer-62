@@ -363,13 +363,16 @@ Deno.serve(async (req) => {
       // AI-PROVIDER-RESILIENCE-001A: the timeout/retry policy lives in
       // _shared/geminiTransport.ts, which the Google adapter calls, shared with
       // suggest-paper-organization so the two Gemini callers cannot drift.
-      // TEMPORARY, per AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A: 90 s per attempt
-      // and ZERO retries, so every outcome — including a 429/5xx — resolves
-      // after a single attempt and no backoff is slept. (The established policy
-      // this will be restored to is 30 s with two bounded 2 s / 4 s retries;
-      // see the transport header.) A timeout is TERMINAL under either policy
-      // and is never automatically re-sent. This function pins none of it, and
-      // neither does the adapter: both take whatever the shared constants are.
+      // Gemini's permanent policy (C46) is the shared 90-second SINGLE-ATTEMPT
+      // one: 90 s per attempt and ZERO retries, the latter deliberate rather
+      // than merely disabled. Every Analyze operation therefore makes at most
+      // ONE Gemini generation request, and a timeout, an ordinary network
+      // failure, a 429 and a 5xx alike return after that one attempt with no
+      // backoff slept. A timeout in particular is TERMINAL and is never
+      // automatically re-sent. Quota and refund semantics for those failures
+      // remain the caller's — they are not the transport's job. This function
+      // pins none of the policy, and neither does the adapter: both take
+      // whatever the shared constants are.
       const providerCall = await generateWithRegisteredAiProvider(
         modelSelection,
         generationRequest,

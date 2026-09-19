@@ -1,36 +1,30 @@
 // Shared Gemini provider transport — AI-PROVIDER-RESILIENCE-001A.
 //
-// ## TEMPORARY DIAGNOSTIC POLICY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A
+// ## Gemini transport policy: 90 s per attempt, ZERO automatic retries (C46)
 //
-// This module is currently running a temporary Production diagnostic policy of
-// a 90-second per-attempt timeout with ZERO retries. That is NOT the
-// established policy and is NOT intended to ship permanently.
+// This is PaperLume's permanent, owner-adopted policy for Gemini, not an
+// experiment and not a value awaiting restoration. One user action makes at
+// most ONE Gemini generation request:
 //
-//   * The established policy, in force before this experiment and to be
-//     restored after it, is a 30-second per-attempt timeout with two bounded
-//     retries (backoff 2 s then 4 s).
+//   * The per-attempt ceiling is 90 seconds. A request that has not answered by
+//     then is abandoned, and the sequence ends.
 //
-//   * The question the experiment answers: on the real authenticated
-//     Production path, an Analyze and a Suggest request each reached our own
-//     30 s client-side ceiling (`provider_timeout attempt=1 elapsed_ms=30004
-//     retry=0`) while controlled direct probes of the same model completed the
-//     same PaperLume-shaped contracts in ~5-13 s. Does such a request
-//     eventually return a valid response, a provider HTTP failure, or still
-//     nothing at all, when allowed to run for up to 90 s?
+//   * The retry budget is zero. Timeout, ordinary network failure, HTTP 429 and
+//     HTTP 5xx all return after that single provider attempt. No backoff is
+//     ever slept, because there is never a second attempt to sleep before.
 //
-//   * Zero retries is not incidental to the diagnostic, it is required by it.
-//     At a 90 s ceiling, retaining two retries would permit
-//     90 + 2 + 90 + 4 + 90 = 276 s, well past the documented 150-second
-//     request envelope. At zero retries the worst case is a single 90 s wait,
-//     and one user action can make at most one Gemini generation request — so
-//     the experiment also cannot distort the provider's request counter.
-//     Removing retries does not hide the failure being investigated: both
-//     Production failures already consisted of exactly one provider attempt.
+//   * The caller keeps its existing quota/refund semantics unchanged. Handling
+//     a provider failure is the caller's job; retrying is deliberately not part
+//     of this transport's policy.
 //
-//   * This is deliberately two constants and nothing else — no env-var
-//     timeout, no model-specific branch, no total-budget redesign. REVERT both
-//     constants to 30_000 / 2 once the bounded Production experiment has run,
-//     whatever its result.
+//   * This policy is Gemini-specific. `anthropicAiProvider.ts` and
+//     `openAiProvider.ts` own their own independent timeout constants and do
+//     not inherit these. A shared ADAPTER contract is asserted across providers
+//     (C39); a shared TRANSPORT policy deliberately is not.
+//
+// Changing either constant is a new reviewed policy decision, not a tuning
+// exercise — see "Why zero retries" below for what a non-zero budget would
+// reintroduce.
 //
 // Pure module (no Deno APIs, no remote imports): the analyze-paper and
 // suggest-paper-organization Edge Functions (Deno) call it with the real
@@ -60,53 +54,85 @@
 // provider-call sequence here; the caller refunds the Paperlume unit and
 // returns its existing neutral provider-unavailable failure.
 //
-// An explicit 429 or 5xx is the opposite case: the provider answered, and its
-// answer was "not now". Those normally keep the bounded retry budget — but that
-// budget is temporarily 0 for the diagnostic above, so during the experiment a
-// 429 or 5xx is also returned after a single attempt.
+// ## Why zero retries, including for 429 and 5xx
+//
+// An explicit 429 or 5xx is not the timeout case: the provider answered, and its
+// answer was "not now". Under the policy this module used to run, those kept a
+// bounded retry budget. They no longer do, for two reasons:
+//
+//   * Duration. At a 90 s per-attempt ceiling, two retries would permit
+//     90 + 2 + 90 + 4 + 90 = 276 s, well past the documented 150-second request
+//     envelope. Ninety seconds and two retries cannot both be had.
+//
+//   * Duplicate generation work. PaperLume's quota/refund semantics already
+//     handle a provider failure correctly — the unit is refunded and a neutral
+//     provider-unavailable failure is returned. Surfacing that failure after one
+//     attempt is preferred to automatically creating a second generation request
+//     on the user's behalf.
+//
+// ## How this policy was reached (history)
+//
+//   * The policy before this one was a 30 s per-attempt timeout with two bounded
+//     retries (backoff 2 s then 4 s), itself a correction of the original 15 s.
+//
+//   * Production then showed 30 s cancelling requests that had not failed: an
+//     Analyze and a Suggest request each hit our own client-side ceiling
+//     (`provider_timeout attempt=1 elapsed_ms=30004 retry=0`) while controlled
+//     direct probes of the same model completed the same PaperLume-shaped
+//     contracts in ~5-13 s.
+//
+//   * That evidence motivated AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A, a bounded
+//     Production experiment that raised the ceiling to 90 s and dropped the
+//     retry budget to 0.
+//
+//   * On 2026-09-19 the owner adopted the experiment's behaviour as the durable
+//     policy (C46). The 90 s / zero-retry values below are therefore current
+//     policy, and the 30 s / two-retry values are history.
 //
 // ## Duration budget
 //
 // Supabase currently documents a 150 s Free-plan wall-clock limit and a 150 s
-// request idle timeout for hosted Edge Functions. Under this temporary policy
-// the worst case is ONE 90 s attempt with no backoff, so the transport cannot
-// spend more than 90 s inside that 150 s envelope.
-//
-// Under the established policy the worst case was three full attempts separated
-// by the two backoffs — 30 + 2 + 30 + 4 + 30 = 96 s.
+// request idle timeout for hosted Edge Functions. Under this policy the worst
+// case is ONE 90 s attempt with no backoff, so the transport cannot spend more
+// than 90 s inside that 150 s envelope.
 
 /**
- * Per-attempt provider timeout.
+ * Per-attempt provider timeout — PaperLume's permanent Gemini policy (C46).
  *
- * TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A. The established policy is
- * 30 s (raised from 15 s: see the header); this is raised to 90 s only for the
- * bounded Production diagnostic described above, and must be restored to
- * 30_000 when that experiment ends.
+ * Ninety seconds is the owner-adopted ceiling, not a temporary value. It
+ * replaced 30 s (itself a correction of the original 15 s) after Production
+ * showed the shorter ceiling cancelling Gemini requests that had not failed;
+ * see the header for that evidence. Raising or lowering it is a new reviewed
+ * policy decision.
  */
 export const GEMINI_PROVIDER_TIMEOUT_MS = 90_000;
 /**
- * Retries *after* the first attempt, for explicitly retriable outcomes only.
+ * Retries *after* the first attempt — permanently ZERO for Gemini (C46).
  *
- * TEMPORARY — AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A. The established policy is
- * 2. Zero is required for the diagnostic window: at a 90 s per-attempt ceiling,
- * keeping two retries would allow 90 + 2 + 90 + 4 + 90 = 276 s, far past the
- * documented 150 s request envelope. At 0 the worst case is a single 90 s wait,
- * and one user action can make at most one Gemini generation request — which is
- * also the cleaner experiment. Restore to 2 when the experiment ends.
+ * Zero is the product contract, not a disabled setting: one user action makes
+ * at most one Gemini generation request. At a 90 s per-attempt ceiling, two
+ * retries would allow 90 + 2 + 90 + 4 + 90 = 276 s, far past the documented
+ * 150 s request envelope, and would automatically create duplicate generation
+ * work that PaperLume's quota/refund semantics already handle correctly
+ * without.
  *
- * While this is 0, the 429/5xx and ordinary-network retry semantics described
- * in the header and implemented below are reachable code but temporarily
- * inert: every outcome resolves on attempt 1 and no backoff is ever slept.
+ * Consequently the 429/5xx and ordinary-network retry branches implemented
+ * below are DORMANT: they are intact, reachable-by-construction code that this
+ * configured budget never enters, so every outcome resolves on attempt 1 and no
+ * backoff is ever slept. They are kept rather than deleted so that the policy
+ * lives in one constant. Giving Gemini a non-zero retry budget would require a
+ * new reviewed policy decision — including a fresh duration-budget review,
+ * since 90 s and two retries cannot both be had.
  */
 export const GEMINI_PROVIDER_MAX_RETRIES = 0;
 /**
- * Backoff base: first retry 2 s, second 4 s. Unchanged by the diagnostic, but
- * unreachable while `GEMINI_PROVIDER_MAX_RETRIES` is 0.
+ * Backoff base: first retry 2 s, second 4 s. Dormant — `GEMINI_PROVIDER_MAX_RETRIES`
+ * is 0, so no backoff is ever slept under the current policy.
  */
 export const GEMINI_PROVIDER_BASE_DELAY_MS = 2_000;
 /**
- * Ceiling applied to a `Retry-After` the provider asks for. Unchanged by the
- * diagnostic, but unreachable while `GEMINI_PROVIDER_MAX_RETRIES` is 0.
+ * Ceiling applied to a `Retry-After` the provider asks for. Dormant — parsing a
+ * `Retry-After` only matters to a retry, and `GEMINI_PROVIDER_MAX_RETRIES` is 0.
  */
 export const GEMINI_PROVIDER_MAX_RETRY_AFTER_MS = 10_000;
 
@@ -182,15 +208,18 @@ function isTimeout(error: unknown, signal: AbortSignal): boolean {
 /**
  * POST to Gemini with a finite per-attempt timeout and a bounded retry budget.
  *
- * Retries 429 and 5xx (honouring a bounded `Retry-After` on 429) and ordinary
- * network failures, up to `GEMINI_PROVIDER_MAX_RETRIES`. Does NOT retry a
- * timeout — see the header — and does not retry any other 4xx, which is a
- * statement about the request rather than about the provider's availability.
+ * The retry budget is `GEMINI_PROVIDER_MAX_RETRIES`, which is permanently 0 for
+ * Gemini (C46). Under that policy EVERY outcome — timeout, ordinary network
+ * failure, 429, 5xx and any other 4xx alike — resolves on attempt 1, and no
+ * backoff is slept.
  *
- * TEMPORARY: `GEMINI_PROVIDER_MAX_RETRIES` is 0 for the diagnostic in the
- * header, so every outcome — retriable or not — currently resolves on attempt 1
- * and no backoff is slept. The retry branches below are retained unchanged so
- * restoring the constant restores the established policy exactly.
+ * The generic branches below still express what a non-zero budget would mean:
+ * retry 429 and 5xx (honouring a bounded `Retry-After` on 429) and ordinary
+ * network failures, never a timeout (see the header) and never any other 4xx,
+ * which is a statement about the request rather than about the provider's
+ * availability. They are dormant, and are kept intact rather than deleted so
+ * that the policy lives in one constant; a non-zero budget is a new reviewed
+ * policy decision.
  */
 export async function callGeminiWithRetry(
   url: string,

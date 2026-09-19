@@ -155,9 +155,10 @@ export function isOpenAiReasoningLevel(level: AiReasoningLevel): level is OpenAi
  * Per-attempt ceiling — this adapter's own, not the Gemini transport's and not
  * the Anthropic adapter's.
  *
- * Chosen rather than copied. `_shared/geminiTransport.ts` currently runs a
- * TEMPORARY 90 s Production diagnostic value, and C39's whole point is that one
- * provider's transport constants are not evidence about another's. That it
+ * Chosen rather than copied. `_shared/geminiTransport.ts` runs a 90 s
+ * single-attempt policy that is permanent but explicitly Gemini-specific (C46),
+ * and C39's whole point is that one provider's transport constants are not
+ * evidence about another's. That it
  * currently equals the Anthropic value is a coincidence of two similar bounds,
  * not a shared decision — they are two constants in two modules precisely so
  * either can move without the other.
