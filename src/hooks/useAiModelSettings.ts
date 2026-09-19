@@ -29,11 +29,15 @@ import { isAiReasoningLevel, reasoningLevelLabel, type AiReasoningLevel } from "
  *     dormant preference.
  *   • WRITE `set_current_user_ai_reasoning(p_reasoning_level)` — the only way
  *     to pin a manual reasoning level (AI-MULTI-PROVIDER-001C, C41). Created
- *     ungranted; migration `20260919075655` (AI-MANUAL-REASONING-001) grants it
- *     to `authenticated` together with `reasoning_selectable = true` on every
- *     catalog row. Until that migration is applied the database refuses the
- *     call, and the UI does not make it, because `reasoningSelectable` is still
- *     `false` on every row it reads.
+ *     ungranted by 001C; migration `20260919075655` (AI-MANUAL-REASONING-001,
+ *     C45, applied 2026-09-19) granted it to `authenticated` together with
+ *     `reasoning_selectable = true` on the six catalog rows that existed then,
+ *     so the call is now reachable. A row may still carry
+ *     `reasoningSelectable: false` — a future model starts closed, and a model
+ *     can be closed to NEW choices later — and this hook does not offer the
+ *     control for such a row. That check is a MIRROR of the server's, never an
+ *     authorization decision: the setter re-checks entitlement, the pinned
+ *     model, the flag and the level itself, and it is the only authority.
  *   • WRITE `clear_current_user_ai_reasoning()` — return to Automatic while
  *     keeping the saved model. Granted immediately, and deliberately not gated
  *     on entitlement or on `reasoning_selectable`: leaving a manual level must
