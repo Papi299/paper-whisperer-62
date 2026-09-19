@@ -1596,7 +1596,17 @@ No title, abstract, keywords, study type, statistical methods, notes or other pa
 
 ## 30. Addendum — paid-provider activation review (AI-MULTI-PROVIDER-001E, 2026-09-17)
 
-**Status: REPOSITORY PREPARATION. No paid provider is reachable, and no request has been sent to Anthropic or OpenAI.**
+> **SUPERSEDED ON THE STATUS LINE ONLY — updated 2026-09-19.** The review below was written on 2026-09-17 as repository preparation, and its analysis, findings and caveats stand unchanged. What has changed is the deployment state it describes:
+>
+> - Both credentials were installed and the Phase-7 canaries ran on 2026-09-18: Analyze and Suggest against Claude Sonnet 5 and GPT-5.6 Terra, on a dedicated acceptance account's synthetic paper. **Real requests have therefore been sent to Anthropic and OpenAI.**
+> - `20260918210017` was applied on **2026-09-19**, so both rows are now `enabled AND selectable` and the two models are offered to **entitled** users. Selection is still entitlement-gated; a non-entitled account resolves to the Google system default.
+> - **The research-content data flow is unchanged from what §30.2 and §30.3 verified**: the same allow-listed payload boundary, the same operations, the same content. What changed is that a user may now direct that already-disclosed flow to a different recipient.
+> - **No new public Privacy Policy amendment was required for Phase 8.** The September 18 wording is provider-conditional by design (§30.7) and remains accurate; `src/pages/Privacy.tsx` is unchanged.
+> - **Manual reasoning remains disabled**: `reasoning_selectable` is false on all six catalog rows and `set_current_user_ai_reasoning` is granted to nobody.
+>
+> Nothing below is weakened by this note. The caveats on **Supabase platform logging**, **Vercel access logging**, **Anthropic/OpenAI retention terms**, **attachment handling** and the **narrow scope of the Edge-log hardening** (§10.1) all stand exactly as written, and none of them became repository-verified because activation happened.
+
+**Status at the time of writing (2026-09-17): REPOSITORY PREPARATION. No paid provider was reachable, and no request had been sent to Anthropic or OpenAI.**
 
 This section is the privacy review that must precede real paid-provider traffic. It was written against the **current source**, not against the prospective description in §8, and it re-verifies the payload boundary rather than assuming it.
 

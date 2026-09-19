@@ -477,12 +477,13 @@ Phase 6  deploy BOTH generation       analyze-paper AND suggest-paper-organizati
          Edge Functions together      (§7c) — never before Phase 1                        analyze-paper v27, suggest v11 (§6.7)
 Phase 7  controlled live canary       per provider, per operation                         COMPLETE: Google/Gemini 2026-09-17 (§6.7);
                                                                                           Anthropic + OpenAI 2026-09-18 (§14.1a)
-Phase 8  user enablement              separate migration: flip reasoning_selectable and   PENDING — the only remaining step
-                                      GRANT EXECUTE ON set_current_user_ai_reasoning
-                                      TO authenticated together; open paid models
+Phase 8  user enablement              separate migration: open the paid models to user    COMPLETE 2026-09-19:
+                                      selection (selectable = true on the two paid rows)  20260918210017 applied (ledger 85).
+                                                                                          Manual reasoning + the reasoning
+                                                                                          setter grant remain DEFERRED
 ```
 
-**Phases 4, 5, 6 and all of Phase 7 are complete; only Phase 8 remains.** The paid-provider rows were staged and both credentials installed on 2026-09-18, the generation functions were redeployed from `ef8ad768` (`analyze-paper` v29, `suggest-paper-organization` v13), and the Claude Sonnet 5 and GPT-5.6 Terra canaries passed that day (§14.1a). Both paid rows remain `selectable = false`. The paragraph below records the earlier Phase 6 milestone.
+**All eight phases are complete.** The paid-provider rows were staged and both credentials installed on 2026-09-18, the generation functions were redeployed from `ef8ad768` (`analyze-paper` v29, `suggest-paper-organization` v13), and the Claude Sonnet 5 and GPT-5.6 Terra canaries passed that day (§14.1a). Phase 8 followed on 2026-09-19: `20260918210017` set `selectable = true` on exactly those two rows, so both models are now offered to entitled users. **What the original Phase-8 line also contemplated — flipping `reasoning_selectable` and granting `set_current_user_ai_reasoning` — was deliberately NOT done.** Manual reasoning remains staged off catalog-wide and is a separate future initiative, not leftover 001E work. The paragraph below records the earlier Phase 6 milestone.
 
 **Phase 6 and the Google part of Phase 7 are complete (2026-09-17).** Both generation functions were deployed together from `main` `f962b44d`, and the bounded Production telemetry canary on the live Gemini models passed (§6.7; [migration-history.md](migration-history.md)). Phases 4 and 5 were not prerequisites of Phase 6: no paid-provider catalog row or credential exists, so the deployed runtime cannot route a request to Anthropic or OpenAI. Phases 4 and 5, the paid-provider canaries and Phase 8 remain, each needing its own authorization.
 
@@ -1228,9 +1229,11 @@ Rotation takes effect on the next function invocation **because both in-memory c
 
 ---
 
-## 14. Paid provider activation (AI-MULTI-PROVIDER-001E) — PHASE 7 COMPLETE; PHASE 8 NOT AUTHORIZED
+## 14. Paid provider activation (AI-MULTI-PROVIDER-001E) — COMPLETE (Phase 8 applied 2026-09-19)
 
-**Current state (2026-09-18): steps 1–10 below are done, and Phase 8 is not.** The owner authorized the rollout; PR #287 merged as `ef8ad768`; the Privacy Policy amendment is live with effective date September 18, 2026; migration `20260917201856` is applied (ledger 84, six catalog rows); both paid-provider secrets are installed; both generation functions were redeployed from `ef8ad768`; and the Claude Sonnet 5 and GPT-5.6 Terra Phase-7 canaries passed. **Both paid models remain `selectable = false` and manual reasoning remains disabled, so no ordinary user can select or reach either provider.**
+**Current state (2026-09-19): the rollout is COMPLETE. Claude Sonnet 5 and GPT-5.6 Terra are user-selectable for entitled accounts.** Phase 8 was owner-authorized and applied on 2026-09-19: PR #289 merged as the two-parent commit `38b22c209591a5f5ac2d80498bb55d082dde6d22`, and one `supabase db push --linked` applied `20260918210017_activate_paid_provider_model_selection.sql` (ledger **84 → 85**). It moved exactly two catalog flags — `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra`, `selectable` **false → true** — and nothing else: the four Google rows are byte-unchanged, `reasoning_selectable` is still false on all six rows, `set_current_user_ai_reasoning` is still granted to nobody, the system default is still Google, and no preference, entitlement or quota row was written. **Entitlement remains the authority for WHO may select a model**; activation only changed WHAT is choosable, and a non-entitled account still resolves to the system default. No new provider canary was required — Phase 7 had already exercised all four operations live — and no Edge deployment or secret change accompanied Phase 8. The steps below are the executed record.
+
+**Earlier state, for the record (2026-09-18): steps 1–10 were done and Phase 8 was not.** The owner authorized the rollout; PR #287 merged as `ef8ad768`; the Privacy Policy amendment is live with effective date September 18, 2026; migration `20260917201856` is applied (ledger 84, six catalog rows); both paid-provider secrets are installed; both generation functions were redeployed from `ef8ad768`; and the Claude Sonnet 5 and GPT-5.6 Terra Phase-7 canaries passed. **Both paid models remain `selectable = false` and manual reasoning remains disabled, so no ordinary user can select or reach either provider.**
 
 The deployed generation runtime already **contained** both adapters (Phase 6), so this was not an adapter rollout. It is a credential + catalog rollout, and each step below was separately authorized.
 
@@ -1246,8 +1249,8 @@ The deployed generation runtime already **contained** both adapters (Phase 6), s
 8. ~~Phase 7 Claude canaries (§14.2).~~ **PASSED 2026-09-18** — Analyze (`automatic` → `off`) and Suggest (`automatic` → `medium`), one attempt each.
 9. ~~Phase 7 OpenAI canaries.~~ **PASSED 2026-09-18** — Analyze (`automatic` → `none`) and Suggest (`automatic` → `medium`), one attempt each.
 10. ~~Inspect routing, quota, telemetry, usage and cost.~~ **DONE** — see the acceptance record below.
-11. **Phase 8 — migration PREPARED, NOT APPLIED**: `20260918210017` is written and reviewed-pending (§14.4); applying it to Production remains a separate, separately authorized step.
-12. **NOT DONE**: verify Settings discovery and one live user-selected invocation per provider.
+11. ~~Phase 8: create and apply the selectable-activation migration (§14.4).~~ **DONE 2026-09-19** — `20260918210017` applied, ledger 84 → 85, exactly two rows changed.
+12. **Settings discovery verified read-only 2026-09-19**; a live user-selected invocation per provider is **not done and is not required for activation** — Phase 7 already exercised Analyze and Suggest against both providers through the real Production endpoints (§14.1a). Verifying it now would mean spending a real user's quota on a paid provider, so it is left to ordinary use.
 
 > Secrets note: one `supabase secrets set` bumps **every** Edge Function's version with no redeploy — observed again on 2026-09-18, when all six went +1 with byte-identical bundles. Record versions before and after, and gate any "did a secret change?" check on the manual subset rather than an all-rows fingerprint.
 
@@ -1270,7 +1273,9 @@ After both blocks the acceptance account was restored to its exact pre-canary st
 
 ### 14.2 Phase 7 canary design — routing a non-selectable model
 
-**The constraint.** Both staged rows are `selectable = false` on purpose (C43), so `set_current_user_ai_model` refuses them and Settings never lists them. A canary must therefore route the model **without** making it selectable.
+> **Historical as of 2026-09-19, and deliberately retained.** Phase 8 made both rows `selectable = true`, so the constraint below no longer describes the live catalog. The procedure is kept because it is the reusable recipe for canarying **any** future staged model — and because the entitlement trap it documents is a live property of the resolver, not a fact about these two rows.
+
+**The constraint (as it stood during Phase 7).** Both staged rows were `selectable = false` on purpose (C43), so `set_current_user_ai_model` refused them and Settings never listed them. A canary therefore had to route the model **without** making it selectable.
 
 **A saved preference alone is NOT enough, and the failure is silent.** This was discovered during the 2026-09-18 run and corrected here. `resolveEffectiveAiModel` (`supabase/functions/_shared/aiModelSelection.ts`) applies three gates **in this order**:
 
@@ -1333,9 +1338,11 @@ Flip `selectable`; grant `set_current_user_ai_reasoning`; touch a non-acceptance
 
 ### 14.4 Phase 8 — the final activation mutation
 
-**Status: the migration is PREPARED but NOT APPLIED.** Production still holds `selectable = false` on both paid rows, so no ordinary user can choose either model today. The Phase-7 canaries passed on 2026-09-18 (§14.1a), and the Edge-log privacy hardening that gated broad activation was merged and deployed the same day (EDGE-LOG-PRIVACY-HARDENING-001, `analyze-paper` v30 / `fetch-paper-metadata` v22), so the prerequisites are met. The activation migration `20260918210017_activate_paid_provider_model_selection.sql` now exists on a branch awaiting independent exact-head review; applying it to Production is a separate, separately authorized step.
+**Status: APPLIED to Production on 2026-09-19 — this section is now an executed operator record.** Both prerequisites were met first: the Phase-7 canaries passed on 2026-09-18 (§14.1a), and the Edge-log privacy hardening that gated broad activation was merged and deployed the same day (EDGE-LOG-PRIVACY-HARDENING-001, `analyze-paper` v30 / `fetch-paper-metadata` v22).
 
-The migration sets exactly this and nothing else:
+**What was done.** PR #289 was reviewed at its exact head and merged as the two-parent commit `38b22c209591a5f5ac2d80498bb55d082dde6d22`; required merged-main CI (Validate, DB Tests) passed; `supabase migration list --linked` and a dry run each showed **exactly one** pending migration; a final read-only gate re-confirmed both rows still `selectable = false`; then **one** `supabase db push --linked --yes`, one attempt, exit 0, applied `20260918210017_activate_paid_provider_model_selection.sql`. Ledger **84 → 85**. Verified afterwards: both paid rows `selectable = true` with every other field unchanged, the four Google rows byte-identical, `reasoning_selectable` false on all six, the reasoning setter still ungranted, entitlements and preferences unwritten, and no Edge deployment or secret change.
+
+The migration set exactly this and nothing else:
 
 ```sql
 UPDATE public.ai_model_catalog
