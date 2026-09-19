@@ -13,19 +13,22 @@
 --     races themselves need two real sessions, so they are proven by the
 --     preference-lock probe in `scripts/e2e-local.mjs db-tests`; section 10
 --     proves what one connection can;
---   * `set_current_user_ai_reasoning` — its business rules exercised in the
---     database-owner context, and its STAGED privilege posture: granted to NO
---     role, `authenticated` included;
+--   * `set_current_user_ai_reasoning` — its business rules, exercised through
+--     the real client path (`authenticated` with the caller's JWT claims);
 --   * `clear_current_user_ai_reasoning` — granted, entitlement-free, idempotent,
 --     and model-preserving.
 --
--- Why the reasoning setter is exercised as the owner. The migration withholds
--- EXECUTE from `authenticated` on purpose, so an ordinary client call is
--- refused with 42501 — and that refusal is itself asserted below. The business
--- logic still has to be proven now, before the later user-enablement migration
--- grants it, so those calls run as the function owner with the caller's JWT
--- claims set: `auth.uid()` reads the claims, not the role, which is exactly the
--- identity the function will see once it is granted.
+-- What moved out. Migration 20260912120000 created the reasoning setter with
+-- NO grant and every catalog row at `reasoning_selectable = false`, and this
+-- suite used to assert both staging locks — running the setter as its OWNER,
+-- because `authenticated` could not call it. AI-MANUAL-REASONING-001
+-- (20260919075655) opened both locks. Every suite runs against the final
+-- migration state, so the staging assertions were not kept as final-state
+-- claims: the flag, the grant and its allowlist are now owned by
+-- 019_manual_reasoning_activation.test.sql, and the calls below run as
+-- `authenticated`. The staged history is still proven on every replay by
+-- 20260912120000's own verify block, which requires both locks at the moment it
+-- runs.
 --
 -- Deterministic UUIDs; explicit fixtures; no TODO/SKIP; no remote calls; no
 -- Production data; no real credentials; no provider request of any kind. pgTAP
@@ -82,7 +85,7 @@ CREATE FUNCTION pg_temp.pair(p_uid uuid) RETURNS text LANGUAGE sql STABLE AS $hl
     'NO_ROW');
 $hlp$;
 
-SELECT plan(104);
+SELECT plan(96);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. Catalog reasoning metadata — shape
@@ -119,47 +122,38 @@ SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE id = 'google/gemini-3.5-flash'
               AND reasoning_levels = ARRAY['minimal','low','medium','high']
               AND auto_analyze_reasoning_level = 'minimal'
-              AND auto_suggest_reasoning_level = 'medium'
-              AND reasoning_selectable = false),
-  1, 'Gemini 3.5 Flash: minimal/low/medium/high, analyze=minimal, suggest=medium, not selectable');
+              AND auto_suggest_reasoning_level = 'medium'),
+  1, 'Gemini 3.5 Flash: minimal/low/medium/high, analyze=minimal, suggest=medium');
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE id = 'google/gemini-3.6-flash'
               AND reasoning_levels = ARRAY['minimal','low','medium','high']
               AND auto_analyze_reasoning_level = 'minimal'
-              AND auto_suggest_reasoning_level = 'medium'
-              AND reasoning_selectable = false),
-  1, 'Gemini 3.6 Flash: minimal/low/medium/high, analyze=minimal, suggest=medium, not selectable');
+              AND auto_suggest_reasoning_level = 'medium'),
+  1, 'Gemini 3.6 Flash: minimal/low/medium/high, analyze=minimal, suggest=medium');
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE id = 'google/gemini-3.7-flash'
               AND reasoning_levels = ARRAY['low','medium','high']
               AND auto_analyze_reasoning_level = 'low'
-              AND auto_suggest_reasoning_level = 'medium'
-              AND reasoning_selectable = false),
-  1, 'Gemini 3.7 Flash: low/medium/high, analyze=low, suggest=medium, not selectable');
+              AND auto_suggest_reasoning_level = 'medium'),
+  1, 'Gemini 3.7 Flash: low/medium/high, analyze=low, suggest=medium');
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE id = 'google/gemini-3.8-flash'
               AND reasoning_levels = ARRAY['low','medium','high']
               AND auto_analyze_reasoning_level = 'low'
-              AND auto_suggest_reasoning_level = 'medium'
-              AND reasoning_selectable = false),
-  1, 'Gemini 3.8 Flash: low/medium/high, analyze=low, suggest=medium, not selectable');
+              AND auto_suggest_reasoning_level = 'medium'),
+  1, 'Gemini 3.8 Flash: low/medium/high, analyze=low, suggest=medium');
 
--- The staging lock, stated on its own.
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE reasoning_selectable),
-  0, 'no catalog row offers manual reasoning selection — 001C activates nothing');
+-- `reasoning_selectable` is deliberately not pinned above. It was false on
+-- every row when 001C shipped and is true on all six since
+-- AI-MANUAL-REASONING-001; suite 019 owns that flag. What this suite owns is the
+-- vocabulary and the Automatic matrix, which activation did not move.
 
--- 001C seeded no non-Google model; AI-MULTI-PROVIDER-001E later staged exactly
--- two. What 001C still owns is the SAFETY half of that claim, and it is
--- asserted here unchanged in force: whatever non-Google rows exist, none of
--- them may offer manual reasoning. Suite 018 owns their full metadata.
+-- 001C seeded no non-Google model; AI-MULTI-PROVIDER-001E later added exactly
+-- two. Suite 018 owns their full metadata.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE provider <> 'google'
               AND id NOT IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
-  0, 'the catalog holds no non-Google row beyond the two staged paid models');
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
-            WHERE provider <> 'google'
-              AND reasoning_selectable),
-  0, 'no staged paid model offers manual reasoning selection');
+  0, 'the catalog holds no non-Google row beyond the two paid models');
 
 -- The per-model fact Google publishes: 3.7 and 3.8 reject `minimal`.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
@@ -272,15 +266,9 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-
   $q$SELECT reason || ':' || reasoning_reset::text FROM public.set_current_user_ai_model('google/gemini-3.5-flash')$q$),
   'ok:false', 'a first model save reports no reasoning reset');
 
--- Test setup: open the reasoning control on three rows so the OWNER can create
--- manual levels. Production has this false everywhere; it rolls back with the
--- suite.
-UPDATE public.ai_model_catalog SET reasoning_selectable = true
- WHERE id IN ('google/gemini-3.5-flash','google/gemini-3.6-flash','google/gemini-3.8-flash');
-
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('minimal')$q$),
-  'ok', 'owner context: a supported manual level is saved');
+  'ok', 'a supported manual level is saved');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
   $q$SELECT reason || ':' || reasoning_reset::text FROM public.set_current_user_ai_model('google/gemini-3.6-flash')$q$),
   'ok:false', 'switching to a model that supports the saved level resets nothing');
@@ -292,9 +280,9 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-
 SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000001'),
   'google/gemini-3.8-flash:AUTOMATIC',
   'the incompatible level was reset to NULL in the same transaction as the model change');
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('high')$q$),
-  'ok', 'owner context: high is saved on 3.8');
+  'ok', 'high is saved on 3.8');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
   $q$SELECT reason || ':' || reasoning_reset::text FROM public.set_current_user_ai_model('google/gemini-3.5-flash')$q$),
   'ok:false', 'high is supported by 3.5, so the switch back resets nothing');
@@ -322,53 +310,53 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-
   'ok:false', 'a user with no prior row gets no reset report');
 
 -- ════════════════════════════════════════════════════════════════════════════
--- 6. set_current_user_ai_reasoning — business rules (owner context)
+-- 6. set_current_user_ai_reasoning — business rules
 -- ════════════════════════════════════════════════════════════════════════════
 
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('ultra')$q$),
   'invalid_reasoning_level', 'a non-canonical level is refused first');
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('automatic')$q$),
   'invalid_reasoning_level', '"automatic" is not a level — returning to it is the clear RPC');
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning(NULL)$q$),
   'invalid_reasoning_level', 'a NULL level is refused');
 -- Entitlement before model: the Free user has no saved model either, and still
 -- hears about entitlement, so the shape of the failure discloses nothing else.
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000002'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000002'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('high')$q$),
   'not_entitled', 'entitlement is checked before any model-specific rejection');
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000004'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000004'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('high')$q$),
   'inactive_entitlement', 'a canceled plan is refused even with the capability flag set');
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000005'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000005'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('high')$q$),
   'missing_entitlement', 'no entitlement row fails closed');
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000006'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000006'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('high')$q$),
   'model_required', 'manual reasoning requires a saved named model');
 
 UPDATE public.ai_model_catalog SET reasoning_selectable = false WHERE id = 'google/gemini-3.6-flash';
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('high')$q$),
   'reasoning_not_selectable', 'a model closed to new reasoning choices refuses one');
 UPDATE public.ai_model_catalog SET reasoning_selectable = true WHERE id = 'google/gemini-3.6-flash';
 
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('xhigh')$q$),
   'reasoning_level_not_supported', 'a canonical level the model does not list is refused');
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('off')$q$),
   'reasoning_level_not_supported', 'another provider''s level is refused for a Gemini model');
 
 UPDATE public.ai_model_catalog SET enabled = false WHERE id = 'google/gemini-3.6-flash';
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
   $q$SELECT reason FROM public.set_current_user_ai_reasoning('low')$q$),
   'model_disabled', 'a retired saved model accepts no reasoning choice');
 UPDATE public.ai_model_catalog SET enabled = true WHERE id = 'google/gemini-3.6-flash';
 
-SELECT is(pg_temp.scalar_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
   $q$SELECT reason || ':' || preferred_model_id || ':' || preferred_reasoning_level
        FROM public.set_current_user_ai_reasoning('low')$q$),
   'ok:google/gemini-3.6-flash:low', 'a valid level is saved and confirmed with its model');
@@ -377,31 +365,10 @@ SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000003'),
 SELECT is(pg_temp.pair('e3000000-0000-0000-0000-000000000001'),
   'google/gemini-3.5-flash:high', 'another user''s row was untouched by that write');
 
--- ── STAGED privileges: nobody can call it yet ────────────────────────────────
-SELECT ok(NOT has_function_privilege('authenticated',
-    'public.set_current_user_ai_reasoning(text)', 'EXECUTE'),
-  'STAGED: authenticated does NOT hold EXECUTE on set_current_user_ai_reasoning');
-SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
-  $q$SELECT * FROM public.set_current_user_ai_reasoning('medium')$q$),
-  '42501', 'STAGED: an authenticated client call is refused by the database');
-SELECT ok(NOT has_function_privilege('anon',
-    'public.set_current_user_ai_reasoning(text)', 'EXECUTE'),
-  'anon cannot execute set_current_user_ai_reasoning');
-SELECT ok(NOT has_function_privilege('service_role',
-    'public.set_current_user_ai_reasoning(text)', 'EXECUTE'),
-  'service_role is not widened onto set_current_user_ai_reasoning');
-SELECT ok(NOT EXISTS (
-    SELECT 1 FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
-     WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure
-       AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
-  'set_current_user_ai_reasoning carries no PUBLIC EXECUTE');
--- Allowlists, judging EVERY grantee: the per-role checks above are a deny-list
--- and would pass a function some other role could still execute.
-SELECT is(
-  (SELECT count(*)::int FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
-    WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure
-      AND a.privilege_type = 'EXECUTE' AND a.grantee <> p.proowner),
-  0, 'STAGED: no role but its owner can execute set_current_user_ai_reasoning (every grantee judged)');
+-- ── Shape and privileges ─────────────────────────────────────────────────────
+-- Who may EXECUTE the reasoning setter — authenticated and its owner, nobody
+-- else — is owned by suite 019, which asserts it as an allowlist. The clear
+-- RPC's allowlist stays here, with the rest of its contract.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
     WHERE p.oid = 'public.clear_current_user_ai_reasoning()'::regprocedure
@@ -504,11 +471,11 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e3000000-0000-0000-
   $q$SELECT array_to_string(reasoning_levels, ',') || '|' || auto_analyze_reasoning_level
             || '|' || auto_suggest_reasoning_level || '|' || reasoning_selectable::text
        FROM public.ai_model_catalog WHERE id = 'google/gemini-3.7-flash'$q$),
-  'low,medium,high|low|medium|false', 'any signed-in user can read a model''s reasoning metadata');
+  'low,medium,high|low|medium|true', 'any signed-in user can read a model''s reasoning metadata');
 SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000003'),
-  $q$UPDATE public.ai_model_catalog SET reasoning_selectable = true
+  $q$UPDATE public.ai_model_catalog SET reasoning_selectable = false
       WHERE id = 'google/gemini-3.5-flash'$q$),
-  '42501', 'a client cannot open a model''s reasoning control itself');
+  '42501', 'a client cannot open or close a model''s reasoning control itself');
 SELECT is(pg_temp.errcode_as('anon', '',
   $q$SELECT reasoning_levels FROM public.ai_model_catalog$q$),
   '42501', 'anon cannot read the catalog');
@@ -562,7 +529,7 @@ CREATE TRIGGER _r016_suppress_update
   FOR EACH ROW WHEN (OLD.user_id = 'e3000000-0000-0000-0000-000000000007'::uuid)
   EXECUTE FUNCTION public._r016_suppress_row();
 
-SELECT is(pg_temp.errcode_as('postgres', pg_temp.claims('e3000000-0000-0000-0000-000000000007'),
+SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000007'),
   $q$SELECT * FROM public.set_current_user_ai_reasoning('high')$q$),
   'XX000', 'a reasoning write that lands on no row raises instead of answering saved = true');
 SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e3000000-0000-0000-0000-000000000007'),

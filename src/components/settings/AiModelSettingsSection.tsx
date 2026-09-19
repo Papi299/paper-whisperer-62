@@ -331,9 +331,10 @@ function SavedStatusText({
  *   • It is not an authorization boundary. `reasoning_selectable` decides
  *     whether a manual choice is offered, and `set_current_user_ai_reasoning`
  *     re-checks it — along with entitlement, the saved model and the level —
- *     server-side. Today that RPC is granted to no role at all, and every
- *     catalog row has `reasoning_selectable = false`, so the manual path is
- *     implemented and not activated.
+ *     server-side. Migration `20260919075655` (AI-MANUAL-REASONING-001) opens
+ *     the flag on every catalog row and grants the RPC to `authenticated`; this
+ *     component needed no change to follow it, because it renders whatever the
+ *     catalog row says.
  *   • It is not provider terminology. Nothing here says `thinkingLevel`,
  *     `output_config.effort` or `reasoning.effort`; those are three providers'
  *     spellings of one product idea and stay in the Edge adapters.
@@ -360,8 +361,8 @@ function ReasoningControl({
   const option = saved.status === "active" ? saved.option : null;
 
   // A manual level is offerable only for a named, active model whose reasoning
-  // control the server has opened. `reasoning_selectable = false` — the state
-  // of every catalog row today — leaves the choice unoffered rather than
+  // control the server has opened. `reasoning_selectable = false` — the state a
+  // new catalog row starts in — leaves the choice unoffered rather than
   // offered-and-refused, so the UI never implies a save that cannot happen.
   const canChooseManual = option !== null && option.reasoningSelectable;
 
@@ -517,6 +518,16 @@ function ReasoningStatusText({
     return (
       <>
         <p>{reasoningLevelDescription(savedReasoning.level)}</p>
+        {/*
+          What switching back would do, stated as concretely as it is on the
+          Automatic state itself — so a user on a manual level never has to
+          leave it to find out what Automatic means for this model.
+        */}
+        {automaticSummary && (
+          <p>
+            {AUTOMATIC_REASONING_LABEL} would use {automaticSummary}.
+          </p>
+        )}
         {!canChooseManual && (
           <p>
             {option.displayName} is no longer accepting new reasoning choices, so switching away
@@ -536,7 +547,11 @@ function ReasoningStatusText({
         <p>Paperlume chooses a reasoning level for each task.</p>
       )}
       <p>This balances quality, speed, and cost.</p>
-      {!canChooseManual && (
+      {canChooseManual ? (
+        // One control, not two: the single most surprising thing about it, so
+        // it is said before the user picks rather than only after.
+        <p>A level you choose applies to both Analyze and organization suggestions.</p>
+      ) : (
         <p>Choosing a reasoning level is not available for {option.displayName}.</p>
       )}
     </>

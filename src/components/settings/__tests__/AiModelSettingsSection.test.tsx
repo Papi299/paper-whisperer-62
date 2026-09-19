@@ -54,10 +54,11 @@ const GEMINI_38_ID = "google/gemini-3.8-flash";
 /**
  * A catalog option as the hook projects it — AI-MULTI-PROVIDER-001C.
  *
- * `reasoningSelectable` defaults to FALSE, which is the staged state of every
- * Production catalog row: the reasoning control is implemented and offers no
- * manual choice. Tests that exercise the manual path opt in explicitly, which
- * is what makes the staged default visible rather than incidental.
+ * `reasoningSelectable` defaults to TRUE: the state AI-MANUAL-REASONING-001's
+ * migration (`20260919075655`) leaves every catalog row in. Tests about a model
+ * CLOSED to new reasoning choices — every row before that migration, and any
+ * future row — opt out explicitly with `closed()`, so that state stays visible
+ * rather than incidental.
  */
 function option(
   id: string,
@@ -81,9 +82,14 @@ function option(
     reasoningLevels: ["minimal", "low", "medium", "high"],
     automaticAnalyzeReasoningLevel: "minimal",
     automaticSuggestReasoningLevel: "medium",
-    reasoningSelectable: false,
+    reasoningSelectable: true,
     ...overrides,
   };
+}
+
+/** The same option, closed to NEW manual reasoning choices. */
+function closed(o: ReturnType<typeof option>) {
+  return { ...o, reasoningSelectable: false };
 }
 
 const OPTIONS = [
@@ -608,15 +614,36 @@ describe("AiModelSettingsSection — reasoning on a named model (Automatic)", ()
     expect(reasoningDescription()).toContain("Analyze: Low · Organization suggestions: Medium");
   });
 
-  it("offers no manual choice while reasoning selection is staged off", async () => {
-    // Every Production catalog row after the 001C migration.
-    renderSection({ model: namedModel(optionById(GEMINI_35_ID)) });
+  it("offers no manual choice on a model closed to new reasoning choices", async () => {
+    // Every catalog row before AI-MANUAL-REASONING-001, and any future row.
+    renderSection({ model: namedModel(closed(optionById(GEMINI_35_ID))) });
     const trigger = screen.getByRole("combobox", { name: "Reasoning level" });
     expect(trigger).toBeDisabled();
     expect(reasoningDescription()).toMatch(
       /Choosing a reasoning level is not available for Gemini 3\.5 Flash/,
     );
+    expect(reasoningDescription()).not.toMatch(/A level you choose applies/);
     expect(saveReasoning).not.toHaveBeenCalled();
+  });
+
+  it("enables the control for a saved model whose reasoning control is open", () => {
+    renderSection({ model: namedModel(optionById(GEMINI_35_ID)) });
+    const trigger = screen.getByRole("combobox", { name: "Reasoning level" });
+    expect(trigger).toBeEnabled();
+    expect(trigger).toHaveTextContent("Automatic (Recommended)");
+  });
+
+  it("explains, before a choice is made, that one level applies to both tasks", () => {
+    renderSection({ model: namedModel(SONNET) });
+    const text = reasoningDescription();
+    // Automatic is PaperLume choosing per task, with this model's exact policy…
+    expect(text).toMatch(/Recommended\. Paperlume adjusts reasoning to the task\./);
+    expect(text).toContain("Analyze: Off · Organization suggestions: Medium");
+    // …and a manual level is ONE setting for both operations.
+    expect(text).toContain("A level you choose applies to both Analyze and organization suggestions.");
+    expect(text).not.toMatch(/not available/);
+    // Qualitative words only: no token counts, budgets or prices promised.
+    expect(text).not.toMatch(/\btokens?\b|budget|\$\s*\d/i);
   });
 });
 
@@ -671,6 +698,51 @@ describe("AiModelSettingsSection — reasoning options when selection is open", 
     ]);
   });
 
+  // The exact list for every one of the six models: Automatic first, then that
+  // model's OWN levels in catalog order, and nothing else — not even disabled.
+  it.each([
+    ["Gemini 3.5 Flash", GEMINI_35_ID, ["Minimal", "Low", "Medium", "High"]],
+    ["Gemini 3.6 Flash", GEMINI_36_ID, ["Minimal", "Low", "Medium", "High"]],
+    ["Gemini 3.7 Flash", GEMINI_37_ID, ["Low", "Medium", "High"]],
+    ["Gemini 3.8 Flash", GEMINI_38_ID, ["Low", "Medium", "High"]],
+  ] as const)("offers %s exactly Automatic plus its own levels", async (_name, id, levels) => {
+    renderSection({ model: namedModel(optionById(id)) });
+    const listbox = await openReasoningSelect();
+    expect(within(listbox).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Automatic (Recommended)",
+      ...levels,
+    ]);
+  });
+
+  it("offers Minimal on Gemini 3.5/3.6 and never on 3.7/3.8", async () => {
+    for (const [id, hasMinimal] of [
+      [GEMINI_35_ID, true],
+      [GEMINI_36_ID, true],
+      [GEMINI_37_ID, false],
+      [GEMINI_38_ID, false],
+    ] as const) {
+      const view = renderSection({ model: namedModel(optionById(id)) });
+      const listbox = await openReasoningSelect();
+      const labels = within(listbox).getAllByRole("option").map((o) => o.textContent);
+      expect(labels.includes("Minimal"), id).toBe(hasMinimal);
+      view.unmount();
+    }
+  });
+
+  it("offers Claude Off but not None, and Terra None but not Off", async () => {
+    let view = renderSection({ model: namedModel(SONNET) });
+    let labels = within(await openReasoningSelect()).getAllByRole("option").map((o) => o.textContent);
+    expect(labels).toContain("Off");
+    expect(labels).not.toContain("None");
+    view.unmount();
+
+    view = renderSection({ model: namedModel(TERRA) });
+    labels = within(await openReasoningSelect()).getAllByRole("option").map((o) => o.textContent);
+    expect(labels).toContain("None");
+    expect(labels).not.toContain("Off");
+    view.unmount();
+  });
+
   it("saves the chosen canonical level, never a label", async () => {
     renderSection({ model: namedModel(open(optionById(GEMINI_35_ID))) });
     const listbox = await openReasoningSelect();
@@ -689,6 +761,32 @@ describe("AiModelSettingsSection — reasoning options when selection is open", 
     await waitFor(() => expect(clearReasoning).toHaveBeenCalledTimes(1));
     expect(saveReasoning).not.toHaveBeenCalled();
     expect(saveReasoning).not.toHaveBeenCalledWith(AUTOMATIC_REASONING_VALUE);
+  });
+});
+
+describe("AiModelSettingsSection — changing model with a manual level", () => {
+  it("leaves the reset to the server and shows what it decided", async () => {
+    // Claude on manual Off; the user switches to Terra, which has no Off.
+    const allSix = [...OPTIONS, SONNET, TERRA];
+    const view = renderSection({
+      model: { ...namedModel(SONNET, { status: "manual", level: "off" }), options: allSix },
+    });
+    const listbox = await openSelect();
+    fireEvent.click(within(listbox).getByRole("option", { name: "GPT-5.6 Terra" }));
+    await waitFor(() => expect(saveModel).toHaveBeenCalledWith("openai/gpt-5.6-terra"));
+    // The component makes ONE call. No provider-specific reset in the browser:
+    // `set_current_user_ai_model` resets the level in the same transaction.
+    expect(saveReasoning).not.toHaveBeenCalled();
+    expect(clearReasoning).not.toHaveBeenCalled();
+
+    // The hook refetches the authoritative row; render what the server says.
+    mockUseAiModelSettings.mockReturnValue(
+      modelState({ ...namedModel(TERRA, { status: "automatic" }), options: allSix }),
+    );
+    view.rerender(<AiModelSettingsSection userId="user-1" open={true} />);
+    const trigger = screen.getByRole("combobox", { name: "Reasoning level" });
+    expect(trigger).toHaveTextContent("Automatic (Recommended)");
+    expect(reasoningDescription()).toContain("Analyze: None · Organization suggestions: Medium");
   });
 });
 
@@ -711,6 +809,15 @@ describe("AiModelSettingsSection — manual reasoning explanations", () => {
     expect(text).not.toMatch(/\$\s*\d/);
   });
 
+  it("keeps this model's Automatic policy in view while a manual level is chosen", () => {
+    renderSection({ model: namedModel(TERRA, { status: "manual", level: "high" }) });
+    const text = reasoningDescription();
+    expect(text).toMatch(/High applies to both Analyze and organization suggestions/);
+    expect(text).toContain(
+      "Automatic (Recommended) would use Analyze: None · Organization suggestions: Medium.",
+    );
+  });
+
   it("explains Off and None as disabled reasoning", () => {
     renderSection({ model: namedModel({ ...SONNET, reasoningSelectable: true }, { status: "manual", level: "off" }) });
     expect(reasoningDescription()).toMatch(/Thinking is disabled for both Analyze and organization suggestions/);
@@ -727,7 +834,7 @@ describe("AiModelSettingsSection — a saved level while selection is closed", (
     // Mirrors an `enabled, not selectable` MODEL: switching away is permitted,
     // switching sideways is not.
     renderSection({
-      model: namedModel(optionById(GEMINI_35_ID), { status: "manual", level: "high" }),
+      model: namedModel(closed(optionById(GEMINI_35_ID)), { status: "manual", level: "high" }),
     });
     const trigger = screen.getByRole("combobox", { name: "Reasoning level" });
     expect(trigger).toHaveTextContent("High");
@@ -819,6 +926,17 @@ describe("AiModelSettingsSection — static guarantees", () => {
     expect(code).toContain("automaticSuggestReasoningLevel");
     expect(code).not.toMatch(/modelId\s*===\s*["']/);
     expect(code).not.toMatch(/provider\s*===\s*["']/);
+  });
+
+  it("holds no model-to-reasoning table of its own", () => {
+    // AI-MANUAL-REASONING-001. The level list comes from the catalog row, and
+    // labels from `@/lib/aiReasoning`; a level literal in this component would
+    // be a second capability matrix that could disagree with the database.
+    // `"none"` is also SavedModelState's "no saved model" status, which is not a
+    // reasoning level; those comparisons are removed before the check.
+    const withoutStatus = code.replace(/status\s*[!=]==\s*"none"/g, "");
+    expect(withoutStatus).not.toMatch(/["'](minimal|off|none|low|medium|high|xhigh|max)["']/);
+    expect(code).toContain("option.reasoningLevels");
   });
 
   it("uses product words for reasoning, never provider parameter names", () => {

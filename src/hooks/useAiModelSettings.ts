@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { queryKeys } from "@/lib/queryKeys";
 import { useToast } from "@/hooks/use-toast";
-import { isAiReasoningLevel, type AiReasoningLevel } from "@/lib/aiReasoning";
+import { isAiReasoningLevel, reasoningLevelLabel, type AiReasoningLevel } from "@/lib/aiReasoning";
 
 /**
  * Data layer for the Settings → AI Model section (AI-MODEL-SELECTION-001C).
@@ -28,14 +28,12 @@ import { isAiReasoningLevel, type AiReasoningLevel } from "@/lib/aiReasoning";
  *     model-selection entitlement, so a downgraded user can still drop a
  *     dormant preference.
  *   • WRITE `set_current_user_ai_reasoning(p_reasoning_level)` — the only way
- *     to pin a manual reasoning level (AI-MULTI-PROVIDER-001C, C41). **STAGED:
- *     the migration that creates it grants EXECUTE to no role**, so every call
- *     currently fails at the database and this hook reports the failure rather
- *     than a success. That is the intended state until a separately authorized
- *     user-enablement migration grants it alongside flipping
- *     `reasoning_selectable`; the path in between is guarded by
- *     `reasoningSelectable`, which is `false` on every catalog row, so the UI
- *     never offers the choice that would make the call.
+ *     to pin a manual reasoning level (AI-MULTI-PROVIDER-001C, C41). Created
+ *     ungranted; migration `20260919075655` (AI-MANUAL-REASONING-001) grants it
+ *     to `authenticated` together with `reasoning_selectable = true` on every
+ *     catalog row. Until that migration is applied the database refuses the
+ *     call, and the UI does not make it, because `reasoningSelectable` is still
+ *     `false` on every row it reads.
  *   • WRITE `clear_current_user_ai_reasoning()` — return to Automatic while
  *     keeping the saved model. Granted immediately, and deliberately not gated
  *     on entitlement or on `reasoning_selectable`: leaving a manual level must
@@ -732,7 +730,9 @@ export function useAiModelSettings(
       void invalidatePreference();
       toast({
         title: "Reasoning level updated",
-        description: `Paperlume will use ${level} reasoning for Analyze and organization suggestions.`,
+        // The product label, never the canonical value: `xhigh` is a wire word,
+        // "Extra High" is what the dropdown showed the user.
+        description: `Reasoning level set to ${reasoningLevelLabel(level)} for Analyze and organization suggestions.`,
       });
     },
     onError: () => {
@@ -807,10 +807,9 @@ export function useAiModelSettings(
       if (isMutating) return;
       // The server's own preconditions, checked here so the UI never issues a
       // request it already knows is refused. Both are mirrors, never the gate:
-      // `set_current_user_ai_reasoning` re-derives the caller, re-reads the
-      // saved model and re-checks `reasoning_selectable` itself, and until a
-      // separately authorized user-enablement migration grants EXECUTE it is
-      // not callable at all.
+      // `set_current_user_ai_reasoning` re-derives the caller, re-checks
+      // entitlement, re-reads the saved model and re-checks
+      // `reasoning_selectable` and the level itself.
       if (saved?.status !== "active") return;
       if (!saved.option.reasoningSelectable) return;
       if (!saved.option.reasoningLevels.includes(level)) return;
@@ -820,8 +819,9 @@ export function useAiModelSettings(
       if (isMutating) return;
       // Deliberately NOT gated on `reasoningSelectable`: leaving a manual level
       // must never be blocked by the flag that controls entering one, or a
-      // staged-off model would trap whoever already chose a level. The RPC
-      // makes the same choice, and requires no entitlement either.
+      // model later closed to new choices would trap whoever already chose a
+      // level. The RPC makes the same choice, and requires no entitlement
+      // either.
       clearReasoningMutation.mutate();
     },
     isMutating,

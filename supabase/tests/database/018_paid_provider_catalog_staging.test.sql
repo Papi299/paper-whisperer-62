@@ -25,7 +25,7 @@
 -- paid rows:
 --
 --   * 012 owns the catalog as a LIST and the client-facing grant posture;
---   * 016 owns the reasoning VOCABULARY constraints and the ungranted setter;
+--   * 016 owns the reasoning VOCABULARY constraints and the setter's rules;
 --   * 018 owns what the two paid rows ARE, what they are now allowed to do,
 --     and what activation still does not grant.
 --
@@ -49,9 +49,13 @@
 -- gate is `can_select_ai_model`, and section 5 proves an unentitled caller is
 -- still refused a paid model at the first gate.
 --
--- Manual reasoning is NOT activated by either migration and this suite proves it
--- three ways: no row carries `reasoning_selectable`, no preference row carries a
--- reasoning level, and `set_current_user_ai_reasoning` is still ungranted.
+-- Neither 001E migration activated manual reasoning; each one's own verify block
+-- proves that at replay. AI-MANUAL-REASONING-001 (20260919075655) later set
+-- `reasoning_selectable = true` on these two rows and the four Google rows and
+-- granted `set_current_user_ai_reasoning`. The whole-row assertions below
+-- therefore carry `true` for that flag, and everything else about manual
+-- reasoning — which rows are open, who may call the setter, and every level of
+-- both paid models through the real client path — is owned by suite 019.
 --
 -- Deterministic UUIDs; explicit fixtures; no TODO/SKIP; no remote calls; no
 -- Production data; no real credentials; no provider request of any kind. pgTAP
@@ -100,7 +104,7 @@ CREATE FUNCTION pg_temp.claims(p_uid text) RETURNS text LANGUAGE sql IMMUTABLE A
   SELECT '{"sub":"' || p_uid || '","role":"authenticated"}';
 $hlp$;
 
-SELECT plan(49);
+SELECT plan(45);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. Exactly one row per staged model, and exactly the approved metadata
@@ -152,9 +156,6 @@ SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog
 SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog
             WHERE provider IN ('anthropic','openai')),
   'both paid models are selectable, so an entitled user can choose one');
-SELECT ok((SELECT NOT bool_or(reasoning_selectable) FROM public.ai_model_catalog
-            WHERE provider IN ('anthropic','openai')),
-  'neither paid model offers manual reasoning selection');
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 2. The C41 reasoning metadata, exactly and in order
@@ -210,9 +211,9 @@ SELECT is(
            reasoning_levels, auto_analyze_reasoning_level, auto_suggest_reasoning_level,
            reasoning_selectable) IN (
       ('anthropic/claude-sonnet-5','anthropic','claude-sonnet-5','Claude Sonnet 5',
-       true,true,50,ARRAY['off','low','medium','high','xhigh','max'],'off','medium',false),
+       true,true,50,ARRAY['off','low','medium','high','xhigh','max'],'off','medium',true),
       ('openai/gpt-5.6-terra','openai','gpt-5.6-terra','GPT-5.6 Terra',
-       true,true,60,ARRAY['none','low','medium','high','xhigh','max'],'none','medium',false))),
+       true,true,60,ARRAY['none','low','medium','high','xhigh','max'],'none','medium',true))),
   2, 'each paid row matches its approved metadata as a whole row');
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -220,7 +221,9 @@ SELECT is(
 -- ════════════════════════════════════════════════════════════════════════════
 --
 -- The invariant a careless edit of the 001E migration would break. Asserted
--- positively, as whole rows, rather than by counting what changed.
+-- positively, as whole rows, rather than by counting what changed. The one
+-- field that differs from 001E's own snapshot is `reasoning_selectable`, which
+-- AI-MANUAL-REASONING-001 later set to true on every row.
 
 SELECT is(
   (SELECT count(*)::int FROM public.ai_model_catalog
@@ -228,14 +231,14 @@ SELECT is(
            reasoning_levels, auto_analyze_reasoning_level, auto_suggest_reasoning_level,
            reasoning_selectable) IN (
       ('google/gemini-3.5-flash','google','gemini-3.5-flash','Gemini 3.5 Flash',true,true,10,
-       ARRAY['minimal','low','medium','high'],'minimal','medium',false),
+       ARRAY['minimal','low','medium','high'],'minimal','medium',true),
       ('google/gemini-3.6-flash','google','gemini-3.6-flash','Gemini 3.6 Flash',true,true,20,
-       ARRAY['minimal','low','medium','high'],'minimal','medium',false),
+       ARRAY['minimal','low','medium','high'],'minimal','medium',true),
       ('google/gemini-3.7-flash','google','gemini-3.7-flash','Gemini 3.7 Flash',true,true,30,
-       ARRAY['low','medium','high'],'low','medium',false),
+       ARRAY['low','medium','high'],'low','medium',true),
       ('google/gemini-3.8-flash','google','gemini-3.8-flash','Gemini 3.8 Flash',true,true,40,
-       ARRAY['low','medium','high'],'low','medium',false))),
-  4, 'all four Google rows are unchanged, as whole rows');
+       ARRAY['low','medium','high'],'low','medium',true))),
+  4, 'all four Google rows are unchanged by 001E, as whole rows');
 
 -- The paid rows appended; they did not renumber anyone.
 SELECT is((SELECT array_agg(sort_order ORDER BY sort_order)
@@ -370,22 +373,7 @@ SELECT ok(
 DELETE FROM public.user_ai_preferences WHERE user_id = 'e8000000-0000-0000-0000-000000000001';
 
 -- ════════════════════════════════════════════════════════════════════════════
--- 7. Manual reasoning is still inactive, catalog-wide
--- ════════════════════════════════════════════════════════════════════════════
-
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE reasoning_selectable),
-  0, 'no catalog row offers manual reasoning — 001E activates nothing');
-
--- The grant is the other half of manual reasoning. 001E must not have added it.
-SELECT ok(NOT has_function_privilege('authenticated',
-            'public.set_current_user_ai_reasoning(text)'::regprocedure, 'EXECUTE'),
-  'authenticated still cannot execute set_current_user_ai_reasoning');
-SELECT ok(NOT has_function_privilege('anon',
-            'public.set_current_user_ai_reasoning(text)'::regprocedure, 'EXECUTE'),
-  'anon still cannot execute set_current_user_ai_reasoning');
-
--- ════════════════════════════════════════════════════════════════════════════
--- 8. The catalog is still credential-free and still read-only to clients
+-- 7. The catalog is still credential-free and still read-only to clients
 -- ════════════════════════════════════════════════════════════════════════════
 --
 -- Two PAID providers now have rows, so "there is nowhere here to put an API
