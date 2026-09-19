@@ -1,8 +1,19 @@
--- AI-MULTI-PROVIDER-001E suite 018: the two staged paid-provider catalog rows.
+-- AI-MULTI-PROVIDER-001E suite 018: the two paid-provider catalog rows.
 --
--- Owns the database half of migration 20260917201856, which adds
--- `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` to
--- `public.ai_model_catalog` as ENABLED but NOT SELECTABLE.
+-- Owns the database half of BOTH 001E migrations:
+--
+--   * 20260917201856 staged `anthropic/claude-sonnet-5` and
+--     `openai/gpt-5.6-terra` in `public.ai_model_catalog` as ENABLED but NOT
+--     SELECTABLE, so Phase 7 could canary them without exposing them;
+--   * 20260918210017 (Phase 8) then set `selectable = true` on exactly those
+--     two rows, once the Production canaries had passed.
+--
+-- The filename still says "staging" because that is where these rows came from
+-- and renaming a suite loses its history; what it asserts is the CURRENT state.
+-- Every database suite runs against the FINAL migration state, so the
+-- staging-era claims here were inverted rather than deleted. That is not lost
+-- coverage: 20260917201856 carries its own fail-closed verify block proving it
+-- inserted the rows non-selectable, and that block is replayed on every reset.
 --
 -- ## Why a separate suite, and where the boundary is
 --
@@ -15,26 +26,30 @@
 --
 --   * 012 owns the catalog as a LIST and the client-facing grant posture;
 --   * 016 owns the reasoning VOCABULARY constraints and the ungranted setter;
---   * 018 owns what the two paid rows ARE, and — the point of the whole
---     migration — what they are still not allowed to do.
+--   * 018 owns what the two paid rows ARE, what they are now allowed to do,
+--     and what activation still does not grant.
 --
 -- ## The property this suite exists to defend
 --
--- `enabled = true AND selectable = false` is a deliberate, unusual combination
--- and it is the entire safety design of Phase 7. It means:
+-- The two flags are independent, and after Phase 8 both are true for these
+-- rows:
 --
---   * the resolver WILL route a saved preference naming one of these models,
---     which is what lets an operator canary a paid provider against the real
---     endpoints;
---   * the Settings control will NOT offer it, and `set_current_user_ai_model`
---     will REFUSE it, so no ordinary user can acquire that preference.
+--   * `enabled` means the resolver WILL route a saved preference naming one of
+--     these models — the property that let Phase 7 canary them, and the same
+--     property that now serves a user's own choice;
+--   * `selectable` means `set_current_user_ai_model` will accept it and the
+--     Settings control will offer it.
 --
--- A regression in either direction is a real incident: making them selectable
--- exposes a paid, un-canaried provider to every entitled user, and disabling
--- them silently strands a canary on the system default while appearing to work.
--- Both directions are asserted here.
+-- A regression in either direction is still a real incident: losing `enabled`
+-- would strand saved preferences on the system default while appearing to work,
+-- and losing `selectable` would silently remove two models users can now
+-- choose. Both directions are asserted here.
 --
--- Manual reasoning is NOT activated by this migration and this suite proves it
+-- What activation deliberately did NOT change is who may choose at all. That
+-- gate is `can_select_ai_model`, and section 5 proves an unentitled caller is
+-- still refused a paid model at the first gate.
+--
+-- Manual reasoning is NOT activated by either migration and this suite proves it
 -- three ways: no row carries `reasoning_selectable`, no preference row carries a
 -- reasoning level, and `set_current_user_ai_reasoning` is still ungranted.
 --
@@ -85,7 +100,7 @@ CREATE FUNCTION pg_temp.claims(p_uid text) RETURNS text LANGUAGE sql IMMUTABLE A
   SELECT '{"sub":"' || p_uid || '","role":"authenticated"}';
 $hlp$;
 
-SELECT plan(45);
+SELECT plan(49);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. Exactly one row per staged model, and exactly the approved metadata
@@ -126,13 +141,17 @@ SELECT is((SELECT display_name FROM public.ai_model_catalog WHERE id = 'anthropi
 SELECT is((SELECT display_name FROM public.ai_model_catalog WHERE id = 'openai/gpt-5.6-terra'),
   'GPT-5.6 Terra', 'Terra row carries its approved label');
 
--- ── enabled, and NOT selectable — the staging combination ──────────────────
+-- ── enabled AND selectable — the activated combination ─────────────────────
+-- Phase 8 (20260918210017) flipped `selectable` and nothing else. `enabled` is
+-- asserted separately from `selectable` because they still mean different
+-- things: `enabled` is what makes a saved preference ROUTABLE, `selectable` is
+-- what lets a user acquire that preference in the first place.
 SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog
             WHERE provider IN ('anthropic','openai')),
   'both paid models are enabled, so a saved preference for one is routable');
-SELECT ok((SELECT NOT bool_or(selectable) FROM public.ai_model_catalog
+SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog
             WHERE provider IN ('anthropic','openai')),
-  'neither paid model is selectable, so no user can newly choose one');
+  'both paid models are selectable, so an entitled user can choose one');
 SELECT ok((SELECT NOT bool_or(reasoning_selectable) FROM public.ai_model_catalog
             WHERE provider IN ('anthropic','openai')),
   'neither paid model offers manual reasoning selection');
@@ -191,9 +210,9 @@ SELECT is(
            reasoning_levels, auto_analyze_reasoning_level, auto_suggest_reasoning_level,
            reasoning_selectable) IN (
       ('anthropic/claude-sonnet-5','anthropic','claude-sonnet-5','Claude Sonnet 5',
-       true,false,50,ARRAY['off','low','medium','high','xhigh','max'],'off','medium',false),
+       true,true,50,ARRAY['off','low','medium','high','xhigh','max'],'off','medium',false),
       ('openai/gpt-5.6-terra','openai','gpt-5.6-terra','GPT-5.6 Terra',
-       true,false,60,ARRAY['none','low','medium','high','xhigh','max'],'none','medium',false))),
+       true,true,60,ARRAY['none','low','medium','high','xhigh','max'],'none','medium',false))),
   2, 'each paid row matches its approved metadata as a whole row');
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -240,16 +259,22 @@ SELECT is((SELECT count(*)::int FROM public.user_ai_preferences
   0, 'no manual reasoning preference exists');
 
 -- ════════════════════════════════════════════════════════════════════════════
--- 5. The setter refuses both paid models — for an ENTITLED caller
+-- 5. The setter now ACCEPTS both paid models — for an ENTITLED caller only
 -- ════════════════════════════════════════════════════════════════════════════
 --
--- The load-bearing test of the whole migration. It must run as a caller who
--- WOULD be allowed to choose a model, or it proves nothing: a refusal aimed at
--- an unentitled user would be the entitlement gate talking, not `selectable`.
--- `set_current_user_ai_model` checks entitlement, then plan status, then
--- existence, then `enabled`, then `selectable` — so reaching
--- `model_not_selectable` positively proves the row passed every earlier gate
--- and was stopped by exactly the flag this migration set.
+-- The load-bearing test of the activation. Before Phase 8 this section proved
+-- the mirror image: the same entitled caller was refused with
+-- `model_not_selectable`. That refusal is exactly what the activation removes,
+-- so the assertion is inverted rather than deleted — and the deleted half is
+-- not lost coverage, because 20260917201856's own verify block still proves the
+-- rows were inserted non-selectable, and it is replayed on every reset.
+--
+-- It must run as a caller who is entitled, or it proves nothing about
+-- `selectable`: an acceptance for an unentitled user would be impossible for a
+-- different reason. `set_current_user_ai_model` checks entitlement, then plan
+-- status, then existence, then `enabled`, then `selectable` — so a successful
+-- save positively proves the row passed every one of those gates, including the
+-- flag this migration set.
 
 INSERT INTO auth.users (id, email) VALUES
   ('e8000000-0000-0000-0000-000000000001','suite018-entitled@paperlume.test');
@@ -259,7 +284,7 @@ UPDATE public.user_entitlements
  WHERE user_id = 'e8000000-0000-0000-0000-000000000001';
 
 -- Positive control FIRST: this caller really can save a model. Without it, the
--- two refusals below would be consistent with a broken fixture.
+-- acceptances below would be consistent with a fixture that accepts anything.
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_model('google/gemini-3.8-flash')$q$),
   'ok', 'control: the entitled caller can save a selectable Google model');
@@ -269,32 +294,52 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-
 
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5')$q$),
-  'model_not_selectable', 'the setter refuses Claude Sonnet 5 as not selectable');
+  'ok', 'the setter accepts Claude Sonnet 5 for an entitled caller');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
-  $q$SELECT saved::text FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
-  'false', 'the setter does not save GPT-5.6 Terra');
-SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
-  $q$SELECT reason FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
-  'model_not_selectable', 'the setter refuses GPT-5.6 Terra as not selectable');
-
--- The refusals wrote nothing: the caller still holds the Google model the
--- control saved, not a paid one.
+  $q$SELECT saved::text FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5')$q$),
+  'true', 'that Claude selection reported success');
 SELECT is((SELECT preferred_model_id FROM public.user_ai_preferences
             WHERE user_id = 'e8000000-0000-0000-0000-000000000001'),
-  'google/gemini-3.8-flash',
-  'a refused paid selection left the caller''s saved model untouched');
+  'anthropic/claude-sonnet-5', 'the caller''s saved model is now Claude Sonnet 5');
+
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
+  $q$SELECT reason FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
+  'ok', 'the setter accepts GPT-5.6 Terra for an entitled caller');
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
+  $q$SELECT saved::text FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
+  'true', 'that Terra selection reported success');
+SELECT is((SELECT preferred_model_id FROM public.user_ai_preferences
+            WHERE user_id = 'e8000000-0000-0000-0000-000000000001'),
+  'openai/gpt-5.6-terra', 'the caller''s saved model is now GPT-5.6 Terra');
+
+-- ── Entitlement is untouched by activation ────────────────────────────────
+-- The corollary that matters most: making a model choosable did not make
+-- anyone able to choose. An unentitled caller is refused at the FIRST gate,
+-- before `selectable` is ever consulted, so a paid model is no more reachable
+-- for them than a Google one ever was.
+INSERT INTO auth.users (id, email) VALUES
+  ('e8000000-0000-0000-0000-000000000002','suite018-unentitled@paperlume.test');
+
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000002'),
+  $q$SELECT reason FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5')$q$),
+  'not_entitled', 'an unentitled caller is refused Claude Sonnet 5 as not entitled');
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000002'),
+  $q$SELECT saved::text FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
+  'false', 'an unentitled caller cannot save GPT-5.6 Terra either');
 SELECT is((SELECT count(*)::int FROM public.user_ai_preferences
-            WHERE preferred_model_id IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
-  0, 'no preference row names a paid model after the refusals');
+            WHERE user_id = 'e8000000-0000-0000-0000-000000000002'),
+  0, 'the refused unentitled caller has no saved preference at all');
 
 -- ════════════════════════════════════════════════════════════════════════════
--- 6. An already-saved enabled/non-selectable model stays ROUTABLE
+-- 6. A saved paid preference is ROUTABLE
 -- ════════════════════════════════════════════════════════════════════════════
 --
--- The other half of `enabled = true`, and the mechanism Phase 7 canaries use.
--- The setter will not create such a preference, but one written directly by an
--- operator must resolve — otherwise a canary would silently run on the system
--- default while appearing to test a paid provider.
+-- The other half of `enabled = true`. Before Phase 8 this was the mechanism the
+-- canaries used: the setter would not create such a preference, but one written
+-- directly by an operator had to resolve, or a canary would silently run on the
+-- system default while appearing to test a paid provider. After Phase 8 an
+-- entitled user's own choice lands in the same row, and it must resolve the
+-- same way.
 --
 -- This is the DATABASE-side fact: the row is enabled, and the catalog join a
 -- resolver performs still returns it. The runtime's own handling of that row is
@@ -313,14 +358,14 @@ SELECT is(
   'claude-sonnet-5',
   'an operator-written Sonnet preference still resolves to a routable provider model');
 
--- And it is still not selectable while being routable — the two flags really
--- are independent, which is the whole staging design.
+-- And it is now selectable as well as routable: after activation the two flags
+-- agree for these rows, which is exactly what Phase 8 changed.
 SELECT ok(
-  (SELECT c.enabled AND NOT c.selectable
+  (SELECT c.enabled AND c.selectable
      FROM public.user_ai_preferences p
      JOIN public.ai_model_catalog c ON c.id = p.preferred_model_id
     WHERE p.user_id = 'e8000000-0000-0000-0000-000000000001'),
-  'that routable preference names a model that is still not user-selectable');
+  'that routable preference names a model that is now user-selectable too');
 
 DELETE FROM public.user_ai_preferences WHERE user_id = 'e8000000-0000-0000-0000-000000000001';
 

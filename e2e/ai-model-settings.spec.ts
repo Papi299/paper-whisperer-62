@@ -44,15 +44,24 @@ const GEMINI_35_LABEL = "Gemini 3.5 Flash";
 const GEMINI_36_LABEL = "Gemini 3.6 Flash";
 const GEMINI_37_LABEL = "Gemini 3.7 Flash";
 const GEMINI_38_LABEL = "Gemini 3.8 Flash";
+const CLAUDE_SONNET_5_LABEL = "Claude Sonnet 5";
+const GPT_56_TERRA_LABEL = "GPT-5.6 Terra";
 const AUTOMATIC_REASONING_LABEL = "Automatic (Recommended)";
 
 /**
  * Exactly what the dropdown must contain after a full local migration replay:
- * the sentinel first, then the four catalog models in `sort_order`. 3.7 and 3.8
- * arrive from migration `20260903120000` (AI-MODEL-SELECTION-001D, C35) with no
- * frontend change — this list is read out of the live local database through the
- * ordinary authenticated catalog SELECT, so it is the end-to-end evidence that a
+ * the sentinel first, then the six catalog models in `sort_order`. 3.7 and 3.8
+ * arrive from migration `20260903120000` (AI-MODEL-SELECTION-001D, C35); Claude
+ * Sonnet 5 and GPT-5.6 Terra arrive from `20260917201856` but become offerable
+ * only with the Phase 8 activation `20260918210017`
+ * (AI-MULTI-PROVIDER-001E, C43). None of them needed a frontend change: this
+ * list is read out of the live local database through the ordinary
+ * authenticated catalog SELECT, so it is the end-to-end evidence that a
  * reviewed row is all a new model needs.
+ *
+ * The two paid rows are the strongest case for that claim, because they were
+ * present but NOT selectable for a whole phase: the same UI that renders them
+ * now was already deployed and deliberately did not offer them.
  */
 const EXPECTED_OPTIONS = [
   DEFAULT_LABEL,
@@ -60,6 +69,8 @@ const EXPECTED_OPTIONS = [
   GEMINI_36_LABEL,
   GEMINI_37_LABEL,
   GEMINI_38_LABEL,
+  CLAUDE_SONNET_5_LABEL,
+  GPT_56_TERRA_LABEL,
 ];
 
 function requireEnv(name: string): string {

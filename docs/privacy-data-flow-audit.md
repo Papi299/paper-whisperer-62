@@ -319,7 +319,14 @@ These are ordinary server-side operational logs, not application analytics. A po
 >
 > **What changed.** No arbitrary throwable text can now reach a log from either function. Every caught value is reduced to an allow-listed error **name** by `_shared/boundedLogging.ts`, and failure lines are built from server-generated bounded facts only (operation, upstream, HTTP status, attempt number, error class, and one of a closed set of reason literals). The transport reports its own bounded failure and throws a fixed message instead of the provider's error. `err.message`, `String(err)`, `stack` and `cause` are read by nothing. Regression tests feed real V8 parse failures and URL-bearing transport errors through the shipped code and assert none of that material appears.
 >
-> **Status: PARTIALLY VERIFIED — verified in repository source, pending deployment.** `analyze-paper` and `fetch-paper-metadata` must be redeployed for Production logs to gain the hardening, and until then the pre-hardening behaviour described above remains live. The claim is re-verified unchanged for `suggest-paper-organization`, `search-pubmed` and `delete-account`, none of which ever logged a throwable message.
+> **Status: VERIFIED — merged and LIVE in Production since 2026-09-18.** The hardening PR merged as `a3c7d910`, and both affected functions were deployed from that exact commit: `analyze-paper` as **v30** and `fetch-paper-metadata` as **v22**, each read back byte-identical to the merged source. So in the reviewed application log paths of those two functions, an arbitrary throwable message can no longer be logged: every caught value is reduced to an allow-listed error name, the JSON parse exception is discarded rather than bound, the reduction survives a hostile value whose `name` is a throwing getter or `Proxy` trap, and the upstream transport throws a fixed `upstream_fetch_failed` instead of a raw fetch error that could carry the request URL, its query and the user's `api_key`.
+>
+> **The precise scope, stated so this is not read as more than it is:**
+>
+> - It closes the specific application-log finding above, in `analyze-paper` and `fetch-paper-metadata` only. `suggest-paper-organization` was **not** redeployed and did not need this module: it never interpolated a throwable message into a log.
+> - It says nothing new about the other two rows of this table. **Supabase platform-log** retention and content, and **Vercel access-log** retention, remain outside this repository and are still EXTERNAL POLICY VERIFICATION REQUIRED — deploying application code cannot and did not verify them.
+> - `fetch-paper-metadata` still deliberately logs the PMID it is parsing (`pubmed-parse pmid=… bytes=… fetch_ms=…`), exactly as the row above records. That is unchanged by the hardening, which was about throwable text, not about this bounded identifier.
+> - It is a statement about what the code can log, not a claim that any particular historical log line is now absent; logs written before the deployment are unaffected.
 
 ---
 
