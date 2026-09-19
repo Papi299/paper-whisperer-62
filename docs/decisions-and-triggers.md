@@ -1050,10 +1050,10 @@ The missing grant was deliberate. Creating user-owned reasoning data before the 
 
 **Migration-before-merge dependency.** The merged frontend and export read the new columns, so the 001C pull request **must not be merged until migration `20260912120000` has been separately authorized, applied to Production, and verified while the old application is still live**. The migration is additive and backward compatible with the deployed app: the new columns are unread by it, the new preference column is nullable with no backfill, the model setter only gains a result column, and the two new functions are uncalled. Applying it alone activates nothing. Order: approve the exact PR head → authorize and apply the migration → verify the old app → merge. See [deployment.md](deployment.md) §6.6. **Status: satisfied, then merged.** `20260912120000` was applied to Production on 2026-09-12 and verified with the old application still live, and the pull request (#280) merged on 2026-09-13, so the 001C schema and frontend are live. The generation Edge rollout followed on 2026-09-17, and manual reasoning was activated on 2026-09-19 by `AI-MANUAL-REASONING-001` (C45).
 
-**An approved behaviour change for Gemini, stated plainly.** Production currently sends Gemini no thinking level, so both operations run at Google's `medium` default. Once the 001C Edge runtime is deployed:
+**An approved behaviour change for Gemini, stated plainly.** Before the 001C runtime deployment, Production sent Gemini no explicit thinking level, so both operations ran at Google's `medium` default. The Phase 6 deployment on 2026-09-17 changed that as approved, and it is **live in Production today**:
 
-- Analyze drops to `minimal` (3.5/3.6) or `low` (3.7/3.8).
-- Suggest stays `medium`, now stated explicitly.
+- Analyze sends `minimal` (3.5/3.6) or `low` (3.7/3.8).
+- Suggest sends `medium`, now stated explicitly.
 
 That is intended product behaviour, not a regression. 001C is **not** Google behaviour-equivalent, unlike 001A. The fail-open `provider_default` path does reproduce the pre-001C request byte-for-byte (golden SHA-256 `3285186f…`).
 
