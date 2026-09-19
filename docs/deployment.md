@@ -1246,7 +1246,7 @@ The deployed generation runtime already **contained** both adapters (Phase 6), s
 8. ~~Phase 7 Claude canaries (§14.2).~~ **PASSED 2026-09-18** — Analyze (`automatic` → `off`) and Suggest (`automatic` → `medium`), one attempt each.
 9. ~~Phase 7 OpenAI canaries.~~ **PASSED 2026-09-18** — Analyze (`automatic` → `none`) and Suggest (`automatic` → `medium`), one attempt each.
 10. ~~Inspect routing, quota, telemetry, usage and cost.~~ **DONE** — see the acceptance record below.
-11. **Phase 8 — NOT DONE and not yet authorized**: create and apply the selectable-activation migration (§14.4).
+11. **Phase 8 — migration PREPARED, NOT APPLIED**: `20260918210017` is written and reviewed-pending (§14.4); applying it to Production remains a separate, separately authorized step.
 12. **NOT DONE**: verify Settings discovery and one live user-selected invocation per provider.
 
 > Secrets note: one `supabase secrets set` bumps **every** Edge Function's version with no redeploy — observed again on 2026-09-18, when all six went +1 with byte-identical bundles. Record versions before and after, and gate any "did a secret change?" check on the manual subset rather than an all-rows fingerprint.
@@ -1333,9 +1333,9 @@ Flip `selectable`; grant `set_current_user_ai_reasoning`; touch a non-acceptance
 
 ### 14.4 Phase 8 — the final activation mutation
 
-**Status: not done, and not yet authorized.** The Phase-7 canaries passed on 2026-09-18 (§14.1a), so this is the remaining paid-provider step. Before it runs, the known Edge-log privacy hardening (EDGE-LOG-PRIVACY-HARDENING-001) should be reviewed, merged **and deployed** — a synthetic canary exercised no failure path, so it did not close that debt.
+**Status: the migration is PREPARED but NOT APPLIED.** Production still holds `selectable = false` on both paid rows, so no ordinary user can choose either model today. The Phase-7 canaries passed on 2026-09-18 (§14.1a), and the Edge-log privacy hardening that gated broad activation was merged and deployed the same day (EDGE-LOG-PRIVACY-HARDENING-001, `analyze-paper` v30 / `fetch-paper-metadata` v22), so the prerequisites are met. The activation migration `20260918210017_activate_paid_provider_model_selection.sql` now exists on a branch awaiting independent exact-head review; applying it to Production is a separate, separately authorized step.
 
-One migration sets exactly this and nothing else:
+The migration sets exactly this and nothing else:
 
 ```sql
 UPDATE public.ai_model_catalog

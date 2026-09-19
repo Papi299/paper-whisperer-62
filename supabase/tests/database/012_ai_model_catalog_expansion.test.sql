@@ -74,7 +74,7 @@ CREATE FUNCTION pg_temp.claims(p_uid text) RETURNS text LANGUAGE sql IMMUTABLE A
   SELECT '{"sub":"' || p_uid || '","role":"authenticated"}';
 $hlp$;
 
-SELECT plan(51);
+SELECT plan(52);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. The catalog is exactly the four approved models
@@ -83,10 +83,10 @@ SELECT plan(51);
 -- Asserted BEFORE any fixture row is inserted, so these counts describe the
 -- migrated catalog and nothing this suite manufactured.
 
--- AI-MULTI-PROVIDER-001E appended two PAID-provider rows (staged enabled but
--- NOT selectable). This suite still owns "the catalog as a list", so the list
--- it asserts is the whole list; the Google-specific claims below are scoped to
--- Google rather than softened.
+-- AI-MULTI-PROVIDER-001E appended two PAID-provider rows, staged enabled but
+-- NOT selectable, and its Phase 8 migration (20260918210017) then made them
+-- selectable once the Production canaries had passed. This suite still owns
+-- "the catalog as a list", so the list it asserts is the whole list.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 6,
   'the catalog holds exactly the six approved models');
 
@@ -125,14 +125,19 @@ SELECT is(
 
 SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog),
   'all six models are enabled');
--- Scoped to Google, because this is where the two model classes part company:
--- every Google row is selectable, and neither staged paid row is. Asserting
--- selectability over the whole catalog would now be false; asserting it over
--- Google keeps the original claim exactly as strong for the rows it was about.
+-- The two classes parted company while the paid rows were staged (001E:
+-- enabled but NOT selectable) and rejoined when Phase 8 activated them
+-- (20260918210017). The whole-catalog claim is therefore true again, and it is
+-- asserted over the whole catalog rather than scoped, because that is the
+-- stronger statement: a row that silently lost selectability — of either class
+-- — fails here.
+SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog),
+  'all six models are selectable');
 SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog WHERE provider = 'google'),
   'all four Google models are selectable');
-SELECT ok((SELECT NOT bool_or(selectable) FROM public.ai_model_catalog WHERE provider <> 'google'),
-  'neither staged paid model is selectable');
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE provider <> 'google' AND selectable),
+  2, 'both paid models are selectable after Phase 8');
 
 -- Whole-row identity, so a column cannot drift onto the wrong model while every
 -- individual array above still lines up.
