@@ -169,7 +169,7 @@ Per the [Remediation policy](#remediation-policy):
 
 ## Vitest residual — REMEDIATED by a major upgrade
 
-**Status: REMEDIATED** (`VITEST-SECURITY-MAJOR-UPGRADE-001`, 2026-09-20). The advisory is absent from **both** the full and the production audit graph, and the vulnerable package is **no longer installed**: `vitest` and `@vitest/mocker` both resolve to **4.1.11**, outside the affected range. It was dev/test scope throughout and never appeared in the production graph.
+**Status: REMEDIATED** (`VITEST-SECURITY-MAJOR-UPGRADE-001`, 2026-09-20). The advisory is absent from **both** the full and the production audit graph. **The vulnerable 3.2.7 versions are no longer installed; `vitest` and `@vitest/mocker` remain installed, at patched 4.1.11** — outside the affected range. The remediation moved the resolved versions off the affected range; it did not remove either package from the dependency graph. It was dev/test scope throughout and never appeared in the production graph.
 
 **Why it needed a major.** Upstream states that the 2.1.x and 3.x lines "are not maintained and are not planned to receive the fix", so no in-range 3.x remediation existed. **4.1.11** was chosen over the 5.x line because it is the first patched *stable* release and the smallest security-sufficient transition — one major boundary instead of two. (At the time of the upgrade the advisory's 5.x patched version was `5.0.0-rc.2`, a release candidate.) `^3.2.4` → `^4.1.11` is the only `package.json` change.
 
@@ -178,14 +178,14 @@ Per the [Remediation policy](#remediation-policy):
 | Advisory | [GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9) (CVE-2026-84373) — "Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock" (CWE-22) |
 | Severity | Moderate (CVSS 3.1 5.9, `AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N`) |
 | Affected | `vitest` and `@vitest/mocker` `>=2.1.0 <4.1.11`, plus the 5.0.0 pre-releases before `5.0.0-rc.2` |
-| Patched | **4.1.11** (v4 line) and **5.0.0**. Upstream states that older majors (2.1.x, 3.x) "are not maintained and are not planned to receive the fix" |
+| Patched | **4.1.11** (v4 line) and **`5.0.0-rc.2`** (v5 prerelease line; later v5 releases are also patched). Upstream states that older majors (2.1.x, 3.x) "are not maintained and are not planned to receive the fix" |
 | Installed **now** | `vitest` **4.1.11** (root `devDependencies`, declared `^4.1.11`; 4.1.11 is the `V4` dist-tag) · `@vitest/mocker` **4.1.11** — **both outside the affected range** |
 | Installed **before** (historical) | `vitest` **3.2.7** (declared `^3.2.4`; 3.2.7 was the newest 3.x) · `@vitest/mocker` **3.2.7** (exact-pinned by `vitest`) |
 | Audit representation **before** | Two moderate entries: `@vitest/mocker`, and `vitest` through it. `npm audit fix --force` proposed `vitest@5.0.1`, a breaking move across two majors, and was not used |
 
 ### Applicability — what was and was not established (2026-09-17, historical)
 
-> **Historical.** The analysis below describes the **3.2.7** install that is no longer present. It is retained because it records how the exposure was bounded while the residual was open, and because its method is the template for a future residual. It is **not** the reason the advisory is now absent — that reason is simply that the vulnerable package is no longer installed. Every statement in this subsection is in the past tense of the 3.x install.
+> **Historical — read every statement below as of 2026-09-17, against the then-installed 3.2.7.** Some of its bullets are written in the present tense of that measurement ("the vulnerable code **is** installed"); that tense refers to the 3.2.7 install, which is no longer the installed version. The analysis is retained because it records how the exposure was bounded while the residual was open, and because its method is the template for a future residual. It is **not** the reason the advisory is now absent — that reason is that `vitest` and `@vitest/mocker` now resolve to patched **4.1.11** instead of the affected 3.2.7, not that either package left the graph.
 
 Per the advisory, the file-read sink is the `interceptorPlugin` `load` hook in `@vitest/mocker`. For a registered redirect mock it returns `readFile(mock.redirect)` with no `server.fs` boundary check. That registration is **unauthenticated** only through the public `mockerPlugin` / standalone `interceptorPlugin` exports, which listen for `vitest:interceptor:register` on Vite's HMR WebSocket. Vitest browser mode registers mocks over a token-authenticated RPC instead.
 
@@ -292,7 +292,7 @@ npm explain <package>        # introduction path and parent semver range
 Revisit this document when any of the following occurs:
 
 - **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
-- the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade removed the vulnerable package, so the former applicability caveats no longer gate anything — but adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface and is worth a re-measure on its own;
+- the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade moved `vitest` and `@vitest/mocker` off the affected versions onto patched 4.1.11 (both packages are still installed), so the former applicability caveats no longer gate anything. Adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface, and is worth a re-measure on its own;
 - a **new React Router advisory** is published, particularly one whose affected range reaches **7.18.2** — that would move the floor again and require re-measuring the v7 line (and re-examining whether v8, still out of scope today, has become necessary);
 - Paperlume's Router usage changes in a way that alters the exposure profile — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
