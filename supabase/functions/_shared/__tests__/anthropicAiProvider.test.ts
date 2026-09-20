@@ -15,10 +15,12 @@
 //
 // TWO things this suite exists to keep true, beyond the protocol:
 //
-//   * The adapter is NOT REGISTERED. `aiProviderRegistry.test.ts` proves that
-//     from the registry's side. Nothing here needs a registry entry: the module
-//     is imported directly, which is the whole reason an unregistered adapter
-//     can be reviewed this thoroughly before anyone can reach it.
+//   * Registry membership is NOT this suite's concern. The module is imported
+//     DIRECTLY so the Anthropic protocol can be pinned in isolation, and
+//     `aiProviderRegistry.test.ts` owns the separate question of which
+//     providers are registered. Every assertion below is written to hold
+//     regardless of whether `anthropic` is in the registry on any given day,
+//     so a registration change can never quietly weaken the wire contract.
 //   * Reading `content[0]` is wrong. Claude Sonnet 5 runs adaptive thinking by
 //     DEFAULT, so `thinking` blocks can precede the first `text` block today,
 //     and AI-MULTI-PROVIDER-001C may deliberately turn thinking on for Suggest.
@@ -777,8 +779,9 @@ describe("normalizing provider failures", () => {
 describe("a 200 whose stop_reason is not end_turn", () => {
   it.each([
     // Our own 4096 ceiling truncated the answer. With adaptive thinking on by
-    // default, this is a REALISTIC outcome at the provisional ceiling — one of
-    // the reasons this adapter stays unregistered until 001C sets a real one.
+    // default this is a REALISTIC outcome rather than a defensive edge case:
+    // thinking and answer share that one ceiling, so a long thinking pass can
+    // exhaust it before any usable text exists.
     ["max_tokens"],
     // A Sonnet 5 safeguard declined. Documented as HTTP 200, not an error.
     ["refusal"],
