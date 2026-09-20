@@ -9,10 +9,15 @@
 // (`consume_ai_quota` / `refund_ai_quota`) and, since AI-MULTI-PROVIDER-001D,
 // one content-free provider-usage telemetry row per provider call.
 //
-// There is deliberately no frontend caller yet. 001A ships and proves the
-// backend contract; the Edit Paper experience that will use it is 001B, and the
-// endpoint must be deployed and verified before that UI can ship (the same
-// endpoint-before-UI rule `search-pubmed` follows — see docs/deployment.md).
+// The Edit Paper experience that consumes this endpoint has shipped
+// (`src/components/papers/PaperOrganizationSuggestions.tsx`, reached through
+// `src/lib/suggestPaperOrganizationEdge.ts`), so the advisory boundary above is
+// what keeps the two apart rather than the absence of a caller. The frontend
+// may ask for suggestions; acting on one stays an explicit user action in the
+// UI, and the resulting Project/Tag write goes through the pre-existing
+// mutation paths, never through this function. Because a caller now exists, the
+// endpoint-before-UI rule `search-pubmed` follows applies to any future change
+// to this contract — see docs/deployment.md.
 //
 // This file is only the Deno shell — it builds the caller-scoped Supabase
 // client, reads the environment, and serves the handler. Every decision that

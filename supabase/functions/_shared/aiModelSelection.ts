@@ -62,19 +62,19 @@
 //
 // ## Provider adapter boundary
 //
-// The catalog's `provider` column is deliberately unconstrained so a future
-// Anthropic/OpenAI model is a seed row plus an adapter rather than a schema
-// change — but until that adapter exists, a row naming any other provider must
-// NOT be called. This module asks `_shared/aiProviderRegistry.ts` whether a
+// The catalog's `provider` column is deliberately unconstrained so that a new
+// provider's model is a seed row plus a reviewed adapter rather than a schema
+// change — but until that adapter exists, a row naming that provider must NOT
+// be called. This module asks `_shared/aiProviderRegistry.ts` whether a
 // reviewed adapter exists for the row's provider and falls back when none does,
 // rather than routing to a provider whose credentials, request contract, error
 // semantics and privacy review do not exist. Since AI-MULTI-PROVIDER-001A (C39)
-// the registry is that authority; since AI-MULTI-PROVIDER-001C (C41) it holds
-// three entries — `google`, `anthropic` and `openai` — so a valid, enabled
-// catalog row naming any of them is now honoured rather than falling back on
-// provider family alone. Nothing else changed here: an unregistered provider
-// still falls back with `unsupported_provider`, and no `anthropic/*` or
-// `openai/*` catalog row exists for this to route.
+// the registry is that authority, and membership in it is the only thing this
+// module tests — it names no provider of its own and hard-codes no count, so
+// registering or retiring an adapter changes what routes here without changing
+// this file. A row whose provider is registered, and which clears the validity
+// and `enabled` checks below, is honoured; an unregistered provider falls back
+// with `unsupported_provider`.
 //
 // This module decides WHICH model; it no longer knows how to REACH one. It
 // builds no URL, sets no header and names no provider of its own — the Google
@@ -353,8 +353,9 @@ export async function resolveEffectiveAiModel(
   // it.
   if (catalogRow.enabled !== true) return fallback("model_disabled");
 
-  // Step 5 — provider adapter boundary. The runtime registry is asked whether a
-  // reviewed adapter exists for this row's provider; today exactly one does.
+  // Step 5 — provider adapter boundary. The row passes only if its provider is
+  // present in the reviewed runtime registry; that registry is the sole
+  // authority on membership, so no count or provider name is restated here.
   // A row naming anything else is refused HERE, before any URL, credential or
   // request for that provider could be constructed.
   if (!isTrimmedNonEmpty(catalogRow.provider)) return fallback("invalid_catalog_row");
