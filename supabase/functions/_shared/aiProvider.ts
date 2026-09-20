@@ -267,15 +267,19 @@ export interface AiCallPolicy<Level extends AiReasoningLevel> {
  * model returned nothing" would misdescribe the failure in exactly the logs
  * someone would use to diagnose it.
  *
- * Google cannot produce it: its envelope has no such field. Anthropic and OpenAI
- * can, and both have been REGISTERED since AI-MULTI-PROVIDER-001C (C41) — but no
- * `anthropic/*` or `openai/*` catalog row exists, so no request can reach either
- * yet. The original note, kept for history: when it was written, Google was the
- * only registered
- * adapter and its envelope has no such field, so its behaviour is unchanged and
- * both operations' existing classifications are untouched. The two operations
- * nonetheless classify this kind explicitly, so the branch exists before the
- * provider that needs it is ever routeable.
+ * This is why the neutral vocabulary has to carry the kind at all: different
+ * registered provider protocols expose different failure SHAPES, and the
+ * contract has to represent them without leaking any provider's response body,
+ * error envelope or request id to a caller. Google cannot produce this kind —
+ * its envelope has no such field — while Anthropic and OpenAI can, and both
+ * have been registered since AI-MULTI-PROVIDER-001C (C41). The branch is
+ * therefore exercised by providers that requests can actually be routed to,
+ * rather than being future-proofing for a hypothetical one.
+ *
+ * *(Historical: when this kind was added, Google was the only registered
+ * adapter, so the branch was written before any provider that could produce it
+ * was routable. Google's behaviour was unchanged then and is unchanged now, and
+ * both operations' existing classifications were untouched.)*
  */
 export type AiProviderFailureKind =
   | "http"

@@ -1,6 +1,6 @@
 // The Anthropic (Claude Messages API) provider adapter — AI-MULTI-PROVIDER-001B.
 //
-// ## REGISTERED SINCE AI-MULTI-PROVIDER-001C — and still unreachable
+// ## REGISTERED SINCE AI-MULTI-PROVIDER-001C
 //
 // 001B implemented this protocol and deliberately left it out of the registry,
 // because Claude Sonnet 5 runs ADAPTIVE THINKING BY DEFAULT at effort `high`
@@ -13,20 +13,19 @@
 // output ceiling arrives from the calling operation instead of being invented
 // here.
 //
-// Registration is not the same as reachability, and nothing in Production can
-// reach this yet. This module IS in the deployed generation bundles — the
-// AI-MULTI-PROVIDER-001D Phase 6 rollout (2026-09-17) shipped them — so the
-// remaining two barriers are the ones that matter:
+// Registration is not the same as reachability. Registering this adapter makes
+// the `anthropic` PROTOCOL speakable; whether any given deployment actually
+// routes here depends on conditions this module neither owns nor can observe:
+// an `ai_model_catalog` row naming `anthropic` that the resolver accepts, and
+// an `ANTHROPIC_API_KEY` present in that environment. Both are live deployment
+// state rather than source facts, so this file asserts neither — see
+// `_shared/aiProviderRegistry.ts` for the full set of conditions.
 //
-//   * no `ANTHROPIC_API_KEY` exists on any server, so
-//     `_shared/aiProviderCredentials.ts` fails closed before a request is built;
-//   * AI-MULTI-PROVIDER-001E stages `anthropic/claude-sonnet-5` in
-//     `ai_model_catalog` as `enabled` but NOT `selectable`, so the Settings
-//     control does not offer it and no ordinary user can save a preference for
-//     it — and that migration reaches Production only as a separate step.
-//
-// Installing the secret and making the row selectable remain separate,
-// separately authorized steps — see docs/deployment.md.
+// What this module guarantees regardless of that state: it is reached only
+// after `_shared/aiModelSelection.ts` has resolved an entitled caller's
+// effective model to this provider, and it is called only with a credential
+// resolved for THIS provider by `_shared/aiProviderCredentials.ts` — a missing
+// or blank key fails the call closed there, before any request is built.
 //
 // ## What this module owns, and only this module
 //
@@ -623,12 +622,15 @@ function isTimeout(error: unknown, signal: AbortSignal): boolean {
  * The Anthropic adapter — implemented, reviewed, and registered since
  * AI-MULTI-PROVIDER-001C.
  *
- * `_shared/aiProviderRegistry.ts` imports this constant, so a valid enabled
- * `anthropic` catalog row is honoured rather than falling back with
- * `unsupported_provider`. AI-MULTI-PROVIDER-001E stages exactly one such row,
- * `anthropic/claude-sonnet-5`, as `enabled` but NOT `selectable` — and a
- * missing `ANTHROPIC_API_KEY` still fails the call closed before this adapter
- * is reached.
+ * `_shared/aiProviderRegistry.ts` imports this constant, so a catalog row
+ * naming `anthropic` that the resolver accepts is honoured rather than falling
+ * back with `unsupported_provider`.
+ *
+ * What the adapter requires when invoked, rather than what any particular
+ * deployment currently holds: a resolved `anthropic` provider model, and this
+ * provider's own credential. A missing or blank `ANTHROPIC_API_KEY` fails the
+ * call closed in `_shared/aiProviderCredentials.ts` before this adapter is
+ * reached, so `generate` never runs without one.
  */
 export const ANTHROPIC_AI_PROVIDER_ADAPTER: AiProviderAdapter<
   typeof ANTHROPIC_AI_PROVIDER,

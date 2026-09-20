@@ -10,10 +10,10 @@
 //
 // The approved matrix is asserted against FIXTURE catalog rows, never against a
 // list inside the module: the catalog is the authority, and a TypeScript copy of
-// it here would be a second one that could disagree. The Sonnet 5 and Terra rows
-// are fixtures for models that do not exist in `ai_model_catalog` at all — they
-// prove the policy layer is model-shaped rather than Google-shaped, and seeding
-// them is a separate reviewed migration.
+// it here would be a second one that could disagree. That holds for every row
+// below, including the Sonnet 5 and Terra ones — these are fixture objects, not
+// live database reads, so they assert what the policy layer does with a row of
+// that shape rather than what any deployment's catalog currently contains.
 import { describe, it, expect } from "vitest";
 import {
   AI_OPERATION_MAX_OUTPUT_TOKENS,
@@ -43,8 +43,8 @@ const GEMINI_37 = {
 };
 const GEMINI_38 = { ...GEMINI_37, provider_model: "gemini-3.8-flash" };
 
-// FUTURE rows. No such catalog row exists; these are test fixtures carrying the
-// metadata a later, separately authorized staging migration would seed.
+// Paid-provider rows. Fixture objects carrying the reasoning metadata these
+// tests exercise — not live catalog reads, exactly like the Gemini rows above.
 const SONNET_5 = {
   provider: "anthropic",
   provider_model: "claude-sonnet-5",
@@ -168,10 +168,11 @@ describe("Automatic resolves to PaperLume's own level, per model and per operati
     expect(s.warns).toEqual([]);
   });
 
-  // FUTURE catalog rows. No `anthropic/*` or `openai/*` row exists today, so
-  // these can only be reached once a separately authorized migration seeds one.
-  // They are here because the policy layer must be model-shaped rather than
-  // Google-shaped BEFORE that migration, not after it.
+  // Paid-provider catalog fixtures. These assert that the policy layer is
+  // model-shaped rather than Google-shaped: it reads each row's own reasoning
+  // metadata, so a non-Google row resolves from that row alone. The fixtures
+  // stand on their own — the assertion is about the resolver's behaviour for a
+  // row of this shape, not about which rows any deployment's catalog holds.
   it.each([
     ["claude-sonnet-5", SONNET_5, "off", "medium"],
     ["gpt-5.6-terra", TERRA, "none", "medium"],
