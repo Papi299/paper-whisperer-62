@@ -501,13 +501,15 @@ describe("normalizing a provider failure", () => {
   });
 
   it("inherits the shared transport policy rather than pinning its own", async () => {
-    // TEMPORARY, per AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A: 90 s, zero retries.
-    // What this really asserts is that the adapter takes WHATEVER the shared
-    // constants are, so it moves with them in both directions.
+    // The adapter owns no transport policy of its own: it takes WHATEVER the
+    // shared constants are, so it moves with them in both directions. The
+    // durable Gemini policy it currently inherits is 90 s with zero retries
+    // (C46), so the queued success after the 503 is never reached.
     const harness = makeHarness([new Response("", { status: 503 }), geminiOk("{}")]);
     await generate(harness);
     expect(harness.signalTimeouts).toEqual([GEMINI_PROVIDER_TIMEOUT_MS]);
     expect(harness.signalTimeouts).toEqual([90_000]);
+    expect(GEMINI_PROVIDER_MAX_RETRIES).toBe(0);
     expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
     expect(harness.sleeps).toEqual([]);
   });

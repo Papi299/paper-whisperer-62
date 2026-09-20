@@ -532,8 +532,8 @@ describe("this adapter's own transport policy", () => {
     await generate(harness);
     expect(harness.signalTimeouts).toEqual([ANTHROPIC_PROVIDER_TIMEOUT_MS]);
     expect(ANTHROPIC_PROVIDER_TIMEOUT_MS).toBe(60_000);
-    // C39: a second provider's transport constants are not inherited. The
-    // Gemini value is currently a temporary 90 s Production diagnostic.
+    // C39: a second provider's transport constants are not inherited, and C46's
+    // permanent 90 s / zero-retry Gemini policy is explicitly Gemini-specific.
     expect(ANTHROPIC_PROVIDER_TIMEOUT_MS).not.toBe(GEMINI_PROVIDER_TIMEOUT_MS);
   });
 

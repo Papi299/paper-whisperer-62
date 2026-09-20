@@ -185,9 +185,10 @@ const ANTHROPIC_DISABLED_THINKING_EFFORT = "low";
 /**
  * Per-attempt ceiling — this adapter's own, not the Gemini transport's.
  *
- * Chosen rather than copied. `_shared/geminiTransport.ts` currently runs a
- * TEMPORARY 90 s Production diagnostic value, and C39's whole point is that one
- * provider's transport constants are not evidence about another's.
+ * Chosen rather than copied. `_shared/geminiTransport.ts` runs a 90 s
+ * single-attempt policy that is permanent but explicitly Gemini-specific (C46),
+ * and C39's whole point is that one provider's transport constants are not
+ * evidence about another's.
  *
  * 60 s, because the generation here is hard-bounded: `max_tokens` above caps
  * thinking and answer together at 4096 tokens, so a Sonnet 5 call cannot run
@@ -204,9 +205,10 @@ export const ANTHROPIC_PROVIDER_TIMEOUT_MS = 60_000;
  *
  * The conservative baseline for a protocol that has never run against the real
  * provider: a retry cannot duplicate a paid request if there is no retry.
- * Gemini's bounded 429/5xx retry budget exists because Production evidence
- * shaped it; this adapter has no such evidence, and inventing a retry policy
- * from another provider's incident history is exactly the assumption C39
+ * Gemini reached the same single-attempt answer by a different route — its
+ * bounded 429/5xx retry budget was shaped by Production evidence and then
+ * removed by it (C46) — but that history is Gemini's, and deriving a retry
+ * policy from another provider's incidents is exactly the assumption C39
  * rejects. `Retry-After` is deliberately not read, and no backoff is slept.
  */
 export const ANTHROPIC_PROVIDER_ATTEMPTS = 1;

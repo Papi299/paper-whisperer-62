@@ -14,12 +14,17 @@
 //
 // ## What this module deliberately does NOT own
 //
-//   * The transport policy. It calls `_shared/geminiTransport.ts`, which keeps
-//     its own timeout/retry rules — currently the temporary 90 s / zero-retry
-//     `AI-PROVIDER-90S-PROD-DIAGNOSTIC-001A` policy, which 001A neither changes
-//     nor generalises. A second provider may well need different status
-//     semantics, `Retry-After` handling and idempotency rules, so a shared
-//     ADAPTER contract is asserted here and a shared TRANSPORT policy is not.
+//   * The transport policy. It calls `_shared/geminiTransport.ts` and inherits
+//     whatever that module's timeout/retry rules are; 001A neither changed nor
+//     generalised them. The durable Gemini policy is 90 seconds per attempt
+//     with ZERO automatic retries (C46), so one Analyze or Suggest operation
+//     makes at most one Gemini generation request. That policy is
+//     Gemini-specific and is NOT inherited by the other adapters:
+//     `anthropicAiProvider.ts` and `openAiProvider.ts` each own an independent
+//     timeout constant. Provider transports stay independent on purpose —
+//     different providers need different status semantics, `Retry-After`
+//     handling and idempotency rules — so a shared ADAPTER contract is asserted
+//     here and a shared TRANSPORT policy deliberately is not.
 //   * The prompts. Both come in already built, as two strings.
 //   * The parsing. The generated text goes back to the operation's own strict
 //     parser untouched — this module never learns what a TLDR, a study type, a
