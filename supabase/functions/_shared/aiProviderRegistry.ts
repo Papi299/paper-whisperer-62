@@ -33,20 +33,27 @@
 // the specific harm 001B refused.
 //
 // Registration is a statement about PROTOCOLS, and it is still not a route to
-// anything. Three separate things must also be true before a request can reach
-// a non-Google provider:
+// anything by itself. Registering an adapter here is one of three independent
+// conditions, all of which must hold before any request reaches a non-Google
+// provider:
 //
-//   * the Edge Functions must be deployed — since the AI-MULTI-PROVIDER-001D
-//     Phase 6 rollout (2026-09-17) they are: the deployed `analyze-paper` and
-//     `suggest-paper-organization` bundles contain this registry and both
-//     adapters. This is the one of the three that is now satisfied;
-//   * `ai_model_catalog` must hold an enabled row naming that provider —
-//     AI-MULTI-PROVIDER-001E stages `anthropic/claude-sonnet-5` and
-//     `openai/gpt-5.6-terra` as `enabled` but NOT `selectable`, and that
-//     migration is applied to Production only as a separate rollout step;
-//   * that provider's credential must exist in the Edge environment — see
-//     `./aiProviderCredentials.ts`; neither secret is installed, so both
-//     providers fail closed even once their catalog rows exist.
+//   * a reviewed adapter for that provider must exist in this registry — that
+//     is this module's own question, and the only one it answers;
+//   * the caller's effective model must resolve through an `ai_model_catalog`
+//     row naming that provider, and that row must be valid and `enabled` (the
+//     resolver in `aiModelSelection.ts` owns this; note that `selectable`
+//     governs NEW choices in the setter/Settings path and is deliberately not
+//     an extra runtime requirement for an already-saved preference);
+//   * that provider's own credential must be present in the Edge environment
+//     under the name `./aiProviderCredentials.ts` binds to it.
+//
+// Each condition fails closed on its own terms and independently of the other
+// two: an unregistered provider falls back with `unsupported_provider`, a
+// missing/disabled/invalid row falls back through the resolver's existing
+// reasons, and a missing credential fails per the credential contract. None of
+// them is inferable from this file — in particular, which catalog rows exist
+// and which secrets are installed are live deployment state, not source facts,
+// so this comment deliberately asserts neither.
 //
 // An unimplemented provider is still absent rather than stubbed: there is no
 // placeholder that throws "not implemented", because a stub is something a
