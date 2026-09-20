@@ -19,9 +19,12 @@
 //     by default, and PaperLume sends paper titles and abstracts. This is the
 //     privacy term of the whole integration, so it is asserted from several
 //     directions rather than once.
-//   * The adapter is NOT REGISTERED. Nothing here needs a registry entry: the
-//     module is imported directly, which is the whole reason an unregistered
-//     adapter can be reviewed this thoroughly before anyone can reach it.
+//   * Registry membership is NOT this suite's concern. The module is imported
+//     DIRECTLY so the OpenAI protocol can be pinned in isolation, and
+//     `aiProviderRegistry.test.ts` owns the separate question of which
+//     providers are registered. Every assertion below is written to hold
+//     regardless of whether `openai` is in the registry on any given day, so a
+//     registration change can never quietly weaken the wire contract.
 //   * Reading `output[0]` is wrong. On a reasoning model a `reasoning` item can
 //     precede the `message` item, and AI-MULTI-PROVIDER-001C may deliberately
 //     raise reasoning effort. The extraction tests are written against that.
@@ -828,9 +831,9 @@ describe("normalizing provider failures", () => {
 describe("a 200 whose status is not completed", () => {
   it.each([
     // Our own 4096 ceiling stopped the generation. On a reasoning model this
-    // can be reached during reasoning, before any visible text exists — one of
-    // the reasons this adapter stays unregistered until 001C sets a real
-    // output/reasoning policy.
+    // can be reached during reasoning, before any visible text exists, which
+    // makes it a REALISTIC outcome rather than a defensive edge case:
+    // reasoning tokens are billed as output and share that same ceiling.
     ["incomplete"],
     // Documented response states that a synchronous call should never treat as
     // a finished answer.

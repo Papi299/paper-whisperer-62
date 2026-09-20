@@ -660,10 +660,14 @@ describe("provider adapter boundary", () => {
   // goes back to being the only thing that decides which models a user can be
   // routed to (C33/C35/C39).
   //
-  // These rows are hypothetical fixtures and nothing else. No `anthropic/*` or
-  // `openai/*` row exists in `ai_model_catalog`, so no user can reach this
-  // path today; adding one is a separate reviewed migration, and that migration
-  // — not this resolver — is what would make a non-Google model routable.
+  // These rows are hypothetical fixtures and nothing else: the ids and
+  // `provider_model` strings below are SYNTHETIC and name no catalog row in any
+  // environment. What the case pins is the RULE, not any particular row — a
+  // valid, ENABLED catalog row naming a REGISTERED provider is the whole of
+  // what makes a model routable, and the resolver keeps no provider-specific
+  // model allowlist of its own to check one against. Which `anthropic/*` or
+  // `openai/*` rows the catalog actually holds is a migration's business and
+  // changes nothing here.
   it.each([
     ["anthropic", "hypothetical-anthropic-model"],
     ["openai", "hypothetical-openai-model"],
