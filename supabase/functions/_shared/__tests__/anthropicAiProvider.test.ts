@@ -22,9 +22,11 @@
 //     regardless of whether `anthropic` is in the registry on any given day,
 //     so a registration change can never quietly weaken the wire contract.
 //   * Reading `content[0]` is wrong. Claude Sonnet 5 runs adaptive thinking by
-//     DEFAULT, so `thinking` blocks can precede the first `text` block today,
-//     and AI-MULTI-PROVIDER-001C may deliberately turn thinking on for Suggest.
-//     The extraction tests below are written against that future.
+//     DEFAULT, and PaperLume's reasoning policy can ask for thinking on top of
+//     that, so a `thinking` block may precede the first `text` block in any
+//     response. Extraction must therefore SEARCH the content array for the
+//     text block rather than assume its position, and the tests below pin that
+//     response shape whichever reasoning configuration produced it.
 //
 // No network: `fetchImpl` is injected everywhere, and one test proves the
 // adapter never reaches for a global `fetch`. No real API key exists, is
