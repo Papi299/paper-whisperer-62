@@ -14,7 +14,22 @@
    * under — otherwise the same file could pass one project and fail the other.
    */
   "compilerOptions": {
-    "types": ["vitest/globals"],
+    /*
+     * `node` is declared explicitly because three suites under
+     * `extension/src/__tests__/` read committed source from disk and import
+     * `node:fs` / `node:path` / `node:url` to do it. Until Vitest 4 this entry
+     * was unnecessary: Vitest 3's `dist/index.d.ts` itself imported from
+     * `node:vm`, which pulled `@types/node` into every program that referenced
+     * `vitest/globals`. Vitest 4 removed that accidental inclusion, so the
+     * dependency these suites always had is now stated rather than inherited.
+     * `@types/node` is already a devDependency; nothing new is installed.
+     *
+     * This is a TYPE-visibility entry only. The extension's real no-Node /
+     * no-network boundary is asserted against committed source text by
+     * `extension/src/__tests__/sourceBoundary.test.ts`, which deliberately
+     * excludes the test directory, and is unchanged by this.
+     */
+    "types": ["vitest/globals", "node"],
     "target": "ES2022",
     "useDefineForClassFields": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -44,8 +59,10 @@
   /*
    * `vite.extension.config.ts` is deliberately absent: it is a Node build
    * script, not extension source, so it belongs to `tsconfig.node.json`
-   * alongside `vite.config.ts` — where `@types/node` is in scope and `fs` and
-   * `__dirname` resolve.
+   * alongside `vite.config.ts`. That placement is about which project owns the
+   * build script, and it still holds; it is no longer a statement about where
+   * `@types/node` resolves, since the test suites here now declare `node`
+   * explicitly (see the `types` note above).
    */
   "include": ["extension"]
 }

@@ -10,16 +10,16 @@
 
 ## Current audit state
 
-`npm audit` measured **2026-09-17**, on a clean `npm ci` that did not mutate `package-lock.json`, against `main` `20b57562dbdcdc2b130286388f17ca86676f81e0` plus the [Advisory remediation 002](#advisory-remediation-002--remediated) lockfile (`package-lock.json` SHA-256 `ecd63ddf9a13d9e19cb06670c2b47b3dcc781331002f78d2ab9613ef4c7cf436`, `package.json` unchanged):
+`npm audit` measured **2026-09-20**, on a clean `npm ci` that did not mutate `package-lock.json`, against `main` `07c68c0b73362789e6b2e6b3b4a8e782dbde1be7` plus the [Vitest 4 upgrade](#vitest-residual--remediated-by-a-major-upgrade) lockfile (`package-lock.json` SHA-256 `90bd52938ba1a0edaed858fbd56cf65a6d3d96445ef5730209cacdb9d92fb142`):
 
 | Graph | Total | Low | Moderate | High | Critical |
 |---|---|---|---|---|---|
-| Full (incl. dev) | **2** | 0 | 2 | 0 | 0 |
+| Full (incl. dev) | **0** | 0 | 0 | 0 | 0 |
 | Production only | **0** | 0 | 0 | 0 | 0 |
 
-**The production graph is at zero. The full graph holds one dev-only residual:** [GHSA-82fw-gwwq-j7x9](#vitest-residual--open-separate-major-version-decision), which npm reports as two moderate package entries, `vitest` and `@vitest/mocker`. It has no patched release on the installed 3.x line, so clearing it needs a Vitest major upgrade, which is a **separately bounded task**. No high or critical finding is outstanding.
+**Both graphs are at zero as measured on 2026-09-20.** The last outstanding finding, the dev-only [GHSA-82fw-gwwq-j7x9](#vitest-residual--remediated-by-a-major-upgrade), was cleared by upgrading `vitest` from the unmaintained 3.x line to **4.1.11**. No finding of any severity is outstanding.
 
-**How the graphs got here.** After [Cluster 5](#react-router-cluster-5--complete) both graphs measured zero, and that was true at the time. Advisories published or revised between 2026-09-01 and 2026-09-08 then reopened them with no change to this repository: on `main` `20b57562` the full graph measured **6 (2 high / 3 moderate / 1 low)** and the production graph **1 low**. Advisory remediation 002 cleared every finding that had a compatible in-range fix, and only the Vitest family is left.
+**How the graphs got here.** After [Cluster 5](#react-router-cluster-5--complete) both graphs measured zero, and that was true at the time. Advisories published or revised between 2026-09-01 and 2026-09-08 then reopened them with no change to this repository: on `main` `20b57562` the full graph measured **6 (2 high / 3 moderate / 1 low)** and the production graph **1 low**. Advisory remediation 002 cleared every finding that had a compatible in-range fix and took the full graph to **2 moderate**, leaving only the Vitest family; the 2026-09-20 Vitest major upgrade then took it to **0**.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -45,11 +45,12 @@ These resolutions must not regress. A change that moves any of them backwards re
 
 | Cluster | Packages |
 |---|---|
-| 1 | `vite` 7.3.6 · `vitest` 3.2.7 · `postcss` 8.5.26 |
+| 1 | `vite` 7.3.6 · `vitest` 3.2.7 — **superseded by 4.1.11** ([Vitest 4 upgrade](#vitest-residual--remediated-by-a-major-upgrade)) · `postcss` 8.5.26 |
 | 2 | `lodash` 4.18.1 · `ws` 8.21.3 · `yaml` 2.9.0 · `picomatch` 4.0.5 (nested v2 line 2.3.2) · `brace-expansion` 1.1.18 (nested v2 line 2.1.4) |
 | 3 | `js-yaml` 4.3.1 — **superseded by 4.3.2** (remediation 002) · `flatted` 3.4.4 · `form-data` 4.0.6 · `@tootallnate/once` 2.0.1 · `esbuild` 0.28.1 |
 | 5 | `react-router` **7.18.2** (declared `^7.18.2`) · `cookie` 1.1.1 · `set-cookie-parser` 2.7.2 |
 | Remediation 002 | `browserslist` **4.29.0** · `js-yaml` **4.3.2** · `@humanfs/node` **0.16.8** · `postcss-selector-parser` **6.1.4** (hoisted line; the nested exact-pinned 6.0.10 is outside the affected range) |
+| Vitest 4 upgrade | `vitest` **4.1.11** (declared `^4.1.11`) · `@vitest/mocker` **4.1.11** · the `@vitest/*` 4.1.11 siblings · `chai` **6.2.2** |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
@@ -110,7 +111,7 @@ The fix was applied with a name-scoped, lockfile-only update (`npm update nanoid
 
 ## Advisory remediation 002 — REMEDIATED
 
-**Status: REMEDIATED** (`DEPENDENCY-ADVISORY-REMEDIATION-002`, 2026-09-17). Like the `nanoid` fix, this was a standalone bounded task, not a cluster. It cleared every advisory from the September 2026 re-measurement that had a fix inside an existing semver range. All five advisories below are now absent from **both** the full and the production audit graph. The one advisory it left open is the [Vitest residual](#vitest-residual--open-separate-major-version-decision).
+**Status: REMEDIATED** (`DEPENDENCY-ADVISORY-REMEDIATION-002`, 2026-09-17). Like the `nanoid` fix, this was a standalone bounded task, not a cluster. It cleared every advisory from the September 2026 re-measurement that had a fix inside an existing semver range. All five advisories below are now absent from **both** the full and the production audit graph. The one advisory it left open was the [Vitest residual](#vitest-residual--remediated-by-a-major-upgrade), which a separate major upgrade has since remediated (2026-09-20).
 
 | Package | Advisory | Severity | Affected → patched floor | Installed → resolved | Existing range that permits it | Graph |
 |---|---|---|---|---|---|---|
@@ -166,9 +167,11 @@ Per the [Remediation policy](#remediation-policy):
 - after `node_modules` was removed, `npm ci` reproduced the tree from the committed lockfile without mutating it, and `npm ls --all` reports no invalid, missing or extraneous node;
 - the full audit went from **6 (2 high / 3 moderate / 1 low)** to **2 moderate**, and the production audit from **1 low** to **zero**.
 
-## Vitest residual — OPEN (separate major-version decision)
+## Vitest residual — REMEDIATED by a major upgrade
 
-**Status: OPEN — deliberately not remediated by remediation 002.** It is dev/test scope only and absent from the production graph.
+**Status: REMEDIATED** (`VITEST-SECURITY-MAJOR-UPGRADE-001`, 2026-09-20). The advisory is absent from **both** the full and the production audit graph, and the vulnerable package is **no longer installed**: `vitest` and `@vitest/mocker` both resolve to **4.1.11**, outside the affected range. It was dev/test scope throughout and never appeared in the production graph.
+
+**Why it needed a major.** Upstream states that the 2.1.x and 3.x lines "are not maintained and are not planned to receive the fix", so no in-range 3.x remediation existed. **4.1.11** was chosen over the 5.x line because it is the first patched *stable* release and the smallest security-sufficient transition — one major boundary instead of two. (At the time of the upgrade the advisory's 5.x patched version was `5.0.0-rc.2`, a release candidate.) `^3.2.4` → `^4.1.11` is the only `package.json` change.
 
 | Field | Value |
 |---|---|
@@ -176,10 +179,13 @@ Per the [Remediation policy](#remediation-policy):
 | Severity | Moderate (CVSS 3.1 5.9, `AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N`) |
 | Affected | `vitest` and `@vitest/mocker` `>=2.1.0 <4.1.11`, plus the 5.0.0 pre-releases before `5.0.0-rc.2` |
 | Patched | **4.1.11** (v4 line) and **5.0.0**. Upstream states that older majors (2.1.x, 3.x) "are not maintained and are not planned to receive the fix" |
-| Installed | `vitest` **3.2.7** (root `devDependencies`, declared `^3.2.4`; 3.2.7 is the `V3` dist-tag, the newest 3.x) · `@vitest/mocker` **3.2.7** (exact-pinned `"3.2.7"` by `vitest`) |
-| Audit representation | Two moderate entries: `@vitest/mocker`, and `vitest` through it. `npm audit fix --force` proposes `vitest@5.0.1`, a breaking move across two majors, and was not used |
+| Installed **now** | `vitest` **4.1.11** (root `devDependencies`, declared `^4.1.11`; 4.1.11 is the `V4` dist-tag) · `@vitest/mocker` **4.1.11** — **both outside the affected range** |
+| Installed **before** (historical) | `vitest` **3.2.7** (declared `^3.2.4`; 3.2.7 was the newest 3.x) · `@vitest/mocker` **3.2.7** (exact-pinned by `vitest`) |
+| Audit representation **before** | Two moderate entries: `@vitest/mocker`, and `vitest` through it. `npm audit fix --force` proposed `vitest@5.0.1`, a breaking move across two majors, and was not used |
 
-### Applicability — what was and was not established (2026-09-17)
+### Applicability — what was and was not established (2026-09-17, historical)
+
+> **Historical.** The analysis below describes the **3.2.7** install that is no longer present. It is retained because it records how the exposure was bounded while the residual was open, and because its method is the template for a future residual. It is **not** the reason the advisory is now absent — that reason is simply that the vulnerable package is no longer installed. Every statement in this subsection is in the past tense of the 3.x install.
 
 Per the advisory, the file-read sink is the `interceptorPlugin` `load` hook in `@vitest/mocker`. For a registered redirect mock it returns `readFile(mock.redirect)` with no `server.fs` boundary check. That registration is **unauthenticated** only through the public `mockerPlugin` / standalone `interceptorPlugin` exports, which listen for `vitest:interceptor:register` on Vite's HMR WebSocket. Vitest browser mode registers mocks over a token-authenticated RPC instead.
 
@@ -191,15 +197,23 @@ Per the advisory, the file-read sink is the `interceptorPlugin` `load` hook in `
 - **Recorded, but not a path to this advisory:** the application dev-server config `vite.config.ts` sets `host: "::"` (port 8080), so `npm run dev` is reachable beyond loopback. That server loads only `@vitejs/plugin-react-swc`, not the interceptor plugin, so the unauthenticated registration handler is never attached to its HMR socket. Vitest itself reads `vitest.config.ts`, which takes precedence and sets no host.
 - **Not established:** that the advisory can never apply. Adopting browser mode, `@vitest/browser`, the mocker plugin exports, a Vitest UI or API server, or redirect mocks would change this conclusion, and the sink stays in the installed package until the upgrade.
 
-These findings **bound the exposure** while the residual is open. They are not a claim that the advisory is inapplicable, and they are not why it remains open. It remains open because **no compatible patched release exists**.
+These findings **bounded the exposure** while the residual was open. They were never a claim that the advisory was inapplicable, and they were not why it stayed open — it stayed open because no compatible patched release existed on 3.x. That gap is now closed by the upgrade rather than by the analysis.
 
-### Why remediation 002 did not upgrade it
+### Why remediation 002 did not upgrade it (historical)
 
 - There is no in-range fix: every patched release crosses a major (`^3.2.4` → ≥ 4.1.11 or 5.x), so any fix changes `package.json`.
 - Under the [Remediation policy](#remediation-policy), a major upgrade is separate bounded work. A test-runner major can require configuration and test changes and must be verified against the whole suite on its own terms. It also should not ride along with a lockfile-only fix.
 - No `overrides` entry was added, and a patched 4.x `@vitest/mocker` was not forced under the 3.x `vitest`, because that would silence the finding rather than fix it.
 
-Clearing this residual needs a **separately authorized Vitest-major task**, which should choose the target line (≥ 4.1.11 or 5.x) and re-measure first. For orientation only, as of 2026-09-17: `vitest@4.1.11` declares a `vite` peer of `^6.0.0 || ^7.0.0 || ^8.0.0` (installed: 7.3.6) and `node` engines of `^20.0.0 || ^22.0.0 || >=24.0.0`.
+That separately authorized Vitest-major task is the one that closed this: `VITEST-SECURITY-MAJOR-UPGRADE-001` (2026-09-20).
+
+### The upgrade, as performed (2026-09-20)
+
+- **Compatibility, re-verified at the time:** `vitest@4.1.11` declares a `vite` peer of `^6.0.0 || ^7.0.0 || ^8.0.0` (installed: **7.3.6**, unchanged by the upgrade) and `node` engines of `^20.0.0 || ^22.0.0 || >=24.0.0` (CI runs **22.x** on all four workflows).
+- **Dependency delta:** `package.json` changed one line. The lockfile moved **26** packages, every one inside the Vitest subtree and every one `dev`: 13 version changes (`vitest` and the seven `@vitest/*` siblings to 4.1.11, plus `chai` 6.2.2, `es-module-lexer` 2.3.2, `std-env` 4.2.0, `tinyexec` 1.3.1, `tinyrainbow` 3.1.1), 3 additions (`@standard-schema/spec`, `convert-source-map`, `obug`), and 10 removals — including `vite-node`, which Vitest 4 replaces with Vite's Module Runner, and `tinypool`/`tinyspy`, which v4 restructured. No application dependency moved and `vite` stayed at 7.3.6.
+- **Test migration required: none.** All 169 test files and 5,567 tests passed unchanged. The repository used none of the v4 breaking-change surfaces — no pool/worker options, no `poolMatchGlobs`/`environmentMatchGlobs`, no `deps.inline`/`deps.external`, no snapshots at all, no browser mode, no coverage config, no custom reporters, no `vite-node`/`vitest/execute` usage, and no object-form third argument to `test()`.
+- **One typecheck fix was required**, in `tsconfig.extension.json`. Vitest 4 removed an accidental `@types/node` inclusion: Vitest 3's `dist/index.d.ts` imported from `node:vm`, which pulled `@types/node` into any program referencing `vitest/globals`. Three suites under `extension/src/__tests__/` import `node:fs`/`node:path`/`node:url` to read committed source, so they had always depended on that leaked type and began failing `typecheck:extension` under v4. The fix adds `"node"` to that project's `types` array, making an existing dependency explicit; `@types/node` was already a devDependency. It is a type-visibility change only — the extension's real no-Node/no-network boundary is asserted against committed source text by `extension/src/__tests__/sourceBoundary.test.ts` and is unchanged.
+- **No production source, Edge function, migration or runtime configuration changed.**
 
 ## React Router Cluster 5 — COMPLETE
 
@@ -271,14 +285,14 @@ npm ls <package> --all       # every installed occurrence
 npm explain <package>        # introduction path and parent semver range
 ```
 
-`npm audit --omit=dev` currently exits zero, and a **nonzero** exit there means a new advisory has appeared. The full `npm audit` currently exits nonzero **only** because of the [Vitest residual](#vitest-residual--open-separate-major-version-decision) (GHSA-82fw-gwwq-j7x9, reported against `vitest` and `@vitest/mocker`). Any other entry in the full graph is new — investigate it rather than treating the nonzero exit as normal.
+**Both** `npm audit` and `npm audit --omit=dev` currently exit zero, as measured on 2026-09-20. A **nonzero** exit from either now means a new advisory has appeared — there is no longer an expected residual to discount. Investigate any entry rather than treating a nonzero exit as normal. *(Historically the full audit was expected to exit nonzero because of the Vitest residual; that stopped being true when `vitest` moved to 4.1.11.)*
 
 ## Re-evaluation triggers
 
 Revisit this document when any of the following occurs:
 
-- **any** advisory appears in the production graph, or any advisory other than the Vitest residual appears in the full graph. This is the primary trigger, and a new high or critical fires it urgently;
-- the Vitest residual's standing changes: a Vitest-major task is authorized, the advisory is revised or a patched 3.x release appears, or the project adopts anything that invalidates the [applicability findings](#applicability--what-was-and-was-not-established-2026-09-17) — browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config, or factory-less `vi.mock` / `__mocks__` redirect mocks;
+- **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
+- the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade removed the vulnerable package, so the former applicability caveats no longer gate anything — but adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface and is worth a re-measure on its own;
 - a **new React Router advisory** is published, particularly one whose affected range reaches **7.18.2** — that would move the floor again and require re-measuring the v7 line (and re-examining whether v8, still out of scope today, has become necessary);
 - Paperlume's Router usage changes in a way that alters the exposure profile — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
