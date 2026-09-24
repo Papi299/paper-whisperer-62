@@ -6,8 +6,10 @@
 // application domain: the user accepts or rejects each suggestion later, and
 // the existing Project/Tag mutation paths remain the sole authority for any
 // change to the library. Its writes are the two pre-existing AI-quota RPCs
-// (`consume_ai_quota` / `refund_ai_quota`) and, since AI-MULTI-PROVIDER-001D,
-// one content-free provider-usage telemetry row per provider call.
+// (`consume_ai_quota` through the caller's own client; `refund_ai_quota`, since
+// SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47), only through a server-only client)
+// and, since AI-MULTI-PROVIDER-001D, one content-free provider-usage telemetry
+// row per provider call.
 //
 // The Edit Paper experience that consumes this endpoint has shipped
 // (`src/components/papers/PaperOrganizationSuggestions.tsx`, reached through
@@ -24,7 +26,8 @@
 // matters lives in the pure, Node-tested modules beside it:
 //   handler.ts    — CORS before auth, method gating, the authoritative
 //                   getUser() check, paper ownership, taxonomy loading, quota
-//                   consumption/refund, the provider transport policy it
+//                   consumption and (server-only) refund, the provider
+//                   transport policy it
 //                   inherits (90 s, zero retries for Gemini — C46), and when
 //                   a provider-usage event is recorded
 //   validation.ts — request shape, bounds, and the eligibility rule
@@ -50,6 +53,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import { resolveSystemDefaultAiModel } from "../_shared/aiProviderRegistry.ts";
 import { createAiUsageEventInsertClient } from "../_shared/aiUsageTelemetry.ts";
+import { createAiQuotaRefundClient } from "../_shared/aiQuotaRefund.ts";
 import { handleSuggestOrganizationRequest, type CallerClient } from "./handler.ts";
 
 Deno.serve((req) =>
@@ -61,9 +65,11 @@ Deno.serve((req) =>
       const supabaseUrl = requireEdgeEnv("SUPABASE_URL");
       const supabaseAnonKey = requireEdgeEnv("SUPABASE_ANON_KEY");
       // Anon key + the caller's own Authorization header: every read this
-      // function performs is subject to the caller's RLS, and the quota RPCs
-      // see the caller's auth.uid(). The one elevated client in this function
-      // is the telemetry writer below, and it reads nothing.
+      // function performs is subject to the caller's RLS, and
+      // `consume_ai_quota` sees the caller's auth.uid(). This client never
+      // refunds. The two elevated clients in this function are the telemetry
+      // writer and the quota-refund client below; each is typed for one call,
+      // and neither reads anything.
       return createClient(supabaseUrl, supabaseAnonKey, {
         global: { headers: { Authorization: authHeader } },
       }) as unknown as CallerClient;
@@ -98,6 +104,19 @@ Deno.serve((req) =>
     // event is not recorded (logged), never a failed request.
     createUsageEventClient: () =>
       createAiUsageEventInsertClient({
+        supabaseUrl: requireEdgeEnv("SUPABASE_URL"),
+        readEnv: (name) => Deno.env.get(name),
+        createSupabaseClient: (url, key, options) => createClient(url, key, options),
+      }),
+    // SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47). The quota-refund client, built
+    // lazily — only when a consumed unit must be given back — from the same
+    // platform-injected secret key. `refund_ai_quota` is executable by
+    // `service_role` only, so this is the only client that can refund, and its
+    // type allows exactly that one RPC. It carries no caller header; the user
+    // id it refunds is the handler's `getUser()` identity. A missing key only
+    // means the refund is logged as not done, never a changed response.
+    createQuotaRefundClient: () =>
+      createAiQuotaRefundClient({
         supabaseUrl: requireEdgeEnv("SUPABASE_URL"),
         readEnv: (name) => Deno.env.get(name),
         createSupabaseClient: (url, key, options) => createClient(url, key, options),

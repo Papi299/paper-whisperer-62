@@ -190,8 +190,14 @@ describe("analyze-paper source keeps the boundary wired (guard)", () => {
   });
 
   it("keeps the quota RPC failures bounded too", () => {
-    expect(CODE).toContain('console.error("analyze-paper refund_failed rpc_error=1");');
-    expect(CODE).toContain('console.error("analyze-paper refund_failed threw=1");');
+    // Since C47 the refund's bounded failure lines are written by the shared
+    // server-only refund module under this function's label — the same module
+    // and spelling `suggest-paper-organization` uses — and the executed suite
+    // `quotaRefundAuthority.test.ts` asserts the exact lines this function emits.
+    expect(CODE).toContain("await refundAiQuotaUnit(userId, {");
+    expect(CODE).toContain('label: "analyze-paper",');
+    expect(CODE).toContain("logger: console,");
+    expect(CODE).not.toMatch(/refund_failed/);
     expect(CODE).toContain('console.error("3c. analyze-paper quota_rpc_error");');
   });
 

@@ -422,12 +422,15 @@ describe("no model can enter from the request", () => {
   it("reads no user id from the request", () => {
     expect(SOURCE).not.toMatch(/\buserId\b\s*=\s*(body|payload)/);
     expect(SOURCE).not.toContain("p_user_id: body");
-    // Both quota RPCs are scoped to the authenticated id: `consume_ai_quota`
-    // passes `user.id` directly, and the refund helper's `userId` parameter is
-    // only ever called with `user.id` (twice, asserted below).
+    // Both quota operations are scoped to the authenticated id:
+    // `consume_ai_quota` passes `user.id` directly, and the refund helper's
+    // `userId` parameter is only ever called with `user.id` (twice, asserted
+    // below). Since C47 the refund RPC itself is spelled only in the shared
+    // server-only module, never on this function's caller-scoped client.
     expect(SOURCE).toContain("{ p_user_id: user.id }");
-    expect(SOURCE).toContain('rpc("refund_ai_quota", { p_user_id: userId })');
-    expect(SOURCE.match(/safeRefundAiQuota\(supabase, user\.id\)/g)?.length).toBe(2);
+    expect(SOURCE).not.toMatch(/\.rpc\(\s*"refund_ai_quota"/);
+    expect(SOURCE).toContain("await refundAiQuotaUnit(userId, {");
+    expect(SOURCE.match(/safeRefundAiQuota\(supabaseUrl, user\.id\)/g)?.length).toBe(2);
     expect(SOURCE.match(/safeRefundAiQuota\(/g)?.length).toBe(3);
   });
 });
@@ -496,7 +499,7 @@ describe("model selection changes the model and nothing else", () => {
   });
 
   it("still refunds from exactly the two pre-existing call sites", () => {
-    expect(SOURCE.match(/safeRefundAiQuota\(supabase, user\.id\)/g)?.length).toBe(2);
+    expect(SOURCE.match(/safeRefundAiQuota\(supabaseUrl, user\.id\)/g)?.length).toBe(2);
     // Neither of them is a model-selection path.
     expect(SOURCE).not.toMatch(/model_selection[\s\S]{0,120}safeRefundAiQuota/);
     expect(SOURCE).not.toMatch(/resolveEffectiveAiModel[\s\S]{0,400}safeRefundAiQuota/);

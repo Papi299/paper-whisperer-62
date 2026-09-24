@@ -8,7 +8,11 @@ verify_jwt = false
 
 # analyze-paper verifies auth inside the function body (getUser()).
 # Disable gateway JWT verification so stale/refreshing tokens don't
-# cause 401 before the function code executes.
+# cause 401 before the function code executes. Besides the caller-scoped
+# client, it builds two narrow server-only clients from the Edge runtime's
+# auto-provided elevated key: one for its content-free telemetry INSERT (C42)
+# and one for the server-only refund_ai_quota RPC (C47). Neither carries the
+# caller's Authorization header.
 [functions.analyze-paper]
 verify_jwt = false
 
@@ -24,11 +28,12 @@ verify_jwt = false
 # auth.getUser(token) network call, then derives the deletion target solely from
 # the authenticated user. Same in-body auth model as the three functions above,
 # so the gateway JWT check stays disabled and the in-code auth plus the exact
-# typed-confirmation check are authoritative. This is the only function that
-# additionally uses the Edge runtime's auto-provided server-only elevated key
-# (SUPABASE_SECRET_KEYS, falling back to SUPABASE_SERVICE_ROLE_KEY) — required
-# for Storage administration and auth.admin.deleteUser, and never exposed to the
-# client.
+# typed-confirmation check are authoritative. It additionally uses the Edge
+# runtime's auto-provided server-only elevated key (SUPABASE_SECRET_KEYS,
+# falling back to SUPABASE_SERVICE_ROLE_KEY) — required for Storage
+# administration and auth.admin.deleteUser, and never exposed to the client.
+# (analyze-paper and suggest-paper-organization use the same key for two
+# narrow server-only calls only; see their entries.)
 [functions.delete-account]
 verify_jwt = false
 
@@ -56,8 +61,11 @@ verify_jwt = false
 # authenticated user. No user id is accepted from the request body, and no
 # owner/manager status or email comparison is used as an access shortcut.
 # The function is advisory: it reads the caller's own paper and taxonomy, asks
-# Gemini for suggestions, and returns them. It performs no Project, Tag,
-# assignment or paper mutation; its only writes are the pre-existing
-# consume_ai_quota / refund_ai_quota RPCs. It uses no elevated key.
+# the selected provider for suggestions, and returns them. It performs no
+# Project, Tag, assignment or paper mutation; its only writes are the
+# pre-existing consume_ai_quota RPC (caller-scoped), the server-only
+# refund_ai_quota RPC (C47) and one content-free telemetry row (C42). Those last
+# two go through narrow server-only clients built from the Edge runtime's
+# auto-provided elevated key, with no caller Authorization header.
 [functions.suggest-paper-organization]
 verify_jwt = false

@@ -7,6 +7,8 @@
 // measuring jsdom rather than this function. Node 22 provides the same
 // `AbortSignal.timeout`, `Request` and `Response` the Edge runtime does.
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   corsHeaders,
   handleSuggestOrganizationRequest,
@@ -16,6 +18,7 @@ import {
 import { NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE, MAX_PROJECTS } from "../contract.ts";
 import { resolveSystemDefaultAiModel } from "../../_shared/aiProviderRegistry.ts";
 import type { AiUsageEventInsertClient } from "../../_shared/aiUsageTelemetry.ts";
+import type { AiQuotaRefundClient } from "../../_shared/aiQuotaRefund.ts";
 
 // AI-MULTI-PROVIDER-001B/001C — a test-only seam onto the provider DISPATCH.
 //
@@ -152,7 +155,19 @@ interface Harness {
   credentialReads: string[];
   deps: SuggestOrganizationDeps;
   fetchImpl: ReturnType<typeof vi.fn>;
+  /**
+   * Every RPC the handler made, in order, through EITHER client — the caller's
+   * and, since C47, the server-only refund client. Chronological, so quota
+   * assertions still read "consume, then refund".
+   */
   rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>;
+  /** Only the RPCs made through the caller-scoped client. */
+  callerRpcCalls: Array<{ fn: string; args: Record<string, unknown> }>;
+  /**
+   * SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47). Every call made through the
+   * server-only refund client, and how many times the handler asked for it.
+   */
+  refund: { calls: Array<{ fn: string; args: Record<string, unknown> }>; clientRequests: number };
   queries: QueryRecord[];
   logs: string[];
   warns: string[];
@@ -179,8 +194,14 @@ interface HarnessOptions {
   tagsError?: unknown;
   quota?: unknown;
   quotaError?: { message: string } | null;
+  /** How the SERVER-ONLY refund RPC answers (C47): an error, or a throw. */
   refundError?: { message: string } | null;
   refundThrows?: boolean;
+  /**
+   * C47. Whether the server-only refund client can be built: yes (the default),
+   * no server key (`null`), or a factory that throws (e.g. no SUPABASE_URL).
+   */
+  refundClient?: "ok" | "no_key" | "factory_throws";
   responses?: Array<Response | Error>;
   /**
    * The value every credential read returns, or `null` to simulate a
@@ -225,6 +246,8 @@ function trap<T extends object>(target: T, allowed: string[], forbidden: string[
 
 function makeHarness(options: HarnessOptions = {}): Harness {
   const rpcCalls: Harness["rpcCalls"] = [];
+  const callerRpcCalls: Harness["callerRpcCalls"] = [];
+  const refund: Harness["refund"] = { calls: [], clientRequests: 0 };
   const queries: QueryRecord[] = [];
   const logs: string[] = [];
   const warns: string[] = [];
@@ -331,6 +354,17 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     },
     rpc(fn: string, args: Record<string, unknown>) {
       rpcCalls.push({ fn, args });
+      callerRpcCalls.push({ fn, args });
+      if (fn === "refund_ai_quota") {
+        // C47: the database grants refund_ai_quota to service_role only, so the
+        // caller's JWT is refused — answered exactly as PostgREST would, and
+        // recorded as a violation the suite asserts never happens.
+        forbidden.push("rpc:refund_ai_quota");
+        return Promise.resolve({
+          data: null,
+          error: { message: "permission denied for function refund_ai_quota", code: "42501" },
+        });
+      }
       if (fn === "get_current_user_access") {
         return Promise.resolve({
           data: options.accessError
@@ -341,10 +375,6 @@ function makeHarness(options: HarnessOptions = {}): Harness {
           error: options.accessError ?? null,
         });
       }
-      if (fn === "refund_ai_quota") {
-        if (options.refundThrows) throw new Error("refund exploded");
-        return Promise.resolve({ data: null, error: options.refundError ?? null });
-      }
       if (options.quotaError) return Promise.resolve({ data: null, error: options.quotaError });
       return Promise.resolve({
         data: options.quota === undefined
@@ -352,6 +382,18 @@ function makeHarness(options: HarnessOptions = {}): Harness {
           : options.quota,
         error: null,
       });
+    },
+  };
+
+  // SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47). The server-only refund client, as
+  // its own fake — a separate dependency from the caller client, exactly as in
+  // `index.ts`, whose only method is the one RPC its type allows.
+  const refundClient: AiQuotaRefundClient = {
+    rpc(fn, args) {
+      rpcCalls.push({ fn, args: { ...args } });
+      refund.calls.push({ fn, args: { ...args } });
+      if (options.refundThrows) throw new Error(`refund exploded for ${USER_ID}`);
+      return Promise.resolve({ error: options.refundError ?? null });
     },
   };
 
@@ -380,6 +422,13 @@ function makeHarness(options: HarnessOptions = {}): Harness {
         usage.clientRequests += 1;
         return options.usageWrite === "no_key" ? null : usageClient;
       },
+      createQuotaRefundClient: () => {
+        refund.clientRequests += 1;
+        if (options.refundClient === "factory_throws") {
+          throw new Error("SUPABASE_URL is not configured");
+        }
+        return options.refundClient === "no_key" ? null : refundClient;
+      },
       logger: {
         log: (m: string) => logs.push(m),
         warn: (m: string) => warns.push(m),
@@ -389,6 +438,8 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     fetchImpl,
     credentialReads,
     rpcCalls,
+    callerRpcCalls,
+    refund,
     queries,
     logs,
     warns,
@@ -1164,6 +1215,115 @@ describe("refund behaviour", () => {
     const payload = await response.json();
     expect(payload.error).toBe("suggestions_unavailable");
     expect(payload.code).toBe("provider_unavailable");
+  });
+});
+
+// ── 10a. Refund authority (SEC-AI-QUOTA-REFUND-AUTHORITY-001, C47) ─────────
+
+/**
+ * Consumption is the caller's; the refund is the server's. `refund_ai_quota` is
+ * granted to `service_role` only, so a browser can no longer give itself back a
+ * unit — and this handler must therefore refund through the separate,
+ * server-only client `index.ts` builds from the platform secret key, never
+ * through the caller's JWT, with the id `getUser()` authenticated.
+ */
+describe("refund authority — consume on the caller's client, refund on the server's", () => {
+  const OTHER_USER = "22222222-3333-4444-8555-666666666666";
+
+  it("refunds exactly once, through the server-only client, never the caller's", async () => {
+    const harness = makeHarness({ responses: [new Response("", { status: 500 })] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(500);
+    expect(harness.refund.clientRequests).toBe(1);
+    expect(harness.refund.calls).toEqual([{ fn: "refund_ai_quota", args: { p_user_id: USER_ID } }]);
+    // The caller's client consumed and did nothing else quota-related.
+    expect(harness.callerRpcCalls.map((c) => c.fn)).toEqual(["get_current_user_access", "consume_ai_quota"]);
+    expect(harness.forbidden).toEqual([]);
+  });
+
+  it("refunds the getUser() identity — not a constant, not a body field", async () => {
+    const harness = makeHarness({
+      user: { id: OTHER_USER },
+      responses: [new Response("", { status: 503 })],
+    });
+    await handleSuggestOrganizationRequest(
+      request(validBody({ user_id: USER_ID, userId: USER_ID, p_user_id: USER_ID })),
+      harness.deps,
+    );
+    expect(rpcArgs(harness, "consume_ai_quota")).toEqual({ p_user_id: OTHER_USER });
+    expect(harness.refund.calls).toEqual([{ fn: "refund_ai_quota", args: { p_user_id: OTHER_USER } }]);
+  });
+
+  it("does not refund — or even build the refund client — when the result is usable", async () => {
+    const harness = makeHarness({ responses: [geminiOk(EMPTY_SUGGESTIONS)] });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(response.status).toBe(200);
+    expect(harness.refund.clientRequests).toBe(0);
+    expect(harness.refund.calls).toEqual([]);
+    expect(quotaRpcs(harness)).toEqual(["consume_ai_quota"]);
+  });
+
+  it.each([
+    ["a Paperlume quota wall (nothing consumed)", {
+      quota: [{ allowed: false, reason: "quota_exceeded", plan: "free", period_type: "lifetime", used: 15, quota: 15, remaining: 0, reset_at: null }],
+    }],
+    ["a quota RPC error (nothing consumed)", { quotaError: { message: "boom" } }],
+    ["a missing provider credential (checked before consumption)", { geminiKey: null }],
+    ["a foreign or missing paper", { paper: null }],
+  ])("never refunds after %s", async (_label, options) => {
+    const harness = makeHarness(options as HarnessOptions);
+    await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    expect(harness.refund.clientRequests).toBe(0);
+    expect(harness.refund.calls).toEqual([]);
+    expect(harness.callerRpcCalls.map((c) => c.fn)).not.toContain("refund_ai_quota");
+  });
+
+  it.each([
+    ["no server key is available", { refundClient: "no_key" }, "suggest-organization refund_failed no_server_key=1"],
+    ["the refund client cannot be built", { refundClient: "factory_throws" }, "suggest-organization refund_failed threw=1"],
+    ["the refund RPC returns an error", { refundError: { message: `permission denied for ${USER_ID}` } }, "suggest-organization refund_failed rpc_error=1"],
+    ["the refund RPC throws", { refundThrows: true }, "suggest-organization refund_failed threw=1"],
+  ])("keeps the original provider failure when %s, with one bounded line and no caller fallback", async (_label, options, line) => {
+    const baseline = makeHarness({ responses: [new Response("", { status: 429 })] });
+    const baselineResponse = await handleSuggestOrganizationRequest(request(validBody()), baseline.deps);
+    const baselinePayload = await baselineResponse.json();
+
+    const harness = makeHarness({ responses: [new Response("", { status: 429 })], ...(options as HarnessOptions) });
+    const response = await handleSuggestOrganizationRequest(request(validBody()), harness.deps);
+    // Same status, same body — the refund's fate is invisible to the user.
+    expect(response.status).toBe(baselineResponse.status);
+    expect(await response.json()).toEqual(baselinePayload);
+    expect(harness.errors).toContain(line);
+    // No second attempt through the caller's identity: that would be the defect.
+    expect(harness.callerRpcCalls.map((c) => c.fn)).not.toContain("refund_ai_quota");
+    expect(harness.forbidden).toEqual([]);
+    // Nothing that identifies the user, and no database text, reaches a log.
+    const logged = [...harness.logs, ...harness.warns, ...harness.errors].join("\n");
+    expect(logged).not.toContain(USER_ID);
+    expect(logged).not.toContain("permission denied");
+    expect(logged).not.toContain("exploded");
+    expect(logged).not.toContain("SUPABASE_URL");
+  });
+
+  it("pins the split in the shipped source, not only in this harness", () => {
+    const handlerSource = readFileSync(fileURLToPath(new URL("../handler.ts", import.meta.url)), "utf8");
+    const indexSource = readFileSync(fileURLToPath(new URL("../index.ts", import.meta.url)), "utf8");
+    // The caller client's type names exactly two RPCs, and the refund is not one.
+    expect(handlerSource).toContain(
+      'export type CallerRpcName = "consume_ai_quota" | "get_current_user_access";',
+    );
+    expect(handlerSource).toMatch(/rpc\(\s*fn: CallerRpcName,/);
+    // The handler never spells the refund call itself; the shared module does.
+    expect(handlerSource).not.toMatch(/\.rpc\(\s*"refund_ai_quota"/);
+    expect(handlerSource).toContain("await safeRefund(deps, userId, logger);");
+    expect(handlerSource.match(/await safeRefund\(/g)?.length).toBe(1);
+    expect(handlerSource).toContain("createClient: () => deps.createQuotaRefundClient(),");
+    // index.ts builds that client from the platform secret key through the
+    // shared factory, and the caller client keeps the anon key + caller header.
+    expect(indexSource).toContain('import { createAiQuotaRefundClient } from "../_shared/aiQuotaRefund.ts";');
+    expect(indexSource).toMatch(/createQuotaRefundClient: \(\) =>\s*createAiQuotaRefundClient\(\{/);
+    expect(indexSource.match(/createAiQuotaRefundClient\(/g)?.length).toBe(1);
+    expect(indexSource).not.toMatch(/SUPABASE_SECRET_KEYS|SERVICE_ROLE/);
   });
 });
 
@@ -2308,9 +2468,23 @@ describe("provider-usage telemetry — privacy and client boundary", () => {
         order.push("usage_client");
         return harness.deps.createUsageEventClient();
       },
+      // C47: the refund goes through its own server-only client, so the order
+      // is observed there rather than on the caller client.
+      createQuotaRefundClient: () => {
+        const refundClient = harness.deps.createQuotaRefundClient();
+        if (refundClient === null) return null;
+        return {
+          rpc: (fn, args) => {
+            order.push(fn);
+            return refundClient.rpc(fn, args);
+          },
+        };
+      },
     };
     await handleSuggestOrganizationRequest(request(validBody()), deps);
     expect(order.indexOf("refund_ai_quota")).toBeGreaterThan(-1);
     expect(order.indexOf("usage_client")).toBeGreaterThan(order.indexOf("refund_ai_quota"));
+    // …and the caller client never attempted it.
+    expect(harness.callerRpcCalls.map((c) => c.fn)).not.toContain("refund_ai_quota");
   });
 });

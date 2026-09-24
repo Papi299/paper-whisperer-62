@@ -229,8 +229,9 @@ describe("analyze-paper is wired to the shared recorder", () => {
     expect(success).toBeLessThan(CODE.indexOf("{ status: 200, headers: jsonHeaders }"));
     expect(failure).toBeGreaterThan(CODE.indexOf("} catch (geminiErr) {"));
     expect(failure).toBeLessThan(CODE.indexOf('error: "analysis_unavailable"'));
-    // The refund on that path is unchanged and still comes first.
-    expect(CODE.lastIndexOf("await safeRefundAiQuota(supabase, user.id);", failure)).toBeGreaterThan(
+    // The refund on that path still comes first (through the server-only
+    // refund client since C47).
+    expect(CODE.lastIndexOf("await safeRefundAiQuota(supabaseUrl, user.id);", failure)).toBeGreaterThan(
       CODE.indexOf("} catch (geminiErr) {"),
     );
   });
@@ -273,7 +274,8 @@ describe("analyze-paper is wired to the shared recorder", () => {
     expect(factoryCall).not.toContain("Authorization");
     // The key names live in the shared factory, not here.
     expect(CODE).not.toMatch(/SUPABASE_SECRET_KEYS|SERVICE_ROLE/);
-    // Quota and routing still use the caller-scoped client alone.
+    // Consumption and routing still use the caller-scoped client alone; the
+    // refund has its own server-only client since C47, built the same way.
     expect(CODE.match(/const supabase = createClient\(/g)?.length).toBe(1);
   });
 
@@ -283,8 +285,10 @@ describe("analyze-paper is wired to the shared recorder", () => {
     expect(CODE).not.toMatch(/if\s*\(\s*await recordProviderUsage/);
   });
 
-  it("leaves the quota and refund call sites exactly as they were", () => {
+  it("leaves the quota and refund call sites where they were", () => {
     expect(SOURCE.match(/rpc\(\s*\n?\s*"consume_ai_quota"/g)?.length).toBe(1);
-    expect(SOURCE.match(/safeRefundAiQuota\(supabase, user\.id\)/g)?.length).toBe(2);
+    // Same two refund sites; since C47 they refund through the server-only
+    // refund client (`quotaRefundAuthority.test.ts` executes both).
+    expect(SOURCE.match(/safeRefundAiQuota\(supabaseUrl, user\.id\)/g)?.length).toBe(2);
   });
 });

@@ -28,6 +28,7 @@ import {
   recordAiProviderUsage,
   type AiOperationOutcome,
 } from "../_shared/aiUsageTelemetry.ts";
+import { createAiQuotaRefundClient, refundAiQuotaUnit } from "../_shared/aiQuotaRefund.ts";
 import {
   analyzeEnvMissingLog,
   analyzeProviderFailureLog,
@@ -43,27 +44,6 @@ const corsHeaders = {
 };
 
 const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
-
-/**
- * Best-effort refund of one AI quota unit. Swallows any error so the
- * caller can still surface the ORIGINAL provider failure without being
- * shadowed by a refund-side issue. The refund_ai_quota RPC itself is
- * also tolerant (returns refunded=false on missing counter), so the
- * combination is layered defense-in-depth.
- *
- * Takes a Supabase client that is authenticated as the caller so the
- * RPC sees the right auth.uid() and the S1 ownership guard passes.
- * Uses a minimal structural type covering just the `.rpc()` shape
- * actually called below — avoids importing the full SupabaseClient
- * generic type (which requires a Database type that this Edge
- * Function doesn't ship with).
- */
-type RpcClient = {
-  rpc: (
-    fn: string,
-    args: Record<string, unknown>,
-  ) => Promise<{ error: { message: string } | null }>;
-};
 
 /**
  * Read a runtime-required variable, logging only its NAME when it is missing.
@@ -84,19 +64,35 @@ function requireEdgeEnvLogged(name: AnalyzeRequiredEnvName): string {
   }
 }
 
-async function safeRefundAiQuota(supabase: RpcClient, userId: string): Promise<void> {
-  try {
-    const { error } = await supabase.rpc("refund_ai_quota", { p_user_id: userId });
-    // EDGE-LOG-PRIVACY-HARDENING-001: the failure is reported as a bounded flag
-    // rather than the database's own message, which is arbitrary text from
-    // outside this function. Same spelling as `suggest-paper-organization`'s
-    // `safeRefund`, so the two refund paths report failure identically.
-    if (error) {
-      console.error("analyze-paper refund_failed rpc_error=1");
-    }
-  } catch {
-    console.error("analyze-paper refund_failed threw=1");
-  }
+/**
+ * Best-effort refund of the one AI quota unit this request consumed, through the
+ * SERVER-ONLY refund client — never through the caller's (C47).
+ *
+ * `refund_ai_quota` is executable by `service_role` only, so the call goes
+ * through `_shared/aiQuotaRefund.ts`: a separate client built from the
+ * platform-injected secret key, with no caller Authorization header, whose type
+ * can make this one RPC call and nothing else. `userId` is always the
+ * authoritative `user.id` from `auth.getUser()` below — the request body carries
+ * no user id. Consumption stays on the caller's client; only the reversal moved.
+ *
+ * Never throws. A missing server key, an RPC error or a thrown fetch is one
+ * bounded `analyze-paper refund_failed …` line (EDGE-LOG-PRIVACY-HARDENING-001:
+ * a flag, never the database's own message), spelled identically to
+ * `suggest-paper-organization`'s because both come from the same module, and
+ * the ORIGINAL provider failure still decides the response. There is no
+ * fallback to the caller-scoped client: that path is exactly what C47 closed.
+ */
+async function safeRefundAiQuota(supabaseUrl: string, userId: string): Promise<void> {
+  await refundAiQuotaUnit(userId, {
+    label: "analyze-paper",
+    logger: console,
+    createClient: () =>
+      createAiQuotaRefundClient({
+        supabaseUrl,
+        readEnv: (name) => Deno.env.get(name),
+        createSupabaseClient: (url, key, options) => createClient(url, key, options),
+      }),
+  });
 }
 
 Deno.serve(async (req) => {
@@ -259,10 +255,11 @@ Deno.serve(async (req) => {
 
     // ── Step 4: Call the selected provider ──
     // Wrapped in an inner try so a provider / parsing failure triggers a
-    // best-effort refund of the quota unit just consumed. The refund
-    // RPC is best-effort: if it itself fails, it is logged as its own bounded
-    // line and the ORIGINAL provider failure still decides the response, so a
-    // refund-side problem never masks the real outcome. Since
+    // best-effort refund of the quota unit just consumed, through the
+    // server-only refund client (C47). The refund is best-effort: if it itself
+    // fails, it is logged as its own bounded line and the ORIGINAL provider
+    // failure still decides the response, so a refund-side problem never masks
+    // the real outcome. Since
     // EDGE-LOG-PRIVACY-HARDENING-001 the failure is reported by its bounded
     // class and reason, never by the thrown error's message.
     // ── Step 4: the SELECTED PROVIDER's credential ──
@@ -292,7 +289,7 @@ Deno.serve(async (req) => {
       // `suggest-paper-organization` already uses), because the outer catch no
       // longer logs the thrown message.
       console.error(`analyze-paper provider_key_missing env=${credential.envName}`);
-      await safeRefundAiQuota(supabase, user.id);
+      await safeRefundAiQuota(supabaseUrl, user.id);
       throw new Error(`${credential.envName} not configured in Supabase secrets`);
     }
     console.log("4a. Provider credential present:", credential.envName);
@@ -330,10 +327,14 @@ Deno.serve(async (req) => {
     // provider — on the success return and in the failure catch — and only
     // AFTER the outcome is decided, so telemetry can neither change nor shadow
     // it. `recordAiProviderUsage` never throws and nothing reads its result.
-    // The quota refund is untouched: provider cost and PaperLume quota are
-    // different ledgers. The telemetry client is the only elevated client in
-    // this function; it is built lazily from the platform-injected secret key
-    // and can INSERT one telemetry row and nothing else.
+    // Provider cost and PaperLume quota are different ledgers, so telemetry
+    // never touches the refund. The telemetry client is one of TWO narrow
+    // elevated clients in this function, each built lazily from the
+    // platform-injected secret key and each typed for one call: this one can
+    // INSERT one telemetry row and nothing else, and the refund client (C47,
+    // `safeRefundAiQuota` above) can call `refund_ai_quota` and nothing else.
+    // Neither carries the caller's Authorization header, and neither is the
+    // caller-scoped client every read and `consume_ai_quota` still use.
     let dispatchedCall: AiProviderResult | null = null;
     const recordProviderUsage = async (operationOutcome: AiOperationOutcome): Promise<void> => {
       if (dispatchedCall === null) return;
@@ -511,7 +512,7 @@ Deno.serve(async (req) => {
         providerErrorClass = classifyProviderError({ kind: "network" });
       }
       // Best-effort refund — the user did not receive a valid analysis.
-      await safeRefundAiQuota(supabase, user.id);
+      await safeRefundAiQuota(supabaseUrl, user.id);
       // The provider's usage is recorded even though the user got nothing: a
       // parse failure after a completed generation still cost the provider
       // work. A request that never reached the provider records nothing.
