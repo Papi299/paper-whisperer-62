@@ -20,7 +20,9 @@
 --   5 no client insert/update · 6 anon cannot execute RPC · 7 null-auth reject ·
 --   8 no arbitrary-user inspection · 9 Free 15 lifetime · 10 Pro monthly cap ·
 --   11 exempt allowed beyond cap · 12 exempt usage increments ·
---   13 exempt refund decrements same bucket · 14 missing/inactive safe ·
+--   13 exempt refund decrements same bucket (server-only since C47: the
+--      caller's own JWT is refused; the refund runs as service_role) ·
+--   14 missing/inactive safe ·
 --   15 is_exempt reported · 16 usage never negative · 17 no email-based role check ·
 --   18 internal_user_access direct client table/column privileges revoked
 --     (PUBLIC/anon/authenticated), service_role CRUD retained, RPC EXECUTE
@@ -245,7 +247,25 @@ BEGIN
   ASSERT r.allowed=true AND r.reason='quota_exempt', 'case11: exempt owner allowed beyond nominal quota';
   ASSERT r.period_type='monthly' AND r.used=351, 'case12: exempt owner usage increments past the cap';
 
-  -- Case 13: refund decrements the SAME (monthly) bucket (351 -> 350).
+  -- SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47): the refund is SERVER-ONLY. The
+  -- owner's own JWT can no longer call it — not even for their own id.
+  BEGIN
+    SELECT * INTO r FROM public.refund_ai_quota('a0000000-0000-0000-0000-000000000001');
+    ASSERT false, 'case13: an authenticated caller must not be able to execute refund_ai_quota';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+  END;
+END $$;
+
+-- Case 13: refund decrements the SAME (monthly) bucket (351 -> 350). Since C47
+-- the refund is made the way the Edge Functions make it: as service_role, with
+-- no caller claims, naming the user the server authenticated.
+RESET ROLE;
+SET LOCAL ROLE service_role;
+SELECT set_config('request.jwt.claims', '', true);
+DO $$
+DECLARE r RECORD;
+BEGIN
   SELECT * INTO r FROM public.refund_ai_quota('a0000000-0000-0000-0000-000000000001');
   ASSERT r.refunded=true AND r.period_type='monthly' AND r.used=350, 'case13: exempt refund decrements same bucket';
 END $$;
@@ -255,8 +275,8 @@ RESET ROLE;
 UPDATE public.usage_counters SET used = 0
  WHERE user_id='a0000000-0000-0000-0000-000000000001'
    AND feature='ai_analysis' AND period_type='monthly';
-SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claims', '{"sub":"a0000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
+SET LOCAL ROLE service_role;
+SELECT set_config('request.jwt.claims', '', true);
 DO $$
 DECLARE r RECORD;
 BEGIN

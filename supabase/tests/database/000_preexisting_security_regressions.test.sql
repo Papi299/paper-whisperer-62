@@ -66,7 +66,10 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (17).
+-- The directly-callable SECURITY DEFINER RPC surface this remediation covered
+-- (16). It covered 17 until SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47) made
+-- refund_ai_quota server-only; that function's posture is asserted on its own
+-- in section 1b below, and in full by suite 003's server-only classification.
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
@@ -80,7 +83,6 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.get_duplicate_papers()',
     'public.get_keyword_options(uuid,uuid[],integer,integer,text[])',
     'public.merge_exact_duplicates(uuid,uuid[])',
-    'public.refund_ai_quota(uuid)',
     'public.safe_bulk_insert_papers(uuid,jsonb)',
     'public.search_papers(uuid,text,integer,integer)',
     'public.search_papers_short(uuid,text)',
@@ -143,6 +145,21 @@ SELECT ok(
   NOT has_function_privilege('service_role', sig::regprocedure, 'EXECUTE'),
   'service_role cannot execute ' || sig
 ) FROM pg_temp.client_rpcs() sig;
+
+-- ── 1b. refund_ai_quota: server-only since C47 ───────────────────────────────
+-- 20260802025704 left it {authenticated} with an auth.uid() guard, which let a
+-- signed-in browser refund its own quota at will. It is now the inverse:
+-- service_role only, and no browser role at all.
+SELECT ok(NOT has_function_privilege('anon', 'public.refund_ai_quota(uuid)', 'EXECUTE'),
+  'anon cannot execute public.refund_ai_quota(uuid)');
+SELECT ok(NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = 'public.refund_ai_quota(uuid)'::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+  'PUBLIC cannot execute public.refund_ai_quota(uuid)');
+SELECT ok(NOT has_function_privilege('authenticated', 'public.refund_ai_quota(uuid)', 'EXECUTE'),
+  'authenticated cannot execute public.refund_ai_quota(uuid) (server-only since C47)');
+SELECT ok(has_function_privilege('service_role', 'public.refund_ai_quota(uuid)', 'EXECUTE'),
+  'service_role can execute public.refund_ai_quota(uuid) (the one server path)');
 
 -- ── 2. Trigger-only functions are not directly client-executable ────────────
 SELECT ok(
