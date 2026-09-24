@@ -78,6 +78,9 @@
 --     privileges. Both are pinned below and re-verified after the change.
 --   * It does NOT change any quota number, plan, entitlement, counter, table,
 --     column, policy, RLS setting or default privilege, and it writes no row.
+--     Section 5 checks the counter and entitlement tables against this
+--     transaction's own statistics, so it does not need, and does not ask for,
+--     a pause in AI traffic while it runs.
 --   * It does NOT grant `service_role` anything else. `service_role` held
 --     EXECUTE on NO SECURITY DEFINER function in `public` before this
 --     migration (20260802025704 removed it everywhere); after it, it holds
@@ -113,12 +116,35 @@ BEGIN;
 
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 0. Execution context
+-- 0. Execution context, and this transaction's own write counters
 -- ═════════════════════════════════════════════════════════════════════════════
 --
 -- Only the grantor can revoke a grant, and every ACL entry on this function was
 -- granted by `postgres`, which also owns it. Running as anything else would
 -- turn the REVOKE below into a silent no-op.
+--
+-- Section 5 proves that THIS transaction inserted, updated or deleted no
+-- `usage_counters` or `user_entitlements` row. It does so from PostgreSQL's
+-- per-transaction table statistics (`pg_stat_get_xact_tuples_*`), which live in
+-- this backend's own memory and count only this backend's work: another
+-- session's writes, committed or not, never appear in them. Legitimate quota
+-- traffic that runs while this migration does — a `consume_ai_quota` from a
+-- live user — therefore cannot fail the check, which a row-timestamp or
+-- row-count test could not promise (any snapshot taken after that session
+-- commits would see its row).
+--
+-- The counters are captured HERE, before anything changes, and section 5
+-- compares against this baseline rather than against zero: a backend keeps an
+-- earlier, already-committed transaction's counts pending until its next
+-- periodic flush, which happens only while idle and at most about once a
+-- second, so a runner that wrote either table moments earlier on the same
+-- connection would otherwise look like this file's write. Inside a transaction
+-- nothing is flushed, so the baseline stays exact until COMMIT. It is kept with
+-- set_config(..., true), which lasts exactly as long as this transaction; a
+-- runner that stripped the BEGIN above would lose it, and section 5 fails
+-- closed on that. With `track_counts` off every counter stays at zero and the
+-- check would prove nothing, so that is refused up front (autovacuum needs
+-- `track_counts` too, so a healthy database always has it on).
 
 DO $ctx$
 BEGIN
@@ -127,6 +153,20 @@ BEGIN
       'ai_quota_refund_authority: must run as postgres (current_user is %) — only the grantor can revoke the authenticated grant',
       current_user;
   END IF;
+
+  IF NOT current_setting('track_counts')::boolean THEN
+    RAISE EXCEPTION 'ai_quota_refund_authority: track_counts is off, so the no-write self-check could not observe anything';
+  END IF;
+  PERFORM set_config(
+    'ai_quota_refund_authority.xact_writes_at_start',
+    format('usage_counters=%s user_entitlements=%s',
+      pg_stat_get_xact_tuples_inserted('public.usage_counters'::regclass)
+        + pg_stat_get_xact_tuples_updated('public.usage_counters'::regclass)
+        + pg_stat_get_xact_tuples_deleted('public.usage_counters'::regclass),
+      pg_stat_get_xact_tuples_inserted('public.user_entitlements'::regclass)
+        + pg_stat_get_xact_tuples_updated('public.user_entitlements'::regclass)
+        + pg_stat_get_xact_tuples_deleted('public.user_entitlements'::regclass)),
+    true);
 END
 $ctx$;
 
@@ -379,6 +419,8 @@ DECLARE
   v_count INTEGER;
   v_list  TEXT;
   v_fn    TEXT;
+  v_base  TEXT;
+  v_now   TEXT;
 BEGIN
   -- ── Exact final EXECUTE matrix: owner + service_role, nobody else ────────
   IF EXISTS (
@@ -475,16 +517,23 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- ── No counter or entitlement was written ─────────────────────────────────
-  -- now() is this transaction's start, so anything this file wrote would carry
-  -- it. The migration changes authority; it never moves anyone's usage.
-  SELECT count(*) INTO v_count FROM public.usage_counters WHERE updated_at >= now();
-  IF v_count <> 0 THEN
-    RAISE EXCEPTION 'ai_quota_refund_authority: % usage counter row(s) were written', v_count;
+  -- ── This transaction wrote no counter or entitlement row ──────────────────
+  -- The migration changes authority; it never moves anyone's usage. Measured
+  -- against the baseline section 0 took from this transaction's own statistics
+  -- (see there for why this, and not row timestamps, is concurrency-safe).
+  v_base := current_setting('ai_quota_refund_authority.xact_writes_at_start', true);
+  IF coalesce(v_base, '') = '' THEN
+    RAISE EXCEPTION 'ai_quota_refund_authority: the write baseline from section 0 is missing — this file must run as one transaction';
   END IF;
-  SELECT count(*) INTO v_count FROM public.user_entitlements WHERE updated_at >= now();
-  IF v_count <> 0 THEN
-    RAISE EXCEPTION 'ai_quota_refund_authority: % entitlement row(s) were written', v_count;
+  v_now := format('usage_counters=%s user_entitlements=%s',
+    pg_stat_get_xact_tuples_inserted('public.usage_counters'::regclass)
+      + pg_stat_get_xact_tuples_updated('public.usage_counters'::regclass)
+      + pg_stat_get_xact_tuples_deleted('public.usage_counters'::regclass),
+    pg_stat_get_xact_tuples_inserted('public.user_entitlements'::regclass)
+      + pg_stat_get_xact_tuples_updated('public.user_entitlements'::regclass)
+      + pg_stat_get_xact_tuples_deleted('public.user_entitlements'::regclass));
+  IF v_now <> v_base THEN
+    RAISE EXCEPTION 'ai_quota_refund_authority: this transaction inserted, updated or deleted usage_counters/user_entitlements rows (row writes at start: %; now: %)', v_base, v_now;
   END IF;
 
   -- ── The browser roles still cannot write the counters directly ───────────
