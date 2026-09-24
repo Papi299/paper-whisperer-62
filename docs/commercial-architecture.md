@@ -76,7 +76,7 @@ The corollary matters just as much: **a gate that has no server-side boundary is
 
 | Gate | Server-side boundary | State |
 |---|---|---|
-| **AI quota** | `analyze-paper` calls the `consume_ai_quota` SECURITY DEFINER RPC **before** invoking the routed AI provider; returns the structured **HTTP 402** without calling the provider when quota is unavailable; calls `refund_ai_quota` best-effort if the provider call or parsing fails after a successful consume. The path is provider-neutral — the consume, the dispatch through the provider registry and the refund are identical whichever of the three registered families (§4.9a) the request is routed to. | ✅ **Live in Production.** |
+| **AI quota** | `analyze-paper` calls the `consume_ai_quota` SECURITY DEFINER RPC **before** invoking the routed AI provider; returns the structured **HTTP 402** without calling the provider when quota is unavailable; calls `refund_ai_quota` best-effort if the provider call or parsing fails after a successful consume. The path is provider-neutral — the consume, the dispatch through the provider registry and the refund are identical whichever of the three registered families (§4.9a) the request is routed to. **Consumption is caller-authenticated; the refund is server-only** (C47): `refund_ai_quota` is executable by `service_role` alone, and both generation functions call it through a dedicated server client with the user id their own `auth.getUser()` returned, so no browser can give itself a unit back. | ✅ **Live in Production.** The server-only refund (C47, `20260924193915`) is in the repository and **not yet rolled out** — [deployment.md](deployment.md) §6.8. |
 | **Storage quota** | `BEFORE INSERT` trigger on `paper_attachments` performs an atomic quota-gated check-and-consume; `AFTER DELETE` refunds, floored at zero. | ✅ **Live in Production.** |
 | **Attachment privacy** | Private bucket (`public = false`) with an owner-scoped path-prefix SELECT policy; signed URLs are the client read path. | ✅ **Live in Production.** |
 | **Paper limit** | **None.** `user_entitlements.paper_limit` is stored, but `safe_bulk_insert_papers` **does not read it** — the RPC performs the atomic ownership-scoped insert and applies no per-plan cap. | ❌ **Not enforced.** |
@@ -375,6 +375,8 @@ $$;
 ```
 
 `analyze-paper` calls `consume_ai_quota` first; only on `ok: true` does it dispatch to the routed provider through the runtime registry (§4.9a). On a hard provider failure, `refund_ai_quota` is called to undo the increment. Neither step branches on which provider was selected.
+
+**Who may refund (C47).** The two steps have different authorities. `consume_ai_quota` runs on the caller's own client and checks `p_user_id = auth.uid()` — spending your own unit is always yours to do. `refund_ai_quota` is **server-only**: executable by `service_role` alone, called through [`_shared/aiQuotaRefund.ts`](../supabase/functions/_shared/aiQuotaRefund.ts) (platform secret key, no caller Authorization header, one RPC), with the id the function authenticated. Before C47 the refund was granted to `authenticated` with only an `auth.uid()` check, which let a signed-in browser refund itself at will and consume again — AI usage stopped being bounded (C3). The refund stays best-effort and keeps every accounting rule (bucket selection, the C28 exempt fallback, the floor at zero). Rollout state: [deployment.md](deployment.md) §6.8.
 
 ### 5.3 Add-on credit packs (future)
 

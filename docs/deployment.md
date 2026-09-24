@@ -78,14 +78,16 @@ supabase secrets list --project-ref <project-ref>
 |---|---|---|
 | `SUPABASE_URL` | Edge Functions | Auto-injected by the runtime. No manual setup. |
 | `SUPABASE_ANON_KEY` | Edge Functions | Auto-injected by the runtime. No manual setup. |
-| `SUPABASE_SECRET_KEYS` | `delete-account`; also `analyze-paper` and `suggest-paper-organization` (live since 2026-09-17), for the telemetry INSERT only | Auto-injected by the runtime. **Server-only elevated key**, JSON dictionary keyed by key name; the function reads `default`. Preferred over the legacy key below. |
+| `SUPABASE_SECRET_KEYS` | `delete-account`; also `analyze-paper` and `suggest-paper-organization`, for the telemetry INSERT (live since 2026-09-17) and the server-only AI-quota refund (C47; see §6.8 for its rollout state) | Auto-injected by the runtime. **Server-only elevated key**, JSON dictionary keyed by key name; the function reads `default`. Preferred over the legacy key below. |
 | `SUPABASE_SERVICE_ROLE_KEY` | as above | Auto-injected by the runtime. **Server-only elevated key**, legacy plain string; used only as a compatibility fallback when the project has not created the newer secret keys. |
 
 Validated by PR #139 via the `requireEdgeEnv` helper in [`supabase/functions/_shared/env.ts`](../supabase/functions/_shared/env.ts). If for any reason the runtime stops injecting either of the first two, the function fails safely — a request that reaches the environment check is refused rather than served by an empty-string client — and the actionable message naming the variable goes to its **Edge log**. The caller receives a neutral generic 500 that does not name the variable; the body differs per function. Operator detail: §10.2.
 
-**About the elevated key (PFA-C04).** `delete-account` is the only function that needs one for administration: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. In deployed Production the only other elevated-key use is the generation functions' insert-only telemetry writer (below); every other function remains caller-authenticated and uses no elevated key.
+**About the elevated key (PFA-C04).** `delete-account` is the only function that needs one for administration: deleting an Auth user is an administrative operation, and the account's private attachment binaries must be removed through the Storage API. `selectEdgeSecretKey()` in [`supabase/functions/_shared/accountDeletion.ts`](../supabase/functions/_shared/accountDeletion.ts) prefers `SUPABASE_SECRET_KEYS["default"]` and falls back to `SUPABASE_SERVICE_ROLE_KEY`; if neither is present the function returns a safe 500 and deletes nothing rather than continuing unprivileged. **Because both are platform-provided, no manual Production secret needs to be added for this function.** The key never leaves the function: it is not returned, not logged, not placed in any response body, and — as §3.1 requires — never carried in a `VITE_*` variable. The generation functions hold the only other elevated-key uses, each a narrow single-call client: the insert-only telemetry writer (below, live) and the server-only quota-refund client (below; §6.8 records whether it is deployed). Every other function remains caller-authenticated and uses no elevated key.
 
-**The telemetry writer (AI-MULTI-PROVIDER-001D, C42 — live in Production since the 2026-09-17 Phase 6 deploy).** `analyze-paper` and `suggest-paper-organization` each build a second, server-only client from the same two platform-injected keys, through the same `selectEdgeSecretKey` rule. It is created lazily, only after a provider call has happened; carries no caller Authorization header and no session; is typed to one `insert` into `ai_provider_usage_events`; and the database grants `service_role` exactly `INSERT` on that table and nothing else on it. Authentication, model selection, entitlement, quota and every product read stay on the caller-authenticated client. No manual secret is added, and a missing key only means the event is not recorded (one bounded log line) — never a failed AI request.
+**The telemetry writer (AI-MULTI-PROVIDER-001D, C42 — live in Production since the 2026-09-17 Phase 6 deploy).** `analyze-paper` and `suggest-paper-organization` each build a second, server-only client from the same two platform-injected keys, through the same `selectEdgeSecretKey` rule. It is created lazily, only after a provider call has happened; carries no caller Authorization header and no session; is typed to one `insert` into `ai_provider_usage_events`; and the database grants `service_role` exactly `INSERT` on that table and nothing else on it. Authentication, model selection, entitlement, quota consumption and every product read stay on the caller-authenticated client. No manual secret is added, and a missing key only means the event is not recorded (one bounded log line) — never a failed AI request.
+
+**The quota-refund client (SEC-AI-QUOTA-REFUND-AUTHORITY-001, C47 — rollout state in §6.8).** `refund_ai_quota` is granted to `service_role` **only** from migration `20260924193915`, because while `authenticated` could execute it any signed-in browser could call it for its own id and reset its own AI quota. `analyze-paper` and `suggest-paper-organization` therefore refund through a **third**, separate client built by [`_shared/aiQuotaRefund.ts`](../supabase/functions/_shared/aiQuotaRefund.ts) from the same two platform-injected keys through the same `selectEdgeSecretKey` rule. It is created lazily — only on a path that already consumed a unit and is about to report a failure — carries no caller Authorization header and no session, bounds its request to 5 s, and is typed to exactly one call, `rpc("refund_ai_quota", { p_user_id })`. The user id is the function's own `auth.getUser()` result, never a request field. It is **not** the telemetry writer's client, which stays insert-only. The refund stays best-effort: a missing key, an RPC error or a thrown fetch is one bounded `<label> refund_failed …=1` line and the original response is unchanged — and there is deliberately **no** fallback to the caller's client, because that fallback is the defect C47 closed. Quota **consumption** is unchanged and stays on the caller's client.
 
 ---
 
@@ -560,6 +562,52 @@ Read-only post-apply checks (all passed again on 2026-09-17; see the status abov
 
 ---
 
+### 6.8 `20260924193915` (server-only AI-quota refund, C47) — migration FIRST, then deploy BOTH generation functions; NOT YET APPLIED
+
+> **Status — authored by `SEC-AI-QUOTA-REFUND-AUTHORITY-001`; not applied to Production and not deployed.** Read-only verification on 2026-09-24 found Production at **86** ledger rows (latest `20260919075655`), `refund_ai_quota(uuid)` executable by its owner and `authenticated` only (`{postgres=X/postgres,authenticated=X/postgres}`, body digest `36d1bdb04fc5d163a04cc32afce0ee66`), and `analyze-paper` v32 / `suggest-paper-organization` v15 byte-identical to `main` `f06107b6` — both refunding through the **caller-scoped** client. Update this status when the rollout happens; do not re-run it as a pending step afterwards.
+
+**Why it exists.** Before C47 a signed-in browser could `POST /rest/v1/rpc/refund_ai_quota` with its own id: the function checked only `p_user_id = auth.uid()` and then decremented the counter, with nothing tying a refund to a consumption. Consume, refund, consume again — without limit, on the one `ai_analysis` counter both AI operations share. See decision C47.
+
+**What changes, together.**
+- **Database:** one explicitly transactional migration replaces the body (the `auth.uid()` comparison is removed; every bucket rule is preserved; a NULL target is refused) and the ACL (`authenticated` revoked **before** the body changes, `service_role` granted **after**) in the same transaction, behind fail-closed preconditions that pin the reviewed body by digest. Final EXECUTE: owner + `service_role`; `authenticated`, `anon` and PUBLIC none. `service_role` then executes exactly this one SECURITY DEFINER function in `public`. `consume_ai_quota`, `get_ai_quota_status`, quotas, plans, entitlements and counters do not change.
+- **Edge:** `analyze-paper` and `suggest-paper-organization` refund through the server-only refund client (§3.3). **Both** must be redeployed. `_shared/aiQuotaRefund.ts` joins the deployment closure of both; `_shared/edgeSecretKey.ts` was already in it.
+- **Generated types:** unchanged — same signature (verified by generating types before and after on a local replay: byte-identical).
+
+**Ordered rollout (each step separately authorized):**
+1. Merge the independently approved exact head with a regular two-parent merge commit; wait for merged-`main` CI.
+2. Read-only preflight inside `SET TRANSACTION READ ONLY`: the ledger is still 86 rows with `20260924193915` absent, and `refund_ai_quota` still has the pre-state above. If anything differs, stop — the migration would refuse it anyway, and the difference needs explaining first.
+3. `supabase db push --linked` from the merge commit — it must apply exactly `20260924193915` (87 rows).
+4. Verify **immediately**, read-only:
+   ```sql
+   BEGIN; SET TRANSACTION READ ONLY;
+   SELECT current_setting('transaction_read_only') AS ro,
+          p.proacl::text,
+          has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated,   -- expect false
+          has_function_privilege('anon',          p.oid, 'EXECUTE') AS anon,            -- expect false
+          EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                   WHERE a.grantee = 0) AS public_exec,                                 -- expect false
+          has_function_privilege('service_role',  p.oid, 'EXECUTE') AS service_role,    -- expect true
+          md5(p.prosrc) AS body                                                         -- expect 4224750ddbff3651e7e0aaa2576f4de4
+     FROM pg_proc p WHERE p.oid = 'public.refund_ai_quota(uuid)'::regprocedure;
+   ROLLBACK;
+   ```
+   Expected ACL: `{postgres=X/postgres,service_role=X/postgres}`.
+5. Deploy **both** `analyze-paper` and `suggest-paper-organization` from a worktree whose function closure is byte-identical to the merge commit (§7).
+6. Verify the deployed sources through the §7 read-back: both import `_shared/aiQuotaRefund.ts`; neither calls `refund_ai_quota` on its caller-scoped client.
+7. Confirm normal CI and Vercel status. No frontend or Vercel action is part of this change.
+
+**Why the migration goes first, and what the gap costs.** Migration-first closes the browser path the moment it commits. Until step 5 finishes, the previously deployed functions still try to refund through the caller's JWT and are refused (`42501`); refund is best-effort, so they log `refund_failed rpc_error=1`, the **original** provider failure still reaches the user, and successful operations are unaffected. The only cost is that a unit consumed by an attempt that fails inside that window is not given back — keep the gap short. Deploying the Edge Functions first would not avoid a gap (their `service_role` refund is refused until the grant exists) and would leave the exploit open for longer. **Never bridge the gap with an authenticated fallback**: that fallback is the defect.
+
+**After the deploy.** A refund failure is visible only in the Edge log. `refund_failed no_server_key=1` means the platform-injected key is missing (the same condition the telemetry writer reports as `reason=no_server_key`); `refund_failed rpc_error=1` after step 5 means the grant or the deployed code is not what this section expects — re-run step 4 and step 6.
+
+**Rollback — a SECURITY rollback, reference only.** Prefer fixing forward. Restoring the previous state **deliberately re-opens the self-refund defect**, and it needs both halves or refunds stop working:
+1. a new forward migration, in one explicit transaction: `REVOKE ALL ON FUNCTION public.refund_ai_quota(uuid) FROM PUBLIC, anon, authenticated, service_role;`, then the `CREATE OR REPLACE FUNCTION public.refund_ai_quota` text from `20260725090000` §4 **verbatim** (its body digest is `36d1bdb04fc5d163a04cc32afce0ee66`), then `GRANT EXECUTE ON FUNCTION public.refund_ai_quota(uuid) TO authenticated;`;
+2. redeploying both generation functions from `main` `f06107b6` (or any commit whose refund path is caller-scoped), because the C47 functions refund as `service_role`, which the restored ACL refuses.
+
+Neither step is applied anywhere by this change.
+
+---
+
 ---
 
 ## 7. Edge Function deployment
@@ -674,7 +722,7 @@ The empty-query case is the informative one: it proves the worker boots, builds 
 
 **The frontend calls it in Production, and the feature is accepted.** `001B` shipped the Edit Paper surface against this exact contract (PR #242, merged as `8159d353f3cdb76b332d6a0266f00c4d4772c566`). That PR was **frontend-only**: it changed no file under `supabase/functions/`, `supabase/config.toml` or `supabase/migrations/`, so it required no Edge deployment and no migration, and the deployed artifact it depends on is the one the `001A` rollout verified. **`001B` Production acceptance completed on 2026-08-24** against that unchanged deployed function — a real generation returned 200, and both the existing-selection and **Create & select** paths persisted correctly through Save Changes; the chronology is in [migration-history.md](migration-history.md). The endpoint-before-UI gate was satisfied *before* `001B` was built, which is the ordering the rule exists to produce.
 
-**What it is.** An advisory, non-mutating suggestion endpoint. It authenticates the caller in-function with `auth.getUser()`, verifies the requested paper belongs to that caller, reads that caller's own Projects and Tags, sends Gemini a bounded, allow-listed semantic payload, and returns four suggestion lists. It consumes **one unit of the existing AI quota** per successful generation through `consume_ai_quota`, and refunds through `refund_ai_quota` when the provider fails or returns an unusable result. It uses **no elevated key**.
+**What it is.** An advisory, non-mutating suggestion endpoint. It authenticates the caller in-function with `auth.getUser()`, verifies the requested paper belongs to that caller, reads that caller's own Projects and Tags, sends Gemini a bounded, allow-listed semantic payload, and returns four suggestion lists. It consumes **one unit of the existing AI quota** per successful generation through `consume_ai_quota` on the caller's client, and refunds through `refund_ai_quota` when the provider fails or returns an unusable result — since C47 through the **server-only refund client** (§3.3), because the database no longer lets a caller refund. Its only elevated-key uses are that refund and the insert-only telemetry writer (§3.3); every read stays caller-scoped.
 
 **What it is not.** It is not a mutation path. It performs no Project, Tag, `paper_projects`, `paper_tags` or `papers` write, and persists no suggestion — its deployment therefore changed nothing about how the library is stored, and it cannot alter existing data. Production verification confirmed that empirically: a real generation left every Project, Tag, assignment and paper row byte-identical. It is also not a second quota system: it records under the existing `ai_analysis` counter, so the owner/manager AI exemption keeps working unchanged. See [decisions-and-triggers.md](decisions-and-triggers.md) C32.
 
@@ -1063,7 +1111,7 @@ What to expect today: a `provider_status=` warning is **terminal** for that prov
 
 | Function | Client sees | Edge log line | Quota |
 |---|---|---|---|
-| `analyze-paper` | 500 `{"error": "Analysis failed. Please try again later."}` | `analyze-paper error: GEMINI_API_KEY not configured in Supabase secrets` | The unit is consumed **before** this check, so the missing-key path calls `refund_ai_quota` before throwing. The refund is **best-effort**: if it fails it is logged and swallowed so the original error still surfaces. |
+| `analyze-paper` | 500 `{"error": "Analysis failed. Please try again later."}` | `analyze-paper error: GEMINI_API_KEY not configured in Supabase secrets` | The unit is consumed **before** this check, so the missing-key path calls `refund_ai_quota` before throwing — through the server-only refund client since C47 (§3.3). The refund is **best-effort**: if it fails it is logged (`analyze-paper refund_failed …=1`) and swallowed so the original error still surfaces. |
 | `suggest-paper-organization` | 500 `{"error": "internal_error", "message": "Something went wrong. Please try again."}` | `suggest-organization provider_key_missing env=GEMINI_API_KEY` | The key is checked **before** `consume_ai_quota`, so **no unit is consumed and no refund is required**. |
 
 Both fail before any Gemini provider call is made, so a missing key costs nothing upstream. The ordering difference is the useful diagnostic: if Analyze is failing you will also see a refund attempt in its log, whereas Suggest never reaches the quota RPC at all.
@@ -1106,7 +1154,7 @@ No code redeploy needed; the next function invocation picks up the new secret.
 
 - **Do not commit `.env.local`, `.env.test`, or any file containing a real secret.** Both names are gitignored already (`.gitignore` lines 2–4 cover the pattern); don't override the ignore.
 - **Do not paste real secrets** (Gemini key, JWT, service-role key, OAuth secret) into a chat, PR description, commit message, or this doc.
-- **Do not use service-role keys in client code.** The repo currently has zero service-role references in `src/` (verified). Keep it that way. RLS plus the SECURITY DEFINER `auth.uid()` guards from PR #130 are the security boundary.
+- **Do not use service-role keys in client code.** The repo currently has zero service-role references in `src/` (verified). Keep it that way. RLS plus the SECURITY DEFINER `auth.uid()` guards from PR #130 are the security boundary. The one server-only RPC, `refund_ai_quota` (C47), is granted to `service_role` alone and is called only by the two generation Edge Functions; never grant it back to `authenticated` and never add a caller-scoped fallback for it.
 - **Do not run `supabase db push`** for docs-only or client-only PRs. Even if it's a no-op, it adds noise; with stale local state it can re-trigger already-applied migrations.
 - **Do not run `supabase db push --include-all`** unless you are deliberately reproducing the PR #131 / #132 reconciliation pattern with the same audit-first discipline. The `--include-all` flag bypasses ordering safety.
 - **Do not run Playwright against Production or any linked/cloud Supabase project.** The supported lifecycle is `npm run test:e2e:local` on an ephemeral local stack; a bare `npm run test:e2e` fails closed by design. Do not work around the guard.

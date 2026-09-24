@@ -1724,3 +1724,30 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 - ❌ "`store: false` means OpenAI retains nothing" — **false.** Abuse-monitoring retention may still apply.
 - ❌ "the paid providers share Google's Free-tier terms" — **false.** The Free-tier data-use and geographic warnings describe Google only.
 - ❌ "this review approves activation" — **false.** It is a prerequisite for it.
+
+## 31. Addendum — 2026-09-24 — `SEC-AI-QUOTA-REFUND-AUTHORITY-001` server-only AI-quota refund
+
+**Scope.** Records a **repository** change to who may write the AI usage counters, and keeps it apart from **deployed Production behaviour**. §4 (the "AI usage counters" row), §8 (the two "Quota" rows) and §14 (the elevated-key row, which already predates §29's telemetry writer) are preserved as written; this section amends them only where stated. Decision C47 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+
+### 31.1 Repository and Production
+
+| | Repository (this change) | Production database | Production generation runtime |
+|---|---|---|---|
+| `refund_ai_quota` EXECUTE | Owner + `service_role` only (migration `20260924193915`) | Owner + `authenticated` (verified read-only 2026-09-24) — **not yet migrated** | — |
+| Who calls the refund | `analyze-paper` and `suggest-paper-organization`, through a dedicated server-only client with no caller Authorization header | — | Both still refund through the **caller-scoped** client (`analyze-paper` v32, `suggest-paper-organization` v15) |
+| Elevated key in the generation functions | Two narrow uses: the telemetry INSERT (§29) and the refund RPC | — | The telemetry INSERT only (§29) |
+| `consume_ai_quota` | Unchanged: caller-authenticated, `authenticated` only | Unchanged | Unchanged |
+
+**Class: VERIFIED** for the repository column (source, migration and tests) and for the Production columns (read-only queries inside `SET TRANSACTION READ ONLY`, and a byte comparison of the deployed Edge sources with `main` `f06107b6`, on 2026-09-24).
+
+### 31.2 What changes for personal data — nothing new is collected
+
+- **Same data, same table, same retention.** `usage_counters` still holds only a feature name, a period and an integer count per user; it is still cascade-deleted with the account and still excluded from the account export. No new field, row type, table, log line with an identifier, or recipient is introduced.
+- **Narrower write authority.** Before this change a signed-in browser could decrement its own counter at will through `refund_ai_quota`; afterwards only PaperLume's server can, and only for the user id the server itself authenticated. That makes the counters a more faithful record of actual AI use, not a less private one.
+- **The elevated key stays server-side.** The new refund client is built inside the Edge runtime from the platform-injected secret, is typed to one RPC, carries no caller token, and never returns or logs the key or the user id. The browser bundle is unchanged (`src/` still has no elevated-key reference).
+- **No Privacy Policy change is needed.** The published policy already describes AI usage counting for quota enforcement; who within PaperLume's own backend may adjust that count is not a disclosure category. This addendum makes no statement about the policy's wording beyond that.
+
+### 31.3 What this addendum does NOT claim
+
+- ❌ "Production already enforces the server-only refund" — **false until the §6.8 rollout in [deployment.md](deployment.md) runs.** Update §31.1 when it does.
+- ❌ "Any account abused the old refund path" — **not established.** The defect was reproduced only on a disposable local replay; no Production counter was inspected per user or modified by this work.
