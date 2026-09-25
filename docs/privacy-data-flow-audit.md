@@ -1727,18 +1727,20 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ## 31. Addendum — 2026-09-24 — `SEC-AI-QUOTA-REFUND-AUTHORITY-001` server-only AI-quota refund
 
-**Scope.** Records a **repository** change to who may write the AI usage counters, and keeps it apart from **deployed Production behaviour**. §4 (the "AI usage counters" row), §8 (the two "Quota" rows) and §14 (the elevated-key row, which already predates §29's telemetry writer) are preserved as written; this section amends them only where stated. Decision C47 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+> **Status (updated 2026-09-25): LIVE in Production.** Migration `20260924193915` was applied and both generation functions were redeployed on 2026-09-25 ([deployment.md](deployment.md) §6.8), so §31.1's Production columns now match the repository column. The 2026-09-24 pre-rollout values are kept there, labelled *Before*.
+
+**Scope.** Records a change to who may write the AI usage counters. It was written on 2026-09-24 as a **repository** change, kept apart from **deployed Production behaviour**, which the 2026-09-25 rollout has since brought into line. §4 (the "AI usage counters" row), §8 (the two "Quota" rows) and §14 (the elevated-key row, which already predates §29's telemetry writer) are preserved as written; this section amends them only where stated. Decision C47 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
 
 ### 31.1 Repository and Production
 
 | | Repository (this change) | Production database | Production generation runtime |
 |---|---|---|---|
-| `refund_ai_quota` EXECUTE | Owner + `service_role` only (migration `20260924193915`) | Owner + `authenticated` (verified read-only 2026-09-24) — **not yet migrated** | — |
-| Who calls the refund | `analyze-paper` and `suggest-paper-organization`, through a dedicated server-only client with no caller Authorization header | — | Both still refund through the **caller-scoped** client (`analyze-paper` v32, `suggest-paper-organization` v15) |
-| Elevated key in the generation functions | Two narrow uses: the telemetry INSERT (§29) and the refund RPC | — | The telemetry INSERT only (§29) |
+| `refund_ai_quota` EXECUTE | Owner + `service_role` only (migration `20260924193915`) | Owner + `service_role` only — `20260924193915` applied 2026-09-25; `authenticated`, `anon` and PUBLIC cannot execute it. *Before: owner + `authenticated`, verified 2026-09-24.* | — |
+| Who calls the refund | `analyze-paper` and `suggest-paper-organization`, through a dedicated server-only client with no caller Authorization header | — | Both refund through the dedicated server-only client (`analyze-paper` v33, `suggest-paper-organization` v16, deployed 2026-09-25). *Before: the caller-scoped client, in v32 and v15.* |
+| Elevated key in the generation functions | Two narrow uses: the telemetry INSERT (§29) and the refund RPC | — | The same two narrow uses, each through its own client: the telemetry INSERT (§29) and the refund RPC. *Before: the telemetry INSERT only.* |
 | `consume_ai_quota` | Unchanged: caller-authenticated, `authenticated` only | Unchanged | Unchanged |
 
-**Class: VERIFIED** for the repository column (source, migration and tests) and for the Production columns (read-only queries inside `SET TRANSACTION READ ONLY`, and a byte comparison of the deployed Edge sources with `main` `f06107b6`, on 2026-09-24).
+**Class: VERIFIED** for the repository column (source, migration and tests) and for the Production columns. The current values come from read-only queries inside `SET TRANSACTION READ ONLY` and Edge version and bundle-hash read-backs on 2026-09-25; the independent Production verification also read back both deployed bundles. The *Before* values were verified on 2026-09-24 the same way, plus a byte comparison of the then-deployed Edge sources with `main` `f06107b6`.
 
 ### 31.2 What changes for personal data — nothing new is collected
 
@@ -1749,5 +1751,6 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ### 31.3 What this addendum does NOT claim
 
-- ❌ "Production already enforces the server-only refund" — **false until the §6.8 rollout in [deployment.md](deployment.md) runs.** Update §31.1 when it does.
+- ❌ "The rollout was proven by a live refund" — **not claimed.** No AI-provider request and no quota consume or refund canary was run; enforcement is established by the live ACL and function body and by the deployed bundles.
+- ❌ "Every refund is now guaranteed" — **not claimed.** The refund stays best-effort: a failure is logged and the original response is unchanged.
 - ❌ "Any account abused the old refund path" — **not established.** The defect was reproduced only on a disposable local replay; no Production counter was inspected per user or modified by this work.
