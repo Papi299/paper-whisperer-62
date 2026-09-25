@@ -1780,5 +1780,5 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ### 32.3 What this addendum does NOT claim
 
-- ❌ "Cross-account writes were possible before" — **not claimed.** The removed grants were always guarded by both-owner RLS; this is least-privilege hardening, not an incident fix.
+- ❌ "This fixes a cross-account write" — **not claimed.** The current pre-C48 Production path has been guarded by both-owner RLS since 2026-08-02. An earlier schema **did** permit cross-owner junction insertion (a user could link their own paper to another user's Project or Tag); that defect was separately remediated by `20260802025704` (PFA-C03B1, [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) §9.6). C48 is a later least-privilege follow-up, not that remediation. It claims no new incident, and no historical abuse: whether the pre-2026-08-02 defect was ever exercised by a real account is not established.
 - ❌ "This is live" — **not claimed** until the §6.9 rollout is separately authorized and verified.

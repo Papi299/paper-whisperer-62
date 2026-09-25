@@ -30,11 +30,23 @@
 --   bulk_add_paper_projects(uuid[],uuid[]) bulk_add_paper_tags(uuid[],uuid[])
 --   merge_exact_duplicates(uuid,uuid[])
 --
--- So the direct INSERT/DELETE grants were an unused second write path. Its RLS
--- policies required both-owner semantics, so it could not cross accounts — but
--- it could bypass the RPCs' own contracts (all-or-nothing validation, NULL-id
--- refusal, replace-vs-add semantics), and least privilege says a capability no
--- product path uses should not be held. This is hardening, not an incident fix.
+-- So the direct INSERT/DELETE grants were an unused second write path.
+--
+-- HISTORY — keep the two states apart:
+--   * Before 20260802025704 (the 2026-08-02 relational-ownership remediation,
+--     PFA-C03B1) the junction policies checked PAPER ownership only, so a user
+--     could link their own paper to another user's Project or Tag. Cross-owner
+--     insertion into both junctions was a confirmed defect, reproduced on a
+--     replay of that schema (docs/pfa-c03-staging-and-security-test-plan.md
+--     §9.6). Whether any real account ever exercised it is not established.
+--   * 20260802025704 fixed it: since then the direct path has been constrained
+--     by both-owner RLS (paper AND Project/Tag must belong to auth.uid()), and
+--     the setter RPCs validate both owners too.
+--   * This migration is NOT that remediation. It is a later least-privilege
+--     follow-up that removes the direct write surface left over afterwards —
+--     redundant authority that could still bypass the RPCs' own contracts
+--     (all-or-nothing validation, NULL-id refusal, replace-vs-add semantics).
+--     It does not respond to any newly discovered live cross-account path.
 --
 -- WHY THE RPCs KEEP WORKING
 -- ─────────────────────────────────────────────────────────────────────────────
