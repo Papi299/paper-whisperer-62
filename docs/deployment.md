@@ -623,6 +623,53 @@ Read-only post-apply checks (all passed again on 2026-09-17; see the status abov
 
 Neither step has been applied. Do not treat the rollback as a routine revert: it hands every signed-in browser back the ability to reset its own AI quota.
 
+### 6.9 `20260925134526` (junction DML grant hardening, C48) — migration-only; NOT APPLIED
+
+> **Status — PENDING. Prepared in the repository; not applied to Production, and not authorized to be as part of the PR that adds it.** Production today (read-only, 2026-09-25): ledger **87**, latest `20260924193915`; `authenticated` holds `SELECT, INSERT, DELETE` on `paper_projects` and `paper_tags` (`authenticated=ard/postgres`) and `SELECT, INSERT, UPDATE, DELETE` on `projects` and `tags` (`authenticated=arwd/postgres`). The repository target after this migration is `SELECT` only on the two junctions, with `projects` / `tags` unchanged.
+
+**What changes.** One statement inside a fail-closed transaction: `REVOKE INSERT, DELETE ON TABLE public.paper_projects, public.paper_tags FROM authenticated;`. Nothing else: not `projects` / `tags` (Projects and Tags — including AI-proposed ones — are still created by direct browser INSERT), not `service_role`, not `anon` / PUBLIC, not RLS or any policy, not any function, not any row. See decision C48.
+
+**Why there is no ordering constraint.** No shipped client path writes either junction directly: every assignment goes through `set_paper_*`, `bulk_set_paper_*`, `bulk_add_paper_*` or `merge_exact_duplicates`, all SECURITY DEFINER and owned by `postgres`, so they write as the owner and are unaffected by the caller's grant. FK cascades (deleting a Project, Tag or paper) also run as the junction's owner. So there is no web-first or Edge-first step, no drain and no barrier, and no frontend or Edge Function deploy is part of this rollout. **Generated types do not change** (a grant is not part of the schema shape PostgREST types describe).
+
+**Ordered rollout — each step needs its own authorization.**
+1. Merge the independently approved exact head with a regular two-parent merge commit; wait for merged-`main` CI (Validate, DB Tests, E2E (local), Extension) to be green on that commit.
+2. Read-only preflight inside `SET TRANSACTION READ ONLY`: ledger still 87 rows with `20260925134526` absent, and the pre-state in the status box above. The migration refuses any other pre-state anyway (its section 1) — a difference needs explaining before anyone retries.
+3. `supabase migration list --linked`, then `supabase db push --dry-run` from the merge commit. The dry run must list **exactly** `20260925134526_harden_junction_dml_grants.sql`; anything else, stop (§6.2).
+4. `supabase db push --linked` — ledger 87 → 88.
+5. Verify immediately, read-only:
+   ```sql
+   BEGIN; SET TRANSACTION READ ONLY;
+   -- Junctions: SELECT only for authenticated, direct and effective.
+   SELECT c.relname, c.relacl::text,
+          has_table_privilege('authenticated', c.oid, 'SELECT') AS sel,   -- expect true
+          has_table_privilege('authenticated', c.oid, 'INSERT') AS ins,   -- expect false
+          has_table_privilege('authenticated', c.oid, 'UPDATE') AS upd,   -- expect false
+          has_table_privilege('authenticated', c.oid, 'DELETE') AS del,   -- expect false
+          c.relrowsecurity, c.relforcerowsecurity                          -- expect true, true
+     FROM pg_class c
+    WHERE c.oid IN ('public.paper_projects'::regclass, 'public.paper_tags'::regclass,
+                    'public.projects'::regclass, 'public.tags'::regclass)
+    ORDER BY c.relname;
+   -- Assignment RPC authority unchanged.
+   SELECT p.oid::regprocedure, pg_get_userbyid(p.proowner) AS owner, p.prosecdef,
+          p.proconfig::text, md5(p.prosrc) AS body, p.proacl::text
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname IN ('set_paper_projects','set_paper_tags','bulk_set_paper_projects','bulk_set_paper_tags',
+                        'bulk_add_paper_projects','bulk_add_paper_tags','merge_exact_duplicates')
+    ORDER BY 1;
+   ROLLBACK;
+   ```
+   Expected:
+   - `paper_projects` / `paper_tags`: `{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=r/postgres}`; `sel` true, `ins` / `upd` / `del` false; RLS and FORCE RLS true.
+   - `projects` / `tags`: **unchanged** — `{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=arwd/postgres}`; `sel`, `ins`, `upd`, `del` all true.
+   - All seven routines: owner `postgres`, SECURITY DEFINER, `{search_path=public}`, ACL `{postgres=X/postgres,authenticated=X/postgres}`, and bodies `set_paper_projects` `8104be4a8a25bfbca45b0aab4393d110`, `set_paper_tags` `8b0537b3964e5a1956a8d1e99bdaed82`, `bulk_set_paper_projects` `a348cebfcf3b393af9aff1b5a77cd1a6`, `bulk_set_paper_tags` `e3b6bcfec228d4cca4f52dc126765e32`, `bulk_add_paper_projects` `1d1c91251a099af644cb9d416637e1cc`, `bulk_add_paper_tags` `01da7404df6f887252f724c649d11fba`, `merge_exact_duplicates` `b43400b3cdc51b5572efe81a80acdfab`.
+6. Confirm the security advisor shows nothing new (read-only). The six assignment RPCs' "authenticated can execute a SECURITY DEFINER function" notices are expected — after this change they are the deliberate client-facing write authority.
+
+**No canary is required.** The migration's own verification block refuses to commit anything but the expected state, and the product paths are covered by CI against the hardened schema (pgTAP 000/002/015 and the E2E lane replay every migration). If an authenticated product smoke is separately authorized, the smallest one is: open Edit Paper on a disposable paper, use AI "Create & select" or the Projects selector, save, reopen — the assignment must persist.
+
+**Rollback — reference only.** Prefer fixing forward. If a real product path turns out to need a direct junction write, restore exactly the pre-C48 grant in a new forward migration: `GRANT INSERT, DELETE ON TABLE public.paper_projects, public.paper_tags TO authenticated;`. That re-opens only a path still guarded by the dormant both-owner RLS policies, so it is a least-privilege regression, not a security hole — but the better fix is a reviewed RPC for the new path. Not applied anywhere.
+
 ---
 
 ---

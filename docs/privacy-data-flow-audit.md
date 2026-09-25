@@ -1754,3 +1754,31 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 - ❌ "The rollout was proven by a live refund" — **not claimed.** No AI-provider request and no quota consume or refund canary was run; enforcement is established by the live ACL and function body and by the deployed bundles.
 - ❌ "Every refund is now guaranteed" — **not claimed.** The refund stays best-effort: a failure is logged and the original response is unchanged.
 - ❌ "Any account abused the old refund path" — **not established.** The defect was reproduced only on a disposable local replay; no Production counter was inspected per user or modified by this work.
+
+## 32. Addendum — 2026-09-25 — `DB-JUNCTION-DML-GRANT-HARDENING-001` assignment junctions become SELECT-only
+
+> **Status: repository change, NOT live.** Migration `20260925134526_harden_junction_dml_grants.sql` is prepared and unapplied; Production still grants `authenticated` `SELECT, INSERT, DELETE` on the two junctions ([deployment.md](deployment.md) §6.9). Decision C48 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+
+**Scope.** A privilege reduction on two relationship tables, `paper_projects` and `paper_tags`, which record only which of a user's own papers is filed under which of their own Projects and Tags (two UUIDs per row). The browser loses the ability to insert or delete those rows directly; it keeps the ability to read its own. Assignment continues through the existing SECURITY DEFINER RPCs. §4's rows for these tables are unchanged by this addendum except where stated here.
+
+### 32.1 Repository and Production
+
+| | Repository (this change) | Production |
+|---|---|---|
+| `paper_projects` / `paper_tags`, `authenticated` | `SELECT` only | `SELECT, INSERT, DELETE` (verified read-only 2026-09-25) |
+| `projects` / `tags`, `authenticated` | `SELECT, INSERT, UPDATE, DELETE` — unchanged | Same |
+| How a paper is assigned to a Project/Tag | Through `set_paper_*`, `bulk_set_paper_*`, `bulk_add_paper_*`, `merge_exact_duplicates` | Same — the browser already used only these |
+
+### 32.2 What changes for personal data — nothing
+
+- **No new data category, field or table**, and no new row is written by the migration (its verification block proves that from the transaction's own statistics).
+- **No new recipient and no new processor.** The change is inside PaperLume's own database grants; nothing is sent anywhere new.
+- **No retention change.** Junction rows are still removed by cascade when their paper, Project, Tag or account is deleted, exactly as before (§12.3); a referential cascade runs as the table owner and never depended on the browser's DELETE grant.
+- **No export change.** The full account export and CSV/BibTeX export still read the junctions with `SELECT`, which is kept.
+- **No Privacy Policy change is needed.** Who within PaperLume may write an assignment row is not a disclosure category, and the product behaviour users see is unchanged.
+- **Projects and Tags can still be created** — by hand or through AI "Create & select", which writes the Project/Tag itself and leaves the assignment to Save. Only the browser's *direct* junction-write authority is removed.
+
+### 32.3 What this addendum does NOT claim
+
+- ❌ "This fixes a cross-account write" — **not claimed.** The current pre-C48 Production path has been guarded by both-owner RLS since 2026-08-02. An earlier schema **did** permit cross-owner junction insertion (a user could link their own paper to another user's Project or Tag); that defect was separately remediated by `20260802025704` (PFA-C03B1, [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) §9.6). C48 is a later least-privilege follow-up, not that remediation. It claims no new incident, and no historical abuse: whether the pre-2026-08-02 defect was ever exercised by a real account is not established.
+- ❌ "This is live" — **not claimed** until the §6.9 rollout is separately authorized and verified.

@@ -1,6 +1,8 @@
 -- DATA-API-ACL-RECONCILIATION-001 suite 015: the Data API object-privilege matrix.
 --
--- Owns the client-role half of `20260910212202_reconcile_data_api_acls.sql`, and
+-- Owns the client-role half of `20260910212202_reconcile_data_api_acls.sql` (and
+-- of `20260925134526_harden_junction_dml_grants.sql`, which narrowed the two
+-- assignment junctions to SELECT — section I), and
 -- it is deliberately an EXACT-MATCH suite rather than a "can the app still work"
 -- suite. Under-grant and OVER-grant both fail here: a privilege nobody intended
 -- is the defect this whole initiative exists to remove, and a subset test would
@@ -112,8 +114,11 @@ INSERT INTO acl_expected (relname, auth_privs, svc_privs) VALUES
   ('keyword_exclusion_pool',      'DELETE,INSERT,SELECT',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
   ('keyword_pool',                'DELETE,INSERT,SELECT',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
   ('paper_attachments',           'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('paper_projects',              'DELETE,INSERT,SELECT',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('paper_tags',                  'DELETE,INSERT,SELECT',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
+  -- DB-JUNCTION-DML-GRANT-HARDENING-001 (C48). Read-only to the browser: every
+  -- assignment write goes through the SECURITY DEFINER assignment RPCs. The
+  -- entity tables `projects` / `tags` below are deliberately NOT narrowed.
+  ('paper_projects',              'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
+  ('paper_tags',                  'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
   ('papers',                      'INSERT,SELECT,UPDATE',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
   ('profiles',                    'INSERT,SELECT,UPDATE',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
   ('projects',                    'DELETE,INSERT,SELECT,UPDATE',       'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
@@ -147,7 +152,7 @@ INSERT INTO acl_invoker_public_exec_allowlist VALUES
   ('set_updated_at()',                          'updated_at trigger function'),
   ('update_updated_at_column()',                'updated_at trigger function');
 
-SELECT plan(90);
+SELECT plan(97);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -383,6 +388,79 @@ SELECT is(
                        WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE'))),
   '',
   'ACL-H4 no SECURITY DEFINER routine in public is executable by anon or PUBLIC');
+
+-- ══ I. Assignment junctions vs. the entities they join (C48) ═══════════════
+-- DB-JUNCTION-DML-GRANT-HARDENING-001 split two things that are easy to
+-- conflate. The JUNCTIONS (`paper_projects`, `paper_tags` — "paper X is in
+-- Project/Tag Y") are read-only to the browser; the ENTITIES (`projects`,
+-- `tags`) stay fully user-mutable, because creating a Project or Tag — including
+-- the AI suggestion flow's "Create & select" — is a direct browser INSERT into
+-- the entity table. Section C already covers all four through `acl_expected`;
+-- these restate them as literals, so narrowing an entity table cannot pass by
+-- editing a single matrix row, and they prove the SELECT-only junction is not a
+-- dead end: the RPC surface that writes it is intact.
+SELECT is(
+  pg_temp.direct_privs(to_regclass('public.projects'), to_regrole('authenticated')::oid) || ' / '
+    || pg_temp.eff_table_privs(to_regclass('public.projects'), to_regrole('authenticated')::oid),
+  'DELETE,INSERT,SELECT,UPDATE / DELETE,INSERT,SELECT,UPDATE',
+  'ACL-I1 projects stays user-mutable for authenticated, direct and effective (Projects UI and AI "Create & select" insert here)');
+
+SELECT is(
+  pg_temp.direct_privs(to_regclass('public.tags'), to_regrole('authenticated')::oid) || ' / '
+    || pg_temp.eff_table_privs(to_regclass('public.tags'), to_regrole('authenticated')::oid),
+  'DELETE,INSERT,SELECT,UPDATE / DELETE,INSERT,SELECT,UPDATE',
+  'ACL-I2 tags stays user-mutable for authenticated, direct and effective (Tags UI and AI "Create & select" insert here)');
+
+SELECT is(
+  pg_temp.direct_privs(to_regclass('public.paper_projects'), to_regrole('authenticated')::oid) || ' / '
+    || pg_temp.eff_table_privs(to_regclass('public.paper_projects'), to_regrole('authenticated')::oid),
+  'SELECT / SELECT',
+  'ACL-I3 paper_projects is read-only to authenticated, direct and effective (assignment writes go through the RPCs)');
+
+SELECT is(
+  pg_temp.direct_privs(to_regclass('public.paper_tags'), to_regrole('authenticated')::oid) || ' / '
+    || pg_temp.eff_table_privs(to_regclass('public.paper_tags'), to_regrole('authenticated')::oid),
+  'SELECT / SELECT',
+  'ACL-I4 paper_tags is read-only to authenticated, direct and effective (assignment writes go through the RPCs)');
+
+SELECT is(
+  (SELECT coalesce(string_agg(att.attrelid::regclass::text || '.' || att.attname, ', ' ORDER BY att.attrelid::regclass::text, att.attname), '')
+     FROM pg_attribute att, aclexplode(att.attacl) a
+    WHERE att.attrelid IN (to_regclass('public.paper_projects'), to_regclass('public.paper_tags'))
+      AND att.attacl IS NOT NULL
+      AND a.grantee = to_regrole('authenticated')::oid),
+  '',
+  'ACL-I5 no column-level grant re-opens a junction write for authenticated (a table REVOKE would not remove one)');
+
+-- The write authority that replaces the direct grant: seven SECURITY DEFINER
+-- routines owned by postgres and executable by authenticated. A missing routine
+-- is reported by name rather than passing vacuously (coalesce to false).
+SELECT is(
+  (SELECT coalesce(string_agg(s, ', ' ORDER BY s), '')
+     FROM unnest(ARRAY[
+       'public.set_paper_projects(uuid,uuid[])',
+       'public.set_paper_tags(uuid,uuid[])',
+       'public.bulk_set_paper_projects(uuid[],uuid[])',
+       'public.bulk_set_paper_tags(uuid[],uuid[])',
+       'public.bulk_add_paper_projects(uuid[],uuid[])',
+       'public.bulk_add_paper_tags(uuid[],uuid[])',
+       'public.merge_exact_duplicates(uuid,uuid[])']) s
+    WHERE NOT coalesce(
+            (SELECT p.prosecdef AND p.proowner = to_regrole('postgres')::oid
+               FROM pg_proc p WHERE p.oid = to_regprocedure(s))
+            AND has_function_privilege(to_regrole('authenticated')::oid, to_regprocedure(s), 'EXECUTE'),
+            false)),
+  '',
+  'ACL-I6 every assignment RPC is SECURITY DEFINER, owned by postgres and executable by authenticated');
+
+-- ...and the role those routines execute as can still write both junctions.
+-- Checked one privilege at a time: a comma list means "any of".
+SELECT ok(
+  has_table_privilege(to_regrole('postgres')::oid, 'public.paper_projects'::regclass, 'INSERT')
+  AND has_table_privilege(to_regrole('postgres')::oid, 'public.paper_projects'::regclass, 'DELETE')
+  AND has_table_privilege(to_regrole('postgres')::oid, 'public.paper_tags'::regclass, 'INSERT')
+  AND has_table_privilege(to_regrole('postgres')::oid, 'public.paper_tags'::regclass, 'DELETE'),
+  'ACL-I7 the assignment RPCs'' definer (postgres) still holds INSERT and DELETE on both junctions');
 
 -- ══ G4. The defaults, proved on real objects ════════════════════════════════
 -- Reading `pg_default_acl` says what is stored. This says what a new object
