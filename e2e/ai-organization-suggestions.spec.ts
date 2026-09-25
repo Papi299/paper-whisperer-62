@@ -29,13 +29,19 @@ import {
  *   - an explicitly created Project/Tag really does survive that cancellation,
  *     because creation is immediate while the paper assignment is not;
  *   - Save Changes persists exactly the accepted assignments through the real
- *     `set_paper_projects` / `set_paper_tags` path.
+ *     `set_paper_projects` / `set_paper_tags` path;
+ *   - with the assignment junctions SELECT-only for the browser (C48, replayed
+ *     by the local stack), "Create & select" writes only the Project/Tag
+ *     ENTITY, Save writes only through the setter RPCs, and no request ever
+ *     writes `paper_projects` / `paper_tags` directly — asserted on the
+ *     recorded Data API traffic.
  *
  * ## State
  *
- * Mutating, but only within fixtures it owns: two disposable Projects and two
- * disposable Tags (one pair created through the management modals, one pair
- * created by the feature under test), all removed in `afterAll`. Deleting them
+ * Mutating, but only within fixtures it owns: two disposable Projects and three
+ * disposable Tags (one Project and one Tag created through the management
+ * modals, the rest created by the feature under test), all removed in
+ * `afterAll`. Deleting them
  * cascades the junction rows away, so the paper's assignments are restored with
  * them. The one seeded paper it edits is the designated disposable
  * highest-order record, and the only field it touches — Study Type — is
@@ -54,6 +60,8 @@ const EXISTING_TAG = `_e2e_aiorg_tag_${STAMP}`;
 /** Proposed-new taxonomy the user creates through the feature itself. */
 const PROPOSED_TAG = `_e2e_aiorg_newtag_${STAMP}`;
 const PROPOSED_PROJECT = `_e2e_aiorg_newproj_${STAMP}`;
+/** A proposed-new Tag the Save test creates AND assigns (the one above is cancelled). */
+const PROPOSED_SAVED_TAG = `_e2e_aiorg_newtag_saved_${STAMP}`;
 
 /** An unsaved Study Type value that exists nowhere in the seed. */
 const UNSAVED_STUDY_TYPE = `_e2e_unsaved_study_type_${STAMP}`;
@@ -96,6 +104,8 @@ interface Recorder {
   /** Real taxonomy ids, read from the app's own PostgREST reads. */
   projectIds: Map<string, string>;
   tagIds: Map<string, string>;
+  /** Every Data API write the page sent, as `METHOD /rest/v1/<path>`. */
+  dataApiWrites: string[];
 }
 
 function newRecorder(): Recorder {
@@ -104,6 +114,7 @@ function newRecorder(): Recorder {
     providerRequests: [],
     projectIds: new Map(),
     tagIds: new Map(),
+    dataApiWrites: [],
   };
 }
 
@@ -150,6 +161,31 @@ function watchTaxonomyIds(page: Page, recorder: Recorder) {
       });
   });
 }
+
+/**
+ * Record every Data API write the page sends (DB-JUNCTION-DML-GRANT-HARDENING-001,
+ * C48). The local stack replays every migration, so the assignment junctions
+ * are SELECT-only for the browser here exactly as they are meant to be in
+ * Production: a direct junction write would be refused. Recording the writes
+ * lets the spec say more than "it worked" — that the entity was created in
+ * `projects` / `tags`, the assignment went through the setter RPCs, and no
+ * junction write was ever attempted.
+ */
+function watchDataApiWrites(page: Page, recorder: Recorder) {
+  page.on("request", (request) => {
+    const method = request.method();
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
+    let pathname: string;
+    try {
+      pathname = new URL(request.url()).pathname;
+    } catch {
+      return;
+    }
+    if (pathname.startsWith("/rest/v1/")) recorder.dataApiWrites.push(`${method} ${pathname}`);
+  });
+}
+
+const JUNCTION_WRITE = /^(POST|PATCH|PUT|DELETE) \/rest\/v1\/paper_(projects|tags)(\/|$)/;
 
 function watchProviderHosts(page: Page, recorder: Recorder) {
   page.on("request", (request) => {
@@ -300,6 +336,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
       await deleteProject(page, PROPOSED_PROJECT);
       await deleteTag(page, EXISTING_TAG);
       await deleteTag(page, PROPOSED_TAG);
+      await deleteTag(page, PROPOSED_SAVED_TAG);
       await createProject(page, EXISTING_PROJECT);
       await createTag(page, EXISTING_TAG);
     } finally {
@@ -318,6 +355,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
       await deleteProject(page, PROPOSED_PROJECT);
       await deleteTag(page, EXISTING_TAG);
       await deleteTag(page, PROPOSED_TAG);
+      await deleteTag(page, PROPOSED_SAVED_TAG);
     } finally {
       await context.close();
     }
@@ -333,6 +371,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
     const recorder = newRecorder();
     watchTaxonomyIds(page, recorder);
     watchProviderHosts(page, recorder);
+    watchDataApiWrites(page, recorder);
 
     await openDashboard(page);
     await expect
@@ -436,6 +475,11 @@ test.describe("AI organization suggestions in Edit Paper", () => {
 
     await closeDialogWithCancel(page);
 
+    // ── The Tag was created as an ENTITY; nothing was assigned ──────────
+    expect(recorder.dataApiWrites).toContain("POST /rest/v1/tags");
+    expect(recorder.dataApiWrites.filter((w) => w.includes("/rest/v1/rpc/set_paper_"))).toEqual([]);
+    expect(recorder.dataApiWrites.filter((w) => JUNCTION_WRITE.test(w))).toEqual([]);
+
     expect(recorder.providerRequests).toEqual([]);
   });
 
@@ -443,6 +487,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
     const recorder = newRecorder();
     watchTaxonomyIds(page, recorder);
     watchProviderHosts(page, recorder);
+    watchDataApiWrites(page, recorder);
 
     await openDashboard(page);
     await expect
@@ -465,6 +510,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
           reason: "A theme the library does not cover yet.",
         },
       ],
+      newTags: [{ name: PROPOSED_SAVED_TAG, reason: "A label the library does not have yet." }],
     }));
 
     await openEditPaperDialog(page, PAPER_TITLE);
@@ -476,7 +522,7 @@ test.describe("AI organization suggestions in Edit Paper", () => {
     await generateSuggestions(page, recorder);
     expect(recorder.invocations[0].studyType).toBe(UNSAVED_STUDY_TYPE);
 
-    // Accept one existing Project, one existing Tag, and create one Project.
+    // Accept one existing Project and Tag, and create one Project and one Tag.
     await section
       .getByRole("button", { name: `Select project "${EXISTING_PROJECT}" for this paper` })
       .click();
@@ -488,9 +534,20 @@ test.describe("AI organization suggestions in Edit Paper", () => {
         name: `Create project "${PROPOSED_PROJECT}" and select it for this paper`,
       })
       .click();
+    await expect(projectsTrigger(page)).toHaveText(/2 projects selected/);
+    await section
+      .getByRole("button", {
+        name: `Create tag "${PROPOSED_SAVED_TAG}" and select it for this paper`,
+      })
+      .click();
 
     await expect(projectsTrigger(page)).toHaveText(/2 projects selected/);
-    await expect(tagsTrigger(page)).toHaveText(/1 tag selected/);
+    await expect(tagsTrigger(page)).toHaveText(/2 tags selected/);
+
+    // Creation is immediate and writes the ENTITIES; nothing is assigned yet.
+    expect(recorder.dataApiWrites).toContain("POST /rest/v1/projects");
+    expect(recorder.dataApiWrites).toContain("POST /rest/v1/tags");
+    expect(recorder.dataApiWrites.filter((w) => w.includes("/rest/v1/rpc/set_paper_"))).toEqual([]);
 
     // Revert Study Type to its seeded (empty) value before saving, so the only
     // durable change this spec makes is the taxonomy it cleans up. Editing the
@@ -499,20 +556,26 @@ test.describe("AI organization suggestions in Edit Paper", () => {
     await setField(page, "Study Type", "");
     await expect(page.getByTestId("ai-organization-stale")).toBeVisible();
     await expect(projectsTrigger(page)).toHaveText(/2 projects selected/);
-    await expect(tagsTrigger(page)).toHaveText(/1 tag selected/);
+    await expect(tagsTrigger(page)).toHaveText(/2 tags selected/);
 
     await saveDialog(page);
+
+    // ── The assignment went through the setter RPCs, never a junction ───
+    expect(recorder.dataApiWrites).toContain("POST /rest/v1/rpc/set_paper_projects");
+    expect(recorder.dataApiWrites).toContain("POST /rest/v1/rpc/set_paper_tags");
+    expect(recorder.dataApiWrites.filter((w) => JUNCTION_WRITE.test(w))).toEqual([]);
 
     // ── Reopen: the assignments are on the row, the Study Type is not ───
     await openEditPaperDialog(page, PAPER_TITLE);
     await expect(projectsTrigger(page)).toHaveText(/2 projects selected/);
-    await expect(tagsTrigger(page)).toHaveText(/1 tag selected/);
+    await expect(tagsTrigger(page)).toHaveText(/2 tags selected/);
     await expect(page.getByRole("dialog").getByLabel("Study Type", { exact: true })).toHaveValue("");
 
-    // The saved selection is exactly the two Projects and the one Tag accepted.
+    // The saved selection is exactly the two Projects and the two Tags accepted.
     await expect(page.getByRole("dialog").getByText(EXISTING_PROJECT)).toBeVisible();
     await expect(page.getByRole("dialog").getByText(PROPOSED_PROJECT)).toBeVisible();
     await expect(page.getByRole("dialog").getByText(EXISTING_TAG)).toBeVisible();
+    await expect(page.getByRole("dialog").getByText(PROPOSED_SAVED_TAG)).toBeVisible();
 
     await closeDialogWithCancel(page);
 

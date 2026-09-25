@@ -80,7 +80,7 @@ const AUTH_STATE_FILE = resolve(ROOT, "e2e/.auth/user.json");
  */
 const DEFAULT_SPECS = [
   // AI-PROJECT-TAG-SUGGESTIONS-001B Edit Paper acceptance flows. Mutating, but
-  // only within fixtures it owns: two disposable Projects and two disposable
+  // only within fixtures it owns: two disposable Projects and three disposable
   // Tags, all deleted in afterAll — which cascades the `paper_projects` /
   // `paper_tags` rows away, restoring the one seeded paper it assigns to. The
   // only paper field it edits is Study Type, reverted to its seeded empty value
