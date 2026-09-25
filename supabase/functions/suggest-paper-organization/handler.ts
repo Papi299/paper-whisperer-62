@@ -18,9 +18,12 @@
  * inserts, updates or deletes a Project, a Tag, a `paper_projects` row, a
  * `paper_tags` row or a paper, and it never persists a suggestion. That is
  * enforced structurally, not by convention: `CallerClient` below is the entire
- * database surface this module can reach, and it exposes `select`, `rpc` and
- * nothing else — there is no `insert`, `update`, `upsert` or `delete` to call.
- * The only writes are the two pre-existing AI-quota RPCs.
+ * caller-scoped database surface this module can reach, and it exposes
+ * `select`, two named RPCs and nothing else — there is no `insert`, `update`,
+ * `upsert` or `delete` to call. Its only write is `consume_ai_quota`. The two
+ * other writes each go through their own narrow, server-only client: the
+ * refund of an undelivered unit (`refund_ai_quota`, C47) and one content-free
+ * provider-usage telemetry row (C42).
  *
  * ## Order of operations, and why
  *
@@ -83,6 +86,7 @@ import {
   type AiOperationOutcome,
   type AiUsageEventInsertClient,
 } from "../_shared/aiUsageTelemetry.ts";
+import { refundAiQuotaUnit, type AiQuotaRefundClient } from "../_shared/aiQuotaRefund.ts";
 import {
   NEUTRAL_SUGGESTIONS_UNAVAILABLE_MESSAGE,
   PAPER_NOT_FOUND_MESSAGE,
@@ -125,6 +129,15 @@ export interface TableQuery {
   maybeSingle(): PromiseLike<{ data: Record<string, unknown> | null; error: unknown }>;
 }
 
+/**
+ * The only RPCs the caller-scoped client is for: spending the caller's own
+ * quota unit, and the entitlement read model selection makes (reached through
+ * `_shared/aiModelSelection.ts`). `refund_ai_quota` is deliberately NOT here —
+ * the database grants it to `service_role` only (C47), so a refund goes through
+ * `createQuotaRefundClient` and never through the caller's identity.
+ */
+export type CallerRpcName = "consume_ai_quota" | "get_current_user_access";
+
 export interface CallerClient {
   auth: {
     getUser(): Promise<{
@@ -134,7 +147,7 @@ export interface CallerClient {
   };
   from(table: string): { select(columns: string): TableQuery };
   rpc(
-    fn: string,
+    fn: CallerRpcName,
     args: Record<string, unknown>,
   ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
 }
@@ -196,6 +209,21 @@ export interface SuggestOrganizationDeps {
    * reads anything, and this one can write telemetry and nothing else.
    */
   createUsageEventClient(): AiUsageEventInsertClient | null;
+  /**
+   * Build the SERVER-ONLY quota-refund client, or return `null` when no server
+   * key is available — SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47).
+   *
+   * `refund_ai_quota` is executable by `service_role` only, so the caller's
+   * client can no longer refund, and must not: a browser that could refund
+   * could reset its own quota. `index.ts` builds this from the platform-injected
+   * secret key with no caller Authorization header. Called lazily — only on a
+   * path that already consumed a unit and is about to report a failure — and
+   * typed for exactly one call, `rpc("refund_ai_quota", { p_user_id })`. The
+   * user id passed is the `getUser()` identity from step 4, never a request
+   * field. `null` means the refund is logged as not done; the response is
+   * unchanged.
+   */
+  createQuotaRefundClient(): AiQuotaRefundClient | null;
   /** Injected so tests can assert exactly what is (and is not) logged. */
   logger?: { log(message: string): void; warn(message: string): void; error(message: string): void };
 }
@@ -207,24 +235,26 @@ function fail(status: number, error: string, message: string, extra?: Record<str
 // ── Quota ─────────────────────────────────────────────────────────────────
 
 /**
- * Best-effort refund of the one unit consumed for this attempt.
+ * Best-effort refund of the one unit consumed for this attempt, through the
+ * SERVER-ONLY refund client — never the caller's (C47).
  *
- * Swallows every error, exactly as `analyze-paper` does, so a refund-side
- * problem can never replace the provider failure the user actually needs to
- * see. `refund_ai_quota` is itself tolerant (`GREATEST(used - 1, 0)`, and a
- * no-op when the counter row is missing), so the two layers compose.
+ * Swallows every error, exactly as `analyze-paper` does and through the same
+ * shared module, so a refund-side problem can never replace the provider
+ * failure the user actually needs to see, and the two functions log it
+ * identically. `refund_ai_quota` is itself tolerant (`GREATEST(used - 1, 0)`,
+ * and a no-op when the counter row is missing), so the two layers compose.
+ * There is no fallback to the caller's client: that path is what C47 closed.
  */
 async function safeRefund(
-  client: CallerClient,
+  deps: SuggestOrganizationDeps,
   userId: string,
   logger: NonNullable<SuggestOrganizationDeps["logger"]>,
 ): Promise<void> {
-  try {
-    const { error } = await client.rpc("refund_ai_quota", { p_user_id: userId });
-    if (error) logger.error("suggest-organization refund_failed rpc_error=1");
-  } catch {
-    logger.error("suggest-organization refund_failed threw=1");
-  }
+  await refundAiQuotaUnit(userId, {
+    label: "suggest-organization",
+    logger,
+    createClient: () => deps.createQuotaRefundClient(),
+  });
 }
 
 // ── Provider transport ────────────────────────────────────────────────────
@@ -637,7 +667,7 @@ export async function handleSuggestOrganizationRequest(
     if (suggestions === null) {
       // Best-effort refund — the user did not receive a usable result. Its own
       // failure is logged separately and never replaces the provider outcome.
-      await safeRefund(client, userId, logger);
+      await safeRefund(deps, userId, logger);
       logger.error(
         `suggest-organization outcome=provider_failure class=${providerClass} ` +
           `detail=${failureDetail} provider_attempts=${call.attempts} refund=attempted`,

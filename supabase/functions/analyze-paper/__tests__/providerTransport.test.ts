@@ -176,9 +176,10 @@ describe("analyze-paper quota semantics are untouched", () => {
   });
 
   it("refunds best-effort on the provider-failure path", () => {
-    expect(SOURCE).toContain("await safeRefundAiQuota(supabase, user.id)");
-    // Once for the missing-key path, once for the provider-failure catch.
-    expect(SOURCE.match(/safeRefundAiQuota\(supabase, user\.id\)/g)?.length).toBe(2);
+    expect(SOURCE).toContain("await safeRefundAiQuota(supabaseUrl, user.id)");
+    // Once for the missing-key path, once for the provider-failure catch. Since
+    // C47 both go through the server-only refund client, not the caller's.
+    expect(SOURCE.match(/safeRefundAiQuota\(supabaseUrl, user\.id\)/g)?.length).toBe(2);
   });
 
   it("does not refund per provider attempt — the retry budget is the transport's", () => {

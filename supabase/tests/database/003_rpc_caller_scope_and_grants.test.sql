@@ -2,15 +2,20 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 38 SECURITY DEFINER functions (31 directly callable + 5 trigger-
---     only + 2 internal-only); no unexpected privileged function or overload;
+--   * exactly 40 SECURITY DEFINER functions (32 directly callable + 1 server-
+--     only + 5 trigger-only + 2 internal-only); no unexpected privileged
+--     function or overload;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
+--   * server-only RPCs (SEC-AI-QUOTA-REFUND-AUTHORITY-001, C47): {service_role}
+--     EXECUTE only — no PUBLIC / anon / authenticated; owner retained; and
+--     service_role executes NO other SECURITY DEFINER function in public;
 --   * trigger-only functions: not client-executable and not service_role-
 --     executable; owner retained;
 --   * caller identity: null-auth and mismatched caller rejected, valid caller
---     accepted, for the four read RPCs, safe_bulk_insert_papers, and the three
---     AI-quota RPCs;
+--     accepted, for the four read RPCs, safe_bulk_insert_papers, and the two
+--     caller-scoped AI-quota RPCs; the refund refuses every browser caller at
+--     the ACL — its own user included — and serves the server role;
 --   * representative caller/ownership boundaries for the setter, bulk-update,
 --     dedup, and access RPCs;
 --   * search_papers bounded search_path; exactly one overload of each hardened
@@ -63,7 +68,8 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (30).
+-- The complete directly-callable SECURITY DEFINER RPC surface (32).
+-- `refund_ai_quota` left this list for server_rpcs() below with C47.
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
@@ -77,7 +83,6 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.get_duplicate_papers()',
     'public.get_keyword_options(uuid,uuid[],integer,integer,text[])',
     'public.merge_exact_duplicates(uuid,uuid[])',
-    'public.refund_ai_quota(uuid)',
     'public.safe_bulk_insert_papers(uuid,jsonb)',
     'public.search_papers(uuid,text,integer,integer)',
     'public.search_papers_short(uuid,text)',
@@ -147,6 +152,19 @@ CREATE FUNCTION pg_temp.internal_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
   ) v(sig)
 $hlp$;
 
+-- Server-only RPCs: SECURITY DEFINER functions only trusted server code may
+-- call. SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47) created this class for
+-- refund_ai_quota: while it was a client RPC, any signed-in browser could call it
+-- for its own id and reset its own AI quota. The Edge Functions now call it with
+-- the platform secret key (service_role) and a user id they authenticated, so
+-- the required posture is the inverse of a client RPC's: service_role only, and
+-- no browser role — not even authenticated.
+CREATE FUNCTION pg_temp.server_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
+  SELECT unnest(ARRAY[
+    'public.refund_ai_quota(uuid)'
+  ]);
+$hlp$;
+
 CREATE FUNCTION pg_temp.trigger_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.check_and_consume_storage_quota()',
@@ -186,7 +204,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(291);
+SELECT plan(298);
 
 -- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
@@ -211,6 +229,9 @@ SELECT plan(291);
 -- set_current_user_ai_reasoning to authenticated, moving it from the staged
 -- classification into the directly-callable matrix: still 40 definer
 -- functions, now 33 directly callable and none staged.
+-- SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47) then moved refund_ai_quota OUT of the
+-- directly-callable matrix into a server-only classification of its own: still
+-- 40 definer functions, now 32 directly callable and 1 server-only.
 -- The count is deliberately exact: a new definer function that nobody registered
 -- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
@@ -264,7 +285,7 @@ SELECT is(
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 
--- ══ 2. EXECUTE matrix over the 33 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 32 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -313,7 +334,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 33) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 32) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(
@@ -322,6 +343,48 @@ SELECT ok(
     sig::regprocedure, 'EXECUTE'),
   'directly-callable owner execution preserved: ' || sig
 ) FROM pg_temp.client_rpcs() sig;
+
+-- ══ 3d. Server-only RPCs: service_role only; no browser role; owner kept ═════
+-- The inverse of the client matrix above. authenticated is judged by name
+-- because it is the role that held this grant until C47 — and the one a
+-- well-meaning "make it callable again" re-grant would restore.
+SELECT ok(NOT has_function_privilege('authenticated', sig::regprocedure, 'EXECUTE'),
+  'server-only not authenticated-executable: ' || sig) FROM pg_temp.server_rpcs() sig;
+SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
+  'server-only not anon-executable: ' || sig) FROM pg_temp.server_rpcs() sig;
+SELECT ok(NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = sig::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+  'server-only carries no PUBLIC EXECUTE: ' || sig) FROM pg_temp.server_rpcs() sig;
+SELECT ok(has_function_privilege('service_role', sig::regprocedure, 'EXECUTE'),
+  'server-only is service_role-executable: ' || sig) FROM pg_temp.server_rpcs() sig;
+SELECT ok(NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
+    WHERE p.oid = sig::regprocedure AND a.grantee = 'service_role'::regrole AND a.is_grantable),
+  'server-only grant carries no grant option: ' || sig) FROM pg_temp.server_rpcs() sig;
+SELECT ok(has_function_privilege(
+    (SELECT p.proowner::regrole::text FROM pg_proc p WHERE p.oid = sig::regprocedure),
+    sig::regprocedure, 'EXECUTE'),
+  'server-only owner execution preserved: ' || sig) FROM pg_temp.server_rpcs() sig;
+-- An allowlist, every grantee judged: nobody but the owner and service_role.
+SELECT is(
+  (SELECT coalesce(string_agg(a.grantee::regrole::text, ',' ORDER BY a.grantee::regrole::text), '')
+     FROM pg_temp.server_rpcs() sig, pg_proc p,
+          aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = sig::regprocedure AND a.privilege_type = 'EXECUTE'
+      AND a.grantee <> p.proowner),
+  'service_role',
+  'server-only RPCs are executable by the owner and service_role, and nobody else');
+-- The server role reaches exactly the server-only set among definer functions.
+-- A service_role grant on any other one would re-open the pre-20260802025704
+-- drift this suite exists to keep closed.
+SELECT is(
+  (SELECT coalesce(string_agg(p.oid::regprocedure::text, ',' ORDER BY p.oid::regprocedure::text), '')
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prosecdef
+      AND has_function_privilege('service_role', p.oid, 'EXECUTE')),
+  (SELECT string_agg(sig::regprocedure::text, ',' ORDER BY sig::regprocedure::text) FROM pg_temp.server_rpcs() sig),
+  'service_role executes exactly the server-only SECURITY DEFINER functions, and no other');
 
 -- ══ 4. Caller identity: read RPCs (null-auth / mismatch reject, valid ok) ════
 -- null-auth
@@ -360,25 +423,46 @@ SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-00
   $q$SELECT public.safe_bulk_insert_papers('aa000000-0000-0000-0000-000000000001'::uuid,'[{"title":"VALID"}]'::jsonb)$q$),
   '00000', 'safe_bulk_insert_papers: valid caller accepted');
 
--- ── AI-quota RPCs (S1 guard: null-auth / mismatch → P0001) ─────────────────
+-- ── Caller-scoped AI-quota RPCs (S1 guard: null-auth / mismatch → P0001) ───
 SELECT is(pg_temp.errcode_as('authenticated','', sql), 'P0001',
   'null-auth rejected: ' || nm) FROM (VALUES
    ($q$SELECT * FROM public.consume_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'consume_ai_quota'),
-   ($q$SELECT * FROM public.refund_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'refund_ai_quota'),
    ($q$SELECT * FROM public.get_ai_quota_status('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'get_ai_quota_status')
   ) v(sql,nm);
 SELECT is(pg_temp.errcode_as('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}', sql), 'P0001',
   'mismatched caller rejected: ' || nm) FROM (VALUES
    ($q$SELECT * FROM public.consume_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'consume_ai_quota'),
-   ($q$SELECT * FROM public.refund_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'refund_ai_quota'),
    ($q$SELECT * FROM public.get_ai_quota_status('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'get_ai_quota_status')
   ) v(sql,nm);
 SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}', sql), '00000',
   'valid caller accepted: ' || nm) FROM (VALUES
    ($q$SELECT * FROM public.consume_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'consume_ai_quota'),
-   ($q$SELECT * FROM public.refund_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'refund_ai_quota'),
    ($q$SELECT * FROM public.get_ai_quota_status('aa000000-0000-0000-0000-000000000001'::uuid)$q$,'get_ai_quota_status')
   ) v(sql,nm);
+-- Consumption is the caller's, never the server's.
+SELECT is(pg_temp.errcode_as('service_role','',
+  $q$SELECT * FROM public.consume_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$),
+  '42501', 'service_role cannot execute consume_ai_quota (ACL)');
+
+-- ── refund_ai_quota: server-only (C47) ─────────────────────────────────────
+-- Every browser caller is refused by the object ACL, before the body runs —
+-- INCLUDING the "valid caller" for their own id, which is exactly the call that
+-- let a signed-in user reset their own quota before C47.
+SELECT is(pg_temp.errcode_as(role, claims,
+  $q$SELECT * FROM public.refund_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$),
+  '42501', 'refund_ai_quota refused at the ACL: ' || nm) FROM (VALUES
+   ('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}','authenticated caller, own id'),
+   ('authenticated','{"sub":"bb000000-0000-0000-0000-000000000002","role":"authenticated"}','authenticated caller, another user''s id'),
+   ('authenticated','','authenticated caller, no claims'),
+   ('anon','','anon')
+  ) v(role, claims, nm);
+-- The server path: no caller claims at all, a server-supplied id.
+SELECT is(pg_temp.errcode_as('service_role','',
+  $q$SELECT * FROM public.refund_ai_quota('aa000000-0000-0000-0000-000000000001'::uuid)$q$),
+  '00000', 'refund_ai_quota: service_role with no caller claims is accepted');
+SELECT is(pg_temp.errcode_as('service_role','',
+  $q$SELECT * FROM public.refund_ai_quota(NULL::uuid)$q$),
+  'P0001', 'refund_ai_quota: a NULL target is refused');
 
 -- ══ 5. Setter RPCs (representative caller/ownership boundary) ════════════════
 SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-000000000001","role":"authenticated"}',
