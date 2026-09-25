@@ -10,7 +10,12 @@
 --     (set_paper_tags/_projects, bulk_set_paper_tags/_projects), all-or-nothing,
 --     validated before any mutation so a rejected call preserves assignments;
 --   * bounded search_path on search_papers;
---   * both-owner relational integrity for paper_projects / paper_tags;
+--   * the paper_projects / paper_tags write boundary. Originally both-owner RLS
+--     on direct browser INSERTs; since DB-JUNCTION-DML-GRANT-HARDENING-001
+--     (migration 20260925134526, decision C48) the browser holds SELECT only, so
+--     sections 11/12 assert that a direct INSERT/DELETE is refused at the ACL,
+--     and section 18 proves the setter RPCs still write the junctions with that
+--     grant gone. The dormant both-owner policies are proved in suite 002;
 --   * attachment↔paper ownership + quota defense.
 --
 -- Deterministic UUIDs; no TODO/SKIP; no remote calls; no Production access; no
@@ -48,6 +53,28 @@ BEGIN
   RESET ROLE;
   PERFORM set_config('request.jwt.claims', '', true);
   RETURN v_state;
+END;
+$hlp$;
+
+-- Like errcode_as, but returns '<SQLSTATE> <message>'. An ACL refusal and an
+-- RLS refusal share SQLSTATE 42501; the message is what proves which layer
+-- answered.
+CREATE FUNCTION pg_temp.err_as(p_role text, p_claims text, p_sql text)
+RETURNS text LANGUAGE plpgsql AS $hlp$
+DECLARE v_state text; v_msg text;
+BEGIN
+  PERFORM set_config('request.jwt.claims', COALESCE(p_claims, ''), true);
+  EXECUTE 'SET LOCAL ROLE ' || quote_ident(p_role);
+  BEGIN
+    EXECUTE p_sql;
+    v_state := '00000';
+    v_msg := '';
+  EXCEPTION WHEN others THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+  END;
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims', '', true);
+  RETURN v_state || ' ' || v_msg;
 END;
 $hlp$;
 
@@ -118,7 +145,7 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('30000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-00000000000a','Tag A'),
   ('30000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-00000000000b','Tag B');
 
-SELECT plan(139);
+SELECT plan(156);
 
 -- ── 1. EXECUTE ACL matrix over the full directly-callable RPC surface ───────
 SELECT ok(
@@ -270,44 +297,47 @@ SELECT is(
   'mismatched authenticated safe_bulk_insert_papers rejected by ownership guard'
 );
 
--- ── 11. paper_projects both-owner relational integrity ──────────────────────
+-- ── 11. paper_projects: a direct browser write is refused at the ACL ────────
+-- Until C48 this section proved the both-owner RLS policy by letting an own/own
+-- direct INSERT succeed. `authenticated` now holds SELECT only, so the same
+-- statement is refused by the object privilege — "permission denied", not a
+-- policy violation — and writes nothing. The policies themselves are still
+-- proved, under a test-only re-grant, in suite 002.
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  pg_temp.err_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
     $q$INSERT INTO public.paper_projects(paper_id, project_id) VALUES ('10000000-0000-0000-0000-0000000000a1','20000000-0000-0000-0000-0000000000a1')$q$),
-  '00000',
-  'paper_projects: own paper + own project allowed'
+  '42501 permission denied for table paper_projects',
+  'paper_projects: own paper + own project direct INSERT denied at the ACL'
 );
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
-    $q$INSERT INTO public.paper_projects(paper_id, project_id) VALUES ('10000000-0000-0000-0000-0000000000a1','20000000-0000-0000-0000-0000000000b1')$q$),
-  '42501',
-  'paper_projects: own paper + foreign project rejected'
+  pg_temp.err_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+    $q$DELETE FROM public.paper_projects WHERE paper_id = '10000000-0000-0000-0000-0000000000a1'$q$),
+  '42501 permission denied for table paper_projects',
+  'paper_projects: own direct DELETE denied at the ACL'
 );
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
-    $q$INSERT INTO public.paper_projects(paper_id, project_id) VALUES ('10000000-0000-0000-0000-0000000000b1','20000000-0000-0000-0000-0000000000a1')$q$),
-  '42501',
-  'paper_projects: foreign paper + own project rejected'
+  (SELECT count(*)::int FROM public.paper_projects WHERE paper_id = '10000000-0000-0000-0000-0000000000a1'),
+  0,
+  'paper_projects: the refused direct INSERT wrote no row (so any row below is the RPC''s)'
 );
 
--- ── 12. paper_tags both-owner relational integrity ──────────────────────────
+-- ── 12. paper_tags: a direct browser write is refused at the ACL ────────────
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  pg_temp.err_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
     $q$INSERT INTO public.paper_tags(paper_id, tag_id) VALUES ('10000000-0000-0000-0000-0000000000a1','30000000-0000-0000-0000-0000000000a1')$q$),
-  '00000',
-  'paper_tags: own paper + own tag allowed'
+  '42501 permission denied for table paper_tags',
+  'paper_tags: own paper + own tag direct INSERT denied at the ACL'
 );
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
-    $q$INSERT INTO public.paper_tags(paper_id, tag_id) VALUES ('10000000-0000-0000-0000-0000000000a1','30000000-0000-0000-0000-0000000000b1')$q$),
-  '42501',
-  'paper_tags: own paper + foreign tag rejected'
+  pg_temp.err_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+    $q$DELETE FROM public.paper_tags WHERE paper_id = '10000000-0000-0000-0000-0000000000a1'$q$),
+  '42501 permission denied for table paper_tags',
+  'paper_tags: own direct DELETE denied at the ACL'
 );
 SELECT is(
-  pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
-    $q$INSERT INTO public.paper_tags(paper_id, tag_id) VALUES ('10000000-0000-0000-0000-0000000000b1','30000000-0000-0000-0000-0000000000a1')$q$),
-  '42501',
-  'paper_tags: foreign paper + own tag rejected'
+  (SELECT count(*)::int FROM public.paper_tags WHERE paper_id = '10000000-0000-0000-0000-0000000000a1'),
+  0,
+  'paper_tags: the refused direct INSERT wrote no row (so any row below is the RPC''s)'
 );
 
 -- ── 13. paper_attachments ownership + quota defense ─────────────────────────
@@ -349,7 +379,9 @@ SELECT is(
 );
 
 -- ── 14. set_paper_tags referenced-object ownership (single) ─────────────────
--- (a) own paper + own tag succeeds (establishes paperA -> {tagA}).
+-- (a) own paper + own tag succeeds (establishes paperA -> {tagA}). Section 12
+--     proved no row existed before this call, so (e) below is also the proof
+--     that the RPC — not a direct write — created it.
 SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
   $q$SELECT public.set_paper_tags('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
   '00000', 'set_paper_tags: own paper + own tag succeeds');
@@ -446,6 +478,64 @@ SELECT is((SELECT count(*)::int FROM public.paper_projects
 SELECT is((SELECT count(*)::int FROM public.paper_projects
    WHERE paper_id='10000000-0000-0000-0000-0000000000b1'),
   0, 'bulk_set_paper_projects: no partial insert for foreign paper');
+
+-- ── 18. The setter RPCs still write the junctions with the direct grant gone
+-- The four setters are SECURITY DEFINER and owned by postgres, so their INSERT
+-- and DELETE are checked against the owner, never against the calling
+-- `authenticated`. This section runs every write path each of them has — the
+-- DELETE half and the INSERT half, single and bulk — in the post-C48 state, and
+-- starts by proving that state, so a positive result cannot be explained by a
+-- lingering direct grant. (bulk_add_* is proved the same way in suite 013, and
+-- merge_exact_duplicates in suite 005.)
+SELECT ok(
+  NOT has_table_privilege('authenticated', 'public.paper_projects', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'public.paper_projects', 'DELETE')
+  AND NOT has_table_privilege('authenticated', 'public.paper_tags', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'public.paper_tags', 'DELETE'),
+  'RPC authority: precondition — authenticated holds no direct INSERT or DELETE on either junction');
+
+-- paperA starts this section at {projectA} and {tagA} (sections 14–17).
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_projects(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY[]::uuid[])$q$),
+  '00000', 'RPC authority: bulk_set_paper_projects clearing call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_projects WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  0, 'RPC authority: bulk_set_paper_projects DELETED the assignment without a client DELETE grant');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_projects('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'RPC authority: set_paper_projects assigning call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_projects WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  1, 'RPC authority: set_paper_projects INSERTED the assignment without a client INSERT grant');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_projects('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY[]::uuid[])$q$),
+  '00000', 'RPC authority: set_paper_projects clearing call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_projects WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  0, 'RPC authority: set_paper_projects DELETED the assignment without a client DELETE grant');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_projects(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['20000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'RPC authority: bulk_set_paper_projects assigning call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_projects WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  1, 'RPC authority: bulk_set_paper_projects INSERTED the assignment without a client INSERT grant');
+
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_tags(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY[]::uuid[])$q$),
+  '00000', 'RPC authority: bulk_set_paper_tags clearing call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_tags WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  0, 'RPC authority: bulk_set_paper_tags DELETED the assignment without a client DELETE grant');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_tags('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'RPC authority: set_paper_tags assigning call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_tags WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  1, 'RPC authority: set_paper_tags INSERTED the assignment without a client INSERT grant');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.set_paper_tags('10000000-0000-0000-0000-0000000000a1'::uuid, ARRAY[]::uuid[])$q$),
+  '00000', 'RPC authority: set_paper_tags clearing call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_tags WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  0, 'RPC authority: set_paper_tags DELETED the assignment without a client DELETE grant');
+SELECT is(pg_temp.errcode_as('authenticated', '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+  $q$SELECT public.bulk_set_paper_tags(ARRAY['10000000-0000-0000-0000-0000000000a1']::uuid[], ARRAY['30000000-0000-0000-0000-0000000000a1']::uuid[])$q$),
+  '00000', 'RPC authority: bulk_set_paper_tags assigning call succeeds');
+SELECT is((SELECT count(*)::int FROM public.paper_tags WHERE paper_id='10000000-0000-0000-0000-0000000000a1'),
+  1, 'RPC authority: bulk_set_paper_tags INSERTED the assignment without a client INSERT grant');
 
 SELECT * FROM finish();
 ROLLBACK;
