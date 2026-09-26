@@ -1782,3 +1782,30 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 - ❌ "This fixes a cross-account write" — **not claimed.** The direct junction write path C48 removed had been guarded by both-owner RLS since 2026-08-02. An earlier schema **did** permit cross-owner junction insertion (a user could link their own paper to another user's Project or Tag); that defect was separately remediated by `20260802025704` (PFA-C03B1, [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) §9.6). C48 is a later least-privilege follow-up, not that remediation. It claims no new incident, and no historical abuse: whether the pre-2026-08-02 defect was ever exercised by a real account is not established.
 - ❌ "The live product was canaried after the change" — **not claimed.** The rollout is established by the live ACL/catalog state and the tracked migration; no live user-data or AI canary was performed (no AI suggestion, no Project/Tag creation, no paper assignment).
+
+## 33. Addendum — 2026-09-26 — `DB-INVOKER-EXECUTE-HARDENING-001A` caller-scoped read RPCs become SECURITY INVOKER
+
+> **Status: PREPARED, NOT YET IN PRODUCTION.** Migration `20260926152414_harden_read_rpcs_security_invoker.sql` exists in the repository only. It has not been applied, so in Production the five functions below still run as SECURITY DEFINER. The rollout is a pending migration-only step ([deployment.md](deployment.md) §6.10). Decision C49 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+
+**Scope.** An **authority reduction only**, inside PaperLume's own database. Five read functions stop running with their owner's (RLS-bypassing) authority and run as the signed-in caller, so the caller's own table grants and row-level security bound what they can read: `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` and `get_duplicate_papers`. They read the caller's own papers (and, for keyword filtering, the caller's own synonym groups) and return the same results as before. §4's rows for `papers` and `synonym_pool` are unchanged by this addendum.
+
+### 33.1 Repository and Production
+
+| | Repository (this change) | Production |
+|---|---|---|
+| Security mode of the five read RPCs | SECURITY INVOKER | SECURITY DEFINER — unchanged until the rollout |
+| Who may call them | `authenticated` only (unchanged) | Same |
+| What they return to a signed-in user | Only that user's own rows (RLS + the unchanged identity guards) | Only that user's own rows (the identity guards) |
+
+### 33.2 What changes for personal data — nothing
+
+- **No data-category change.** No new field, table or kind of personal data; the migration writes no row (its verification block proves it from the transaction's own statistics).
+- **No recipient change.** Nothing is sent anywhere new, and no new party can read anything. The change only narrows the authority these functions run with.
+- **No retention change.** Nothing is kept longer or shorter. Deletion and account-deletion cascades are untouched.
+- **No processor change.** No new sub-processor, and no change to what any existing processor receives. No Edge Function or AI-provider path is involved.
+- **No Privacy Policy amendment.** The security mode of an internal database function is not a disclosure category, and what users see is unchanged.
+
+### 33.3 What this addendum does NOT claim
+
+- ❌ "This fixes a cross-account read" — **not claimed.** Since `20260518010000` each of these functions has refused, or scoped away, any request for another user's data through its own `auth.uid()` logic, and that logic is kept. C49 adds row-level security as the primary layer beneath it; it answers no known incident.
+- ❌ "This is live" — **not claimed** until the rollout in [deployment.md](deployment.md) §6.10 has happened and this status is updated.

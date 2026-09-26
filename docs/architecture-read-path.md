@@ -117,6 +117,18 @@ matched_journal, matched_notes, matched_keywords
 
 For the FTS path each flag is computed server-side by testing the field's own `to_tsvector('english', coalesce(field, ''))` against the same prefix-aware tsquery used in the `WHERE` clause; for the short / phrase paths each flag is the corresponding `ILIKE` / `EXISTS … ILIKE`. `useFilterState.ts` assembles a `Map<paper_id, MatchFlags>` (type defined in `src/hooks/papers/types.ts`) and threads it to `PaperList`, which renders an authoritative "Matched in: …" sub-line on each matching row in fixed UI order — **Title → Abstract → Authors → Journal → Notes → Keywords**. Attribution is **server-driven**; the client must not re-tokenize the query or re-derive the flags. (Migration: `20260420010000_keywords_in_search_with_attribution.sql`.)
 
+## Security mode of the read RPCs
+
+The five read RPCs on this path — `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` and `get_duplicate_papers` (Find Duplicates) — are **SECURITY INVOKER** in the repository schema from migration `20260926152414_harden_read_rpcs_security_invoker.sql` (decision C49). **That migration is prepared, not yet applied to Production.** Until its migration-only rollout ([deployment.md](deployment.md) §6.10) Production still runs all five as SECURITY DEFINER, with identical results.
+
+As INVOKER they run as the calling `authenticated` role, exactly like the list query above:
+
+- **Primary boundary:** `authenticated`'s table-level `SELECT` on `papers` (and `synonym_pool`, which `filter_papers_by_keywords` reads for synonym expansion), filtered by the caller-owned RLS SELECT policies `USING (auth.uid() = user_id)`.
+- **Defense-in-depth, unchanged:** the four functions that take `p_user_id` still refuse a NULL id, a missing `auth.uid()` or a mismatch with `Unauthorized: user mismatch`. `get_duplicate_papers` still derives the caller from `auth.uid()`.
+- **Nothing client-visible changes.** Signatures, return shapes, ranking, tokenization, attribution flags and the `EXECUTE` grant (`authenticated` only) are identical, and so are the generated types.
+
+`search_papers`' stored body still carries a historical inline comment saying SECURITY DEFINER bypasses RLS. It predates C49 and no longer describes the function. The migration supersedes it, and it can be removed the next time that body is legitimately recreated.
+
 ## Abstract on-demand loading
 
 **Hook:** `useAbstract(paperId | null)` — enabled only when paperId is truthy.
