@@ -748,6 +748,108 @@ Nothing else: not a body, signature, return type, argument default, volatility, 
 
 ---
 
+### 6.11 `20260926202754` (SECURITY DEFINER `pg_temp`-last hardening, C50) — migration-only; **NOT YET RUN**
+
+> **Status — PREPARED, NOT APPLIED. Nothing in this section has been run against Production, and this section authorizes nothing.** Each Production step below needs its own explicit authorization, given after the independent review of the exact PR head.
+>
+> - **Live Production today** (read-only, 2026-09-26): ledger **89**, latest `20260926152414` (C49); **35** `public` SECURITY DEFINER functions, **27** of them `authenticated`-callable, all owned by `postgres`, **all 35 at `{search_path=public}`** and none at `public, pg_temp`; the three exception bodies match their audited digests; `anon` and PUBLIC execute none of the 35, and `service_role` only `refund_ai_quota`.
+> - **Prepared repository state:** 32 at `{"search_path=public, pg_temp"}`, the three audited exceptions still at `{search_path=public}`, nothing else different (decision C50).
+
+**What changes.** 32 exact-signature statements inside a fail-closed transaction, one attribute each — `proconfig` `{search_path=public}` → `{"search_path=public, pg_temp"}`:
+
+```sql
+-- Tier 1
+ALTER FUNCTION public.bulk_add_paper_projects(uuid[],uuid[])                     SET search_path = public, pg_temp;
+ALTER FUNCTION public.bulk_add_paper_tags(uuid[],uuid[])                         SET search_path = public, pg_temp;
+ALTER FUNCTION public.bulk_set_paper_projects(uuid[],uuid[])                     SET search_path = public, pg_temp;
+ALTER FUNCTION public.bulk_set_paper_tags(uuid[],uuid[])                         SET search_path = public, pg_temp;
+ALTER FUNCTION public.bulk_update_keywords(jsonb)                                SET search_path = public, pg_temp;
+ALTER FUNCTION public.bulk_update_study_types(jsonb)                             SET search_path = public, pg_temp;
+ALTER FUNCTION public.merge_exact_duplicates(uuid,uuid[])                        SET search_path = public, pg_temp;
+ALTER FUNCTION public.safe_bulk_insert_papers(uuid,jsonb)                        SET search_path = public, pg_temp;
+ALTER FUNCTION public.set_paper_projects(uuid,uuid[])                            SET search_path = public, pg_temp;
+ALTER FUNCTION public.set_paper_tags(uuid,uuid[])                                SET search_path = public, pg_temp;
+-- Tier 2
+ALTER FUNCTION public.attachment_object_has_live_metadata(text)                  SET search_path = public, pg_temp;
+ALTER FUNCTION public.author_identity_effective_root(uuid,uuid)                  SET search_path = public, pg_temp;
+ALTER FUNCTION public.check_and_consume_storage_quota()                          SET search_path = public, pg_temp;
+ALTER FUNCTION public.clear_current_user_ai_model()                              SET search_path = public, pg_temp;
+ALTER FUNCTION public.clear_current_user_ai_reasoning()                          SET search_path = public, pg_temp;
+ALTER FUNCTION public.consume_ai_quota(uuid)                                     SET search_path = public, pg_temp;
+ALTER FUNCTION public.create_author_identity_from_mention(uuid,integer,text,text,boolean) SET search_path = public, pg_temp;
+ALTER FUNCTION public.delete_attachment_with_cleanup(uuid)                       SET search_path = public, pg_temp;
+ALTER FUNCTION public.delete_empty_author_identity(uuid)                         SET search_path = public, pg_temp;
+ALTER FUNCTION public.delete_papers_with_attachment_cleanup(uuid[])              SET search_path = public, pg_temp;
+ALTER FUNCTION public.finalize_attachment_upload(uuid,text,text,text,integer)    SET search_path = public, pg_temp;
+ALTER FUNCTION public.get_ai_quota_status(uuid)                                  SET search_path = public, pg_temp;
+ALTER FUNCTION public.get_current_user_access()                                  SET search_path = public, pg_temp;
+ALTER FUNCTION public.handle_new_user()                                          SET search_path = public, pg_temp;
+ALTER FUNCTION public.link_author_mention_to_identity(uuid,integer,text,uuid,text,boolean) SET search_path = public, pg_temp;
+ALTER FUNCTION public.merge_author_identities(uuid,uuid)                         SET search_path = public, pg_temp;
+ALTER FUNCTION public.refund_ai_quota(uuid)                                      SET search_path = public, pg_temp;
+ALTER FUNCTION public.set_current_user_ai_model(text)                            SET search_path = public, pg_temp;
+ALTER FUNCTION public.set_current_user_ai_reasoning(text)                        SET search_path = public, pg_temp;
+ALTER FUNCTION public.unlink_author_mention_identity(uuid,integer)               SET search_path = public, pg_temp;
+ALTER FUNCTION public.unmerge_author_identity(uuid)                              SET search_path = public, pg_temp;
+ALTER FUNCTION public.validate_author_mention_for_identity(uuid,uuid,integer,text) SET search_path = public, pg_temp;
+```
+
+**No statement touches the three audited exceptions**, which stay at `search_path=public` for their audited bodies only: `clear_author_identity_links_on_authors_change()` (`a14c92dbd8485afff4d1600684b37565`), `refund_storage_quota()` (`3e20f43b80a908b309cb6335d8eb9360`) and `reject_attachment_over_cleanup_intent()` (`494f7297c23991bc8d28d4f81906e059`). The migration also changes no body, owner, security mode, grant, trigger, policy, relation or row, and its §3 proves each of those before COMMIT.
+
+**Why there is no ordering constraint.** With no temporary shadow object present — the only situation a legitimate caller creates — `public, pg_temp` and `public` resolve every name identically, so no call returns anything different. A call already executing when the migration commits finishes under the configuration it started with. So there is no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step are part of this rollout.** Generated types do not change, because `proconfig` is not part of any signature.
+
+**Procedure — NOT YET RUN.**
+1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
+2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
+3. Fresh read-only preflight against Production:
+   ```sql
+   BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO public;
+   SELECT count(*) AS ledger, max(version) AS latest                               -- expect 89, 20260926152414
+     FROM supabase_migrations.schema_migrations;
+   SELECT count(*) FILTER (WHERE version = '20260926202754') AS c50_present        -- expect 0
+     FROM supabase_migrations.schema_migrations;
+   SELECT count(*) FILTER (WHERE p.prosecdef) AS public_definer,                   -- expect 35
+          count(*) FILTER (WHERE p.prosecdef
+                             AND has_function_privilege('authenticated', p.oid, 'EXECUTE')) AS auth_definer,  -- expect 27
+          count(*) FILTER (WHERE p.prosecdef AND p.proconfig = ARRAY['search_path=public']) AS at_public,       -- expect 35
+          count(*) FILTER (WHERE p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']) AS at_pg_temp_last  -- expect 0
+     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace;
+   SELECT p.oid::regprocedure, md5(p.prosrc) AS body                               -- expect the three audited digests
+     FROM pg_proc p
+    WHERE p.oid IN ('public.clear_author_identity_links_on_authors_change()'::regprocedure,
+                    'public.refund_storage_quota()'::regprocedure,
+                    'public.reject_attachment_over_cleanup_intent()'::regprocedure);
+   -- Record this value; step 7 must return the same one.
+   SELECT md5(string_agg(p.oid::text || '|' || p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|'
+                         || coalesce(p.proacl::text, '') || '|' || p.prosecdef::text || '|' || pg_get_userbyid(p.proowner),
+                         E'\n' ORDER BY p.oid)) AS surface_with_oids
+     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef;
+   ROLLBACK;
+   ```
+   On 2026-09-26 `surface_with_oids` read `1e6cfb8bb03375d61583426b1f0ae4bc`. Re-read it at preflight rather than trusting this value. Any other pre-state is a reason to stop, and the migration refuses it anyway (its §1). In particular, **if an exception digest differs, stop and re-audit that function**; do not edit the migration to fit.
+4. `supabase migration list --linked` must show exactly one local-only migration, `20260926202754`. Then run `supabase db push --dry-run` from the merge commit; it must list **exactly** `20260926202754_harden_security_definer_pg_temp_last.sql`. Anything else, stop (§6.2).
+5. Obtain the separate, explicit rollout authorization.
+6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **89 → 90**).
+7. Verify immediately, read-only:
+   - the ledger is **90**, latest `20260926202754`, present exactly once;
+   - rerunning the step-3 counts gives `public_definer` **35**, `auth_definer` **27**, `at_public` **3**, `at_pg_temp_last` **32**, and the three rows at `at_public` are exactly the three exceptions, with their audited digests;
+   - `surface_with_oids` is **identical** to the value recorded at step 3. That shows the OIDs, bodies, ACLs, security modes and owners of all 35 are unchanged.
+   ```sql
+   BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO public;
+   SELECT p.oid::regprocedure, p.proconfig::text
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef
+      AND p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'];      -- expect exactly the 3 exceptions, at {search_path=public}
+   ROLLBACK;
+   ```
+8. Re-read the Security Advisor (read-only). `authenticated_security_definer_function_executable` is expected to stay at **27**, the same functions as before, because neither the security mode nor any grant changes. `function_search_path_mutable` is expected to be unchanged.
+
+**No canary is needed.** The migration's own verification refuses to commit anything but the expected catalog state, and the behaviour is covered in CI against a full replay: suite `021` (including the temp-shadow behavioural test and its old-posture negative control), plus the existing suites that exercise these functions. If an authenticated product smoke is ever separately authorized, the smallest one is to tag a paper, add it to a project and open Settings → AI; each must behave exactly as before.
+
+**Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration with the same 32 statements set to `SET search_path = public`, which returns them to the pre-change shape (bodies, ACLs and modes were never touched). It removes a defense-in-depth layer; it opens no boundary. It needs its own decision against C50.
+
+---
+
 ---
 
 ## 7. Edge Function deployment

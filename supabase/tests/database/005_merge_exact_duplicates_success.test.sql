@@ -453,7 +453,8 @@ SELECT is((SELECT p.prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pron
 SELECT is((SELECT array_to_string(p.proconfig, ',') FROM pg_proc p
            JOIN pg_namespace n ON n.oid=p.pronamespace
            WHERE n.nspname='public' AND p.proname='merge_exact_duplicates'),
-  'search_path=public', 'security: bounded search_path retained');
+  -- C50: pg_temp is explicitly last (owned by suite 021).
+  'search_path=public, pg_temp', 'security: bounded search_path retained (public, pg_temp last)');
 SELECT is((SELECT pg_get_userbyid(p.proowner) FROM pg_proc p
            JOIN pg_namespace n ON n.oid=p.pronamespace
            WHERE n.nspname='public' AND p.proname='merge_exact_duplicates'),

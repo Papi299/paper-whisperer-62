@@ -583,10 +583,11 @@ SELECT ok(
   'public.bulk_add_paper_tags(uuid[],uuid[])'
 ]) sig;
 
+-- C50 later placed pg_temp explicitly last (owned by suite 021); pinned exactly.
 SELECT ok(
   (SELECT p.proconfig FROM pg_proc p WHERE p.oid = sig::regprocedure)
-    @> ARRAY['search_path=public'],
-  'posture: ' || sig || ' pins search_path=public'
+    = ARRAY['search_path=public, pg_temp'],
+  'posture: ' || sig || ' pins search_path=public, pg_temp'
 ) FROM unnest(ARRAY[
   'public.bulk_add_paper_projects(uuid[],uuid[])',
   'public.bulk_add_paper_tags(uuid[],uuid[])'

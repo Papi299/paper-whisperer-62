@@ -290,7 +290,8 @@ SELECT ok(
 SELECT is(
   (SELECT p.proconfig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'safe_bulk_insert_papers'),
-  ARRAY['search_path=public'], 'security: bounded search_path retained');
+  -- C50: pg_temp is explicitly last (owned by suite 021).
+  ARRAY['search_path=public, pg_temp'], 'security: bounded search_path retained (public, pg_temp last)');
 
 SELECT is(
   (SELECT pg_get_userbyid(p.proowner) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -571,7 +572,8 @@ SELECT ok(
 SELECT is(
   (SELECT p.proconfig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'merge_exact_duplicates'),
-  ARRAY['search_path=public'], 'security: merge bounded search_path retained');
+  -- C50: pg_temp is explicitly last (owned by suite 021).
+  ARRAY['search_path=public, pg_temp'], 'security: merge bounded search_path retained (public, pg_temp last)');
 
 SELECT is(
   (SELECT pg_get_userbyid(p.proowner) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

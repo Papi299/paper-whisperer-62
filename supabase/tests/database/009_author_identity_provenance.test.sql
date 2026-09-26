@@ -731,7 +731,8 @@ SELECT is(
   1, 'security: exactly one safe_bulk_insert_papers overload');
 
 SELECT ok(
-  (SELECT p.prosecdef AND p.proconfig = ARRAY['search_path=public']
+  -- search_path: pg_temp explicitly last since C50 (owned by suite 021).
+  (SELECT p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
           AND pg_get_userbyid(p.proowner)='postgres'
           AND pg_get_function_result(p.oid)='jsonb'
           AND pg_get_function_identity_arguments(p.oid)='p_user_id uuid, p_papers jsonb'
@@ -863,7 +864,8 @@ SELECT is(
   1, 'security: exactly one merge_exact_duplicates overload');
 
 SELECT ok(
-  (SELECT p.prosecdef AND p.proconfig = ARRAY['search_path=public']
+  -- search_path: pg_temp explicitly last since C50 (owned by suite 021).
+  (SELECT p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
           AND pg_get_userbyid(p.proowner)='postgres'
           AND pg_get_function_result(p.oid)='void'
           AND pg_get_function_identity_arguments(p.oid)='p_keep_id uuid, p_discard_ids uuid[]'
