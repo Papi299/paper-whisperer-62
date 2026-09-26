@@ -1757,7 +1757,7 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ## 32. Addendum — 2026-09-25 — `DB-JUNCTION-DML-GRANT-HARDENING-001` assignment junctions become SELECT-only
 
-> **Status: repository change, NOT live.** Migration `20260925134526_harden_junction_dml_grants.sql` is prepared and unapplied; Production still grants `authenticated` `SELECT, INSERT, DELETE` on the two junctions ([deployment.md](deployment.md) §6.9). Decision C48 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+> **Status (updated 2026-09-26): LIVE in Production.** Migration `20260925134526_harden_junction_dml_grants.sql` was applied on 2026-09-25 in a migration-only rollout ([deployment.md](deployment.md) §6.9), so §32.1's repository and Production columns now agree. The pre-rollout Production value is kept there, labelled *Before*. Decision C48 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
 
 **Scope.** A privilege reduction on two relationship tables, `paper_projects` and `paper_tags`, which record only which of a user's own papers is filed under which of their own Projects and Tags (two UUIDs per row). The browser loses the ability to insert or delete those rows directly; it keeps the ability to read its own. Assignment continues through the existing SECURITY DEFINER RPCs. §4's rows for these tables are unchanged by this addendum except where stated here.
 
@@ -1765,9 +1765,9 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 | | Repository (this change) | Production |
 |---|---|---|
-| `paper_projects` / `paper_tags`, `authenticated` | `SELECT` only | `SELECT, INSERT, DELETE` (verified read-only 2026-09-25) |
-| `projects` / `tags`, `authenticated` | `SELECT, INSERT, UPDATE, DELETE` — unchanged | Same |
-| How a paper is assigned to a Project/Tag | Through `set_paper_*`, `bulk_set_paper_*`, `bulk_add_paper_*`, `merge_exact_duplicates` | Same — the browser already used only these |
+| `paper_projects` / `paper_tags`, `authenticated` | `SELECT` only | `SELECT` only — `20260925134526` applied 2026-09-25. *Before: `SELECT, INSERT, DELETE`, verified read-only 2026-09-25.* |
+| `projects` / `tags`, `authenticated` | `SELECT, INSERT, UPDATE, DELETE` — unchanged | Same — unchanged by the rollout |
+| How a paper is assigned to a Project/Tag | RPC-mediated: `set_paper_*`, `bulk_set_paper_*`, `bulk_add_paper_*`, `merge_exact_duplicates` | Same — the browser already used only these |
 
 ### 32.2 What changes for personal data — nothing
 
@@ -1780,5 +1780,5 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ### 32.3 What this addendum does NOT claim
 
-- ❌ "This fixes a cross-account write" — **not claimed.** The current pre-C48 Production path has been guarded by both-owner RLS since 2026-08-02. An earlier schema **did** permit cross-owner junction insertion (a user could link their own paper to another user's Project or Tag); that defect was separately remediated by `20260802025704` (PFA-C03B1, [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) §9.6). C48 is a later least-privilege follow-up, not that remediation. It claims no new incident, and no historical abuse: whether the pre-2026-08-02 defect was ever exercised by a real account is not established.
-- ❌ "This is live" — **not claimed** until the §6.9 rollout is separately authorized and verified.
+- ❌ "This fixes a cross-account write" — **not claimed.** The direct junction write path C48 removed had been guarded by both-owner RLS since 2026-08-02. An earlier schema **did** permit cross-owner junction insertion (a user could link their own paper to another user's Project or Tag); that defect was separately remediated by `20260802025704` (PFA-C03B1, [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) §9.6). C48 is a later least-privilege follow-up, not that remediation. It claims no new incident, and no historical abuse: whether the pre-2026-08-02 defect was ever exercised by a real account is not established.
+- ❌ "The live product was canaried after the change" — **not claimed.** The rollout is established by the live ACL/catalog state and the tracked migration; no live user-data or AI canary was performed (no AI suggestion, no Project/Tag creation, no paper assignment).
