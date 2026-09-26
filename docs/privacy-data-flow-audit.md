@@ -1785,7 +1785,7 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ## 33. Addendum — 2026-09-26 — `DB-INVOKER-EXECUTE-HARDENING-001A` caller-scoped read RPCs become SECURITY INVOKER
 
-> **Status: PREPARED, NOT YET IN PRODUCTION.** Migration `20260926152414_harden_read_rpcs_security_invoker.sql` exists in the repository only. It has not been applied, so in Production the five functions below still run as SECURITY DEFINER. The rollout is a pending migration-only step ([deployment.md](deployment.md) §6.10). Decision C49 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
+> **Status (updated 2026-09-26): LIVE in Production.** Migration `20260926152414_harden_read_rpcs_security_invoker.sql` was applied on 2026-09-26 in a migration-only rollout ([deployment.md](deployment.md) §6.10), so in Production the five functions below now run as SECURITY INVOKER, verified read-only after the apply. This addendum was first written while the migration was prepared but not yet applied; its privacy conclusions were unaffected by the rollout. Decision C49 in [decisions-and-triggers.md](decisions-and-triggers.md) is the architectural authority.
 
 **Scope.** An **authority reduction only**, inside PaperLume's own database. Five read functions stop running with their owner's (RLS-bypassing) authority and run as the signed-in caller, so the caller's own table grants and row-level security bound what they can read: `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` and `get_duplicate_papers`. They read the caller's own papers (and, for keyword filtering, the caller's own synonym groups) and return the same results as before. §4's rows for `papers` and `synonym_pool` are unchanged by this addendum.
 
@@ -1793,9 +1793,9 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 | | Repository (this change) | Production |
 |---|---|---|
-| Security mode of the five read RPCs | SECURITY INVOKER | SECURITY DEFINER — unchanged until the rollout |
+| Security mode of the five read RPCs | SECURITY INVOKER | SECURITY INVOKER — `20260926152414` applied 2026-09-26. *Before: SECURITY DEFINER, verified read-only 2026-09-26.* |
 | Who may call them | `authenticated` only (unchanged) | Same |
-| What they return to a signed-in user | Only that user's own rows (RLS + the unchanged identity guards) | Only that user's own rows (the identity guards) |
+| What they return to a signed-in user | Only that user's own rows (RLS + the unchanged identity guards) | Same. *Before the rollout: only that user's own rows, bounded by the identity guards alone.* |
 
 ### 33.2 What changes for personal data — nothing
 
@@ -1808,4 +1808,4 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 ### 33.3 What this addendum does NOT claim
 
 - ❌ "This fixes a cross-account read" — **not claimed.** Since `20260518010000` each of these functions has refused, or scoped away, any request for another user's data through its own `auth.uid()` logic, and that logic is kept. C49 adds row-level security as the primary layer beneath it; it answers no known incident.
-- ❌ "This is live" — **not claimed** until the rollout in [deployment.md](deployment.md) §6.10 has happened and this status is updated.
+- ❌ "The live product was canaried after the change" — **not claimed.** When this addendum was written the change was not yet live. It was subsequently rolled out on 2026-09-26 and verified read-only against the live catalog ([deployment.md](deployment.md) §6.10), but no search, filter or duplicate-detection canary was run on live user data.

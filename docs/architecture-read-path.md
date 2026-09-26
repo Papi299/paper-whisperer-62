@@ -119,7 +119,7 @@ For the FTS path each flag is computed server-side by testing the field's own `t
 
 ## Security mode of the read RPCs
 
-The five read RPCs on this path — `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` and `get_duplicate_papers` (Find Duplicates) — are **SECURITY INVOKER** in the repository schema from migration `20260926152414_harden_read_rpcs_security_invoker.sql` (decision C49). **That migration is prepared, not yet applied to Production.** Until its migration-only rollout ([deployment.md](deployment.md) §6.10) Production still runs all five as SECURITY DEFINER, with identical results.
+The five read RPCs on this path — `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` and `get_duplicate_papers` (Find Duplicates) — are **SECURITY INVOKER**, in the repository schema and in Production, under decision C49 / migration `20260926152414_harden_read_rpcs_security_invoker.sql`. That migration was applied to Production on 2026-09-26 in a migration-only rollout ([deployment.md](deployment.md) §6.10); before it, Production ran all five as SECURITY DEFINER, with identical results for the caller's own data.
 
 As INVOKER they run as the calling `authenticated` role, exactly like the list query above:
 
