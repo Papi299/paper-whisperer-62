@@ -676,7 +676,7 @@ Neither step has been applied. Do not treat the rollback as a routine revert: it
    Expected (the live state since 2026-09-25):
    - `paper_projects` / `paper_tags`: `{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=r/postgres}`; `sel` true, `ins` / `upd` / `del` false; RLS and FORCE RLS true.
    - `projects` / `tags`: **unchanged** — `{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=arwd/postgres}`; `sel`, `ins`, `upd`, `del` all true.
-   - All seven routines: owner `postgres`, SECURITY DEFINER, `{search_path=public}`, ACL `{postgres=X/postgres,authenticated=X/postgres}`, and bodies `set_paper_projects` `8104be4a8a25bfbca45b0aab4393d110`, `set_paper_tags` `8b0537b3964e5a1956a8d1e99bdaed82`, `bulk_set_paper_projects` `a348cebfcf3b393af9aff1b5a77cd1a6`, `bulk_set_paper_tags` `e3b6bcfec228d4cca4f52dc126765e32`, `bulk_add_paper_projects` `1d1c91251a099af644cb9d416637e1cc`, `bulk_add_paper_tags` `01da7404df6f887252f724c649d11fba`, `merge_exact_duplicates` `b43400b3cdc51b5572efe81a80acdfab`.
+   - All seven routines: owner `postgres`, SECURITY DEFINER, `{search_path=public}` *(superseded since the 2026-09-26 C50 rollout: all seven are now `{"search_path=public, pg_temp"}` — §6.11; everything else on this line is unchanged)*, ACL `{postgres=X/postgres,authenticated=X/postgres}`, and bodies `set_paper_projects` `8104be4a8a25bfbca45b0aab4393d110`, `set_paper_tags` `8b0537b3964e5a1956a8d1e99bdaed82`, `bulk_set_paper_projects` `a348cebfcf3b393af9aff1b5a77cd1a6`, `bulk_set_paper_tags` `e3b6bcfec228d4cca4f52dc126765e32`, `bulk_add_paper_projects` `1d1c91251a099af644cb9d416637e1cc`, `bulk_add_paper_tags` `01da7404df6f887252f724c649d11fba`, `merge_exact_duplicates` `b43400b3cdc51b5572efe81a80acdfab`.
 6. Confirm the security advisor shows nothing new (read-only). The six assignment RPCs' "authenticated can execute a SECURITY DEFINER function" notices are expected — after this change they are the deliberate client-facing write authority.
 
 **No canary was run, and none was required.** The migration's own verification block refuses to commit anything but the expected state, and the product paths are covered by CI against the hardened schema (pgTAP 000/002/015 and the E2E lane replay every migration). If an authenticated product smoke is ever separately authorized, the smallest one is: open Edit Paper on a disposable paper, use AI "Create & select" or the Projects selector, save, reopen — the assignment must persist.
@@ -748,12 +748,22 @@ Nothing else: not a body, signature, return type, argument default, volatility, 
 
 ---
 
-### 6.11 `20260926202754` (SECURITY DEFINER `pg_temp`-last hardening, C50) — migration-only; **NOT YET RUN**
+### 6.11 `20260926202754` (SECURITY DEFINER `pg_temp`-last hardening, C50) — migration-only; COMPLETE: applied 2026-09-26
 
-> **Status — PREPARED, NOT APPLIED. Nothing in this section has been run against Production, and this section authorizes nothing.** Each Production step below needs its own explicit authorization, given after the independent review of the exact PR head.
+> **Status — COMPLETE. The migration-only rollout finished on 2026-09-26 and C50 is live in Production. Do not re-run the migration as a pending step.**
 >
-> - **Live Production today** (read-only, 2026-09-26): ledger **89**, latest `20260926152414` (C49); **35** `public` SECURITY DEFINER functions, **27** of them `authenticated`-callable, all owned by `postgres`, **all 35 at `{search_path=public}`** and none at `public, pg_temp`; the three exception bodies match their audited digests; `anon` and PUBLIC execute none of the 35, and `service_role` only `refund_ai_quota`.
-> - **Prepared repository state:** 32 at `{"search_path=public, pg_temp"}`, the three audited exceptions still at `{search_path=public}`, nothing else different (decision C50).
+> - **Merged.** PR #305 as the two-parent commit `b765145e1970c8378f528acac85ad3eb9782c346` (parents `fb6f2778` and the approved head `dfc9d368`; tree `71864d6d`, identical to the approved head's).
+> - **Hosted CI.** Merged-`main` on `b765145`: Validate (run `36272601913`), DB Tests (`36272601840`) and Extension (`36272600988`) passed. `E2E (local)` does not run on a push to `main` ([README](../README.md#ci)); its evidence for this change is the pull-request run on the exact approved head `dfc9d368de544c696fc78484db8b2d74521c7ff3`, run `36271097526`, which passed.
+> - **Before — fresh read-only preflight, immediately before the apply** (step 3): PostgreSQL 17.6; ledger **89**, latest `20260926152414`, C50 absent; **35** `public` SECURITY DEFINER functions, **27** of them `authenticated`-callable, all owned by `postgres`; `anon` and PUBLIC execute none of them, and `service_role` only `refund_ai_quota(uuid)`; **35** at `{search_path=public}` and **0** at `public, pg_temp`; the three exception bodies matched their audited digests; advisor `authenticated_security_definer_function_executable` **27**; `surface_with_oids` recomputed as `1e6cfb8bb03375d61583426b1f0ae4bc`. The migration's own §0/§1 precondition blocks were also run verbatim inside a read-only, rolled-back transaction, and passed.
+> - **What was run — migration only, exactly as planned.** `supabase migration list --linked` showed exactly one local-only migration, `20260926202754`, and no remote-only one. `supabase db push --linked --dry-run` listed exactly `20260926202754_harden_security_definer_pg_temp_last.sql`, with no seeds and no roles. The normal linked `supabase db push --linked --yes` then applied exactly that file under its own repository version. Ledger **89 → 90**, latest `20260926202754`, present exactly once (name `harden_security_definer_pg_temp_last`). It was the only intentional Production mutation of the C50 rollout. No Edge Function was deployed (all six versions and bundle hashes were unchanged). The rollout changed no Auth, Storage, secret, AI/provider or quota state, wrote no application row and ran no canary.
+> - **No manual Vercel action.** None was part of the database rollout, and none was needed: C50 changed function configuration, tests and docs, not shipped frontend behavior. This record makes no claim about any Vercel deployment; that was outside the rollout's verification scope.
+> - **After — verified read-only immediately after the apply** (and re-verified independently, read-only, on 2026-09-26 for the documentation reconciliation):
+>   - **35** `public` SECURITY DEFINER functions, **27** `authenticated`-callable; `anon` and PUBLIC execute none; `service_role` only `refund_ai_quota(uuid)`, whose ACL is still `{postgres=X/postgres,service_role=X/postgres}`.
+>   - **32** at exactly `{"search_path=public, pg_temp"}`. They are exactly the 32 listed below, and each moved only from `{search_path=public}`.
+>   - **3** at `{search_path=public}`, exactly `clear_author_identity_links_on_authors_change()`, `refund_storage_quota()` and `reject_attachment_over_cleanup_intent()`. Their whole `pg_proc` rows are byte-identical to the preflight: OIDs `108859`, `66812`, `109308`; bodies `a14c92db…`, `3e20f43b…`, `494f7297…`; owner-only ACL `{postgres=X/postgres}`.
+>   - `surface_with_oids` is **`1e6cfb8bb03375d61583426b1f0ae4bc`, identical** to the preflight value, so no OID, signature, body, ACL, security mode or owner changed.
+>   - The five trigger bindings and the `attachments_owner_delete` Storage-policy binding are unchanged, with the same trigger, policy and function OIDs.
+>   - Security Advisor `authenticated_security_definer_function_executable` is still **27**, listing the same functions, and no new finding appeared. The C30 leaked-password warning and the six `rls_enabled_no_policy` notices predate C50 and are unrelated to it.
 
 **What changes.** 32 exact-signature statements inside a fail-closed transaction, one attribute each — `proconfig` `{search_path=public}` → `{"search_path=public, pg_temp"}`:
 
@@ -796,12 +806,12 @@ ALTER FUNCTION public.validate_author_mention_for_identity(uuid,uuid,integer,tex
 
 **No statement touches the three audited exceptions**, which stay at `search_path=public` for their audited bodies only: `clear_author_identity_links_on_authors_change()` (`a14c92dbd8485afff4d1600684b37565`), `refund_storage_quota()` (`3e20f43b80a908b309cb6335d8eb9360`) and `reject_attachment_over_cleanup_intent()` (`494f7297c23991bc8d28d4f81906e059`). The migration also changes no body, owner, security mode, grant, trigger, policy, relation or row, and its §3 proves each of those before COMMIT.
 
-**Why there is no ordering constraint.** With no temporary shadow object present — the only situation a legitimate caller creates — `public, pg_temp` and `public` resolve every name identically, so no call returns anything different. A call already executing when the migration commits finishes under the configuration it started with. So there is no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step are part of this rollout.** Generated types do not change, because `proconfig` is not part of any signature.
+**Why there is no ordering constraint.** With no temporary shadow object present — the only situation a legitimate caller creates — `public, pg_temp` and `public` resolve every name identically, so no call returns anything different. A call already executing when the migration commits finishes under the configuration it started with. So there was no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step were part of this rollout.** Generated types do not change, because `proconfig` is not part of any signature.
 
-**Procedure — NOT YET RUN.**
+**Procedure — EXECUTED 2026-09-26; kept as the reference procedure and as the pattern for a comparable migration-only change; not a pending step.** These are the steps as written before the rollout. The `expect` values in step 3 are the **pre-rollout** state it was checked against. What was actually observed and run is the status box above, restated per step below.
 1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
 2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
-3. Fresh read-only preflight against Production:
+3. Fresh read-only preflight against Production (pre-rollout expectations; after the rollout this query returns ledger 90, latest `20260926202754`, `c50_present` 1, `at_public` 3 and `at_pg_temp_last` 32):
    ```sql
    BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO public;
    SELECT count(*) AS ledger, max(version) AS latest                               -- expect 89, 20260926152414
@@ -826,11 +836,11 @@ ALTER FUNCTION public.validate_author_mention_for_identity(uuid,uuid,integer,tex
      FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef;
    ROLLBACK;
    ```
-   On 2026-09-26 `surface_with_oids` read `1e6cfb8bb03375d61583426b1f0ae4bc`. Re-read it at preflight rather than trusting this value. Any other pre-state is a reason to stop, and the migration refuses it anyway (its §1). In particular, **if an exception digest differs, stop and re-audit that function**; do not edit the migration to fit.
-4. `supabase migration list --linked` must show exactly one local-only migration, `20260926202754`. Then run `supabase db push --dry-run` from the merge commit; it must list **exactly** `20260926202754_harden_security_definer_pg_temp_last.sql`. Anything else, stop (§6.2).
-5. Obtain the separate, explicit rollout authorization.
-6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **89 → 90**).
-7. Verify immediately, read-only:
+   At the audit on 2026-09-26 `surface_with_oids` read `1e6cfb8bb03375d61583426b1f0ae4bc`. The rule was to re-read it at preflight rather than trust that value, and the fresh preflight immediately before the apply returned the same value. Every other step-3 value matched too. Any other pre-state would have been a reason to stop, and the migration refuses it anyway (its §1). In particular, **if an exception digest differs, stop and re-audit that function**; do not edit the migration to fit.
+4. `supabase migration list --linked` must show exactly one local-only migration, `20260926202754`. Then run `supabase db push --dry-run` from the merge commit; it must list **exactly** `20260926202754_harden_security_definer_pg_temp_last.sql`. Anything else, stop (§6.2). *Observed:* exactly that one local-only migration, and a dry run that listed exactly that file and nothing else.
+5. Obtain the separate, explicit rollout authorization. *Obtained before the apply.*
+6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **89 → 90**). *Executed as `supabase db push --linked --yes`; it applied exactly that one file, and the ledger went **89 → 90**.*
+7. Verify immediately, read-only (the expected values below are the live state since 2026-09-26, and were observed exactly):
    - the ledger is **90**, latest `20260926202754`, present exactly once;
    - rerunning the step-3 counts gives `public_definer` **35**, `auth_definer` **27**, `at_public` **3**, `at_pg_temp_last` **32**, and the three rows at `at_public` are exactly the three exceptions, with their audited digests;
    - `surface_with_oids` is **identical** to the value recorded at step 3. That shows the OIDs, bodies, ACLs, security modes and owners of all 35 are unchanged.
@@ -842,9 +852,9 @@ ALTER FUNCTION public.validate_author_mention_for_identity(uuid,uuid,integer,tex
       AND p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'];      -- expect exactly the 3 exceptions, at {search_path=public}
    ROLLBACK;
    ```
-8. Re-read the Security Advisor (read-only). `authenticated_security_definer_function_executable` is expected to stay at **27**, the same functions as before, because neither the security mode nor any grant changes. `function_search_path_mutable` is expected to be unchanged.
+8. Re-read the Security Advisor (read-only). `authenticated_security_definer_function_executable` is expected to stay at **27**, the same functions as before, because neither the security mode nor any grant changes. `function_search_path_mutable` is expected to be unchanged. *Observed:* **27**, the same functions, before and after; no `function_search_path_mutable` finding either time, and no new finding.
 
-**No canary is needed.** The migration's own verification refuses to commit anything but the expected catalog state, and the behaviour is covered in CI against a full replay: suite `021` (including the temp-shadow behavioural test and its old-posture negative control), plus the existing suites that exercise these functions. If an authenticated product smoke is ever separately authorized, the smallest one is to tag a paper, add it to a project and open Settings → AI; each must behave exactly as before.
+**No canary was run, and none was required.** No temp-shadow probe was repeated in Production, and no disposable row was written. The migration's own verification refuses to commit anything but the expected catalog state, and the behaviour is covered in CI against a full replay: suite `021` (including the temp-shadow behavioural test and its old-posture negative control), plus the existing suites that exercise these functions. If an authenticated product smoke is ever separately authorized, the smallest one is to tag a paper, add it to a project and open Settings → AI; each must behave exactly as before.
 
 **Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration with the same 32 statements set to `SET search_path = public`, which returns them to the pre-change shape (bodies, ACLs and modes were never touched). It removes a defense-in-depth layer; it opens no boundary. It needs its own decision against C50.
 
