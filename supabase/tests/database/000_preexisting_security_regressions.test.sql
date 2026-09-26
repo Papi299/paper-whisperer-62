@@ -93,10 +93,15 @@ BEGIN
 END;
 $hlp$;
 
--- The directly-callable SECURITY DEFINER RPC surface this remediation covered
--- (16). It covered 17 until SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47) made
--- refund_ai_quota server-only; that function's posture is asserted on its own
--- in section 1b below, and in full by suite 003's server-only classification.
+-- The directly-callable RPC surface this remediation covered (16), all SECURITY
+-- DEFINER when it ran. It covered 17 until SEC-AI-QUOTA-REFUND-AUTHORITY-001
+-- (C47) made refund_ai_quota server-only; that function's posture is asserted on
+-- its own in section 1b below, and in full by suite 003's server-only
+-- classification. Five of the 16 — search_papers, search_papers_short,
+-- filter_papers_by_keywords, get_keyword_options and get_duplicate_papers — are
+-- SECURITY INVOKER since DB-INVOKER-EXECUTE-HARDENING-001A (C49). Their EXECUTE
+-- ACL did not change, so this least-privilege matrix still applies to them
+-- unchanged; their security mode is pinned by suites 003, 015 and 020.
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',

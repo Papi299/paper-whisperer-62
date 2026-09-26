@@ -42,7 +42,10 @@
 --   * function EXECUTE privileges are not changed. Section H is an INVENTORY
 --     guard only: a new SECURITY INVOKER routine must be classified rather than
 --     silently inherit the PUBLIC EXECUTE that PostgreSQL's built-in global
---     default gives every new function.
+--     default gives every new function. Section J pins the five caller-scoped
+--     read RPCs that became SECURITY INVOKER with
+--     `20260926152414_harden_read_rpcs_security_invoker.sql` (C49): for them the
+--     relation matrix in section C is part of their security boundary.
 
 BEGIN;
 
@@ -152,7 +155,7 @@ INSERT INTO acl_invoker_public_exec_allowlist VALUES
   ('set_updated_at()',                          'updated_at trigger function'),
   ('update_updated_at_column()',                'updated_at trigger function');
 
-SELECT plan(97);
+SELECT plan(103);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -351,14 +354,21 @@ SELECT is(
   'ACL-G6 postgres table/sequence defaults in public name no grantee but the owner and service_role');
 
 -- ══ H. SECURITY INVOKER routine inventory (guard only; no grant is changed) ══
+-- Eleven since DB-INVOKER-EXECUTE-HARDENING-001A (C49): the original six, plus
+-- the five caller-scoped read RPCs whose exact posture section J pins. Ordered
+-- under the "C" collation so the expected string does not depend on the
+-- database's default collation (which sorts `search_papers_short` first).
 SELECT is(
-  (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text), '')
+  (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND NOT p.prosecdef),
-  'attachment_cleanup_path_is_safe(uuid,text,uuid), immutable_english_tsvector_jsonb(jsonb), '
+  'attachment_cleanup_path_is_safe(uuid,text,uuid), filter_papers_by_keywords(uuid,text[]), '
+  || 'get_duplicate_papers(), get_keyword_options(uuid,uuid[],integer,integer,text[]), '
+  || 'immutable_english_tsvector_jsonb(jsonb), '
   || 'immutable_english_tsvector_text(text), immutable_english_tsvector_textarr(text[]), '
+  || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text), '
   || 'set_updated_at(), update_updated_at_column()',
-  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified six');
+  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified eleven');
 
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text), '')
@@ -461,6 +471,53 @@ SELECT ok(
   AND has_table_privilege(to_regrole('postgres')::oid, 'public.paper_tags'::regclass, 'INSERT')
   AND has_table_privilege(to_regrole('postgres')::oid, 'public.paper_tags'::regclass, 'DELETE'),
   'ACL-I7 the assignment RPCs'' definer (postgres) still holds INSERT and DELETE on both junctions');
+
+-- ══ J. The authenticated SECURITY INVOKER read RPCs (C49) ═══════════════════
+-- DB-INVOKER-EXECUTE-HARDENING-001A converted five caller-scoped read RPCs to
+-- SECURITY INVOKER, so for them the table matrix above is no longer a separate
+-- concern: `authenticated`'s SELECT on `papers` / `synonym_pool` (section C) and
+-- the caller-owned RLS policies ARE their boundary. Each is pinned exactly —
+-- owner, security mode, search_path, body digest, stored ACL, and which of the
+-- four roles that matter can execute it — in one readable line, so a failure
+-- names the attribute that moved. Relation ACL expectations are unchanged.
+SELECT is(
+  (SELECT pg_get_userbyid(p.proowner)
+          || ' | ' || CASE WHEN p.prosecdef THEN 'SECURITY DEFINER' ELSE 'SECURITY INVOKER' END
+          || ' | ' || coalesce(array_to_string(p.proconfig, ','), '<no config>')
+          || ' | body ' || md5(p.prosrc)
+          || ' | acl ' || coalesce(p.proacl::text, 'NULL')
+          || ' | exec ' || (SELECT coalesce(string_agg(r, ',' ORDER BY r COLLATE "C"), '<nobody>')
+                              FROM unnest(ARRAY['PUBLIC','anon','authenticated','service_role']) r
+                             WHERE CASE WHEN r = 'PUBLIC'
+                                        THEN EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) a
+                                                      WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+                                        ELSE has_function_privilege(to_regrole(r)::oid, p.oid, 'EXECUTE') END)
+     FROM pg_proc p WHERE p.oid = to_regprocedure(e.sig)),
+  'postgres | SECURITY INVOKER | search_path=public | body ' || e.body_md5
+    || ' | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated',
+  'ACL-J1 ' || e.sig || ': owner postgres, SECURITY INVOKER, search_path=public, reviewed body, authenticated EXECUTE only')
+FROM (VALUES
+  ('public.filter_papers_by_keywords(uuid,text[])',                   'b2f5a8e58589a5a094a7074c5ed9bb2d'),
+  ('public.get_duplicate_papers()',                                    '3c914811a9b8c75b9df834e1cf51e1e0'),
+  ('public.get_keyword_options(uuid,uuid[],integer,integer,text[])',   '531010c10d84ee94c7c1e00d65a2e7f5'),
+  ('public.search_papers(uuid,text,integer,integer)',                  'd4a5f3afdc485d5dfda8e0798c61cc48'),
+  ('public.search_papers_short(uuid,text)',                            'ce353564edcb73a5466092e84d0b8d1b')
+) AS e(sig, body_md5)
+ORDER BY e.sig;
+
+-- The class as a set: the SECURITY INVOKER routines `authenticated` can execute
+-- and `anon` cannot are exactly these five. (The five allowlisted helpers above
+-- are reachable by everyone through PUBLIC, so they are not in this class.)
+SELECT is(
+  (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND NOT p.prosecdef
+      AND has_function_privilege(to_regrole('authenticated')::oid, p.oid, 'EXECUTE')
+      AND NOT has_function_privilege(to_regrole('anon')::oid, p.oid, 'EXECUTE')),
+  'filter_papers_by_keywords(uuid,text[]), get_duplicate_papers(), '
+  || 'get_keyword_options(uuid,uuid[],integer,integer,text[]), '
+  || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text)',
+  'ACL-J2 the authenticated-only SECURITY INVOKER RPCs are exactly the five caller-scoped read RPCs');
 
 -- ══ G4. The defaults, proved on real objects ════════════════════════════════
 -- Reading `pg_default_acl` says what is stored. This says what a new object

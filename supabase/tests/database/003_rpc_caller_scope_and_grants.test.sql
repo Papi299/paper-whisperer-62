@@ -2,18 +2,24 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 40 SECURITY DEFINER functions (32 directly callable + 1 server-
+--   * exactly 35 SECURITY DEFINER functions (27 directly callable + 1 server-
 --     only + 5 trigger-only + 2 internal-only); no unexpected privileged
---     function or overload;
+--     function or overload; and the authenticated-executable definer set is
+--     exactly the 27 directly-callable ones;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
+--   * directly-callable INVOKER RPCs (DB-INVOKER-EXECUTE-HARDENING-001A, C49):
+--     the five caller-scoped read RPCs left the definer inventory for a
+--     classification of their own. They are SECURITY INVOKER, and their
+--     EXECUTE ACL is the same {authenticated}-only posture, byte-for-byte;
 --   * server-only RPCs (SEC-AI-QUOTA-REFUND-AUTHORITY-001, C47): {service_role}
 --     EXECUTE only — no PUBLIC / anon / authenticated; owner retained; and
 --     service_role executes NO other SECURITY DEFINER function in public;
 --   * trigger-only functions: not client-executable and not service_role-
 --     executable; owner retained;
 --   * caller identity: null-auth and mismatched caller rejected, valid caller
---     accepted, for the four read RPCs, safe_bulk_insert_papers, and the two
+--     accepted, for the four read RPCs that take a user id (INVOKER since C49 —
+--     the guards are unchanged and still asserted), safe_bulk_insert_papers, and the two
 --     caller-scoped AI-quota RPCs; the refund refuses every browser caller at
 --     the ACL — its own user included — and serves the server role;
 --   * representative caller/ownership boundaries for the setter, bulk-update,
@@ -68,8 +74,9 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (32).
--- `refund_ai_quota` left this list for server_rpcs() below with C47.
+-- The complete directly-callable SECURITY DEFINER RPC surface (27).
+-- `refund_ai_quota` left this list for server_rpcs() below with C47, and the
+-- five caller-scoped read RPCs left it for invoker_rpcs() below with C49.
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
@@ -77,15 +84,10 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.bulk_update_keywords(jsonb)',
     'public.bulk_update_study_types(jsonb)',
     'public.consume_ai_quota(uuid)',
-    'public.filter_papers_by_keywords(uuid,text[])',
     'public.get_ai_quota_status(uuid)',
     'public.get_current_user_access()',
-    'public.get_duplicate_papers()',
-    'public.get_keyword_options(uuid,uuid[],integer,integer,text[])',
     'public.merge_exact_duplicates(uuid,uuid[])',
     'public.safe_bulk_insert_papers(uuid,jsonb)',
-    'public.search_papers(uuid,text,integer,integer)',
-    'public.search_papers_short(uuid,text)',
     'public.set_paper_projects(uuid,uuid[])',
     'public.set_paper_tags(uuid,uuid[])',
     -- AUTHOR-IDENTITY-RESOLUTION-001C. Every identity decision that must be
@@ -165,6 +167,25 @@ CREATE FUNCTION pg_temp.server_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   ]);
 $hlp$;
 
+-- Directly-callable SECURITY INVOKER RPCs: client RPCs that need no authority
+-- beyond the caller's own. DB-INVOKER-EXECUTE-HARDENING-001A (C49) moved these
+-- five caller-scoped reads out of client_rpcs(): each reads only the caller's
+-- rows of `papers` (and `synonym_pool`), which `authenticated` may already read
+-- through its table SELECT grant and the caller-owned RLS policies, so they run
+-- as the caller and RLS is their primary database boundary. Their EXECUTE
+-- posture is exactly a client RPC's — {authenticated} only — and is asserted
+-- below alongside the one attribute that distinguishes them: NOT prosecdef.
+-- Behaviour under the caller's RLS is owned by 020_read_rpc_security_invoker.
+CREATE FUNCTION pg_temp.invoker_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
+  SELECT unnest(ARRAY[
+    'public.filter_papers_by_keywords(uuid,text[])',
+    'public.get_duplicate_papers()',
+    'public.get_keyword_options(uuid,uuid[],integer,integer,text[])',
+    'public.search_papers(uuid,text,integer,integer)',
+    'public.search_papers_short(uuid,text)'
+  ]);
+$hlp$;
+
 CREATE FUNCTION pg_temp.trigger_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.check_and_consume_storage_quota()',
@@ -204,9 +225,9 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(298);
+SELECT plan(309);
 
--- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 35 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
 -- internal helpers and one trigger function; 31 after AI-MODEL-SELECTION-001A
 -- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
@@ -232,12 +253,18 @@ SELECT plan(298);
 -- SEC-AI-QUOTA-REFUND-AUTHORITY-001 (C47) then moved refund_ai_quota OUT of the
 -- directly-callable matrix into a server-only classification of its own: still
 -- 40 definer functions, now 32 directly callable and 1 server-only.
+-- DB-INVOKER-EXECUTE-HARDENING-001A (C49) then converted the five caller-scoped
+-- read RPCs — search_papers, search_papers_short, filter_papers_by_keywords,
+-- get_keyword_options, get_duplicate_papers — to SECURITY INVOKER: 35 definer
+-- functions, 27 directly callable. They are deliberately NOT in the list below
+-- any more, so one of them reverting to SECURITY DEFINER is an unclassified
+-- definer function and fails here; their own classification is invoker_rpcs().
 -- The count is deliberately exact: a new definer function that nobody registered
 -- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  40, 'exactly 40 SECURITY DEFINER functions in public');
+  35, 'exactly 35 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -247,16 +274,11 @@ SELECT is(
        'public.bulk_update_keywords(jsonb)'::regprocedure,
        'public.bulk_update_study_types(jsonb)'::regprocedure,
        'public.consume_ai_quota(uuid)'::regprocedure,
-       'public.filter_papers_by_keywords(uuid,text[])'::regprocedure,
        'public.get_ai_quota_status(uuid)'::regprocedure,
        'public.get_current_user_access()'::regprocedure,
-       'public.get_duplicate_papers()'::regprocedure,
-       'public.get_keyword_options(uuid,uuid[],integer,integer,text[])'::regprocedure,
        'public.merge_exact_duplicates(uuid,uuid[])'::regprocedure,
        'public.refund_ai_quota(uuid)'::regprocedure,
        'public.safe_bulk_insert_papers(uuid,jsonb)'::regprocedure,
-       'public.search_papers(uuid,text,integer,integer)'::regprocedure,
-       'public.search_papers_short(uuid,text)'::regprocedure,
        'public.set_paper_projects(uuid,uuid[])'::regprocedure,
        'public.set_paper_tags(uuid,uuid[])'::regprocedure,
        'public.check_and_consume_storage_quota()'::regprocedure,
@@ -284,8 +306,42 @@ SELECT is(
        'public.clear_current_user_ai_reasoning()'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
+-- The classification, stated as a set rather than implied by the two counts:
+-- the definer functions `authenticated` can execute are exactly client_rpcs().
+-- This is the set the Security Advisor's
+-- authenticated_security_definer_function_executable lint reports (27 after C49).
+SELECT is(
+  (SELECT coalesce(string_agg(p.oid::regprocedure::text, ',' ORDER BY p.oid::regprocedure::text), '')
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.prosecdef
+      AND has_function_privilege('authenticated', p.oid, 'EXECUTE')),
+  (SELECT string_agg(sig::regprocedure::text, ',' ORDER BY sig::regprocedure::text) FROM pg_temp.client_rpcs() sig),
+  'the authenticated-executable SECURITY DEFINER functions are exactly the 27 directly-callable RPCs');
 
--- ══ 2. EXECUTE matrix over the 32 directly-callable RPCs ═════════════════════
+-- ══ 1b. The directly-callable SECURITY INVOKER RPCs (C49) ═══════════════════
+-- Same EXECUTE matrix as a client RPC, pinned byte-for-byte on the ACL itself
+-- (the conversion changed prosecdef and nothing else), plus the security mode.
+SELECT ok(NOT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = sig::regprocedure),
+  'directly-callable INVOKER RPC is SECURITY INVOKER: ' || sig) FROM pg_temp.invoker_rpcs() sig;
+SELECT is((SELECT p.proacl::text FROM pg_proc p WHERE p.oid = sig::regprocedure),
+  '{postgres=X/postgres,authenticated=X/postgres}',
+  'directly-callable INVOKER RPC EXECUTE ACL unchanged (owner + authenticated): ' || sig) FROM pg_temp.invoker_rpcs() sig;
+SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
+  'anon cannot execute ' || sig) FROM pg_temp.invoker_rpcs() sig;
+SELECT ok(NOT EXISTS (
+    SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+    WHERE p.oid = sig::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+  'PUBLIC cannot execute ' || sig) FROM pg_temp.invoker_rpcs() sig;
+SELECT ok(NOT has_function_privilege('service_role', sig::regprocedure, 'EXECUTE'),
+  'service_role cannot execute ' || sig) FROM pg_temp.invoker_rpcs() sig;
+SELECT ok(has_function_privilege('authenticated', sig::regprocedure, 'EXECUTE'),
+  'authenticated can execute ' || sig) FROM pg_temp.invoker_rpcs() sig;
+SELECT ok(
+  (SELECT p.proowner = 'postgres'::regrole AND has_function_privilege('postgres', p.oid, 'EXECUTE')
+     FROM pg_proc p WHERE p.oid = sig::regprocedure),
+  'directly-callable INVOKER RPC owner (postgres) retained with EXECUTE: ' || sig) FROM pg_temp.invoker_rpcs() sig;
+
+-- ══ 2. EXECUTE matrix over the 27 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -334,7 +390,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 32) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 27) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(
