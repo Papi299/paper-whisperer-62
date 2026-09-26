@@ -380,9 +380,10 @@ SELECT set_eq(
      WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure$$,
   ARRAY['p_reasoning_level','saved','reason','preferred_model_id','preferred_reasoning_level','updated_at'],
   'the reasoning setter takes a level and no user id, and returns no secret');
-SELECT ok((SELECT p.prosecdef AND p.proconfig @> ARRAY['search_path=public']
+-- C50: pg_temp explicitly last (owned by suite 021); pinned exactly.
+SELECT ok((SELECT p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
              FROM pg_proc p WHERE p.oid = 'public.set_current_user_ai_reasoning(text)'::regprocedure),
-  'set_current_user_ai_reasoning is SECURITY DEFINER with a pinned search_path');
+  'set_current_user_ai_reasoning is SECURITY DEFINER with a pinned search_path (public, pg_temp)');
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 7. clear_current_user_ai_reasoning — granted, entitlement-free, idempotent

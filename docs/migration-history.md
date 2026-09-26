@@ -3744,3 +3744,59 @@ First bounded result of the `DB-INVOKER-EXECUTE-HARDENING-001` design audit; dec
   - **Final Production verification (read-only):** all five are SECURITY INVOKER (`prosecdef = false`); owner `postgres`, `search_path=public`, stored ACL `{postgres=X/postgres,authenticated=X/postgres}` (EXECUTE for `authenticated` only — `anon`, `service_role` and PUBLIC refused) and body digests `d4a5f3af…` / `ce353564…` / `b2f5a8e5…` / `531010c1…` / `3c914811…`, all unchanged. `public` SECURITY DEFINER **40 → 35**, `authenticated`-callable SECURITY DEFINER **32 → 27**, and the advisor's `authenticated_security_definer_function_executable` **32 → 27** — exactly these five left the finding. Verified unchanged: `papers` / `synonym_pool` owner, grants (`INSERT, SELECT, UPDATE` / `DELETE, INSERT, SELECT, UPDATE` for `authenticated`), RLS and FORCE RLS, and all eight PERMISSIVE ownership policies (digest `07603cbe…`). The same state was re-verified independently, read-only, on 2026-09-26 when this record was reconciled.
   - **Not done, by design.** No search, filter, keyword-option or Find Duplicates canary, and no application-data write. The rollout is established by the live catalog state and the tracked migration; the behaviour under INVOKER is proven by the CI suites above.
   - **Rollback** would re-add owner authority to all five; see [deployment.md](deployment.md) §6.10. None has been performed.
+
+## 2026-09-26 — DB-SECURITY-DEFINER-PG-TEMP-LAST-001: retained SECURITY DEFINER functions place `pg_temp` last (`20260926202754`) — **prepared; migration NOT applied to Production**
+
+Implementation of the read-only audit `DB-SECURITY-DEFINER-SEARCH-PATH-AUDIT-001`; decision **C50**. **Draft only: nothing here is applied.** Production keeps all 35 `public` SECURITY DEFINER functions at `{search_path=public}` until the separately authorized, migration-only rollout ([deployment.md](deployment.md) §6.11, NOT YET RUN).
+
+| | Hardened 32 | Audited exceptions (3) | `public` SECURITY DEFINER | … executable by `authenticated` |
+|---|---|---|---|---|
+| **Production** (read-only, 2026-09-26; ledger **89**, latest `20260926152414`) | `{search_path=public}` | `{search_path=public}` | 35 | 27 |
+| **Prepared repository** (this migration; ledger would go **89 → 90**) | `{"search_path=public, pg_temp"}` | `{search_path=public}` — unchanged | 35 | 27 |
+
+- **What changes.** 32 exact-signature `ALTER FUNCTION … SET search_path = public, pg_temp` statements, and nothing else. Only `proconfig` changes on those 32. Body, OID, signature, argument defaults, result, language, volatility, parallel mode, strictness, leakproofness, SETOF, owner, SECURITY DEFINER, ACL and effective EXECUTE are unchanged. There is no `CREATE OR REPLACE`, GRANT, REVOKE, owner change, mode change or row write.
+- **Why.** Under PostgreSQL 17, a temp schema that is not listed in `search_path` is searched **first** for relation and type names. So an unqualified relation or type in a SECURITY DEFINER body could resolve to a caller-created temp object and be used with the owner's authority. Listing `pg_temp` last is the documented safe arrangement ([CREATE FUNCTION — Writing SECURITY DEFINER Functions Safely](https://www.postgresql.org/docs/17/sql-createfunction.html#SQL-CREATEFUNCTION-SECURITY)). This is **defense in depth**. The audit found no function confirmed exploitable and no route by which an ordinary caller can run the necessary arbitrary SQL. It is not incident remediation.
+- **The 3 exceptions, not normalised.** `clear_author_identity_links_on_authors_change()` (`a14c92db…`), `refund_storage_quota()` (`3e20f43b…`) and `reject_attachment_over_cleanup_intent()` (`494f7297…`) are trigger functions whose audited bodies reference only schema-qualified relations and built-in functions. They were classified SAFE UNDER CURRENT PRIVILEGES and stay at `search_path=public`. The exemption is **body-specific**: the migration refuses to run on any other digest, and suite `021` pins path and digest together, so a future body edit forces a re-audit.
+- **Fail-closed preconditions.** The migration runs as `postgres` with `track_counts` on.
+  - The two reviewed lists are exactly 32 + 3, disjoint, and all resolve.
+  - Exactly 35 `public` SECURITY DEFINER functions exist, and they are exactly those; an unaudited one is refused by count and by name.
+  - The exception digests are checked on their own first, with a STOP / re-audit message.
+  - All 35 are pinned field by field on one readable line each: one overload, owner, mode, kind, language, volatility, parallel, strictness, leakproofness, SETOF, result, arguments with defaults, `{search_path=public}`, literal ACL, effective EXECUTE class across PUBLIC / `anon` / `authenticated` / `service_role`, and body md5.
+  - The matrix is 27 `authenticated`-callable, no `anon` or PUBLIC, and `service_role` on `refund_ai_quota` only.
+  - The five trigger bindings and the `attachments_owner_delete` Storage-policy dependency are pinned in a search_path-independent rendering.
+  - Snapshots are taken for §3.
+- **Fail-closed verification before COMMIT.**
+  - The 32 are at exactly `{"search_path=public, pg_temp"}` and the 3 at exactly `{search_path=public}`; the distribution over the inventory is 32 + 3.
+  - The targets' whole `pg_proc` rows **minus `proconfig`** are unchanged, and the exceptions' whole rows **including `proconfig`** are unchanged. The body digests are restated literally.
+  - No other `public` function changed. The inventory, the 27, `anon` / PUBLIC and C47's `refund_ai_quota` contract are unchanged.
+  - Trigger bindings, `pg_depend` dependents and the Storage policy are unchanged, with their OIDs.
+  - No row was written to any `public` / `auth` / `storage` table, per this transaction's own `pg_stat_get_xact_tuples_*` counters.
+- **Migration controls, run locally** (PG 17.6), each inside a rolled-back transaction with the named message:
+  - *Positive control:* the clean pre-state applied all 32 and passed §3.
+  - *Refused before any ALTER:* an exception body edited (STOP, re-audit); a new SECURITY DEFINER function (count 36); a new definer swapped in for a demoted one (count still 35, refused by name); a reviewed function missing; a target already hardened; `anon` EXECUTE granted; `service_role` EXECUTE granted; a trigger disabled.
+  - *Refused at verification:* an exception altered too; a target given an extra schema; `pg_temp` moved first; `COST` changed; `authenticated` EXECUTE revoked; a function outside the 35 changed; the Storage policy changed; an application row written.
+- **Tests.**
+  - New `021_security_definer_search_path` (101 assertions):
+    - the 32 at exactly `public, pg_temp`;
+    - every `public` SECURITY DEFINER function classified into exactly one of the two groups;
+    - the rule stated generally (`public` first, `pg_temp` last, nothing else);
+    - the 32 / 3 distribution;
+    - rolled-back sensitivity probes: path reverted, reset, `pg_temp` first, an extra schema, `pg_temp` not last, an exception body edited, an exception re-pathed;
+    - each exception's path **and** body digest, plus its owner, mode, ACL and trigger binding;
+    - each of the 32 still SECURITY DEFINER, owned by `postgres`, with its literal ACL and EXECUTE class;
+    - the **behavioural temp-shadow proof** on `set_paper_tags` with its **old-posture negative control**;
+    - the five trigger bindings and the Storage-policy binding.
+  - Run against the pre-C50 posture, `021` fails 40 of 101 assertions, including all four hardened behavioural ones.
+  - Stale exact-path pins were moved to the new value, never loosened: `005` ×1, `006` ×2, `009` ×2, `013` ×2 (containment `@>` tightened to equality) and `016` ×1 (likewise).
+  - `000`, `003`, `007`, `015` and `020` pin C49 or helper functions and are unchanged and green.
+- **Behavioural proof (local, rolled back; not a Production exploit).** An `authenticated` caller creates a temp `papers` table holding a forged ownership row for another account's paper.
+  - As hardened, `set_paper_tags` reads `public.papers`: the caller's own paper updates, and the forged foreign paper is refused.
+  - With only that function transaction-locally back at `search_path=public`, the same shadow wins: the caller's own real paper is refused, and the forged row lets the call replace the other account's tag links.
+  - Restoring `public, pg_temp` refuses it again.
+- **Preservation cross-check.** A digest over the whole 35-function surface **excluding only `proconfig`** is identical between Production (pre-C50, read-only) and the post-C50 local replay: `78c7e589e774f0d537715f40d4f86509`. It covers signature, language, modes, SECURITY DEFINER, ACL, body, EXECUTE matrix, arguments, result, owner, kind, cost/rows, argument modes and names.
+- **Full local lifecycle.** `npm run test:db:local` from a fresh stack (Supabase CLI 2.111.0, PostgreSQL 17.6) passed: replay of all 90 tracked migrations, the catalog-fingerprint sensitivity probe, the papers-RLS negative control, **22 suites / 2,099 pgTAP assertions**, the 18-case framework-free verification, every concurrency and cutover probe, the hosted-Production ACL parity lane, the residue check and the authoritative teardown.
+- **Product regression.** No application or Edge Function source changed. Lint reports 0 errors. `npm test` passes 173 files / 5,658 tests with Validate's placeholder env.
+- **Generated types unchanged.** `supabase gen types typescript --local --schema public` is byte-identical with the 32 at `public` and at `public, pg_temp`. Its content equals the committed `src/integrations/supabase/types.ts`, apart from the CLI's trailing blank line.
+- **Advisor.** `authenticated_security_definer_function_executable` is expected to stay at **27**, since no mode or grant changes.
+- **Out of scope:** C49's INVOKER read RPCs; the `pg_catalog` helper path review; the `bulk_update_*` / `safe_bulk_insert_papers` INVOKER groups; the attachment-fence regression task; database `TEMP` (not revoked); default function EXECUTE hardening; service-role least privilege; search-vector parity; C30.
+- **Deployment state.** **The migration is NOT applied.** Applying it is the separately authorized rollout in [deployment.md](deployment.md) §6.11.
