@@ -683,6 +683,58 @@ Neither step has been applied. Do not treat the rollback as a routine revert: it
 
 **Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward: if a real product path turns out to need a direct junction write, the fix is a reviewed RPC for that path. Restoring the pre-C48 grant (`GRANT INSERT, DELETE ON TABLE public.paper_projects, public.paper_tags TO authenticated;`, in a new forward migration) would be a **least-privilege regression**: it re-opens a direct browser write path that bypasses the RPCs' contracts. The rows would still be constrained by the dormant both-owner RLS policies that stay in place today, so it would not re-open the pre-`20260802025704` cross-owner defect — but it undoes C48 and needs its own decision.
 
+### 6.10 `20260926152414` (read RPCs become SECURITY INVOKER, C49) — migration-only; PENDING: prepared, not yet applied to Production
+
+> **Status — PENDING. Nothing below has been run against Production.** The migration is authored and tested locally (DB-INVOKER-EXECUTE-HARDENING-001A); it is not merged and not applied. Until it is, Production still runs all five functions as SECURITY DEFINER — ledger **88**, latest `20260925134526`, and the Security Advisor reports **32** `authenticated_security_definer_function_executable` warnings (read-only, 2026-09-26). Update this box — and the C49 status in [decisions-and-triggers.md](decisions-and-triggers.md) and [migration-history.md](migration-history.md) — only after the rollout below has actually happened.
+
+**What changes.** Five statements inside a fail-closed transaction, one attribute each — `prosecdef` true → false:
+
+```sql
+ALTER FUNCTION public.search_papers(uuid,text,integer,integer)                SECURITY INVOKER;
+ALTER FUNCTION public.search_papers_short(uuid,text)                          SECURITY INVOKER;
+ALTER FUNCTION public.filter_papers_by_keywords(uuid,text[])                  SECURITY INVOKER;
+ALTER FUNCTION public.get_keyword_options(uuid,uuid[],integer,integer,text[]) SECURITY INVOKER;
+ALTER FUNCTION public.get_duplicate_papers()                                  SECURITY INVOKER;
+```
+
+Nothing else: not a body, signature, return type, argument default, volatility, parallel mode, owner, `search_path` or EXECUTE ACL; not a table grant, RLS flag or policy; not another function; not a row. `authenticated` keeps EXECUTE on all five. See decision C49.
+
+**Why there is no ordering constraint.** The shipped web app and extension call these five with the caller's own id, and for that call both security modes return the same rows: the body's own `user_id` predicate and the caller-owned RLS SELECT policy select the same set. Every other call is still refused by the unchanged guard before the first read. No Edge Function calls them. So there is no web-first or Edge-first step, no drain and no barrier, and **no Edge Function deployment is part of this rollout. No manual frontend or Vercel deployment step is required either** — but merging the PR to `main` will still trigger the repository's ordinary automatic Vercel Production deployment of that commit, as every merge does; it carries no C49 application-behavior change. **Generated types do not change** (security mode is not part of the function signature PostgREST types describe; verified byte-identical locally).
+
+**Planned procedure — not yet run.**
+1. Merge the independently approved exact head with a regular two-parent merge commit; wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check — its evidence is the pull-request run on the exact approved head.
+2. Read-only preflight inside `SET TRANSACTION READ ONLY`: ledger **88**, latest `20260925134526`, migration absent; the five functions still SECURITY DEFINER with the body digests below; the policy digest below. The migration refuses any other pre-state anyway (its section 1) — a difference needs explaining before anyone retries.
+3. `supabase migration list --linked`, then `supabase db push --dry-run` from the merge commit. The dry run must list **exactly** `20260926152414_harden_read_rpcs_security_invoker.sql`; anything else, stop (§6.2).
+4. Apply exactly that migration: `supabase db push --linked` (expected ledger **88 → 89**).
+5. Verify immediately, read-only (this query also re-verifies the state at any time):
+   ```sql
+   BEGIN; SET TRANSACTION READ ONLY;
+   SELECT p.oid::regprocedure, pg_get_userbyid(p.proowner) AS owner, p.prosecdef,
+          p.proconfig::text, md5(p.prosrc) AS body, p.proacl::text,
+          has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth_x,   -- expect true
+          has_function_privilege('anon',          p.oid, 'EXECUTE') AS anon_x,   -- expect false
+          has_function_privilege('service_role',  p.oid, 'EXECUTE') AS svc_x     -- expect false
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname IN ('search_papers','search_papers_short','filter_papers_by_keywords',
+                        'get_keyword_options','get_duplicate_papers')
+    ORDER BY 1;
+   SELECT count(*) FILTER (WHERE p.prosecdef) AS public_definer,                         -- expect 35
+          count(*) FILTER (WHERE p.prosecdef
+                             AND has_function_privilege('authenticated', p.oid, 'EXECUTE')) AS auth_definer  -- expect 27
+     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace;
+   ROLLBACK;
+   ```
+   Expected after the apply:
+   - All five: `prosecdef` **false**; owner `postgres`; `{search_path=public}`; ACL `{postgres=X/postgres,authenticated=X/postgres}`; `auth_x` true, `anon_x` and `svc_x` false; bodies **unchanged** — `search_papers` `d4a5f3afdc485d5dfda8e0798c61cc48`, `search_papers_short` `ce353564edcb73a5466092e84d0b8d1b`, `filter_papers_by_keywords` `b2f5a8e58589a5a094a7074c5ed9bb2d`, `get_keyword_options` `531010c10d84ee94c7c1e00d65a2e7f5`, `get_duplicate_papers` `3c914811a9b8c75b9df834e1cf51e1e0`.
+   - `public_definer` **40 → 35**, `auth_definer` **32 → 27**.
+   - `papers` / `synonym_pool` ACLs, RLS, FORCE RLS and all eight policies unchanged (policy digest `07603cbe4e78a4d6097e7ec33bd1e6c8`, the formula in the migration's §1d).
+6. Re-read the Security Advisor (read-only): `authenticated_security_definer_function_executable` **32 → 27**, with none of the five listed. The remaining 27 are expected at this phase — the 24 functions the audit found intentionally privileged, plus `bulk_update_keywords`, `bulk_update_study_types` and `safe_bulk_insert_papers`, which are later INVOKER groups.
+
+**No canary is planned or required.** The migration's own verification block refuses to commit anything but the expected catalog state, and the behaviour under INVOKER is covered by CI against a full replay (pgTAP 000/003/015/020, the search/filter E2E specs). If an authenticated product smoke is ever separately authorized, the smallest one is: search the library (3+ characters, and 1–2 characters), apply a keyword filter, open the keyword dropdown and open Find Duplicates — results must match the pre-rollout ones.
+
+**Rollback — reference only; none is authorized here.** Prefer fixing forward. The reviewed restoration is a new forward migration containing exactly the five `ALTER FUNCTION … SECURITY DEFINER;` statements, which returns them to the pre-change shape (bodies, ACL and configuration were never touched). It re-adds owner authority and re-makes each body's guard the only database boundary for these five; it does not remove any boundary. It needs its own decision against C49.
+
 ---
 
 ---

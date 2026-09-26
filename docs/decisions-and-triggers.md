@@ -187,8 +187,8 @@ placed at the top of the function body. Equivalent alternative: drop the paramet
 - `safe_bulk_insert_papers` — guard already present (original precedent).
 - `set_paper_tags`, `set_paper_projects`, `bulk_set_paper_tags`, `bulk_set_paper_projects` — derive ownership from `auth.uid()` internally; no `p_user_id` parameter.
 - `bulk_update_study_types`, `bulk_update_keywords` — derive ownership from `auth.uid()` internally.
-- `get_duplicate_papers`, `merge_exact_duplicates` — `auth.uid()` only; no `p_user_id` parameter.
-- `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` — hardened by `20260518010000_rpc_auth_uid_ownership_check.sql`.
+- `merge_exact_duplicates` — `auth.uid()` only; no `p_user_id` parameter.
+- **Leaving this inventory — C49 (`20260926152414`, prepared, NOT yet applied to Production).** `search_papers`, `search_papers_short`, `filter_papers_by_keywords`, `get_keyword_options` (hardened by `20260518010000_rpc_auth_uid_ownership_check.sql`) and `get_duplicate_papers` (`auth.uid()` only) need no authority beyond the caller's own, and in the repository schema from that migration on they are **SECURITY INVOKER** — no longer SECURITY DEFINER RPCs, so this rule no longer governs them there; table grants plus caller-owned RLS are their primary boundary, and their guards stay as defense-in-depth (C49). **Production still runs all five as SECURITY DEFINER until that migration is rolled out** ([deployment.md](deployment.md) §6.10), and S1 applies to them there, unchanged, until then.
 
 **Required for any new `SECURITY DEFINER` RPC:** the migration creating it must include either the explicit guard or an `auth.uid()`-derived ownership pattern; review will reject SECURITY DEFINER RPCs that lack one of these.
 
@@ -1307,3 +1307,36 @@ Ninety seconds is **not** claimed to be universally optimal. It is the owner's s
 **History — C48 is not the cross-owner fix.** The direct junction grants were not always protected this way. Before `20260802025704`, the junction policies checked **paper** ownership only, and cross-owner insertion into both `paper_projects` and `paper_tags` was a confirmed defect — reproduced on a replay of that schema and recorded with the other PFA-C03B1 findings ([pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md) §9.6). `20260802025704` closed it by making the SELECT / INSERT / DELETE policies both-owner and by validating both owners inside the setter RPCs; that record stands unchanged. C48 is a later least-privilege follow-up: it removes the direct write authority that remained after that remediation and that no product path uses. It is not an incident response in the sense that it answers no newly discovered live cross-account path. It makes no claim either way about whether the pre-2026-08-02 defect was ever exercised by a real account; that is not established.
 
 **Re-evaluation triggers:** a product path that genuinely needs to write a junction row outside the reviewed RPCs (add a reviewed RPC rather than re-granting); a change to the assignment RPCs' security mode or ownership (the SELECT-only junction relies on them being SECURITY DEFINER and owner-privileged); a proposal to drop the dormant policies; or `service_role` least-privilege work, which would revisit the junctions' server-side grant separately.
+
+## Least-privilege function authority (2026-09-26)
+
+### C49. Caller-scoped read RPCs that need no elevated authority run as SECURITY INVOKER; ordinary table ACL + RLS is their primary boundary (2026-09-26)
+
+**Status: PREPARED, NOT YET IN PRODUCTION.** Migration `20260926152414_harden_read_rpcs_security_invoker.sql` implements it (`DB-INVOKER-EXECUTE-HARDENING-001A`, the first bounded result of the `DB-INVOKER-EXECUTE-HARDENING-001` design audit). It is authored and tested, not merged and not applied. Production still runs the five functions below as SECURITY DEFINER — ledger **88**, latest `20260925134526`, and **32** `authenticated_security_definer_function_executable` advisor warnings (read-only, 2026-09-26). The rollout is a pending migration-only step ([deployment.md](deployment.md) §6.10). Update this status only after that rollout has happened.
+
+**Decision.** A client-callable read RPC whose every read is already permitted to the caller — by the caller's own table grants and the caller-owned RLS policies — runs as **SECURITY INVOKER**, so ordinary table ACL + RLS is its primary database boundary. SECURITY DEFINER is reserved for functions that genuinely need authority the caller does not hold (writing a table the browser cannot write, reading one it cannot read, cross-row validation the caller cannot see, or evaluation inside a Storage policy), and each such function carries S1's guard.
+
+**The five converted functions:**
+- `search_papers(uuid,text,integer,integer)` — prefix-aware full-text search with per-field attribution;
+- `search_papers_short(uuid,text)` — 1–2 character and quoted-phrase search with per-field attribution;
+- `filter_papers_by_keywords(uuid,text[])` — keyword AND-filter with synonym expansion (reads `papers` and `synonym_pool`);
+- `get_keyword_options(uuid,uuid[],integer,integer,text[])` — keyword dropdown options;
+- `get_duplicate_papers()` — PMID/DOI duplicate groups.
+
+Each reads only the caller's rows of `papers` (and `synonym_pool`). `authenticated` holds table-level `SELECT` on both, and the PERMISSIVE SELECT policies `Users can view their own papers` / `Users can view their own synonym groups` (`USING (auth.uid() = user_id)`) admit exactly the caller's rows. Before C49 they ran as their owner `postgres`, which has BYPASSRLS, so each body's own `auth.uid()` predicate was the **only** database boundary between accounts. After C49 the caller's RLS applies inside them. `authenticated` is neither SUPERUSER nor BYPASSRLS, which the migration pins.
+
+**The explicit identity predicates stay, as defense-in-depth and product contract.** The four functions that take `p_user_id` still raise `Unauthorized: user mismatch` for a NULL id, a NULL `auth.uid()` or a mismatch. `get_duplicate_papers` still derives `v_user_id := auth.uid()` and scopes to it. Nothing caller-visible changes: for the caller's own id the body predicate and the RLS predicate select the same rows. Suite `020` demonstrates the layering. With the guard removed and owner authority restored, a cross-user call returns the victim's rows. With the guard removed but INVOKER kept, the same call returns **none**, because RLS stops it on its own.
+
+**Exactly one attribute changes.** `prosecdef` goes true → false via `ALTER FUNCTION … SECURITY INVOKER`. Nothing else moves: not a body, signature, return type, argument default, volatility, parallel mode, owner, `search_path` or EXECUTE ACL (`authenticated` only, as before). The migration proves this by comparing each function's whole `pg_proc` row, minus `prosecdef`, before and after. It also pins the relations, grants and all eight `papers` / `synonym_pool` policies by value and digest (`07603cbe4e78a4d6097e7ec33bd1e6c8`), because after C49 those ARE the boundary. **`search_papers`' stored body still contains its historical comment "SECURITY DEFINER bypasses table-level RLS …"** (from `20260518010000`). It was deliberately not recreated just to edit a comment. The migration records that it supersedes the comment, the comment does not describe the current mode, and it may be removed the next time the body is legitimately recreated.
+
+**Scope — what the audit found and what this does not do.** The audit classified the 32 authenticated-callable SECURITY DEFINER functions as **24 intentionally privileged** (kept) and **8 unnecessarily elevated**. C49 converts the 5 read-only ones. `bulk_update_keywords`, `bulk_update_study_types` and `safe_bulk_insert_papers` are the other 3 and belong to later, separately reviewed INVOKER groups. After rollout the advisor count is expected to go **32 → 27**. Those 27 are not defects merely because the advisor lists them. C49 does not touch the 24, the `pg_temp` placement in retained functions' `search_path`, `attachment_object_has_live_metadata` (which must stay SECURITY DEFINER), search-vector expression parity, or C30 (leaked-password protection).
+
+**Performance note.** The caller's RLS predicate is now evaluated inside these functions too, as it already is on every direct `papers` read the dashboard makes. A local comparison on a 5,000-paper library (PostgreSQL 17.6, 10 calls each) returned identical row counts, with timings within noise in both modes. That measurement is local, not Production. If RLS cost ever shows up in a profile, the usual remedy is the `(SELECT auth.uid())` initplan form in the policies, which is a separate change under Performance Trigger 1.
+
+**Privacy.** Authority reduction only: no data category, recipient, retention or processor changes, and no Privacy Policy amendment ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)).
+
+**Re-evaluation triggers:**
+- a read operation that legitimately needs visibility beyond the caller's RLS view. Making it SECURITY DEFINER again requires a new, explicit security justification and S1's guard; it is never a silent revert;
+- any change to `papers` / `synonym_pool` SELECT grants or policies, which is now a change to these five functions' boundary;
+- a change that would make `authenticated` (or any client role) BYPASSRLS;
+- the later INVOKER groups for the remaining three candidates.
