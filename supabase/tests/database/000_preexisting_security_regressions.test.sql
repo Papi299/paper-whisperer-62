@@ -102,6 +102,9 @@ $hlp$;
 -- SECURITY INVOKER since DB-INVOKER-EXECUTE-HARDENING-001A (C49). Their EXECUTE
 -- ACL did not change, so this least-privilege matrix still applies to them
 -- unchanged; their security mode is pinned by suites 003, 015 and 020.
+-- bulk_update_keywords and bulk_update_study_types followed as SECURITY
+-- INVOKER with DB-BULK-METADATA-WRITE-INVOKER-001 (C52), again with the EXECUTE
+-- ACL untouched; their security mode is pinned by suites 003, 015, 021 and 022.
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
