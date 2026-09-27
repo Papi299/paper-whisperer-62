@@ -1,4 +1,5 @@
--- Suite 007: bounded search_path on the non-RPC helper functions (PFA-C08, C51).
+-- Suite 007: bounded search_path on the non-RPC helper functions (PFA-C08, C51,
+-- C55).
 --
 -- Migration 20260810152125_harden_remaining_function_search_paths (PFA-C08)
 -- pinned `search_path = pg_catalog` on the four functions that remained on the
@@ -15,21 +16,28 @@
 -- Migration 20260927001229_harden_pg_catalog_helper_pg_temp_last (C51) then
 -- moved the four whose bodies name built-in data types to
 -- `search_path = pg_catalog, pg_temp`, so those names resolve deterministically
--- to `pg_catalog` in every session. The suite pins two groups:
+-- to `pg_catalog` in every session.
 --
---   * hardened (4) — attachment_cleanup_path_is_safe and the three wrappers:
---     exactly `pg_catalog, pg_temp`, in that order, nothing else;
+-- Migration 20260927214838_retire_immutable_english_tsvector_wrappers (C55)
+-- then retired the three search-vector helpers: after C54 nothing called them.
+-- The suite now pins two live groups and the retirement:
+--
+--   * hardened (1) — attachment_cleanup_path_is_safe: exactly
+--     `pg_catalog, pg_temp`, in that order, nothing else;
 --   * pg_catalog only (1) — set_updated_at(): its reviewed body names no data
 --     type, so it deliberately stays at exactly `pg_catalog`. That is tied to
---     its body digest, so a body change fails here and forces a re-review.
+--     its body digest, so a body change fails here and forces a re-review;
+--   * retired (3) — no immutable_english_tsvector_* function exists in any
+--     schema. Their search_path hardening was correct while they were part of
+--     the search boundary; the canonical search expression is owned by 024.
 --
 -- attachment_cleanup_path_is_safe is a non-RPC helper: SECURITY INVOKER, pure,
 -- reading no table, callable by nobody but its owner, and used only from inside
 -- the three cleanup RPCs. Its accept/refuse matrix is owned by
 -- 014_attachment_cleanup_recovery.test.sql; section 6 here only confirms that
 -- the hardened configuration still accepts an ordinary own path and refuses an
--- out-of-namespace one. Sections 3–5 concern the search-vector wrappers and
--- set_updated_at specifically.
+-- out-of-namespace one. Section 3 pins the retirement; sections 4–5 concern the
+-- generated search column and set_updated_at specifically.
 --
 -- This suite pins that hardening and, just as importantly, pins that it stayed
 -- execution-environment-only. The bounded RPC surface is not this suite's remit:
@@ -38,20 +46,19 @@
 -- by 015, and the SECURITY DEFINER `public, pg_temp` inventory (C50) by 021.
 --
 -- Asserted here:
---   * the four carry exactly search_path=pg_catalog, pg_temp — `pg_catalog`
---     first, `pg_temp` last, no other schema, and no second GUC in proconfig;
+--   * attachment_cleanup_path_is_safe carries exactly search_path=pg_catalog,
+--     pg_temp — `pg_catalog` first, `pg_temp` last, no other schema, and no
+--     second GUC in proconfig;
 --   * set_updated_at() carries exactly search_path=pg_catalog, with its
 --     reviewed body; and no other public function is pinned to pg_catalog;
---   * all five remain SECURITY INVOKER with their original volatility, parallel
+--   * both remain SECURITY INVOKER with their original volatility, parallel
 --     safety, language and return type, so a later "fix" cannot quietly promote
 --     one to SECURITY DEFINER or relax IMMUTABLE/PARALLEL SAFE;
 --   * the EXECUTE ACLs are unchanged: owner-only on the attachment helper, and
---     one of the two reviewed representations of the default posture on the
---     other four (NULL on a clean replay, explicit on hosted Production);
---   * the pinned path is *sufficient*: each wrapper still equals the raw
---     `to_tsvector('english', COALESCE(…))` form it wraps across NULL, empty,
---     English prose, punctuation, unicode, text[] and jsonb shapes — a resolution
---     failure under the pinned path would surface here rather than silently;
+--     one of the two reviewed representations of the default posture on
+--     set_updated_at() (NULL on a clean replay, explicit on hosted Production);
+--   * the three immutable_english_tsvector_* helpers are gone — no function of
+--     those names exists in any schema — so a re-created one fails here;
 --   * the generated `papers.search_vector` still populates, keeps its A/B/C/D
 --     field weighting, and regenerates on UPDATE;
 --   * `set_updated_at` still advances `papers.updated_at`, and every trigger in
@@ -68,22 +75,16 @@ CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO extensions, public, pg_temp;
 
 -- ── Helpers ─────────────────────────────────────────────────────────────────
--- The four C51-hardened functions, addressed by exact signature.
+-- The C51-hardened function still live after C55, addressed by exact signature.
 CREATE FUNCTION pg_temp.hardened_fns()
 RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
   SELECT * FROM (VALUES
-    ('immutable_english_tsvector_text(text)',
-       'public.immutable_english_tsvector_text(text)'::regprocedure::oid),
-    ('immutable_english_tsvector_textarr(text[])',
-       'public.immutable_english_tsvector_textarr(text[])'::regprocedure::oid),
-    ('immutable_english_tsvector_jsonb(jsonb)',
-       'public.immutable_english_tsvector_jsonb(jsonb)'::regprocedure::oid),
     ('attachment_cleanup_path_is_safe(uuid,text,uuid)',
        'public.attachment_cleanup_path_is_safe(uuid,text,uuid)'::regprocedure::oid)
   ) AS t(label, oid);
 $hlp$;
 
--- All five bounded helpers: the four above plus the pg_catalog-only one.
+-- Both bounded helpers: the one above plus the pg_catalog-only one.
 CREATE FUNCTION pg_temp.helper_fns()
 RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
   SELECT 'set_updated_at()', 'public.set_updated_at()'::regprocedure::oid
@@ -91,12 +92,12 @@ RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
   SELECT * FROM pg_temp.hardened_fns();
 $hlp$;
 
--- 15 (search_path) + 15 (posture + ACL) + 24 (wrapper equivalence)
---   + 12 (generated search_vector) + 3 (set_updated_at) + 2 (attachment path) = 71
-SELECT plan(71);
+-- 6 (search_path) + 6 (posture + ACL) + 1 (retired helpers)
+--   + 12 (generated search_vector) + 3 (set_updated_at) + 2 (attachment path) = 30
+SELECT plan(30);
 
 -- ══ 1. Bounded search_path ══════════════════════════════════════════════════
--- ── 1a. The hardened four — exactly `pg_catalog, pg_temp` ────────────────────
+-- ── 1a. The hardened helper — exactly `pg_catalog, pg_temp` ──────────────────
 SELECT is(
   (SELECT array_to_string(p.proconfig, ',') FROM pg_proc p WHERE p.oid = f.oid),
   'search_path=pg_catalog, pg_temp',
@@ -140,11 +141,8 @@ SELECT is(
      FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace AND array_to_string(p.proconfig, ',') LIKE '%pg_catalog%'),
   'attachment_cleanup_path_is_safe(uuid,text,uuid) = search_path=pg_catalog, pg_temp; '
-  || 'immutable_english_tsvector_jsonb(jsonb) = search_path=pg_catalog, pg_temp; '
-  || 'immutable_english_tsvector_text(text) = search_path=pg_catalog, pg_temp; '
-  || 'immutable_english_tsvector_textarr(text[]) = search_path=pg_catalog, pg_temp; '
   || 'set_updated_at() = search_path=pg_catalog',
-  'search_path: the pg_catalog-pinned public functions are exactly the classified 4 + 1');
+  'search_path: the pg_catalog-pinned public functions are exactly the classified 1 + 1');
 
 -- ══ 2. The hardening stayed execution-environment-only ══════════════════════
 SELECT ok(
@@ -164,9 +162,6 @@ SELECT is(
     FROM pg_temp.helper_fns() h
     JOIN (VALUES
       ('set_updated_at()',                           'v/u/plpgsql/trigger'),
-      ('immutable_english_tsvector_text(text)',      'i/s/sql/tsvector'),
-      ('immutable_english_tsvector_textarr(text[])', 'i/s/sql/tsvector'),
-      ('immutable_english_tsvector_jsonb(jsonb)',    'i/s/sql/tsvector'),
       -- IMMUTABLE and PARALLEL SAFE are load-bearing, not incidental: the helper
       -- is a pure predicate over its arguments, and anything that made it read
       -- state would have to change one of them.
@@ -181,10 +176,10 @@ SELECT is(
   '{postgres=X/postgres}',
   'acl: attachment_cleanup_path_is_safe(uuid,text,uuid) is still exactly owner-only');
 
--- The other four keep PostgreSQL's default EXECUTE posture, which has two
+-- set_updated_at() keeps PostgreSQL's default EXECUTE posture, which has two
 -- reviewed stored forms: NULL on a clean replay, and the explicit equivalent on
 -- hosted Production (scripts/acl-parity/hosted-baseline-20260904120000.sql).
--- Either passes; any third form fails. Their callers are owned by 015.
+-- Either passes; any third form fails. Its callers are owned by 015.
 SELECT ok(
   (SELECT p.proacl IS NULL
           OR p.proacl::text = '{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}'
@@ -193,55 +188,17 @@ SELECT ok(
 ) FROM pg_temp.helper_fns() f
  WHERE f.label <> 'attachment_cleanup_path_is_safe(uuid,text,uuid)';
 
--- ══ 3. pg_catalog is sufficient — wrappers still equal what they wrap ═══════
--- Each wrapper is `to_tsvector('english'::regconfig, COALESCE(<arg>, ''))`. If
--- the pinned path could not resolve to_tsvector or the `english` configuration,
--- these would error rather than return; if it silently changed tokenization,
--- they would differ. Both failure modes are caught here.
+-- ══ 3. The three search-vector helpers are retired (C55) ═══════════════════
+-- Not ignored: absent by name in every schema, so a re-created helper (at its
+-- old signature or any other), an overload or a same-named function elsewhere
+-- fails here, and the failure lists what it found.
 SELECT is(
-  public.immutable_english_tsvector_text(v.val),
-  to_tsvector('english'::regconfig, COALESCE(v.val, '')),
-  'text wrapper: ' || v.label || ' matches the raw built-in form'
-) FROM (VALUES
-  ('null',      NULL::text),
-  ('empty',     ''),
-  ('whitespace','   '),
-  ('prose',     'The running dogs quickly jumped over lazy foxes'),
-  ('stemming',  'Randomized controlled trials studying immunotherapies'),
-  ('punctuation','COVID-19: a meta-analysis (2021) — n=1,234; p<0.05'),
-  ('stopwords', 'the a an of and or but in on at to'),
-  ('unicode',   'Étude sur les protéines β-amyloïdes'),
-  ('numeric',   '10.1000/example 41912805')
-) AS v(label, val);
-
-SELECT is(
-  public.immutable_english_tsvector_textarr(v.val),
-  to_tsvector('english'::regconfig, COALESCE(v.val::text, '')),
-  'text[] wrapper: ' || v.label || ' matches the raw built-in form'
-) FROM (VALUES
-  ('null',        NULL::text[]),
-  ('empty array', ARRAY[]::text[]),
-  ('one element', ARRAY['Smith J']),
-  ('many',        ARRAY['Smith J','Doe A','O''Brien P']),
-  ('null element',ARRAY['Smith J', NULL]),
-  ('unicode',     ARRAY['Müller K','Ångström A'])
-) AS v(label, val);
-
-SELECT is(
-  public.immutable_english_tsvector_jsonb(v.val),
-  to_tsvector('english'::regconfig, COALESCE(v.val::text, '')),
-  'jsonb wrapper: ' || v.label || ' matches the raw built-in form'
-) FROM (VALUES
-  ('sql null',    NULL::jsonb),
-  ('json null',   'null'::jsonb),
-  ('empty array', '[]'::jsonb),
-  ('string array','["Smith J","Doe A"]'::jsonb),
-  ('empty object','{}'::jsonb),
-  ('object',      '{"name":"Smith J","affiliation":"Oxford"}'::jsonb),
-  ('nested',      '[{"a":["deep","values"]},{"b":2}]'::jsonb),
-  ('unicode',     '["Müller K","Ångström A"]'::jsonb),
-  ('empty string','[""]'::jsonb)
-) AS v(label, val);
+  (SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C")
+     FROM pg_proc p
+    WHERE p.proname IN ('immutable_english_tsvector_text', 'immutable_english_tsvector_textarr',
+                        'immutable_english_tsvector_jsonb')),
+  NULL,
+  'retired: no immutable_english_tsvector_* function exists in any schema (C55)');
 
 -- ══ 4. The generated papers.search_vector still works end to end ════════════
 INSERT INTO auth.users (id, email) VALUES
@@ -260,7 +217,7 @@ VALUES ('07000000-0000-0000-0000-0000000000a1',
 SELECT isnt(
   (SELECT search_vector FROM public.papers
     WHERE id = '07000000-0000-0000-0000-0000000000a1'),
-  NULL, 'search_vector: generated column populated under the pinned path');
+  NULL, 'search_vector: generated column populated');
 
 -- One assertion per indexed field, so a regression names the field it broke.
 SELECT ok(

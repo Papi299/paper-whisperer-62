@@ -151,12 +151,11 @@ CREATE TEMP TABLE acl_relation_allowlist (relname text PRIMARY KEY, why text NOT
 -- out-of-scope exception (see the suite header and decision C38). Removing it
 -- requires a GLOBAL default-privilege change that would reach other schemas, so
 -- it belongs to the separate function-privilege initiative. Listing them by name
--- is what makes a SIXTH such routine fail CI.
+-- is what makes a THIRD such routine fail CI. (Five until
+-- DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001 (C55) dropped the three
+-- immutable_english_tsvector_* helpers.)
 CREATE TEMP TABLE acl_invoker_public_exec_allowlist (sig text PRIMARY KEY, why text NOT NULL);
 INSERT INTO acl_invoker_public_exec_allowlist VALUES
-  ('immutable_english_tsvector_jsonb(jsonb)',   'tsvector wrapper, retained; papers.search_vector calls no wrapper since C54'),
-  ('immutable_english_tsvector_text(text)',     'tsvector wrapper, retained; papers.search_vector calls no wrapper since C54'),
-  ('immutable_english_tsvector_textarr(text[])','tsvector wrapper, retained; papers.search_vector calls no wrapper since C54'),
   ('set_updated_at()',                          'updated_at trigger function'),
   ('update_updated_at_column()',                'updated_at trigger function');
 
@@ -363,7 +362,9 @@ SELECT is(
 -- the five caller-scoped read RPCs whose exact posture section J pins; thirteen
 -- since DB-BULK-METADATA-WRITE-INVOKER-001 (C52) added the two bulk metadata
 -- writes, and fourteen since DB-SAFE-BULK-INSERT-INVOKER-001 (C53) added the
--- bulk import, both pinned in section J as well. Ordered
+-- bulk import, both pinned in section J as well. Eleven again since
+-- DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001 (C55) dropped the three
+-- immutable_english_tsvector_* helpers, so a re-created one fails here. Ordered
 -- under the "C" collation so the expected string does not depend on the
 -- database's default collation (which sorts `search_papers_short` first).
 SELECT is(
@@ -373,12 +374,10 @@ SELECT is(
   'attachment_cleanup_path_is_safe(uuid,text,uuid), bulk_update_keywords(jsonb), '
   || 'bulk_update_study_types(jsonb), filter_papers_by_keywords(uuid,text[]), '
   || 'get_duplicate_papers(), get_keyword_options(uuid,uuid[],integer,integer,text[]), '
-  || 'immutable_english_tsvector_jsonb(jsonb), '
-  || 'immutable_english_tsvector_text(text), immutable_english_tsvector_textarr(text[]), '
   || 'safe_bulk_insert_papers(uuid,jsonb), '
   || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text), '
   || 'set_updated_at(), update_updated_at_column()',
-  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified fourteen');
+  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified eleven');
 
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text), '')
@@ -528,8 +527,9 @@ FROM (VALUES
 ORDER BY e.sig;
 
 -- The class as a set: the SECURITY INVOKER routines `authenticated` can execute
--- and `anon` cannot are exactly these eight. (The five allowlisted helpers above
--- are reachable by everyone through PUBLIC, so they are not in this class.)
+-- and `anon` cannot are exactly these eight. (The two allowlisted trigger
+-- functions above are reachable by everyone through PUBLIC, so they are not in
+-- this class.)
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

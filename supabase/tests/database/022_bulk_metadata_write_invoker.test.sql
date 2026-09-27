@@ -43,9 +43,10 @@
 --      as SECURITY DEFINER would not;
 --  13. the generated-column dependency: every function papers.search_vector
 --      calls is executable by the caller, and since C54 they are exactly the
---      three direct built-ins (by OID), so revoking the old wrappers' EXECUTE
---      no longer affects either write; a transaction-local probe generated
---      column on a revoked probe function shows the dependency is real —
+--      three direct built-ins (by OID), so both writes succeed with the old
+--      immutable_english_tsvector_* wrappers retired (C55); a transaction-local
+--      probe generated column on a revoked probe function shows the dependency
+--      is real —
 --      every UPDATE, even of a column it does not read, evaluates it as the
 --      caller, for the INVOKER calls exactly as for a direct browser UPDATE;
 --  14. neither write fires the author-link invalidation trigger, while a direct
@@ -541,15 +542,13 @@ SELECT is(
                   ('pg_catalog.tsvector_concat(tsvector,tsvector)')) AS w(s)),
   'dependency: search_vector calls exactly setweight, to_tsvector(regconfig,text) and tsvector_concat');
 
--- The old wrappers are no longer on the write path: with their EXECUTE taken
--- away from the caller (PUBLIC on a replay; authenticated too, for the
--- explicit hosted ACL form), both INVOKER calls and a plain browser UPDATE
--- still succeed, and the vector is recomputed to the canonical value.
-REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) FROM PUBLIC, authenticated;
-REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) FROM PUBLIC, authenticated;
+-- The old immutable_english_tsvector_* wrappers are not on the write path:
+-- C55 retired them (007 and 024 pin their absence), and both INVOKER calls and
+-- a plain browser UPDATE succeed without them, recomputing the vector to the
+-- canonical value.
 SELECT is(pg_temp.as_a(f, '[{"id":"22a00000-0000-0000-0000-0000000000a1","keywords":["zqcnowrapper"],"study_type":"no wrapper"}]'),
   '00000 ',
-  'dependency: without EXECUTE on the old wrappers, ' || f || ' still succeeds — they are not a dependency any more')
+  'dependency: with the old wrappers retired, ' || f || ' succeeds — they are not a dependency')
 FROM unnest(ARRAY['bulk_update_keywords', 'bulk_update_study_types']) f ORDER BY f;
 SELECT is(pg_temp.err_as('authenticated', pg_temp.claims_a(),
     $q$UPDATE public.papers SET study_type = 'direct no wrapper' WHERE id = '22a00000-0000-0000-0000-0000000000a1'$q$),
@@ -564,8 +563,6 @@ SELECT ok((SELECT p.search_vector IS NOT DISTINCT FROM (
                   AND p.search_vector @@ plainto_tsquery('english', 'zqcnowrapper')
              FROM public.papers p WHERE p.id = '22a00000-0000-0000-0000-0000000000a1'),
   'dependency: the recomputed vector is the canonical direct value and carries the new keyword');
-GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) TO PUBLIC;
-GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) TO PUBLIC;
 
 -- The dependency itself is real. papers' own expression calls only built-ins
 -- this role cannot revoke, so a transaction-local probe generated column on a

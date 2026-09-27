@@ -33,26 +33,34 @@
 --   3. recomputation — a browser INSERT stores the canonical value, an UPDATE
 --      of each of the six inputs recomputes it, and an UPDATE of another
 --      column leaves it canonical;
---   4. semantic equivalence — over a corpus of SQL NULL, empty, whitespace,
---      punctuation, case, prose, stopwords, numbers, Unicode scripts,
---      composed and decomposed accents, emoji/ZWJ, empty/nested/scalar/mixed/
---      null JSON, quotes and backslashes, SQL-like text, swapped JSON order,
---      over-long words, more than 16383 positions, large text, the six
---      isolated fields and all six together, the canonical expression and the
---      former wrapper expression are equal as tsvectors AND byte for byte;
---      the corpus stored in papers equals both; the one over-limit input
---      fails identically in both;
---   5. search — search_papers returns identical rows, ranks and all six
---      matched_* flags before and after the column is rewritten to the old
---      wrapper form; field-isolated matches rank A > B > C = C = C > D with
---      exactly the right flag; the GIN index serves `@@`;
---   6. detection — a noncanonical expression (a different configuration, or
---      the old wrapper form) is detected by the same shape checks, and the
+--   4. semantics — a pinned, independent oracle: over a corpus of SQL NULL,
+--      empty, whitespace, punctuation, case, prose, stopwords, numbers,
+--      Unicode scripts, composed and decomposed accents, emoji/ZWJ, empty/
+--      nested/scalar/mixed/null JSON, quotes and backslashes, SQL-like text,
+--      swapped JSON order, over-long words, more than 16383 positions, large
+--      text, the six isolated fields and all six together, the canonical
+--      expression yields exactly each row's golden lexeme count and
+--      md5(tsvectorsend(…)), and so does the vector stored in papers; one
+--      over-limit input is refused by a real INSERT through the generated
+--      column (54000) and leaves no row;
+--   5. search — field-isolated matches rank A > B > C = C = C > D with exactly
+--      the right matched_* flag; search_papers returns identical rows, ranks
+--      and all six flags for 32 queries before and after the column is
+--      rewritten to a function-wrapped form; the GIN index serves `@@`;
+--   6. detection — a noncanonical expression (a function-wrapped form, or a
+--      different configuration) is detected by the same shape checks,
+--      RESTRICT refuses to drop a function the column depends on, and the
 --      canonical form restores cleanly.
 --
--- Wrapper-specific search_path and body pins stay in suite 007 (the wrappers
--- still exist; retiring them is a separate decision). Caller-EXECUTE on the
--- expression's functions for the INVOKER writes is also covered by 022/023.
+-- DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001 (C55) retired the three
+-- immutable_english_tsvector_* wrappers, so this suite asserts their absence
+-- (as does 007) and no longer compares against them. Comparing the canonical
+-- expression with a wrapper whose body was the same to_tsvector call was never
+-- an independent check; the golden values in section 4 are. The wrapper-shaped
+-- rewrite in sections 5 and 6 uses a test-only function,
+-- public.zz_024_probe_tsvector(text), created and dropped inside this
+-- transaction — never a retired name. Caller-EXECUTE on the expression's
+-- functions for the INVOKER writes is also covered by 022/023.
 --
 -- Sections 5 and 6 rewrite papers (ALTER TABLE … SET EXPRESSION) inside this
 -- suite's transaction; like every fixture here it is undone by the ROLLBACK.
@@ -132,8 +140,7 @@ CREATE FUNCTION pg_temp.sv_shape() RETURNS text LANGUAGE sql AS $hlp$
               ELSE 'noncanonical ' || coalesce(pg_temp.sv_f1(), '<missing>') END
 $hlp$;
 
--- The canonical direct expression, and the former clean-replay wrapper form
--- (20260420010000 as rewritten), over explicit inputs.
+-- The canonical direct expression over explicit inputs.
 CREATE FUNCTION pg_temp.direct_sv(t text, ab text, j text, au jsonb, kw jsonb, n text)
 RETURNS tsvector LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $hlp$
   SELECT setweight(to_tsvector('english'::regconfig, COALESCE(t, ''::text)), 'A')
@@ -142,16 +149,6 @@ RETURNS tsvector LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $hlp$
          || setweight(to_tsvector('english'::regconfig, COALESCE(au::text, ''::text)), 'C')
          || setweight(to_tsvector('english'::regconfig, COALESCE(kw::text, ''::text)), 'C')
          || setweight(to_tsvector('english'::regconfig, COALESCE(n, ''::text)), 'D')
-$hlp$;
-
-CREATE FUNCTION pg_temp.wrapper_sv(t text, ab text, j text, au jsonb, kw jsonb, n text)
-RETURNS tsvector LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $hlp$
-  SELECT setweight(public.immutable_english_tsvector_text(t), 'A')
-         || setweight(public.immutable_english_tsvector_text(ab), 'B')
-         || setweight(public.immutable_english_tsvector_text(j), 'C')
-         || setweight(public.immutable_english_tsvector_jsonb(au), 'C')
-         || setweight(public.immutable_english_tsvector_jsonb(kw), 'C')
-         || setweight(public.immutable_english_tsvector_text(n), 'D')
 $hlp$;
 
 -- Exact equality: as tsvectors AND byte for byte.
@@ -180,6 +177,20 @@ BEGIN
 EXCEPTION WHEN others THEN
   GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
   RETURN v_state || ' ' || v_msg;
+END;
+$hlp$;
+
+-- '<SQLSTATE> <detail>' of a statement expected to fail, rendered under the
+-- pinned path so object names are schema-qualified.
+CREATE FUNCTION pg_temp.err_detail_of(p_sql text) RETURNS text LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $hlp$
+DECLARE v_state text; v_detail text;
+BEGIN
+  EXECUTE p_sql;
+  RETURN '00000 ';
+EXCEPTION WHEN others THEN
+  GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_detail = PG_EXCEPTION_DETAIL;
+  RETURN v_state || ' ' || v_detail;
 END;
 $hlp$;
 
@@ -283,6 +294,55 @@ INSERT INTO c54_corpus VALUES
   (32, 'notes only',                      NULL, NULL, NULL, NULL, NULL, 'zqcweight notes'),
   (33, 'all six fields populated',        'zqcall title words', 'zqcall abstract words', 'zqcall journal', '["zqcall author"]', '["zqcall keyword"]', 'zqcall notes');
 
+-- ── Golden oracle ───────────────────────────────────────────────────────────
+-- For each corpus row, what the canonical expression must produce: its lexeme
+-- count and md5(tsvectorsend(…)) — the exact binary form, so every lexeme,
+-- position and weight is covered. Pinned on 2026-09-28 and identical, row for
+-- row, on a clean local replay and in hosted Production (both PostgreSQL 17.6).
+-- Rows 1–4 and 7 are legitimately the empty vector. A change here means
+-- PostgreSQL's text-search output itself changed — a new release (17.11, for
+-- example, hardens tsvector length limits) or a new snowball stemmer or
+-- dictionary; update deliberately by recomputing
+--   SELECT c.ord, length(v), md5(tsvectorsend(v)) FROM c54_corpus c,
+--     LATERAL pg_temp.direct_sv(c.title, c.abstract, c.journal, c.authors, c.keywords, c.notes) v
+--    ORDER BY c.ord;
+-- and review every row that moved before accepting it.
+CREATE TEMP TABLE c54_golden (ord int PRIMARY KEY, lexemes int NOT NULL, tsvectorsend_md5 text NOT NULL);
+INSERT INTO c54_golden VALUES
+  ( 1,     0, 'f1d3ff8443297732862df21dc4e57262'),
+  ( 2,     0, 'f1d3ff8443297732862df21dc4e57262'),
+  ( 3,     0, 'f1d3ff8443297732862df21dc4e57262'),
+  ( 4,     0, 'f1d3ff8443297732862df21dc4e57262'),
+  ( 5,    11, '5a43db0f26a4e4c2a17cd3bcf616bfa8'),
+  ( 6,    40, '17e7da846240473a3c40144a4d42a8f6'),
+  ( 7,     0, 'f1d3ff8443297732862df21dc4e57262'),
+  ( 8,    33, '1b79eed8ad65ceccb00bf8f87de11598'),
+  ( 9,    18, 'fe8cc6ff7d4e52f07258e6c1cf000367'),
+  (10,    16, '9fdc5a0c65fa2f8927ca2e3fb6d1c4d8'),
+  (11,     7, '8cc27426be4148a820decb2468eaa693'),
+  (12,     8, 'a69cc7c0ac02cc05126bf8b93ab330c7'),
+  (13,     2, '62d5c724dab4e9d014a354e94e98668b'),
+  (14,    16, 'c47ca7ca807c0513de0366d7b03652f9'),
+  (15,     5, '781adbb3ce7a35ca3dac8beb89e1f633'),
+  (16,    13, '6ab64955efaec83ff00a706d80777b25'),
+  (17,     2, 'a83eeb14e4380e03c4eb7b6749398f7c'),
+  (18,     7, '7335a268a0819fde2d71a1e6d56e1cb4'),
+  (19,    17, '737457eea9c8c81d6266d2bcf81a065b'),
+  (20,    18, '76c6d2632cab986c4273aa0ab2ef6686'),
+  (21,    34, '6b031fdf547506d7a4d78f40468c9518'),
+  (22,     7, '35d669159589a0dacb34798521e54088'),
+  (23,     7, '026fb5f1b9b40acd6f4ee0eb3d05b0fa'),
+  (24,     1, '949b38eff8702d3e04bf49debeec7f58'),
+  (25, 20002, '462d20111353e8f15a5dbd0aa5d9988c'),
+  (26,    10, '8241819a6e48316da4ce0d2b133db3eb'),
+  (27,     2, 'f6375938fa0d49b6a81d59f6e3202271'),
+  (28,     2, '3347d4abeab94365ce8e01b6a1bbbeb7'),
+  (29,     2, 'd3deba0121d64904bb071cb66c49779f'),
+  (30,     2, '28fc0543fd4304c3a3c4d16a4c69ea70'),
+  (31,     2, 'a504438e2e1d602664b7a95912234abd'),
+  (32,     2, 'f920b7dcb78e627e1755ca4fedf4e27b'),
+  (33,     8, '9d96fdb8520c7e749efbcfad94ce6197');
+
 -- ── Fixtures (as the table owner; RLS bypassed) ──────────────────────────────
 -- The owner holds one paper per corpus row (papers.title is NOT NULL, so a
 -- NULL title is stored as ''), plus one row the browser writes in section 3.
@@ -300,7 +360,7 @@ INSERT INTO public.papers (id, user_id, title, abstract, journal, authors, keywo
   ('24b00000-0000-0000-0000-0000000000b1', '24b00000-0000-0000-0000-00000000000b',
    'zqcweight zqcall foreign title', 'Randomized running', 'Journal of Cardiovascular Prevention', '["Smith J"]', '["cardiology"]', 'foreign');
 
-SELECT plan(87);
+SELECT plan(90);
 
 -- ══ 1. One representation: the canonical direct built-in expression ════════
 SELECT is(
@@ -337,12 +397,11 @@ SELECT is(
   0, 'shape: it depends on no function at all');
 
 SELECT is(
-  (SELECT count(*)::int FROM pg_depend dd
-    WHERE dd.refclassid = 'pg_proc'::regclass AND dd.deptype = 'n'
-      AND dd.refobjid IN ('public.immutable_english_tsvector_text(text)'::regprocedure,
-                          'public.immutable_english_tsvector_jsonb(jsonb)'::regprocedure,
-                          'public.immutable_english_tsvector_textarr(text[])'::regprocedure)),
-  0, 'shape: nothing depends on the three immutable_english_tsvector_* wrappers any more');
+  (SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C")
+     FROM pg_proc p
+    WHERE p.proname IN ('immutable_english_tsvector_text', 'immutable_english_tsvector_textarr',
+                        'immutable_english_tsvector_jsonb')),
+  NULL, 'shape: the retired immutable_english_tsvector_* wrappers exist nowhere (C55)');
 
 SELECT ok(pg_temp.direct_calls() IS NOT NULL AND cardinality(pg_temp.direct_calls()) = 3,
   'calls: the three reviewed built-in signatures each resolve');
@@ -426,24 +485,33 @@ SELECT is(pg_temp.err_as('24a00000-0000-0000-0000-00000000000a',
   || pg_temp.stored_is_canonical('24a00000-0000-0000-0000-0000000000f1')::text,
   '00000 true', 'recompute: an UPDATE of a non-input column leaves the vector canonical');
 
--- ══ 4. Semantic equivalence — canonical vs the former wrapper form ══════════
-SELECT ok(pg_temp.same_sv(pg_temp.direct_sv(c.title, c.abstract, c.journal, c.authors, c.keywords, c.notes),
-                          pg_temp.wrapper_sv(c.title, c.abstract, c.journal, c.authors, c.keywords, c.notes)),
-  'corpus: ' || c.label || ' — direct = wrapper, as tsvectors and byte for byte')
-  FROM c54_corpus c ORDER BY c.ord;
+-- ══ 4. Semantics — the canonical expression against the golden oracle ══════
+SELECT is(format('lexemes=%s md5=%s', length(x.v), md5(tsvectorsend(x.v))),
+          format('lexemes=%s md5=%s', g.lexemes, g.tsvectorsend_md5),
+  'corpus: ' || c.label || ' — the canonical expression yields its golden value')
+  FROM c54_corpus c
+  LEFT JOIN c54_golden g USING (ord)
+  CROSS JOIN LATERAL (SELECT pg_temp.direct_sv(c.title, c.abstract, c.journal, c.authors, c.keywords, c.notes) AS v) x
+ ORDER BY c.ord;
+
+SELECT is(
+  (SELECT count(*)::int FROM c54_golden g FULL JOIN c54_corpus c USING (ord) WHERE g.ord IS NULL OR c.ord IS NULL),
+  0, 'corpus (control): every corpus row has exactly one golden value and no golden value is orphaned');
 
 SELECT isnt(pg_temp.direct_sv('A', 'B', 'C', '["D"]', '["E"]', 'F'), pg_temp.direct_sv('B', 'A', 'C', '["D"]', '["E"]', 'F'),
-  'corpus (control): moving text between fields changes the vector, so equality above is not vacuous');
+  'corpus (control): moving text between fields changes the vector, so the golden values are not vacuous');
 
 SELECT isnt(tsvectorsend(pg_temp.direct_sv(NULL, NULL, NULL, '["Alpha A","Beta B"]', NULL, NULL)),
             tsvectorsend(pg_temp.direct_sv(NULL, NULL, NULL, '["Beta B","Alpha A"]', NULL, NULL)),
-  'corpus (control): swapped JSON order changes positions, and both expressions agree on each order');
+  'corpus (control): swapped JSON order changes positions (rows 22 and 23 carry different golden values)');
 
 SELECT is(
-  (SELECT count(*)::int FROM c54_corpus c JOIN public.papers p ON p.id = ('24a00000-0000-0000-0000-' || lpad(c.ord::text, 12, '0'))::uuid
+  (SELECT count(*)::int FROM c54_corpus c
+     JOIN c54_golden g USING (ord)
+     JOIN public.papers p ON p.id = ('24a00000-0000-0000-0000-' || lpad(c.ord::text, 12, '0'))::uuid
     WHERE NOT pg_temp.same_sv(p.search_vector, pg_temp.direct_sv(p.title, p.abstract, p.journal, p.authors, p.keywords, p.notes))
-       OR NOT pg_temp.same_sv(p.search_vector, pg_temp.wrapper_sv(p.title, p.abstract, p.journal, p.authors, p.keywords, p.notes))),
-  0, 'corpus: every stored corpus vector equals both expressions over its row, byte for byte');
+       OR md5(tsvectorsend(p.search_vector)) IS DISTINCT FROM g.tsvectorsend_md5),
+  0, 'corpus: every stored corpus vector equals the canonical expression over its row and its golden value, byte for byte');
 
 SELECT is(
   (SELECT max(pos) || ' ' || max(cardinality(u.positions))
@@ -452,14 +520,22 @@ SELECT is(
   '16383 255',
   'corpus (control): row 25 really reaches the position clamp (16383) and the per-lexeme cap (255)');
 
-SELECT is(
-  pg_temp.err_of($q$SELECT pg_temp.direct_sv((SELECT string_agg(md5(i::text), ' ') FROM generate_series(1, 40000) i), NULL, NULL, NULL, NULL, NULL)$q$),
-  pg_temp.err_of($q$SELECT pg_temp.wrapper_sv((SELECT string_agg(md5(i::text), ' ') FROM generate_series(1, 40000) i), NULL, NULL, NULL, NULL, NULL)$q$),
-  'corpus: an over-limit input fails identically in both forms');
+-- Over the tsvector size limit: the canonical expression refuses the input,
+-- and so does a real browser INSERT through the generated column — which
+-- therefore leaves no row behind.
 SELECT alike(
   pg_temp.err_of($q$SELECT pg_temp.direct_sv((SELECT string_agg(md5(i::text), ' ') FROM generate_series(1, 40000) i), NULL, NULL, NULL, NULL, NULL)$q$),
   '54000 string is too long for tsvector%',
   'corpus (control): that input really is over the tsvector limit');
+SELECT alike(
+  pg_temp.err_as('24a00000-0000-0000-0000-00000000000a',
+    $q$INSERT INTO public.papers (id, user_id, title)
+       VALUES ('24a00000-0000-0000-0000-0000000000e1', '24a00000-0000-0000-0000-00000000000a',
+               (SELECT string_agg(md5(i::text), ' ') FROM generate_series(1, 40000) i))$q$),
+  '54000 string is too long for tsvector%',
+  'corpus: an over-limit title is refused by a real INSERT through the generated column (54000)');
+SELECT is((SELECT count(*)::int FROM public.papers WHERE id = '24a00000-0000-0000-0000-0000000000e1'), 0,
+  'corpus: and the refused INSERT left no row');
 
 -- ══ 5. Search behavior ══════════════════════════════════════════════════════
 -- Field-isolated matches: one row per field carries `zqcweight`.
@@ -479,7 +555,9 @@ SELECT is(pg_temp.search_as_owner('zqcall'),
   'search: a term in all six fields sets all six flags, and the other account''s row is not returned');
 
 -- The same searches, and the corpus searches, before and after the column is
--- rewritten to the former wrapper form: identical rows, ranks and flags.
+-- rewritten to a function-wrapped form — the shape C54 removed — through a
+-- test-only probe with the same body the retired text wrapper had:
+-- identical rows, ranks and flags.
 CREATE TEMP TABLE c54_queries (o int PRIMARY KEY, q text NOT NULL);
 INSERT INTO c54_queries VALUES
   (1, 'zqcweight'), (2, 'zqcall'), (3, 'running'), (4, 'run'), (5, 'cardiology'), (6, 'cardio'), (7, 'smith'),
@@ -489,33 +567,41 @@ INSERT INTO c54_queries VALUES
   (26, 'doi.org'), (27, 'x-ray'), (28, 'the'), (29, ''), (30, 'a & b'), (31, 'zqcupdtitle'), (32, 'swapped');
 CREATE TEMP TABLE c54_search_canonical AS SELECT q.o, pg_temp.search_as_owner(q.q) AS r FROM c54_queries q;
 
+CREATE FUNCTION public.zz_024_probe_tsvector(p text) RETURNS tsvector
+LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp
+AS $$ SELECT to_tsvector('english'::regconfig, COALESCE(p, '')) $$;
 ALTER TABLE public.papers ALTER COLUMN search_vector SET EXPRESSION AS (
-    setweight(public.immutable_english_tsvector_text(title), 'A') ||
-    setweight(public.immutable_english_tsvector_text(abstract), 'B') ||
-    setweight(public.immutable_english_tsvector_text(journal), 'C') ||
-    setweight(public.immutable_english_tsvector_jsonb(authors), 'C') ||
-    setweight(public.immutable_english_tsvector_jsonb(keywords), 'C') ||
-    setweight(public.immutable_english_tsvector_text(notes), 'D'));
-SELECT is(pg_temp.sv_f1(), 'dd69f099a274a9cdc0f174ae0883ddb6',
-  'search: (rewritten in this transaction to the former clean-replay wrapper form)');
-CREATE TEMP TABLE c54_search_wrapper AS SELECT q.o, pg_temp.search_as_owner(q.q) AS r FROM c54_queries q;
+    setweight(public.zz_024_probe_tsvector(title), 'A') ||
+    setweight(public.zz_024_probe_tsvector(abstract), 'B') ||
+    setweight(public.zz_024_probe_tsvector(journal), 'C') ||
+    setweight(public.zz_024_probe_tsvector(authors::text), 'C') ||
+    setweight(public.zz_024_probe_tsvector(keywords::text), 'C') ||
+    setweight(public.zz_024_probe_tsvector(notes), 'D'));
+SELECT ok(pg_temp.sv_f1() <> '8ddd960b4f4b11dd7afd35485d01fd25'
+          AND 'public.zz_024_probe_tsvector(text)'::regprocedure::oid = ANY (pg_temp.sv_calls()),
+  'search: (rewritten in this transaction to a function-wrapped form through the test-only probe)');
+CREATE TEMP TABLE c54_search_wrapped AS SELECT q.o, pg_temp.search_as_owner(q.q) AS r FROM c54_queries q;
 
 SELECT is(
-  (SELECT count(*)::int FROM c54_search_canonical c FULL JOIN c54_search_wrapper w USING (o) WHERE c.r IS DISTINCT FROM w.r),
+  (SELECT count(*)::int FROM c54_search_canonical c FULL JOIN c54_search_wrapped w USING (o) WHERE c.r IS DISTINCT FROM w.r),
   0, 'search: search_papers rows, ranks and all six matched_* flags are identical for 32 queries under both forms');
 SELECT ok((SELECT count(*) FROM c54_search_canonical WHERE r <> '<none>') >= 25,
   'search (control): most of those queries return rows, so the comparison is not vacuous');
 
 -- ══ 6. Detection of a noncanonical expression, and restoration ═════════════
-SELECT is(pg_temp.sv_shape(), 'noncanonical dd69f099a274a9cdc0f174ae0883ddb6',
-  'detect: the former wrapper form is flagged as noncanonical');
+SELECT ok(pg_temp.sv_shape() LIKE 'noncanonical %',
+  'detect: the function-wrapped form is flagged as noncanonical');
 SELECT is(pg_temp.sv_deps(),
   'pg_class:public.papers.abstract|n' || E'\n' || 'pg_class:public.papers.authors|n' || E'\n'
   || 'pg_class:public.papers.journal|n' || E'\n' || 'pg_class:public.papers.keywords|n' || E'\n'
   || 'pg_class:public.papers.notes|n' || E'\n' || 'pg_class:public.papers.search_vector|i' || E'\n'
-  || 'pg_class:public.papers.title|n' || E'\n' || 'pg_proc:public.immutable_english_tsvector_jsonb(jsonb)|n' || E'\n'
-  || 'pg_proc:public.immutable_english_tsvector_text(text)|n',
-  'detect: in that form the column depends on the text and jsonb wrappers — exactly what C54 removed');
+  || 'pg_class:public.papers.title|n' || E'\n' || 'pg_proc:public.zz_024_probe_tsvector(text)|n',
+  'detect: in that form the column depends on a project function — the kind of dependency C54 removed');
+-- The gate C55's migration relies on: while a generated column depends on a
+-- function, DROP FUNCTION … RESTRICT refuses and names the column.
+SELECT is(pg_temp.err_detail_of('DROP FUNCTION public.zz_024_probe_tsvector(text) RESTRICT'),
+  '2BP01 column search_vector of table public.papers depends on function public.zz_024_probe_tsvector(text)',
+  'detect: DROP FUNCTION … RESTRICT refuses to drop a function the generated column depends on, and names the column');
 
 ALTER TABLE public.papers ALTER COLUMN search_vector SET EXPRESSION AS (
     setweight(to_tsvector('simple'::regconfig, COALESCE(title, ''::text)), 'A')

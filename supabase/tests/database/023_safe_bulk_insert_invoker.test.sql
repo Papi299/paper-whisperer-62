@@ -43,8 +43,8 @@
 --      generated-column / CHECK function EXECUTE fails closed as per-row
 --      `error` at the INSERT and writes nothing (a transaction-local probe
 --      column stands in for the generated-column function: since C54
---      search_vector calls only built-ins, and revoking the old wrappers'
---      EXECUTE is shown to affect nothing); drift that strikes inside the
+--      search_vector calls only built-ins, and the import is shown to work
+--      with the old wrappers retired (C55)); drift that strikes inside the
 --      duplicate handler escapes it as an RPC-level error and rolls the whole
 --      call back.
 --
@@ -648,14 +648,12 @@ SELECT is(pg_temp.shape(pg_temp.ins_a('[{"title":"Zqc53 drift sequence"}]')) || 
 GRANT USAGE ON SEQUENCE public.papers_insert_order_seq TO authenticated;
 
 -- The old search_vector wrappers are not on the INSERT path: since C54 the
--- expression calls only built-ins, so with the wrappers' EXECUTE taken away
--- from the caller (PUBLIC on a replay; authenticated too, for the explicit
--- hosted ACL form) the import and a direct browser INSERT both still work.
-REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) FROM PUBLIC, authenticated;
-REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) FROM PUBLIC, authenticated;
+-- expression calls only built-ins, and C55 retired the wrappers (007 and 024
+-- pin their absence), so the import and a direct browser INSERT both work
+-- without them.
 SELECT is(pg_temp.shape(pg_temp.ins_a('[{"title":"Zqc53 no wrapper import","authors":["Zqc Author"],"keywords":["zqckw"]}]'))
           || ' ' || pg_temp.n('Zqc53 no wrapper import'),
-  '0:inserted+id 1', 'no wrapper dependency: without EXECUTE on the old wrappers the import still inserts');
+  '0:inserted+id 1', 'no wrapper dependency: with the old wrappers retired the import inserts');
 SELECT is(pg_temp.err_as('authenticated', pg_temp.claims('23a00000-0000-0000-0000-00000000000a'),
             $q$INSERT INTO public.papers (user_id, title, keywords) VALUES ('23a00000-0000-0000-0000-00000000000a', 'Zqc53 no wrapper direct', '["zqcdirect"]')$q$),
   '00000 ', 'no wrapper dependency: a direct browser INSERT works without them too');
@@ -671,8 +669,6 @@ SELECT ok((SELECT p.search_vector IS NOT DISTINCT FROM (
                   AND p.search_vector @@ plainto_tsquery('english', 'zqcdirect')
              FROM public.papers p WHERE p.title = 'Zqc53 no wrapper direct'),
   'no wrapper dependency: that row stores the canonical direct vector');
-GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) TO PUBLIC;
-GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) TO PUBLIC;
 
 -- A generated-column function's EXECUTE revoked. papers' own search_vector
 -- calls only built-ins this role cannot revoke, so a transaction-local probe

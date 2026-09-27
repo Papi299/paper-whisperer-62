@@ -1252,12 +1252,6 @@ export type Database = {
           keyword: string
         }[]
       }
-      immutable_english_tsvector_jsonb: { Args: { j: Json }; Returns: unknown }
-      immutable_english_tsvector_text: { Args: { t: string }; Returns: unknown }
-      immutable_english_tsvector_textarr: {
-        Args: { arr: string[] }
-        Returns: unknown
-      }
       link_author_mention_to_identity: {
         Args: {
           p_author_index: number

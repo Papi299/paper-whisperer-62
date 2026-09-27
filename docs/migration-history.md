@@ -4171,3 +4171,72 @@ Decision **C54**. Implements the verdict of the read-only audit `DB-SEARCH-VECTO
     - every `papers` and `public`-wide logical digest.
   - **No ANALYZE.** Manual `analyze_count` stayed 0, and `pg_statistic` and the last autoanalyze were unchanged.
   - No Edge Function deploy, no canary and no application write. No rollback has been performed.
+
+## 2026-09-28 — DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001: retire the three obsolete `immutable_english_tsvector_*` wrappers (`20260927214838`) — **PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION**
+
+Decision **C55**. It implements the verdict of the read-only audit `DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-AUDIT-001`, **SAFE TO RETIRE ALL THREE**. The migration has **not** been applied to Production; that needs a separate authorization ([deployment.md](deployment.md) §6.16). It follows C54, which made the wrappers obsolete, and does not change C54. C51's hardening of the wrappers was correct while they were in the search boundary (C51, C55).
+
+| | The three wrappers | `public` functions / PUBLIC-executable |
+|---|---|---|
+| **Production now** (read-only, 2026-09-28; PostgreSQL 17.6; ledger **94**, latest `20260927161343`) | Present: OIDs `66407`/`66408`/`66409`, bodies `26edc211…`/`19261084…`/`30c015cd…`, `pg_catalog, pg_temp`, the explicit hosted ACL, 0 dependents, 0 routine-body references | 46 / 5 |
+| **Clean replay before** (through `20260927161343`) | Present, the same contract, `proacl` NULL | 46 / 5 |
+| **Clean replay after** (through `20260927214838`) | Absent; no function of those names in any schema | 43 / 2 (`set_updated_at()`, `update_updated_at_column()`) |
+
+- **Why.** The wrappers are SECURITY INVOKER, table-independent and side-effect-free; this is not a vulnerability fix. Nothing depends on or calls them, and they were never a documented API. PUBLIC EXECUTE nevertheless exposed them to `anon` as the only three RPCs in its OpenAPI document (on a clean replay), and they were in the generated types.
+- **Migration `20260927214838_retire_immutable_english_tsvector_wrappers`.** It was created with `supabase migration new`, is explicitly transactional, and runs as `postgres` under transaction-local `search_path = pg_catalog, pg_temp` and `lock_timeout = 5s`:
+  - **§0** context: the owner role, both settings in effect (so it is one transaction), `track_counts`, and the per-transaction write baseline.
+  - **§1** fail-closed preconditions:
+    - each target's exact contract (signature resolved one per row; owner, language, kind, security mode, volatility, parallel mode, strictness, leakproofness, result, argument names, `proconfig`, body digest, cost, rows, support function and comment);
+    - no same-named function in any schema;
+    - one of the two reviewed ACL forms (NULL or the explicit hosted literal), shared by all three;
+    - no `pg_depend` dependent;
+    - no call node on a target OID in any stored expression tree (defaults, CHECKs, index expressions and predicates, rules, policies, trigger WHEN clauses, statistics, publication filters, SQL-standard bodies);
+    - no function-OID catalog reference (triggers, event triggers, casts, operators, aggregates, types, ranges, languages, transforms, support functions, operator-class support);
+    - no routine body or `pg_cron` job naming a target;
+    - `search_vector` at C54's canonical F1, dependency set and call set;
+    - `idx_papers_search_vector` GIN, valid, ready and live;
+    - 46 `public` functions with exactly the reviewed five PUBLIC-executable;
+    - a 16-category snapshot of everything that must not change.
+  - **§2** `DROP FUNCTION … RESTRICT` on the three exact signatures, in a fixed order. There is no `CASCADE` and no `IF EXISTS`.
+  - **§3** verification before COMMIT:
+    - the targets are absent by signature, OID and name;
+    - the snapshot is identical: every other `public` function row, every function database-wide by OID, relations (with ACLs), columns (with ACLs), defaults, constraints, indexes, policies, triggers, rules, types, default privileges, the `public` schema, event triggers, the search column and the search index;
+    - 43 functions, with exactly the two trigger functions PUBLIC-executable;
+    - the search column and index still canonical and usable;
+    - no lock of any mode on any `public` relation;
+    - no application row written.
+- **Migration controls, run locally** (PG 17.6), each on the real file with its `COMMIT` replaced, each leaving a whole-catalog, dependency, ledger and `papers`-data fingerprint byte-identical:
+  - **24 precondition refusals**, none reaching the first DROP. They cover a missing target, drift in body, owner, security mode, volatility, `proconfig` or strictness, mixed and uniform unreviewed ACLs, an overload and a same-named function in another schema, and a dependent view and CHECK. They also cover a view whose `pg_depend` edge was deleted (caught by the node-tree scan alone), PL/pgSQL and dynamic-SQL body references, the wrapper-form `search_vector`, a wrong-configuration built-in form, an invalid and a not-ready index, a 47th function, an extra PUBLIC-executable function, the wrong role, and running outside a transaction.
+  - **9 postcondition refusals**: another public function, a function elsewhere, a relation ACL, default privileges, a policy, a column ACL, a lock on `papers`, an application row and a rewritten `search_vector`.
+  - **Positive runs:**
+    - the NULL ACL and the hosted explicit ACL both pass, and their final catalog fingerprints are identical;
+    - a committed run on 25 fixture papers changed only the wrapper count. Heap, TOAST and index OIDs and relfilenodes, catalog xmins, `pg_statistic` and every row's ctid, xmin, content and vector are unchanged;
+    - locks: ACCESS EXCLUSIVE on the three `pg_proc` objects, ACCESS SHARE on catalogs, and nothing on any relation in `public`.
+  - **Real CLI and Data API.** Through `supabase migration up --local`, `anon`'s OpenAPI RPCs went 3 → 0, `service_role`'s 4 → 1 (`refund_ai_quota`), and each wrapper RPC went from 200 to 404 `PGRST202`, with the schema cache reloaded by the drop event trigger.
+  - **Negative `RESTRICT` control.** With the wrapper-form `search_vector` re-induced in a rolled-back transaction, dropping `text` and `jsonb` fails with `2BP01`, naming `column search_vector of table public.papers`. `textarr` drops: on a replay it was in the stored expression only transiently, in `20260305020000` before `20260331010000` rebuilt the column, and Production's column never used it.
+- **Production, read-only, at preparation.** The real file's §0 and §1 ran in `BEGIN TRANSACTION READ ONLY … ROLLBACK`, with no DDL sent. Every precondition passed. It resolved the targets to `{66407,66408,66409}`, held only ACCESS SHARE on catalogs and nothing on any `public` relation, and was never assigned a transaction ID. A per-surface dependency survey found zero dependents and references. The 33 golden corpus digests (below) are identical in Production.
+- **Tests.**
+  - `007` **71 → 30**: the wrapper rows, bodies, `proconfig`, posture, ACL and 24 equivalence assertions are removed. `attachment_cleanup_path_is_safe` and `set_updated_at()` keep every pin, and one new assertion requires that no function of the three names exists in any schema. That is the audit's 29 plus that one.
+  - `015` still **106**: the three allowlist rows are removed, and ACL-H1 now lists eleven SECURITY INVOKER routines instead of fourteen.
+  - `022` still **95** and `023` still **76**: the wrapper REVOKE/GRANT simulation is removed, and the same assertions now show the INVOKER writes, the import and direct writes succeeding with the wrappers gone.
+  - `024` **87 → 90**. It adopts a golden oracle: each of the 33 corpus rows pins its lexeme count and `md5(tsvectorsend(…))`, identical on a clean replay and in Production.
+
+    Its three new assertions are a golden-coverage guard, a no-row check after the over-limit case (now a real browser INSERT through the generated column, `54000`), and proof that `DROP FUNCTION … RESTRICT` refuses a function the column depends on and names it. The function-wrapped rewrite and detection use a transaction-local `public.zz_024_probe_tsvector(text)`, never a retired name, and an explicit absence assertion replaces the wrapper-dependency count. Negative controls: an altered expression fails every row with keyword content; one swapped golden value fails exactly that row.
+  - **Inversion:** with the wrappers re-created after C55, `007` (2), `015` (ACL-H1, H2 and H3) and `024` (1) fail.
+- **Generated types:** exactly the three RPC entries removed (−6 lines, no additions), from `supabase gen types typescript --local --schema public`. No handwritten code referenced them. No runtime source, Edge Function, extension or hook changed.
+- **Security Advisor:** unchanged. It showed 6 `rls_enabled_no_policy` locally both before and after. Production, read-only, showed 31 findings (24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password), none naming a wrapper.
+- **Full local lifecycle.** `npm run test:db:local` passed:
+  - replay of all 95 migrations;
+  - the sensitivity probe and the negative control;
+  - **25 suites / 2,337 pgTAP assertions**, from 25 / 2,375. The audit's scratch run predicted 2,333; the extra 4 are `007`'s absence assertion and `024`'s three additions;
+  - every concurrency and cutover probe, and the residue check;
+  - the hosted-Production ACL parity lane: it re-verified the frozen 2026-09-04 seed against its reference, applied every later migration through C55 with `migration up` from Production's explicit ACL shape, and kept `015` green;
+  - a clean teardown.
+- **Application gates:** lint, `npm run typecheck` (app, node and extension), Vitest (173 files / 5,662 tests), the web and extension production builds, and the local E2E lane (257 Playwright tests) passed.
+- **Historical migrations and fixtures are untouched.** No applied file was edited and no `migration repair` was run. The hosted-ACL parity seed and reference (`scripts/acl-parity/hosted-baseline-20260904120000.*`) stay frozen as the 2026-09-04 baseline.
+- **Out of scope:**
+  - `set_updated_at()` and `update_updated_at_column()`;
+  - default function-EXECUTE hardening and `ALTER DEFAULT PRIVILEGES`;
+  - `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`;
+  - database `TEMP`;
+  - service-role least privilege.
