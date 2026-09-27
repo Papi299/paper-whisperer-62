@@ -3888,3 +3888,72 @@ Decision **C51**. **Live in Production since the 2026-09-27 migration-only rollo
     - The same state was re-verified independently, read-only, on 2026-09-27 when this record was reconciled.
   - **Not done, by design.** No temporary-object probe, product canary or application-data write in Production. The rollout is established by the live catalog state and the tracked migration; the behaviour is proven by suite `007` and the CI suites above.
   - **Rollback** would remove a hardening layer (it opens no grant); see [deployment.md](deployment.md) §6.12. None has been performed.
+
+## 2026-09-27 — DB-BULK-METADATA-WRITE-INVOKER-001: the two caller-owned bulk metadata writes run as SECURITY INVOKER (`20260927071803`) — **PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION**
+
+Decision **C52**. **Not applied to Production.** Production is at ledger **91** (latest `20260927001229`, C51) and still runs both functions as SECURITY DEFINER (read-only, 2026-09-27). The migration-only rollout is pending review, merge and separate authorization ([deployment.md](deployment.md) §6.13, NOT YET RUN).
+
+| | `bulk_update_keywords(jsonb)` | `bulk_update_study_types(jsonb)` |
+|---|---|---|
+| **Before** (Production and clean replay, read-only, 2026-09-27; ledger **91**) | SECURITY DEFINER, `{"search_path=public, pg_temp"}`, body `c002702d…`, Production OID `46223` | SECURITY DEFINER, `{"search_path=public, pg_temp"}`, body `6086d69c…`, Production OID `19998` |
+| **After** (clean local replay only; ledger **92**) | SECURITY INVOKER; everything else identical | SECURITY INVOKER; everything else identical |
+
+- **What changes.** Two exact-signature `ALTER FUNCTION … SECURITY INVOKER` statements, and nothing else. Only `prosecdef` changes. OID, body, owner, language, volatility, parallel mode, cost, strictness, result, argument, `search_path` (C50's `public, pg_temp`) and the `authenticated`-only EXECUTE ACL are unchanged. There is no `CREATE OR REPLACE`, GRANT, REVOKE, owner change, path change or row write. `safe_bulk_insert_papers` is untouched.
+- **Why.** The read-only audit `DB-BULK-METADATA-WRITE-INVOKER-AUDIT-001` classified both **SAFE TO CONVERT**. Each body is one UPDATE of the caller's own `papers` rows, which `authenticated` may already write through its table SELECT/UPDATE grants and the caller-owned SELECT/UPDATE policies. As SECURITY DEFINER, the body's `papers.user_id = auth.uid()` was the only database boundary between accounts. As SECURITY INVOKER, the caller's grants and RLS are the primary boundary, and the predicate stays as defense-in-depth.
+- **Fail-closed preconditions.** The migration runs as `postgres` with `track_counts` on, under a transaction-local `search_path = pg_catalog, pg_temp`.
+  - `authenticated` is neither SUPERUSER nor BYPASSRLS, and holds USAGE on `public` / `auth` and EXECUTE on `auth.uid()`.
+  - The two body digests are checked on their own first, with a STOP / re-audit message. Then each function is pinned field by field on one readable line: one overload, owner, SECURITY DEFINER, kind, language, volatility, parallel, strictness, leakproofness, SETOF, cost, result, argument, `{"search_path=public, pg_temp"}`, literal ACL, effective EXECUTE class and body md5.
+  - `papers` is an ordinary `postgres`-owned table with RLS enabled **and** forced. `authenticated` holds exactly `INSERT, SELECT, UPDATE`, direct and effective. `anon`, PUBLIC and every unknown grantee hold nothing, and there is no column grant. These are checked by privilege, not by the literal ACL text, because the hosted-parity replay reaches this ACL from Production's legacy one.
+  - No RESTRICTIVE policy exists. The four `papers` policies match by value and by digest `83aefa941c0457380be04b51c131ed5d`.
+  - All twelve `papers` triggers are pinned: the two named ones by enabled state, type, function, column list and definition digest, and the ten internal foreign-key triggers by kind, function and the relation at the other end. Both trigger functions are pinned by mode, owner, path and body, and the author-link one by its owner-only ACL. Neither target body mentions `authors`.
+  - `papers.search_vector` is the stored generated `tsvector` in one of the two reviewed shapes: clean replay `dd69f099…` (dependencies and called functions: the text + jsonb wrappers, `setweight`, `tsvector_concat`) or hosted `8ddd960b…` (no dependency; `to_tsvector`, `setweight`, `tsvector_concat`). Every function it calls, and every function a `papers` CHECK constraint or index expression calls, must be executable by `authenticated`. `idx_papers_search_vector` is valid, ready and unchanged in definition.
+  - There are exactly 35 `public` SECURITY DEFINER functions, 27 of them `authenticated`-callable.
+- **Fail-closed verification before COMMIT.**
+  - Both are SECURITY INVOKER with the same literal ACL and effective callers, and with owner, path, language, volatility and parallel mode restated literally.
+  - Each target's whole `pg_proc` row **minus `prosecdef`**, OID included, is unchanged, and the body digests are restated.
+  - Every other `public` function's whole row is unchanged, and `safe_bulk_insert_papers` is still SECURITY DEFINER.
+  - The inventory is 33 / 25: the retained definer set is exactly the pre-change set minus these two, and the INVOKER set grew by exactly these two.
+  - `papers`' owner, RLS flags, stored ACL, relfilenode, column grants, every policy row, every trigger row, the `search_vector` attribute, default and index are unchanged, with their OIDs. `authenticated` keeps SELECT and UPDATE and is still not BYPASSRLS.
+  - No row was written to any `public` / `auth` / `storage` table.
+- **Migration controls, run locally** (PG 17.6, pre-C52 replay), each on a rolled-back copy of the real file, each leaving a whole-catalog fingerprint byte-identical (28/28):
+  - *Positive control:* the unmodified file passes its preconditions, both ALTERs and its verification.
+  - *Refused before any ALTER (21):* a target body changed; a target already SECURITY INVOKER; a target's path changed; a target granted to `service_role`; a target's owner changed; `papers` UPDATE revoked; `papers` SELECT revoked; RLS disabled; FORCE RLS disabled; the UPDATE policy's WITH CHECK widened; an extra RESTRICTIVE policy; the author-link trigger widened to every UPDATE; the updated-at trigger disabled; an extra BEFORE UPDATE trigger; a third `search_vector` shape; EXECUTE revoked on the jsonb wrapper; a CHECK constraint or an index expression calling a function the caller cannot execute (two probes); a 36th SECURITY DEFINER function; a column grant on `papers`; a PUBLIC grant on `papers`.
+  - *Refused at verification (5):* a target's path moved after the change; a target granted to `anon` after the change; `safe_bulk_insert_papers` converted too; a `papers` policy changed; an application row written in the migration's transaction.
+  - *Production, read-only:* the migration's own §0/§1 blocks, run verbatim inside `BEGIN TRANSACTION READ ONLY … ROLLBACK` on 2026-09-27, passed (`transaction_read_only = on`), with OIDs `46223` / `19998` and whole-row-minus-`prosecdef` digests `5fad9ff5…` / `2da2205f…`.
+- **Tests.**
+  - New suite **`022_bulk_metadata_write_invoker`**, **91** assertions. It covers:
+    - posture and boundary;
+    - `anon` and `service_role` refused at the ACL;
+    - own row — the target column, `updated_at = now()`, every other column untouched, and `search_vector` recomputed from the new keywords;
+    - foreign, mixed, unknown-id, empty, SQL `NULL` and no-claims payloads as silent no-ops;
+    - malformed input — `22023` / `22P02`, nothing applied;
+    - duplicate ids, where only "one of the supplied values" is asserted and a foreign row is never written;
+    - the body's predicate and `updated_at = now()` retained;
+    - RLS live under a RESTRICTIVE deny probe;
+    - RLS as the primary boundary — predicate-free INVOKER copies are blocked, each policy alone still blocks, both opened lets the write through (negative control), and the same copy as SECURITY DEFINER writes despite RLS;
+    - the grants live — UPDATE or SELECT revoked refuses both, with a DEFINER contrast;
+    - the `search_vector` EXECUTE dependency — the jsonb wrapper revoked refuses both calls and a plain browser UPDATE alike;
+    - the author-link trigger not firing, with a positive control.
+  - `003` **309 → 313**: 33 / 25 inventory; the two move from `client_rpcs()` to `invoker_rpcs()` (−5 each, +7 each). Its §6 own-row / cross-user behaviour assertions are kept unchanged.
+  - `015` **103 → 105**: ACL-H1 lists thirteen INVOKER routines, ACL-J1 gains the two rows at `search_path=public, pg_temp`, and ACL-J2 lists seven.
+  - `021` **101 → 99**: the hardened group is 30 (−2 in §1, −2 in §4), plus a new §1b pinning that both left the definer group with C50's path intact (+2). C50's remaining guarantees are unchanged.
+  - `000`: comment only; its EXECUTE matrix is mode-agnostic and unchanged at 156.
+  - Before editing, the unmodified suites against a C52 replay failed exactly the 8 inventory pins the audit predicted (`003` 1, 3; `015` ACL-H1, ACL-J2; `021` 33, 35, 59, 60). Reverting both functions to SECURITY DEFINER in scratch copies fails 19 assertions across `003` (5), `015` (4), `021` (4) and `022` (6). Moving one back to `search_path=public` fails one each in `015`, `021` and `022`.
+- **Full local lifecycle.** `npm run test:db:local` from a fresh stack (Supabase CLI 2.111.0, PostgreSQL 17.6) passed:
+  - replay of all 92 tracked migrations;
+  - the catalog-fingerprint sensitivity probe and the papers-RLS negative control;
+  - **23 suites / 2,206 pgTAP assertions** (from 22 / 2,111);
+  - the 18-case framework-free verification, and every concurrency and cutover probe;
+  - the residue check and the authoritative teardown;
+  - the hosted-Production ACL parity lane, which seeded Production's legacy ACL, applied every later migration including this one, and kept `015` green.
+- **Product regression.** No application or Edge Function source changed. Lint reports 0 errors (the 18 pre-existing warnings, none in a changed file). Typecheck passes. `npm test` passes 173 files / 5,658 tests with Validate's placeholder env. `build` and `build:extension` pass.
+- **Local E2E lane.** `npm run test:e2e:local` passed **257** Playwright tests (13.6 min). No spec in it calls either function directly, so this is a whole-app regression run.
+- **Real PostgREST path (local stack only).** A signed-in `supabase-js` client, as one of two disposable `.test` users created and deleted for the check, called both functions through PostgREST (10/10):
+  - own-row updates succeeded and read back;
+  - foreign and mixed payloads returned no error and left the other user's row byte-identical;
+  - a non-array payload returned `22023`;
+  - `anon` and `service_role` were refused with `42501 permission denied for function`.
+- **Generated types unchanged.** `supabase gen types typescript --local --schema public` on the C52 replay equals the committed `src/integrations/supabase/types.ts`, apart from the CLI's trailing blank line.
+- **Out of scope:** `safe_bulk_insert_papers(uuid,jsonb)`, which remains unaudited for SECURITY INVOKER and is the next distinct candidate; C49's five read RPCs; C50's 30 remaining definers and 3 exceptions; C51's helpers; `DB-SEARCH-VECTOR-EXPRESSION-PARITY-001`; the redundant `updated_at = now()`; C30.
+- **Expected Production rollout (not performed; [deployment.md](deployment.md) §6.13).** Ledger **91 → 92**. Both functions go to `prosecdef = false`, with OIDs, bodies, ACLs, owners and paths unchanged. `public` SECURITY DEFINER **35 → 33**, `authenticated`-callable **27 → 25**, Advisor `authenticated_security_definer_function_executable` **27 → 25**, with neither function listed. Table grants, policies, triggers, the `search_vector` expression and index, and Edge Function versions are unchanged.
+- **Rollback** would re-add owner authority; see [deployment.md](deployment.md) §6.13. Nothing has been applied, so there is nothing to roll back.
