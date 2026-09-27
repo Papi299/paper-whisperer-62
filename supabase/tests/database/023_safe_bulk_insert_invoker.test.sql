@@ -41,7 +41,10 @@
 --      DEFINER — the posture the migration left;
 --   6. caller privilege drift — a revoked INSERT, SELECT, sequence USAGE or
 --      generated-column / CHECK function EXECUTE fails closed as per-row
---      `error` at the INSERT and writes nothing; drift that strikes inside the
+--      `error` at the INSERT and writes nothing (a transaction-local probe
+--      column stands in for the generated-column function: since C54
+--      search_vector calls only built-ins, and revoking the old wrappers'
+--      EXECUTE is shown to affect nothing); drift that strikes inside the
 --      duplicate handler escapes it as an RPC-level error and rolls the whole
 --      call back.
 --
@@ -170,7 +173,7 @@ INSERT INTO public.papers (id, user_id, title, pmid, doi) VALUES
 CREATE TEMP TABLE c53_b1_before AS
   SELECT to_jsonb(p.*) AS row_j FROM public.papers p WHERE p.id = '23b00000-0000-0000-0000-0000000000b1';
 
-SELECT plan(73);
+SELECT plan(76);
 
 -- ══ 1. Posture ══════════════════════════════════════════════════════════════
 SELECT is(
@@ -644,18 +647,49 @@ SELECT is(pg_temp.shape(pg_temp.ins_a('[{"title":"Zqc53 drift sequence"}]')) || 
   '0:error 0', 'drift: without USAGE on papers_insert_order_seq the INSERT fails per row and nothing is written');
 GRANT USAGE ON SEQUENCE public.papers_insert_order_seq TO authenticated;
 
--- A generated-column function's EXECUTE revoked (the clean-replay
--- search_vector wrapper; PUBLIC on a replay, authenticated for the explicit
--- hosted form). A direct browser INSERT carries the same dependency.
+-- The old search_vector wrappers are not on the INSERT path: since C54 the
+-- expression calls only built-ins, so with the wrappers' EXECUTE taken away
+-- from the caller (PUBLIC on a replay; authenticated too, for the explicit
+-- hosted ACL form) the import and a direct browser INSERT both still work.
 REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) FROM PUBLIC, authenticated;
+REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) FROM PUBLIC, authenticated;
+SELECT is(pg_temp.shape(pg_temp.ins_a('[{"title":"Zqc53 no wrapper import","authors":["Zqc Author"],"keywords":["zqckw"]}]'))
+          || ' ' || pg_temp.n('Zqc53 no wrapper import'),
+  '0:inserted+id 1', 'no wrapper dependency: without EXECUTE on the old wrappers the import still inserts');
+SELECT is(pg_temp.err_as('authenticated', pg_temp.claims('23a00000-0000-0000-0000-00000000000a'),
+            $q$INSERT INTO public.papers (user_id, title, keywords) VALUES ('23a00000-0000-0000-0000-00000000000a', 'Zqc53 no wrapper direct', '["zqcdirect"]')$q$),
+  '00000 ', 'no wrapper dependency: a direct browser INSERT works without them too');
+-- (Read in a later statement: a subquery in the INSERT's own statement would
+-- share its pre-INSERT snapshot.)
+SELECT ok((SELECT p.search_vector IS NOT DISTINCT FROM (
+                    setweight(to_tsvector('english'::regconfig, COALESCE(p.title, ''::text)), 'A')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.abstract, ''::text)), 'B')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.journal, ''::text)), 'C')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.authors::text, ''::text)), 'C')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.keywords::text, ''::text)), 'C')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.notes, ''::text)), 'D'))
+                  AND p.search_vector @@ plainto_tsquery('english', 'zqcdirect')
+             FROM public.papers p WHERE p.title = 'Zqc53 no wrapper direct'),
+  'no wrapper dependency: that row stores the canonical direct vector');
+GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) TO PUBLIC;
+
+-- A generated-column function's EXECUTE revoked. papers' own search_vector
+-- calls only built-ins this role cannot revoke, so a transaction-local probe
+-- generated column on a probe function stands in for it. A direct browser
+-- INSERT carries the same dependency.
+CREATE FUNCTION public.zz_023_gen_probe(p_title text) RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true';
+REVOKE ALL ON FUNCTION public.zz_023_gen_probe(text) FROM PUBLIC;
+ALTER TABLE public.papers ADD COLUMN zz_023_gen boolean GENERATED ALWAYS AS (public.zz_023_gen_probe(title)) STORED;
 SELECT is(pg_temp.shape(pg_temp.ins_a('[{"title":"Zqc53 drift generated"}]')) || ' ' || pg_temp.n('Zqc53 drift generated'),
-  '0:error 0', 'drift: without EXECUTE on a search_vector function the INSERT fails per row and nothing is written');
-SELECT is((SELECT left(e, 5) || ' ' || (position('immutable_english_tsvector_text' IN e) > 0)::text
+  '0:error 0', 'drift: without EXECUTE on a generated-column function the INSERT fails per row and nothing is written');
+SELECT is((SELECT left(e, 5) || ' ' || (position('zz_023_gen_probe' IN e) > 0)::text
              FROM pg_temp.err_as('authenticated', pg_temp.claims('23a00000-0000-0000-0000-00000000000a'),
                     $q$INSERT INTO public.papers (user_id, title) VALUES ('23a00000-0000-0000-0000-00000000000a', 'Zqc53 drift direct')$q$) e),
   '42501 true',
   'drift: a direct browser INSERT carries the same generated-column dependency (not introduced by INVOKER)');
-GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) TO PUBLIC;
+ALTER TABLE public.papers DROP COLUMN zz_023_gen;
+DROP FUNCTION public.zz_023_gen_probe(text);
 
 -- A CHECK constraint's function EXECUTE revoked. papers' own CHECKs call only
 -- built-ins this role cannot revoke, so a transaction-local probe constraint on

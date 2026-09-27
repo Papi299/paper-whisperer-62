@@ -42,9 +42,12 @@
 --      makes both fail with "permission denied for table papers"; the same call
 --      as SECURITY DEFINER would not;
 --  13. the generated-column dependency: every function papers.search_vector
---      calls is executable by the caller, and on this replay they are the
---      reviewed wrapper shape; revoking the jsonb wrapper's EXECUTE breaks the
---      INVOKER call exactly as it breaks a direct browser UPDATE;
+--      calls is executable by the caller, and since C54 they are exactly the
+--      three direct built-ins (by OID), so revoking the old wrappers' EXECUTE
+--      no longer affects either write; a transaction-local probe generated
+--      column on a revoked probe function shows the dependency is real —
+--      every UPDATE, even of a column it does not read, evaluates it as the
+--      caller, for the INVOKER calls exactly as for a direct browser UPDATE;
 --  14. neither write fires the author-link invalidation trigger, while a direct
 --      authors edit still does (positive control).
 --
@@ -141,7 +144,7 @@ INSERT INTO public.author_identity_links (user_id, identity_id, paper_id, author
   ('22a00000-0000-0000-0000-00000000000a', '22a00000-0000-0000-0000-0000000000e1',
    '22a00000-0000-0000-0000-0000000000a1', 0, 'Zqcfiftytwo Author', 'manual');
 
-SELECT plan(91);
+SELECT plan(95);
 
 -- ══ 1. Posture ══════════════════════════════════════════════════════════════
 SELECT is(
@@ -514,7 +517,7 @@ SELECT is(
 -- papers has a BEFORE UPDATE row trigger, so every UPDATE recomputes the stored
 -- search_vector, and PostgreSQL checks EXECUTE on each function its expression
 -- calls as the current user — the caller, now. Read from the expression's node
--- tree, so it covers whatever the expression calls.
+-- tree as OIDs, so it covers whatever the expression calls.
 SELECT is(
   (SELECT coalesce(string_agg(f.oid::regprocedure::text, ', ' ORDER BY f.oid::regprocedure::text COLLATE "C"), '')
      FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum,
@@ -525,35 +528,66 @@ SELECT is(
       AND NOT has_function_privilege('authenticated', f.oid, 'EXECUTE')),
   '',
   'dependency: authenticated can EXECUTE every function papers.search_vector calls');
--- The reviewed clean-replay shape (DB-SEARCH-VECTOR-EXPRESSION-PARITY-001 keeps
--- hosted Production on inlined built-ins; not resolved here).
+-- Since C54 (DB-SEARCH-VECTOR-EXPRESSION-PARITY-001) every environment stores
+-- the direct built-in form, so those are exactly three built-ins — compared as
+-- OIDs against one resolved signature per row, never a comma-split list.
 SELECT is(
-  (SELECT string_agg(f.oid::regprocedure::text, ', ' ORDER BY f.oid::regprocedure::text COLLATE "C")
+  (SELECT array_agg(DISTINCT m[1]::oid ORDER BY m[1]::oid)
      FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum,
-          LATERAL (SELECT DISTINCT m[1]::oid AS fid
-                     FROM regexp_matches(d.adbin::text, ':(?:funcid|opfuncid) ([0-9]+)', 'g') AS m) x
-     JOIN pg_proc f ON f.oid = x.fid
+          regexp_matches(d.adbin::text, ':(?:funcid|opfuncid) ([0-9]+)', 'g') AS m
     WHERE d.adrelid = 'public.papers'::regclass AND a.attname = 'search_vector'),
-  'immutable_english_tsvector_jsonb(jsonb), immutable_english_tsvector_text(text), setweight(tsvector,"char"), tsvector_concat(tsvector,tsvector)',
-  'dependency: on a clean replay search_vector calls the reviewed text and jsonb wrappers');
+  (SELECT array_agg(to_regprocedure(s)::oid ORDER BY to_regprocedure(s)::oid)
+     FROM (VALUES ('pg_catalog.setweight(tsvector,"char")'), ('pg_catalog.to_tsvector(regconfig,text)'),
+                  ('pg_catalog.tsvector_concat(tsvector,tsvector)')) AS w(s)),
+  'dependency: search_vector calls exactly setweight, to_tsvector(regconfig,text) and tsvector_concat');
 
--- Take EXECUTE on the jsonb wrapper away from the caller (PUBLIC on a replay,
--- where the ACL is the default; authenticated too, for the explicit hosted
--- form). The INVOKER calls now fail on the wrapper — and so does a plain
--- browser UPDATE, which is why this is not a new dependency.
+-- The old wrappers are no longer on the write path: with their EXECUTE taken
+-- away from the caller (PUBLIC on a replay; authenticated too, for the
+-- explicit hosted ACL form), both INVOKER calls and a plain browser UPDATE
+-- still succeed, and the vector is recomputed to the canonical value.
+REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) FROM PUBLIC, authenticated;
 REVOKE EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) FROM PUBLIC, authenticated;
+SELECT is(pg_temp.as_a(f, '[{"id":"22a00000-0000-0000-0000-0000000000a1","keywords":["zqcnowrapper"],"study_type":"no wrapper"}]'),
+  '00000 ',
+  'dependency: without EXECUTE on the old wrappers, ' || f || ' still succeeds — they are not a dependency any more')
+FROM unnest(ARRAY['bulk_update_keywords', 'bulk_update_study_types']) f ORDER BY f;
+SELECT is(pg_temp.err_as('authenticated', pg_temp.claims_a(),
+    $q$UPDATE public.papers SET study_type = 'direct no wrapper' WHERE id = '22a00000-0000-0000-0000-0000000000a1'$q$),
+  '00000 ', 'dependency: a direct browser UPDATE succeeds without them too');
+SELECT ok((SELECT p.search_vector IS NOT DISTINCT FROM (
+                    setweight(to_tsvector('english'::regconfig, COALESCE(p.title, ''::text)), 'A')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.abstract, ''::text)), 'B')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.journal, ''::text)), 'C')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.authors::text, ''::text)), 'C')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.keywords::text, ''::text)), 'C')
+                    || setweight(to_tsvector('english'::regconfig, COALESCE(p.notes, ''::text)), 'D'))
+                  AND p.search_vector @@ plainto_tsquery('english', 'zqcnowrapper')
+             FROM public.papers p WHERE p.id = '22a00000-0000-0000-0000-0000000000a1'),
+  'dependency: the recomputed vector is the canonical direct value and carries the new keyword');
+GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_text(text) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) TO PUBLIC;
+
+-- The dependency itself is real. papers' own expression calls only built-ins
+-- this role cannot revoke, so a transaction-local probe generated column on a
+-- probe function stands in: with the caller's EXECUTE revoked, both INVOKER
+-- calls fail on it — even bulk_update_study_types, which writes no column the
+-- probe reads — and so does a plain browser UPDATE.
+CREATE FUNCTION public.zz_022_gen_probe(p_title text) RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true';
+REVOKE ALL ON FUNCTION public.zz_022_gen_probe(text) FROM PUBLIC;
+ALTER TABLE public.papers ADD COLUMN zz_022_gen boolean GENERATED ALWAYS AS (public.zz_022_gen_probe(title)) STORED;
 SELECT is(pg_temp.as_a(f, '[{"id":"22a00000-0000-0000-0000-0000000000a1","keywords":["zqcw"],"study_type":"w"}]'),
-  '42501 permission denied for function immutable_english_tsvector_jsonb',
-  'dependency: without EXECUTE on the jsonb wrapper, ' || f || ' is refused — even for a column the wrapper does not read')
+  '42501 permission denied for function zz_022_gen_probe',
+  'dependency: without EXECUTE on a generated-column function, ' || f || ' is refused — even for a column it does not read')
 FROM unnest(ARRAY['bulk_update_keywords', 'bulk_update_study_types']) f ORDER BY f;
 SELECT is(pg_temp.err_as('authenticated', pg_temp.claims_a(),
     $q$UPDATE public.papers SET study_type = 'w' WHERE id = '22a00000-0000-0000-0000-0000000000a1'$q$),
-  '42501 permission denied for function immutable_english_tsvector_jsonb',
+  '42501 permission denied for function zz_022_gen_probe',
   'dependency: a direct browser UPDATE carries the same dependency (not introduced by INVOKER)');
-GRANT EXECUTE ON FUNCTION public.immutable_english_tsvector_jsonb(jsonb) TO PUBLIC;
-SELECT is(pg_temp.as_a('bulk_update_study_types', '[{"id":"22a00000-0000-0000-0000-0000000000a1","study_type":"wrapper back"}]')
+ALTER TABLE public.papers DROP COLUMN zz_022_gen;
+DROP FUNCTION public.zz_022_gen_probe(text);
+SELECT is(pg_temp.as_a('bulk_update_study_types', '[{"id":"22a00000-0000-0000-0000-0000000000a1","study_type":"probe gone"}]')
           || pg_temp.st('22a00000-0000-0000-0000-0000000000a1'),
-  '00000 wrapper back', 'dependency: with EXECUTE restored the INVOKER call succeeds again');
+  '00000 probe gone', 'dependency: with the probe column gone the INVOKER call succeeds again');
 
 -- ══ 14. The author-link invalidation trigger does not fire ══════════════════
 -- A1 carries one author-identity link. Neither function writes `authors`, so

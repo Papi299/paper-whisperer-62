@@ -154,9 +154,9 @@ CREATE TEMP TABLE acl_relation_allowlist (relname text PRIMARY KEY, why text NOT
 -- is what makes a SIXTH such routine fail CI.
 CREATE TEMP TABLE acl_invoker_public_exec_allowlist (sig text PRIMARY KEY, why text NOT NULL);
 INSERT INTO acl_invoker_public_exec_allowlist VALUES
-  ('immutable_english_tsvector_jsonb(jsonb)',   'tsvector wrapper used by the papers search_vector generation expression'),
-  ('immutable_english_tsvector_text(text)',     'tsvector wrapper used by the papers search_vector generation expression'),
-  ('immutable_english_tsvector_textarr(text[])','tsvector wrapper used by the papers search_vector generation expression'),
+  ('immutable_english_tsvector_jsonb(jsonb)',   'tsvector wrapper, retained; papers.search_vector calls no wrapper since C54'),
+  ('immutable_english_tsvector_text(text)',     'tsvector wrapper, retained; papers.search_vector calls no wrapper since C54'),
+  ('immutable_english_tsvector_textarr(text[])','tsvector wrapper, retained; papers.search_vector calls no wrapper since C54'),
   ('set_updated_at()',                          'updated_at trigger function'),
   ('update_updated_at_column()',                'updated_at trigger function');
 

@@ -869,7 +869,7 @@ ALTER FUNCTION public.validate_author_mention_for_identity(uuid,uuid,integer,tex
 >   - Exactly five `public` functions at `{search_path=pg_catalog}`, all SECURITY INVOKER and owned by `postgres`: `attachment_cleanup_path_is_safe` (OID `109298`, body `2c2f2ff5…`), the text / text[] / jsonb wrappers (`66407` / `66408` / `66409`, bodies `26edc211…` / `19261084…` / `30c015cd…`) and `set_updated_at` (`33584`, body `301a8849…`).
 >   - The attachment helper's ACL was `{postgres=X/postgres}`, and the other four were at the hosted explicit default form.
 >   - The three attachment callers were at `{"search_path=public, pg_temp"}` with digests `23833e1f…` / `91bf1072…` / `4bdcc814…`.
->   - `papers.search_vector` was at the hosted inlined expression `8ddd960b4f4b11dd7afd35485d01fd25`, and `trg_papers_updated_at` (OID `33585`) was bound to `set_updated_at()`.
+>   - `papers.search_vector` was at the hosted direct built-in expression `8ddd960b4f4b11dd7afd35485d01fd25` *(recorded at the time as "inlined" — the wrong mechanism; see C54)*, and `trg_papers_updated_at` (OID `33585`) was bound to `set_updated_at()`.
 >   - `helpers_minus_config` recomputed as `f2c68ed1852d00f9e0a1369ea11a172e`.
 >   - The migration's own §0/§1 precondition blocks were also run verbatim inside a read-only, rolled-back transaction, and passed.
 > - **What was run — migration only, exactly as planned.**
@@ -897,7 +897,7 @@ ALTER FUNCTION public.immutable_english_tsvector_textarr(text[])       SET searc
 ALTER FUNCTION public.immutable_english_tsvector_jsonb(jsonb)          SET search_path = pg_catalog, pg_temp;
 ```
 
-**No statement touches `public.set_updated_at()`**, which stays at exactly `{search_path=pg_catalog}`. The migration also changes no body, OID, owner, security mode, grant, caller, trigger, generated column, index, policy, relation or row, and its §3 proves each of those before COMMIT. It accepts only the two reviewed representations of the wrappers' EXECUTE ACL (NULL on a clean replay, explicit on hosted) and of the `search_vector` expression (wrapper calls on a clean replay, inlined on hosted), and preserves whichever it finds (C51).
+**No statement touches `public.set_updated_at()`**, which stays at exactly `{search_path=pg_catalog}`. The migration also changes no body, OID, owner, security mode, grant, caller, trigger, generated column, index, policy, relation or row, and its §3 proves each of those before COMMIT. It accepts only the two reviewed representations of the wrappers' EXECUTE ACL (NULL on a clean replay, explicit on hosted) and of the `search_vector` expression (wrapper calls on a clean replay, direct built-in calls on hosted — recorded at the time as "inlined"; see C54), and preserves whichever it finds (C51).
 
 **Why there is no ordering constraint.** With no temporary object present — the only situation a legitimate caller creates — `pg_catalog, pg_temp` and `pg_catalog` resolve every name identically, so no call returns anything different. A call already executing when the migration commits finishes under the configuration it started with. So there was no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step were part of this rollout.** Generated types do not change, because `proconfig` is not part of any signature.
 
@@ -961,7 +961,7 @@ ALTER FUNCTION public.immutable_english_tsvector_jsonb(jsonb)          SET searc
 >   - `bulk_update_keywords(jsonb)` (OID `46223`, body `c002702d05a14e7febd00feaf1e97786`) and `bulk_update_study_types(jsonb)` (OID `19998`, body `6086d69c0915c8a7c67089556b40041b`) were SECURITY DEFINER, owned by `postgres`, plpgsql, VOLATILE, PARALLEL UNSAFE, `returns void`, argument `updates jsonb`, at `{"search_path=public, pg_temp"}`, with ACL `{postgres=X/postgres,authenticated=X/postgres}`.
 >   - **35** `public` SECURITY DEFINER functions, **27** of them `authenticated`-callable; Security Advisor `authenticated_security_definer_function_executable` **27**, both functions listed. `safe_bulk_insert_papers(uuid,jsonb)` (OID `29057`) was SECURITY DEFINER.
 >   - `papers`: owner `postgres`, RLS and FORCE RLS on, `authenticated` exactly `INSERT, SELECT, UPDATE`, no column grant. Its four caller-owned PERMISSIVE policies matched the digest `83aefa941c0457380be04b51c131ed5d`, and there was no RESTRICTIVE policy. `trg_papers_updated_at` (BEFORE UPDATE → `set_updated_at()`, SECURITY INVOKER, `{search_path=pg_catalog}`) and `papers_clear_author_identity_links_on_authors_change` (AFTER UPDATE OF `authors`, WHEN `authors` changed) were in their reviewed shape.
->   - `papers.search_vector` was at the hosted inlined expression `8ddd960b4f4b11dd7afd35485d01fd25`; every function it calls was executable by `authenticated`. `idx_papers_search_vector` (OID `61100`) was valid and ready.
+>   - `papers.search_vector` was at the hosted direct built-in expression `8ddd960b4f4b11dd7afd35485d01fd25` *(recorded at the time as "inlined" — the wrong mechanism; see C54)*; every function it calls was executable by `authenticated`. `idx_papers_search_vector` (OID `61100`) was valid and ready.
 >   - The migration's own §0/§1 precondition blocks were run verbatim inside a read-only, rolled-back transaction, and passed both times.
 > - **What was run — migration only, exactly as planned.**
 >   - `supabase migration list --linked` showed local and remote aligned through `20260927001229`, exactly one local-only migration, `20260927071803`, and no remote-only one.
@@ -1069,7 +1069,7 @@ Nothing else: not a body, OID, signature, return type, owner, `search_path` (bot
 >   - `safe_bulk_insert_papers(uuid,jsonb)` (OID `29057`, body `119925245a5c3c8529ada3d2e10fba96`, 7,628 characters) was SECURITY DEFINER, owned by `postgres`, plpgsql, VOLATILE, PARALLEL UNSAFE, not STRICT, `returns jsonb`, arguments `p_user_id uuid, p_papers jsonb`, at `{"search_path=public, pg_temp"}`, with ACL `{postgres=X/postgres,authenticated=X/postgres}`. Its whole `pg_proc` row minus `prosecdef` hashed to `0a0cb0878fbafd75b4f5d8f366904d81`, by the formula in step 3.
 >   - **33** `public` SECURITY DEFINER functions, **25** of them `authenticated`-callable, distributed **30** at `public, pg_temp` and **3** at `public`. The Security Advisor's `authenticated_security_definer_function_executable` was **25**, and it listed this function.
 >   - `papers`: owner `postgres`, RLS and FORCE RLS on, `authenticated` exactly `INSERT, SELECT, UPDATE`, no column grant. Its four caller-owned PERMISSIVE policies matched the digest `83aefa941c0457380be04b51c131ed5d`, and there was no RESTRICTIVE policy. `authenticated` held exactly `USAGE` on `papers_insert_order_seq`. The six constraints (the `papers.user_id → auth.users` foreign key included), the seven indexes (all valid and ready, the PMID and `lower(doi)` unique indexes included) and the twelve triggers were in their reviewed shape. Both named triggers were UPDATE-only, and the only INSERT-time trigger was the internal `papers_user_id_fkey` check against `auth.users`.
->   - `papers.search_vector` was at the hosted inlined expression `8ddd960b4f4b11dd7afd35485d01fd25`. Read by function OID, `authenticated` could EXECUTE all three functions it calls: `setweight(tsvector,"char")`, `to_tsvector(regconfig,text)` and `tsvector_concat(tsvector,tsvector)`. `idx_papers_search_vector` (OID `61100`) was valid and ready. Every function and operator the body calls was executable by `authenticated` too.
+>   - `papers.search_vector` was at the hosted direct built-in expression `8ddd960b4f4b11dd7afd35485d01fd25` *(recorded at the time as "inlined" — the wrong mechanism; see C54)*. Read by function OID, `authenticated` could EXECUTE all three functions it calls: `setweight(tsvector,"char")`, `to_tsvector(regconfig,text)` and `tsvector_concat(tsvector,tsvector)`. `idx_papers_search_vector` (OID `61100`) was valid and ready. Every function and operator the body calls was executable by `authenticated` too.
 >   - The migration's own §0/§1 precondition blocks were run verbatim inside a read-only, rolled-back transaction, and passed both times.
 > - **What was run — migration only, exactly as planned.**
 >   - `supabase migration list --linked` showed local and remote aligned through `20260927071803`, exactly one local-only migration, `20260927123856`, and no remote-only one.
@@ -1163,6 +1163,69 @@ Nothing else changes. The body (the broad per-row `WHEN OTHERS` handler included
 **Row-level errors under caller drift — expected, and fail-closed.** C53 kept the per-row `WHEN OTHERS` handler by decision; the body did not change. If a future change ever removed a grant or policy this function relies on, the import would report each affected paper as `failed` (a per-row `error` object at HTTP 200) rather than failing the whole request. Nothing would be written, and no other account's data would be returned. The importer already treats a failed RPC chunk the same way, so the user sees the same failed items. Drift that strikes inside the duplicate handler still escapes as an RPC-level error that rolls the whole call back. Treat a sudden spike of failed imports after any `papers` grant, policy or sequence change as that drift.
 
 **Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration containing exactly `ALTER FUNCTION public.safe_bulk_insert_papers(uuid,jsonb) SECURITY DEFINER;`, which returns it to the pre-change shape (body, ACL and configuration were never touched). It re-adds owner authority and re-makes the identity guard the only database boundary for this function; it does not remove any boundary. It needs its own decision against C53.
+
+### 6.15 `20260927161343` (one canonical `papers.search_vector` expression, C54) — migration-only; PREPARED IN REPOSITORY — PRODUCTION EXPRESSION ALREADY CANONICAL; MIGRATION LEDGER ROLLOUT NOT YET PERFORMED
+
+> **Status — PREPARED, NOT APPLIED. Production already stores the canonical direct built-in expression, so it needs no search-vector rewrite. The migration itself is not in Production's ledger. Applying it needs its own, explicit authorization; nothing in this section authorizes it.**
+>
+> - **Repository.** `20260927161343_canonicalize_papers_search_vector_expression.sql`, on branch `db/search-vector-direct-canonicalization`, in a draft pull request that is not merged. After it, every replay ends on one `search_vector` representation (C54).
+> - **Production, verified read-only on 2026-09-27** (before and after the implementation work, with no Production mutation between):
+>   - PostgreSQL 17.6; ledger **93**, latest `20260927123856`; `20260927161343` absent.
+>   - `papers.search_vector`: attnum 29, attrdef OID `59954`, expression `8ddd960b4f4b11dd7afd35485d01fd25` — the direct built-in form, which calls `setweight`, `to_tsvector(regconfig,text)` and `tsvector_concat` (all executable by `authenticated`). Its normal dependencies are exactly its six input columns and `pg_ts_config english`.
+>   - `idx_papers_search_vector`: OID `61100` (relfilenode `61100`), valid, ready and live, `GIN (search_vector)`. `papers`: OID `17492`, relfilenode `59955`.
+>   - The three wrappers (OIDs `66407`–`66409`, bodies `26edc211…` / `19261084…` / `30c015cd…`, `{"search_path=pg_catalog, pg_temp"}`, the explicit hosted ACL) have **zero** dependents.
+>   - **The real migration file ran end to end inside `BEGIN TRANSACTION READ ONLY … ROLLBACK`.** It classified Production as the **no-op** branch and passed every precondition and postcondition, the all-rows semantic check included. It held only ACCESS SHARE on `papers` and its indexes, was never assigned a transaction ID, and changed nothing.
+> - **No Production mutation has been performed for C54.** No `db push`, ALTER, UPDATE, ANALYZE, index rebuild, temporary object or application-data canary.
+
+**What the migration does.** It accepts exactly two starting representations of `papers.search_vector` and refuses any third before taking a lock or changing anything (C54):
+- **Direct built-in** (`8ddd960b…`, hosted Production) → **no-op branch.** Validation reads only: no `ALTER TABLE`, no explicit lock, no table rewrite, no index rebuild, no `ANALYZE`, no row write. Its own verification proves before COMMIT that the heap, TOAST and index files, every index OID and the column default's row are physically unchanged, and that it held nothing stronger than ACCESS SHARE on `papers`.
+- **Clean-replay wrapper** (`dd69f099…`, every `supabase db reset`) → **rewrite branch.** `lock_timeout` 5 s, ACCESS EXCLUSIVE on `papers`, every precondition re-checked under the lock, one `ALTER TABLE public.papers ALTER COLUMN search_vector SET EXPRESSION AS (…)`, then `ANALYZE public.papers (search_vector)`, with row count, data and stored vectors proven identical.
+
+Both branches require every stored vector to equal the canonical expression already (validation only), and end on exactly `8ddd960b…` with no wrapper dependency.
+
+**Projected Production effect of a future, separately authorized rollout.** Exactly one ledger row (**93 → 94**). The no-op branch. No ALTER TABLE, no rewrite, no index rebuild, no ANALYZE, no application-data write. The `search_vector` expression, attrdef OID `59954`, `idx_papers_search_vector` OID `61100` and every relfilenode unchanged. It reads every `papers` row once for the semantic check, under ACCESS SHARE only, so it neither blocks nor is blocked by ordinary application reads and writes.
+
+**Why there is no ordering constraint.** Production's expression and stored values do not change, so no client, RPC or Edge Function can observe the rollout. No Edge Function deployment, no frontend step and no drain are involved. Generated types do not change (local regeneration byte-identical).
+
+**Procedure — for a separately authorized rollout; NOT YET EXECUTED.**
+1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
+2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
+3. Fresh read-only preflight against Production:
+
+   ```sql
+   BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO pg_catalog, pg_temp;
+   SELECT current_setting('server_version') AS pg;                                   -- expect 17.6 (see the note below if not)
+   SELECT count(*) AS ledger, max(version) AS latest,                                -- expect 93, 20260927123856
+          count(*) FILTER (WHERE version = '20260927161343') AS c54_present         -- expect 0
+     FROM supabase_migrations.schema_migrations;
+   SELECT a.attnum, d.oid AS attrdef_oid, d.xmin::text AS attrdef_xmin,            -- expect 29, 59954; record the xmin
+          md5(pg_get_expr(d.adbin, d.adrelid)) AS search_vector_expr                -- expect 8ddd960b4f4b11dd7afd35485d01fd25
+     FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+    WHERE d.adrelid = 'public.papers'::regclass AND a.attname = 'search_vector';
+   SELECT c.oid, c.relfilenode, c.xmin::text AS class_xmin                           -- expect idx 61100/61100 and papers 17492/59955; record the xmins
+     FROM pg_class c WHERE c.oid IN ('public.papers'::regclass, 'public.idx_papers_search_vector'::regclass);
+   SELECT count(*) AS wrapper_dependents                                             -- expect 0
+     FROM pg_depend WHERE refclassid = 'pg_proc'::regclass AND deptype = 'n'
+      AND refobjid IN ('public.immutable_english_tsvector_text(text)'::regprocedure,
+                       'public.immutable_english_tsvector_jsonb(jsonb)'::regprocedure,
+                       'public.immutable_english_tsvector_textarr(text[])'::regprocedure);
+   ROLLBACK;
+   ```
+   Then run the **real migration file** read-only: replace its `BEGIN;` with `BEGIN TRANSACTION READ ONLY;` and its `COMMIT;` with `ROLLBACK;`, and run it with `supabase db query --linked -f`. It must finish, with `current_setting('paperlume.search_vector_parity.branch', true)` = `noop` just before the ROLLBACK. A read-only transaction cannot take the rewrite branch's lock, so it cannot change anything even if the classification were wrong. **If the expression is not `8ddd960b…`, the branch is not `noop`, or any check refuses, stop and re-review; do not edit the migration to fit.**
+4. `supabase migration list --linked` must show exactly one local-only migration, `20260927161343`, and no remote-only one. Then run `supabase db push --dry-run` from the merge commit. It must list **exactly** `20260927161343_canonicalize_papers_search_vector_expression.sql`, with no seeds and no roles. Anything else, stop (§6.2).
+5. Obtain the separate, explicit rollout authorization.
+6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **93 → 94**). The file is explicitly transactional; a refusal rolls it back with nothing changed.
+7. Verify immediately, read-only. Rerun step 3's first query block:
+   - the ledger is **94**, latest `20260927161343`, present exactly once;
+   - `search_vector_expr` is still `8ddd960b…`, and attnum 29, attrdef OID `59954` **and its xmin** are identical to step 3 (an `ALTER TABLE` would have replaced the attrdef row);
+   - `papers` and `idx_papers_search_vector` keep the same OIDs, relfilenodes **and** `pg_class` xmins (a rewrite, index rebuild or ANALYZE would move at least one);
+   - wrapper dependents are still 0; Edge Function versions are unchanged.
+
+**No canary, and none is required.** Nothing observable changes in Production. The rewrite branch's behavior is covered in CI against a full replay: suite `024` (the single-representation contract, a 33-case equivalence corpus and before/after `search_papers` comparison), suites `022` and `023`, and the hosted-ACL parity lane, which applies this migration from Production's legacy ACL shape.
+
+**PostgreSQL 17.11.** Supabase makes 17.11 available from 2026-09-28, and the project owner starts the upgrade. It hardens `tsvector` length limits, and would affect the canonical and wrapper forms identically. If Production is upgraded before this rollout, repeat step 3, including the read-only run of the real file: its semantic check re-validates every stored vector on the new version. No 17.11 image was available for an exact-version local reproduction when this was prepared.
+
+**Rollback — reference only; this section authorizes none.** In Production there is nothing to roll back: the no-op branch changes no schema object. The ledger row would remain, recording that the canonicalization check ran. On a replayed database the former wrapper expression could be restored with another `SET EXPRESSION`, a rewrite with the same values, but that would reintroduce the dual representation C54 removes, so it needs its own decision.
 
 ---
 
