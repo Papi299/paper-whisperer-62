@@ -950,17 +950,41 @@ ALTER FUNCTION public.immutable_english_tsvector_jsonb(jsonb)          SET searc
 
 ---
 
-### 6.13 `20260927071803` (bulk metadata writes become SECURITY INVOKER, C52) — migration-only; PREPARED — NOT YET RUN
+### 6.13 `20260927071803` (bulk metadata writes become SECURITY INVOKER, C52) — migration-only; COMPLETE: applied 2026-09-27
 
-> **Status — PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION.** Nothing in this section has been executed against Production. The migration is not applied, and the rollout below needs independent review, a merge and a separate, explicit authorization.
+> **Status — COMPLETE. The migration-only rollout finished on 2026-09-27 and C52 is live in Production. Do not re-run the migration as a pending step.**
 >
-> - **Pre-state, verified read-only on 2026-09-27** while preparing the change:
+> - **Merged.** PR #309 as the two-parent commit `72469931591468bfebba2e8cfe9d7c7e85b7c658` (parents `f0931090` and the approved head `eaa3904c`; tree `bacea6cb`, identical to the approved head's).
+> - **Hosted CI.** Merged-`main` on `7246993`: Validate (run `36307235008`), DB Tests (`36307235030`) and Extension (`36307235024`) passed. `E2E (local)` does not run on a push to `main` ([README](../README.md#ci)); its evidence for this change is the pull-request run on the exact approved head `eaa3904c4c73b476e778b9ff83979abca4e4b646`, run `36304602176`, which passed.
+> - **Before — pre-rollout state, verified read-only at preparation on 2026-09-27 and again in the fresh preflight immediately before the apply** (step 3):
 >   - PostgreSQL 17.6; ledger **91**, latest `20260927001229` (C51); C52 absent.
->   - `bulk_update_keywords(jsonb)` (OID `46223`, body `c002702d05a14e7febd00feaf1e97786`) and `bulk_update_study_types(jsonb)` (OID `19998`, body `6086d69c0915c8a7c67089556b40041b`) are SECURITY DEFINER, owned by `postgres`, plpgsql, VOLATILE, PARALLEL UNSAFE, `returns void`, argument `updates jsonb`, at `{"search_path=public, pg_temp"}`, with ACL `{postgres=X/postgres,authenticated=X/postgres}`.
->   - **35** `public` SECURITY DEFINER functions, **27** of them `authenticated`-callable; Security Advisor `authenticated_security_definer_function_executable` **27**, both functions listed.
->   - `papers`: owner `postgres`, RLS and FORCE RLS on, `authenticated` exactly `INSERT, SELECT, UPDATE`, no column grant. Its four caller-owned PERMISSIVE policies match the digest `83aefa941c0457380be04b51c131ed5d`, and there is no RESTRICTIVE policy. `trg_papers_updated_at` (BEFORE UPDATE → `set_updated_at()`, SECURITY INVOKER, `{search_path=pg_catalog}`) and `papers_clear_author_identity_links_on_authors_change` (AFTER UPDATE OF `authors`, WHEN `authors` changed) are in their reviewed shape.
->   - `papers.search_vector` is at the hosted inlined expression `8ddd960b4f4b11dd7afd35485d01fd25`; every function it calls is executable by `authenticated`.
->   - The migration's own §0/§1 precondition blocks were run verbatim inside a read-only, rolled-back transaction, and passed.
+>   - `bulk_update_keywords(jsonb)` (OID `46223`, body `c002702d05a14e7febd00feaf1e97786`) and `bulk_update_study_types(jsonb)` (OID `19998`, body `6086d69c0915c8a7c67089556b40041b`) were SECURITY DEFINER, owned by `postgres`, plpgsql, VOLATILE, PARALLEL UNSAFE, `returns void`, argument `updates jsonb`, at `{"search_path=public, pg_temp"}`, with ACL `{postgres=X/postgres,authenticated=X/postgres}`.
+>   - **35** `public` SECURITY DEFINER functions, **27** of them `authenticated`-callable; Security Advisor `authenticated_security_definer_function_executable` **27**, both functions listed. `safe_bulk_insert_papers(uuid,jsonb)` (OID `29057`) was SECURITY DEFINER.
+>   - `papers`: owner `postgres`, RLS and FORCE RLS on, `authenticated` exactly `INSERT, SELECT, UPDATE`, no column grant. Its four caller-owned PERMISSIVE policies matched the digest `83aefa941c0457380be04b51c131ed5d`, and there was no RESTRICTIVE policy. `trg_papers_updated_at` (BEFORE UPDATE → `set_updated_at()`, SECURITY INVOKER, `{search_path=pg_catalog}`) and `papers_clear_author_identity_links_on_authors_change` (AFTER UPDATE OF `authors`, WHEN `authors` changed) were in their reviewed shape.
+>   - `papers.search_vector` was at the hosted inlined expression `8ddd960b4f4b11dd7afd35485d01fd25`; every function it calls was executable by `authenticated`. `idx_papers_search_vector` (OID `61100`) was valid and ready.
+>   - The migration's own §0/§1 precondition blocks were run verbatim inside a read-only, rolled-back transaction, and passed both times.
+> - **What was run — migration only, exactly as planned.**
+>   - `supabase migration list --linked` showed local and remote aligned through `20260927001229`, exactly one local-only migration, `20260927071803`, and no remote-only one.
+>   - `supabase db push --linked --dry-run` listed exactly `20260927071803_convert_bulk_metadata_writes_security_invoker.sql`, with no seeds and no roles.
+>   - The normal linked `supabase db push --linked --yes` (Supabase CLI 2.111.0) then applied exactly that file under its own repository version, between 09:07:33Z and 09:07:45Z UTC. It exited 0 and reported no seeds and no roles.
+>   - Ledger **91 → 92**, latest `20260927071803`, present exactly once (name `convert_bulk_metadata_writes_security_invoker`).
+>   - It was the only intentional Production mutation of the C52 rollout. No Edge Function was deployed: all six versions and bundle hashes read back afterwards were unchanged. The rollout changed no Auth, Storage, secret, AI/provider or quota state, created no temporary object, wrote no application row and ran no canary.
+> - **No manual Vercel action.** None was part of the database rollout, and none was needed: C52 changed a function security mode, tests and docs, not shipped frontend behavior. This record makes no claim about any Vercel deployment; that was outside the rollout's verification scope.
+> - **After — verified read-only immediately after the apply** (and re-verified independently, read-only, on 2026-09-27 for the documentation reconciliation):
+>   - Both functions are SECURITY INVOKER.
+>     - They keep the same OIDs (`46223`, `19998`), owner `postgres`, plpgsql, VOLATILE and PARALLEL UNSAFE.
+>     - They keep `{"search_path=public, pg_temp"}`, the ACL `{postgres=X/postgres,authenticated=X/postgres}`, and bodies `c002702d…` / `6086d69c…`.
+>     - Their whole `pg_proc` rows minus `prosecdef` are **identical** to the preflight (`5fad9ff5f940c37fa9dd9fce3fc925b6` / `2da2205ff43522a8b9e2c8b4f859b041`). Only the security mode moved.
+>   - **33** `public` SECURITY DEFINER functions, **25** of them `authenticated`-callable. **30** are at `{"search_path=public, pg_temp"}` and C50's **3** exceptions at `{search_path=public}`.
+>     - Exactly these two left, and none joined. Every other `public` function's row is unchanged.
+>     - `safe_bulk_insert_papers(uuid,jsonb)` (OID `29057`) is still SECURITY DEFINER.
+>   - `papers` is unchanged:
+>     - `authenticated` is still exactly `INSERT, SELECT, UPDATE`, with no DELETE or TRUNCATE;
+>     - RLS and FORCE RLS are on;
+>     - the four policies still match `83aefa94…`, none RESTRICTIVE.
+>   - All twelve `papers` triggers are unchanged, `trg_papers_updated_at` and `papers_clear_author_identity_links_on_authors_change` included. So are `set_updated_at()`, the `search_vector` expression (`8ddd960b…`) and `idx_papers_search_vector` (OID `61100`, valid and ready, same definition).
+>   - Row counts of all 29 `public` tables were identical immediately before and after the apply. The migration's own §3 also proved its transaction wrote no row.
+>   - Security Advisor `authenticated_security_definer_function_executable` went **27 → 25**, with neither function listed and no finding added. The C30 leaked-password warning and the six `rls_enabled_no_policy` notices predate C52 and are unrelated to it.
 
 **What changes.** Two statements inside a fail-closed transaction, one attribute each — `prosecdef` true → false:
 
@@ -971,12 +995,17 @@ ALTER FUNCTION public.bulk_update_study_types(jsonb)  SECURITY INVOKER;
 
 Nothing else: not a body, OID, signature, return type, owner, `search_path` (both keep C50's `public, pg_temp`), volatility, parallel mode, cost, strictness or EXECUTE ACL; not a table grant, RLS flag, policy, trigger, generated column or index; not another function (`safe_bulk_insert_papers` stays SECURITY DEFINER); not a row. `authenticated` keeps EXECUTE on both. See decision C52.
 
-**Why there is no ordering constraint.** The shipped web app calls both functions for ids from the caller's own library. For those ids both security modes update the same rows: the body's `user_id` predicate and the caller-owned RLS SELECT and UPDATE policies admit the same set. Every other id is a silent no-op in both modes. A call already executing when the migration commits finishes under the mode it started with. No Edge Function calls them. So there is no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step are part of this rollout.** Generated types do not change: the security mode is not part of the function signature PostgREST types describe, and the local check was byte-identical.
+**Why there is no ordering constraint.** The shipped web app calls both functions for ids from the caller's own library. For those ids both security modes update the same rows: the body's `user_id` predicate and the caller-owned RLS SELECT and UPDATE policies admit the same set. Every other id is a silent no-op in both modes. A call already executing when the migration commits finishes under the mode it started with. No Edge Function calls them. So there was no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step were part of this rollout.** Generated types do not change: the security mode is not part of the function signature PostgREST types describe, and the local check was byte-identical.
 
-**Procedure — NOT YET RUN.**
+**Procedure — EXECUTED 2026-09-27; kept as the reference procedure and as the pattern for a comparable migration-only change; not a pending step.** These are the steps as written before the rollout. The `expect` values in step 3 are the **pre-rollout** state it was checked against. What was actually observed and run is the status box above, restated per step below.
 1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
 2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
-3. Fresh read-only preflight against Production:
+3. Fresh read-only preflight against Production. These are the pre-rollout expectations. After the rollout this query returns:
+   - ledger 92, latest `20260927071803`, `c52_present` 1;
+   - both rows with `prosecdef` false, and the same OIDs, bodies, paths, ACLs and `row_minus_secdef` values;
+   - `public_definer` 33 and `auth_definer` 25;
+   - the same `papers_policies` and `search_vector_expr`.
+
    ```sql
    BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO pg_catalog, pg_temp;
    SELECT count(*) AS ledger, max(version) AS latest                                -- expect 91, 20260927001229
@@ -988,7 +1017,7 @@ Nothing else: not a body, OID, signature, return type, owner, `search_path` (bot
      FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace
       AND p.proname IN ('bulk_update_keywords', 'bulk_update_study_types')
-    ORDER BY 2;                          -- expect the two rows in the status box above, prosecdef true
+    ORDER BY 2;                          -- expect the two rows in the status box's "Before" list, prosecdef true
    SELECT count(*) FILTER (WHERE p.prosecdef) AS public_definer,                    -- expect 35
           count(*) FILTER (WHERE p.prosecdef
                              AND has_function_privilege('authenticated', p.oid, 'EXECUTE')) AS auth_definer  -- expect 27
@@ -1005,22 +1034,25 @@ Nothing else: not a body, OID, signature, return type, owner, `search_path` (bot
     WHERE d.adrelid = 'public.papers'::regclass AND a.attname = 'search_vector';
    ROLLBACK;
    ```
-   Record both `row_minus_secdef` values; step 7 must return the same ones. At preparation they read `5fad9ff5f940c37fa9dd9fce3fc925b6` (`bulk_update_keywords`) and `2da2205ff43522a8b9e2c8b4f859b041` (`bulk_update_study_types`). Re-read them rather than trust these. Also run the migration's own §0/§1 blocks verbatim inside `BEGIN TRANSACTION READ ONLY … ROLLBACK`. Any other pre-state is a reason to stop, and the migration refuses it anyway (its §1). In particular, **if a body digest, the policy digest or the `search_vector` expression differs, stop and re-review**; do not edit the migration to fit.
-4. `supabase migration list --linked` must show exactly one local-only migration, `20260927071803`, and no remote-only one. Then run `supabase db push --dry-run` from the merge commit; it must list **exactly** `20260927071803_convert_bulk_metadata_writes_security_invoker.sql`. Anything else, stop (§6.2).
-5. Obtain the separate, explicit rollout authorization.
-6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **91 → 92**).
-7. Verify immediately, read-only. Expected after the apply:
+   Record both `row_minus_secdef` values; step 7 must return the same ones. At preparation on 2026-09-27 they read `5fad9ff5f940c37fa9dd9fce3fc925b6` (`bulk_update_keywords`) and `2da2205ff43522a8b9e2c8b4f859b041` (`bulk_update_study_types`).
+   - The rule was to re-read them at preflight rather than trust those values. The fresh preflight immediately before the apply returned the same values, and every other step-3 value matched too.
+   - The migration's own §0/§1 blocks also passed, run verbatim inside `BEGIN TRANSACTION READ ONLY … ROLLBACK`.
+   - Any other pre-state would have been a reason to stop, and the migration refuses it anyway (its §1). In particular, **if a body digest, the policy digest or the `search_vector` expression differs, stop and re-review**; do not edit the migration to fit.
+4. `supabase migration list --linked` must show exactly one local-only migration, `20260927071803`, and no remote-only one. Then run `supabase db push --dry-run` from the merge commit; it must list **exactly** `20260927071803_convert_bulk_metadata_writes_security_invoker.sql`. Anything else, stop (§6.2). *Observed:* local and remote aligned through `20260927001229`, exactly that one local-only migration and no remote-only one, and a dry run that listed exactly that file, with no seeds and no roles.
+5. Obtain the separate, explicit rollout authorization. *Obtained before the apply.*
+6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **91 → 92**). *Executed as `supabase db push --linked --yes` (CLI 2.111.0) between 09:07:33Z and 09:07:45Z UTC; it applied exactly that one file, and the ledger went **91 → 92**.*
+7. Verify immediately, read-only (the expected values below are the live state since 2026-09-27, and were observed exactly):
    - the ledger is **92**, latest `20260927071803`, present exactly once;
    - rerunning step 3 shows both functions with `prosecdef` **false**, and the same OIDs (`46223`, `19998`), body digests, `{"search_path=public, pg_temp"}` and ACL `{postgres=X/postgres,authenticated=X/postgres}`; both `row_minus_secdef` values are **identical** to step 3;
    - `public_definer` **35 → 33**, `auth_definer` **27 → 25**; the two that left are exactly these two;
    - `authenticated` still has EXECUTE on both, and `anon`, `service_role` and PUBLIC still have none;
    - `papers`' grants, RLS and FORCE RLS are unchanged, `papers_policies` is unchanged, and so are both named triggers, `search_vector_expr` and `idx_papers_search_vector`;
    - Edge Function versions are unchanged.
-8. Re-read the Security Advisor (read-only). `authenticated_security_definer_function_executable` is expected to go **27 → 25**, with neither function listed. The remaining 25 are the 24 functions the C49 audit found intentionally privileged, plus `safe_bulk_insert_papers`, which is still unaudited for SECURITY INVOKER.
+8. Re-read the Security Advisor (read-only). `authenticated_security_definer_function_executable` is expected to go **27 → 25**, with neither function listed. The remaining 25 are the 24 functions the C49 audit found intentionally privileged, plus `safe_bulk_insert_papers`, which is still unaudited for SECURITY INVOKER. They are not 25 confirmed defects; each is classified function by function. *Observed:* **27 → 25**, neither function listed and no finding added. The six `rls_enabled_no_policy` notices (INFO) and the C30 leaked-password warning (WARN) were unchanged.
 
-**No canary is required.** The migration's own verification refuses to commit anything but the expected catalog state. The behaviour under INVOKER is covered in CI against a full replay: suite `022`, plus `000`, `003`, `015` and `021`, and the hosted-ACL parity lane, which applies this migration from Production's legacy ACL shape. If an authenticated product smoke is ever separately authorized, the smallest one is to change a keyword-pool entry and a study-type-pool entry so the library re-evaluates keywords and study types. Both must save without an error toast, exactly as before.
+**No canary was run, and none was required.** No application row was written, and no disposable user or paper was created in Production. The migration's own verification refuses to commit anything but the expected catalog state. The behaviour under INVOKER is covered in CI against a full replay: suite `022`, plus `000`, `003`, `015` and `021`, and the hosted-ACL parity lane, which applies this migration from Production's legacy ACL shape. If an authenticated product smoke is ever separately authorized, the smallest one is to change a keyword-pool entry and a study-type-pool entry so the library re-evaluates keywords and study types. Both must save without an error toast, exactly as before.
 
-**Rollback — reference only; this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration containing exactly the two `ALTER FUNCTION … SECURITY DEFINER;` statements, which returns them to the pre-change shape (bodies, ACL and configuration are never touched). It re-adds owner authority and re-makes the body predicate the only database boundary for these two; it does not remove any boundary. It needs its own decision against C52.
+**Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration containing exactly the two `ALTER FUNCTION … SECURITY DEFINER;` statements, which returns them to the pre-change shape (bodies, ACL and configuration were never touched). It re-adds owner authority and re-makes the body predicate the only database boundary for these two; it does not remove any boundary. It needs its own decision against C52.
 
 ---
 
