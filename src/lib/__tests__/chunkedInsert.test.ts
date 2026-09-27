@@ -209,3 +209,53 @@ describe("processChunkedInsert — chunk failure accounting", () => {
     expect(rpcFn).not.toHaveBeenCalled();
   });
 });
+
+// DB-SAFE-BULK-INSERT-INVOKER-001 (C53): safe_bulk_insert_papers runs as
+// SECURITY INVOKER and keeps its per-row `WHEN OTHERS` handler. The same caller
+// privilege drift can therefore reach this loop in two shapes — the chunk's RPC
+// fails (Case A), or it succeeds with one `status: "error"` row per paper
+// (Case B). Both must account for every item identically.
+describe("processChunkedInsert — a failed chunk and per-row errors give the same accounting", () => {
+  const DENIED = "permission denied for table papers";
+  const payload = Array.from({ length: 6 }, (_, i) => ({ title: `paper-${i}` }));
+
+  /** Chunks 0 and 2 insert; the middle chunk answers with `middle`. */
+  async function runWithMiddleChunk(middle: Awaited<ReturnType<RpcFn>>) {
+    const rpcFn = vi.fn<RpcFn>()
+      .mockResolvedValueOnce(makeSuccess(2, 0))
+      .mockResolvedValueOnce(middle)
+      .mockResolvedValueOnce(makeSuccess(2, 4));
+    const out = await processChunkedInsert(payload, rpcFn, { chunkSize: 2, interChunkDelayMs: 0 });
+    return { ...out, calls: rpcFn.mock.calls.length };
+  }
+
+  /** What the importer acts on: index, status and id — not the error text. */
+  const outcome = (results: Awaited<ReturnType<typeof processChunkedInsert>>["results"]) =>
+    results.map(({ index, status, id }) => ({ index, status, id: id ?? null }));
+
+  it("Case A (RPC error) and Case B (per-row errors) yield the same per-item results", async () => {
+    const caseA = await runWithMiddleChunk({ data: null, error: { message: DENIED } });
+    const caseB = await runWithMiddleChunk(makeMixed([{ status: "error" }, { status: "error" }]));
+
+    expect(outcome(caseA.results)).toEqual(outcome(caseB.results));
+    expect(outcome(caseA.results)).toEqual([
+      { index: 0, status: "inserted", id: "id-0" },
+      { index: 1, status: "inserted", id: "id-1" },
+      { index: 2, status: "error", id: null },
+      { index: 3, status: "error", id: null },
+      { index: 4, status: "inserted", id: "id-4" },
+      { index: 5, status: "inserted", id: "id-5" },
+    ]);
+    // Neither shape stops the run: the chunk after the failed one is attempted.
+    expect(caseA.calls).toBe(3);
+    expect(caseB.calls).toBe(3);
+  });
+
+  it("differs only in lastError, which is internal diagnostics rather than an outcome", async () => {
+    const caseA = await runWithMiddleChunk({ data: null, error: { message: DENIED } });
+    const caseB = await runWithMiddleChunk(makeMixed([{ status: "error" }, { status: "error" }]));
+
+    expect(caseA.lastError).toBe(DENIED);
+    expect(caseB.lastError).toBeNull();
+  });
+});

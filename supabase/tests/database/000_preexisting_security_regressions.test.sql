@@ -105,6 +105,10 @@ $hlp$;
 -- bulk_update_keywords and bulk_update_study_types followed as SECURITY
 -- INVOKER with DB-BULK-METADATA-WRITE-INVOKER-001 (C52), again with the EXECUTE
 -- ACL untouched; their security mode is pinned by suites 003, 015, 021 and 022.
+-- safe_bulk_insert_papers followed as SECURITY INVOKER with
+-- DB-SAFE-BULK-INSERT-INVOKER-001 (C53), again with the EXECUTE ACL and its
+-- NULL-auth / mismatch guard untouched (section 10 still asserts both); its
+-- security mode is pinned by suites 003, 006, 009, 015, 021 and 023.
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
