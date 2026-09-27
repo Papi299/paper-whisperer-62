@@ -3001,6 +3001,8 @@ Adds **one** additive migration, `20260731162729_reconcile_data_api_grants.sql`,
 
 ## 2026-08-10 — PFA-C08-SECURITY-HARDENING-001: bounded `search_path` on the four remaining advisor functions (`20260810152125`) — **applied to Production**
 
+> **Later clarification (2026-09-27, C51).** This record is preserved as written. Its hardening outcome remains valid, and its function/operator reasoning is correct: the temporary schema is never searched for function or operator names. Its broader statement that the casts and the `'english'::regconfig` lookup "all resolve in `pg_catalog`" was incomplete for **data-type names**: an implicit, unlisted temporary schema may precede `pg_catalog` for type lookup. C51 (`20260927001229`, prepared in repository and not live in Production at the time of writing) is the forward refinement for the helpers whose bodies contain type-name references. See the 2026-09-27 entry below and [decisions-and-triggers.md](decisions-and-triggers.md) C51.
+
 **Merged first, deployed second.** This migration landed as a **repository-only** change (PR #200, regular two-parent merge `7c61ba397e775fa580479139baef48a2d3330a8e`) and sat committed-but-unapplied while the ledger stayed at **72 rows** (latest `20260809051802`). It was then deployed to Production **the same day under a separate, explicit owner authorization** (`PFA-C08-SECURITY-HARDENING-001P`), taking the ledger to **73 rows**. No Supabase Auth setting was changed at either step. The rollout evidence is recorded at the end of this entry.
 
 - **Why.** A fresh read-only Security Advisor run against `lioxtgiputfniqbktcsz` still reported `function_search_path_mutable` for four functions that the C03B1 RPC hardening (`20260802025704`) did not cover, because none of them is an RPC: `public.set_updated_at()` (plpgsql `BEFORE UPDATE` trigger function) and the three `SECURITY INVOKER` SQL helpers behind the generated `papers.search_vector` — `immutable_english_tsvector_text(text)`, `immutable_english_tsvector_textarr(text[])`, `immutable_english_tsvector_jsonb(jsonb)`.
@@ -3812,3 +3814,56 @@ Implementation of the read-only audit `DB-SECURITY-DEFINER-SEARCH-PATH-AUDIT-001
     - The same state was re-verified independently, read-only, on 2026-09-26 when this record was reconciled.
   - **Not done, by design.** No temp-shadow probe, product canary or application-data write in Production. The rollout is established by the live catalog state and the tracked migration; the behaviour is proven by suite `021` and the CI suites above.
   - **Rollback** would remove a defense-in-depth layer (it opens no boundary); see [deployment.md](deployment.md) §6.11. None has been performed.
+
+## 2026-09-27 — DB-PG-CATALOG-HELPER-PG-TEMP-LAST-001: the `pg_catalog` helpers that name built-in data types place `pg_temp` last (`20260927001229`) — **PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION**
+
+Decision **C51**. **Nothing here has been applied to Production.** Production stays at ledger **90**, latest `20260926202754` (C50), with all five `pg_catalog` helpers at `{search_path=pg_catalog}` (re-verified read-only on 2026-09-27), until a separately authorized, migration-only rollout ([deployment.md](deployment.md) §6.12, NOT YET RUN).
+
+| | Hardened 4 | `set_updated_at()` |
+|---|---|---|
+| **Before** (Production and clean replay, read-only, 2026-09-27; ledger **90**) | `{search_path=pg_catalog}` | `{search_path=pg_catalog}` |
+| **After** (clean local replay; ledger **91**) | `{"search_path=pg_catalog, pg_temp"}` | `{search_path=pg_catalog}` — unchanged |
+
+- **What changes.** Four exact-signature `ALTER FUNCTION … SET search_path = pg_catalog, pg_temp` statements, on `attachment_cleanup_path_is_safe(uuid,text,uuid)` and the three `immutable_english_tsvector_*` wrappers, and nothing else. Only `proconfig` changes on those four. Body, OID, owner, language, volatility, parallel mode, strictness, leakproofness, return type, arguments, SECURITY INVOKER, ACL and effective callers are unchanged. There is no `CREATE OR REPLACE`, GRANT, REVOKE, owner change, mode change or row write, and `set_updated_at()` has no statement.
+- **Why.** An unlisted temporary schema is searched before `pg_catalog` for data-type names (never for functions or operators). All four bodies name built-in data types, so listing `pg_temp` last makes their type-name resolution deterministic. For the attachment helper, which is evaluated inside the three SECURITY DEFINER attachment lifecycle RPCs, this is **security-boundary hardening**. For the wrappers it is **semantic-integrity / defense-in-depth hardening**. There is no evidence of exploitation, and no ordinary PaperLume route to the arbitrary SQL/DDL prerequisite has been identified. It is not an incident.
+- **PFA-C08 clarified.** The 2026-08-10 entry above now carries a note: its outcome and its function/operator reasoning stand; its statement about type lookup was incomplete. C51 is the forward refinement. The historical migration file is unchanged.
+- **Fail-closed preconditions.** The migration runs as `postgres` with `track_counts` on, under a transaction-local `search_path = pg_catalog, pg_temp`, so every rendering it compares is runner-independent.
+  - The five body digests are checked on their own first, with a STOP / re-review message.
+  - All five are pinned field by field on one readable line each: one overload, owner, SECURITY INVOKER, kind, language, volatility, parallel, strictness, leakproofness, SETOF, result, arguments, `{search_path=pg_catalog}`, effective EXECUTE class and body md5. No other `public` function may be `pg_catalog`-pinned.
+  - ACLs: the attachment helper is exactly `{postgres=X/postgres}`. The wrappers and `set_updated_at()` are either the clean-replay `NULL` or the hosted explicit default form, all four the same one. Any third or mixed shape is refused.
+  - Exactly `delete_attachment_with_cleanup`, `delete_papers_with_attachment_cleanup` and `finalize_attachment_upload` call the helper, schema-qualified, each in its reviewed SECURITY DEFINER shape (C50 path, owner + `authenticated` ACL, body digest).
+  - `papers.search_vector` is the stored generated `tsvector` in one of the two reviewed shapes: clean replay `dd69f099…` on the text + jsonb wrappers, or hosted `8ddd960b…` on no function. `idx_papers_search_vector` is valid, ready and unchanged in definition. Nothing else depends on the four.
+  - `set_updated_at()` is bound exactly by `papers.trg_papers_updated_at` (enabled, BEFORE UPDATE FOR EACH ROW) and nothing else depends on it.
+- **Fail-closed verification before COMMIT.**
+  - The four are at exactly `{"search_path=pg_catalog, pg_temp"}` and `set_updated_at()` at exactly `{search_path=pg_catalog}`; the `pg_catalog` distribution over `public` is 4 + 1.
+  - The targets' whole `pg_proc` rows **minus `proconfig`** are unchanged, OID included. The body digests, SECURITY INVOKER and each literal ACL are restated.
+  - Effective callers are unchanged: nobody but the owner for the helper; `anon` / `authenticated` / `service_role` through PUBLIC for the wrappers.
+  - `set_updated_at()`'s whole row and every other `public` function (the three callers included) are unchanged.
+  - The `search_vector` attribute and default, the index (with its relfilenode), `papers`' relfilenode, the trigger and every `pg_depend` edge into the five are unchanged, with their OIDs.
+  - No row was written to any `public` / `auth` / `storage` table.
+- **Migration controls, run locally** (PG 17.6), each on a rolled-back copy of the real file, each leaving the database byte-identical (42/42):
+  - *Positive controls:* the clean-replay shape; the hosted ACL shape; the hosted inlined `search_vector` shape; both hosted shapes together.
+  - *Refused before any ALTER (27):* a wrapper, helper or `set_updated_at()` body changed; a target given an extra schema, already hardened, given a second GUC, or made SECURITY DEFINER; `set_updated_at()` re-pathed or made SECURITY DEFINER; an unreviewed wrapper ACL, a hosted ACL plus an extra grantee, or mixed representations; an extra grantee on the helper, or `authenticated` EXECUTE on it; the updated-at trigger disabled, or a second trigger on `set_updated_at()`; a third or mixed `search_vector` shape; the GIN index missing; a caller's path or grant drifted; an unreviewed caller of the helper; a sixth `pg_catalog`-pinned function; an unreviewed dependent on a wrapper; not running as `postgres`; the rendering path not pinned.
+  - *Refused at verification (11):* `set_updated_at()` moved too; `pg_temp` first; an extra schema; `COST` changed; a mode changed; the helper granted; an ACL normalised to the hosted form; a caller changed; `search_vector` changed; the updated-at trigger changed; an application row written.
+- **Tests.**
+  - `007_function_search_path_hardening` is refactored from 59 to **71** assertions:
+    - the four at exactly `pg_catalog, pg_temp`, with no second GUC, and the list parsed as `pg_catalog` then `pg_temp`;
+    - `set_updated_at()` at exactly `pg_catalog`, with its body digest;
+    - every `pg_catalog`-pinned `public` function classified as 4 + 1;
+    - all five still SECURITY INVOKER with their volatility, parallel mode, language and return type;
+    - the helper's owner-only ACL, and the wrappers' / `set_updated_at()`'s ACL in a reviewed representation;
+    - an ordinary own attachment path still accepted and another account's namespace still refused.
+
+    All existing wrapper-equivalence, generated `search_vector` and updated-at trigger assertions are kept. Run against the pre-C51 posture, `007` fails 9 of 71: every hardened path and classification assertion. Its ACL assertion passes on the hosted explicit shape and fails on a third shape.
+  - `014` (167), `015` (103) and `021` (101) are unchanged and green.
+- **Full local lifecycle.** `npm run test:db:local` from a fresh stack (Supabase CLI 2.111.0, PostgreSQL 17.6) passed:
+  - replay of all 91 tracked migrations;
+  - the catalog-fingerprint sensitivity probe and the papers-RLS negative control;
+  - **22 suites / 2,111 pgTAP assertions**;
+  - the 18-case framework-free verification, and every concurrency and cutover probe;
+  - the residue check and the authoritative teardown;
+  - the hosted-Production ACL parity lane, which applied this migration from Production's **explicit** wrapper ACL shape and kept `015` green.
+- **Preservation cross-check.** A digest over the five helpers and the three attachment callers, excluding only `proconfig` (OIDs, bodies, ACLs, modes and owners), is identical before and after C51 on a local replay. Production's pre-rollout value is recorded in [deployment.md](deployment.md) §6.12 for the rollout to compare against.
+- **Product regression.** No application or Edge Function source changed. Lint reports 0 errors. Typecheck passes. `npm test` passes 173 files / 5,658 tests with Validate's placeholder env. `build` and `build:extension` pass.
+- **Generated types unchanged.** `supabase gen types typescript --local --schema public` is byte-identical before and after C51. It equals the committed `src/integrations/supabase/types.ts`, apart from the CLI's trailing blank line.
+- **Out of scope:** C50's SECURITY DEFINER inventory; `update_updated_at_column()`; default function EXECUTE hardening; database `TEMPORARY`; `DB-SEARCH-VECTOR-EXPRESSION-PARITY-001`; C30.

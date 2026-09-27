@@ -619,7 +619,7 @@ The selection between Paddle and Lemon Squeezy is the topic of a separate small 
 
 **Rationale:** Current Supabase documentation makes leaked-password protection available on the **Pro Plan and above**, and read-only inspection on 2026-08-10 confirmed the organization is on **Free**. The owner does not want to incur the plan cost during the current development phase solely for this one Auth control. Commercialization is already paused under C27, so the appropriate current posture is to accept the control as deferred rather than to introduce recurring spend before the product is ready for commercial launch.
 
-**Consequence:** No Supabase plan, billing, or Auth setting changes are authorized during development by this decision. PFA-C08's database hardening was a separate track and is now **complete**: migration `20260810152125_harden_remaining_function_search_paths` was merged (PR #200, merge `7c61ba39…`) and **deployed to Production on 2026-08-10 under separate authorization** (`PFA-C08-SECURITY-HARDENING-001P`), taking the ledger from 72 to **73** rows; post-deploy verification confirmed the four `function_search_path_mutable` warnings cleared, with `proconfig` the only changed catalog field and `papers.search_vector`, the `papers` indexes, and the `set_updated_at` trigger all unchanged — see [migration-history.md](migration-history.md). **PFA-C08 is therefore closed for the current development scope.** Leaked-password protection stays **disabled** and is an explicit **commercialization prerequisite**, not an unresolved development blocker.
+**Consequence:** No Supabase plan, billing, or Auth setting changes are authorized during development by this decision. PFA-C08's database hardening was a separate track and is now **complete**: migration `20260810152125_harden_remaining_function_search_paths` was merged (PR #200, merge `7c61ba39…`) and **deployed to Production on 2026-08-10 under separate authorization** (`PFA-C08-SECURITY-HARDENING-001P`), taking the ledger from 72 to **73** rows; post-deploy verification confirmed the four `function_search_path_mutable` warnings cleared, with `proconfig` the only changed catalog field and `papers.search_vector`, the `papers` indexes, and the `set_updated_at` trigger all unchanged — see [migration-history.md](migration-history.md). **PFA-C08 is therefore closed for the current development scope.** (Its hardening outcome stands; its type-lookup reasoning is refined forward by **C51**.) Leaked-password protection stays **disabled** and is an explicit **commercialization prerequisite**, not an unresolved development blocker.
 
 **Re-evaluation trigger:** before commercial/public paid launch, or earlier if the Supabase organization moves to Pro for another reason or Supabase makes leaked-password protection available on the current plan. At re-evaluation, confirm the current Supabase documentation and project configuration rather than assuming today's plan gate still applies; if supported, enable leaked-password protection and re-run the Security Advisor to verify the finding clears.
 
@@ -1392,7 +1392,7 @@ The audit classified them **SAFE UNDER CURRENT PRIVILEGES**. The exemption belon
 - **Negative control:** only that function, transaction-locally, is set back to `search_path=public`. The same shadow now wins. The caller's own real paper is refused, and the forged row lets the call replace the other account's tag links under the owner's authority.
 - Restoring `public, pg_temp` refuses the forged call again. Run against the pre-C50 posture, the suite fails 40 of its 101 assertions, including every hardened behavioural one. So it detects the old posture; it does not merely pass on the new one.
 
-**Out of scope, unchanged:** C49's five SECURITY INVOKER read RPCs; the `search_path=pg_catalog` helpers (`set_updated_at`, `immutable_english_tsvector_*`, `attachment_cleanup_path_is_safe`), whose review is a separate follow-up; the database `TEMP` privilege, which is not revoked from PUBLIC (a separate, platform-sensitive question); default function EXECUTE hardening; service-role least privilege; search-vector expression parity; C30.
+**Out of scope, unchanged:** C49's five SECURITY INVOKER read RPCs; the `search_path=pg_catalog` helpers (`set_updated_at`, `immutable_english_tsvector_*`, `attachment_cleanup_path_is_safe`), whose review is a separate follow-up *(2026-09-27: now **C51**, prepared in repository, not live in Production)*; the database `TEMP` privilege, which is not revoked from PUBLIC (a separate, platform-sensitive question); default function EXECUTE hardening; service-role least privilege; search-vector expression parity; C30.
 
 **Privacy.** Execution-environment hardening only: no data category, recipient, retention or processor changes, and no Privacy Policy amendment ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)).
 
@@ -1401,4 +1401,42 @@ The audit classified them **SAFE UNDER CURRENT PRIVILEGES**. The exemption belon
 - **any body change to one of the three exceptions** — re-audit it; the digest pin fails CI until someone decides;
 - a hardened function being converted to SECURITY INVOKER (the `bulk_update_*` and `safe_bulk_insert_papers` groups) — decide then whether it keeps `pg_temp` last;
 - a change to CREATE on `public` or to database `TEMP` for client roles;
-- the separate `pg_catalog`-helper path review.
+- the separate `pg_catalog`-helper path review — now **C51**.
+
+### C51. The `search_path=pg_catalog` helpers whose bodies name built-in data types list `pg_temp` last (2026-09-27)
+
+**Status: PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION.** Migration `20260927001229_harden_pg_catalog_helper_pg_temp_last.sql` implements it (`DB-PG-CATALOG-HELPER-PG-TEMP-LAST-001`). It has not been applied to Production. Production stays at ledger **90**, latest `20260926202754` (C50), with all five `pg_catalog` helpers still at `{search_path=pg_catalog}`, until a separately authorized, migration-only rollout ([deployment.md](deployment.md) §6.12). Because the attachment helper sits on a privileged boundary, that rollout should be prioritized once the implementation PR is approved and merged.
+
+**Decision.** Exactly four SECURITY INVOKER helpers move from `{search_path=pg_catalog}` to `{"search_path=pg_catalog, pg_temp"}`:
+
+| Function | Role | Classification |
+|---|---|---|
+| `attachment_cleanup_path_is_safe(uuid,text,uuid)` | The attachment-namespace predicate evaluated inside the three SECURITY DEFINER lifecycle RPCs (`delete_attachment_with_cleanup`, `delete_papers_with_attachment_cleanup`, `finalize_attachment_upload`) | **Security-boundary hardening.** Its resolution environment is part of that privileged boundary. |
+| `immutable_english_tsvector_text(text)` | Search-vector wrapper | **Semantic-integrity / defense-in-depth hardening** |
+| `immutable_english_tsvector_textarr(text[])` | Search-vector wrapper | **Semantic-integrity / defense-in-depth hardening** |
+| `immutable_english_tsvector_jsonb(jsonb)` | Search-vector wrapper | **Semantic-integrity / defense-in-depth hardening** |
+
+`set_updated_at()` **deliberately stays at exactly `{search_path=pg_catalog}`**. Its reviewed body (`md5(prosrc)` `301a884953d37769916294bb60562e05`) names no data type: it assigns `now()` to `NEW.updated_at` and returns `NEW`. As with C50's exceptions, the classification belongs to that exact body. Suite `007` pins path and digest together, so a body change forces a re-review.
+
+All five remain SECURITY INVOKER. For each of the four, **only `proconfig` changes**. Body, OID, owner, language, volatility, parallel mode, strictness, leakproofness, return type, arguments, SECURITY INVOKER status, EXECUTE ACL and effective callers are unchanged. So are the three attachment callers, the `papers.trg_papers_updated_at` binding, the `papers.search_vector` generated column, its stored values and `idx_papers_search_vector`. There is no grant, OID or dependency change.
+
+**Why.** Under PostgreSQL 17 the session's temporary schema is always searched and, when it is not listed in `search_path`, it is searched **before** `pg_catalog` for relation and data-type names. It is never searched for function or operator names ([runtime-config-client, `search_path`](https://www.postgresql.org/docs/17/runtime-config-client.html#GUC-SEARCH-PATH)). All four bodies name built-in data types, so `search_path=pg_catalog` alone does not make those names resolve to `pg_catalog` in every session. Listing `pg_temp` explicitly **last** places `pg_catalog` ahead of it, and **built-in type-name resolution becomes deterministic**. This is C50's principle applied to the `pg_catalog`-pinned INVOKER helpers.
+
+**Not an incident.** There is **no evidence of exploitation**. **No current ordinary PaperLume route** has been identified that provides the arbitrary SQL/DDL prerequisite; PostgREST exposes RPC calls, not DDL. Client roles hold database-level `TEMPORARY` through PUBLIC's database ACL entry `=Tc/postgres` (`T` = TEMPORARY, `c` = CONNECT). That is not CREATE on schema `public`, a separate privilege that `anon`, `authenticated` and `service_role` do not hold (re-verified read-only in Production on 2026-09-27). C51 does not change what any legitimate call returns: with no temporary object present, `pg_catalog, pg_temp` and `pg_catalog` resolve every name identically.
+
+**PFA-C08 clarified, not reopened.** PFA-C08 (`20260810152125`, 2026-08-10) is not an incident and its hardening outcome remains valid: the four advisor findings were closed with a fixed, narrow path. Its reasoning was correct for functions and operators, which are never looked up in the temporary schema. Its broader statement that unqualified type lookups resolve `pg_catalog` first was **incomplete**: an implicit, unlisted temporary schema may precede `pg_catalog` for data-type lookup. C51 is the forward refinement for the four helpers whose bodies contain type-name references. The historical migration file is not edited.
+
+**Two known environment differences — each accepted in exactly two reviewed shapes, never normalised:**
+1. **EXECUTE ACL of the three wrappers (and of `set_updated_at()`).** A clean replay stores `proacl IS NULL`, PostgreSQL's default of owner plus PUBLIC EXECUTE. Hosted Production stores the same effective posture as the explicit `{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}`. The migration accepts either, requires all four to share one of them, refuses any third shape, and preserves the literal value it found. The attachment helper has one exact owner-only ACL, `{postgres=X/postgres}`, everywhere.
+2. **The `papers.search_vector` expression** (`DB-SEARCH-VECTOR-EXPRESSION-PARITY-001`, tracked separately and not resolved here). A clean replay stores calls to the text and jsonb wrappers. Hosted Production stores the inlined built-in form. Rendered under the migration's pinned path, these are `dd69f099a274a9cdc0f174ae0883ddb6` and `8ddd960b4f4b11dd7afd35485d01fd25`. Any third shape stops the migration.
+
+**Out of scope, unchanged:** C50's SECURITY DEFINER inventory (the four C51 functions are SECURITY INVOKER and do not join it); `update_updated_at_column()`; default function-EXECUTE hardening, i.e. PUBLIC EXECUTE on the INVOKER helpers (a separate backlog item); database `TEMPORARY` (not revoked); `DB-SEARCH-VECTOR-EXPRESSION-PARITY-001`; C30.
+
+**Privacy.** Execution-environment hardening only: no data category, recipient, retention or processor changes, and no Privacy Policy amendment ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)).
+
+**Re-evaluation triggers:**
+- **any body change to `set_updated_at()`** — re-review whether it now names a data type; the digest pin in suite `007` fails CI until someone decides;
+- **any new `public` function pinned to a `pg_catalog`-based `search_path`** — classify it from its body; suite `007` fails when one appears in neither group;
+- a body change to one of the four that would need a schema other than `pg_catalog`;
+- a change to database `TEMPORARY` for client roles, or to CREATE on `public`;
+- resolution of `DB-SEARCH-VECTOR-EXPRESSION-PARITY-001`, which changes which search-vector shape is expected where.

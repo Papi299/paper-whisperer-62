@@ -1,47 +1,62 @@
--- PFA-C08 suite 007: bounded search_path on the non-RPC helper functions.
+-- Suite 007: bounded search_path on the non-RPC helper functions (PFA-C08, C51).
 --
--- Migration 20260810152125_harden_remaining_function_search_paths pinned
--- `search_path = pg_catalog` on the four functions that remained on the Supabase
--- Security Advisor's `function_search_path_mutable` list after the C03B1 RPC
--- hardening:
+-- Migration 20260810152125_harden_remaining_function_search_paths (PFA-C08)
+-- pinned `search_path = pg_catalog` on the four functions that remained on the
+-- Supabase Security Advisor's `function_search_path_mutable` list after the
+-- C03B1 RPC hardening, and ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 later added a
+-- fifth function of the same kind:
 --
---   * public.set_updated_at()                           — plpgsql trigger fn
---   * public.immutable_english_tsvector_text(text)      — search-vector helper
---   * public.immutable_english_tsvector_textarr(text[]) — search-vector helper
---   * public.immutable_english_tsvector_jsonb(jsonb)    — search-vector helper
---
--- ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001 later added a fifth function of the
--- same kind, and it joins sections 1 and 2 for the same reason the original four
--- are there:
---
+--   * public.set_updated_at()                                — plpgsql trigger fn
+--   * public.immutable_english_tsvector_text(text)           — search-vector helper
+--   * public.immutable_english_tsvector_textarr(text[])      — search-vector helper
+--   * public.immutable_english_tsvector_jsonb(jsonb)         — search-vector helper
 --   * public.attachment_cleanup_path_is_safe(uuid,text,uuid) — path predicate
 --
--- It is a non-RPC helper: SECURITY INVOKER, pure, reading no table, callable by
--- nobody but its owner, and used only from inside the three cleanup RPCs. Its
--- BEHAVIOUR — which paths it accepts and refuses — is owned by
--- 014_attachment_cleanup_recovery.test.sql; what it owes this suite is the same
--- execution-environment pinning as its four predecessors. Sections 3–5 below
--- concern the search-vector wrappers specifically and do not apply to it.
+-- Migration 20260927001229_harden_pg_catalog_helper_pg_temp_last (C51) then
+-- moved the four whose bodies name built-in data types to
+-- `search_path = pg_catalog, pg_temp`, so those names resolve deterministically
+-- to `pg_catalog` in every session. The suite pins two groups:
+--
+--   * hardened (4) — attachment_cleanup_path_is_safe and the three wrappers:
+--     exactly `pg_catalog, pg_temp`, in that order, nothing else;
+--   * pg_catalog only (1) — set_updated_at(): its reviewed body names no data
+--     type, so it deliberately stays at exactly `pg_catalog`. That is tied to
+--     its body digest, so a body change fails here and forces a re-review.
+--
+-- attachment_cleanup_path_is_safe is a non-RPC helper: SECURITY INVOKER, pure,
+-- reading no table, callable by nobody but its owner, and used only from inside
+-- the three cleanup RPCs. Its accept/refuse matrix is owned by
+-- 014_attachment_cleanup_recovery.test.sql; section 6 here only confirms that
+-- the hardened configuration still accepts an ordinary own path and refuses an
+-- out-of-namespace one. Sections 3–5 concern the search-vector wrappers and
+-- set_updated_at specifically.
 --
 -- This suite pins that hardening and, just as importantly, pins that it stayed
 -- execution-environment-only. The bounded RPC surface is not this suite's remit:
 -- `search_papers`'s `search_path=public` and the least-privilege EXECUTE grants
--- are owned by 003_rpc_caller_scope_and_grants.test.sql.
+-- are owned by 003_rpc_caller_scope_and_grants.test.sql, the Data API ACL matrix
+-- by 015, and the SECURITY DEFINER `public, pg_temp` inventory (C50) by 021.
 --
 -- Asserted here:
---   * all four carry exactly search_path=pg_catalog — no wider value, and no
---     second GUC smuggled into proconfig;
---   * all four remain SECURITY INVOKER with their original volatility, parallel
+--   * the four carry exactly search_path=pg_catalog, pg_temp — `pg_catalog`
+--     first, `pg_temp` last, no other schema, and no second GUC in proconfig;
+--   * set_updated_at() carries exactly search_path=pg_catalog, with its
+--     reviewed body; and no other public function is pinned to pg_catalog;
+--   * all five remain SECURITY INVOKER with their original volatility, parallel
 --     safety, language and return type, so a later "fix" cannot quietly promote
 --     one to SECURITY DEFINER or relax IMMUTABLE/PARALLEL SAFE;
---   * pg_catalog is *sufficient*: each wrapper still equals the raw
+--   * the EXECUTE ACLs are unchanged: owner-only on the attachment helper, and
+--     one of the two reviewed representations of the default posture on the
+--     other four (NULL on a clean replay, explicit on hosted Production);
+--   * the pinned path is *sufficient*: each wrapper still equals the raw
 --     `to_tsvector('english', COALESCE(…))` form it wraps across NULL, empty,
 --     English prose, punctuation, unicode, text[] and jsonb shapes — a resolution
 --     failure under the pinned path would surface here rather than silently;
 --   * the generated `papers.search_vector` still populates, keeps its A/B/C/D
 --     field weighting, and regenerates on UPDATE;
 --   * `set_updated_at` still advances `papers.updated_at`, and every trigger in
---     public that uses it is discovered rather than assumed.
+--     public that uses it is discovered rather than assumed;
+--   * attachment namespace validation is not weakened.
 --
 -- Deterministic UUIDs; explicit fixtures; no TODO/SKIP; no remote calls; no
 -- Production data; no real credentials. pgTAP is created inside the transaction
@@ -53,12 +68,10 @@ CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO extensions, public, pg_temp;
 
 -- ── Helpers ─────────────────────────────────────────────────────────────────
--- The four hardened functions, addressed by exact signature.
+-- The four C51-hardened functions, addressed by exact signature.
 CREATE FUNCTION pg_temp.hardened_fns()
 RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
   SELECT * FROM (VALUES
-    ('set_updated_at()',
-       'public.set_updated_at()'::regprocedure::oid),
     ('immutable_english_tsvector_text(text)',
        'public.immutable_english_tsvector_text(text)'::regprocedure::oid),
     ('immutable_english_tsvector_textarr(text[])',
@@ -70,15 +83,24 @@ RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
   ) AS t(label, oid);
 $hlp$;
 
--- 10 (search_path) + 10 (posture) + 24 (wrapper equivalence)
---   + 12 (generated search_vector) + 3 (set_updated_at) = 59
-SELECT plan(59);
+-- All five bounded helpers: the four above plus the pg_catalog-only one.
+CREATE FUNCTION pg_temp.helper_fns()
+RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
+  SELECT 'set_updated_at()', 'public.set_updated_at()'::regprocedure::oid
+  UNION ALL
+  SELECT * FROM pg_temp.hardened_fns();
+$hlp$;
 
--- ══ 1. Bounded search_path — exactly pg_catalog, nothing else ═══════════════
+-- 15 (search_path) + 15 (posture + ACL) + 24 (wrapper equivalence)
+--   + 12 (generated search_vector) + 3 (set_updated_at) + 2 (attachment path) = 71
+SELECT plan(71);
+
+-- ══ 1. Bounded search_path ══════════════════════════════════════════════════
+-- ── 1a. The hardened four — exactly `pg_catalog, pg_temp` ────────────────────
 SELECT is(
   (SELECT array_to_string(p.proconfig, ',') FROM pg_proc p WHERE p.oid = f.oid),
-  'search_path=pg_catalog',
-  'search_path: ' || f.label || ' is pinned to exactly pg_catalog'
+  'search_path=pg_catalog, pg_temp',
+  'search_path: ' || f.label || ' is pinned to exactly pg_catalog, pg_temp'
 ) FROM pg_temp.hardened_fns() f;
 
 -- proconfig must carry the search_path and nothing more — a second GUC here
@@ -89,11 +111,46 @@ SELECT is(
   'search_path: ' || f.label || ' sets no other GUC'
 ) FROM pg_temp.hardened_fns() f;
 
+-- The configured schema list, parsed: `pg_catalog` first, `pg_temp` last, and
+-- no other schema between or around them.
+SELECT is(
+  (SELECT string_to_array(substr(p.proconfig[1], length('search_path=') + 1), ', ')
+     FROM pg_proc p WHERE p.oid = f.oid AND p.proconfig[1] LIKE 'search_path=%'),
+  ARRAY['pg_catalog', 'pg_temp'],
+  'search_path: ' || f.label || ' lists pg_catalog first and pg_temp last, nothing else'
+) FROM pg_temp.hardened_fns() f;
+
+-- ── 1b. set_updated_at() — deliberately exactly `pg_catalog` ─────────────────
+SELECT is(
+  (SELECT p.proconfig FROM pg_proc p WHERE p.oid = 'public.set_updated_at()'::regprocedure),
+  ARRAY['search_path=pg_catalog'],
+  'search_path: set_updated_at() is pinned to exactly pg_catalog and sets no other GUC');
+
+-- Its pg_catalog-only classification holds for this reviewed body only: a body
+-- change must be re-reviewed (keep it here, or move it to the hardened group).
+SELECT is(
+  (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = 'public.set_updated_at()'::regprocedure),
+  '301a884953d37769916294bb60562e05',
+  'search_path: set_updated_at() still has the reviewed body its classification is for');
+
+-- ── 1c. Every pg_catalog-pinned public function is classified ────────────────
+SELECT is(
+  (SELECT string_agg(p.oid::regprocedure::text || ' = ' || array_to_string(p.proconfig, ','), '; '
+                     ORDER BY p.oid::regprocedure::text COLLATE "C")
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace AND array_to_string(p.proconfig, ',') LIKE '%pg_catalog%'),
+  'attachment_cleanup_path_is_safe(uuid,text,uuid) = search_path=pg_catalog, pg_temp; '
+  || 'immutable_english_tsvector_jsonb(jsonb) = search_path=pg_catalog, pg_temp; '
+  || 'immutable_english_tsvector_text(text) = search_path=pg_catalog, pg_temp; '
+  || 'immutable_english_tsvector_textarr(text[]) = search_path=pg_catalog, pg_temp; '
+  || 'set_updated_at() = search_path=pg_catalog',
+  'search_path: the pg_catalog-pinned public functions are exactly the classified 4 + 1');
+
 -- ══ 2. The hardening stayed execution-environment-only ══════════════════════
 SELECT ok(
   NOT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = f.oid),
   'posture: ' || f.label || ' is still SECURITY INVOKER'
-) FROM pg_temp.hardened_fns() f;
+) FROM pg_temp.helper_fns() f;
 
 SELECT is(
   (SELECT p.provolatile::text || '/' || p.proparallel::text || '/' ||
@@ -104,7 +161,7 @@ SELECT is(
   'posture: ' || f.label || ' kept volatility/parallel/language/return type'
 ) FROM (
   SELECT h.label, h.oid, v.expected
-    FROM pg_temp.hardened_fns() h
+    FROM pg_temp.helper_fns() h
     JOIN (VALUES
       ('set_updated_at()',                           'v/u/plpgsql/trigger'),
       ('immutable_english_tsvector_text(text)',      'i/s/sql/tsvector'),
@@ -116,6 +173,25 @@ SELECT is(
       ('attachment_cleanup_path_is_safe(uuid,text,uuid)', 'i/s/sql/boolean')
     ) AS v(label, expected) ON v.label = h.label
 ) f;
+
+-- EXECUTE ACLs are unchanged. The attachment helper is owner-only everywhere.
+SELECT is(
+  (SELECT p.proacl::text FROM pg_proc p
+    WHERE p.oid = 'public.attachment_cleanup_path_is_safe(uuid,text,uuid)'::regprocedure),
+  '{postgres=X/postgres}',
+  'acl: attachment_cleanup_path_is_safe(uuid,text,uuid) is still exactly owner-only');
+
+-- The other four keep PostgreSQL's default EXECUTE posture, which has two
+-- reviewed stored forms: NULL on a clean replay, and the explicit equivalent on
+-- hosted Production (scripts/acl-parity/hosted-baseline-20260904120000.sql).
+-- Either passes; any third form fails. Their callers are owned by 015.
+SELECT ok(
+  (SELECT p.proacl IS NULL
+          OR p.proacl::text = '{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}'
+     FROM pg_proc p WHERE p.oid = f.oid),
+  'acl: ' || f.label || ' is in a reviewed representation of the default EXECUTE posture'
+) FROM pg_temp.helper_fns() f
+ WHERE f.label <> 'attachment_cleanup_path_is_safe(uuid,text,uuid)';
 
 -- ══ 3. pg_catalog is sufficient — wrappers still equal what they wrap ═══════
 -- Each wrapper is `to_tsvector('english'::regconfig, COALESCE(<arg>, ''))`. If
@@ -260,6 +336,20 @@ SELECT ok(
   (SELECT updated_at FROM public.papers
     WHERE id = '07000000-0000-0000-0000-0000000000a1') > '2020-01-02T00:00:00Z'::timestamptz,
   'set_updated_at: overwrites a caller-supplied updated_at under the pinned path');
+
+-- ══ 6. Attachment namespace validation is not weakened ══════════════════════
+-- Two ordinary cases from 014's fixtures, which owns the full matrix: the
+-- caller's own canonical path is still accepted, and another account's
+-- namespace is still refused, under the hardened configuration.
+SELECT is(
+  public.attachment_cleanup_path_is_safe('aa000000-0000-0000-0000-0000000000a0'::uuid,
+    'aa000000-0000-0000-0000-0000000000a0/a1000000-0000-0000-0000-0000000000a1/f.png', NULL::uuid),
+  true, 'attachment path: the caller''s own canonical path is still accepted');
+
+SELECT is(
+  public.attachment_cleanup_path_is_safe('aa000000-0000-0000-0000-0000000000a0'::uuid,
+    'bb000000-0000-0000-0000-0000000000b0/a1000000-0000-0000-0000-0000000000a1/f.png', NULL::uuid),
+  false, 'attachment path: another account''s namespace is still refused');
 
 SELECT * FROM finish();
 ROLLBACK;
