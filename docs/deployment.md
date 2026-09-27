@@ -858,11 +858,35 @@ ALTER FUNCTION public.validate_author_mention_for_identity(uuid,uuid,integer,tex
 
 **Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration with the same 32 statements set to `SET search_path = public`, which returns them to the pre-change shape (bodies, ACLs and modes were never touched). It removes a defense-in-depth layer; it opens no boundary. It needs its own decision against C50.
 
-### 6.12 `20260927001229` (`pg_catalog`-helper `pg_temp`-last hardening, C51) — migration-only; NOT APPLIED
+### 6.12 `20260927001229` (`pg_catalog`-helper `pg_temp`-last hardening, C51) — migration-only; COMPLETE: applied 2026-09-27
 
-> **Status — PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION.** Nothing in this section has been run against Production, and this section authorizes nothing by itself. The rollout needs a separate, explicit authorization **after** independent review and merge. Because `attachment_cleanup_path_is_safe` participates in a privileged boundary (C51), prioritize that rollout once the implementation PR is approved and merged.
+> **Status — COMPLETE. The migration-only rollout finished on 2026-09-27 and C51 is live in Production. Do not re-run the migration as a pending step.**
 >
-> - **Pre-state, verified read-only on 2026-09-27:** PostgreSQL 17.6; ledger **90**, latest `20260926202754` (C50), C51 absent; exactly five `public` functions at `{search_path=pg_catalog}`, all SECURITY INVOKER and owned by `postgres`, with body digests `2c2f2ff5…` (attachment helper), `26edc211…` / `19261084…` / `30c015cd…` (text / text[] / jsonb wrappers) and `301a8849…` (`set_updated_at`); the attachment helper ACL `{postgres=X/postgres}` and the other four at the hosted explicit default form; the three attachment callers at `{"search_path=public, pg_temp"}` with digests `23833e1f…` / `91bf1072…` / `4bdcc814…`; `papers.search_vector` at the hosted inlined expression `8ddd960b4f4b11dd7afd35485d01fd25`; `trg_papers_updated_at` bound to `set_updated_at()`.
+> - **Merged.** PR #307 as the two-parent commit `bc8278b38a6d82a15c82e5ccd478347eb00a7811` (parents `35de3020` and the approved head `2bdc6e0c`; tree `efc740f3`, identical to the approved head's).
+> - **Hosted CI.** Merged-`main` on `bc8278b`: Validate (run `36296417102`), DB Tests (`36296417141`) and Extension (`36296417122`) passed. `E2E (local)` does not run on a push to `main` ([README](../README.md#ci)); its evidence for this change is the pull-request run on the exact approved head `2bdc6e0c92b4efe14a2a16e7b03f090b8995ce8a`, run `36292037273`, which passed.
+> - **Before — pre-state, verified read-only at preparation on 2026-09-27 and again in the fresh preflight immediately before the apply** (step 3):
+>   - PostgreSQL 17.6; ledger **90**, latest `20260926202754` (C50), C51 absent.
+>   - Exactly five `public` functions at `{search_path=pg_catalog}`, all SECURITY INVOKER and owned by `postgres`: `attachment_cleanup_path_is_safe` (OID `109298`, body `2c2f2ff5…`), the text / text[] / jsonb wrappers (`66407` / `66408` / `66409`, bodies `26edc211…` / `19261084…` / `30c015cd…`) and `set_updated_at` (`33584`, body `301a8849…`).
+>   - The attachment helper's ACL was `{postgres=X/postgres}`, and the other four were at the hosted explicit default form.
+>   - The three attachment callers were at `{"search_path=public, pg_temp"}` with digests `23833e1f…` / `91bf1072…` / `4bdcc814…`.
+>   - `papers.search_vector` was at the hosted inlined expression `8ddd960b4f4b11dd7afd35485d01fd25`, and `trg_papers_updated_at` (OID `33585`) was bound to `set_updated_at()`.
+>   - `helpers_minus_config` recomputed as `f2c68ed1852d00f9e0a1369ea11a172e`.
+>   - The migration's own §0/§1 precondition blocks were also run verbatim inside a read-only, rolled-back transaction, and passed.
+> - **What was run — migration only, exactly as planned.**
+>   - `supabase migration list --linked` showed local and remote aligned through `20260926202754`, exactly one local-only migration, `20260927001229`, and no remote-only one.
+>   - `supabase db push --linked --dry-run` listed exactly `20260927001229_harden_pg_catalog_helper_pg_temp_last.sql`, with no seeds and no roles.
+>   - The normal linked `supabase db push --linked --yes` (Supabase CLI 2.111.0) then applied exactly that file under its own repository version, between 05:23:28Z and 05:23:59Z UTC. It exited 0 and reported no seeds and no roles.
+>   - Ledger **90 → 91**, latest `20260927001229`, present exactly once (name `harden_pg_catalog_helper_pg_temp_last`).
+>   - It was the only intentional Production mutation of the C51 rollout. No Edge Function was deployed: all six versions read back afterwards were last updated on or before 2026-09-25. The rollout changed no Auth, Storage, secret, AI/provider or quota state, created no temporary object, wrote no application row and ran no canary.
+> - **No manual Vercel action.** None was part of the database rollout, and none was needed: C51 changed function configuration, tests and docs, not shipped frontend behavior. This record makes no claim about any Vercel deployment; that was outside the rollout's verification scope.
+> - **After — verified read-only immediately after the apply** (and re-verified independently, read-only, on 2026-09-27 for the documentation reconciliation):
+>   - Exactly the four targets are at `{"search_path=pg_catalog, pg_temp"}`: `attachment_cleanup_path_is_safe` and the three `immutable_english_tsvector_*` wrappers, same OIDs, each moved only from `{search_path=pg_catalog}`.
+>   - `set_updated_at()` is still at exactly `{search_path=pg_catalog}`, and its whole `pg_proc` row is byte-identical to the preflight. The `pg_catalog` distribution over `public` is 4 + 1.
+>   - All five are still SECURITY INVOKER, owned by `postgres`, with the same body digests, literal ACLs and effective callers. Nobody but the owner can execute the attachment helper. The wrappers and `set_updated_at()` are executable by PUBLIC (hence `anon`, `authenticated` and `service_role`), as before.
+>   - The three attachment callers' whole `pg_proc` rows are byte-identical: OIDs `109299` / `109300` / `109304`, SECURITY DEFINER, owner `postgres`, `{"search_path=public, pg_temp"}`, ACL `{postgres=X/postgres,authenticated=X/postgres}`, and bodies `23833e1f…` / `91bf1072…` / `4bdcc814…`.
+>   - `helpers_minus_config` is **`f2c68ed1852d00f9e0a1369ea11a172e`, identical** to the preflight value.
+>   - The `papers.search_vector` attribute, default and expression (`8ddd960b…`) are unchanged. `idx_papers_search_vector` (OID `61100`) is valid and ready, with the same definition and relfilenode. `trg_papers_updated_at` (OID `33585`, `tgfoid` `33584`, BEFORE UPDATE, `EXECUTE FUNCTION public.set_updated_at()`) is unchanged. Every `pg_depend` edge into the five is unchanged, and so is every other `public` function row.
+>   - The Security Advisor shows no `function_search_path_mutable` finding and no finding naming any of the five helpers. `authenticated_security_definer_function_executable` is still **27**, as recorded after C50. The C30 leaked-password warning and the six `rls_enabled_no_policy` notices predate C51 and are unrelated to it.
 
 **What changes.** Four exact-signature statements inside a fail-closed transaction, one attribute each — `proconfig` `{search_path=pg_catalog}` → `{"search_path=pg_catalog, pg_temp"}`:
 
@@ -875,12 +899,12 @@ ALTER FUNCTION public.immutable_english_tsvector_jsonb(jsonb)          SET searc
 
 **No statement touches `public.set_updated_at()`**, which stays at exactly `{search_path=pg_catalog}`. The migration also changes no body, OID, owner, security mode, grant, caller, trigger, generated column, index, policy, relation or row, and its §3 proves each of those before COMMIT. It accepts only the two reviewed representations of the wrappers' EXECUTE ACL (NULL on a clean replay, explicit on hosted) and of the `search_vector` expression (wrapper calls on a clean replay, inlined on hosted), and preserves whichever it finds (C51).
 
-**Why there is no ordering constraint.** With no temporary object present — the only situation a legitimate caller creates — `pg_catalog, pg_temp` and `pg_catalog` resolve every name identically, so no call returns anything different. A call already executing when the migration commits finishes under the configuration it started with. So there is no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step belong to this rollout.** Generated types do not change, because `proconfig` is not part of any signature.
+**Why there is no ordering constraint.** With no temporary object present — the only situation a legitimate caller creates — `pg_catalog, pg_temp` and `pg_catalog` resolve every name identically, so no call returns anything different. A call already executing when the migration commits finishes under the configuration it started with. So there was no web-first or Edge-first step, no drain and no barrier. **No Edge Function deployment and no manual frontend or Vercel step were part of this rollout.** Generated types do not change, because `proconfig` is not part of any signature.
 
-**Procedure — PENDING; each step only under the separate rollout authorization.**
+**Procedure — EXECUTED 2026-09-27; kept as the reference procedure and as the pattern for a comparable migration-only change; not a pending step.** These are the steps as written before the rollout. The `expect` values in step 3 are the **pre-rollout** state it was checked against. What was actually observed and run is the status box above, restated per step below.
 1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
 2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
-3. Fresh read-only preflight against Production:
+3. Fresh read-only preflight against Production (pre-rollout expectations; after the rollout this query returns ledger 91, latest `20260927001229`, `c51_present` 1, the four targets at `{"search_path=pg_catalog, pg_temp"}`, `set_updated_at()` at `{search_path=pg_catalog}`, and the same digests, ACLs, `search_vector_expr` and `helpers_minus_config`):
    ```sql
    BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO pg_catalog, pg_temp;
    SELECT count(*) AS ledger, max(version) AS latest                                -- expect 90, 20260926202754
@@ -910,19 +934,19 @@ ALTER FUNCTION public.immutable_english_tsvector_jsonb(jsonb)          SET searc
                         'finalize_attachment_upload');
    ROLLBACK;
    ```
-   At preparation on 2026-09-27 this preflight returned exactly the pre-state above, and `helpers_minus_config` read `f2c68ed1852d00f9e0a1369ea11a172e`. Re-read it at preflight rather than trusting that value. Any other pre-state is a reason to stop, and the migration refuses it anyway (its §1). In particular, **if a body digest or the `search_vector` expression differs, stop and re-review**; do not edit the migration to fit.
-4. `supabase migration list --linked` must show exactly one local-only migration, `20260927001229`. Then run `supabase db push --dry-run` from the merge commit; it must list **exactly** `20260927001229_harden_pg_catalog_helper_pg_temp_last.sql`. Anything else, stop (§6.2).
-5. Obtain the separate, explicit rollout authorization.
-6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **90 → 91**).
-7. Verify immediately, read-only:
+   At preparation on 2026-09-27 this preflight returned exactly the pre-state above, and `helpers_minus_config` read `f2c68ed1852d00f9e0a1369ea11a172e`. The rule was to re-read it at preflight rather than trust that value, and the fresh preflight immediately before the apply returned the same value. Every other step-3 value matched too. Any other pre-state would have been a reason to stop, and the migration refuses it anyway (its §1). In particular, **if a body digest or the `search_vector` expression differs, stop and re-review**; do not edit the migration to fit.
+4. `supabase migration list --linked` must show exactly one local-only migration, `20260927001229`. Then run `supabase db push --dry-run` from the merge commit; it must list **exactly** `20260927001229_harden_pg_catalog_helper_pg_temp_last.sql`. Anything else, stop (§6.2). *Observed:* exactly that one local-only migration and no remote-only one, and a dry run that listed exactly that file, with no seeds and no roles.
+5. Obtain the separate, explicit rollout authorization. *Obtained before the apply.*
+6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **90 → 91**). *Executed as `supabase db push --linked --yes` (CLI 2.111.0) between 05:23:28Z and 05:23:59Z UTC; it applied exactly that one file, and the ledger went **90 → 91**.*
+7. Verify immediately, read-only (the expected values below are the live state since 2026-09-27, and were observed exactly):
    - the ledger is **91**, latest `20260927001229`, present exactly once;
    - rerunning step 3 shows the four targets at exactly `{"search_path=pg_catalog, pg_temp"}` and `set_updated_at()` still at exactly `{search_path=pg_catalog}`; all five `prosecdef = f`; the same five body digests; the same literal ACLs; the same `search_vector_expr`;
    - `helpers_minus_config` is **identical** to the step-3 value. That shows the OIDs, bodies, ACLs, modes and owners of the five helpers and the three attachment callers are unchanged; only the four targets' `proconfig` moved.
-8. Re-read the Security Advisor (read-only). `function_search_path_mutable` is expected to stay clear, since all five still pin a fixed path, and no new finding is expected.
+8. Re-read the Security Advisor (read-only). `function_search_path_mutable` is expected to stay clear, since all five still pin a fixed path, and no new finding is expected. *Observed:* no `function_search_path_mutable` finding, none naming the five helpers, and no new finding; `authenticated_security_definer_function_executable` still **27**.
 
-**No canary is required.** No temporary-object probe is to be run in Production, and no application row is to be written. The migration's own verification refuses to commit anything but the expected catalog state, and the behaviour is covered in CI against a full replay: suites `007`, `014`, `015` and `021`, and the hosted-ACL parity lane, which applies this migration from Production's explicit ACL shape.
+**No canary was run, and none was required.** No temporary-object probe was run in Production, and no application row was written. The migration's own verification refuses to commit anything but the expected catalog state, and the behaviour is covered in CI against a full replay: suites `007`, `014`, `015` and `021`, and the hosted-ACL parity lane, which applies this migration from Production's explicit ACL shape.
 
-**Rollback — reference only; this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration with the same four statements set to `SET search_path = pg_catalog`, which returns them to the pre-change shape (bodies, ACLs and modes are never touched). It removes a hardening layer; it opens no grant. It needs its own decision against C51.
+**Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward. The reviewed restoration is a new forward migration with the same four statements set to `SET search_path = pg_catalog`, which returns them to the pre-change shape (bodies, ACLs and modes were never touched). It removes a hardening layer; it opens no grant. It needs its own decision against C51.
 
 ---
 
