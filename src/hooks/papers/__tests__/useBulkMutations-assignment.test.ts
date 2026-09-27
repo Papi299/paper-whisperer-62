@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 // ── Supabase mock (hoisted) ───────────────────────────────────────────
@@ -923,5 +923,148 @@ describe("useBulkMutations – parsed-file import never assigns resolved duplica
         description: "0 added, 1 skipped (duplicates), 0 failed.",
       }),
     );
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// DB-SAFE-BULK-INSERT-INVOKER-001 (C53): the two shapes of a failed chunk
+// ══════════════════════════════════════════════════════════════════════════
+//
+// safe_bulk_insert_papers runs as SECURITY INVOKER since C53 and keeps its
+// per-row `WHEN OTHERS` handler. The same caller-privilege drift can therefore
+// reach the importer as a failed RPC for the whole chunk (Case A) or as a
+// successful RPC with one `status: "error"` row per paper (Case B). These tests
+// run the REAL processChunkedInsert under both shapes and require the same
+// user-facing outcome: counts, per-identifier statuses, the chunk after the
+// failed one still imported, and nothing counted as added or skipped that was
+// not. The internal `lastError` differs between the shapes and is not asserted.
+
+describe("useBulkMutations – a failed RPC chunk and per-row RPC errors are the same outcome", () => {
+  // The hook's fixed CHUNK_SIZE is 50, so 101 papers make three chunks
+  // (50, 50, 1); the middle one fails.
+  const TOTAL = 101;
+  const FIRST_FAILED = 50;
+  const LAST_FAILED = 99;
+  const DENIED = "permission denied for table papers";
+  const identifiers = Array.from({ length: TOTAL }, (_, i) => String(300000 + i));
+
+  type Shape = "rpc-error" | "row-errors";
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const actual = await vi.importActual<typeof import("@/lib/chunkedInsert")>("@/lib/chunkedInsert");
+    mockProcessChunkedInsert.mockImplementation(actual.processChunkedInsert);
+    mockFetchPaperMetadata.mockResolvedValue(
+      identifiers.map((identifier) => ({
+        identifier, title: `Paper ${identifier}`, authors: ["Author"], year: 2024, pmid: identifier, doi: null,
+        abstract: null, keywords: [], mesh_terms: [], substances: [], study_type: null, pubmed_url: null,
+        journal_url: null, journal: null,
+      })),
+    );
+  });
+
+  afterEach(() => {
+    mockProcessChunkedInsert.mockReset();
+    mockRpc.mockReset();
+  });
+
+  /**
+   * safe_bulk_insert_papers answers the chunk that starts at FIRST_FAILED in
+   * the given shape and inserts every other paper; every other RPC succeeds.
+   */
+  function setupRpc(shape: Shape) {
+    mockRpc.mockImplementation(async (name: string, args: { p_papers?: Array<{ title: string }> }) => {
+      if (name !== "safe_bulk_insert_papers") return { data: null, error: null };
+      const chunk = args.p_papers ?? [];
+      const failing = chunk[0]?.title === `Paper ${identifiers[FIRST_FAILED]}`;
+      if (failing && shape === "rpc-error") {
+        return { data: null, error: { message: DENIED, code: "42501" } };
+      }
+      return {
+        data: chunk.map((paper, j) =>
+          failing
+            ? { index: j, status: "error", error_message: DENIED }
+            : { index: j, status: "inserted", id: `new-${paper.title}` },
+        ),
+        error: null,
+      };
+    });
+  }
+
+  async function runPubMedImport(shape: Shape) {
+    setupRpc(shape);
+    const { result } = renderBulkHook();
+    let last = { added: [] as string[], skipped: [] as string[], failed: [] as string[] };
+    let outcome: Awaited<ReturnType<typeof result.current.bulkImportPapers>>;
+    await act(async () => {
+      outcome = await result.current.bulkImportPapers(
+        identifiers,
+        (_current, _total, added, skipped, failed) => {
+          last = { added: [...added], skipped: [...skipped], failed: [...failed] };
+        },
+        { targetProjectIds: ["proj-1"] },
+      );
+    });
+    const assigned = mockRpc.mock.calls.find((c: unknown[]) => c[0] === "bulk_set_paper_projects");
+    return {
+      items: outcome!.items,
+      progress: last,
+      toasts: mockToast.mock.calls.map((c: unknown[]) => c[0]),
+      assignedIds: (assigned?.[1] as { p_paper_ids: string[] } | undefined)?.p_paper_ids ?? [],
+    };
+  }
+
+  async function runFileImport(shape: Shape) {
+    setupRpc(shape);
+    const { result } = renderBulkHook();
+    let counts: number[] = [];
+    await act(async () => {
+      await result.current.bulkImportFromParsedData(
+        identifiers.map((identifier) => ({
+          title: `Paper ${identifier}`, authors: ["Author"], year: 2024, journal: null, pmid: identifier, doi: null,
+          abstract: null, keywords: [], mesh_terms: [], substances: [], study_type: null, pubmed_url: null,
+          journal_url: null, drive_url: null,
+        })),
+        (_current, _total, added, skipped, failed) => {
+          counts = [added, skipped, failed];
+        },
+      );
+    });
+    return { counts, toasts: mockToast.mock.calls.map((c: unknown[]) => c[0]) };
+  }
+
+  it("PubMed import: both shapes report the same items, counts, toast and assignments", async () => {
+    const caseA = await runPubMedImport("rpc-error");
+    vi.clearAllMocks();
+    const caseB = await runPubMedImport("row-errors");
+
+    expect(caseB).toEqual(caseA);
+
+    const failed = identifiers.slice(FIRST_FAILED, LAST_FAILED + 1);
+    const inserted = identifiers.filter((id) => !failed.includes(id));
+    expect(caseA.items).toEqual(
+      identifiers.map((identifier) => ({
+        identifier,
+        status: failed.includes(identifier) ? "failed" : "inserted",
+      })),
+    );
+    expect(caseA.progress).toEqual({ added: inserted, skipped: [], failed });
+    // The chunk after the failed one was still imported and assigned.
+    expect(caseA.assignedIds).toEqual(inserted.map((id) => `new-Paper ${id}`));
+    expect(caseA.toasts).toEqual([
+      { title: "Bulk import complete", description: "51 added, 0 skipped (duplicates), 50 failed." },
+    ]);
+  });
+
+  it("file import: both shapes report the same counts and toast", async () => {
+    const caseA = await runFileImport("rpc-error");
+    vi.clearAllMocks();
+    const caseB = await runFileImport("row-errors");
+
+    expect(caseB).toEqual(caseA);
+    expect(caseA.counts).toEqual([51, 0, 50]);
+    expect(caseA.toasts).toEqual([
+      { title: "File import complete", description: "51 added, 0 skipped (duplicates), 50 failed." },
+    ]);
   });
 });

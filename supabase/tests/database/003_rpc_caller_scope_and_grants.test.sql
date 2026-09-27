@@ -2,15 +2,16 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 33 SECURITY DEFINER functions (25 directly callable + 1 server-
+--   * exactly 32 SECURITY DEFINER functions (24 directly callable + 1 server-
 --     only + 5 trigger-only + 2 internal-only); no unexpected privileged
 --     function or overload; and the authenticated-executable definer set is
---     exactly the 25 directly-callable ones;
+--     exactly the 24 directly-callable ones;
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
 --   * directly-callable INVOKER RPCs: the five caller-scoped read RPCs
---     (DB-INVOKER-EXECUTE-HARDENING-001A, C49) and the two caller-owned bulk
---     metadata writes (DB-BULK-METADATA-WRITE-INVOKER-001, C52) left the
+--     (DB-INVOKER-EXECUTE-HARDENING-001A, C49), the two caller-owned bulk
+--     metadata writes (DB-BULK-METADATA-WRITE-INVOKER-001, C52) and the
+--     caller-owned bulk import (DB-SAFE-BULK-INSERT-INVOKER-001, C53) left the
 --     definer inventory for a classification of their own. They are SECURITY
 --     INVOKER, and their EXECUTE ACL is the same {authenticated}-only posture,
 --     byte-for-byte;
@@ -21,9 +22,10 @@
 --     executable; owner retained;
 --   * caller identity: null-auth and mismatched caller rejected, valid caller
 --     accepted, for the four read RPCs that take a user id (INVOKER since C49 —
---     the guards are unchanged and still asserted), safe_bulk_insert_papers, and the two
---     caller-scoped AI-quota RPCs; the refund refuses every browser caller at
---     the ACL — its own user included — and serves the server role;
+--     the guards are unchanged and still asserted), safe_bulk_insert_papers
+--     (INVOKER since C53 — its guard likewise unchanged and asserted), and the
+--     two caller-scoped AI-quota RPCs; the refund refuses every browser caller
+--     at the ACL — its own user included — and serves the server role;
 --   * representative caller/ownership boundaries for the setter, bulk-update,
 --     dedup, and access RPCs;
 --   * search_papers bounded search_path; exactly one overload of each hardened
@@ -76,10 +78,11 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (25).
+-- The complete directly-callable SECURITY DEFINER RPC surface (24).
 -- `refund_ai_quota` left this list for server_rpcs() below with C47, the five
--- caller-scoped read RPCs left it for invoker_rpcs() below with C49, and
--- bulk_update_keywords / bulk_update_study_types followed them with C52.
+-- caller-scoped read RPCs left it for invoker_rpcs() below with C49,
+-- bulk_update_keywords / bulk_update_study_types followed them with C52, and
+-- safe_bulk_insert_papers with C53.
 CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_set_paper_projects(uuid[],uuid[])',
@@ -88,7 +91,6 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.get_ai_quota_status(uuid)',
     'public.get_current_user_access()',
     'public.merge_exact_duplicates(uuid,uuid[])',
-    'public.safe_bulk_insert_papers(uuid,jsonb)',
     'public.set_paper_projects(uuid,uuid[])',
     'public.set_paper_tags(uuid,uuid[])',
     -- AUTHOR-IDENTITY-RESOLUTION-001C. Every identity decision that must be
@@ -182,6 +184,12 @@ $hlp$;
 -- `authenticated` may already update through its table SELECT/UPDATE grants
 -- and the caller-owned RLS policies. Their behaviour under the caller's grants
 -- and RLS is owned by 022_bulk_metadata_write_invoker.
+-- DB-SAFE-BULK-INSERT-INVOKER-001 (C53) then moved the bulk import here: it
+-- INSERTs only rows for its guarded caller and looks up only the caller's own
+-- rows, which `authenticated` may already do through its table INSERT/SELECT
+-- grants, sequence USAGE and the caller-owned RLS policies. Its identity guard
+-- is still asserted in section 4; its behaviour under the caller's grants and
+-- RLS is owned by 023_safe_bulk_insert_invoker.
 CREATE FUNCTION pg_temp.invoker_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT unnest(ARRAY[
     'public.bulk_update_keywords(jsonb)',
@@ -189,6 +197,7 @@ CREATE FUNCTION pg_temp.invoker_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.filter_papers_by_keywords(uuid,text[])',
     'public.get_duplicate_papers()',
     'public.get_keyword_options(uuid,uuid[],integer,integer,text[])',
+    'public.safe_bulk_insert_papers(uuid,jsonb)',
     'public.search_papers(uuid,text,integer,integer)',
     'public.search_papers_short(uuid,text)'
   ]);
@@ -233,9 +242,9 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(313);
+SELECT plan(315);
 
--- ══ 1. Inventory: exactly 33 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 32 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
 -- internal helpers and one trigger function; 31 after AI-MODEL-SELECTION-001A
 -- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
@@ -270,12 +279,15 @@ SELECT plan(313);
 -- DB-BULK-METADATA-WRITE-INVOKER-001 (C52) then converted the two caller-owned
 -- bulk metadata writes — bulk_update_keywords, bulk_update_study_types — the
 -- same way: 33 definer functions, 25 directly callable.
+-- DB-SAFE-BULK-INSERT-INVOKER-001 (C53) then converted the caller-owned bulk
+-- import — safe_bulk_insert_papers — the same way: 32 definer functions, 24
+-- directly callable.
 -- The count is deliberately exact: a new definer function that nobody registered
 -- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  33, 'exactly 33 SECURITY DEFINER functions in public');
+  32, 'exactly 32 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -287,7 +299,6 @@ SELECT is(
        'public.get_current_user_access()'::regprocedure,
        'public.merge_exact_duplicates(uuid,uuid[])'::regprocedure,
        'public.refund_ai_quota(uuid)'::regprocedure,
-       'public.safe_bulk_insert_papers(uuid,jsonb)'::regprocedure,
        'public.set_paper_projects(uuid,uuid[])'::regprocedure,
        'public.set_paper_tags(uuid,uuid[])'::regprocedure,
        'public.check_and_consume_storage_quota()'::regprocedure,
@@ -319,16 +330,16 @@ SELECT is(
 -- the definer functions `authenticated` can execute are exactly client_rpcs().
 -- This is the set the Security Advisor's
 -- authenticated_security_definer_function_executable lint reports (27 after
--- C49; 25 once C52 is applied).
+-- C49; 25 once C52 is applied; 24 once C53 is applied).
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ',' ORDER BY p.oid::regprocedure::text), '')
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.prosecdef
       AND has_function_privilege('authenticated', p.oid, 'EXECUTE')),
   (SELECT string_agg(sig::regprocedure::text, ',' ORDER BY sig::regprocedure::text) FROM pg_temp.client_rpcs() sig),
-  'the authenticated-executable SECURITY DEFINER functions are exactly the 25 directly-callable RPCs');
+  'the authenticated-executable SECURITY DEFINER functions are exactly the 24 directly-callable RPCs');
 
--- ══ 1b. The directly-callable SECURITY INVOKER RPCs (C49, C52) ══════════════
+-- ══ 1b. The directly-callable SECURITY INVOKER RPCs (C49, C52, C53) ═════════
 -- Same EXECUTE matrix as a client RPC, pinned byte-for-byte on the ACL itself
 -- (the conversion changed prosecdef and nothing else), plus the security mode.
 SELECT ok(NOT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = sig::regprocedure),
@@ -351,7 +362,7 @@ SELECT ok(
      FROM pg_proc p WHERE p.oid = sig::regprocedure),
   'directly-callable INVOKER RPC owner (postgres) retained with EXECUTE: ' || sig) FROM pg_temp.invoker_rpcs() sig;
 
--- ══ 2. EXECUTE matrix over the 25 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 24 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -400,7 +411,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 25) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 24) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(
@@ -479,6 +490,8 @@ SELECT is(pg_temp.errcode_as('authenticated','{"sub":"aa000000-0000-0000-0000-00
   ) v(sql,nm);
 
 -- ── safe_bulk_insert_papers ───────────────────────────────────────────────
+-- SECURITY INVOKER since C53; the guard is unchanged and still rejects before
+-- any row is attempted. 023_safe_bulk_insert_invoker owns its RLS boundary.
 SELECT is(pg_temp.errcode_as('authenticated','',
   $q$SELECT public.safe_bulk_insert_papers('aa000000-0000-0000-0000-000000000001'::uuid,'[{"title":"NULLAUTH"}]'::jsonb)$q$),
   'P0001', 'safe_bulk_insert_papers: null-auth rejected');

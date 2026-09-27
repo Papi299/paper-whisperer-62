@@ -44,9 +44,11 @@
 --     silently inherit the PUBLIC EXECUTE that PostgreSQL's built-in global
 --     default gives every new function. Section J pins the five caller-scoped
 --     read RPCs that became SECURITY INVOKER with
---     `20260926152414_harden_read_rpcs_security_invoker.sql` (C49), and the two
+--     `20260926152414_harden_read_rpcs_security_invoker.sql` (C49), the two
 --     caller-owned bulk metadata writes that followed with
---     `20260927071803_convert_bulk_metadata_writes_security_invoker.sql` (C52):
+--     `20260927071803_convert_bulk_metadata_writes_security_invoker.sql` (C52),
+--     and the caller-owned bulk import that followed with
+--     `20260927123856_convert_safe_bulk_insert_security_invoker.sql` (C53):
 --     for them the relation matrix in section C is part of their security
 --     boundary.
 
@@ -158,7 +160,7 @@ INSERT INTO acl_invoker_public_exec_allowlist VALUES
   ('set_updated_at()',                          'updated_at trigger function'),
   ('update_updated_at_column()',                'updated_at trigger function');
 
-SELECT plan(105);
+SELECT plan(106);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -360,7 +362,8 @@ SELECT is(
 -- Eleven since DB-INVOKER-EXECUTE-HARDENING-001A (C49): the original six, plus
 -- the five caller-scoped read RPCs whose exact posture section J pins; thirteen
 -- since DB-BULK-METADATA-WRITE-INVOKER-001 (C52) added the two bulk metadata
--- writes, pinned in section J as well. Ordered
+-- writes, and fourteen since DB-SAFE-BULK-INSERT-INVOKER-001 (C53) added the
+-- bulk import, both pinned in section J as well. Ordered
 -- under the "C" collation so the expected string does not depend on the
 -- database's default collation (which sorts `search_papers_short` first).
 SELECT is(
@@ -372,9 +375,10 @@ SELECT is(
   || 'get_duplicate_papers(), get_keyword_options(uuid,uuid[],integer,integer,text[]), '
   || 'immutable_english_tsvector_jsonb(jsonb), '
   || 'immutable_english_tsvector_text(text), immutable_english_tsvector_textarr(text[]), '
+  || 'safe_bulk_insert_papers(uuid,jsonb), '
   || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text), '
   || 'set_updated_at(), update_updated_at_column()',
-  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified thirteen');
+  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified fourteen');
 
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text), '')
@@ -478,15 +482,19 @@ SELECT ok(
   AND has_table_privilege(to_regrole('postgres')::oid, 'public.paper_tags'::regclass, 'DELETE'),
   'ACL-I7 the assignment RPCs'' definer (postgres) still holds INSERT and DELETE on both junctions');
 
--- ══ J. The authenticated SECURITY INVOKER RPCs (C49, C52) ═══════════════════
+-- ══ J. The authenticated SECURITY INVOKER RPCs (C49, C52, C53) ══════════════
 -- DB-INVOKER-EXECUTE-HARDENING-001A converted five caller-scoped read RPCs to
 -- SECURITY INVOKER, so for them the table matrix above is no longer a separate
 -- concern: `authenticated`'s SELECT on `papers` / `synonym_pool` (section C) and
 -- the caller-owned RLS policies ARE their boundary. DB-BULK-METADATA-WRITE-
 -- INVOKER-001 did the same for the two bulk metadata writes, whose boundary is
 -- `authenticated`'s SELECT and UPDATE on `papers` and the caller-owned SELECT
--- and UPDATE policies. Those two keep the `public, pg_temp` path C50 gave them
--- while they were SECURITY DEFINER; the five read RPCs are at `public`. Each is
+-- and UPDATE policies. DB-SAFE-BULK-INSERT-INVOKER-001 (C53) did the same for
+-- the bulk import, whose boundary is `authenticated`'s INSERT and SELECT on
+-- `papers`, its USAGE on `papers_insert_order_seq` (section C) and the
+-- caller-owned INSERT and SELECT policies. Those three keep the
+-- `public, pg_temp` path C50 gave them while they were SECURITY DEFINER; the
+-- five read RPCs are at `public`. Each is
 -- pinned exactly — owner, security mode, search_path, body digest, stored ACL,
 -- and which of the four roles that matter can execute it — in one readable
 -- line, so a failure names the attribute that moved. Relation ACL expectations
@@ -513,13 +521,14 @@ FROM (VALUES
   ('public.filter_papers_by_keywords(uuid,text[])',                   'search_path=public',          'b2f5a8e58589a5a094a7074c5ed9bb2d'),
   ('public.get_duplicate_papers()',                                    'search_path=public',          '3c914811a9b8c75b9df834e1cf51e1e0'),
   ('public.get_keyword_options(uuid,uuid[],integer,integer,text[])',   'search_path=public',          '531010c10d84ee94c7c1e00d65a2e7f5'),
+  ('public.safe_bulk_insert_papers(uuid,jsonb)',                       'search_path=public, pg_temp', '119925245a5c3c8529ada3d2e10fba96'),
   ('public.search_papers(uuid,text,integer,integer)',                  'search_path=public',          'd4a5f3afdc485d5dfda8e0798c61cc48'),
   ('public.search_papers_short(uuid,text)',                            'search_path=public',          'ce353564edcb73a5466092e84d0b8d1b')
 ) AS e(sig, path, body_md5)
 ORDER BY e.sig;
 
 -- The class as a set: the SECURITY INVOKER routines `authenticated` can execute
--- and `anon` cannot are exactly these seven. (The five allowlisted helpers above
+-- and `anon` cannot are exactly these eight. (The five allowlisted helpers above
 -- are reachable by everyone through PUBLIC, so they are not in this class.)
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
@@ -530,8 +539,9 @@ SELECT is(
   'bulk_update_keywords(jsonb), bulk_update_study_types(jsonb), '
   || 'filter_papers_by_keywords(uuid,text[]), get_duplicate_papers(), '
   || 'get_keyword_options(uuid,uuid[],integer,integer,text[]), '
+  || 'safe_bulk_insert_papers(uuid,jsonb), '
   || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text)',
-  'ACL-J2 the authenticated-only SECURITY INVOKER RPCs are exactly the five caller-scoped read RPCs and the two bulk metadata writes');
+  'ACL-J2 the authenticated-only SECURITY INVOKER RPCs are exactly the five caller-scoped read RPCs, the two bulk metadata writes and the bulk import');
 
 -- ══ G4. The defaults, proved on real objects ════════════════════════════════
 -- Reading `pg_default_acl` says what is stored. This says what a new object

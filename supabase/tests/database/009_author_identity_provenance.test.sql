@@ -46,9 +46,10 @@
 --     batch still inserts;
 --   * provenance is never manufactured: a payload carrying only authors stores
 --     NULL, never a parse of those strings;
---   * both functions' unchanged security contract — one overload, signature,
---     SECURITY DEFINER, bounded search_path, owner, least-privilege EXECUTE,
---     null-auth and cross-user rejection;
+--   * both functions' security contract — one overload, signature, security
+--     mode (merge_exact_duplicates SECURITY DEFINER; safe_bulk_insert_papers
+--     SECURITY INVOKER since C53), bounded search_path, owner, least-privilege
+--     EXECUTE, null-auth and cross-user rejection;
 --   * merge_exact_duplicates coherence: authors and author_provenance always
 --     come from ONE source row, never unioned, and a winning row with NULL
 --     provenance never borrows a discard's.
@@ -724,6 +725,9 @@ SELECT is(pg_temp.stored_prov('Batch good'),
   'bulk: the surviving row keeps its own provenance intact');
 
 -- ══ 6. safe_bulk_insert_papers security contract is unchanged ═══════════════
+-- Apart from its security mode: DB-SAFE-BULK-INSERT-INVOKER-001 (C53) made it
+-- SECURITY INVOKER and changed nothing else asserted here. Its behaviour under
+-- the caller's grants and RLS is owned by suite 023.
 
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
@@ -731,14 +735,15 @@ SELECT is(
   1, 'security: exactly one safe_bulk_insert_papers overload');
 
 SELECT ok(
-  -- search_path: pg_temp explicitly last since C50 (owned by suite 021).
-  (SELECT p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
+  -- search_path: pg_temp explicitly last since C50 (owned by suite 021);
+  -- SECURITY INVOKER since C53 (owned by suite 023).
+  (SELECT NOT p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
           AND pg_get_userbyid(p.proowner)='postgres'
           AND pg_get_function_result(p.oid)='jsonb'
           AND pg_get_function_identity_arguments(p.oid)='p_user_id uuid, p_papers jsonb'
    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.proname='safe_bulk_insert_papers'),
-  'security: safe_bulk_insert_papers keeps SECURITY DEFINER, search_path, owner, signature');
+  'security: safe_bulk_insert_papers is SECURITY INVOKER and keeps its search_path, owner, signature');
 
 SELECT ok(
   NOT has_function_privilege('anon','public.safe_bulk_insert_papers(uuid,jsonb)','EXECUTE')

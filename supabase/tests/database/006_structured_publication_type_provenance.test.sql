@@ -28,9 +28,10 @@
 --     result while the rest of the batch still inserts;
 --   * provenance is never manufactured: a payload carrying only the joined
 --     raw_study_type stores NULL, never a split of it;
---   * both functions' unchanged security contract — one overload, signature,
---     SECURITY DEFINER, bounded search_path, owner, least-privilege EXECUTE,
---     null-auth and cross-user rejection;
+--   * both functions' security contract — one overload, signature, security
+--     mode (merge_exact_duplicates SECURITY DEFINER; safe_bulk_insert_papers
+--     SECURITY INVOKER since C53), bounded search_path, owner, least-privilege
+--     EXECUTE, null-auth and cross-user rejection;
 --   * forward-compatible version skew: the PRE-migration function body ignores
 --     an unrecognized raw_publication_types key rather than failing, so a merged
 --     frontend deployed before the migration causes no import outage;
@@ -264,6 +265,9 @@ SELECT is(pg_temp.stored_types('PT after malformed'),
   'rpc: a multi-comma official type survives the batch whole');
 
 -- ══ 5. safe_bulk_insert_papers security contract unchanged ══════════════════
+-- DB-SAFE-BULK-INSERT-INVOKER-001 (C53) changed exactly one attribute of it —
+-- SECURITY DEFINER → SECURITY INVOKER — and nothing else pinned here. Its
+-- behaviour under the caller's grants and RLS is owned by suite 023.
 
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -282,10 +286,11 @@ SELECT is(
    WHERE n.nspname = 'public' AND p.proname = 'safe_bulk_insert_papers'),
   'jsonb', 'security: return type unchanged');
 
-SELECT ok(
-  (SELECT p.prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+SELECT is(
+  (SELECT CASE WHEN p.prosecdef THEN 'SECURITY DEFINER' ELSE 'SECURITY INVOKER' END
+   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'safe_bulk_insert_papers'),
-  'security: SECURITY DEFINER retained');
+  'SECURITY INVOKER', 'security: SECURITY INVOKER since C53 (caller grants and RLS are its primary boundary)');
 
 SELECT is(
   (SELECT p.proconfig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
