@@ -4102,16 +4102,16 @@ Decision **C53**. **Live in Production since the 2026-09-27 migration-only rollo
   - **Not done, by design.** No call to the function, product canary, disposable user or paper, temporary object or application-data write in Production. The rollout is established by the live catalog state and the tracked migration; the behaviour is proven by suite `023` and the CI suites above.
 - **Rollback** would re-add owner authority and make the identity guard the only database boundary again; see [deployment.md](deployment.md) §6.14. None has been performed.
 
-## 2026-09-27 — DB-SEARCH-VECTOR-EXPRESSION-PARITY-001: one canonical `papers.search_vector` expression, the direct built-in form (`20260927161343`) — **PREPARED IN REPOSITORY — PRODUCTION EXPRESSION ALREADY CANONICAL; MIGRATION LEDGER ROLLOUT NOT YET PERFORMED**
+## 2026-09-27 — DB-SEARCH-VECTOR-EXPRESSION-PARITY-001: one canonical `papers.search_vector` expression, the direct built-in form (`20260927161343`) — **APPLIED to Production, 2026-09-27** (no-op branch; ledger row only)
 
-Decision **C54**. Implements the verdict of the read-only audit `DB-SEARCH-VECTOR-EXPRESSION-PARITY-AUDIT-001`: converge on the representation hosted Production already stores. On branch `db/search-vector-direct-canonicalization`, in a draft pull request that is not merged. Nothing was applied to Production ([deployment.md](deployment.md) §6.15).
+Decision **C54**. Implements the verdict of the read-only audit `DB-SEARCH-VECTOR-EXPRESSION-PARITY-AUDIT-001`: converge on the representation hosted Production already stored. PR #313 merged as `05ca045476f67ef9ccee5e23936b1b47acee6adb` (approved head `e10eaba6c309eaea4014e87c40a9f056a03fb80f`). **Live in Production since the 2026-09-27 migration-only rollout** ([deployment.md](deployment.md) §6.15; the **Rollout** bullet below). **C54 aligned migration history and the clean-replay schema representation; it did not rewrite Production.** Production already stored the direct form and took the migration's verified no-op branch. Its only durable change was the C54 ledger row. No canary was run.
 
 | | `papers.search_vector` generation expression |
 |---|---|
-| **Production** (read-only, 2026-09-27; PostgreSQL 17.6; ledger **93**, latest `20260927123856`) | Direct built-in `8ddd960b4f4b11dd7afd35485d01fd25`: `setweight`, `to_tsvector(regconfig,text)`, `tsvector_concat`; attnum 29, attrdef OID `59954`; `idx_papers_search_vector` OID `61100`; wrappers `66407`–`66409` with zero dependents |
+| **Production before** (read-only, 2026-09-27, at preparation and immediately before the apply; PostgreSQL 17.6; ledger **93**, latest `20260927123856`; C54 absent) | Direct built-in `8ddd960b4f4b11dd7afd35485d01fd25`: `setweight`, `to_tsvector(regconfig,text)`, `tsvector_concat`; attnum 29, attrdef OID `59954`; `papers` OID `17492`, relfilenode `59955`; TOAST `59958`; `idx_papers_search_vector` OID and relfilenode `61100`; wrappers `66407`–`66409` with zero dependents |
 | **Clean replay before** (through `20260927123856`) | Wrapper form `dd69f099a274a9cdc0f174ae0883ddb6`: `immutable_english_tsvector_text` / `_jsonb`, `setweight`, `tsvector_concat` |
 | **Clean replay after** (through `20260927161343`) | Direct built-in `8ddd960b…`, the same attnum; no function dependency; the wrappers unreferenced but unchanged |
-| **Production after a future, separately authorized rollout** (projected, and proven read-only) | Unchanged: the no-op branch. One ledger row (93 → 94), no ALTER TABLE, no rewrite, no index rebuild, no ANALYZE, no row write |
+| **Production after** (read-only, immediately after the 2026-09-27 apply and again for the documentation reconciliation; PostgreSQL 17.6; ledger **94**, latest `20260927161343`, present exactly once) | Unchanged, via the no-op branch: the same `8ddd960b…`, attnum 29 and attrdef `59954` (same xmin and dependency rows); `papers` `17492` / `59955`; TOAST `59958`; all seven index OIDs and relfilenodes, `idx_papers_search_vector` `61100` valid, ready and live; the wrappers unchanged with zero dependents. No ALTER TABLE, rewrite, index rebuild, ANALYZE or row write; the ledger row is the only durable change |
 
 - **Root cause, corrected.** Different migration SQL text was executed. Production's column came from the original April text of `20260420010000` (commit `c6434de`, direct `to_tsvector` calls). On 2026-05-18 (commit `e4c5931`) that file, `20260305020000` and `20260417020000` were rewritten to call wrappers so a fresh replay would pass, and the April versions were recorded in Production by `migration repair`, so their ledger rows store text that never ran there. PostgreSQL never "inlined" a wrapper into a stored expression; SQL-function inlining happens at plan time. The contrary wording in `20260719162013`, `20260810152125` and `20260927001229` (C51), and `20260305020000`'s claims that a `to_tsvector(text,text)` overload exists and that `jsonb_out` is STABLE, are wrong. **Applied files are not edited**; the new migration's header, C54 and the correction notes in this file (the `20260810152125` entry above, the C51 and C52 entries), [deployment.md](deployment.md) §6.12–6.14 and [schema-reconciliation.md](schema-reconciliation.md) record the correction. C26's equivalence finding stands; C54 supersedes only its retained dual representation.
 - **Migration `20260927161343_canonicalize_papers_search_vector_expression`**, created with `supabase migration new`, explicitly transactional, run as `postgres` under transaction-local `search_path = pg_catalog, pg_temp`, `lock_timeout = 5s` and `row_security = off`:
@@ -4149,7 +4149,7 @@ Decision **C54**. Implements the verdict of the read-only audit `DB-SEARCH-VECTO
   - Positive CLI runs:
     - wrapper → direct on 89 fixture rows: logical state, data and 40 `search_papers` results identical;
     - direct state: one line changed out of 116 physical and catalog lines — the ledger.
-- **Production, read-only.** The real file ran in `BEGIN TRANSACTION READ ONLY … ROLLBACK`: branch `noop`, every check passed, ACCESS SHARE only, no transaction ID assigned.
+- **Production, read-only, at preparation.** The real file ran in `BEGIN TRANSACTION READ ONLY … ROLLBACK`: branch `noop`, every check passed, ACCESS SHARE only, no transaction ID assigned.
 - **Full local lifecycle.** `npm run test:db:local` passed:
   - replay of all 94 migrations;
   - the sensitivity probe and the negative control;
@@ -4158,6 +4158,16 @@ Decision **C54**. Implements the verdict of the read-only audit `DB-SEARCH-VECTO
   - the hosted-Production ACL parity lane, which applied this migration's rewrite branch from Production's legacy ACL shape;
   - a clean teardown.
 - **Generated types** unchanged (local regeneration byte-identical). No application, Edge Function, Auth, Storage or quota change.
-- **Versions.** PostgreSQL 17.6 in Production and locally. Supabase's 17.11 (available from 2026-09-28, started by the owner) hardens `tsvector` limits identically for both forms. No 17.11 image was available for an exact-version reproduction; re-run the read-only dry run if Production upgrades first.
-- **Out of scope:** retiring the wrappers; `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`; `matched_*` attribution; C30.
-- **Rollout:** requires separate authorization ([deployment.md](deployment.md) §6.15). None has been performed.
+- **Versions.** PostgreSQL 17.6 in Production and locally; Production stayed on 17.6 throughout the rollout. Supabase's 17.11 (available from 2026-09-28, started by the owner) hardens `tsvector` limits identically for both forms. No 17.11 image was available for an exact-version reproduction. C54 was applied on 17.6, so the planned re-run of the read-only dry run after an earlier upgrade never arose.
+- **Out of scope:** retiring the wrappers (they remain, unreferenced by `search_vector`, and a separate decision); `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`; `matched_*` attribution; C30.
+- **Rollout — applied 2026-09-27, migration only** ([deployment.md](deployment.md) §6.15).
+  - **Gates.** `supabase migration list --linked` showed exactly this one local-only migration, and the dry run listed exactly this file, with no seeds and no roles. Immediately before the apply, the exact merged file ran against Production read-only once more: `noop`, every check passed, ACCESS SHARE only, no transaction ID.
+  - **Apply.** `supabase db push --linked --yes` (Supabase CLI 2.111.0, 19:51:53Z–19:52:27Z UTC) exited 0 and applied exactly this file, with no seeds and no roles. The ledger went **93 → 94**, latest `20260927161343`, present once. Its ten recorded statements each appear verbatim in the file.
+  - **No-op proof.** A 165-value catalog snapshot before and after differed only in the six ledger fields. Identical before and after:
+    - the heap and TOAST files;
+    - every index OID, relfilenode and xmin;
+    - the attrdef row and its dependency rows;
+    - the wrappers;
+    - every `papers` and `public`-wide logical digest.
+  - **No ANALYZE.** Manual `analyze_count` stayed 0, and `pg_statistic` and the last autoanalyze were unchanged.
+  - No Edge Function deploy, no canary and no application write. No rollback has been performed.
