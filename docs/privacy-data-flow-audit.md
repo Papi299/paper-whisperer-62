@@ -304,7 +304,7 @@ User-Agent: PaperIndex/1.0 (mailto:support@paperindex.app)
 
 This is the Crossref "polite pool" convention: the address is the contact Crossref may use to reach the operator about API behaviour. It names the **former** brand (`paperindex.app`), not `paperlume.app`, and points at an address the repository gives no evidence resolves. It transmits no user data — but a privacy policy that lists Crossref as a processor should be accurate about what is sent, and the owner may want this corrected. **Correcting it is a source change and therefore out of scope for this audit** (see §16); it is recorded here as a finding only.
 
-*(2026-09-28: corrected in repository source by `CROSSREF-OPERATIONAL-IDENTITY-001A`, **not yet live** in Production — see §34.)*
+*(2026-09-28: corrected by `CROSSREF-OPERATIONAL-IDENTITY-001A`, and **live in Production** since `fetch-paper-metadata` v23 was deployed the same day — see §34.)*
 
 ---
 
@@ -343,7 +343,7 @@ These are ordinary server-side operational logs, not application analytics. A po
 >
 > **What changed.** No arbitrary throwable text can now reach a log from either function. Every caught value is reduced to an allow-listed error **name** by `_shared/boundedLogging.ts`, and failure lines are built from server-generated bounded facts only (operation, upstream, HTTP status, attempt number, error class, and one of a closed set of reason literals). The transport reports its own bounded failure and throws a fixed message instead of the provider's error. `err.message`, `String(err)`, `stack` and `cause` are read by nothing. Regression tests feed real V8 parse failures and URL-bearing transport errors through the shipped code and assert none of that material appears.
 >
-> **Status: VERIFIED — merged and LIVE in Production since 2026-09-18.** The hardening PR merged as `a3c7d910`, and both affected functions were deployed from that exact commit: `analyze-paper` as **v30** and `fetch-paper-metadata` as **v22**, each read back byte-identical to the merged source. So in the reviewed application log paths of those two functions, an arbitrary throwable message can no longer be logged: every caught value is reduced to an allow-listed error name, the JSON parse exception is discarded rather than bound, the reduction survives a hostile value whose `name` is a throwing getter or `Proxy` trap, and the upstream transport throws a fixed `upstream_fetch_failed` instead of a raw fetch error that could carry the request URL, its query and the user's `api_key`.
+> **Status: VERIFIED — merged and LIVE in Production since 2026-09-18.** The hardening PR merged as `a3c7d910`, and both affected functions were deployed from that exact commit: `analyze-paper` as **v30** and `fetch-paper-metadata` as **v22**, each read back byte-identical to the merged source. *(2026-09-28: `fetch-paper-metadata` is now **v23**, deployed from `58970383` for the Crossref identity (§34). Its transport and logging code are byte-identical to v22's, so this status still holds.)* So in the reviewed application log paths of those two functions, an arbitrary throwable message can no longer be logged: every caught value is reduced to an allow-listed error name, the JSON parse exception is discarded rather than bound, the reduction survives a hostile value whose `name` is a throwing getter or `Proxy` trap, and the upstream transport throws a fixed `upstream_fetch_failed` instead of a raw fetch error that could carry the request URL, its query and the user's `api_key`.
 >
 > **The precise scope, stated so this is not read as more than it is:**
 >
@@ -595,7 +595,7 @@ Nothing in the repository or the running application establishes any of these.
 | Trading name | "PaperLume" / "Paperlume" is a **working commercial brand, explicitly not a registered trademark** (C19) |
 | Privacy contact email | `OWNER INPUT REQUIRED`. No privacy address exists anywhere |
 | Support email | `support@paperlume.app` is referenced in the Supabase Auth email templates and in three docs, but `docs/deployment.md` and `docs/owner-decisions.md` both record that it is **pending owner setup** and may not resolve to a real inbox. **Class: PARTIALLY VERIFIED — referenced, not confirmed reachable** |
-| Stale operational contact | `support@paperindex.app` is still sent to Crossref (§9.3). *Corrected in repository source on 2026-09-28; Production keeps sending it until `fetch-paper-metadata` is redeployed (§34).* |
+| Stale operational contact | `support@paperindex.app` is still sent to Crossref (§9.3). *Closed 2026-09-28: Production's `fetch-paper-metadata` v23 no longer sends it (§34).* |
 | Postal address | `OWNER INPUT REQUIRED` |
 | Governing law / jurisdiction | `OWNER INPUT REQUIRED` |
 | Data-subject-request route | `OWNER INPUT REQUIRED` |
@@ -825,7 +825,7 @@ Location is `Supabase (ap-south-1, India)` unless stated. "Until account deletio
 
 17. **No AI disclaimer is surfaced in the app** where AI output is shown, despite being a stated launch requirement (§18).
 18. **No `/privacy`, `/terms`, `/support` route or link exists** in the app (§18).
-19. **The Crossref `User-Agent` names the retired `paperindex.app` brand** and an address of unknown reachability (§9.3). *Corrected in repository source by `CROSSREF-OPERATIONAL-IDENTITY-001A` (2026-09-28, §34), but **not yet live**: Production's `fetch-paper-metadata` v22 still sends the retired identity until its separately authorized deploy.*
+19. **The Crossref `User-Agent` names the retired `paperindex.app` brand** and an address of unknown reachability (§9.3). ***CLOSED 2026-09-28.** Corrected by `CROSSREF-OPERATIONAL-IDENTITY-001A` and live in Production since `fetch-paper-metadata` v23 (§34). The Gmail contact it now sends is temporary. Moving to a dedicated PaperLume address once one is active is a planned improvement, not an open defect.*
 20. **Orphaned attachment binaries can survive a failed best-effort cleanup** until account deletion (§6.3). *NARROWED, not closed. The fix is live in Production: `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` landed in the repository 2026-09-04 (§27), both migrations are now applied to Production, and the lifecycle passed a bounded wet acceptance on 2026-09-10 (§28). Cleanup is now **recoverable** — durable intent, retried immediately and again at the next authenticated session — but still **not immediate and not guaranteed**: there is no scheduled worker, so a queue row waits for a user who never returns, an object whose finalization never reached the database is deliberately left in place, and pre-feature orphans remain. Account deletion stays the final sweep, and this item therefore stays open in its residual form.*
 21. **No error-tracking with PII redaction exists**, which is a stated launch blocker — if one is later added, it becomes a new processor and this audit must be revised.
 
@@ -1814,13 +1814,13 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ## 34. Addendum — 2026-09-28 — `CROSSREF-OPERATIONAL-IDENTITY-001A` Crossref operational identity
 
-> **Status: CORRECTED IN REPOSITORY SOURCE; NOT YET LIVE IN PRODUCTION.** Production's `fetch-paper-metadata` is still deployed **v22**, which sends the retired identity. It keeps doing so until a separately authorized deploy of that one function ([deployment.md](deployment.md) §7d); a GitHub merge alone deploys no Edge Function. Update this status when that deploy happens.
+> **Status (updated 2026-09-28): LIVE in Production — the finding is closed.** PR #319 merged as `58970383`, and `fetch-paper-metadata` **v23** was deployed from that exact commit on 2026-09-28 at 18:39:13Z (`CROSSREF-OPERATIONAL-IDENTITY-001B`, [deployment.md](deployment.md) §7d). Its read-back source is byte-identical to the merge. This addendum was first written while the change was in repository source only; the pre-rollout Production values are kept in §34.1, labelled *Before*.
 
-**Scope.** This closes, in source, the §9.3 finding (the §17 "Stale operational contact" row and §22.4 item 19). It changes only how `fetch-paper-metadata` identifies PaperLume to Crossref as an API client. §9.1's Crossref row is preserved as written; this section amends it where stated.
+**Scope.** This closes the §9.3 finding (the §17 "Stale operational contact" row and §22.4 item 19). It changes only how `fetch-paper-metadata` identifies PaperLume to Crossref as an API client. §9.1's Crossref row is preserved as written; this section amends it where stated.
 
-### 34.1 Repository and Production
+### 34.1 Production now, and before
 
-| | Repository (this change) | Production (`fetch-paper-metadata` v22) |
+| | Production now (`fetch-paper-metadata` v23, since 2026-09-28) | *Before* (v22, 2026-09-18 to 2026-09-28) |
 |---|---|---|
 | `User-Agent` on every Crossref request | `PaperLume/1.0 (mailto:mutrisport@gmail.com)` | `PaperIndex/1.0 (mailto:support@paperindex.app)` |
 | `mailto` query parameter | `mailto=mutrisport@gmail.com` on both request kinds | none |
@@ -1829,12 +1829,14 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 | User content sent | a DOI or a title string | the same |
 
 **Class: VERIFIED.**
-- **Repository column:** source and tests, including a behavioural suite that drives the shipped transport.
-- **Production column:**
-  - v22 was read back byte-identical to merge `a3c7d910` when it was deployed on 2026-09-18;
-  - its version and update time were unchanged when read back on 2026-09-28;
-  - `a3c7d910` sends the retired identity at both call sites;
-  - no file in the function's import closure changed between `a3c7d910` and the base of this change.
+- **Now column:**
+  - v23 (`ezbr_sha256` `1e74d51d…`) was read back through `supabase functions download --use-api`;
+  - all 12 files of its import closure are byte-identical to merge `58970383`;
+  - executing the deployed `crossrefRequest.ts` yields exactly the `User-Agent` and both URL shapes above;
+  - the source is also covered by tests, including a behavioural suite that drives the shipped transport.
+- **Before column:**
+  - v22 (`c334e87d…`) was read back byte-identical to merge `a3c7d910`, both at its 2026-09-18 deploy and again immediately before the 2026-09-28 deploy;
+  - `a3c7d910` sends the retired identity at both call sites.
 
 ### 34.2 What changes for personal data — nothing about users
 
@@ -1865,6 +1867,9 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 ### 34.4 What this addendum does NOT claim
 
-- ❌ "The finding is fixed in Production" — **not claimed.** It is fixed in source only, until `fetch-paper-metadata` is deployed.
-- ❌ "The new identity was observed reaching Crossref" — **not claimed.** No request was made to Crossref, and no Production request was made, to prepare this change.
+- ❌ "The new identity was observed reaching Crossref" — **not claimed.** What Production sends is established by the byte-identical deployed source.
+  - PaperLume cannot observe the outgoing header.
+  - The bounded authenticated Crossref-fallback call planned for the rollout was **not run**: no safe existing acceptance credential was available, and none was created ([deployment.md](deployment.md) §7d).
+  - The only Production request was an unauthenticated boot probe, which the function rejected with its own 401 before any Crossref call.
+- ❌ "PaperLume's traffic is in Crossref's polite pool" as an observed fact — **not claimed.** That follows from Crossref's documented rule that an email in `mailto` or the agent header selects the polite pool. No Crossref response header was observed.
 - ❌ "The stale identity caused a problem" — **not established.** There is no evidence that Crossref tried to reach `support@paperindex.app`, or that PaperLume's traffic was ever throttled or blocked because of it.

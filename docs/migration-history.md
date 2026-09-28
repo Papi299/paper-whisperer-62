@@ -4338,9 +4338,9 @@ Decision **C56**. It implements the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE
   - **Security Advisor** unchanged: 24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password.
   - No Edge Function deploy (all six versions unchanged), no canary and no application write. No rollback has been performed.
 
-## 2026-09-28 — CROSSREF-OPERATIONAL-IDENTITY-001A: PaperLume's Crossref operational identity in `fetch-paper-metadata` — **PREPARED, NOT DEPLOYED to Production**
+## 2026-09-28 — CROSSREF-OPERATIONAL-IDENTITY-001A: PaperLume's Crossref operational identity in `fetch-paper-metadata` — **DEPLOYED to Production, 2026-09-28 (v23)**
 
-Edge Function source only. There is no migration, frontend or `_shared` change. **Not deployed:** Production's `fetch-paper-metadata` stays **v22**, which still sends the retired identity, until a separately authorized deploy of that one function ([deployment.md](deployment.md) §7d).
+Edge Function source only. There is no migration, frontend or `_shared` change. **Deployed 2026-09-28:** PR #319 merged as `58970383`, and `fetch-paper-metadata` went **v22 → v23** in a single-function rollout (`CROSSREF-OPERATIONAL-IDENTITY-001B`; [deployment.md](deployment.md) §7d).
 
 - **Why.** Every Crossref request identified the client as `PaperIndex/1.0 (mailto:support@paperindex.app)`: the retired product name and an address never shown to reach anyone ([privacy-data-flow-audit.md](privacy-data-flow-audit.md) §9.3).
 - **Crossref guidance.** Its first-party guidance ("Access and authentication", updated 2025-10-16) asks clients to give an email in the `mailto` parameter or the agent header, strongly recommends `mailto` on every request, and needs no registration or API key.
@@ -4360,4 +4360,21 @@ Edge Function source only. There is no migration, frontend or `_shared` change. 
   - `metadataDoiLinks.test.ts`: the DOI-segment check is now behavioural.
   - **11 negative controls** each made the suite fail.
 - **Validation.** Lint (0 errors), `npm run typecheck`, Vitest (174 files / 5,679 tests), both production builds, and a scripted strict typecheck of the function's full closure (0 diagnostics, before and after) passed.
-- **Rollout — not performed.** No Edge Function was deployed, no secret changed, and no request was made to Crossref or to Production.
+- **Merge and CI.** PR #319 (approved head `ab3e06dc`) merged as the two-parent commit `589703838ae5cbc10e16098ddc757fe2f6750d05` (parents `3f0ccaae` and `ab3e06dc`, identical tree). Merged-`main` Validate `36465888100`, DB Tests `36465888137` and Extension `36465888026` passed on the first attempt.
+- **Rollout — deployed 2026-09-28, one function only.**
+  - **Before.**
+    - `fetch-paper-metadata` was v22, `ezbr_sha256` `c334e87d80b1f9c0081c06baf1f5481326912e2f579c2764994e94b42ccc9c20`, updated 2026-09-18T20:19:26Z.
+    - Its source was captured through `supabase functions download --use-api` as the rollback artifact: 11 files, byte-identical to `a3c7d910`, which re-established byte fidelity for that mechanism.
+  - **Provenance.** Deployed from a clean worktree at `58970383`. The recursively determined 12-file closure was byte-identical to that commit.
+  - **Deploy.** `supabase functions deploy fetch-paper-metadata --project-ref <project-ref>` (Supabase CLI 2.111.0, Docker bundling) ran between 18:39:02Z and 18:39:26Z and exited 0.
+  - **After.**
+    - `fetch-paper-metadata` is **v23**, `ezbr_sha256` `1e74d51d50b31260670d90fea7df710ec93875e42f03b1af26d6e8c9599d3296`, updated 2026-09-28T18:39:13.518Z. Its id and `verify_jwt = false` are unchanged.
+    - Its `--use-api` read-back is 12/12 files byte-identical to `58970383`, and the deployed `crossrefRequest.ts` yields the new `User-Agent` and `mailto` on both request kinds.
+    - No deployed code contains the retired identity.
+  - **Isolation.**
+    - `analyze-paper` v33, `suggest-paper-organization` v16, `get-gemini-provider-quota` v9, `delete-account` v6 and `search-pubmed` v6 are unchanged in version, update time and `ezbr_sha256`.
+    - All 7 manually managed secrets are unchanged. The 7 platform `SUPABASE_*` rows kept their digests and were only restamped to the deploy instant, as on every deploy.
+    - A read-only database fingerprint is identical before and after (ledger 96).
+    - No migration was run, and no Auth, Storage or Vercel setting changed.
+  - **Acceptance.** An unauthenticated boot probe got the function's own 401. The authenticated Crossref-fallback call was **skipped**, because no safe existing acceptance credential was available in the session and none was created. The deployed-source read-back is the identity proof.
+  - No rollback has been performed.
