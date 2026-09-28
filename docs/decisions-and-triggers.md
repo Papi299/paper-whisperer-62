@@ -1423,7 +1423,7 @@ The audit classified them **SAFE UNDER CURRENT PRIVILEGES**. The exemption belon
 
 `set_updated_at()` **deliberately stays at exactly `{search_path=pg_catalog}`**. Its reviewed body (`md5(prosrc)` `301a884953d37769916294bb60562e05`) names no data type: it assigns `now()` to `NEW.updated_at` and returns `NEW`. As with C50's exceptions, the classification belongs to that exact body. Suite `007` pins path and digest together, so a body change forces a re-review.
 
-> **The three wrappers — later history (2026-09-28).** When C51 hardened them, the text and jsonb wrappers were inside the search boundary: every clean replay's `papers.search_vector` called them, so a wrapper's name resolution decided what was stored. Hardening their path was correct then, and it stays correct history. C54 (live 2026-09-27) later removed that dependency, and **C55 — PREPARED IN REPOSITORY, NOT LIVE IN PRODUCTION —** retires the three wrappers as obsolete. C51's hardening of `attachment_cleanup_path_is_safe` and its classification of `set_updated_at()` are unaffected, and suite `007` keeps pinning both. In Production the three wrappers still exist at `pg_catalog, pg_temp` until C55's separately authorized rollout.
+> **The three wrappers — later history (2026-09-28).** When C51 hardened them, the text and jsonb wrappers were inside the search boundary: every clean replay's `papers.search_vector` called them, so a wrapper's name resolution decided what was stored. Hardening their path was correct then, and it stays correct history. C54 (live 2026-09-27) later removed that dependency, and **C55 (live in Production since 2026-09-28)** then retired the three wrappers as obsolete. C51's hardening of `attachment_cleanup_path_is_safe` and its classification of `set_updated_at()` are unaffected, and suite `007` keeps pinning both. The wrappers kept C51's `pg_catalog, pg_temp` in Production until C55's migration-only rollout dropped all three on 2026-09-28.
 
 All five remain SECURITY INVOKER. For each of the four, **only `proconfig` changes**. Body, OID, owner, language, volatility, parallel mode, strictness, leakproofness, return type, arguments, SECURITY INVOKER status, EXECUTE ACL and effective callers are unchanged. So are the three attachment callers, the `papers.trg_papers_updated_at` binding, the `papers.search_vector` generated column, its stored values and `idx_papers_search_vector`. There is no grant, OID or dependency change.
 
@@ -1616,7 +1616,7 @@ Drift that strikes **inside** the duplicate handler — for example column `SELE
   - `papers` (OID `17492`, relfilenode `59955`), its TOAST relation (`59958`) and `idx_papers_search_vector` (OID and relfilenode `61100`; valid, ready, live; GIN over `search_vector`) are physically unchanged.
   - The three wrappers are still present with unchanged bodies, `proconfig` and ACLs, and 0 / 0 / 0 dependents. C54 did not retire them.
 
-> **Follow-up: C55 (2026-09-28) — PREPARED IN REPOSITORY, NOT LIVE IN PRODUCTION.** Where this entry says the three `immutable_english_tsvector_*` wrappers remain present, unreferenced and pinned by suite `007`, that describes C54 and is still Production's state. C55's migration `20260927214838` retires them. It does not change C54's decision, expression or rollout record. With it, suites `007`, `015`, `022`, `023` and `024` were revised; suite `024` now checks the canonical expression against pinned golden values instead of the wrappers. C54 remains fully closed.
+> **Follow-up: C55 (2026-09-28) — COMPLETE, LIVE IN PRODUCTION since 2026-09-28.** Where this entry says the three `immutable_english_tsvector_*` wrappers remain present, unreferenced and pinned by suite `007`, that describes C54 at its completion, and it stayed Production's state until C55. C55's migration `20260927214838` retired them: its migration-only rollout dropped all three in Production on 2026-09-28 (ledger **94 → 95**). It does not change C54's decision, expression or rollout record. `search_vector` is still F1 `8ddd960b…` (attrdef `59954`), and `papers` (`17492` / `59955`) and `idx_papers_search_vector` (`61100` / `61100`) are physically unchanged. With C55, suites `007`, `015`, `022`, `023` and `024` were revised; suite `024` now checks the canonical expression against pinned golden values instead of the wrappers. C54 remains fully closed.
 
 **Decision.** `papers.search_vector` has exactly one generation expression everywhere:
 
@@ -1701,7 +1701,7 @@ Any third expression, dependency set or call set is refused before any lock or c
 
 **PostgreSQL and Supabase versions.** Production and the local stack are PostgreSQL 17.6, and Production stayed on 17.6 throughout the C54 rollout. Supabase announced 17.11 on 2026-09-25, with upgrades available from 2026-09-28 and started by the project owner. 17.11 hardens `tsvector`/`tsquery` length limits (CVE-2026-14662). Both representations call the same `to_tsvector(regconfig,text)`, so any change affects them identically, and the migration's semantic precondition re-validated every stored value at rollout. **Limitation:** no 17.11 image was available for an exact-version local reproduction. C54 was applied on 17.6, before the upgrade window opened, so the planned pre-rollout re-check on 17.11 was never needed.
 
-**Not in scope, unchanged.** Retiring the three wrappers (a separate future decision — now C55, prepared in repository and not live); `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`; redesigning `matched_*` attribution; the 17.11 upgrade; C30.
+**Not in scope, unchanged.** Retiring the three wrappers (a separate future decision — now C55, live in Production since 2026-09-28); `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`; redesigning `matched_*` attribution; the 17.11 upgrade; C30.
 
 **Privacy.** Schema-representation convergence only: no data category, recipient, retention or processor changes, and no Privacy Policy amendment ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)).
 
@@ -1714,8 +1714,22 @@ Any third expression, dependency set or call set is refused before any lock or c
 
 ### C55. The three obsolete `immutable_english_tsvector_*` wrappers are retired (2026-09-28)
 
-**Status: PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION.** Migration `20260927214838_retire_immutable_english_tsvector_wrappers.sql` implements it (`DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001`, from the read-only audit `DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-AUDIT-001`, which classified all three **SAFE TO RETIRE**). It has not been applied to Production, and applying it requires a separate authorization ([deployment.md](deployment.md) §6.16).
+**Status: COMPLETE — LIVE IN PRODUCTION since 2026-09-28.** Migration `20260927214838_retire_immutable_english_tsvector_wrappers.sql` implements it (`DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001`, from the read-only audit `DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-AUDIT-001`, which classified all three **SAFE TO RETIRE**). PR #315 merged as `6d17f68c62d8531ef10ef831453da7f09208b0c2` (approved head `12ce5fdba034c3bf1dd3714601877e6149a4a032`). The separately authorized migration-only rollout applied it on 2026-09-28 with `npx supabase db push --linked --yes` (Supabase CLI 2.111.0, between 06:22:05Z and 06:23:01Z, exit 0, exactly one migration, no seeds and no roles; ledger **94 → 95**, latest `20260927214838`; [deployment.md](deployment.md) §6.16).
 - **Production at preparation** (read-only, 2026-09-28): PostgreSQL 17.6; ledger **94**, latest `20260927161343` (C54, present once); `search_vector` F1 `8ddd960b…`; `idx_papers_search_vector` valid, ready and live. The three wrappers are OIDs `66407` (`text`), `66408` (`textarr`) and `66409` (`jsonb`). Each is `postgres`-owned, `sql`, SECURITY INVOKER, IMMUTABLE, PARALLEL SAFE, not strict and not leakproof, returns `tsvector` and has `search_path=pg_catalog, pg_temp`. Bodies are `26edc211…` / `19261084…` / `30c015cd…`. All three carry the explicit ACL `{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}` and have zero dependents and zero routine-body references. `public` has 46 functions, five with PUBLIC EXECUTE: the three wrappers, `set_updated_at()` and `update_updated_at_column()`.
+- **Production after the rollout** (read-only, immediately after the apply and again on 2026-09-28 for the documentation reconciliation):
+  - PostgreSQL 17.6; ledger **95**, latest `20260927214838`, present exactly once. Each of its ten recorded statements appears verbatim in the merged file.
+  - The three signatures no longer resolve, OIDs `66407`–`66409` no longer exist, and no function of those names exists in any schema.
+  - `public` has **43** functions (46 before). Exactly two are PUBLIC-executable (five before): `set_updated_at()` and `update_updated_at_column()`, unchanged. C55 did not harden them.
+  - **The only durable database changes were the migration-ledger entry and removal of the three target function objects.** A fingerprint taken immediately before and after the apply was otherwise identical:
+    - the migration's own 16-category snapshot;
+    - the xmins of every other function, database-wide, and of every `public` catalog row;
+    - `search_vector`: F1 `8ddd960b…`, attrdef `59954` and its dependencies, the direct call set `setweight(tsvector,"char")`, `to_tsvector(regconfig,text)` and `tsvector_concat(tsvector,tsvector)`, and weights A/B/C/C/C/D;
+    - `papers` (OID `17492`, relfilenode `59955`), its TOAST relation `59958`, and all seven `papers` index OIDs and relfilenodes, with `idx_papers_search_vector` still `61100` / `61100`, valid, ready and live;
+    - `pg_statistic` for `papers`, and every `public` table's write counters.
+  - Inside its own transaction the migration verified no lock of any mode on a `public` relation and no application row written. There was no table rewrite, index rebuild, data canary or application-data migration.
+  - PostgREST refreshed its schema cache automatically through the drop event trigger; no manual `NOTIFY pgrst` was needed or sent. A bounded anonymous call to `rpc/immutable_english_tsvector_text` with a fixed input answered 200 before the rollout and 404 `PGRST202` after. That is the intended response for a retired RPC, not an application error.
+  - Linked type generation contains no wrapper entry, so Production's function surface and the committed generated types agree again. The linked output differs from the committed file only in formatting (an `__InternalSupabase { PostgrestVersion: "14.5" }` block and optional parentheses in helper generics), not in schema.
+  - The Security Advisor is unchanged: 24 × `authenticated_security_definer_function_executable`, 6 × `rls_enabled_no_policy` and 1 leaked-password warning, none naming a wrapper. C55 was not expected to move it, since the wrappers were SECURITY INVOKER.
 
 **Decision.** Drop exactly these three functions, each by its complete signature, with `RESTRICT`:
 
@@ -1769,15 +1783,15 @@ Nothing else changes. No table, column, index, default, constraint, policy, trig
   - no lock of any mode on any `public` relation;
   - no application row written.
 
-**Expected Production effect** (projected; not run):
+**Production effect — projected before the rollout, and observed** (the outcome is recorded above; the lock footprint was measured locally, and in Production the migration's own postcondition proved no `public` relation was locked):
 - ledger **94 → 95**;
 - exactly three function drops, taking ACCESS EXCLUSIVE on the three function objects only;
 - no lock on `papers` or any other relation, no table rewrite, no index rebuild and no application-data write;
 - the DROP fires the platform's `sql_drop` event trigger (`pgrst_drop_watch`), so PostgREST reloads its schema cache and the three RPC names stop resolving.
 
-The Security Advisor's counts are not expected to change: the wrappers are INVOKER, and no Advisor lint names them.
+The Security Advisor's counts were not expected to change, and did not: the wrappers were INVOKER, and no Advisor lint named them.
 
-**Evidence (local, PostgreSQL 17.6, rolled back or on disposable replays; Production read-only only).**
+**Implementation evidence** (gathered before the rollout: local, PostgreSQL 17.6, rolled back or on disposable replays; Production read-only only).
 - **Migration controls on the real file**, each leaving a whole-catalog, dependency, ledger and `papers`-data fingerprint byte-identical:
   - **24 precondition refusals**, none reaching the first DROP:
     - a missing target;
@@ -1812,14 +1826,14 @@ The Security Advisor's counts are not expected to change: the wrappers are INVOK
 - **Generated types**: exactly the three RPC entries removed (−6 lines, no additions), generated with `supabase gen types typescript --local --schema public`.
 - **Full lifecycle**, the hosted-ACL parity lane and the application gates: see [migration-history.md](migration-history.md).
 
-**Rollback — forward only.** Do not edit C55 after it is applied, and do not `migration repair` a legitimate application of it. If an unforeseen consumer appears, write a new forward migration that re-creates the exact reviewed definitions (bodies in `20260331010000`, `search_path` per C51) and restates the intended EXECUTE ACL explicitly. Plain `CREATE FUNCTION` reproduces the reviewed body digests, verified locally. The resulting ACL depends on the environment's default privileges: NULL under replay defaults, or the explicit hosted literal under Production's current defaults. So the restoring migration must state the intended ACL rather than rely on either.
+**Rollback — forward only; none has been performed.** Do not edit C55, and do not `migration repair` its legitimate application. If an unforeseen consumer appears, write a new forward migration that re-creates the exact reviewed definitions (bodies in `20260331010000`, `search_path` per C51) and restates the intended EXECUTE ACL explicitly. Plain `CREATE FUNCTION` reproduces the reviewed body digests, verified locally. The resulting ACL depends on the environment's default privileges: NULL under replay defaults, or the explicit hosted literal under Production's current defaults. So the restoring migration must state the intended ACL rather than rely on either.
 
 **Not in scope, unchanged.** `set_updated_at()` and `update_updated_at_column()` (grants and definitions); default function-EXECUTE hardening and every `ALTER DEFAULT PRIVILEGES`; `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`; database `TEMP`; service-role least privilege; C54's decision; historical migrations; the frozen hosted-ACL parity fixtures (`scripts/acl-parity/hosted-baseline-20260904120000.*`), which describe the 2026-09-04 baseline and still replay it exactly.
 
 **Privacy.** Removes three unused callable functions. No data category, recipient, retention or processor changes, and no Privacy Policy amendment ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)).
 
 **Re-evaluation triggers:**
-- a caller of any of the three names discovered before or after rollout — stop; after rollout, restore by a new forward migration as above;
-- the Production rollout's read-only preflight finding a state other than the reviewed one (the migration refuses it) — stop and re-review; do not edit the migration to fit;
+- a caller of any of the three names discovered after the rollout — stop, and restore by a new forward migration as above;
+- a database whose state differs from the reviewed one (for example a new hosted environment), which the migration refuses — stop and re-review; do not edit the migration to fit (Production passed the reviewed preflight and was retired on 2026-09-28);
 - a PostgreSQL or text-search change that moves a golden value in suite `024` — review each row that moved, then update the golden table deliberately;
 - the separate default function-EXECUTE hardening decision, which is where the two remaining PUBLIC-executable trigger functions belong.

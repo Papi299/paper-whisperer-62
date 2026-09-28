@@ -4159,7 +4159,7 @@ Decision **C54**. Implements the verdict of the read-only audit `DB-SEARCH-VECTO
   - a clean teardown.
 - **Generated types** unchanged (local regeneration byte-identical). No application, Edge Function, Auth, Storage or quota change.
 - **Versions.** PostgreSQL 17.6 in Production and locally; Production stayed on 17.6 throughout the rollout. Supabase's 17.11 (available from 2026-09-28, started by the owner) hardens `tsvector` limits identically for both forms. No 17.11 image was available for an exact-version reproduction. C54 was applied on 17.6, so the planned re-run of the read-only dry run after an earlier upgrade never arose.
-- **Out of scope:** retiring the wrappers (they remain, unreferenced by `search_vector`, and a separate decision); `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`; `matched_*` attribution; C30.
+- **Out of scope:** retiring the wrappers (they remain, unreferenced by `search_vector`, and a separate decision — *superseded 2026-09-28: C55 retired them; see the next entry*); `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`; `matched_*` attribution; C30.
 - **Rollout — applied 2026-09-27, migration only** ([deployment.md](deployment.md) §6.15).
   - **Gates.** `supabase migration list --linked` showed exactly this one local-only migration, and the dry run listed exactly this file, with no seeds and no roles. Immediately before the apply, the exact merged file ran against Production read-only once more: `noop`, every check passed, ACCESS SHARE only, no transaction ID.
   - **Apply.** `supabase db push --linked --yes` (Supabase CLI 2.111.0, 19:51:53Z–19:52:27Z UTC) exited 0 and applied exactly this file, with no seeds and no roles. The ledger went **93 → 94**, latest `20260927161343`, present once. Its ten recorded statements each appear verbatim in the file.
@@ -4172,15 +4172,16 @@ Decision **C54**. Implements the verdict of the read-only audit `DB-SEARCH-VECTO
   - **No ANALYZE.** Manual `analyze_count` stayed 0, and `pg_statistic` and the last autoanalyze were unchanged.
   - No Edge Function deploy, no canary and no application write. No rollback has been performed.
 
-## 2026-09-28 — DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001: retire the three obsolete `immutable_english_tsvector_*` wrappers (`20260927214838`) — **PREPARED IN REPOSITORY — NOT LIVE IN PRODUCTION**
+## 2026-09-28 — DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001: retire the three obsolete `immutable_english_tsvector_*` wrappers (`20260927214838`) — **APPLIED to Production, 2026-09-28**
 
-Decision **C55**. It implements the verdict of the read-only audit `DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-AUDIT-001`, **SAFE TO RETIRE ALL THREE**. The migration has **not** been applied to Production; that needs a separate authorization ([deployment.md](deployment.md) §6.16). It follows C54, which made the wrappers obsolete, and does not change C54. C51's hardening of the wrappers was correct while they were in the search boundary (C51, C55).
+Decision **C55**. It implements the verdict of the read-only audit `DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-AUDIT-001`, **SAFE TO RETIRE ALL THREE**. PR #315 merged as `6d17f68c62d8531ef10ef831453da7f09208b0c2` (approved head `12ce5fdba034c3bf1dd3714601877e6149a4a032`). **Live in Production since the 2026-09-28 migration-only rollout** ([deployment.md](deployment.md) §6.16; the **Rollout** bullet below). **C55 removed three obsolete function/API objects and aligned the live Data API and type surface with the post-C55 replay; it did not rewrite tables, indexes or application data.** The only durable database changes were the migration-ledger entry and the removal of the three target function objects. No canary was run. It follows C54, which made the wrappers obsolete, and does not change C54. C51's hardening of the wrappers was correct while they were in the search boundary (C51, C55).
 
 | | The three wrappers | `public` functions / PUBLIC-executable |
 |---|---|---|
-| **Production now** (read-only, 2026-09-28; PostgreSQL 17.6; ledger **94**, latest `20260927161343`) | Present: OIDs `66407`/`66408`/`66409`, bodies `26edc211…`/`19261084…`/`30c015cd…`, `pg_catalog, pg_temp`, the explicit hosted ACL, 0 dependents, 0 routine-body references | 46 / 5 |
+| **Production before** (read-only, 2026-09-28, at preparation and immediately before the apply; PostgreSQL 17.6; ledger **94**, latest `20260927161343`; C55 absent) | Present: OIDs `66407`/`66408`/`66409`, bodies `26edc211…`/`19261084…`/`30c015cd…`, `pg_catalog, pg_temp`, the explicit hosted ACL, 0 dependents, 0 routine-body references; `search_vector` F1 `8ddd960b…`; `idx_papers_search_vector` `61100`, valid, ready and live | 46 / 5 |
 | **Clean replay before** (through `20260927161343`) | Present, the same contract, `proacl` NULL | 46 / 5 |
 | **Clean replay after** (through `20260927214838`) | Absent; no function of those names in any schema | 43 / 2 (`set_updated_at()`, `update_updated_at_column()`) |
+| **Production after** (read-only, immediately after the 2026-09-28 apply and again for the documentation reconciliation; PostgreSQL 17.6; ledger **95**, latest `20260927214838`, present exactly once) | Absent: no function of those names in any schema, and OIDs `66407`–`66409` gone. Unchanged: `search_vector` F1 `8ddd960b…` (attrdef `59954`), `papers` `17492` / `59955`, TOAST `59958`, all seven index OIDs and relfilenodes (`idx_papers_search_vector` `61100` / `61100`, valid, ready, live). No table or index rewrite and no row write | 43 / 2 (`set_updated_at()`, `update_updated_at_column()`) |
 
 - **Why.** The wrappers are SECURITY INVOKER, table-independent and side-effect-free; this is not a vulnerability fix. Nothing depends on or calls them, and they were never a documented API. PUBLIC EXECUTE nevertheless exposed them to `anon` as the only three RPCs in its OpenAPI document (on a clean replay), and they were in the generated types.
 - **Migration `20260927214838_retire_immutable_english_tsvector_wrappers`.** It was created with `supabase migration new`, is explicitly transactional, and runs as `postgres` under transaction-local `search_path = pg_catalog, pg_temp` and `lock_timeout = 5s`:
@@ -4240,3 +4241,15 @@ Decision **C55**. It implements the verdict of the read-only audit `DB-IMMUTABLE
   - `DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001`;
   - database `TEMP`;
   - service-role least privilege.
+- **Rollout — applied 2026-09-28, migration only** ([deployment.md](deployment.md) §6.16).
+  - **Gates.** `supabase migration list --linked` showed exactly this one local-only migration, and the dry run listed exactly this file, with no seeds and no roles. Immediately before the apply, the merged file's §0–§1 ran against Production read-only once more: every precondition passed, the targets resolved to `{66407,66408,66409}`, nothing was held on any `public` relation, and no transaction ID was assigned.
+  - **Apply.** `npx supabase db push --linked --yes` (Supabase CLI 2.111.0, between 06:22:05Z and 06:23:01Z UTC) exited 0 and applied exactly this file, with no seeds and no roles. The ledger went **94 → 95**, latest `20260927214838`, present once. Its ten recorded statements each appear verbatim in the file.
+  - **Retirement and preservation proof.** A fingerprint before and after differed only in the ledger and the three targets: the signatures no longer resolve, the OIDs are gone, and `public` went **46 → 43** functions and **5 → 2** PUBLIC-executable. Identical before and after:
+    - the migration's 16-category snapshot;
+    - the xmins of every non-target function and every `public` catalog row;
+    - `search_vector`'s F1, attrdef and dependency rows;
+    - the heap and TOAST files, and every index OID, relfilenode and xmin;
+    - `pg_statistic`, and every `public` table's write counters.
+  - **Data API and types.** PostgREST refreshed its schema cache automatically; no manual `NOTIFY pgrst` was needed. A bounded anonymous call to the text wrapper's RPC answered 200 before and 404 `PGRST202` after, the intended response for a retired RPC. Linked type generation has no wrapper entry and is semantically identical to the committed types. The only differences are formatting: an `__InternalSupabase` PostgREST-version block and optional helper-generic parentheses.
+  - **Security Advisor** unchanged after the apply: 24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password, none naming a wrapper, as expected for SECURITY INVOKER functions.
+  - No Edge Function deploy, no canary and no application write. No rollback has been performed.
