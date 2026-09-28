@@ -1684,37 +1684,62 @@ A frontend-only change that uses the **already-deployed** contract needs no Edge
 
 **A Vercel Preview cannot validate this function.** A Preview build exercises frontend code only; the endpoint lives in Supabase and is deployed separately. Preview state is evidence about the frontend, never about this endpoint's deployed version.
 
-### 7d. `fetch-paper-metadata` — Crossref operational identity (`CROSSREF-OPERATIONAL-IDENTITY-001A`); PREPARED — NOT DEPLOYED
+### 7d. `fetch-paper-metadata` — Crossref operational identity (`CROSSREF-OPERATIONAL-IDENTITY-001A`); COMPLETE: deployed 2026-09-28
 
-> **Status — PREPARED IN THE REPOSITORY; NOT DEPLOYED.** Production's `fetch-paper-metadata` is **v22** (deployed 2026-09-18 from merge `a3c7d910`; version and update time re-read on 2026-09-28). It still sends Crossref `User-Agent: PaperIndex/1.0 (mailto:support@paperindex.app)` and no `mailto` parameter. The corrected source ships to Production only through the separately authorized deploy below; a merge does not deploy it.
+> **Status — COMPLETE. `fetch-paper-metadata` v23 is live in Production since 2026-09-28 18:39:13Z (`CROSSREF-OPERATIONAL-IDENTITY-001B`).** Every Crossref request now identifies PaperLume. The only Production change was that one function's redeploy. No rollback has been performed.
+>
+> - **Merged.** PR #319 as the two-parent commit `589703838ae5cbc10e16098ddc757fe2f6750d05`: parents `3f0ccaae` and the approved head `ab3e06dc`; tree `85a56b94`, identical to the approved head's. The source branch `fix/crossref-operational-identity` is preserved.
+> - **Hosted CI.** Merged-`main` on `58970383`: Validate (run `36465888100`), DB Tests (`36465888137`) and Extension (`36465888026`) all passed on the first attempt. `E2E (local)` does not run on a push to `main`; its evidence is the pull-request run on the approved head, `36461241018`, which passed.
+> - **Before — read-only preflight, 18:37Z.**
+>   - `fetch-paper-metadata` was **v22** (id `7e682b6d-b91b-4d36-9668-fc40a77b2f27`, updated 2026-09-18T20:19:26.016Z, `ezbr_sha256` `c334e87d80b1f9c0081c06baf1f5481326912e2f579c2764994e94b42ccc9c20`, `verify_jwt = false`).
+>   - The other five were `analyze-paper` v33, `suggest-paper-organization` v16, `get-gemini-provider-quota` v9, `delete-account` v6 and `search-pubmed` v6. Their ids, update times and `ezbr_sha256` were recorded.
+>   - The 14 secrets (7 manually managed, 7 platform `SUPABASE_*`) were recorded by name, digest and `updated_at`. No value was read.
+> - **Rollback capture.** `supabase functions download fetch-paper-metadata --project-ref <project-ref> --use-api --workdir <scratch>` returned v22's 11-file closure. Every file was byte-identical to its blob at `a3c7d910`, so byte comparison was valid for this mechanism on this run. v22 sends `PaperIndex/1.0 (mailto:support@paperindex.app)` at both call sites.
+> - **Provenance.** The deploy ran from a clean detached worktree at `58970383` (no modified, untracked or ignored files). Its recursively determined closure was 12 files: `index.ts`, `upstreamFetch.ts` and `crossrefRequest.ts`, plus nine `_shared` modules (`authorProvenance`, `boundedLogging`, `crossrefAuthors`, `env`, `htmlEntities`, `identifierDetection`, `orcid`, `publicationTypes`, `pubmedAuthors`). Each was byte-identical to its merge-commit blob.
+> - **Deploy.** `supabase functions deploy fetch-paper-metadata --project-ref <project-ref>` ran with Supabase CLI 2.111.0 and Docker bundling ("script size: 102 kB") between 18:39:02Z and 18:39:26Z UTC. It exited 0 and deployed exactly that one function.
+> - **After — verified read-only immediately after the deploy.**
+>   - `fetch-paper-metadata` is **v23**: same id, updated 2026-09-28T18:39:13.518Z, `ezbr_sha256` `1e74d51d50b31260670d90fea7df710ec93875e42f03b1af26d6e8c9599d3296`, `verify_jwt = false`, ACTIVE.
+>   - The other five functions are identical in every listed field: version, update time, `ezbr_sha256`, entrypoint and `verify_jwt`.
+>   - **Deployed source.** Read back through the same `--use-api` mechanism, v23 is exactly the 12-file closure, and every file is byte-identical to `58970383`. Executing the deployed `crossrefRequest.ts` yields:
+>     - `User-Agent: PaperLume/1.0 (mailto:mutrisport@gmail.com)`;
+>     - `…/works/10.1000%2Fxyz123?mailto=mutrisport@gmail.com` for a DOI lookup;
+>     - `…/works?query.title=…&rows=1&mailto=mutrisport@gmail.com` for a title search.
+>
+>     Both `index.ts` call sites use it. No deployed code contains `PaperIndex` or `support@paperindex.app`, and `fetch-paper-metadata` does not use `support@paperlume.app`.
+>   - **Secrets.** All 7 manually managed secrets are unchanged in digest and `updated_at`. The 7 platform `SUPABASE_*` rows are unchanged in digest; only their `updated_at` moved, to the deploy instant (18:39:13.518Z). That is the platform's standing restamp on every deploy, not a secret change.
+>   - **Database untouched.** A read-only fingerprint was identical before and after: ledger 96 (latest `20260928133918`), the `public` function-ACL digest and the relation count. No Auth, Storage or Vercel setting was changed.
+> - **Boot probe.** One unauthenticated `POST` with an empty body answered the function's own `401 {"error":"Missing Authorization header"}`. That proves v23 boots and runs its handler. It carried no identifier and reached neither the database nor Crossref.
+> - **Authenticated Crossref acceptance — deliberately skipped.** No safe existing acceptance credential was available: the `PAPERLUME_PROD_ACCEPT_*` variables are not inherited by this VS Code-launched session. The function authenticates every caller, so the live Crossref-fallback call was not run. No user, password or session was created and no auth state was changed to make one possible, so the Edge log inspection tied to that call was not run either. The identity is proven by the byte-identical deployed source, not by an observed outgoing request.
 
-**What changes.** Every Crossref request `fetch-paper-metadata` makes identifies PaperLume, through the new `fetch-paper-metadata/crossrefRequest.ts`:
+**What changed.** Every Crossref request `fetch-paper-metadata` makes identifies PaperLume, through the new `fetch-paper-metadata/crossrefRequest.ts`:
 - `User-Agent: PaperLume/1.0 (mailto:mutrisport@gmail.com)`;
 - a `mailto=mutrisport@gmail.com` query parameter, on the DOI lookup (`/works/{DOI}`) and on the title search (`/works?query.title=…&rows=1`).
 
-Nothing else changes: the DOI and title encoding, `rows=1`, the transport, and the retry budget and logging. The contact is temporary — see [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §34 — and `support@paperlume.app` is deliberately not used while it is inactive.
+Nothing else changed: the DOI and title encoding, `rows=1`, the transport, and the retry budget and logging. The contact is temporary — see [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §34 — and `support@paperlume.app` is deliberately not used while it is inactive.
 
-**Ordering.** No migration, no frontend change and no other function is involved. The change is inside `fetch-paper-metadata/`, and no `_shared/*` module changed, so this is the only function to redeploy. The frontend does not depend on it, so there is no endpoint-before-UI constraint: merge first, then deploy.
+**Ordering.** No migration, no frontend change and no other function was involved. The change is inside `fetch-paper-metadata/`, and no `_shared/*` module changed, so this was the only function to redeploy. The frontend does not depend on it, so there was no endpoint-before-UI constraint: merge first, then deploy.
 
-**Procedure — NOT YET EXECUTED; the reference for the separately authorized deploy.**
-1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
-2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit.
-3. Record the current deployed state: `supabase functions list --project-ref <project-ref>` (expect `fetch-paper-metadata` **v22**), and capture its current source with `supabase functions download fetch-paper-metadata --project-ref <project-ref> --use-api --workdir <scratch dir>` as the rollback reference (§7).
-4. Prove provenance: the deploying worktree's `fetch-paper-metadata` closure is byte-identical to the merge commit. That means `index.ts`, `upstreamFetch.ts`, `crossrefRequest.ts` and every `_shared/*` module the entrypoint imports, recursively.
-5. Deploy exactly that function: `supabase functions deploy fetch-paper-metadata --project-ref <project-ref>`. No other function, and no secret change.
+**Procedure — EXECUTED 2026-09-28; kept as the reference procedure; not a pending step.** These are the steps as written before the deploy; the status box above records what was observed.
+1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit. *Observed:* merged as `58970383`.
+2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. *Observed:* all three passed on the first attempt.
+3. Record the current deployed state: `supabase functions list --project-ref <project-ref>` (expect `fetch-paper-metadata` **v22**), and capture its current source with `supabase functions download fetch-paper-metadata --project-ref <project-ref> --use-api --workdir <scratch dir>` as the rollback reference (§7). *Observed:* v22, `c334e87d…`; the 11-file source is byte-identical to `a3c7d910`.
+4. Prove provenance: the deploying worktree's `fetch-paper-metadata` closure is byte-identical to the merge commit. That means `index.ts`, `upstreamFetch.ts`, `crossrefRequest.ts` and every `_shared/*` module the entrypoint imports, recursively. *Observed:* 12 files, all byte-identical, in a clean worktree.
+5. Deploy exactly that function: `supabase functions deploy fetch-paper-metadata --project-ref <project-ref>`. No other function, and no secret change. *Observed:* exit 0, one function.
 6. Verify the result:
    - the version moved up exactly one from the step-3 value (**v22 → v23** unless something else redeployed it in between), and no other function's version moved;
    - read back through the same `--use-api` mechanism, the deployed files are byte-identical to the merge commit (re-establish byte fidelity first, §7), so the deployed `crossrefRequest.ts` carries the new identity;
    - record the version and `ezbr_sha256` in [migration-history.md](migration-history.md);
    - compare the manually managed secrets only: a deploy restamps the platform `SUPABASE_*` entries.
+
+   *Observed:* v22 → v23, `1e74d51d…`, 12/12 files byte-identical, the other five functions and every manual secret unchanged.
 7. Run one bounded functional check that carries no user content. Make one authenticated `POST` to `fetch-paper-metadata` with a single public DOI that PubMed does not index, so the lookup falls back to Crossref. Crossref's test DOI `10.5555/12345678` is a candidate; confirm it before use. The call must:
    - return one record with `source: "crossref"`, which proves Crossref accepted the new request shape;
    - write nothing, because the function returns metadata and does not insert a paper.
 
-   The outgoing header cannot be observed from the function's response. The identity is established by the byte-identical deployed source in step 6, and polite-pool routing follows from Crossref's documented rule that an email in `mailto` or the agent header selects it. Crossref documents a pool response header (`x-api-pool`) only for Metadata Plus. Check that the Edge log lines for the call contain no DOI, title, URL or contact.
-8. Reconcile the documentation from "prepared" to "live": this section, [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §34 and §22.4 item 19, and the `fetch-paper-metadata` version in [start-here.md](start-here.md) §5.
+   The outgoing header cannot be observed from the function's response. The identity is established by the byte-identical deployed source in step 6, and polite-pool routing follows from Crossref's documented rule that an email in `mailto` or the agent header selects it. Crossref documents a pool response header (`x-api-pool`) only for Metadata Plus. Check that the Edge log lines for the call contain no DOI, title, URL or contact. *Not run:* no safe existing authenticated acceptance credential was available (see the status box). An unauthenticated boot probe answered the function's own 401 instead.
+8. Reconcile the documentation from "prepared" to "live": this section, [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §34 and §22.4 item 19, and the `fetch-paper-metadata` version in [start-here.md](start-here.md) §5. *Done* in `DOCS-CROSSREF-OPERATIONAL-IDENTITY-PRODUCTION-RECONCILIATION-001`.
 
-**Rollback.** Redeploy the captured v22 source from step 3, or deploy from the previous merge. No database state is involved.
+**Rollback — none has been performed.** If a real regression appears, redeploy the captured v22 source (byte-identical to `a3c7d910`) from its download workdir, or deploy from `3f0ccaae`, the previous merge. No database state is involved.
 
 ---
 
