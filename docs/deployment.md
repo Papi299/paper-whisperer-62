@@ -1684,6 +1684,38 @@ A frontend-only change that uses the **already-deployed** contract needs no Edge
 
 **A Vercel Preview cannot validate this function.** A Preview build exercises frontend code only; the endpoint lives in Supabase and is deployed separately. Preview state is evidence about the frontend, never about this endpoint's deployed version.
 
+### 7d. `fetch-paper-metadata` — Crossref operational identity (`CROSSREF-OPERATIONAL-IDENTITY-001A`); PREPARED — NOT DEPLOYED
+
+> **Status — PREPARED IN THE REPOSITORY; NOT DEPLOYED.** Production's `fetch-paper-metadata` is **v22** (deployed 2026-09-18 from merge `a3c7d910`; version and update time re-read on 2026-09-28). It still sends Crossref `User-Agent: PaperIndex/1.0 (mailto:support@paperindex.app)` and no `mailto` parameter. The corrected source ships to Production only through the separately authorized deploy below; a merge does not deploy it.
+
+**What changes.** Every Crossref request `fetch-paper-metadata` makes identifies PaperLume, through the new `fetch-paper-metadata/crossrefRequest.ts`:
+- `User-Agent: PaperLume/1.0 (mailto:mutrisport@gmail.com)`;
+- a `mailto=mutrisport@gmail.com` query parameter, on the DOI lookup (`/works/{DOI}`) and on the title search (`/works?query.title=…&rows=1`).
+
+Nothing else changes: the DOI and title encoding, `rows=1`, the transport, and the retry budget and logging. The contact is temporary — see [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §34 — and `support@paperlume.app` is deliberately not used while it is inactive.
+
+**Ordering.** No migration, no frontend change and no other function is involved. The change is inside `fetch-paper-metadata/`, and no `_shared/*` module changed, so this is the only function to redeploy. The frontend does not depend on it, so there is no endpoint-before-UI constraint: merge first, then deploy.
+
+**Procedure — NOT YET EXECUTED; the reference for the separately authorized deploy.**
+1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
+2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit.
+3. Record the current deployed state: `supabase functions list --project-ref <project-ref>` (expect `fetch-paper-metadata` **v22**), and capture its current source with `supabase functions download fetch-paper-metadata --project-ref <project-ref> --use-api --workdir <scratch dir>` as the rollback reference (§7).
+4. Prove provenance: the deploying worktree's `fetch-paper-metadata` closure is byte-identical to the merge commit. That means `index.ts`, `upstreamFetch.ts`, `crossrefRequest.ts` and every `_shared/*` module the entrypoint imports, recursively.
+5. Deploy exactly that function: `supabase functions deploy fetch-paper-metadata --project-ref <project-ref>`. No other function, and no secret change.
+6. Verify the result:
+   - the version moved up exactly one from the step-3 value (**v22 → v23** unless something else redeployed it in between), and no other function's version moved;
+   - read back through the same `--use-api` mechanism, the deployed files are byte-identical to the merge commit (re-establish byte fidelity first, §7), so the deployed `crossrefRequest.ts` carries the new identity;
+   - record the version and `ezbr_sha256` in [migration-history.md](migration-history.md);
+   - compare the manually managed secrets only: a deploy restamps the platform `SUPABASE_*` entries.
+7. Run one bounded functional check that carries no user content. Make one authenticated `POST` to `fetch-paper-metadata` with a single public DOI that PubMed does not index, so the lookup falls back to Crossref. Crossref's test DOI `10.5555/12345678` is a candidate; confirm it before use. The call must:
+   - return one record with `source: "crossref"`, which proves Crossref accepted the new request shape;
+   - write nothing, because the function returns metadata and does not insert a paper.
+
+   The outgoing header cannot be observed from the function's response. The identity is established by the byte-identical deployed source in step 6, and polite-pool routing follows from Crossref's documented rule that an email in `mailto` or the agent header selects it. Crossref documents a pool response header (`x-api-pool`) only for Metadata Plus. Check that the Edge log lines for the call contain no DOI, title, URL or contact.
+8. Reconcile the documentation from "prepared" to "live": this section, [privacy-data-flow-audit.md](privacy-data-flow-audit.md) §34 and §22.4 item 19, and the `fetch-paper-metadata` version in [start-here.md](start-here.md) §5.
+
+**Rollback.** Redeploy the captured v22 source from step 3, or deploy from the previous merge. No database state is involved.
+
 ---
 
 ## 8. Frontend deployment / Vercel
@@ -1761,6 +1793,7 @@ The repo does not contain DNS record values; those are set in the Cloudflare das
   - `legal@paperlume.app` (group or alias)
 - Aliases / groups can route to a single inbox at MVP to minimize per-user license cost.
 - Google Workspace setup adds operational credibility for Paddle KYB (per C18), vendor onboarding, B2B outreach, and support response. **It does not guarantee Paddle approval.**
+- **Crossref operational contact.** `fetch-paper-metadata` identifies PaperLume to Crossref with `mutrisport@gmail.com` for now, because `support@paperlume.app` is not active yet (§7d). Once a dedicated PaperLume address resolves, moving Crossref to it means changing `CROSSREF_CONTACT_EMAIL` and redeploying `fetch-paper-metadata`, as its own small task.
 - **Status: still pending owner setup.** Auth email delivery does not depend on Google Workspace — that is handled by Resend (next subsection). However: if any user-facing template (Auth email footer, marketing copy) references `support@paperlume.app` or another `@paperlume.app` address, that address **must resolve to a real inbox / group / alias before broader beta** — otherwise users replying to support get bounce-backs. Owner should ensure any address referenced in the customized Auth templates is reachable before the closed paid pilot.
 
 ### Transactional auth email (Resend → Supabase Auth Custom SMTP)

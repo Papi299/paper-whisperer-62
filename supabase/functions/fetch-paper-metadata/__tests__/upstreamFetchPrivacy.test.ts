@@ -23,6 +23,7 @@ import {
   UPSTREAM_FETCH_FAILED_MESSAGE,
   UPSTREAM_TIMEOUT_MS,
 } from "../upstreamFetch.ts";
+import { CROSSREF_CONTACT_EMAIL, crossrefRequestInit, crossrefTitleSearchUrl } from "../crossrefRequest.ts";
 
 const SECRETS = {
   apiKey: "SECRET_VALUE",
@@ -31,8 +32,9 @@ const SECRETS = {
   title: "Synthetic Sleep and Memory Study",
   pubmedUrl:
     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=12345678&retmode=xml&api_key=SECRET_VALUE",
-  crossrefUrl:
-    "https://api.crossref.org/works?query.title=Synthetic%20Sleep%20and%20Memory%20Study&rows=1",
+  // The URL the shipped builder produces, operator contact included.
+  crossrefUrl: crossrefTitleSearchUrl("Synthetic Sleep and Memory Study"),
+  crossrefContact: CROSSREF_CONTACT_EMAIL,
 } as const;
 
 function expectNoContent(text: string): void {
@@ -41,6 +43,7 @@ function expectNoContent(text: string): void {
   }
   expect(text).not.toContain("api_key");
   expect(text).not.toContain("query.title");
+  expect(text).not.toContain("mailto");
 }
 
 interface Harness {
@@ -234,11 +237,11 @@ describe("the retry contract is unchanged by the hardening", () => {
     const h = harness(() => Promise.resolve(new Response("", { status: 200 })));
     await h.fetchWithRetry(SECRETS.crossrefUrl, {
       source: "crossref",
-      init: { headers: { "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)" } },
+      init: crossrefRequestInit(),
     });
     const [call] = h.calls;
     expect((call.init.headers as Record<string, string>)["User-Agent"]).toBe(
-      "PaperIndex/1.0 (mailto:support@paperindex.app)",
+      "PaperLume/1.0 (mailto:mutrisport@gmail.com)",
     );
     expect(call.init.signal).toBeDefined();
     expect(call.url).toBe(SECRETS.crossrefUrl);
@@ -302,9 +305,19 @@ describe("fetch-paper-metadata source keeps the boundary wired (guard)", () => {
     expect(CODE).toContain("console.error(`fetch-paper-metadata env_missing env=${name}`);");
   });
 
-  it("leaves the Crossref contact identity alone — CROSSREF-CONTACT-IDENTITY-001", () => {
-    // Out of scope here on purpose: the owner-approved PaperLume contact has
-    // not been supplied, so this task must not opportunistically change it.
-    expect(CODE.match(/PaperIndex\/1\.0 \(mailto:support@paperindex\.app\)/g)).toHaveLength(2);
+  it("takes every Crossref URL and header from ./crossrefRequest.ts — CROSSREF-OPERATIONAL-IDENTITY-001A", () => {
+    // The identity is defined once, in the module the behavioural suite
+    // (crossrefRequest.test.ts) exercises; this pins that index.ts uses it.
+    expect(CODE).toContain('from "./crossrefRequest.ts"');
+    expect(CODE).not.toContain("api.crossref.org");
+    expect(CODE).not.toContain("User-Agent");
+    expect(CODE).not.toMatch(/paperindex/i);
+    expect(CODE).toContain("const url = crossrefWorkUrl(doi);");
+    expect(CODE).toContain("const url = crossrefTitleSearchUrl(title);");
+    const crossrefBlocks = [...CODE.matchAll(/fetchWithRetry\(url, \{/g)]
+      .map((m) => CODE.slice(m.index ?? 0, (m.index ?? 0) + 220))
+      .filter((block) => block.includes('source: "crossref"'));
+    expect(crossrefBlocks).toHaveLength(2);
+    for (const block of crossrefBlocks) expect(block).toContain("init: crossrefRequestInit(),");
   });
 });

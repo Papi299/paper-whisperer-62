@@ -304,6 +304,8 @@ User-Agent: PaperIndex/1.0 (mailto:support@paperindex.app)
 
 This is the Crossref "polite pool" convention: the address is the contact Crossref may use to reach the operator about API behaviour. It names the **former** brand (`paperindex.app`), not `paperlume.app`, and points at an address the repository gives no evidence resolves. It transmits no user data — but a privacy policy that lists Crossref as a processor should be accurate about what is sent, and the owner may want this corrected. **Correcting it is a source change and therefore out of scope for this audit** (see §16); it is recorded here as a finding only.
 
+*(2026-09-28: corrected in repository source by `CROSSREF-OPERATIONAL-IDENTITY-001A`, **not yet live** in Production — see §34.)*
+
 ---
 
 ## 10. Analytics, telemetry and logs
@@ -593,7 +595,7 @@ Nothing in the repository or the running application establishes any of these.
 | Trading name | "PaperLume" / "Paperlume" is a **working commercial brand, explicitly not a registered trademark** (C19) |
 | Privacy contact email | `OWNER INPUT REQUIRED`. No privacy address exists anywhere |
 | Support email | `support@paperlume.app` is referenced in the Supabase Auth email templates and in three docs, but `docs/deployment.md` and `docs/owner-decisions.md` both record that it is **pending owner setup** and may not resolve to a real inbox. **Class: PARTIALLY VERIFIED — referenced, not confirmed reachable** |
-| Stale operational contact | `support@paperindex.app` is still sent to Crossref (§9.3) |
+| Stale operational contact | `support@paperindex.app` is still sent to Crossref (§9.3). *Corrected in repository source on 2026-09-28; Production keeps sending it until `fetch-paper-metadata` is redeployed (§34).* |
 | Postal address | `OWNER INPUT REQUIRED` |
 | Governing law / jurisdiction | `OWNER INPUT REQUIRED` |
 | Data-subject-request route | `OWNER INPUT REQUIRED` |
@@ -823,7 +825,7 @@ Location is `Supabase (ap-south-1, India)` unless stated. "Until account deletio
 
 17. **No AI disclaimer is surfaced in the app** where AI output is shown, despite being a stated launch requirement (§18).
 18. **No `/privacy`, `/terms`, `/support` route or link exists** in the app (§18).
-19. **The Crossref `User-Agent` names the retired `paperindex.app` brand** and an address of unknown reachability (§9.3).
+19. **The Crossref `User-Agent` names the retired `paperindex.app` brand** and an address of unknown reachability (§9.3). *Corrected in repository source by `CROSSREF-OPERATIONAL-IDENTITY-001A` (2026-09-28, §34), but **not yet live**: Production's `fetch-paper-metadata` v22 still sends the retired identity until its separately authorized deploy.*
 20. **Orphaned attachment binaries can survive a failed best-effort cleanup** until account deletion (§6.3). *NARROWED, not closed. The fix is live in Production: `ATTACHMENT-ORPHAN-CLEANUP-HARDENING-001` landed in the repository 2026-09-04 (§27), both migrations are now applied to Production, and the lifecycle passed a bounded wet acceptance on 2026-09-10 (§28). Cleanup is now **recoverable** — durable intent, retried immediately and again at the next authenticated session — but still **not immediate and not guaranteed**: there is no scheduled worker, so a queue row waits for a user who never returns, an object whose finalization never reached the database is deliberately left in place, and pre-feature orphans remain. Account deletion stays the final sweep, and this item therefore stays open in its residual form.*
 21. **No error-tracking with PII redaction exists**, which is a stated launch blocker — if one is later added, it becomes a new processor and this audit must be revised.
 
@@ -1809,3 +1811,60 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 
 - ❌ "This fixes a cross-account read" — **not claimed.** Since `20260518010000` each of these functions has refused, or scoped away, any request for another user's data through its own `auth.uid()` logic, and that logic is kept. C49 adds row-level security as the primary layer beneath it; it answers no known incident.
 - ❌ "The live product was canaried after the change" — **not claimed.** When this addendum was written the change was not yet live. It was subsequently rolled out on 2026-09-26 and verified read-only against the live catalog ([deployment.md](deployment.md) §6.10), but no search, filter or duplicate-detection canary was run on live user data.
+
+## 34. Addendum — 2026-09-28 — `CROSSREF-OPERATIONAL-IDENTITY-001A` Crossref operational identity
+
+> **Status: CORRECTED IN REPOSITORY SOURCE; NOT YET LIVE IN PRODUCTION.** Production's `fetch-paper-metadata` is still deployed **v22**, which sends the retired identity. It keeps doing so until a separately authorized deploy of that one function ([deployment.md](deployment.md) §7d); a GitHub merge alone deploys no Edge Function. Update this status when that deploy happens.
+
+**Scope.** This closes, in source, the §9.3 finding (the §17 "Stale operational contact" row and §22.4 item 19). It changes only how `fetch-paper-metadata` identifies PaperLume to Crossref as an API client. §9.1's Crossref row is preserved as written; this section amends it where stated.
+
+### 34.1 Repository and Production
+
+| | Repository (this change) | Production (`fetch-paper-metadata` v22) |
+|---|---|---|
+| `User-Agent` on every Crossref request | `PaperLume/1.0 (mailto:mutrisport@gmail.com)` | `PaperIndex/1.0 (mailto:support@paperindex.app)` |
+| `mailto` query parameter | `mailto=mutrisport@gmail.com` on both request kinds | none |
+| DOI lookup | `GET https://api.crossref.org/works/{DOI}?mailto=…`, the DOI name encoded once as one path segment | `GET https://api.crossref.org/works/{DOI}`, encoded the same way |
+| Title search | `GET https://api.crossref.org/works?query.title={title}&rows=1&mailto=…` | `GET https://api.crossref.org/works?query.title={title}&rows=1` |
+| User content sent | a DOI or a title string | the same |
+
+**Class: VERIFIED.**
+- **Repository column:** source and tests, including a behavioural suite that drives the shipped transport.
+- **Production column:**
+  - v22 was read back byte-identical to merge `a3c7d910` when it was deployed on 2026-09-18;
+  - its version and update time were unchanged when read back on 2026-09-28;
+  - `a3c7d910` sends the retired identity at both call sites;
+  - no file in the function's import closure changed between `a3c7d910` and the base of this change.
+
+### 34.2 What changes for personal data — nothing about users
+
+- **The added value is PaperLume's operator contact, not user data.** It is the address PaperLume already publishes as its privacy contact on `/privacy`. No user email, name, account id or other identifier is added to any request.
+- **The user content sent to Crossref is unchanged:** a DOI or a title string, as before. The DOI's single encoding, the title's encoding and `rows=1` are unchanged.
+- **No new recipient.** Crossref was already a recipient (§9.1) and already received a contact address, in the `User-Agent`.
+- **No logging change.** Request URLs are still never logged, and they carry the DOI or title and now also the contact. The transport logs only bounded facts, and the Crossref catch blocks log only an allow-listed error name. A test drives a URL-bearing transport failure through both request kinds and finds none of the DOI, the title, the contact, `mailto`, the host or `query.title` in any log line or in the thrown error.
+- **No Privacy Policy change is needed.** The published Crossref section describes the DOI and title lookups, and the operator's own contact is not user data.
+
+### 34.3 Why this contact, and why it is temporary
+
+- **Crossref's first-party guidance, re-read on 2026-09-28:**
+  - The REST API needs no registration or API key for its public and polite pools.
+  - A client joins the polite pool by giving an email in the `mailto` parameter or the agent header, and Crossref "strongly recommend[s] providing a `mailto` parameter in all requests" so that it can contact the operator about a problem. Source: "Access and authentication", updated 2025-10-16.
+  - The etiquette example in Crossref's older REST API documentation, now marked deprecated, also names the tool and its version in the `User-Agent`.
+  - **Rate limits have changed over time**, so the values in force are the ones Crossref returns in its response headers:
+    - rate: `x-rate-limit-limit` and `x-rate-limit-interval`, plus `x-rate-limit-type` since 2026-07-21;
+    - concurrency: `x-concurrency-limit`.
+
+    Crossref's own announcements give this history:
+    - **2025-11-05:** it announced a request-type split for 2025-12-01.
+    - **2025-12-02:** it reported it could not yet differentiate limits by request type.
+    - **2026-07-21:** it began implementing request-type-based limits. For the polite pool that is 10 requests per second for single-record requests and 3 for list/query requests. It also began rate-limiting polite traffic by the supplied `mailto` address.
+
+    `fetch-paper-metadata` makes its Crossref calls one at a time within each invocation, and this task changes neither its request frequency nor its concurrency.
+- **`support@paperlume.app` is not an active mailbox yet** (§17). Advertising it would give Crossref an address that may reach no one. `mutrisport@gmail.com` is the contact PaperLume already publishes.
+- **The contact is temporary.** Once a dedicated PaperLume address is live, moving to it is a change to one constant (`CROSSREF_CONTACT_EMAIL` in `fetch-paper-metadata/crossrefRequest.ts`) and a redeploy of `fetch-paper-metadata`: a separate small task.
+
+### 34.4 What this addendum does NOT claim
+
+- ❌ "The finding is fixed in Production" — **not claimed.** It is fixed in source only, until `fetch-paper-metadata` is deployed.
+- ❌ "The new identity was observed reaching Crossref" — **not claimed.** No request was made to Crossref, and no Production request was made, to prepare this change.
+- ❌ "The stale identity caused a problem" — **not established.** There is no evidence that Crossref tried to reach `support@paperindex.app`, or that PaperLume's traffic was ever throttled or blocked because of it.

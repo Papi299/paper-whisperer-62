@@ -4337,3 +4337,27 @@ Decision **C56**. It implements the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE
   - **Data API and types.** Anonymous `rpc/set_updated_at` and `rpc/update_updated_at_column` still answer 404 `PGRST202`. Linked type generation is semantically identical to the committed types.
   - **Security Advisor** unchanged: 24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password.
   - No Edge Function deploy (all six versions unchanged), no canary and no application write. No rollback has been performed.
+
+## 2026-09-28 — CROSSREF-OPERATIONAL-IDENTITY-001A: PaperLume's Crossref operational identity in `fetch-paper-metadata` — **PREPARED, NOT DEPLOYED to Production**
+
+Edge Function source only. There is no migration, frontend or `_shared` change. **Not deployed:** Production's `fetch-paper-metadata` stays **v22**, which still sends the retired identity, until a separately authorized deploy of that one function ([deployment.md](deployment.md) §7d).
+
+- **Why.** Every Crossref request identified the client as `PaperIndex/1.0 (mailto:support@paperindex.app)`: the retired product name and an address never shown to reach anyone ([privacy-data-flow-audit.md](privacy-data-flow-audit.md) §9.3).
+- **Crossref guidance.** Its first-party guidance ("Access and authentication", updated 2025-10-16) asks clients to give an email in the `mailto` parameter or the agent header, strongly recommends `mailto` on every request, and needs no registration or API key.
+- **Change.** A new `fetch-paper-metadata/crossrefRequest.ts` defines the identity once:
+  - `User-Agent: PaperLume/1.0 (mailto:mutrisport@gmail.com)`;
+  - `mailto=mutrisport@gmail.com` on both request kinds, the DOI lookup `/works/{DOI}` and the title search `/works?query.title=…&rows=1`.
+
+  `index.ts` builds both requests from it. The contact is PaperLume's already-published address and is **temporary**; `support@paperlume.app` is not used while it is inactive.
+- **Unchanged.**
+  - the DOI's single encoding as one path segment;
+  - the title's `encodeURIComponent` encoding and `rows=1`;
+  - the transport and its retry budget;
+  - the bounded logging: no URL, DOI, title or contact is logged.
+- **Tests.**
+  - New `crossrefRequest.test.ts` (17): the canonical identity, both URL shapes, hostile DOIs and titles, and every retried attempt through the shipped transport carrying the identity. It also checks that a URL-bearing failure logs none of the DOI, the title or the contact, and that no shipped Edge code carries `PaperIndex`.
+  - `upstreamFetchPrivacy.test.ts`: its Crossref fixture is now the real URL, contact included. The old identity pin is replaced by a wiring guard.
+  - `metadataDoiLinks.test.ts`: the DOI-segment check is now behavioural.
+  - **11 negative controls** each made the suite fail.
+- **Validation.** Lint (0 errors), `npm run typecheck`, Vitest (174 files / 5,679 tests), both production builds, and a scripted strict typecheck of the function's full closure (0 diagnostics, before and after) passed.
+- **Rollout — not performed.** No Edge Function was deployed, no secret changed, and no request was made to Crossref or to Production.

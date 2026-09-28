@@ -19,6 +19,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireEdgeEnv } from "../_shared/env.ts";
 import { boundedErrorName } from "../_shared/boundedLogging.ts";
 import { createFetchWithRetry } from "./upstreamFetch.ts";
+import { crossrefRequestInit, crossrefTitleSearchUrl, crossrefWorkUrl } from "./crossrefRequest.ts";
 import { canonicalDoiUrl, detectIdentifier } from "../_shared/identifierDetection.ts";
 import type { AuthorProvenance } from "../_shared/authorProvenance.ts";
 import { extractCrossrefAuthors } from "../_shared/crossrefAuthors.ts";
@@ -398,16 +399,13 @@ async function fetchFromCrossrefByDoi(
   doi: string
 ): Promise<PaperMetadata | null> {
   try {
-    // `doi` is the DOI name proven by `detectIdentifier`, so it is encoded
-    // exactly once here — it arrives unencoded, never as a resolver URL.
-    const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
+    // `doi` is the DOI name proven by `detectIdentifier`, so `crossrefWorkUrl`
+    // encodes it exactly once — it arrives unencoded, never as a resolver URL.
+    // The URL and the init carry PaperLume's Crossref identity (./crossrefRequest.ts).
+    const url = crossrefWorkUrl(doi);
     const response = await fetchWithRetry(url, {
       source: "crossref",
-      init: {
-        headers: {
-          "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)",
-        },
-      },
+      init: crossrefRequestInit(),
     });
     if (!response.ok) return null;
     const data = await response.json();
@@ -423,14 +421,10 @@ async function searchCrossrefByTitle(
   title: string
 ): Promise<PaperMetadata | null> {
   try {
-    const url = `https://api.crossref.org/works?query.title=${encodeURIComponent(title)}&rows=1`;
+    const url = crossrefTitleSearchUrl(title);
     const response = await fetchWithRetry(url, {
       source: "crossref",
-      init: {
-        headers: {
-          "User-Agent": "PaperIndex/1.0 (mailto:support@paperindex.app)",
-        },
-      },
+      init: crossrefRequestInit(),
     });
     if (!response.ok) return null;
     const data = await response.json();

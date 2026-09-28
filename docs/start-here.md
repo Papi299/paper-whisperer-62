@@ -227,6 +227,7 @@ Owner-action blockers that gate the paused C27 work — Paddle Sandbox setup, ma
 Meaningful open items. This is a pointer list, not a backlog database — none of it is auto-selected.
 
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
+- **`fetch-paper-metadata` deploy for `CROSSREF-OPERATIONAL-IDENTITY-001A`.** Repository source identifies PaperLume to Crossref as `PaperLume/1.0 (mailto:mutrisport@gmail.com)` and adds a `mailto` parameter. Production's deployed v22 still sends the retired `PaperIndex` identity until that one function is deployed under its own authorization ([deployment.md](deployment.md) §7d). The contact is temporary, until a dedicated PaperLume address is active.
 - **`DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001` — low priority, separate from C53.** Audit fail-closed migration/test helpers for places where PostgreSQL function/operator signatures are serialized and later split with delimiters that can occur inside the signature, starting with the confirmed C52 §1g comma-splitting defect (its `search_vector` EXECUTE precondition skipped multi-argument signatures; the intended Production fact holds, and suite `022` checks it by OID). Do not edit applied migrations; determine whether any current reusable checker/test pattern needs forward hardening ([migration-history.md](migration-history.md), C52 entry).
 
 ## 11. Before selecting the next task
