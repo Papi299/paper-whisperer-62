@@ -478,9 +478,9 @@ test.describe("Attachment cleanup is recoverable", () => {
 
     // The delete is reported as what it is: done, with cleanup outstanding.
     await expect(page.getByText("Attachment deleted", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
-    // The toast description is rendered twice — visibly, and again inside the
-    // aria-live status region as one concatenated string. Either is proof it was
-    // shown, so the assertion takes the first match rather than requiring one.
+    // Any copy of the description is proof it was shown, so the assertion takes
+    // the first match rather than requiring one (the pre-UI-TOAST-LIFECYCLE Radix
+    // toaster rendered it twice).
     await expect(
       page.getByText(/File cleanup is pending and will retry automatically/i).first(),
     ).toBeVisible({ timeout: 5_000 });

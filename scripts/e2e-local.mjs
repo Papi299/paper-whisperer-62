@@ -170,6 +170,16 @@ const DEFAULT_SPECS = [
   // seed within its own run and is order-independent. No papers, projects or
   // tags are touched; no import and no Edge Function.
   "e2e/scrollarea-reachability.spec.ts",
+  // UI-TOAST-LIFECYCLE-CONSISTENCY-001 notification lifecycle. Mutating, but
+  // only within fixtures it owns: it imports two synthetic papers (nine-digit
+  // PMIDs no other spec uses) through the real Add Papers UI and deletes both
+  // through the real row control, and it adds one synonym group and removes it
+  // again. The sweeps tolerate finding nothing, so it is order-independent and
+  // restores the seed within its own run. Playwright fulfils
+  // `fetch-paper-metadata` and `rpc/bulk_update_keywords`, so there is no
+  // provider egress, no served Edge Function, and the keyword re-evaluation
+  // never rewrites the seeded papers' keywords.
+  "e2e/toast-lifecycle.spec.ts",
   // AI-MODEL-SELECTION-001C Settings model-selection coverage, extended by
   // AI-MANUAL-REASONING-001 to the manual reasoning control. Mutating, but only
   // within a disposable per-run account it owns outright: the entitled cases
