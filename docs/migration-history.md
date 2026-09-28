@@ -4254,16 +4254,16 @@ Decision **C55**. It implements the verdict of the read-only audit `DB-IMMUTABLE
   - **Security Advisor** unchanged after the apply: 24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password, none naming a wrapper, as expected for SECURITY INVOKER functions.
   - No Edge Function deploy, no canary and no application write. No rollback has been performed.
 
-## 2026-09-28 — DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A: owner-only updated_at trigger functions and default-deny function EXECUTE (`20260928133918`) — **PREPARED, NOT APPLIED to Production**
+## 2026-09-28 — DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A: owner-only updated_at trigger functions and default-deny function EXECUTE (`20260928133918`) — **APPLIED to Production, 2026-09-28**
 
-Decision **C56**. It implements the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, which classified both functions **SAFE TO REVOKE DIRECT CLIENT/PUBLIC EXECUTE** and the future default posture **HARDEN DEFAULTS**. **Not applied:** Production stays at ledger 95 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.17). This is least-privilege/default-deny hardening, not a response to any exposure.
+Decision **C56**. It implements the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, which classified both functions **SAFE TO REVOKE DIRECT CLIENT/PUBLIC EXECUTE** and the future default posture **HARDEN DEFAULTS**. **Applied 2026-09-28** after merging as `f5bb0c3d` (PR #317), in a migration-only rollout (`DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001B`; [deployment.md](deployment.md) §6.17): ledger **95 → 96**. This is least-privilege/default-deny hardening, not a response to any exposure.
 
 | | `set_updated_at()` / `update_updated_at_column()` ACL | `postgres` function defaults (global / `public`) | `public` PUBLIC-executable |
 |---|---|---|---|
-| **Production now** (read-only, 2026-09-28; ledger **95**) | explicit `{=X,postgres=X,anon=X,authenticated=X,service_role=X}` (OIDs `33584` / `53609`) | none / `{postgres,anon,authenticated,service_role=X}` | 2 |
+| **Production before** (read-only, 2026-09-28; ledger **95**) | explicit `{=X,postgres=X,anon=X,authenticated=X,service_role=X}` (OIDs `33584` / `53609`) | none / `{postgres,anon,authenticated,service_role=X}` | 2 |
 | **Clean replay before** (through `20260927214838`) | `NULL` (owner + PUBLIC) | none / `{postgres=X}` | 2 |
 | **Clean replay after** (through `20260928133918`) | `{postgres=X/postgres}` | `{postgres=X}` / `{postgres=X}` | 0 |
-| **Production after — projected** | `{postgres=X/postgres}` | `{postgres=X}` / `{postgres=X,service_role=X}` (`service_role` preserved) | 0 |
+| **Production after — observed** (read-only, 2026-09-28; ledger **96**) | `{postgres=X/postgres}` (same OIDs) | `{postgres=X}` / `{postgres=X,service_role=X}` (`service_role` preserved) | 0 |
 
 - **Why.**
   - Trigger firing does not check the caller's EXECUTE; only `CREATE TRIGGER` does. That was proven for all twelve triggers on PostgreSQL 17.6, and Production's five owner-only trigger functions already rely on it.
@@ -4309,4 +4309,31 @@ Decision **C56**. It implements the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE
   - database `TEMPORARY`;
   - the 24 retained `authenticated` SECURITY DEFINER contracts;
   - C30.
-- **Rollout — not performed.** See [deployment.md](deployment.md) §6.17 for the gated procedure.
+- **Rollout — applied 2026-09-28, migration only** ([deployment.md](deployment.md) §6.17).
+  - **Merge and CI.** PR #317 merged as the two-parent commit `f5bb0c3d` (parents `2659c0e9` and the approved head `82620e6e`; identical tree).
+    - Merged-`main` Validate and Extension passed.
+    - DB Tests passed on attempt 2 of the same SHA. Attempt 1 failed inside `supabase start`, before any migration replay or test: the documented ephemeral-stack bring-up transient.
+    - `E2E (local)`'s evidence is the pull-request run on the approved head (257 passed).
+  - **Gates.**
+    - A fresh read-only preflight matched the reviewed state exactly, including the other 41 ACLs' digest `54a18e87…`.
+    - The merged file's §0–§1 ran against Production read-only and passed every precondition, resolving the targets to `{33584,53609}` with no transaction ID assigned.
+    - `supabase migration list --linked` showed exactly this one local-only migration, and the dry run listed exactly this file, with no seeds and no roles.
+  - **Apply.** `npx supabase db push --linked --yes` (Supabase CLI 2.111.0, between 16:16:26Z and 16:17:01Z UTC) exited 0 and applied exactly this file, with no seeds and no roles. The ledger went **95 → 96**, latest `20260928133918`, present once. Its 13 recorded statements each appear verbatim in the file.
+  - **Outcome, verified read-only.** A snapshot before and after differed only in:
+    - the ledger;
+    - the two targets' ACLs, each now `{postgres=X/postgres}`, with no effective EXECUTE for any API role;
+    - the PUBLIC-executable set (**2 → 0**);
+    - `postgres`'s function defaults: global `f={postgres=X/postgres}` added, and `public` down to `{postgres=X/postgres,service_role=X/postgres}`.
+
+    Identical before and after:
+    - the targets' whole `pg_proc` rows apart from the ACL;
+    - the twelve triggers;
+    - the other 41 function ACLs and rows;
+    - every other function ACL in the database;
+    - every other default entry;
+    - every schema.
+
+    No probe object remains.
+  - **Data API and types.** Anonymous `rpc/set_updated_at` and `rpc/update_updated_at_column` still answer 404 `PGRST202`. Linked type generation is semantically identical to the committed types.
+  - **Security Advisor** unchanged: 24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password.
+  - No Edge Function deploy (all six versions unchanged), no canary and no application write. No rollback has been performed.

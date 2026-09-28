@@ -934,7 +934,7 @@ Specifically, and durably:
 - **`paper_tags` / `paper_projects` keep `SELECT, INSERT, DELETE`.** Today's browser only reads them and every mutation goes through a SECURITY DEFINER RPC, so the grants are arguably surplus — but narrowing them is a change to the repository's established contract, not convergence toward it, and it is out of scope here. *(Follow-up, 2026-09-25: that narrowing is now its own decision, **C48** — the two junctions go to `SELECT` only, while `projects` / `tags` keep their full grant. That follow-up is complete: migration `20260925134526` was applied to Production on 2026-09-25, so the live junction grant is now `SELECT` only; the `SELECT, INSERT, DELETE` recorded here is the pre-C48 state.)*
 - **The rollout needed no ordering, and none was used.** No web-first deploy, no Edge deploy, no operator drain and no lock barrier: every privilege removed is one RLS already denies that role every row of, or one no application path uses, and `authenticated`'s live DML surface is identical before and after. The one observable difference is that an operation which never worked now fails with `42501` instead of reporting "0 rows affected".
 
-**Re-evaluation triggers:** an unauthenticated Data API path is ever introduced (today there is none); `service_role` least-privilege hardening is authorized; the function-EXECUTE initiative is authorized *(fired 2026-09-28: C56, prepared and not yet applied)*; a new client-reachable relation kind (view, materialized view, partitioned or foreign table) is added to `public`; or Supabase changes what its platform default grants, in which case the migration's accepted starting shapes and suite 015's default-privilege assertions are re-derived rather than relaxed.
+**Re-evaluation triggers:** an unauthenticated Data API path is ever introduced (today there is none); `service_role` least-privilege hardening is authorized; the function-EXECUTE initiative is authorized *(fired 2026-09-28: C56, applied to Production 2026-09-28)*; a new client-reachable relation kind (view, materialized view, partitioned or foreign table) is added to `public`; or Supabase changes what its platform default grants, in which case the migration's accepted starting shapes and suite 015's default-privilege assertions are re-derived rather than relaxed.
 
 ### C39. AI provider protocol is isolated behind reviewed server-side adapters: the database catalog authorizes MODELS, the runtime registry authorizes PROTOCOLS (2026-09-12)
 
@@ -1836,11 +1836,25 @@ The Security Advisor's counts were not expected to change, and did not: the wrap
 - a caller of any of the three names discovered after the rollout — stop, and restore by a new forward migration as above;
 - a database whose state differs from the reviewed one (for example a new hosted environment), which the migration refuses — stop and re-review; do not edit the migration to fit (Production passed the reviewed preflight and was retired on 2026-09-28);
 - a PostgreSQL or text-search change that moves a golden value in suite `024` — review each row that moved, then update the golden table deliberately;
-- the separate default function-EXECUTE hardening decision, which is where the two remaining PUBLIC-executable trigger functions belong *(fired 2026-09-28: C56, prepared and not yet applied)*.
+- the separate default function-EXECUTE hardening decision, which is where the two remaining PUBLIC-executable trigger functions belong *(fired 2026-09-28: C56, applied to Production 2026-09-28)*.
 
 ### C56. The two updated_at trigger functions are owner-only, and functions `postgres` creates are default-deny for EXECUTE (2026-09-28)
 
-**Status: PREPARED — NOT YET APPLIED TO PRODUCTION.** Migration `20260928133918_harden_default_function_execute.sql` implements it (`DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A`). It follows the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, which classified both functions **SAFE TO REVOKE DIRECT CLIENT/PUBLIC EXECUTE** and the future default posture **HARDEN DEFAULTS**. Production is unchanged until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.17).
+**Status: COMPLETE — applied to Production 2026-09-28.** Migration `20260928133918_harden_default_function_execute.sql` implements it (`DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A`). It follows the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, which classified both functions **SAFE TO REVOKE DIRECT CLIENT/PUBLIC EXECUTE** and the future default posture **HARDEN DEFAULTS**. It merged as `f5bb0c3d` (PR #317, approved head `82620e6e`). It was applied in a migration-only rollout (`DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001B`; [deployment.md](deployment.md) §6.17).
+
+- **Production outcome** (observed read-only immediately after the apply, 2026-09-28):
+  - ledger **95 → 96**, latest `20260928133918`, present once. `npx supabase db push --linked --yes` exited 0 and applied exactly this file, with no seeds and no roles.
+  - Both functions are exactly `{postgres=X/postgres}`, and no API role holds effective EXECUTE on either. Their OIDs (`33584` / `53609`), bodies, owner, SECURITY INVOKER mode, volatility and `search_path`s are unchanged.
+  - `public` keeps **43** functions, and PUBLIC-executable ones went **2 → 0**.
+  - `postgres`'s global function entry is `f={postgres=X/postgres}`, and its `public` function entry is `{postgres=X/postgres,service_role=X/postgres}`, with `service_role` preserved.
+  - Identical before and after:
+    - the twelve triggers;
+    - the other 41 function ACLs (digest `54a18e87…`) and every other function ACL in the database;
+    - every other default-privilege entry;
+    - every schema.
+  - No probe object remains.
+  - Security Advisor unchanged (24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password).
+  - No Edge Function was deployed, and all six keep their versions. No application row was modified.
 
 - **Production at preparation** (read-only, 2026-09-28):
   - PostgreSQL 17.6; ledger **95**, latest `20260927214838`; 43 `public` functions.
@@ -1925,7 +1939,7 @@ It does **not** reach:
 - **Application gates.** Lint (0 errors; the 18 pre-existing warnings, none in a touched file), `npm run typecheck` (app, node, extension), Vitest (173 files / 5,662 tests), the web and extension production builds, and the local E2E lane (257 Playwright tests) passed.
 - **Production, read-only, at preparation.** The real file's §0 and §1 ran against Production in `BEGIN TRANSACTION READ ONLY … ROLLBACK`, with no DDL sent. Every precondition passed; the targets resolved to `{33584,53609}`, the hosted `public` entry was recognised, and no transaction ID was assigned.
 
-**Rollback — forward only; none has been performed.** Do not edit C56 after it is applied, and do not `migration repair` its legitimate application. A reversal is a new forward migration that:
+**Rollback — forward only; none has been performed.** Do not edit C56, which is applied, and do not `migration repair` its legitimate application. A reversal is a new forward migration that:
 - re-GRANTs the intended EXECUTE on the two functions explicitly;
 - runs `ALTER DEFAULT PRIVILEGES FOR ROLE postgres GRANT EXECUTE ON FUNCTIONS TO PUBLIC`, which deletes the global entry again (verified locally);
 - runs the per-schema GRANT to `anon` and `authenticated` in `public`.
@@ -1943,8 +1957,8 @@ It does **not** reach:
 
 **Re-evaluation triggers:**
 - enabling Supabase Queues (`pgmq`), Database Webhooks, or any extension or feature that `postgres` installs and that creates functions expecting inherited PUBLIC EXECUTE — review its execution surface and grant it explicitly in a migration;
-- Supabase changing its platform function defaults before or after the rollout — for example its 2026-10-30 existing-project rollout, announced for tables and sequences — which the preconditions judge. The owner-only `public` entry its documented opt-in produces is accepted; any other shape stops the file, to be re-derived rather than relaxed;
+- Supabase changing its platform function defaults before or after the rollout — for example its 2026-10-30 existing-project rollout, announced for tables and sequences — which the preconditions judge. The owner-only `public` entry its documented opt-in produces is accepted; any other shape stops the file, to be re-derived rather than relaxed. *(Since the 2026-09-28 rollout the preconditions no longer run against Production. Compare `postgres`'s global and `public` function entries, read-only, against the Production outcome above; a platform change that adds a grantee back needs its own review.)*;
 - the separate `service_role` least-privilege review;
 - a new function that genuinely needs PUBLIC or `anon` EXECUTE — classify it deliberately in suite `015`'s allowlist and state the grant in its migration;
 - a PostgreSQL change to when trigger EXECUTE is checked — suite `025` and the migration's trigger probe are where it shows;
-- a database whose state differs from the reviewed one, which the migration refuses — stop and re-review; do not edit the migration to fit.
+- a database whose state differs from the reviewed one (for example a new hosted environment), which the migration refuses — stop and re-review; do not edit the migration to fit (Production passed the reviewed preflight and was hardened on 2026-09-28).
