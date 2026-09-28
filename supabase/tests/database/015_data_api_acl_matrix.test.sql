@@ -39,10 +39,14 @@
 --     (`wU`), so only the lane-invariant part is asserted here; the exact
 --     pre/post equality is proven by the migration's own verification block and
 --     by the hosted-parity lane in `scripts/e2e-local.mjs`.
---   * function EXECUTE privileges are not changed. Section H is an INVENTORY
---     guard only: a new SECURITY INVOKER routine must be classified rather than
---     silently inherit the PUBLIC EXECUTE that PostgreSQL's built-in global
---     default gives every new function. Section J pins the five caller-scoped
+--   * function EXECUTE privileges are not changed by THAT initiative. Section H
+--     is an INVENTORY guard: a new SECURITY INVOKER routine must be classified
+--     rather than inherit whatever the defaults grant. Section K owns the
+--     function-EXECUTE posture that DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A
+--     (C56, `20260928133918_harden_default_function_execute.sql`) established:
+--     no function in `public` is executable through PUBLIC, the two updated_at
+--     trigger functions are owner-only, and a function `postgres` creates later
+--     reaches no client role by default. Section J pins the five caller-scoped
 --     read RPCs that became SECURITY INVOKER with
 --     `20260926152414_harden_read_rpcs_security_invoker.sql` (C49), the two
 --     caller-owned bulk metadata writes that followed with
@@ -147,19 +151,16 @@ INSERT INTO acl_expected (relname, auth_privs, svc_privs) VALUES
 -- `acl_expected` must be classified deliberately, not accommodated here.
 CREATE TEMP TABLE acl_relation_allowlist (relname text PRIMARY KEY, why text NOT NULL);
 
--- SECURITY INVOKER routines whose PUBLIC EXECUTE is a KNOWN, deliberately
--- out-of-scope exception (see the suite header and decision C38). Removing it
--- requires a GLOBAL default-privilege change that would reach other schemas, so
--- it belongs to the separate function-privilege initiative. Listing them by name
--- is what makes a THIRD such routine fail CI. (Five until
--- DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001 (C55) dropped the three
--- immutable_english_tsvector_* helpers.)
+-- SECURITY INVOKER routines allowed to keep PUBLIC EXECUTE. It is EMPTY. It
+-- held the two updated_at trigger functions until
+-- DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A (C56) made them owner-only (a
+-- per-object REVOKE; the global default change only governs FUTURE functions),
+-- and five routines before C55 retired the three immutable_english_tsvector_*
+-- helpers. A routine that needs PUBLIC EXECUTE must be classified here
+-- deliberately — section K fails on it until it is.
 CREATE TEMP TABLE acl_invoker_public_exec_allowlist (sig text PRIMARY KEY, why text NOT NULL);
-INSERT INTO acl_invoker_public_exec_allowlist VALUES
-  ('set_updated_at()',                          'updated_at trigger function'),
-  ('update_updated_at_column()',                'updated_at trigger function');
 
-SELECT plan(106);
+SELECT plan(119);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -527,9 +528,9 @@ FROM (VALUES
 ORDER BY e.sig;
 
 -- The class as a set: the SECURITY INVOKER routines `authenticated` can execute
--- and `anon` cannot are exactly these eight. (The two allowlisted trigger
--- functions above are reachable by everyone through PUBLIC, so they are not in
--- this class.)
+-- and `anon` cannot are exactly these eight. (The two updated_at trigger
+-- functions are owner-only since C56 — section K — so they are not in this
+-- class.)
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -542,6 +543,127 @@ SELECT is(
   || 'safe_bulk_insert_papers(uuid,jsonb), '
   || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text)',
   'ACL-J2 the authenticated-only SECURITY INVOKER RPCs are exactly the five caller-scoped read RPCs, the two bulk metadata writes and the bulk import');
+
+-- ══ K. Function EXECUTE: no PUBLIC, owner-only trigger functions, default deny ══
+-- DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A (C56). Direct (the stored ACL, PUBLIC
+-- = grantee 0) and effective (has_function_privilege, which also sees PUBLIC)
+-- are asserted separately, as in sections B and C.
+SELECT is(
+  (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) a
+                   WHERE a.grantee = 0)
+      AND p.oid::regprocedure::text NOT IN (SELECT sig FROM acl_invoker_public_exec_allowlist)),
+  '',
+  'ACL-K1 no function in public — SECURITY DEFINER or INVOKER — carries PUBLIC EXECUTE');
+
+SELECT is(
+  (SELECT coalesce(p.proacl::text, '<default>') FROM pg_proc p WHERE p.oid = to_regprocedure('public.set_updated_at()')),
+  '{postgres=X/postgres}',
+  'ACL-K2 set_updated_at() is exactly owner-only (its trigger fires without the caller''s EXECUTE)');
+
+SELECT is(
+  (SELECT coalesce(p.proacl::text, '<default>') FROM pg_proc p WHERE p.oid = to_regprocedure('public.update_updated_at_column()')),
+  '{postgres=X/postgres}',
+  'ACL-K3 update_updated_at_column() is exactly owner-only (its eleven triggers fire without the caller''s EXECUTE)');
+
+SELECT is(
+  (SELECT coalesce(string_agg(r || ' -> ' || f, ', ' ORDER BY r, f), '')
+     FROM unnest(ARRAY['anon','authenticated','service_role']) r,
+          unnest(ARRAY['public.set_updated_at()','public.update_updated_at_column()']) f
+    WHERE coalesce(has_function_privilege(to_regrole(r)::oid, to_regprocedure(f), 'EXECUTE'), true)),
+  '',
+  'ACL-K4 anon, authenticated and service_role have no EFFECTIVE EXECUTE on either updated_at trigger function');
+
+-- Future functions. PUBLIC comes from PostgreSQL's built-in GLOBAL default, which
+-- a per-schema REVOKE cannot remove, so the hardening is one global entry for
+-- postgres — and nothing else global.
+SELECT is(
+  (SELECT coalesce(string_agg(d.defaclobjtype::text || '=' || d.defaclacl::text, ', ' ORDER BY d.defaclobjtype::text), '')
+     FROM pg_default_acl d
+    WHERE d.defaclrole = to_regrole('postgres')::oid AND d.defaclnamespace = 0),
+  'f={postgres=X/postgres}',
+  'ACL-K5 postgres''s only GLOBAL default entry revokes function EXECUTE from PUBLIC: f={postgres=X/postgres}');
+
+SELECT is(
+  (SELECT coalesce(string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END, ', '), '')
+     FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+    WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
+      AND a.grantee IN (0, to_regrole('anon')::oid, to_regrole('authenticated')::oid)),
+  '',
+  'ACL-K6 postgres''s public FUNCTION defaults grant nothing to PUBLIC, anon or authenticated');
+
+-- K6 names the client roles; K7 is the allowlist over the whole entry, which is
+-- what catches a default grantee nobody named (the ACL-G6 pattern).
+SELECT is(
+  (SELECT coalesce(string_agg(pg_get_userbyid(a.grantee) || ':' || a.privilege_type, ', ' ORDER BY a.grantee::text), '')
+     FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+    WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
+      AND a.grantee NOT IN (to_regrole('postgres')::oid, to_regrole('service_role')::oid)),
+  '',
+  'ACL-K7 postgres''s public FUNCTION defaults name no grantee but the owner and service_role');
+
+SELECT is(
+  (SELECT coalesce(string_agg(a.privilege_type, ',' ORDER BY a.privilege_type), '<absent>')
+     FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+    WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
+      AND a.grantee = to_regrole('postgres')::oid),
+  'EXECUTE',
+  'ACL-K8 postgres''s public FUNCTION default entry exists and keeps the owner''s own EXECUTE');
+
+-- service_role's FUTURE-function default in public is platform-maintained and
+-- deliberately preserved: present on hosted Production, absent on a clean
+-- replay. Only those two shapes are accepted (the ACL-G3 pattern).
+SELECT ok(
+  (SELECT coalesce(string_agg(a.privilege_type, ',' ORDER BY a.privilege_type), '')
+     FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+    WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
+      AND a.grantee = to_regrole('service_role')::oid)
+  IN ('EXECUTE', ''),
+  'ACL-K9 service_role''s public FUNCTION default is left as the platform maintains it (hosted EXECUTE, or absent on a clean replay)');
+
+-- The defaults, proved on real objects: what the next migration's function
+-- actually inherits, in public and in a schema nobody configured. Dropped
+-- below, and by the suite's ROLLBACK in any case.
+CREATE FUNCTION public.zz_acl_probe_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+CREATE SCHEMA zz_acl_probe_schema;
+CREATE FUNCTION zz_acl_probe_schema.zz_acl_probe_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+
+SELECT is(
+  (SELECT coalesce(string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type, ', '), '')
+     FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) a
+    WHERE p.oid = 'public.zz_acl_probe_fn()'::regprocedure
+      AND a.grantee NOT IN (to_regrole('postgres')::oid, to_regrole('service_role')::oid)),
+  '',
+  'ACL-K10 a newly created public function grants nothing DIRECTLY to any role but its owner and service_role');
+
+SELECT is(
+  (SELECT coalesce(string_agg(r, ', ' ORDER BY r), '')
+     FROM unnest(ARRAY['anon','authenticated']) r
+    WHERE has_function_privilege(to_regrole(r)::oid, 'public.zz_acl_probe_fn()'::regprocedure, 'EXECUTE')),
+  '',
+  'ACL-K11 a newly created public function is not EFFECTIVELY executable by anon or authenticated');
+
+SELECT is(
+  has_function_privilege(to_regrole('service_role')::oid, 'public.zz_acl_probe_fn()'::regprocedure, 'EXECUTE'),
+  EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
+           WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
+             AND a.grantee = to_regrole('service_role')::oid),
+  'ACL-K12 service_role can execute a new public function exactly when its preserved default entry says so');
+
+SELECT is(
+  (SELECT coalesce(p.proacl::text, '<default>') || ' / '
+          || (SELECT coalesce(string_agg(r, ',' ORDER BY r), 'nobody')
+                FROM unnest(ARRAY['anon','authenticated','service_role']) r
+               WHERE has_function_privilege(to_regrole(r)::oid, p.oid, 'EXECUTE'))
+     FROM pg_proc p WHERE p.oid = 'zz_acl_probe_schema.zz_acl_probe_fn()'::regprocedure),
+  '{postgres=X/postgres} / nobody',
+  'ACL-K13 a new function in a schema outside public is owner-only: the PUBLIC default is revoked globally');
+
+DROP FUNCTION zz_acl_probe_schema.zz_acl_probe_fn();
+DROP SCHEMA zz_acl_probe_schema;
+DROP FUNCTION public.zz_acl_probe_fn();
 
 -- ══ G4. The defaults, proved on real objects ════════════════════════════════
 -- Reading `pg_default_acl` says what is stored. This says what a new object

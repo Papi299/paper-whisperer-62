@@ -1270,6 +1270,9 @@ function mergeWorkerSql(source, target) {
     `  RETURN CASE WHEN SQLERRM ILIKE '%cycle%' THEN 'rejected-cycle' ELSE 'rejected-other' END;\n` +
     `END\n` +
     `$fn$;\n` +
+    // Since C56 a function postgres creates — pg_temp included — is owner-only
+    // until granted, so the caller's EXECUTE is stated explicitly.
+    `GRANT EXECUTE ON FUNCTION pg_temp.try_merge(uuid, uuid) TO authenticated;\n` +
     `SELECT set_config('request.jwt.claims','{"sub":"${MERGE_PROBE_USER}","role":"authenticated"}', false);\n` +
     "SET ROLE authenticated;\n" +
     `SELECT pg_advisory_lock_shared(${MERGE_BARRIER_KEY});\n` +
@@ -3714,6 +3717,11 @@ async function runMigrationCutoverProbe(container) {
  *   7. prove suite 015 PASSES, and that `service_role` did not move;
  *   8. prove a NEW table that forgets its ACLs is unreachable at runtime AND
  *      fails CI;
+ *   8b. prove the same for a NEW function (NC7): since C56
+ *      (`20260928133918_harden_default_function_execute.sql`, applied by step 6
+ *      from Production's explicit function ACL and default shape) it reaches no
+ *      client role — while the platform's preserved hosted service_role
+ *      default still applies — and it fails CI;
  *   9. prove a grantee nobody named, arriving AFTER the migration, fails CI
  *      through the allowlist assertions (NC6c).
  *
@@ -3726,6 +3734,7 @@ const ACL_HOSTED_SEED = "scripts/acl-parity/hosted-baseline-20260904120000.sql";
 const ACL_HOSTED_REFERENCE = "scripts/acl-parity/hosted-baseline-20260904120000.reference.json";
 const ACL_MATRIX_SUITE = "supabase/tests/database/015_data_api_acl_matrix.test.sql";
 const ACL_NC2_TABLE = "zz_acl_nc2_forgotten";
+const ACL_NC7_FUNCTION = "zz_acl_nc7_forgotten";
 
 /**
  * The whole object-privilege and default-privilege state, plus the migration
@@ -4034,6 +4043,49 @@ async function runHostedAclParityLane() {
     if (drop.code !== 0) throw new Error(`ACL parity lane: could not drop the NC2 probe table: ${drop.err.trim()}`);
   }
 
+  // ── 8b. NC7 — a future FUNCTION whose author forgot its ACL (C56) ─────────
+  // The same two guarantees for the function surface, from Production's own
+  // starting defaults. At runtime the function reaches neither PUBLIC (the
+  // built-in default C56 revoked globally) nor anon/authenticated (the schema
+  // entry C56 narrowed); service_role still reaches it, because this is the
+  // hosted history and C56 deliberately preserves the platform's service_role
+  // default — the one legitimate difference from a clean replay. And CI refuses
+  // it: suite 015's SECURITY INVOKER inventory (ACL-H1) no longer matches.
+  const beforeNc7 = await aclFullState(container);
+  const create7 = await dockerPsql(container,
+    `CREATE FUNCTION public.${ACL_NC7_FUNCTION}() RETURNS integer LANGUAGE sql AS 'SELECT 1';`);
+  if (create7.code !== 0) throw new Error(`ACL parity lane: could not create the NC7 probe function: ${create7.err.trim()}`);
+  try {
+    const reach = await dbScalar(container,
+      "SELECT coalesce(string_agg(x, ',' ORDER BY x), '<nobody>') FROM (" +
+        "SELECT 'PUBLIC' AS x FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f'::\"char\", p.proowner))) a " +
+        `WHERE p.oid = 'public.${ACL_NC7_FUNCTION}()'::regprocedure AND a.grantee = 0 ` +
+        "UNION ALL SELECT r FROM unnest(ARRAY['anon','authenticated','service_role']) r " +
+        `WHERE has_function_privilege(r, 'public.${ACL_NC7_FUNCTION}()'::regprocedure, 'EXECUTE')) s;`);
+    if (reach !== "service_role") {
+      throw new Error(
+        `ACL parity lane (NC7): a new function created after the hardening reaches [${reach}]; ` +
+          "expected service_role alone (no PUBLIC, anon or authenticated; the hosted service_role default preserved).",
+      );
+    }
+    const flagged7 = await runAclMatrixSuite();
+    assertAclSuiteFailed("NC7 (future function with no ACL statements)", flagged7, ["ACL-H1"]);
+    const unexpected7 = flagged7.failed.filter((name) => !name.startsWith("ACL-H1"));
+    if (unexpected7.length > 0) {
+      throw new Error(
+        `ACL parity lane (NC7): suite 015 also failed ${unexpected7.join("; ")} — the new function was ` +
+          "reachable by a client role or disturbed something else, so the control proves less than it claims.",
+      );
+    }
+    log("NC7 OK: an unclassified new function is unreachable by PUBLIC, anon and authenticated (service_role keeps its preserved hosted default) AND fails the suite.");
+  } finally {
+    const drop7 = await dockerPsql(container, `DROP FUNCTION IF EXISTS public.${ACL_NC7_FUNCTION}();`);
+    if (drop7.code !== 0) throw new Error(`ACL parity lane: could not drop the NC7 probe function: ${drop7.err.trim()}`);
+  }
+  if ((await aclFullState(container)) !== beforeNc7) {
+    throw new Error("ACL parity lane (NC7): the lane is not byte-identical to its pre-control state after clean-up.");
+  }
+
   // ── 9. NC6c — a grantee nobody named, arriving AFTER the migration ────────
   // The migration refuses an unreviewed default grantee it finds (NC6b), but
   // nothing stops a LATER statement adding one. CI must catch it: the allowlist
@@ -4071,7 +4123,7 @@ async function runHostedAclParityLane() {
 
   const restored = await runAclMatrixSuite();
   if (!restored.passed) {
-    throw new Error("ACL parity lane: suite 015 does not pass again after the NC2 and NC6c probes were removed.");
+    throw new Error("ACL parity lane: suite 015 does not pass again after the NC2, NC7 and NC6c probes were removed.");
   }
   log("hosted-Production ACL parity lane OK.");
 }

@@ -882,7 +882,7 @@ ALTER FUNCTION public.validate_author_mention_for_identity(uuid,uuid,integer,tex
 > - **After — verified read-only immediately after the apply** (and re-verified independently, read-only, on 2026-09-27 for the documentation reconciliation):
 >   - Exactly the four targets are at `{"search_path=pg_catalog, pg_temp"}`: `attachment_cleanup_path_is_safe` and the three `immutable_english_tsvector_*` wrappers, same OIDs, each moved only from `{search_path=pg_catalog}`.
 >   - `set_updated_at()` is still at exactly `{search_path=pg_catalog}`, and its whole `pg_proc` row is byte-identical to the preflight. The `pg_catalog` distribution over `public` is 4 + 1.
->   - All five are still SECURITY INVOKER, owned by `postgres`, with the same body digests, literal ACLs and effective callers. Nobody but the owner can execute the attachment helper. The wrappers and `set_updated_at()` are executable by PUBLIC (hence `anon`, `authenticated` and `service_role`), as before.
+>   - All five are still SECURITY INVOKER, owned by `postgres`, with the same body digests, literal ACLs and effective callers. Nobody but the owner can execute the attachment helper. The wrappers and `set_updated_at()` are executable by PUBLIC (hence `anon`, `authenticated` and `service_role`), as before. *(Correction, 2026-09-28, C56: "hence" overstates it. On hosted Production those three roles also held explicit grants of their own, from Supabase's `postgres`/`public` function default. The effective callers recorded here were correct.)*
 >   - The three attachment callers' whole `pg_proc` rows are byte-identical: OIDs `109299` / `109300` / `109304`, SECURITY DEFINER, owner `postgres`, `{"search_path=public, pg_temp"}`, ACL `{postgres=X/postgres,authenticated=X/postgres}`, and bodies `23833e1f…` / `91bf1072…` / `4bdcc814…`.
 >   - `helpers_minus_config` is **`f2c68ed1852d00f9e0a1369ea11a172e`, identical** to the preflight value.
 >   - The `papers.search_vector` attribute, default and expression (`8ddd960b…`) are unchanged. `idx_papers_search_vector` (OID `61100`) is valid and ready, with the same definition and relfilenode. `trg_papers_updated_at` (OID `33585`, `tgfoid` `33584`, BEFORE UPDATE, `EXECUTE FUNCTION public.set_updated_at()`) is unchanged. Every `pg_depend` edge into the five is unchanged, and so is every other `public` function row.
@@ -1355,6 +1355,100 @@ The DROP fires the platform's `sql_drop` event trigger (`pgrst_drop_watch`), so 
 **No canary was run, and none was required.** No application behaviour depended on the wrappers. The drop is covered in CI against a full replay: suites `007`, `015`, `022`, `023` and `024`, plus the hosted-ACL parity lane, which applies this migration from Production's explicit ACL shape.
 
 **Rollback — forward only; none has been performed, and this section authorizes none.** Do not edit the applied migration, and do not `migration repair` a legitimate application of it. If an unforeseen consumer appears after the rollout, write a **new** forward migration. It re-creates the exact reviewed definitions (bodies and attributes in `20260331010000`, `search_path = pg_catalog, pg_temp` per `20260927001229`) and restates the intended EXECUTE ACL explicitly. The ACL a plain `CREATE FUNCTION` receives depends on the environment's default privileges, so it must not be left to them. That needs its own decision against C55.
+
+### 6.17 `20260928133918` (owner-only updated_at trigger functions and default-deny function EXECUTE, C56) — migration-only; PREPARED — NOT APPLIED
+
+> **Status — PREPARED IN THE REPOSITORY; NOT APPLIED TO PRODUCTION.** Production is at ledger **95** (latest `20260927214838`), with both trigger functions still PUBLIC-executable and `postgres`'s function defaults unchanged. Applying this migration needs its own separately authorized rollout; nothing here authorizes one, and no other task may apply it in passing.
+
+**What the migration does** (C56). Exactly four privilege statements, and nothing else:
+- `REVOKE ALL … FROM PUBLIC, anon, authenticated, service_role` on `public.set_updated_at()` and on `public.update_updated_at_column()`;
+- `ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` (global);
+- `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM anon, authenticated`. `service_role`'s default entry is deliberately not named.
+
+Fail-closed preconditions run before the change:
+- both functions' exact contract, body digest, `search_path`, and one reviewed ACL form: `NULL`, or the explicit hosted five-entry form;
+- exactly the reviewed twelve triggers, and no other dependent;
+- 43 `public` functions, exactly two PUBLIC-executable;
+- no global `postgres` default entry;
+- the `postgres`/`public` function entry is exactly the hosted four-role literal or the owner-only literal.
+
+Verification runs before COMMIT:
+- both functions `{postgres=X/postgres}`, directly and effectively;
+- no PUBLIC-executable `public` function;
+- one global entry `f={postgres=X/postgres}`;
+- the `public` entry lost only `anon` and `authenticated`;
+- real-object default probes in `public` and in a fresh schema;
+- an in-transaction probe in which `authenticated`, holding no EXECUTE, fires both hardened functions through scratch triggers, while a direct call is refused with `42501`;
+- a whole-surface snapshot showing nothing else moved;
+- no lock on a `public` relation, and no application row written.
+
+The probe objects live in one scratch schema, `zz_c56_default_probe`, created and dropped inside the transaction.
+
+**Production effect — projected, not yet observed.**
+- ledger **95 → 96**, latest `20260928133918`;
+- catalog writes only:
+  - the two functions' ACLs become `{postgres=X/postgres}`;
+  - one global `pg_default_acl` row for `postgres`, `f={postgres=X/postgres}`, is added;
+  - the `postgres`/`public` function entry becomes `{postgres=X/postgres,service_role=X/postgres}` (the platform's `service_role` entry is kept);
+- `public` keeps 43 functions, now with **zero** PUBLIC-executable; the other 41 function ACLs are unchanged;
+- no lock on any `public` relation, no table rewrite and no application-data write.
+
+The Data API surface does not change: PostgREST already excludes trigger functions, so `rpc/set_updated_at` answers `404 PGRST202` before and after. The privilege DDL may prompt a routine PostgREST schema-cache reload through the platform's event trigger. Security Advisor counts are not expected to change, since neither function is SECURITY DEFINER.
+
+**Operational consequence after the rollout.** From then on, a function `postgres` creates — in a migration, in the SQL editor, or as a member of an extension `postgres` installs itself — is owner-only (plus `service_role` in `public`) until explicitly granted. **Enabling Supabase Queues (`pgmq`) is the proven case needing review:** under this default, 39 of its 40 functions lose PUBLIC EXECUTE. Supautils-privileged and trusted extensions install as `supabase_admin` and are unaffected. Existing functions keep their ACLs.
+
+**Why there is no ordering constraint.** No Edge Function, frontend step or drain is involved. No application code calls either function directly, and their triggers keep firing for every writer.
+
+**Procedure — NOT YET EXECUTED; the reference for the separately authorized rollout.**
+1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
+2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
+3. Fresh read-only preflight against Production. These are the expected pre-rollout values:
+
+   ```sql
+   BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO pg_catalog, pg_temp;
+   SELECT current_setting('server_version') AS pg;                                   -- expect 17.6 unless independently upgraded
+   SELECT count(*) AS ledger, max(version) AS latest,                                -- expect 95, 20260927214838
+          count(*) FILTER (WHERE version = '20260928133918') AS c56_present         -- expect 0
+     FROM supabase_migrations.schema_migrations;
+   SELECT p.oid, p.oid::regprocedure AS sig, md5(p.prosrc) AS body, p.proconfig, p.proacl::text AS acl
+     FROM pg_proc p WHERE p.oid IN ('public.set_updated_at()'::regprocedure, 'public.update_updated_at_column()'::regprocedure);
+     -- expect 33584 301a8849… {search_path=pg_catalog} and 53609 ef6b2d76… {search_path=public},
+     -- both with the explicit hosted five-entry ACL
+   SELECT count(*) AS triggers FROM pg_trigger t                                     -- expect 12
+    WHERE t.tgfoid IN ('public.set_updated_at()'::regprocedure, 'public.update_updated_at_column()'::regprocedure)
+      AND t.tgenabled = 'O';
+   SELECT CASE WHEN d.defaclnamespace = 0 THEN '<GLOBAL>' ELSE d.defaclnamespace::regnamespace::text END AS nsp,
+          d.defaclobjtype, d.defaclacl::text
+     FROM pg_default_acl d WHERE d.defaclrole = 'postgres'::regrole ORDER BY 1, 2;
+     -- expect no <GLOBAL> row; public f = {postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+   SELECT count(*) AS public_fns FROM pg_proc WHERE pronamespace = 'public'::regnamespace;   -- expect 43
+   ROLLBACK;
+   ```
+   Then run the **real migration file's §0 and §1** read-only, with no DDL sent. Take the file from its first line up to, but not including, the section-2 banner. Replace its `BEGIN;` with `BEGIN TRANSACTION READ ONLY;`. Append a final `SELECT current_setting('transaction_read_only'), current_setting('paperlume.default_function_execute.targets', true);` and `ROLLBACK;`. Run it with `supabase db query --linked -f`. It must return `on` and the two target OIDs, which means every precondition passed. **If any value differs or any check refuses, stop and re-review; do not edit the migration to fit.** If Supabase has changed its platform function defaults in the meantime (its 2026-10-30 existing-project rollout is announced for tables and sequences), the preconditions decide. The owner-only `public` entry that Supabase's documented opt-in produces is an accepted shape; anything else stops the file.
+4. `supabase migration list --linked` must show exactly one local-only migration, `20260928133918`, and no remote-only one. `supabase db push --dry-run` must list **exactly** `20260928133918_harden_default_function_execute.sql`, with no seeds and no roles. Anything else, stop (§6.2).
+5. Obtain the separate, explicit rollout authorization.
+6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **95 → 96**). The file is explicitly transactional; a refusal rolls it back with nothing changed.
+7. Verify immediately, read-only:
+   - ledger **96**, latest `20260928133918`, present exactly once;
+   - both functions `{postgres=X/postgres}`;
+   - `postgres`'s global entry exactly `f={postgres=X/postgres}`;
+   - the `public` function entry `{postgres=X/postgres,service_role=X/postgres}`;
+   - `public` holds 43 functions and none is PUBLIC-executable;
+   - the twelve triggers are unchanged and enabled;
+   - the other 41 function ACLs are unchanged (the migration's §3 snapshot proves this before COMMIT; an `md5` of their ACLs taken in step 3 and again here confirms it independently);
+   - no `zz_c56_default_probe` schema exists;
+   - Security Advisor counts are unchanged;
+   - Edge Function versions are unchanged;
+   - optionally, an anonymous `GET /rest/v1/rpc/set_updated_at` still returns 404 `PGRST202`.
+
+   An authenticated browser-path UPDATE on an acceptance-owned row, advancing its `updated_at`, is the natural end-to-end check. The migration's own trigger probe already proves the mechanism in Production, so this check is optional and needs its own authorization.
+
+**Rollback — forward only; none has been performed, and this section authorizes none.** Do not edit the applied migration, and do not `migration repair` a legitimate application of it. A reversal is a **new** forward migration:
+- re-GRANT the intended EXECUTE on the two functions explicitly;
+- `ALTER DEFAULT PRIVILEGES FOR ROLE postgres GRANT EXECUTE ON FUNCTIONS TO PUBLIC`, which deletes the global entry again (verified locally);
+- the per-schema `GRANT EXECUTE ON FUNCTIONS TO anon, authenticated` in `public`.
+
+That needs its own decision against C56.
 
 ---
 

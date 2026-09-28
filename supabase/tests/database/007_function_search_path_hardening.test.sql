@@ -54,9 +54,12 @@
 --   * both remain SECURITY INVOKER with their original volatility, parallel
 --     safety, language and return type, so a later "fix" cannot quietly promote
 --     one to SECURITY DEFINER or relax IMMUTABLE/PARALLEL SAFE;
---   * the EXECUTE ACLs are unchanged: owner-only on the attachment helper, and
---     one of the two reviewed representations of the default posture on
---     set_updated_at() (NULL on a clean replay, explicit on hosted Production);
+--   * the EXECUTE ACLs are exactly owner-only on both: the attachment helper
+--     always was, and set_updated_at() is since C56
+--     (20260928133918_harden_default_function_execute.sql), which revoked the
+--     default posture it had carried until then (NULL on a clean replay,
+--     explicit on hosted Production). Its callers and the rest of the function
+--     EXECUTE posture are owned by 015, and the trigger-firing proof by 025;
 --   * the three immutable_english_tsvector_* helpers are gone — no function of
 --     those names exists in any schema — so a re-created one fails here;
 --   * the generated `papers.search_vector` still populates, keeps its A/B/C/D
@@ -169,22 +172,22 @@ SELECT is(
     ) AS v(label, expected) ON v.label = h.label
 ) f;
 
--- EXECUTE ACLs are unchanged. The attachment helper is owner-only everywhere.
+-- EXECUTE ACLs. The attachment helper is owner-only everywhere.
 SELECT is(
   (SELECT p.proacl::text FROM pg_proc p
     WHERE p.oid = 'public.attachment_cleanup_path_is_safe(uuid,text,uuid)'::regprocedure),
   '{postgres=X/postgres}',
   'acl: attachment_cleanup_path_is_safe(uuid,text,uuid) is still exactly owner-only');
 
--- set_updated_at() keeps PostgreSQL's default EXECUTE posture, which has two
--- reviewed stored forms: NULL on a clean replay, and the explicit equivalent on
--- hosted Production (scripts/acl-parity/hosted-baseline-20260904120000.sql).
--- Either passes; any third form fails. Its callers are owned by 015.
-SELECT ok(
-  (SELECT p.proacl IS NULL
-          OR p.proacl::text = '{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}'
-     FROM pg_proc p WHERE p.oid = f.oid),
-  'acl: ' || f.label || ' is in a reviewed representation of the default EXECUTE posture'
+-- set_updated_at() is exactly owner-only since C56, in every environment: the
+-- migration converged both of its earlier reviewed forms (NULL on a clean
+-- replay, the explicit five-entry form on hosted Production) on this one.
+-- Section 5 below still proves the trigger fires; 025 proves it fires for a
+-- caller holding no EXECUTE.
+SELECT is(
+  (SELECT coalesce(p.proacl::text, '<default>') FROM pg_proc p WHERE p.oid = f.oid),
+  '{postgres=X/postgres}',
+  'acl: ' || f.label || ' is exactly owner-only'
 ) FROM pg_temp.helper_fns() f
  WHERE f.label <> 'attachment_cleanup_path_is_safe(uuid,text,uuid)';
 
