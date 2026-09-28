@@ -1006,7 +1006,7 @@ Nothing else: not a body, OID, signature, return type, owner, `search_path` (bot
    - `public_definer` 33 and `auth_definer` 25;
    - the same `papers_policies` and `search_vector_expr`.
 
-   *(That is C52's post-state. The 2026-09-27 C53 rollout took the ledger to 93, latest `20260927123856`, and the counts to `public_definer` 32 and `auth_definer` 24, with the two C52 rows unchanged (§6.14). The 2026-09-27 C54 rollout then took the ledger to 94, latest `20260927161343`, changing nothing else (§6.15).)*
+   *(That is C52's post-state. The 2026-09-27 C53 rollout took the ledger to 93, latest `20260927123856`, and the counts to `public_definer` 32 and `auth_definer` 24, with the two C52 rows unchanged (§6.14). The 2026-09-27 C54 rollout then took the ledger to 94, latest `20260927161343`, changing nothing else (§6.15). The 2026-09-28 C55 rollout then took the ledger to 95, latest `20260927214838`, removing only the three SECURITY INVOKER `immutable_english_tsvector_*` wrappers and leaving these counts unchanged (§6.16).)*
 
    ```sql
    BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO pg_catalog, pg_temp;
@@ -1168,7 +1168,7 @@ Nothing else changes. The body (the broad per-row `WHEN OTHERS` handler included
 
 > **Status — COMPLETE. The migration-only rollout finished on 2026-09-27 and C54 is live in Production. Production already stored the canonical direct built-in expression, so the migration took its no-op branch there. Its column was not rewritten, and the C54 ledger row is the only durable database change. Do not re-run the migration as a pending step. No rollback has been performed.**
 >
-> *(2026-09-28: the wrapper facts below — present, unreferenced, zero dependents — describe C54's rollout and are still Production's state. Their retirement is C55, prepared in the repository and **not** run in Production; see §6.16. Step 3's wrapper-dependents query below resolves the wrappers by signature, so it errors on a database where C55 has run.)*
+> *(2026-09-28: the wrapper facts below — present, unreferenced, zero dependents — and step 7's ledger values describe C54's rollout. C55 retired the three wrappers in Production on 2026-09-28, taking the ledger to 95 (§6.16); the `search_vector`, `papers` and index facts below still hold. Step 3's wrapper-dependents query below resolves the wrappers by signature, so it now errors in Production, as on any database where C55 has run.)*
 >
 > - **Merged.** PR #313 as the two-parent commit `05ca045476f67ef9ccee5e23936b1b47acee6adb` (parents `9bf114bd` and the approved head `e10eaba6`; tree `5326acda`, identical to the approved head's). The source branch `db/search-vector-direct-canonicalization` is preserved, but it is no longer pending work. Since the merge, every replay ends on one `search_vector` representation (C54).
 > - **Hosted CI.** Merged-`main` on `05ca045`: Validate (run `36344934817`), DB Tests (`36344934832`) and Extension (`36344934863`) passed. `E2E (local)` does not run on a push to `main` ([README](../README.md#ci)); its evidence for this change is the pull-request run on the exact approved head `e10eaba6c309eaea4014e87c40a9f056a03fb80f`, run `36342553665`, which passed.
@@ -1251,9 +1251,45 @@ Both branches require every stored vector to equal the canonical expression alre
 
 **Rollback — reference only; none has been performed, and this section authorizes none.** In Production there is nothing to roll back: the no-op branch changed no schema object. The ledger row remains, recording that the canonicalization check ran. On a replayed database the former wrapper expression could be restored with another `SET EXPRESSION`, a rewrite with the same values, but that would reintroduce the dual representation C54 removes, so it needs its own decision.
 
-### 6.16 `20260927214838` (retire the three obsolete `immutable_english_tsvector_*` wrappers, C55) — migration-only; PREPARED — NOT YET RUN
+### 6.16 `20260927214838` (retire the three obsolete `immutable_english_tsvector_*` wrappers, C55) — migration-only; COMPLETE: applied 2026-09-28
 
-> **Status — PREPARED — NOT YET RUN. C55 is prepared in the repository and is NOT live in Production.** Production still has the three wrappers (ledger **94**, latest `20260927161343`, as of the read-only check on 2026-09-28). Applying this migration requires a separate, explicit rollout authorization. Nothing below has been executed against Production. Merging the PR does not apply it.
+> **Status — COMPLETE. The migration-only rollout finished on 2026-09-28 and C55 is live in Production. It dropped exactly the three wrappers. The migration-ledger entry and the removal of those three function objects were the only durable database changes. Do not re-run the migration as a pending step. No rollback has been performed.**
+>
+> - **Merged.** PR #315 as the two-parent commit `6d17f68c62d8531ef10ef831453da7f09208b0c2` (parents `6355badc` and the approved head `12ce5fdb`; tree `adf18c46`, identical to the approved head's). The source branch `db/retire-immutable-tsvector-wrappers` is preserved, but it is no longer pending work.
+> - **Hosted CI.** Merged-`main` on `6d17f68c`: Validate (run `36383622064`), DB Tests (`36383621892`) and Extension (`36383621874`) passed. `E2E (local)` does not run on a push to `main` ([README](../README.md#ci)); its evidence for this change is the pull-request run on the exact approved head `12ce5fdba034c3bf1dd3714601877e6149a4a032`, run `36355827464`, which passed.
+> - **Before — verified read-only at preparation, again after the merge, and again immediately before the apply** (step 3):
+>   - PostgreSQL 17.6; ledger **94**, latest `20260927161343` (C54); `20260927214838` absent.
+>   - The three wrappers present: OIDs `66407` (`text`), `66408` (`textarr`) and `66409` (`jsonb`); bodies `26edc211…` / `19261084…` / `30c015cd…`; `{"search_path=pg_catalog, pg_temp"}`; the explicit hosted ACL; zero dependents or references on every surface (no `cron.job` table exists).
+>   - `public`: 46 functions, five of them PUBLIC-executable (the three wrappers, `set_updated_at()` and `update_updated_at_column()`).
+>   - `search_vector` F1 `8ddd960b…` (attrdef `59954`), calling exactly `setweight(tsvector,"char")`, `to_tsvector(regconfig,text)` and `tsvector_concat(tsvector,tsvector)`. `idx_papers_search_vector` `61100` / `61100`, valid, ready and live. `papers` `17492` / `59955`, TOAST `59958`.
+>   - Security Advisor: 24 × `authenticated_security_definer_function_executable`, 6 × `rls_enabled_no_policy` and 1 leaked-password warning, none naming a wrapper.
+> - **Read-only preflight — the merged file's §0–§1.** The merged file up to the section-2 banner, with only its `BEGIN;` replaced by `BEGIN TRANSACTION READ ONLY;`, ended by `ROLLBACK`. No DDL was sent. Every precondition passed:
+>   - it ran as `postgres` with both transaction-local settings in effect;
+>   - it resolved the targets to `{66407,66408,66409}` and built the 16-category snapshot;
+>   - it held only ACCESS SHARE on catalogs and nothing on any `public` relation, and was never assigned a transaction ID.
+> - **What was run — migration only, exactly as planned.**
+>   - `supabase migration list --linked` showed local and remote aligned through `20260927161343`, exactly one local-only migration, `20260927214838`, and no remote-only one.
+>   - `supabase db push --linked --dry-run` listed exactly `20260927214838_retire_immutable_english_tsvector_wrappers.sql`, with no seeds and no roles.
+>   - From a checkout whose tree is identical to the merge commit's, `npx supabase db push --linked --yes` (Supabase CLI 2.111.0) then applied exactly that file, between the pre-apply fingerprint at 06:22:05Z and the post-apply fingerprint at 06:23:01Z UTC. It exited 0 and reported no seeds and no roles.
+>   - Ledger **94 → 95**, latest `20260927214838`, present exactly once (name `retire_immutable_english_tsvector_wrappers`). Each of its ten recorded statements appears verbatim in the merged file, among them exactly the three `DROP FUNCTION … RESTRICT`. `supabase migration list --linked` now shows local and remote aligned through `20260927214838` (95 / 95).
+>   - This was the rollout's only intentional Production mutation.
+>     - No Edge Function was deployed. All six functions' versions and last-update times predate the rollout; the latest are `analyze-paper` v33 and `suggest-paper-organization` v16, both from 2026-09-25.
+>     - The rollout created no temporary object, wrote no application row and ran no canary.
+> - **No manual Vercel action.** None was part of the database rollout, and none was needed. This record makes no claim about any Vercel deployment.
+> - **After — verified read-only immediately after the apply, again three minutes later, and again on 2026-09-28 for the documentation reconciliation:**
+>   - PostgreSQL 17.6; ledger **95**, latest `20260927214838`, present exactly once.
+>   - The three signatures no longer resolve (`to_regprocedure` returns NULL), OIDs `66407`–`66409` no longer exist, no function of those names exists in any schema, and no `pg_depend` row refers to the old OIDs.
+>   - `public`: **43** functions; exactly two PUBLIC-executable, `set_updated_at()` and `update_updated_at_column()`, both unchanged.
+>   - A fingerprint taken immediately before and after the apply differed only in the ledger and the three targets. Identical before and after:
+>     - the migration's own 16-category snapshot: every other function, `public` relations and their ACLs, columns and their ACLs, defaults, constraints, indexes, policies, triggers, rules, types, default privileges, the `public` schema, event triggers, the search column and the search index;
+>     - the xmins of every non-target function, database-wide, and of every `public` catalog row;
+>     - `search_vector`: F1 `8ddd960b…`, attrdef `59954` (xmin `6791`) and its dependency rows, the direct call set, and weights A/B/C/C/C/D;
+>     - `papers` `17492` / `59955` (`pg_class` xmin `11363`), TOAST `59958`, and all seven `papers` indexes' OIDs, relfilenodes and xmins, `idx_papers_search_vector` (`61100` / `61100`, valid, ready, live) included;
+>     - `pg_statistic` for `papers`, and every `public` table's cumulative write counters.
+>   - **No table or index rewrite and no application-data write.** The migration's own postconditions, checked inside its transaction before COMMIT, found no lock of any mode on a `public` relation and no application row written.
+>   - **PostgREST.** The schema cache refreshed automatically through the drop event trigger; **no manual `NOTIFY pgrst` was needed or sent**. A bounded anonymous call to `POST /rest/v1/rpc/immutable_english_tsvector_text` with a fixed input answered **200** before the rollout and **404 `PGRST202`** ("Could not find the function … in the schema cache") after. That is the intended response for a retired RPC, not an application error. Production's OpenAPI document requires a secret API key, so the anonymous probe, not an OpenAPI listing, was the observation.
+>   - **Generated types.** Linked generation (`supabase gen types typescript --linked --schema public`, written to a scratch file only) contains no wrapper entry and is semantically identical to the committed `types.ts`. It differs only in formatting: an `__InternalSupabase { PostgrestVersion: "14.5" }` block and optional parentheses in helper generics.
+>   - **Security Advisor unchanged:** the same 31 findings as before (24 × lint 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password), none naming a wrapper. None was expected to change, since the wrappers were SECURITY INVOKER.
 
 **What the migration does** (C55). It drops exactly `public.immutable_english_tsvector_text(text)`, `public.immutable_english_tsvector_textarr(text[])` and `public.immutable_english_tsvector_jsonb(jsonb)`, each by complete signature with `RESTRICT`, and nothing else. Fail-closed preconditions run before the drops:
 - the exact reviewed contract of each target, including its body digest and one of the two reviewed ACL forms;
@@ -1269,21 +1305,21 @@ Postconditions run before COMMIT:
 - `public` holds 43 functions, exactly two of them PUBLIC-executable;
 - no lock on any `public` relation, and no application row written.
 
-**Expected Production effect** (projected from the read-only preflight and the local runs; not observed):
+**Production effect — projected before the rollout, and observed** (see the status box; the lock footprint was measured locally, and in Production the migration's own postcondition proved no `public` relation was locked):
 - ledger **94 → 95**, latest `20260927214838`;
 - exactly three function drops, taking ACCESS EXCLUSIVE on the three function objects only;
 - **no lock on `papers`** or any other relation;
 - no table rewrite, no index rebuild, no ANALYZE and no application-data write;
 - `search_vector` (`8ddd960b…`) and `idx_papers_search_vector` physically unchanged.
 
-The DROP fires the platform's `sql_drop` event trigger (`pgrst_drop_watch`), so PostgREST reloads its schema cache. Afterwards `POST /rest/v1/rpc/immutable_english_tsvector_*` no longer resolves, answering 404 `PGRST202` locally. No application, extension or Edge code calls those RPCs. Security Advisor counts are not expected to change: the wrappers are INVOKER, and no lint names them.
+The DROP fires the platform's `sql_drop` event trigger (`pgrst_drop_watch`), so PostgREST reloads its schema cache; in Production it did so automatically on 2026-09-28. Afterwards `POST /rest/v1/rpc/immutable_english_tsvector_*` no longer resolves and answers 404 `PGRST202`, locally and in Production. No application, extension or Edge code calls those RPCs. Security Advisor counts were not expected to change, and did not: the wrappers were INVOKER, and no lint named them.
 
-**No ordering constraint.** No Edge Function, frontend step or drain is involved. The committed generated types lose the three RPC entries (−6 lines), and no handwritten code references them, so the frontend is correct before and after the rollout.
+**Why there was no ordering constraint.** No Edge Function, frontend step or drain was involved. The committed generated types had already lost the three RPC entries (−6 lines) at the merge, and no handwritten code references them, so the frontend was correct before and after the rollout.
 
-**Procedure — for the future authorized rollout; NOT executed.**
+**Procedure — EXECUTED 2026-09-28; kept as the reference procedure; not a pending step.** These are the steps as written before the rollout. The `expect` values in step 3 are the **pre-rollout** state it was checked against. What was actually observed and run is the status box above, restated per step below.
 1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
 2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
-3. Fresh read-only preflight against Production:
+3. Fresh read-only preflight against Production. These are the pre-rollout expectations. After the rollout, the second query returns `95`, `20260927214838` and `1`, the wrapper query returns no rows, and `public_fns` is `43`; the other values are unchanged.
 
    ```sql
    BEGIN; SET TRANSACTION READ ONLY; SET LOCAL search_path TO pg_catalog, pg_temp;
@@ -1304,21 +1340,21 @@ The DROP fires the platform's `sql_drop` event trigger (`pgrst_drop_watch`), so 
    SELECT count(*) AS public_fns FROM pg_proc WHERE pronamespace = 'public'::regnamespace;   -- expect 46
    ROLLBACK;
    ```
-   Then run the **real migration file's §0 and §1** read-only, with no DDL sent. Take the file from its first line up to, but not including, the section-2 banner. Replace its `BEGIN;` with `BEGIN TRANSACTION READ ONLY;`. Append a final `SELECT current_setting('transaction_read_only'), current_setting('paperlume.retire_tsvector_wrappers.targets', true);` and `ROLLBACK;`. Run it with `supabase db query --linked -f`. It must return `on` and the three target OIDs, which means every precondition passed. **If any value differs or any check refuses, stop and re-review; do not edit the migration to fit.**
-4. `supabase migration list --linked` must show exactly one local-only migration, `20260927214838`, and no remote-only one. Then run `supabase db push --dry-run` from the merge commit. It must list **exactly** `20260927214838_retire_immutable_english_tsvector_wrappers.sql`, with no seeds and no roles. Anything else, stop (§6.2).
-5. Obtain the separate, explicit rollout authorization.
-6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **94 → 95**). The file is explicitly transactional; a refusal rolls it back with nothing changed.
-7. Verify immediately, read-only:
+   Then run the **real migration file's §0 and §1** read-only, with no DDL sent. Take the file from its first line up to, but not including, the section-2 banner. Replace its `BEGIN;` with `BEGIN TRANSACTION READ ONLY;`. Append a final `SELECT current_setting('transaction_read_only'), current_setting('paperlume.retire_tsvector_wrappers.targets', true);` and `ROLLBACK;`. Run it with `supabase db query --linked -f`. It must return `on` and the three target OIDs, which means every precondition passed. **If any value differs or any check refuses, stop and re-review; do not edit the migration to fit.** *Observed:* every step-3 value matched immediately before the apply, and the §0–§1 run passed every precondition, returning `on` and `{66407,66408,66409}` with no transaction ID assigned.
+4. `supabase migration list --linked` must show exactly one local-only migration, `20260927214838`, and no remote-only one. Then run `supabase db push --dry-run` from the merge commit. It must list **exactly** `20260927214838_retire_immutable_english_tsvector_wrappers.sql`, with no seeds and no roles. Anything else, stop (§6.2). *Observed:* local and remote aligned through `20260927161343`, exactly that one local-only migration and no remote-only one, and a dry run that listed exactly that file, with no seeds and no roles.
+5. Obtain the separate, explicit rollout authorization. *Obtained before the apply.*
+6. Apply exactly that migration through the normal linked workflow: `supabase db push --linked` (ledger **94 → 95**). The file is explicitly transactional; a refusal rolls it back with nothing changed. *Executed as `npx supabase db push --linked --yes` (CLI 2.111.0) between 06:22:05Z and 06:23:01Z UTC; it exited 0, applied exactly that one file, and the ledger went **94 → 95**.*
+7. Verify immediately, read-only (the expected values below are the live state since 2026-09-28, and were observed exactly):
    - ledger **95**, latest `20260927214838`, present exactly once;
    - no function named `immutable_english_tsvector_%` in any schema;
    - `public` holds **43** functions, and its PUBLIC-executable set is exactly `set_updated_at()` and `update_updated_at_column()`;
    - `search_vector_expr` is still `8ddd960b…`, and `papers` and `idx_papers_search_vector` keep the OIDs, relfilenodes and `pg_class` xmins recorded in step 3;
    - Edge Function versions are unchanged;
-   - optionally, an anonymous `POST /rest/v1/rpc/immutable_english_tsvector_text` returns 404 `PGRST202`.
+   - optionally, an anonymous `POST /rest/v1/rpc/immutable_english_tsvector_text` returns 404 `PGRST202`. *Observed:* no Edge Function was deployed, and all six versions and last-update times predate the rollout. The anonymous call answered 404 `PGRST202`; the same call had answered 200 before the rollout.
 
-**No canary is required.** No application behaviour depends on the wrappers. The drop is covered in CI against a full replay: suites `007`, `015`, `022`, `023` and `024`, plus the hosted-ACL parity lane, which applies this migration from Production's explicit ACL shape.
+**No canary was run, and none was required.** No application behaviour depended on the wrappers. The drop is covered in CI against a full replay: suites `007`, `015`, `022`, `023` and `024`, plus the hosted-ACL parity lane, which applies this migration from Production's explicit ACL shape.
 
-**Rollback — forward only; this section authorizes none.** Do not edit the applied migration, and do not `migration repair` a legitimate application of it. If an unforeseen consumer appears after the rollout, write a **new** forward migration. It re-creates the exact reviewed definitions (bodies and attributes in `20260331010000`, `search_path = pg_catalog, pg_temp` per `20260927001229`) and restates the intended EXECUTE ACL explicitly. The ACL a plain `CREATE FUNCTION` receives depends on the environment's default privileges, so it must not be left to them. That needs its own decision against C55.
+**Rollback — forward only; none has been performed, and this section authorizes none.** Do not edit the applied migration, and do not `migration repair` a legitimate application of it. If an unforeseen consumer appears after the rollout, write a **new** forward migration. It re-creates the exact reviewed definitions (bodies and attributes in `20260331010000`, `search_path = pg_catalog, pg_temp` per `20260927001229`) and restates the intended EXECUTE ACL explicitly. The ACL a plain `CREATE FUNCTION` receives depends on the environment's default privileges, so it must not be left to them. That needs its own decision against C55.
 
 ---
 
