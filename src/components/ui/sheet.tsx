@@ -3,6 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { X } from "lucide-react";
 import * as React from "react";
 
+import { isNotificationEventTarget } from "@/components/ui/sonner";
 import { useDialogFocusRestore } from "@/hooks/useDialogFocusRestore";
 import { cn } from "@/lib/utils";
 
@@ -53,7 +54,7 @@ interface SheetContentProps
     VariantProps<typeof sheetVariants> {}
 
 const SheetContent = React.forwardRef<React.ElementRef<typeof SheetPrimitive.Content>, SheetContentProps>(
-  ({ side = "right", className, children, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
+  ({ side = "right", className, children, onOpenAutoFocus, onCloseAutoFocus, onInteractOutside, ...props }, ref) => {
     // Sheet is the same Radix primitive as Dialog and is likewise used without
     // a trigger component, so it needs the same close-focus repair.
     const { captureOpener, restoreOpener } = useDialogFocusRestore();
@@ -70,6 +71,12 @@ const SheetContent = React.forwardRef<React.ElementRef<typeof SheetPrimitive.Con
         onCloseAutoFocus={(event) => {
           onCloseAutoFocus?.(event);
           if (!event.defaultPrevented) restoreOpener(event);
+        }}
+        onInteractOutside={(event) => {
+          onInteractOutside?.(event);
+          // Notifications render outside every dialog, so Radix would read a press
+          // on one — or on its close button — as a request to close this one.
+          if (isNotificationEventTarget(event.target)) event.preventDefault();
         }}
         className={cn(sheetVariants({ side }), className)}
         {...props}

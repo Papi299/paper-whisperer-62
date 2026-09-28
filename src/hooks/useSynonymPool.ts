@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { useToast } from "@/hooks/use-toast";
 import { queryKeys } from "@/lib/queryKeys";
 
 export interface Synonym {
@@ -14,6 +14,7 @@ export interface Synonym {
 
 export function useSynonymPool(userId: string | undefined) {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const {
     data: synonymGroups = [],
@@ -45,7 +46,7 @@ export function useSynonymPool(userId: string | undefined) {
         (g) => g.canonical_term.toLowerCase() === canonicalTerm.toLowerCase()
       );
       if (exists) {
-        toast.error("A synonym group with this canonical term already exists");
+        toast({ title: "A synonym group with this canonical term already exists", variant: "destructive" });
         return;
       }
 
@@ -59,19 +60,19 @@ export function useSynonymPool(userId: string | undefined) {
         if (error) {
           // Handle DB unique constraint violation gracefully
           if (error.code === "23505") {
-            toast.error("A synonym group with this canonical term already exists");
+            toast({ title: "A synonym group with this canonical term already exists", variant: "destructive" });
             return;
           }
           throw error;
         }
         await queryClient.invalidateQueries({ queryKey: queryKeys.synonymPool.all(userId) });
-        toast.success(`Synonym group "${canonicalTerm}" added`);
+        toast({ title: `Synonym group "${canonicalTerm}" added` });
       } catch (error) {
         console.error("Error adding synonym group:", error);
-        toast.error("Failed to add synonym group");
+        toast({ title: "Failed to add synonym group", variant: "destructive" });
       }
     },
-    [userId, queryClient, synonymGroups]
+    [userId, queryClient, synonymGroups, toast]
   );
 
   const updateSynonymGroup = useCallback(
@@ -83,7 +84,7 @@ export function useSynonymPool(userId: string | undefined) {
         (g) => g.id !== id && g.canonical_term.toLowerCase() === canonicalTerm.toLowerCase()
       );
       if (exists) {
-        toast.error("A synonym group with this canonical term already exists");
+        toast({ title: "A synonym group with this canonical term already exists", variant: "destructive" });
         return;
       }
 
@@ -99,7 +100,7 @@ export function useSynonymPool(userId: string | undefined) {
 
         if (error) {
           if (error.code === "23505") {
-            toast.error("A synonym group with this canonical term already exists");
+            toast({ title: "A synonym group with this canonical term already exists", variant: "destructive" });
             return;
           }
           throw error;
@@ -114,13 +115,13 @@ export function useSynonymPool(userId: string | undefined) {
                 : sg
             )
         );
-        toast.success(`Synonym group "${canonicalTerm}" updated`);
+        toast({ title: `Synonym group "${canonicalTerm}" updated` });
       } catch (error) {
         console.error("Error updating synonym group:", error);
-        toast.error("Failed to update synonym group");
+        toast({ title: "Failed to update synonym group", variant: "destructive" });
       }
     },
-    [userId, queryClient, synonymGroups]
+    [userId, queryClient, synonymGroups, toast]
   );
 
   const deleteSynonymGroup = useCallback(
@@ -140,13 +141,13 @@ export function useSynonymPool(userId: string | undefined) {
           queryKeys.synonymPool.all(userId),
           (old: Synonym[] = []) => old.filter((sg) => sg.id !== id)
         );
-        toast.success("Synonym group deleted");
+        toast({ title: "Synonym group deleted" });
       } catch (error) {
         console.error("Error deleting synonym group:", error);
-        toast.error("Failed to delete synonym group");
+        toast({ title: "Failed to delete synonym group", variant: "destructive" });
       }
     },
-    [userId, queryClient]
+    [userId, queryClient, toast]
   );
 
   // Build a lookup map from synonyms -> canonical term
