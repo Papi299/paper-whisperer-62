@@ -24,6 +24,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { crossrefWorkUrl } from "../crossrefRequest.ts";
 
 // Resolved from the repository root: the jsdom environment rewrites
 // `import.meta.url` to a non-`file:` scheme, so it cannot locate the file.
@@ -74,9 +75,11 @@ describe("provider API encoding stays separate from resolver construction", () =
   // context where the prefix/suffix `/` stays literal.
 
   it("Crossref still encodes the DOI as a single path segment", () => {
-    expect(source).toMatch(
-      /https:\/\/api\.crossref\.org\/works\/\$\{encodeURIComponent\(doi\)\}/,
-    );
+    // Since CROSSREF-OPERATIONAL-IDENTITY-001A the Crossref URL is built by
+    // `../crossrefRequest.ts`, which is Node-importable, so this is now checked
+    // by behaviour; index.ts hands it the DOI name unchanged.
+    expect(new URL(crossrefWorkUrl("10.1000/a#b")).pathname).toBe("/works/10.1000%2Fa%23b");
+    expect(source).toMatch(/const url = crossrefWorkUrl\(doi\);/);
   });
 
   it("PubMed still encodes the DOI as a [doi] query term value", () => {
@@ -85,7 +88,13 @@ describe("provider API encoding stays separate from resolver construction", () =
 
   it("does not route either provider request through the resolver builder", () => {
     expect(source).not.toMatch(/api\.crossref\.org[^\n]*canonicalDoiUrl/);
+    expect(source).not.toMatch(/crossref(Work|TitleSearch)Url\([^\n]*canonicalDoiUrl/);
     expect(source).not.toMatch(/eutils\.ncbi\.nlm\.nih\.gov[^\n]*canonicalDoiUrl/);
+    const crossrefModule = readFileSync(
+      resolve(process.cwd(), "supabase/functions/fetch-paper-metadata/crossrefRequest.ts"),
+      "utf8",
+    );
+    expect(crossrefModule).not.toContain("canonicalDoiUrl");
   });
 });
 
