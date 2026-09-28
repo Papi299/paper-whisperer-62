@@ -1850,7 +1850,16 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
   - The REST API needs no registration or API key for its public and polite pools.
   - A client joins the polite pool by giving an email in the `mailto` parameter or the agent header, and Crossref "strongly recommend[s] providing a `mailto` parameter in all requests" so that it can contact the operator about a problem. Source: "Access and authentication", updated 2025-10-16.
   - The etiquette example in Crossref's older REST API documentation, now marked deprecated, also names the tool and its version in the `User-Agent`.
-  - Since 2025-12-01 the polite pool allows 10 single-record and 3 list/query requests per second, each with a concurrency of 3. The function makes its Crossref calls one at a time with its existing spacing; this task changes neither.
+  - **Rate limits have changed over time**, so the values in force are the ones Crossref returns in its response headers:
+    - rate: `x-rate-limit-limit` and `x-rate-limit-interval`, plus `x-rate-limit-type` since 2026-07-21;
+    - concurrency: `x-concurrency-limit`.
+
+    Crossref's own announcements give this history:
+    - **2025-11-05:** it announced a request-type split for 2025-12-01.
+    - **2025-12-02:** it reported it could not yet differentiate limits by request type.
+    - **2026-07-21:** it began implementing request-type-based limits. For the polite pool that is 10 requests per second for single-record requests and 3 for list/query requests. It also began rate-limiting polite traffic by the supplied `mailto` address.
+
+    `fetch-paper-metadata` makes its Crossref calls one at a time within each invocation, and this task changes neither its request frequency nor its concurrency.
 - **`support@paperlume.app` is not an active mailbox yet** (§17). Advertising it would give Crossref an address that may reach no one. `mutrisport@gmail.com` is the contact PaperLume already publishes.
 - **The contact is temporary.** Once a dedicated PaperLume address is live, moving to it is a change to one constant (`CROSSREF_CONTACT_EMAIL` in `fetch-paper-metadata/crossrefRequest.ts`) and a redeploy of `fetch-paper-metadata`: a separate small task.
 
