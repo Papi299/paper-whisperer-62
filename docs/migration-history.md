@@ -4253,3 +4253,60 @@ Decision **C55**. It implements the verdict of the read-only audit `DB-IMMUTABLE
   - **Data API and types.** PostgREST refreshed its schema cache automatically; no manual `NOTIFY pgrst` was needed. A bounded anonymous call to the text wrapper's RPC answered 200 before and 404 `PGRST202` after, the intended response for a retired RPC. Linked type generation has no wrapper entry and is semantically identical to the committed types. The only differences are formatting: an `__InternalSupabase` PostgREST-version block and optional helper-generic parentheses.
   - **Security Advisor** unchanged after the apply: 24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password, none naming a wrapper, as expected for SECURITY INVOKER functions.
   - No Edge Function deploy, no canary and no application write. No rollback has been performed.
+
+## 2026-09-28 — DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A: owner-only updated_at trigger functions and default-deny function EXECUTE (`20260928133918`) — **PREPARED, NOT APPLIED to Production**
+
+Decision **C56**. It implements the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, which classified both functions **SAFE TO REVOKE DIRECT CLIENT/PUBLIC EXECUTE** and the future default posture **HARDEN DEFAULTS**. **Not applied:** Production stays at ledger 95 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.17). This is least-privilege/default-deny hardening, not a response to any exposure.
+
+| | `set_updated_at()` / `update_updated_at_column()` ACL | `postgres` function defaults (global / `public`) | `public` PUBLIC-executable |
+|---|---|---|---|
+| **Production now** (read-only, 2026-09-28; ledger **95**) | explicit `{=X,postgres=X,anon=X,authenticated=X,service_role=X}` (OIDs `33584` / `53609`) | none / `{postgres,anon,authenticated,service_role=X}` | 2 |
+| **Clean replay before** (through `20260927214838`) | `NULL` (owner + PUBLIC) | none / `{postgres=X}` | 2 |
+| **Clean replay after** (through `20260928133918`) | `{postgres=X/postgres}` | `{postgres=X}` / `{postgres=X}` | 0 |
+| **Production after — projected** | `{postgres=X/postgres}` | `{postgres=X}` / `{postgres=X,service_role=X}` (`service_role` preserved) | 0 |
+
+- **Why.**
+  - Trigger firing does not check the caller's EXECUTE; only `CREATE TRIGGER` does. That was proven for all twelve triggers on PostgreSQL 17.6, and Production's five owner-only trigger functions already rely on it.
+  - The grant conferred only a direct call that fails (`0A000`) and the ability to attach `set_updated_at()` to a client's own TEMP table. PostgREST excludes trigger functions (`404 PGRST202` in Production).
+  - For future functions, a forgotten ACL is fail-open today. A migration revoking only PUBLIC and `anon` leaves `authenticated` executing the function in Production but not on a clean replay.
+  - PUBLIC comes from the built-in *global* default, which a per-schema REVOKE cannot remove. That includes Supabase's documented per-schema idiom, which was verified to be a no-op for PUBLIC.
+- **Migration `20260928133918_harden_default_function_execute`.** Created with `supabase migration new`. It is explicitly transactional and runs as `postgres` under transaction-local `search_path = pg_catalog, pg_temp` and `lock_timeout = 5s`.
+  - **§0** context: the role, the settings, `track_counts`, the role in force (for the probe to return to), and the write baseline.
+  - **§1** preconditions:
+    - the two functions' exact contracts, body digests, `search_path`s and one reviewed ACL form;
+    - the reviewed twelve triggers, and no other dependent;
+    - no `public` overload;
+    - 43 functions with exactly two PUBLIC-executable;
+    - no global `postgres` default;
+    - the `public` function entry is exactly the hosted or owner-only literal;
+    - a 12-category snapshot.
+  - **§2** the four privilege statements.
+  - **§3** verification:
+    - owner-only, directly and effectively;
+    - no PUBLIC-executable function;
+    - exactly `f={postgres=X/postgres}` global;
+    - the `public` entry lost only `anon` and `authenticated`;
+    - real-object default probes;
+    - an in-transaction trigger-firing probe as `authenticated`, with direct-call denial;
+    - the snapshot unchanged;
+    - no `public` lock and no application row.
+- **Controls on the real file, run locally.** **39 / 39**, each leaving a byte-identical fingerprint:
+  - **19 precondition refusals**;
+  - **15 postcondition refusals** (spliced statements after §2, among them `service_role`'s default narrowed and Supabase's per-schema idiom substituted for the global revoke);
+  - **5 positive runs** from all four ACL × default starting combinations and from a login role that `SET ROLE`s to `postgres`. All five converge on the same state, and the other 41 function ACLs equal Production's digest.
+- **Production, read-only, at preparation.** The real file's §0 and §1 ran in `BEGIN TRANSACTION READ ONLY … ROLLBACK`, with no DDL sent. Every precondition passed: the targets resolved to `{33584,53609}`, the hosted `public` entry was recognised, and no transaction ID was assigned.
+- **Tests.**
+  - `015` **106 → 119**: section K (no PUBLIC EXECUTE anywhere in `public`; both functions owner-only, directly and effectively; the global entry; the `public` entry named and as an allowlist; `service_role`'s accepted platform shapes; real-object probes in `public` and a fresh schema), and its SECURITY INVOKER PUBLIC-EXECUTE allowlist emptied.
+  - `007` stays **30**: `set_updated_at()`'s ACL is pinned exactly owner-only.
+  - New `025` (**33**): the twelve triggers fire for a no-EXECUTE role, the real `authenticated` and `service_role` writers, a disabled-trigger sensitivity control, an RLS negative control, direct-call denial, and a DEFAULT-expression contrast.
+- **Hosted-ACL parity lane.** It applies C56 from Production's explicit function ACL and default shape and keeps `015` green. NC4 proves `service_role` unmoved. The new **NC7** proves a forgotten-ACL function reaches only `service_role`, by its preserved hosted default, and fails `015` on ACL-H1 alone.
+- **Full local lifecycle.** `npm run test:db:local` passed: the replay of all 96 migrations, **26 suites / 2,383 pgTAP assertions** (from 25 / 2,337), every concurrency and cutover probe, the residue check and the complete hosted-ACL parity lane, NC7 included.
+- **Application gates.** Lint (0 errors; the 18 pre-existing warnings, none in a touched file), `npm run typecheck` (app, node, extension), Vitest (173 files / 5,662 tests), the web and extension production builds, and the local E2E lane (257 Playwright tests) passed.
+- **A consequence found in the harness.** The lifecycle's true-concurrency merge-cycle probe created `pg_temp.try_merge` as `postgres` and called it as `authenticated`, relying on inherited PUBLIC EXECUTE. Under C56 that is refused, exactly as intended. The probe now grants EXECUTE explicitly.
+- **Historical migrations are untouched.** `20260910212202`'s imprecise header is corrected by a dated note in C38. The hosted-ACL parity seed and reference stay frozen as the 2026-09-04 baseline.
+- **Out of scope:**
+  - `service_role` least privilege, its default included;
+  - database `TEMPORARY`;
+  - the 24 retained `authenticated` SECURITY DEFINER contracts;
+  - C30.
+- **Rollout — not performed.** See [deployment.md](deployment.md) §6.17 for the gated procedure.

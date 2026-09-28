@@ -930,11 +930,11 @@ Specifically, and durably:
 - **D1a does not replace the per-object rule (D2).** Every migration that creates an API-reachable object still REVOKEs by role and GRANTs its exact surface explicitly. D1a cannot cover objects created by other owners, cannot touch functions, and a project-level setting could re-grant those defaults at any time; it is a second layer, not the contract.
 - **Supabase's own 2026-10-30 platform change is compatible in both orders.** Supabase moves existing projects to opt-in Data API defaults on that date, keeping existing table grants. Its documented statements are `REVOKE`s and strictly narrower than D1a (they leave `TRUNCATE`/`REFERENCES`/`TRIGGER`/`MAINTAIN` on tables and `UPDATE` on sequences), so running them after this migration restores nothing, and if they land first the migration accepts that shape and removes the remainder. Suite 015 runs Supabase's exact statements against the converged state and proves it.
 - **`service_role` is excluded deliberately, not by omission.** Its **table** privileges were already aligned between Production and a clean replay; its sequence and default postures are environment-dependent (hosted vs replay: `rwU` vs `wU` on the sequence, ALL vs `Dxtm` on table defaults, `rwU` vs `w` on sequence defaults). So this initiative deliberately preserves the exact pre-migration `service_role` posture rather than converging or narrowing it — narrowing it would be a new decision. It also bypasses RLS, which makes object privilege its only gate, and it is the role behind every Edge Function: a wrong revoke fails server-side in paths no browser test covers. The migration deliberately references it in its preconditions and verification, but names it in no privilege-mutating `GRANT`, `REVOKE` or `ALTER DEFAULT PRIVILEGES` statement; its exact observed posture is preserved, and the migration refuses to commit if that posture moved.
-- **Function EXECUTE privileges are excluded, and the reason is mechanical.** The five SECURITY INVOKER helpers carry PUBLIC EXECUTE, but that comes from PostgreSQL's built-in **global** default for functions, which `ALTER DEFAULT PRIVILEGES … IN SCHEMA public` cannot revoke — Supabase's own documented `revoke execute on functions from public` is per-schema and therefore ineffective against it. Removing it needs a global, cross-schema default change that would also affect functions `postgres` creates in `extensions`, where the installed extensions live. Suite 015 adds a fail-closed inventory guard so a **new** invoker routine cannot inherit it unnoticed; the revoke itself is a separate initiative.
+- **Function EXECUTE privileges are excluded, and the reason is mechanical.** The five SECURITY INVOKER helpers carry PUBLIC EXECUTE, but that comes from PostgreSQL's built-in **global** default for functions, which `ALTER DEFAULT PRIVILEGES … IN SCHEMA public` cannot revoke — Supabase's own documented `revoke execute on functions from public` is per-schema and therefore ineffective against it. Removing it needs a global, cross-schema default change that would also affect functions `postgres` creates in `extensions`, where the installed extensions live. Suite 015 adds a fail-closed inventory guard so a **new** invoker routine cannot inherit it unnoticed; the revoke itself is a separate initiative. *(Correction, 2026-09-28 — `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, C56. Three parts of this bullet, and the matching header of `20260910212202`, which stays untouched as applied history, were imprecise. **(1)** PUBLIC EXECUTE on an **existing** function is answered by a per-object `REVOKE`; only **future** inheritance needs a default-privilege change. **(2)** Default privileges never touch existing objects, so a global `postgres` default change does not change the functions already installed in `extensions`. It governs functions `postgres` creates **later**, in any schema, and extension objects `postgres` itself owns because it installed a non-superuser extension; `pgmq` is the proven example. Supautils-privileged and trusted extensions install as `supabase_admin` and are unaffected. **(3)** On hosted Production, `anon`, `authenticated` and `service_role` did not execute these functions only through PUBLIC: Supabase's `postgres`/`public` function default also gave each an explicit grant. C56 applies the per-object revoke and the global default change; see C56.)*
 - **`paper_tags` / `paper_projects` keep `SELECT, INSERT, DELETE`.** Today's browser only reads them and every mutation goes through a SECURITY DEFINER RPC, so the grants are arguably surplus — but narrowing them is a change to the repository's established contract, not convergence toward it, and it is out of scope here. *(Follow-up, 2026-09-25: that narrowing is now its own decision, **C48** — the two junctions go to `SELECT` only, while `projects` / `tags` keep their full grant. That follow-up is complete: migration `20260925134526` was applied to Production on 2026-09-25, so the live junction grant is now `SELECT` only; the `SELECT, INSERT, DELETE` recorded here is the pre-C48 state.)*
 - **The rollout needed no ordering, and none was used.** No web-first deploy, no Edge deploy, no operator drain and no lock barrier: every privilege removed is one RLS already denies that role every row of, or one no application path uses, and `authenticated`'s live DML surface is identical before and after. The one observable difference is that an operation which never worked now fails with `42501` instead of reporting "0 rows affected".
 
-**Re-evaluation triggers:** an unauthenticated Data API path is ever introduced (today there is none); `service_role` least-privilege hardening is authorized; the function-EXECUTE initiative is authorized; a new client-reachable relation kind (view, materialized view, partitioned or foreign table) is added to `public`; or Supabase changes what its platform default grants, in which case the migration's accepted starting shapes and suite 015's default-privilege assertions are re-derived rather than relaxed.
+**Re-evaluation triggers:** an unauthenticated Data API path is ever introduced (today there is none); `service_role` least-privilege hardening is authorized; the function-EXECUTE initiative is authorized *(fired 2026-09-28: C56, prepared and not yet applied)*; a new client-reachable relation kind (view, materialized view, partitioned or foreign table) is added to `public`; or Supabase changes what its platform default grants, in which case the migration's accepted starting shapes and suite 015's default-privilege assertions are re-derived rather than relaxed.
 
 ### C39. AI provider protocol is isolated behind reviewed server-side adapters: the database catalog authorizes MODELS, the runtime registry authorizes PROTOCOLS (2026-09-12)
 
@@ -1836,4 +1836,115 @@ The Security Advisor's counts were not expected to change, and did not: the wrap
 - a caller of any of the three names discovered after the rollout — stop, and restore by a new forward migration as above;
 - a database whose state differs from the reviewed one (for example a new hosted environment), which the migration refuses — stop and re-review; do not edit the migration to fit (Production passed the reviewed preflight and was retired on 2026-09-28);
 - a PostgreSQL or text-search change that moves a golden value in suite `024` — review each row that moved, then update the golden table deliberately;
-- the separate default function-EXECUTE hardening decision, which is where the two remaining PUBLIC-executable trigger functions belong.
+- the separate default function-EXECUTE hardening decision, which is where the two remaining PUBLIC-executable trigger functions belong *(fired 2026-09-28: C56, prepared and not yet applied)*.
+
+### C56. The two updated_at trigger functions are owner-only, and functions `postgres` creates are default-deny for EXECUTE (2026-09-28)
+
+**Status: PREPARED — NOT YET APPLIED TO PRODUCTION.** Migration `20260928133918_harden_default_function_execute.sql` implements it (`DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-001A`). It follows the read-only audit `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, which classified both functions **SAFE TO REVOKE DIRECT CLIENT/PUBLIC EXECUTE** and the future default posture **HARDEN DEFAULTS**. Production is unchanged until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.17).
+
+- **Production at preparation** (read-only, 2026-09-28):
+  - PostgreSQL 17.6; ledger **95**, latest `20260927214838`; 43 `public` functions.
+  - Exactly two are PUBLIC-executable: `set_updated_at()` (OID `33584`, body `301a8849…`, `search_path=pg_catalog`) and `update_updated_at_column()` (OID `53609`, body `ef6b2d76…`, `search_path=public`). Both carry the explicit ACL `{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}`.
+  - Exactly 12 enabled `BEFORE UPDATE … FOR EACH ROW` triggers use them, and nothing else depends on them.
+  - `postgres` has **no global** default-privilege entry. Its `public` function entry is `{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}`. A clean replay stores `NULL` for both functions' ACLs and `{postgres=X/postgres}` for that entry.
+
+**Decision.** Exactly four privilege statements:
+
+```sql
+REVOKE ALL ON FUNCTION public.set_updated_at()           FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.update_updated_at_column() FROM PUBLIC, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM anon, authenticated;
+```
+
+Afterwards both functions are `{postgres=X/postgres}` in every environment, and no `public` function carries PUBLIC EXECUTE. A function `postgres` creates later reaches no client role until its migration GRANTs it. No body, owner, security mode, `search_path`, OID, trigger, table, policy or row changes.
+
+**Why the existing grants are surplus — least privilege, not an exposure fix.**
+- PostgreSQL checks EXECUTE on a trigger function when `CREATE TRIGGER` runs, and never when the trigger fires.
+  - PostgreSQL 17's documentation states the creation-time requirement and is silent on firing, so this was proven on this repository's exact image (17.6.1.084): owner-only, all twelve triggers still fire and advance `updated_at` for a role with no EXECUTE, and for real `authenticated` and `service_role` writes.
+  - Production already relies on it. Five other `public` trigger functions, among them `handle_new_user()` (fired by GoTrue) and `clear_author_identity_links_on_authors_change()` (fired by browser writes), are owner-only.
+- The grant conferred nothing useful:
+  - a direct call raises `0A000` ("trigger functions can only be called as triggers");
+  - PostgREST drops trigger functions from its schema cache. `rpc/set_updated_at` answers `404 PGRST202` in Production, even though `anon` holds EXECUTE there;
+  - its one real capability was letting a client attach `set_updated_at()` to a TEMP table of its own.
+
+  **This is not a data-exposure incident** and must not be described as one.
+
+**Where the grants came from.** No migration ever granted them. PUBLIC comes from PostgreSQL's built-in default for functions. `anon`, `authenticated` and `service_role` come — on hosted Production only — from Supabase's per-schema `postgres`/`public` function default. That is why hosted Production stores the explicit five-entry form and a clean replay stores `NULL`: the same effective posture, in two representations. The migration accepts both, and both converge. C38's rationale for leaving function EXECUTE out of scope was imprecise on exactly these points; see the dated correction there.
+
+**Why future defaults change, and why globally.**
+- Today, a function whose migration forgets its ACL is executable by `anon` and `authenticated` everywhere.
+- A migration that revokes only PUBLIC and `anon` leaves `authenticated` able to execute the function in Production but **not** on a clean replay, so no clean-replay test can see it. Neither CI lane catches this today.
+- Per-schema default privileges are *added to* the global default. PostgreSQL 17 documents that a per-schema `REVOKE` "is only useful to reverse the effects of a previous per-schema GRANT". So `… IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` changes nothing. That includes running it as part of Supabase's documented opt-in: verified, a new function stays executable by `anon` and `authenticated`.
+- The only default-privilege mechanism that removes PUBLIC is the global form, which is PostgreSQL's own documented example. The per-schema statement then removes Supabase's `anon`/`authenticated` entry. No narrower default mechanism exists. An event trigger or a CI-only check would miss functions created outside migrations.
+
+**Scope of the global change — and the operational caveat.** It governs **future** functions created by `postgres`, in any schema. That means migrations (all in `public`), functions created by hand as `postgres` (for example in the SQL editor), and member objects of an extension that `postgres` installs itself without superuser. **`pgmq` (Supabase Queues) is the proven example: under this default 39 of its 40 functions lose PUBLIC EXECUTE**, so enabling it — or any feature that creates functions as `postgres` and expects inherited PUBLIC EXECUTE — needs its execution surface reviewed and granted explicitly. `pg_temp` helper functions are included. The local lifecycle's merge-cycle probe needed an explicit `GRANT` on its helper for exactly this reason.
+
+It does **not** reach:
+- existing objects — default privileges never do, so the 49 `postgres`-owned functions already installed in Production's `extensions` are unchanged;
+- objects owned by other roles, including Supabase's managed schemas;
+- supautils-privileged and trusted extensions, whose member objects are created as `supabase_admin`. citext, pg_trgm, vector, pg_cron, moddatetime, pg_jsonschema and lo were verified unchanged.
+
+`postgres` cannot alter `supabase_admin`'s defaults, and C56 does not try.
+
+**`service_role`.** Removed from the two **existing** functions: no path needs it (its DML fires the triggers without it), and 40 of the other 41 `public` functions already exclude it. Its **future-function** default in `public` is platform-maintained and deliberately **preserved exactly as found**, following the C38 precedent. Narrowing it belongs to the separate service-role least-privilege review. The `postgres`/`public` function entry therefore legitimately ends as `{postgres=X/postgres,service_role=X/postgres}` on hosted Production and `{postgres=X/postgres}` on a clean replay.
+
+**How the migration is gated.**
+- **Fail-closed preconditions** before any change:
+  - both functions' exact contract, body digest and `search_path`, and one of the two reviewed ACL forms, shared by both;
+  - exactly the reviewed twelve triggers (definition, enabled state, internal flag), and no other dependent;
+  - no overload of either name in `public`;
+  - 43 `public` functions, exactly these two PUBLIC-executable;
+  - no global `postgres` default entry;
+  - the `postgres`/`public` function entry is one of two literal shapes, judged whole: hosted, or owner-only. The owner-only shape is the clean replay, and also what Supabase's documented opt-in leaves behind, so it composes. Anything else — `anon` without `authenticated`, an unreviewed grantee, `service_role` alone — stops the file.
+- **Verification before COMMIT:**
+  - both functions owner-only, directly and effectively;
+  - no PUBLIC-executable `public` function;
+  - exactly one global entry, `f={postgres=X/postgres}`;
+  - the `public` entry moved only by losing `anon` and `authenticated`, with `service_role` unchanged;
+  - real-object probes: a new `public` function reaches only its owner, plus `service_role` exactly where the preserved entry says so, and a new function in a fresh schema is owner-only;
+  - **an in-transaction trigger probe**: scratch tables carrying each hardened function are updated as `authenticated`, which holds no EXECUTE, and each `updated_at` must advance while a direct call is refused with `42501`;
+  - a snapshot proving nothing else moved: every other function ACL database-wide, every other `public` function row, relations, columns, policies, triggers, every other default entry, schemas, role memberships and event triggers;
+  - no lock on a `public` relation, and no application row written.
+
+  The probe returns to the role the file started under, not to the session user, so it works under the linked CLI's login-role-plus-`SET ROLE postgres` connection.
+
+**Implementation evidence** (local, PostgreSQL 17.6, disposable databases; Production read-only only).
+- **39 controls on the real file**, each leaving a byte-identical privilege/catalog fingerprint:
+  - **19 precondition refusals**: the wrong role; body, `search_path` and security-mode drift; an extra target grantee; a uniform unreviewed ACL; an extra, a disabled and a `WHEN`-clause trigger; an overload; a 44th function; an extra PUBLIC-executable function; existing global table and function defaults; the four unreviewed `public` entry shapes; and a taken probe name.
+  - **15 postcondition refusals**: a target re-granted; another function granted to PUBLIC; an extra global default; `authenticated` back in the `public` entry; `service_role`'s default narrowed; another function's ACL; another default entry; a disabled trigger; a relation ACL; a new function outside `public`; a lock on a `public` relation; a row written; `service_role` left on a target; the global revoke omitted; and Supabase's per-schema idiom substituted for it.
+  - **5 positive runs** converging from all four ACL × default combinations, and from a login role that `SET ROLE`s to `postgres`. Every run ends at the same state: the other 41 function ACLs are byte-identical and equal Production's digest.
+- **Suites:**
+  - `015` **106 → 119**: section K, plus the SECURITY INVOKER PUBLIC-EXECUTE allowlist emptied;
+  - `007` stays **30**, with `set_updated_at()` pinned exactly owner-only;
+  - new `025` (**33**): all twelve triggers fire for a no-EXECUTE role, the real writers, the disabled-trigger sensitivity control, the RLS negative control, direct-call denial, and the DEFAULT-expression contrast;
+  - **26 suites / 2,383 pgTAP assertions** in total.
+- **Hosted-ACL parity lane:** it applies every migration after the frozen 2026-09-04 seed, C56 included, from Production's explicit function ACL and default shape. Suite `015` passes. NC4 proves `service_role`'s default privileges unmoved. New **NC7** proves a forgotten-ACL function reaches no client role (only `service_role`, by its preserved hosted default) and fails `015` on ACL-H1 alone.
+- **Harness consequence, found and fixed.** The lifecycle's true-concurrency merge-cycle probe created `pg_temp.try_merge` as `postgres` and called it as `authenticated`, relying on inherited PUBLIC EXECUTE. Under C56 that call is refused, which is the intended behaviour, so the probe now grants EXECUTE explicitly.
+- **Full local lifecycle.** `npm run test:db:local` passed: the replay of all 96 migrations, the sensitivity probe and negative control, all 26 suites, every concurrency and cutover probe, the residue check and the complete hosted-ACL parity lane (NC1, NC6a/b, seed verification, NC3, convergence, NC4, NC2, NC7, NC6c).
+- **Application gates.** Lint (0 errors; the 18 pre-existing warnings, none in a touched file), `npm run typecheck` (app, node, extension), Vitest (173 files / 5,662 tests), the web and extension production builds, and the local E2E lane (257 Playwright tests) passed.
+- **Production, read-only, at preparation.** The real file's §0 and §1 ran against Production in `BEGIN TRANSACTION READ ONLY … ROLLBACK`, with no DDL sent. Every precondition passed; the targets resolved to `{33584,53609}`, the hosted `public` entry was recognised, and no transaction ID was assigned.
+
+**Rollback — forward only; none has been performed.** Do not edit C56 after it is applied, and do not `migration repair` its legitimate application. A reversal is a new forward migration that:
+- re-GRANTs the intended EXECUTE on the two functions explicitly;
+- runs `ALTER DEFAULT PRIVILEGES FOR ROLE postgres GRANT EXECUTE ON FUNCTIONS TO PUBLIC`, which deletes the global entry again (verified locally);
+- runs the per-schema GRANT to `anon` and `authenticated` in `public`.
+
+**Privacy.** Privilege posture only. No data category, recipient, retention or processor changes, and no Privacy Policy amendment ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)).
+
+**Not in scope, unchanged.**
+- `service_role` least privilege, including its `public` function default;
+- database `TEMPORARY`;
+- the 24 retained `authenticated` SECURITY DEFINER contracts;
+- C30;
+- `supabase_admin`'s and `supabase_auth_admin`'s default privileges, and `postgres`'s dormant `storage` default entry;
+- the frozen hosted-ACL parity fixtures;
+- historical migration files.
+
+**Re-evaluation triggers:**
+- enabling Supabase Queues (`pgmq`), Database Webhooks, or any extension or feature that `postgres` installs and that creates functions expecting inherited PUBLIC EXECUTE — review its execution surface and grant it explicitly in a migration;
+- Supabase changing its platform function defaults before or after the rollout — for example its 2026-10-30 existing-project rollout, announced for tables and sequences — which the preconditions judge. The owner-only `public` entry its documented opt-in produces is accepted; any other shape stops the file, to be re-derived rather than relaxed;
+- the separate `service_role` least-privilege review;
+- a new function that genuinely needs PUBLIC or `anon` EXECUTE — classify it deliberately in suite `015`'s allowlist and state the grant in its migration;
+- a PostgreSQL change to when trigger EXECUTE is checked — suite `025` and the migration's trigger probe are where it shows;
+- a database whose state differs from the reviewed one, which the migration refuses — stop and re-review; do not edit the migration to fit.
