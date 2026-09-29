@@ -242,14 +242,6 @@ test.describe("Mutation persistence regression", () => {
       await tagRemove.click();
     }
 
-    // Dismiss any toast notifications that might block the Save button
-    const toastCloseButtons = page.locator('[data-radix-toast-announce-exclude] button, [role="status"] button');
-    const toastCount = await toastCloseButtons.count();
-    for (let i = 0; i < toastCount; i++) {
-      await toastCloseButtons.nth(i).click().catch(() => {});
-    }
-    await page.waitForTimeout(500);
-
     // Save
     const saveBtn = page.getByRole("dialog").getByRole("button", { name: /save/i });
     if (await saveBtn.isVisible().catch(() => false)) {

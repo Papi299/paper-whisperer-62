@@ -625,8 +625,8 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
     // Gemini 3.8 Flash has no Minimal. The server resets the level in the same
     // transaction as the model change; the browser only reports it.
     await chooseModel(page, GEMINI_38_LABEL);
-    // `.first()`: Radix renders a toast twice — the visible one and a
-    // screen-reader-only status region — so an unqualified match is ambiguous.
+    // `.first()` keeps this independent of how many copies of the text the
+    // toaster renders (the pre-UI-TOAST-LIFECYCLE Radix toaster rendered two).
     await expect(page.getByText(REASONING_RESET_TOAST).first()).toBeVisible();
     await expect(
       settingsDialog(page).getByRole("combobox", { name: "Reasoning level" }),

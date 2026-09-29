@@ -73,10 +73,10 @@ async function dismissStaleOverlays(page: Page) {
 /**
  * Wait for a success toast with the given exact title to fully leave the DOM.
  *
- * shadcn toasts default to ~5s auto-dismiss; their fade-out overlays the
- * top-right region of the screen and can intercept subsequent clicks on
- * the Presets trigger during rapid-fire mutation sequences. Waiting for
- * the detached state is the most reliable way to avoid those races.
+ * Notifications close after 5s (`TOAST_DURATION_MS.default`) and, while
+ * showing, can intercept subsequent clicks on controls beneath them during
+ * rapid-fire mutation sequences. Waiting for the detached state is the most
+ * reliable way to avoid those races.
  *
  * Tolerates an already-detached toast (e.g. if the auto-dismiss raced us).
  */
