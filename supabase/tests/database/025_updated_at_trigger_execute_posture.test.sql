@@ -23,8 +23,10 @@
 --     disabled leave every updated_at at its backdated value, so the check
 --     above cannot pass vacuously;
 --   * the real writers: `authenticated` under its own RLS claims (papers,
---     profiles, filter_presets, author_identities.preferred_name) and
---     `service_role` (the six server-written tables);
+--     profiles, filter_presets, author_identities.preferred_name). The six
+--     server-written tables are written by postgres-owned SECURITY DEFINER
+--     functions and operator SQL, both covered by the no-EXECUTE role above;
+--     `service_role` wrote them directly until C57 and is now refused;
 --   * an ownership/RLS negative control: another user's UPDATE touches no row
 --     and fires no trigger;
 --   * a direct call of either function is refused with 42501 for every role
@@ -157,7 +159,7 @@ GRANT SELECT, UPDATE ON public.ai_model_catalog, public.author_identities, publi
                         public.user_entitlements, public.user_storage_usage TO zz_025_noexec;
 
 -- 1 + 1 + 1 (coverage, fixtures, premise) + 12 (no-EXECUTE role) + 2 (disabled
--- control, re-enabled) + 4 (authenticated) + 6 (service_role) + 1 (RLS)
+-- control, re-enabled) + 4 (authenticated) + 6 (service_role refused) + 1 (RLS)
 -- + 2 (direct calls) + 3 (contrast) = 33
 SELECT plan(33);
 
@@ -267,17 +269,19 @@ SELECT set_config('request.jwt.claims', '', true);
 SELECT is(pg_temp.state(t.tbl), 'advanced', 'authenticated: its own ' || t.tbl || ' UPDATE fired the trigger')
   FROM unnest(ARRAY['author_identities','filter_presets','papers','profiles']) AS t(tbl) ORDER BY t.tbl;
 
--- service_role, on the six server-written tables.
-SET LOCAL ROLE service_role;
-UPDATE public.internal_user_access SET ai_quota_exempt = true         WHERE user_id = '02500000-0000-0000-0000-000000000001';
-UPDATE public.subscriptions        SET status = 'past_due'            WHERE id = '02500000-0000-0000-0000-0000000000c1';
-UPDATE public.usage_counters       SET used = used + 1                WHERE user_id = '02500000-0000-0000-0000-000000000001';
-UPDATE public.usage_credits        SET quantity_remaining = 4         WHERE id = '02500000-0000-0000-0000-0000000000d1';
-UPDATE public.user_entitlements    SET plan_status = plan_status      WHERE user_id = '02500000-0000-0000-0000-000000000001';
-UPDATE public.user_storage_usage   SET used_bytes = used_bytes + 1    WHERE user_id = '02500000-0000-0000-0000-000000000001';
-RESET ROLE;
-
-SELECT is(pg_temp.state(t.tbl), 'advanced', 'service_role: its ' || t.tbl || ' UPDATE fired the trigger')
+-- service_role wrote the six server-written tables directly until C57
+-- (SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001) removed a privilege no server
+-- path used. Their writers are postgres-owned SECURITY DEFINER functions and
+-- operator SQL, which section 2's no-EXECUTE role already stands in for. Each
+-- service_role UPDATE is now refused at the ACL, so no row changes and no
+-- trigger fires.
+SELECT is(
+  pg_temp.errcode_as('service_role', NULL,
+                     format('UPDATE public.%I SET updated_at = updated_at WHERE %s', t.tbl,
+                            (SELECT pred FROM t025_rows WHERE tbl = t.tbl)))
+  || ' ' || pg_temp.state(t.tbl),
+  '42501 old',
+  'service_role: its ' || t.tbl || ' UPDATE is refused (42501) and fires no trigger (C57)')
   FROM unnest(ARRAY['internal_user_access','subscriptions','usage_counters','usage_credits','user_entitlements','user_storage_usage']) AS t(tbl)
  ORDER BY t.tbl;
 

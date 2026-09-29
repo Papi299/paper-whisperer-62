@@ -1494,6 +1494,72 @@ That needs its own decision against C56.
 
 ---
 
+### 6.18 `20260929084252` (`service_role` least privilege, C57) — migration-only; PREPARED — NOT DEPLOYED
+
+> **Status — PREPARED IN THE REPOSITORY; NOT DEPLOYED.** Production is at ledger **96** (latest `20260928133918`). There, `service_role` still holds all eight privileges on 20 tables, `rwU` on `papers_insert_order_seq`, and `arwdDxtm` / `rwU` / `X` defaults in `public`. Applying this migration needs its own separately authorized rollout. Nothing below has been run against Production.
+
+**What the migration does** (C57). Exactly five privilege statements:
+- `REVOKE ALL … FROM service_role` on the 20 reviewed tables and on `papers_insert_order_seq`;
+- `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES / SEQUENCES / FUNCTIONS FROM service_role`.
+
+`ai_provider_usage_events` (INSERT) and `refund_ai_quota(uuid)` (EXECUTE) are not named, so the two server paths keep exactly the grants they use. No client-role grant, platform schema, role attribute or membership is touched. The fail-closed preconditions, verification and accepted starting shapes (H hosted, R clean replay, P hosted after Supabase's announced default revoke) are described in C57 and in the migration header.
+
+**Production effect — projected, not yet observed.**
+- ledger **96 → 97**, latest `20260929084252`;
+- catalog writes only: 21 relation ACLs lose their `service_role` entry, and `postgres`'s three `public` default entries become owner-only: `S={postgres=rwU/postgres} f={postgres=X/postgres} r={postgres=arwdDxtm/postgres}`;
+- the `ai_provider_usage_events` ACL (`{postgres=arwdDxtm/postgres,service_role=a/postgres}`) and the `refund_ai_quota` ACL (`{postgres=X/postgres,service_role=X/postgres}`) are byte-identical afterwards;
+- no lock on any existing `public` relation, no table rewrite and no application-data write. The in-transaction probes create and drop one table (with its identity sequence) and one function, all named `zz_c57_probe_*`.
+
+The privilege DDL may prompt a routine PostgREST schema-cache reload through the platform's event trigger. Security Advisor counts are not expected to change, because none of its findings names `service_role`.
+
+**Why there is no ordering constraint.** No Edge Function, secret, frontend step or drain is involved:
+- no deployed function uses a revoked grant;
+- `delete-account` uses Storage and Auth Admin, not `public` grants;
+- the E2E fixtures that did use the grants are local-only and already re-pointed.
+
+**Procedure — NOT YET EXECUTED; the reference for the separately authorized rollout.**
+1. Independently approve the exact PR head. Merge it with a normal two-parent merge commit.
+2. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
+3. Fresh read-only preflight against Production, with these expected pre-rollout values:
+
+   ```sql
+   BEGIN TRANSACTION READ ONLY; SET LOCAL search_path TO pg_catalog, pg_temp;
+   SELECT current_setting('server_version') AS pg;                                    -- expect 17.6 unless independently upgraded
+   SELECT count(*) AS ledger, max(version) AS latest,                                 -- expect 96, 20260928133918
+          count(*) FILTER (WHERE version = '20260929084252') AS c57_present          -- expect 0
+     FROM supabase_migrations.schema_migrations;
+   SELECT c.relname, a.privilege_type
+     FROM pg_class c, aclexplode(c.relacl) a
+    WHERE c.relnamespace = 'public'::regnamespace AND a.grantee = 'service_role'::regrole
+    ORDER BY 1, 2;                                                                    -- expect 20 tables x 8, the sequence x 3, telemetry INSERT
+   SELECT p.oid::regprocedure FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace AND has_function_privilege('service_role', p.oid, 'EXECUTE');
+                                                                                      -- expect exactly refund_ai_quota(uuid)
+   SELECT md5(prosrc), proacl::text FROM pg_proc WHERE oid = 'public.refund_ai_quota(uuid)'::regprocedure;
+                                                                                      -- expect 4224750d…, {postgres=X/postgres,service_role=X/postgres}
+   SELECT d.defaclobjtype, d.defaclacl::text FROM pg_default_acl d
+    WHERE d.defaclrole = 'postgres'::regrole AND d.defaclnamespace = 'public'::regnamespace ORDER BY 1;
+                                                                                      -- expect shape H: S rwU, f X, r arwdDxtm for service_role
+   SELECT current_setting('transaction_read_only') AS ro;                             -- expect on
+   ROLLBACK;
+   ```
+
+   Then run the merged file's §0–§1 read-only: the file up to the section-2 banner, with its `BEGIN;` replaced by `BEGIN TRANSACTION READ ONLY;` and ended by `ROLLBACK;`. Every precondition must pass and report starting shape **H**, or **P** if Supabase's announced default revoke has landed by then. A refusal means stop and re-review; never edit the migration to fit.
+4. `supabase migration list --linked`: local and remote aligned through `20260928133918`, exactly one local-only migration (`20260929084252`), no remote-only one. `supabase db push --linked --dry-run` must list exactly that file, with no seeds and no roles.
+5. From a checkout at the merge commit, `npx supabase db push --linked --yes`, migration only. No Edge Function deploy, no secret change, no Auth, Storage or Vercel change.
+6. After, read-only:
+   - ledger 97, latest `20260929084252`, present once;
+   - `service_role`'s stored grants in `public` are exactly `ai_provider_usage_events:INSERT`;
+   - its executable `public` routines are exactly `refund_ai_quota(uuid)` with the unchanged ACL and body;
+   - the three `postgres`/`public` default entries are owner-only, and every other `pg_default_acl` row is unchanged;
+   - the client-role matrix and every other ACL are unchanged — the upgrade fingerprint's `relation_acl` changes only in `service_role` entries, and its `function_acl` digest is unchanged;
+   - no `zz_c57_probe_*` object exists;
+   - all six Edge Function versions and `ezbr_sha256` values are unchanged;
+   - the Security Advisor counts are unchanged.
+7. Runtime acceptance — observation only, no canary required. Once organic traffic produces one, a new `ai_provider_usage_events` row recorded after the apply shows the telemetry INSERT path is intact. The refund path's grant is proven by the catalog check in step 6. Account deletion's Storage grants live in the platform `storage` schema, which the migration's snapshot proves untouched. An authenticated AI canary or an account-deletion canary needs its own authorization.
+
+**Rollback.** Forward only; none has been performed. A new migration re-grants exactly what a named server path needs — never the old broad posture wholesale without review. The pre-change effective posture could be restored with `GRANT ALL` on the 20 tables, `GRANT USAGE, SELECT, UPDATE` on the sequence and the matching `ALTER DEFAULT PRIVILEGES … GRANT` statements. The ACL text may then list entries in a different order.
+
 ## 7. Edge Function deployment
 
 Edge Function code does **not** ship via a GitHub merge or a Vercel build. Each affected function must be deployed explicitly:

@@ -11,8 +11,19 @@
  *
  * Hard safety rules (enforced by the caller and re-asserted here):
  *   - Only ever runs against a validated loopback Supabase API URL.
- *   - Uses the local service-role key for Admin/seed writes and the local
- *     publishable (anon) key for the authenticated read-back verification.
+ *   - Three levels of local access, each used for what it is for:
+ *       · the local secret (service-role) key for Auth administration only —
+ *         creating and deleting the seed users, exactly the kind of thing a
+ *         secret key does in Production;
+ *       · the local database-owner connection (`ownerSql`, supplied by the
+ *         lifecycle: `postgres` over the local container's socket) for fixture
+ *         rows and for verifying them. Since SERVICE-ROLE-LEAST-PRIVILEGE-
+ *         HARDENING-001 (C57) `service_role` holds no privilege on any
+ *         application table, locally as in Production, so this is seeding
+ *         infrastructure, never a server path — and no grant is restored to
+ *         make it convenient;
+ *       · the local publishable (anon) key for the authenticated read-back
+ *         verification.
  *   - Generates a fresh ephemeral password per run; never logs or persists
  *     any password, key, token, or JWT.
  *   - Uses only `.test` email identifiers; never a Production account.
@@ -191,6 +202,34 @@ function makeEphemeralPassword() {
   return `Aa1!${randomBytes(24).toString("base64url")}`;
 }
 
+/**
+ * A SQL string literal for the local fixture connection. The lifecycle runs
+ * every fixture script with `standard_conforming_strings = on`, so doubling
+ * single quotes is the whole escaping rule; a NUL byte cannot be represented
+ * and is refused.
+ */
+export function sqlLiteral(value) {
+  const text = String(value);
+  if (text.includes("\0")) throw new Error("Fixture SQL refused: a value contains a NUL byte.");
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+/** A user id from GoTrue, checked before it is placed in fixture SQL. */
+export function assertUuid(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) {
+    throw new Error("Fixture SQL refused: not a canonical UUID.");
+  }
+  return value;
+}
+
+/** The lifecycle-supplied local database-owner runner, or a refusal. */
+export function assertOwnerSql(ownerSql) {
+  if (typeof ownerSql !== "function") {
+    throw new Error("Fixture refused: no local database-owner connection was supplied.");
+  }
+  return ownerSql;
+}
+
 function buildPapers(userId, count, titlePrefix, { disposableTitle } = {}) {
   const rows = [];
   for (let n = 1; n <= count; n++) {
@@ -221,16 +260,45 @@ function buildPapers(userId, count, titlePrefix, { disposableTitle } = {}) {
   return rows;
 }
 
-async function insertPapersInOrder(admin, rows, log, who) {
+/**
+ * One ordered bulk INSERT of fixture papers, as the local table owner. The rows
+ * are decoded by `jsonb_populate_recordset` — the same decoding PostgREST
+ * applies to a JSON array body — and inserted in array order, so each row
+ * draws its `insert_order` default in turn. Only the columns the rows carry are
+ * named, so every other column keeps its default, as with a PostgREST insert.
+ */
+function insertPapersSql(rows) {
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))].sort();
+  for (const column of columns) {
+    if (!/^[a-z_]+$/.test(column)) throw new Error(`Fixture SQL refused: unexpected column name "${column}".`);
+  }
+  for (const row of rows) assertUuid(row.user_id);
+  return (
+    "WITH inserted AS (\n" +
+    `  INSERT INTO public.papers (${columns.join(", ")})\n` +
+    `  SELECT ${columns.map((c) => `r.${c}`).join(", ")}\n` +
+    `    FROM jsonb_populate_recordset(NULL::public.papers, ${sqlLiteral(JSON.stringify(rows))}::jsonb) WITH ORDINALITY AS r\n` +
+    "   ORDER BY r.ordinality\n" +
+    "  RETURNING 1)\n" +
+    "SELECT count(*) FROM inserted;"
+  );
+}
+
+async function insertPapersInOrder(ownerSql, rows, log, who) {
   // Insert in ascending order in bounded batches so insert_order increases with
   // the row index (the last row inserted becomes the newest / highest-order).
   const BATCH = 40;
   let inserted = 0;
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
-    const { error } = await admin.from("papers").insert(batch);
-    if (error) {
-      throw new Error(`Failed inserting ${who} papers batch @${i}: ${error.message}`);
+    let count;
+    try {
+      count = await ownerSql(insertPapersSql(batch));
+    } catch (err) {
+      throw new Error(`Failed inserting ${who} papers batch @${i}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (count !== String(batch.length)) {
+      throw new Error(`Inserting ${who} papers batch @${i} wrote ${count} rows, expected ${batch.length}.`);
     }
     inserted += batch.length;
   }
@@ -261,32 +329,32 @@ async function createConfirmedUser(admin, email, password) {
   return data.user.id;
 }
 
-async function verifyTriggerRows(admin, userId, email) {
+async function verifyTriggerRows(ownerSql, userId, email) {
   // The signup trigger (handle_new_user) must have created a profile, a Free
   // entitlement, and a lifetime ai_analysis usage counter.
-  const profile = await admin.from("profiles").select("user_id").eq("user_id", userId).maybeSingle();
-  if (profile.error) throw new Error(`profiles read failed for ${email}: ${profile.error.message}`);
-  if (!profile.data) throw new Error(`Trigger did not create a profile for ${email}.`);
-
-  const ent = await admin
-    .from("user_entitlements")
-    .select("plan,plan_status,ai_lifetime_quota")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (ent.error) throw new Error(`entitlement read failed for ${email}: ${ent.error.message}`);
-  if (!ent.data) throw new Error(`Trigger did not create an entitlement for ${email}.`);
-  if (ent.data.plan !== "free") throw new Error(`Expected Free plan for ${email}, got ${ent.data.plan}.`);
-
-  const counter = await admin
-    .from("usage_counters")
-    .select("feature,period_type,used")
-    .eq("user_id", userId)
-    .eq("feature", "ai_analysis")
-    .eq("period_type", "lifetime")
-    .maybeSingle();
-  if (counter.error) throw new Error(`usage_counter read failed for ${email}: ${counter.error.message}`);
-  if (!counter.data) throw new Error(`Trigger did not create a lifetime usage counter for ${email}.`);
-  if (counter.data.used !== 0) throw new Error(`Expected used=0 for ${email}, got ${counter.data.used}.`);
+  const uid = sqlLiteral(assertUuid(userId));
+  let rows;
+  try {
+    rows = JSON.parse(
+      await ownerSql(
+        "SELECT json_build_object(" +
+          `'profiles', (SELECT count(*) FROM public.profiles WHERE user_id = ${uid}), ` +
+          `'entitlements', (SELECT count(*) FROM public.user_entitlements WHERE user_id = ${uid}), ` +
+          `'plan', (SELECT plan FROM public.user_entitlements WHERE user_id = ${uid}), ` +
+          `'counters', (SELECT count(*) FROM public.usage_counters WHERE user_id = ${uid} ` +
+          "AND feature = 'ai_analysis' AND period_type = 'lifetime'), " +
+          `'used', (SELECT used FROM public.usage_counters WHERE user_id = ${uid} ` +
+          "AND feature = 'ai_analysis' AND period_type = 'lifetime'))::text;",
+      ),
+    );
+  } catch (err) {
+    throw new Error(`signup-trigger row read failed for ${email}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (rows.profiles !== 1) throw new Error(`Trigger did not create a profile for ${email}.`);
+  if (rows.entitlements !== 1) throw new Error(`Trigger did not create an entitlement for ${email}.`);
+  if (rows.plan !== "free") throw new Error(`Expected Free plan for ${email}, got ${rows.plan}.`);
+  if (rows.counters !== 1) throw new Error(`Trigger did not create a lifetime usage counter for ${email}.`);
+  if (rows.used !== 0) throw new Error(`Expected used=0 for ${email}, got ${rows.used}.`);
 }
 
 async function verifyAuthenticatedIsolation({ apiUrl, anonKey, email, password, expectedCount, foreignTitlePrefix, expectHighestOrderTitle, log }) {
@@ -467,13 +535,14 @@ async function verifyIdentityIsolation({ apiUrl, anonKey, primary, secondary, lo
  * credentials in memory so the caller can hand them to Playwright without ever
  * writing them to disk. Never logs a password or key.
  *
- * @param {{ apiUrl: string, serviceRoleKey: string, anonKey: string, log?: (m: string) => void }} opts
+ * @param {{ apiUrl: string, serviceRoleKey: string, anonKey: string, ownerSql: (sql: string) => Promise<string>, log?: (m: string) => void }} opts
  */
-export async function seedLocalStack({ apiUrl, serviceRoleKey, anonKey, log = () => {} }) {
+export async function seedLocalStack({ apiUrl, serviceRoleKey, anonKey, ownerSql, log = () => {} }) {
   assertLoopbackApiUrl(apiUrl);
   if (!serviceRoleKey || !anonKey) {
     throw new Error("Seed refused: missing local service-role or anon key.");
   }
+  assertOwnerSql(ownerSql);
 
   const admin = createClient(apiUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -492,8 +561,8 @@ export async function seedLocalStack({ apiUrl, serviceRoleKey, anonKey, log = ()
   log(`  created users: ${PRIMARY_EMAIL}, ${SECONDARY_EMAIL}`);
 
   // 2. Trigger-created rows must exist.
-  await verifyTriggerRows(admin, primaryId, PRIMARY_EMAIL);
-  await verifyTriggerRows(admin, secondaryId, SECONDARY_EMAIL);
+  await verifyTriggerRows(ownerSql, primaryId, PRIMARY_EMAIL);
+  await verifyTriggerRows(ownerSql, secondaryId, SECONDARY_EMAIL);
   log("  verified signup-trigger profile / entitlement / usage rows");
 
   // 3. Deterministic fixture libraries.
@@ -503,9 +572,9 @@ export async function seedLocalStack({ apiUrl, serviceRoleKey, anonKey, log = ()
   const secondaryPapers = buildPapers(secondaryId, SECONDARY_PAPER_COUNT, "E2E Secondary Paper");
   // Identity fixtures go in FIRST so the disposable paper keeps the highest
   // insert_order, which the ordering specs depend on.
-  await insertPapersInOrder(admin, buildIdentityPapers(primaryId), log, "primary identity fixture");
-  await insertPapersInOrder(admin, primaryPapers, log, "primary");
-  await insertPapersInOrder(admin, secondaryPapers, log, "secondary");
+  await insertPapersInOrder(ownerSql, buildIdentityPapers(primaryId), log, "primary identity fixture");
+  await insertPapersInOrder(ownerSql, primaryPapers, log, "primary");
+  await insertPapersInOrder(ownerSql, secondaryPapers, log, "secondary");
 
   // 4. Authenticated read-back proves RLS isolation + read paths (both users).
   await verifyAuthenticatedIsolation({
