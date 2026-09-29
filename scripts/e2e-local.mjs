@@ -804,7 +804,7 @@ async function dbScalar(container, sql) {
  * local container's socket (SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001, C57).
  *
  * `service_role` — the secret key's role — holds no privilege on any
- * application table, locally exactly as in Production, so seeding papers,
+ * application table — locally, and in Production once C57 is applied — so seeding papers,
  * setting an entitlement flag and proving an account's rows are gone are done
  * as `postgres` instead: infrastructure administration, the boundary operator
  * SQL uses in Production. The secret key stays in use only for Auth
@@ -4206,7 +4206,9 @@ async function runHostedAclParityLane() {
  * exactly the privileges it changes — service_role's grant on the insert-order
  * sequence and postgres's `public` default entries:
  *
- *   R  a clean replay: what `db reset` builds and every other test sees;
+ *   R  a clean replay through the C56 baseline (`db reset --version
+ *      20260928133918`): the pre-C57 state a replay passes through (a full
+ *      `db reset` then applies C57 itself);
  *   H  hosted Production, observed read-only on 2026-09-29;
  *   P  hosted Production after Supabase applies its announced revoke of the
  *      TABLES SELECT/INSERT/UPDATE/DELETE and SEQUENCES USAGE/SELECT defaults

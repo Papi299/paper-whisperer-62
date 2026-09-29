@@ -24,7 +24,8 @@
  * flag is written through the lifecycle's local database-owner connection
  * (`ownerSql`: `postgres` over the local container's socket), because since
  * SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001 (C57) `service_role` holds no
- * privilege on any application table, locally as in Production. Preference
+ * privilege on any application table — locally, and in Production once C57
+ * is applied. Preference
  * *verification* uses neither: migration `20260902120000` revokes every
  * privilege on `user_ai_preferences` from `service_role` on purpose, so both
  * the before and after checks sign in as the disposable account with the local

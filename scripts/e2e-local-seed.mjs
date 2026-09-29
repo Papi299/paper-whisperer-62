@@ -19,7 +19,8 @@
  *         lifecycle: `postgres` over the local container's socket) for fixture
  *         rows and for verifying them. Since SERVICE-ROLE-LEAST-PRIVILEGE-
  *         HARDENING-001 (C57) `service_role` holds no privilege on any
- *         application table, locally as in Production, so this is seeding
+ *         application table — locally, and in Production once C57 is
+ *         applied — so this is seeding
  *         infrastructure, never a server path — and no grant is restored to
  *         make it convenient;
  *       · the local publishable (anon) key for the authenticated read-back

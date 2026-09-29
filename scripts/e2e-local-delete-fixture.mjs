@@ -25,7 +25,8 @@
  *   tables through the lifecycle's local database-owner connection (`ownerSql`:
  *   `postgres` over the local container's socket), because since
  *   SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001 (C57) `service_role` holds no
- *   privilege on any application table, locally as in Production.
+ *   privilege on any application table — locally, and in Production once
+ *   C57 is applied.
  *
  * Hard safety rules (mirroring scripts/e2e-local-seed.mjs):
  *   - only ever runs against a validated loopback Supabase API URL, checked
