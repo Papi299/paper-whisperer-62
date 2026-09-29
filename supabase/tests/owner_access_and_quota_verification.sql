@@ -25,8 +25,10 @@
 --   14 missing/inactive safe ·
 --   15 is_exempt reported · 16 usage never negative · 17 no email-based role check ·
 --   18 internal_user_access direct client table/column privileges revoked
---     (PUBLIC/anon/authenticated), service_role CRUD retained, RPC EXECUTE
---     boundary intact — verifies migration 20260726120000.
+--     (PUBLIC/anon/authenticated), no service_role privilege either (C57 —
+--     owner/manager administration is a SQL transaction as postgres), RPC
+--     EXECUTE boundary intact — verifies migrations 20260726120000 and
+--     20260929084252.
 
 BEGIN;
 
@@ -349,8 +351,9 @@ END $$;
 
 -- ── Case 18 (001L): internal_user_access direct client grants revoked ────
 -- Defense in depth on top of FORCE RLS + no policy: the object-permission
--- layer must itself deny PUBLIC/anon/authenticated direct table access, while
--- service_role keeps CRUD and authenticated keeps ONLY the RPC EXECUTE path.
+-- layer must itself deny PUBLIC/anon/authenticated direct table access, and
+-- since C57 service_role's too (BYPASSRLS makes its grants its only control);
+-- authenticated keeps ONLY the RPC EXECUTE path.
 RESET ROLE;
 DO $$
 DECLARE
@@ -379,10 +382,15 @@ BEGIN
     ASSERT v_colpriv = 0, format('case18: %s must have no column privileges on internal_user_access', v_role);
   END LOOP;
 
-  -- Explicit server path: service_role retains CRUD.
+  -- No secret-key path: service_role holds nothing (C57). Administration is
+  -- operator SQL as the table owner.
+  FOREACH v_priv IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN'] LOOP
+    ASSERT has_table_privilege('service_role', 'public.internal_user_access', v_priv) = false,
+      format('case18: service_role must NOT have %s on internal_user_access', v_priv);
+  END LOOP;
   FOREACH v_priv IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE'] LOOP
-    ASSERT has_table_privilege('service_role', 'public.internal_user_access', v_priv) = true,
-      format('case18: service_role must retain %s on internal_user_access', v_priv);
+    ASSERT has_table_privilege('postgres', 'public.internal_user_access', v_priv) = true,
+      format('case18: the owner (postgres) must keep %s, its administration path', v_priv);
   END LOOP;
 
   -- RPC boundary preserved: authenticated keeps EXECUTE; anon and PUBLIC do not.

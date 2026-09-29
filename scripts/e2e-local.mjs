@@ -460,7 +460,11 @@ async function cmdRun(specArgs) {
     const { apiUrl, anonKey, serviceRoleKey } = await readLocalStatus();
     log(`validated local API origin: ${apiUrl}`);
 
-    const creds = await seedLocalStack({ apiUrl, anonKey, serviceRoleKey, log });
+    // Fixture rows are written and verified as the local database owner, never
+    // through the secret key (C57): see openLocalOwnerSql.
+    const ownerSql = await openLocalOwnerSql();
+
+    const creds = await seedLocalStack({ apiUrl, anonKey, serviceRoleKey, ownerSql, log });
 
     // PFA-C04 destructive fixture: a disposable account this run owns outright.
     // Provisioned only when the destructive spec is actually scheduled, so a
@@ -478,7 +482,7 @@ async function cmdRun(specArgs) {
     // only when the model spec is actually scheduled.
     const runsModelSpec = specs.some((spec) => spec.includes("ai-model-settings"));
     modelAccount = runsModelSpec
-      ? await provisionEntitledModelAccount({ apiUrl, anonKey, serviceRoleKey, log })
+      ? await provisionEntitledModelAccount({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
       : null;
 
     // Explicit, in-memory backend contract for the guarded Playwright run.
@@ -510,11 +514,12 @@ async function cmdRun(specArgs) {
     log("Playwright run succeeded against the isolated local backend.");
 
     // Authoritative destructive proof. The spec asserts what the browser can
-    // see; this asserts what only an elevated local client can: the Auth user,
-    // every owned row, and every Storage object in the account's namespace are
-    // gone. A survivor fails the lifecycle even though Playwright was green.
+    // see; this asserts what only the elevated local connections can: the Auth
+    // user, every owned row, and every Storage object in the account's
+    // namespace are gone. A survivor fails the lifecycle even though Playwright
+    // was green.
     if (disposable) {
-      await assertDisposableAccountRemoved({ apiUrl, serviceRoleKey, account: disposable, log });
+      await assertDisposableAccountRemoved({ apiUrl, serviceRoleKey, ownerSql, account: disposable, log });
       disposable = null; // proven gone; nothing left to clean up
       log("account-deletion E2E verified: disposable account fully removed.");
     }
@@ -792,6 +797,41 @@ async function dbScalar(container, sql) {
   const r = await dockerPsql(container, sql);
   if (r.code !== 0) throw new Error(`local query failed: ${r.err.trim() || "(no stderr)"}`);
   return r.out.trim();
+}
+
+/**
+ * The E2E fixtures' database connection: the local database owner, over the
+ * local container's socket (SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001, C57).
+ *
+ * `service_role` — the secret key's role — holds no privilege on any
+ * application table — locally, and in Production once C57 is applied — so seeding papers,
+ * setting an entitlement flag and proving an account's rows are gone are done
+ * as `postgres` instead: infrastructure administration, the boundary operator
+ * SQL uses in Production. The secret key stays in use only for Auth
+ * administration and Storage, which is what Production's delete-account uses
+ * it for.
+ *
+ * It is the same `docker exec … psql` path every db-tests probe uses. There is
+ * no connection URL, host or password: the target is the one container
+ * `resolveLocalDbContainer()` validated, so it cannot reach a remote database,
+ * and the identity check below refuses anything but `postgres` on the local
+ * socket. Every script runs with `standard_conforming_strings` on, which the
+ * fixtures' `sqlLiteral` relies on.
+ */
+async function openLocalOwnerSql() {
+  const container = await resolveLocalDbContainer();
+  const run = async (sql) => {
+    const r = await dockerPsql(container, `SET standard_conforming_strings = on;\n${sql}`);
+    if (r.code !== 0) {
+      throw new Error(`local fixture SQL failed: ${(r.err || "").trim().slice(0, 400) || "(no stderr)"}`);
+    }
+    return r.out.trim();
+  };
+  const identity = await run("SELECT current_user || '|' || coalesce(inet_server_addr()::text, 'local-socket');");
+  if (identity !== "postgres|local-socket") {
+    throw new Error(`local fixture connection is "${identity}", not postgres on the local socket; refusing.`);
+  }
+  return run;
 }
 
 /**
@@ -3724,14 +3764,15 @@ async function runMigrationCutoverProbe(container) {
  *   6. apply the pending migration(s) with the CLI, from the real migration
  *      file — never a hand-copied transcription of its statements, so the
  *      lane cannot drift from the implementation it is testing;
- *   7. prove suite 015 PASSES, and that `service_role` did not move;
+ *   7. prove suite 015 PASSES, and (NC4) that the full chain leaves
+ *      `service_role` at the C57 target from this hosted history too;
  *   8. prove a NEW table that forgets its ACLs is unreachable at runtime AND
  *      fails CI;
  *   8b. prove the same for a NEW function (NC7): since C56
- *      (`20260928133918_harden_default_function_execute.sql`, applied by step 6
- *      from Production's explicit function ACL and default shape) it reaches no
- *      client role — while the platform's preserved hosted service_role
- *      default still applies — and it fails CI;
+ *      (`20260928133918_harden_default_function_execute.sql`) and C57
+ *      (`20260929084252_harden_service_role_least_privilege.sql`), both applied
+ *      by step 6 from Production's explicit function ACL and default shape, it
+ *      reaches no client role and not service_role either, and it fails CI;
  *   9. prove a grantee nobody named, arriving AFTER the migration, fails CI
  *      through the allowlist assertions (NC6c).
  *
@@ -3810,17 +3851,22 @@ const ACL_DUMP_SQL = {
 
 /**
  * Everything `service_role` holds in `public` — relation privileges AND the
- * default privileges it inherits on future objects — as one scalar. This
- * initiative must not move any of it, and the proof is equality against this
- * value captured before the migration, never against a hardcoded target.
+ * default privileges it inherits on future objects — as one scalar.
+ *
+ * NC4 used to prove the reconciliation left all of it alone. `migration up`
+ * applies EVERY pending migration, though, and C57
+ * (`20260929084252_harden_service_role_least_privilege.sql`) now removes it on
+ * purpose, so NC4 proves the other half of the story instead: seeded with
+ * hosted Production's broad grants, the full chain ends with service_role
+ * holding nothing on any relation that existed at the baseline and no default
+ * at all. (The reconciliation's own verification block still proves it did not
+ * touch service_role; C57's lane proves its three starting shapes.)
  */
 //
-// AI-MULTI-PROVIDER-001D: `migration up` applies EVERY pending migration, not
-// only the reconciliation, so a later migration's new relation (with its own
-// deliberately stated service_role grant) appears in the "after" state. NC4 is a
-// claim about relations the reconciliation found, so both snapshots are scoped
-// to the relations that existed at the baseline — a relation a later migration
-// creates is that migration's business and is pinned by suite 015 instead.
+// AI-MULTI-PROVIDER-001D: both snapshots are scoped to the relations that
+// existed at the baseline — a relation a later migration creates, with its own
+// deliberately stated service_role grant (the telemetry INSERT), is that
+// migration's business and is pinned by suites 015, 017 and 026 instead.
 const aclServiceRoleSnapshotSql = (baselineRelations) =>
   "SELECT coalesce((SELECT string_agg(c.relname || ':' || a.privilege_type, ',' ORDER BY c.relname, a.privilege_type) " +
   "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, " +
@@ -3832,30 +3878,36 @@ const aclServiceRoleSnapshotSql = (baselineRelations) =>
   "  FROM pg_default_acl d JOIN pg_namespace nn ON nn.oid = d.defaclnamespace, aclexplode(d.defaclacl) x " +
   " WHERE nn.nspname='public' AND pg_get_userbyid(d.defaclrole) = 'postgres' AND x.grantee = 'service_role'::regrole), '');";
 
-/** Run suite 015 alone; returns {passed, failed: [assertion names]}. */
-async function runAclMatrixSuite() {
-  const res = await runCapture("supabase", ["test", "db", ACL_MATRIX_SUITE, "--local"]);
+/** Run one pgTAP suite alone; returns {passed, failed: [assertion names]}. */
+async function runDbSuite(suitePath) {
+  const res = await runCapture("supabase", ["test", "db", suitePath, "--local"]);
   const combined = `${res.out}\n${res.err}`;
   const failed = [...combined.matchAll(/# *Failed test \d+: "([^"]+)"/g)].map((m) => m[1]);
   return { passed: res.code === 0, failed, combined };
 }
 
+/** Run suite 015 alone; returns {passed, failed: [assertion names]}. */
+async function runAclMatrixSuite() {
+  return runDbSuite(ACL_MATRIX_SUITE);
+}
+
 /**
- * Require suite 015 to FAIL, and to fail for the stated reasons. An
- * expected-failure control that accepts ANY failure would also accept a syntax
- * error, so each caller names the assertion prefixes it is proving are detected.
+ * Require a suite (015 unless named) to FAIL, and to fail for the stated
+ * reasons. An expected-failure control that accepts ANY failure would also
+ * accept a syntax error, so each caller names the assertion prefixes it is
+ * proving are detected.
  */
-function assertAclSuiteFailed(label, result, mustNamePrefixes) {
+function assertAclSuiteFailed(label, result, mustNamePrefixes, suite = "suite 015") {
   if (result.passed) {
     throw new Error(
-      `${label}: suite 015 passed where it must fail. The negative control proves nothing — ` +
-        `the ACL matrix suite cannot detect the state it exists to detect.`,
+      `${label}: ${suite} passed where it must fail. The negative control proves nothing — ` +
+        `the suite cannot detect the state it exists to detect.`,
     );
   }
   for (const prefix of mustNamePrefixes) {
     if (!result.failed.some((name) => name.startsWith(prefix))) {
       throw new Error(
-        `${label}: suite 015 failed, but no "${prefix}" assertion is among the failures ` +
+        `${label}: ${suite} failed, but no "${prefix}" assertion is among the failures ` +
           `(${result.failed.length} failed) — it failed for the wrong reason.`,
       );
     }
@@ -3886,7 +3938,7 @@ async function runAclRefusalControl(container, aclVersion, c) {
   const clean = await aclFullState(container);
   const inject = await dockerPsql(container, c.inject);
   if (inject.code !== 0) {
-    throw new Error(`ACL parity lane (${c.id}): could not inject the unsupported default: ${inject.err.trim() || "(no stderr)"}`);
+    throw new Error(`ACL parity lane (${c.id}): could not inject the unsupported state: ${inject.err.trim() || "(no stderr)"}`);
   }
   try {
     const injected = await aclFullState(container);
@@ -3918,7 +3970,7 @@ async function runAclRefusalControl(container, aclVersion, c) {
   } finally {
     const undo = await dockerPsql(container, c.undo);
     if (undo.code !== 0) {
-      throw new Error(`ACL parity lane (${c.id}): could not remove the injected default: ${undo.err.trim() || "(no stderr)"}`);
+      throw new Error(`ACL parity lane (${c.id}): could not remove the injected state: ${undo.err.trim() || "(no stderr)"}`);
     }
   }
   if ((await aclFullState(container)) !== clean) {
@@ -4020,14 +4072,24 @@ async function runHostedAclParityLane() {
   }
   log("hosted-parity convergence OK: suite 015 passes from hosted Production's starting ACL.");
 
-  const serviceRoleAfter = await dbScalar(container, aclServiceRoleSnapshotSql(baselineRelations));
-  if (serviceRoleAfter !== serviceRoleBefore) {
+  // Before: the seed's broad grants must really be there, or "after" proves nothing.
+  // dbScalar trims, so an empty half leaves only "//"; split and trim both halves.
+  const [relationsBefore = "", defaultsBefore = ""] = serviceRoleBefore.split("//").map((half) => half.trim());
+  if (!relationsBefore.split(",").includes("papers:TRUNCATE") || !defaultsBefore.split(",").includes("r:SELECT")) {
     throw new Error(
-      "ACL parity lane (NC4): service_role privileges changed across the migration. This initiative " +
-        "converges PUBLIC/anon/authenticated only; narrowing service_role is a separate, unauthorized change.",
+      `ACL parity lane (NC4): the hosted seed did not give service_role its broad grants (${serviceRoleBefore.slice(0, 200)}), ` +
+        "so the end state below would prove nothing.",
     );
   }
-  log("NC4 OK: service_role relation and default privileges are byte-identical across the migration.");
+  const serviceRoleAfter = await dbScalar(container, aclServiceRoleSnapshotSql(baselineRelations));
+  const [relationsAfter = "", defaultsAfter = ""] = serviceRoleAfter.split("//").map((half) => half.trim());
+  if (relationsAfter !== "" || defaultsAfter !== "") {
+    throw new Error(
+      `ACL parity lane (NC4): from hosted Production's history the full chain leaves service_role holding ` +
+        `${serviceRoleAfter.slice(0, 300)} — C57 requires nothing on these relations and no default.`,
+    );
+  }
+  log("NC4 OK: from hosted Production's broad starting grants, the full chain leaves service_role nothing on any baseline relation and no default (C57).");
 
   // ── 8. NC2 — a future table whose author forgot its ACLs ──────────────────
   // Two independent guarantees, and the lane requires BOTH: the table is
@@ -4053,14 +4115,13 @@ async function runHostedAclParityLane() {
     if (drop.code !== 0) throw new Error(`ACL parity lane: could not drop the NC2 probe table: ${drop.err.trim()}`);
   }
 
-  // ── 8b. NC7 — a future FUNCTION whose author forgot its ACL (C56) ─────────
+  // ── 8b. NC7 — a future FUNCTION whose author forgot its ACL (C56, C57) ────
   // The same two guarantees for the function surface, from Production's own
   // starting defaults. At runtime the function reaches neither PUBLIC (the
   // built-in default C56 revoked globally) nor anon/authenticated (the schema
-  // entry C56 narrowed); service_role still reaches it, because this is the
-  // hosted history and C56 deliberately preserves the platform's service_role
-  // default — the one legitimate difference from a clean replay. And CI refuses
-  // it: suite 015's SECURITY INVOKER inventory (ACL-H1) no longer matches.
+  // entry C56 narrowed) nor service_role (whose hosted default C57 removed).
+  // And CI refuses it: suite 015's SECURITY INVOKER inventory (ACL-H1) no longer
+  // matches.
   const beforeNc7 = await aclFullState(container);
   const create7 = await dockerPsql(container,
     `CREATE FUNCTION public.${ACL_NC7_FUNCTION}() RETURNS integer LANGUAGE sql AS 'SELECT 1';`);
@@ -4072,10 +4133,10 @@ async function runHostedAclParityLane() {
         `WHERE p.oid = 'public.${ACL_NC7_FUNCTION}()'::regprocedure AND a.grantee = 0 ` +
         "UNION ALL SELECT r FROM unnest(ARRAY['anon','authenticated','service_role']) r " +
         `WHERE has_function_privilege(r, 'public.${ACL_NC7_FUNCTION}()'::regprocedure, 'EXECUTE')) s;`);
-    if (reach !== "service_role") {
+    if (reach !== "<nobody>") {
       throw new Error(
         `ACL parity lane (NC7): a new function created after the hardening reaches [${reach}]; ` +
-          "expected service_role alone (no PUBLIC, anon or authenticated; the hosted service_role default preserved).",
+          "expected nobody (no PUBLIC, anon or authenticated since C56, no service_role since C57).",
       );
     }
     const flagged7 = await runAclMatrixSuite();
@@ -4087,7 +4148,7 @@ async function runHostedAclParityLane() {
           "reachable by a client role or disturbed something else, so the control proves less than it claims.",
       );
     }
-    log("NC7 OK: an unclassified new function is unreachable by PUBLIC, anon and authenticated (service_role keeps its preserved hosted default) AND fails the suite.");
+    log("NC7 OK: an unclassified new function is unreachable by PUBLIC, anon, authenticated and service_role AND fails the suite.");
   } finally {
     const drop7 = await dockerPsql(container, `DROP FUNCTION IF EXISTS public.${ACL_NC7_FUNCTION}();`);
     if (drop7.code !== 0) throw new Error(`ACL parity lane: could not drop the NC7 probe function: ${drop7.err.trim()}`);
@@ -4136,6 +4197,259 @@ async function runHostedAclParityLane() {
     throw new Error("ACL parity lane: suite 015 does not pass again after the NC2, NC7 and NC6c probes were removed.");
   }
   log("hosted-Production ACL parity lane OK.");
+}
+
+// ── SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001 (C57): starting-shape lane ────
+/**
+ * WHY THIS LANE EXISTS. `20260929084252_harden_service_role_least_privilege.sql`
+ * meets different starting states in different places, and they differ in
+ * exactly the privileges it changes — service_role's grant on the insert-order
+ * sequence and postgres's `public` default entries:
+ *
+ *   R  a clean replay through the C56 baseline (`db reset --version
+ *      20260928133918`): the pre-C57 state a replay passes through (a full
+ *      `db reset` then applies C57 itself);
+ *   H  hosted Production, observed read-only on 2026-09-29;
+ *   P  hosted Production after Supabase applies its announced revoke of the
+ *      TABLES SELECT/INSERT/UPDATE/DELETE and SEQUENCES USAGE/SELECT defaults
+ *      to existing projects (supabase/supabase discussion #45329), reproduced
+ *      by running those two statements verbatim on top of H.
+ *
+ * The migration keys its behaviour to that privilege state, never to a date,
+ * and every shape must end in the same place. For each shape, from its own
+ * reset to the C56 baseline:
+ *
+ *   1. seed the shape and prove the seed took — H line for line against a
+ *      committed read-only reference, every shape by its exact defaults and
+ *      sequence grant;
+ *   2. prove suite 026 FAILS there (a suite that cannot fail proves nothing);
+ *   3. on R, prove the migration REFUSES six unreviewed states before changing
+ *      anything, each leaving the lane byte-identical (runAclRefusalControl);
+ *   4. apply the real migration file through the CLI;
+ *   5. prove the target defaults and sequence grant, and that suites 026 and
+ *      015 PASS;
+ *   6. prove the canonical privilege state — every relation, column, routine
+ *      and default-privilege grant as sorted aclexplode lines, so ACL entry
+ *      order never matters — is identical to every other shape's.
+ *
+ * It runs in the db-tests lifecycle only, after the hosted-parity lane, and
+ * adds three resets.
+ */
+const SVC_MIGRATION = "supabase/migrations/20260929084252_harden_service_role_least_privilege.sql";
+const SVC_BASELINE_VERSION = "20260928133918";
+const SVC_HOSTED_SEED = "scripts/acl-parity/hosted-service-role-20260928133918.sql";
+const SVC_HOSTED_REFERENCE = "scripts/acl-parity/hosted-service-role-20260928133918.reference.json";
+const SVC_SUITE = "supabase/tests/database/026_service_role_least_privilege.test.sql";
+
+/** Supabase's statements for existing projects (discussion #45329), verbatim. */
+const SVC_PLATFORM_REVOKE_SQL =
+  "alter default privileges for role postgres in schema public\n" +
+  "  revoke select, insert, update, delete on tables from anon, authenticated, service_role;\n" +
+  "alter default privileges for role postgres in schema public\n" +
+  "  revoke usage, select on sequences from anon, authenticated, service_role;\n";
+
+/** The shape-defining state, rendered exactly as the migration's section 1e renders it. */
+const SVC_SHAPE_SQL =
+  "SELECT coalesce((SELECT string_agg(d.defaclobjtype::text || '=' || d.defaclacl::text, ' ' ORDER BY d.defaclobjtype::text COLLATE \"C\") " +
+  "FROM pg_default_acl d WHERE d.defaclrole = 'postgres'::regrole AND d.defaclnamespace = 'public'::regnamespace), '<none>') " +
+  "|| ' seq:service_role=' || coalesce((SELECT string_agg(a.privilege_type, ',' ORDER BY a.privilege_type) " +
+  "FROM pg_class c, aclexplode(c.relacl) a WHERE c.oid = 'public.papers_insert_order_seq'::regclass " +
+  "AND a.grantee = 'service_role'::regrole), '');";
+
+const SVC_SHAPES = [
+  {
+    id: "R", what: "a clean replay", hostedSeed: false, platformRevoke: false,
+    shape: "S={postgres=rwU/postgres,service_role=w/postgres} f={postgres=X/postgres} " +
+      "r={postgres=arwdDxtm/postgres,service_role=Dxtm/postgres} seq:service_role=UPDATE,USAGE",
+  },
+  {
+    id: "H", what: "hosted Production", hostedSeed: true, platformRevoke: false,
+    shape: "S={postgres=rwU/postgres,service_role=rwU/postgres} f={postgres=X/postgres,service_role=X/postgres} " +
+      "r={postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres} seq:service_role=SELECT,UPDATE,USAGE",
+  },
+  {
+    id: "P", what: "hosted Production after Supabase's announced default-privilege revoke", hostedSeed: true, platformRevoke: true,
+    shape: "S={postgres=rwU/postgres,service_role=w/postgres} f={postgres=X/postgres,service_role=X/postgres} " +
+      "r={postgres=arwdDxtm/postgres,service_role=Dxtm/postgres} seq:service_role=SELECT,UPDATE,USAGE",
+  },
+];
+
+/** Where every shape must end. */
+const SVC_TARGET_SHAPE = "S={postgres=rwU/postgres} f={postgres=X/postgres} r={postgres=arwdDxtm/postgres} seq:service_role=";
+
+/**
+ * States the migration must REFUSE before it changes anything, each one
+ * statement away from the clean-replay shape. Same contract as ACL_NC6_CASES:
+ * each `refusal` pattern matches the raised error WITH its substituted values,
+ * because the CLI echoes the failing statement's source — RAISE texts with `%`
+ * placeholders included — after the error.
+ */
+const SVC_REFUSAL_CASES = [
+  {
+    id: "SR-NC2",
+    what: "an unreviewed extra service_role grant on a table (ai_model_catalog SELECT)",
+    inject: "GRANT SELECT ON TABLE public.ai_model_catalog TO service_role;",
+    undo: "REVOKE SELECT ON TABLE public.ai_model_catalog FROM service_role;",
+    refusal: /ai_model_catalog\|r\|owner=postgres\|authenticated=SELECT\|anon=\|PUBLIC=\|service_role=SELECT/,
+  },
+  {
+    id: "SR-NC3",
+    what: "a service_role column grant (profiles.email SELECT)",
+    inject: "GRANT SELECT (email) ON TABLE public.profiles TO service_role;",
+    undo: "REVOKE SELECT (email) ON TABLE public.profiles FROM service_role;",
+    refusal: /the column-level grants in public are not the one reviewed grant: author_identities\.preferred_name:authenticated:UPDATE, profiles\.email:service_role:SELECT/,
+  },
+  {
+    id: "SR-NC4",
+    what: "a second routine executable by service_role",
+    inject: "GRANT EXECUTE ON FUNCTION public.get_current_user_access() TO service_role;",
+    undo: "REVOKE EXECUTE ON FUNCTION public.get_current_user_access() FROM service_role;",
+    refusal: /service_role can execute public\.get_current_user_access\(\), public\.refund_ai_quota\(uuid\) in public/,
+  },
+  {
+    id: "SR-NC5",
+    what: "an unreviewed TABLES default for service_role (SELECT added to the replay entry)",
+    inject: "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO service_role;",
+    undo: "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT ON TABLES FROM service_role;",
+    refusal: /r=\{postgres=arwdDxtm\/postgres,service_role=rDxtm\/postgres\} seq:service_role=UPDATE,USAGE\) match none of the reviewed starting shapes/,
+  },
+  {
+    id: "SR-NC6",
+    what: "a mixed shape (the hosted sequence grant with the replay defaults)",
+    inject: "GRANT SELECT ON SEQUENCE public.papers_insert_order_seq TO service_role;",
+    undo: "REVOKE SELECT ON SEQUENCE public.papers_insert_order_seq FROM service_role;",
+    refusal: /r=\{postgres=arwdDxtm\/postgres,service_role=Dxtm\/postgres\} seq:service_role=SELECT,UPDATE,USAGE\) match none of the reviewed starting shapes/,
+  },
+  {
+    id: "SR-NC7",
+    what: "a client-matrix drift (authenticated SELECT on internal_user_access)",
+    inject: "GRANT SELECT ON TABLE public.internal_user_access TO authenticated;",
+    undo: "REVOKE SELECT ON TABLE public.internal_user_access FROM authenticated;",
+    refusal: /internal_user_access\|r\|owner=postgres\|authenticated=SELECT\|anon=\|PUBLIC=\|service_role=DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE/,
+  },
+];
+
+/** Every grant in public and every default-privilege entry, as order-free canonical lines. */
+const SVC_CANONICAL_STATE_SQL = [
+  "SELECT 'ledger|' || count(*) || '|' || max(version) FROM supabase_migrations.schema_migrations;",
+  "SELECT 'rel|' || c.relname || '|' || CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END " +
+    "|| '|' || a.privilege_type || '|' || a.is_grantable::text || '|' || pg_get_userbyid(a.grantor) " +
+    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, " +
+    "aclexplode(coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's'::\"char\" ELSE 'r'::\"char\" END, c.relowner))) a " +
+    "WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f','S');",
+  "SELECT 'col|' || c.relname || '.' || att.attname || '|' || CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END " +
+    "|| '|' || a.privilege_type FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid " +
+    "JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(att.attacl) a " +
+    "WHERE n.nspname = 'public' AND att.attacl IS NOT NULL;",
+  "SELECT 'fn|' || p.oid::regprocedure::text || '|' || CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END " +
+    "|| '|' || a.privilege_type || '|' || a.is_grantable::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace, " +
+    "aclexplode(coalesce(p.proacl, acldefault('f'::\"char\", p.proowner))) a WHERE n.nspname = 'public';",
+  "SELECT 'def|' || pg_get_userbyid(d.defaclrole) || '|' || coalesce(n.nspname, '<global>') || '|' || d.defaclobjtype::text " +
+    "|| '|' || CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || '|' || a.privilege_type " +
+    "|| '|' || a.is_grantable::text FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a;",
+].join("\n");
+
+async function runServiceRoleParityLane() {
+  log("running service_role starting-shape lane (SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001)…");
+
+  for (const rel of [SVC_MIGRATION, SVC_HOSTED_SEED, SVC_HOSTED_REFERENCE, SVC_SUITE, ACL_MATRIX_SUITE]) {
+    if (!existsSync(resolve(ROOT, rel))) throw new Error(`service_role lane: missing ${rel}.`);
+  }
+  const svcVersion = SVC_MIGRATION.split("/").pop().split("_")[0];
+  if (!(svcVersion > SVC_BASELINE_VERSION)) {
+    throw new Error(`service_role lane: ${svcVersion} is not after the baseline ${SVC_BASELINE_VERSION}.`);
+  }
+  const reference = JSON.parse(readFileSync(resolve(ROOT, SVC_HOSTED_REFERENCE), "utf-8"));
+
+  let converged = null;
+  for (const shape of SVC_SHAPES) {
+    const tag = `service_role lane (${shape.id})`;
+
+    // ── 1. Back to the C56 baseline, then seed the shape and prove it took ──
+    const resetCode = await runInherit(
+      "supabase",
+      ["db", "reset", "--local", "--no-seed", "--version", SVC_BASELINE_VERSION],
+    );
+    if (resetCode !== 0) throw new Error(`${tag}: \`supabase db reset --version\` failed.`);
+    const container = await resolveLocalDbContainer();
+    const atBaseline = await dbScalar(container, "SELECT max(version) FROM supabase_migrations.schema_migrations;");
+    if (atBaseline !== SVC_BASELINE_VERSION) {
+      throw new Error(`${tag}: expected the ledger at ${SVC_BASELINE_VERSION}, found ${atBaseline}.`);
+    }
+    if (shape.hostedSeed) {
+      const seed = await dockerPsql(container, readFileSync(resolve(ROOT, SVC_HOSTED_SEED), "utf-8"));
+      if (seed.code !== 0) throw new Error(`${tag}: the hosted-Production seed failed: ${seed.err.trim() || "(no stderr)"}`);
+      for (const key of ["relacl", "proacl", "default_acl"]) {
+        const actual = await aclDump(container, ACL_DUMP_SQL[key]);
+        const expected = [...reference[key]].sort();
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          const missing = expected.filter((l) => !actual.includes(l)).slice(0, 3);
+          const extra = actual.filter((l) => !expected.includes(l)).slice(0, 3);
+          throw new Error(
+            `${tag}: after seeding, ${key} does not match hosted Production (${actual.length} rows vs ${expected.length}). ` +
+              `Missing: ${missing.join(" ; ") || "none"}. Unexpected: ${extra.join(" ; ") || "none"}.`,
+          );
+        }
+      }
+      log(`${tag}: hosted-Production seed verified against ${SVC_HOSTED_REFERENCE} (relations, routines, default privileges).`);
+    }
+    if (shape.platformRevoke) {
+      const revoke = await dockerPsql(container, SVC_PLATFORM_REVOKE_SQL);
+      if (revoke.code !== 0) throw new Error(`${tag}: Supabase's documented revoke failed: ${revoke.err.trim() || "(no stderr)"}`);
+    }
+    const found = await dbScalar(container, SVC_SHAPE_SQL);
+    if (found !== shape.shape) {
+      throw new Error(`${tag}: the starting state is not ${shape.what}:\n  found:    ${found}\n  expected: ${shape.shape}`);
+    }
+    log(`${tag}: starting shape reproduced — ${shape.what}.`);
+
+    // ── 2. Suite 026 must fail here ─────────────────────────────────────────
+    // Trailing spaces: "A1 " must not be satisfied by A10-A12 failing.
+    assertAclSuiteFailed(`${tag} SR-NC1 (pre-migration)`, await runDbSuite(SVC_SUITE),
+      ["A1 ", "A2 ", "A7 ", "B1 ", "C1 "], "suite 026");
+    log(`${tag} SR-NC1 OK: suite 026 fails before the migration.`);
+
+    // ── 3. Refusals, on the clean-replay shape ──────────────────────────────
+    if (shape.id === "R") {
+      for (const c of SVC_REFUSAL_CASES) await runAclRefusalControl(container, svcVersion, c);
+    }
+
+    // ── 4. Apply the real migration file, through the real CLI path ─────────
+    const upCode = await runInherit("supabase", ["migration", "up", "--local"]);
+    if (upCode !== 0) throw new Error(`${tag}: \`supabase migration up --local\` failed.`);
+    const applied = await dbScalar(container,
+      `SELECT count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '${svcVersion}';`);
+    if (applied !== "1") throw new Error(`${tag}: migration ${svcVersion} is not in the local ledger after \`migration up\`.`);
+
+    // ── 5. The target, and both suites ──────────────────────────────────────
+    const after = await dbScalar(container, SVC_SHAPE_SQL);
+    if (after !== SVC_TARGET_SHAPE) {
+      throw new Error(`${tag}: after the migration the defaults and sequence grant are ${after}, expected ${SVC_TARGET_SHAPE}.`);
+    }
+    for (const suite of [SVC_SUITE, ACL_MATRIX_SUITE]) {
+      const result = await runDbSuite(suite);
+      if (!result.passed) {
+        throw new Error(`${tag}: ${suite} fails after the migration (${result.failed.slice(0, 6).join("; ") || "no assertion named"}).`);
+      }
+    }
+
+    // ── 6. Every shape converges on one privilege state ──────────────────────
+    const state = (await aclDump(container, SVC_CANONICAL_STATE_SQL)).join("\n");
+    if (converged === null) {
+      converged = { from: shape.id, state };
+    } else if (state !== converged.state) {
+      const a = converged.state.split("\n");
+      const b = state.split("\n");
+      const onlyThere = a.filter((l) => !b.includes(l)).slice(0, 4);
+      const onlyHere = b.filter((l) => !a.includes(l)).slice(0, 4);
+      throw new Error(
+        `${tag}: the end state differs from shape ${converged.from}'s. ` +
+          `Only in ${converged.from}: ${onlyThere.join(" ; ") || "none"}. Only in ${shape.id}: ${onlyHere.join(" ; ") || "none"}.`,
+      );
+    }
+    log(`${tag} OK: converged${converged.from === shape.id ? "" : ` on shape ${converged.from}'s exact privilege state`}; suites 026 and 015 pass.`);
+  }
+  log("service_role starting-shape lane OK: R, H and P converge on one privilege state.");
 }
 
 /**
@@ -4333,6 +4647,11 @@ async function cmdDbTests() {
     // fully-migrated schema, and its own residue proof must not see this lane's
     // deliberate reset.
     await runHostedAclParityLane();
+
+    // SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001 (C57). Resets to its own
+    // baseline three times, so it runs after everything that needs the
+    // fully-migrated schema.
+    await runServiceRoleParityLane();
 
     log("all local database-security tests passed.");
   } catch (err) {

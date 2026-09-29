@@ -4378,3 +4378,55 @@ Edge Function source only. There is no migration, frontend or `_shared` change. 
     - No migration was run, and no Auth, Storage or Vercel setting changed.
   - **Acceptance.** An unauthenticated boot probe got the function's own 401. The authenticated Crossref-fallback call was **skipped**, because no safe existing acceptance credential was available in the session and none was created. The deployed-source read-back is the identity proof.
   - No rollback has been performed.
+
+## 2026-09-29 — SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001: `service_role` keeps only the telemetry INSERT and the refund EXECUTE (`20260929084252`) — **PREPARED / NOT DEPLOYED**
+
+Decision **C57**. It implements the read-only audit `SERVICE-ROLE-LEAST-PRIVILEGE-AUDIT-001` (verdict **HARDENING_RECOMMENDED**). **Not applied:** Production stays at ledger 96 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.18). This removes historical, unused authority; it is not an incident response.
+
+| | 20 tables | `papers_insert_order_seq` | `postgres`/`public` defaults (TABLES / SEQUENCES / FUNCTIONS) | `ai_provider_usage_events` | `refund_ai_quota(uuid)` |
+|---|---|---|---|---|---|
+| **Production now** (read-only, 2026-09-29; ledger **96**) | `arwdDxtm` | `rwU` | `arwdDxtm` / `rwU` / `X` | INSERT | EXECUTE |
+| **Clean replay before** (through `20260928133918`) | `arwdDxtm` | `wU` | `Dxtm` / `w` / none | INSERT | EXECUTE |
+| **After, every starting shape** | nothing | nothing | nothing / nothing / nothing | INSERT | EXECUTE |
+
+- **What stays, and why.**
+  - Telemetry INSERT is used by `analyze-paper` and `suggest-paper-organization` (C42).
+  - Refund EXECUTE is used by the same two functions (C47).
+  - `public` USAGE is the platform's.
+  - `delete-account` needs no `public` grant: Storage runs on the platform `storage` schema, Auth Admin deletes as `supabase_auth_admin`, and the cascade runs as each table's owner with SECURITY DEFINER AFTER triggers.
+  - Owner/manager administration is SQL as `postgres` (§13.3).
+  - The future billing writer (C27) will get its own explicit grant.
+- **Migration `20260929084252_harden_service_role_least_privilege`.** Created with `supabase migration new`. It is explicitly transactional and runs as `postgres` under transaction-local `search_path = pg_catalog, pg_temp` and `lock_timeout = 5s`.
+  - **§0** context: the role, the settings, `track_counts`, the role in force and the write baseline.
+  - **§1** preconditions:
+    - the exact 30-relation inventory and owner;
+    - the whole anon/authenticated/PUBLIC/`service_role` matrix, with no other grantee;
+    - grantor `postgres` and no grant option;
+    - the single column grant;
+    - 43 functions, with `service_role` executing exactly the pinned refund;
+    - no PUBLIC- or anon-executable function;
+    - the starting shape H, R or P, judged whole;
+    - C56's global entry;
+    - no role membership, and USAGE without CREATE;
+    - an 18-category snapshot.
+  - **§2** the five privilege statements.
+  - **§3** verification:
+    - stored and effective target;
+    - no column reach;
+    - exactly the refund;
+    - owner-only `public` default entries;
+    - new-object probes refused as `service_role`;
+    - the snapshot unchanged;
+    - no `public` lock and no row written.
+- **Tests.**
+  - New `026` (42).
+  - `015` stays 119, now pinning the target.
+  - `025` stays 33, with `service_role`'s UPDATEs now refused.
+  - Framework-free case 18: `service_role` holds nothing on `internal_user_access`.
+  - `003`, `011`, `012`, `017`, `020`–`023` re-reviewed and unchanged: they already pin the refund and telemetry posture, or only assert what `service_role` lacks.
+- **Lanes.**
+  - The hosted-parity lane's NC4 now proves that the full chain, from the 2026-09-04 hosted history, leaves `service_role` nothing. NC7 proves a forgotten-ACL function reaches nobody.
+  - A new starting-shape lane resets to `20260928133918` three times (R, H against a new frozen reference, and P as H plus Supabase's two statements verbatim). In each it proves `026` fails before and `026`/`015` pass after, runs six refusal controls on R, and requires one canonical privilege state across the three.
+- **Fixtures.** The E2E seed, entitled-model and account-deletion fixtures write and verify rows as the local database owner, through the lifecycle's existing `docker exec … psql` path with an identity check. The local secret key is kept for Auth administration and Storage only.
+- **Historical migrations are untouched.**
+- **Rollout — not performed.** See [deployment.md](deployment.md) §6.18.

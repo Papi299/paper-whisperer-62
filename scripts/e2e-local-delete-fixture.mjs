@@ -10,12 +10,23 @@
  * actually gone.
  *
  * Why the verification lives here and not in the spec:
- *   proving the Auth user no longer exists requires an elevated local key. It
- *   already exists in this lifecycle process (the seed uses it); handing it to
- *   the Playwright process as well would widen its exposure to the spawned Vite
- *   dev server and to every spec, for no gain. The browser-observable half of
- *   the contract (redirect, cleared session, credentials rejected) is asserted
- *   in the spec, where it belongs; the privileged half is asserted here.
+ *   proving the Auth user no longer exists requires an elevated local key, and
+ *   proving its rows are gone requires reading every user's tables. Both
+ *   already exist in this lifecycle process (the seed uses them); handing them
+ *   to the Playwright process as well would widen their exposure to the
+ *   spawned Vite dev server and to every spec, for no gain. The
+ *   browser-observable half of the contract (redirect, cleared session,
+ *   credentials rejected) is asserted in the spec, where it belongs; the
+ *   privileged half is asserted here.
+ *
+ * Levels of access: the local secret (service-role) key does Auth
+ *   administration and Storage listing/removal — exactly what Production's
+ *   delete-account uses it for. The row-level proof reads the application
+ *   tables through the lifecycle's local database-owner connection (`ownerSql`:
+ *   `postgres` over the local container's socket), because since
+ *   SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001 (C57) `service_role` holds no
+ *   privilege on any application table — locally, and in Production once
+ *   C57 is applied.
  *
  * Hard safety rules (mirroring scripts/e2e-local-seed.mjs):
  *   - only ever runs against a validated loopback Supabase API URL, checked
@@ -30,7 +41,13 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { PRIMARY_EMAIL, SECONDARY_EMAIL } from "./e2e-local-seed.mjs";
+import {
+  PRIMARY_EMAIL,
+  SECONDARY_EMAIL,
+  assertOwnerSql,
+  assertUuid,
+  sqlLiteral,
+} from "./e2e-local-seed.mjs";
 
 /** Production project ref — must never appear in a destructive-fixture target. */
 export const PRODUCTION_SUPABASE_REF = "lioxtgiputfniqbktcsz";
@@ -216,11 +233,13 @@ export async function provisionDisposableAccount({ apiUrl, anonKey, serviceRoleK
 export async function assertDisposableAccountRemoved({
   apiUrl,
   serviceRoleKey,
+  ownerSql,
   account,
   log = () => {},
 }) {
   assertLoopbackApiUrl(apiUrl);
   assertDisposableEmail(account.email);
+  assertOwnerSql(ownerSql);
 
   const admin = createClient(apiUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -239,14 +258,22 @@ export async function assertDisposableAccountRemoved({
     "usage_counters",
     "user_storage_usage",
   ];
+  const uid = sqlLiteral(assertUuid(account.userId));
+  let counts;
+  try {
+    counts = JSON.parse(
+      await ownerSql(
+        "SELECT json_build_object(" +
+          tables.map((table) => `'${table}', (SELECT count(*) FROM public.${table} WHERE user_id = ${uid})`).join(", ") +
+          ")::text;",
+      ),
+    );
+  } catch (err) {
+    throw new Error(`account-deletion E2E: could not read the owned rows: ${err instanceof Error ? err.message : String(err)}`);
+  }
   for (const table of tables) {
-    const { count, error } = await admin
-      .from(table)
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", account.userId);
-    if (error) throw new Error(`account-deletion E2E: could not read ${table}: ${error.message}`);
-    if (count !== 0) {
-      throw new Error(`account-deletion E2E: ${count} ${table} row(s) survived the deletion.`);
+    if (counts[table] !== 0) {
+      throw new Error(`account-deletion E2E: ${counts[table]} ${table} row(s) survived the deletion.`);
     }
   }
 

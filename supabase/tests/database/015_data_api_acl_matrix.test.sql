@@ -30,15 +30,17 @@
 --     entries (ACL-B6, ACL-G6, and the real-object probes in G4/G5b): a grantee
 --     nobody named is exactly what a list of named roles cannot see.
 --
--- What this suite deliberately does NOT assert, because this initiative
--- deliberately did not change it:
+-- What this suite asserts about `service_role`, and what it leaves to others:
 --
---   * `service_role` is pinned to its CURRENT posture — the one the migration
---     preserved — and never to a narrower "target". Its sequence privileges
---     differ legitimately between hosted Production (`rwU`) and a clean replay
---     (`wU`), so only the lane-invariant part is asserted here; the exact
---     pre/post equality is proven by the migration's own verification block and
---     by the hosted-parity lane in `scripts/e2e-local.mjs`.
+--   * `service_role` is pinned to the posture SERVICE-ROLE-LEAST-PRIVILEGE-
+--     HARDENING-001 (C57, `20260929084252_harden_service_role_least_privilege.sql`)
+--     established: INSERT on `ai_provider_usage_events` and nothing else on any
+--     relation or sequence (F1, E3), and no default privilege on future tables,
+--     sequences or functions (G3, K9, and the owner-only allowlists G4, G5b,
+--     G6, K7, K10). Until C57 this suite pinned the broad posture the data-API
+--     reconciliation had deliberately preserved. Suite 026 owns the whole
+--     service_role surface, including real attempts and the two server paths
+--     that still need it.
 --   * function EXECUTE privileges are not changed by THAT initiative. Section H
 --     is an INVENTORY guard: a new SECURITY INVOKER routine must be classified
 --     rather than inherit whatever the defaults grant. Section K owns the
@@ -106,8 +108,8 @@ $fn$;
 
 -- ── The intended matrix, as data ────────────────────────────────────────────
 -- `auth_privs` / `svc_privs` are alphabetically ordered comma lists, matching
--- what the helpers above produce. `svc_privs` is a description of what
--- `service_role` holds TODAY, preserved by the migration — not a target.
+-- what the helpers above produce. `svc_privs` is the target C57 established:
+-- service_role holds nothing on any table but the telemetry INSERT.
 CREATE TEMP TABLE acl_expected (relname text PRIMARY KEY, auth_privs text NOT NULL, svc_privs text NOT NULL);
 INSERT INTO acl_expected (relname, auth_privs, svc_privs) VALUES
   ('ai_model_catalog',            'SELECT',                            ''),
@@ -121,30 +123,30 @@ INSERT INTO acl_expected (relname, auth_privs, svc_privs) VALUES
   ('author_identity_aliases',     'DELETE,INSERT,SELECT',              ''),
   ('author_identity_links',       'SELECT',                            ''),
   ('author_identity_merges',      'SELECT',                            ''),
-  ('filter_presets',              'DELETE,INSERT,SELECT,UPDATE',       'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('internal_user_access',        '',                                  'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('keyword_exclusion_pool',      'DELETE,INSERT,SELECT',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('keyword_pool',                'DELETE,INSERT,SELECT',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('paper_attachments',           'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
+  ('filter_presets',              'DELETE,INSERT,SELECT,UPDATE',       ''),
+  ('internal_user_access',        '',                                  ''),
+  ('keyword_exclusion_pool',      'DELETE,INSERT,SELECT',              ''),
+  ('keyword_pool',                'DELETE,INSERT,SELECT',              ''),
+  ('paper_attachments',           'SELECT',                            ''),
   -- DB-JUNCTION-DML-GRANT-HARDENING-001 (C48). Read-only to the browser: every
   -- assignment write goes through the SECURITY DEFINER assignment RPCs. The
   -- entity tables `projects` / `tags` below are deliberately NOT narrowed.
-  ('paper_projects',              'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('paper_tags',                  'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('papers',                      'INSERT,SELECT,UPDATE',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('profiles',                    'INSERT,SELECT,UPDATE',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('projects',                    'DELETE,INSERT,SELECT,UPDATE',       'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('study_type_exclusion_pool',   'DELETE,INSERT,SELECT',              'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('study_type_pool',             'DELETE,INSERT,SELECT,UPDATE',       'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('subscription_events',         '',                                  'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('subscriptions',               '',                                  'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('synonym_pool',                'DELETE,INSERT,SELECT,UPDATE',       'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('tags',                        'DELETE,INSERT,SELECT,UPDATE',       'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('usage_counters',              '',                                  'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('usage_credits',               'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
+  ('paper_projects',              'SELECT',                            ''),
+  ('paper_tags',                  'SELECT',                            ''),
+  ('papers',                      'INSERT,SELECT,UPDATE',              ''),
+  ('profiles',                    'INSERT,SELECT,UPDATE',              ''),
+  ('projects',                    'DELETE,INSERT,SELECT,UPDATE',       ''),
+  ('study_type_exclusion_pool',   'DELETE,INSERT,SELECT',              ''),
+  ('study_type_pool',             'DELETE,INSERT,SELECT,UPDATE',       ''),
+  ('subscription_events',         '',                                  ''),
+  ('subscriptions',               '',                                  ''),
+  ('synonym_pool',                'DELETE,INSERT,SELECT,UPDATE',       ''),
+  ('tags',                        'DELETE,INSERT,SELECT,UPDATE',       ''),
+  ('usage_counters',              '',                                  ''),
+  ('usage_credits',               'SELECT',                            ''),
   ('user_ai_preferences',         'SELECT',                            ''),
-  ('user_entitlements',           'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'),
-  ('user_storage_usage',          'SELECT',                            'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE');
+  ('user_entitlements',           'SELECT',                            ''),
+  ('user_storage_usage',          'SELECT',                            '');
 
 -- The explicit, named exception allowlist for the future-relation guard.
 -- It is EMPTY. A Data API relation that is not an ordinary table in
@@ -297,18 +299,15 @@ SELECT is(
   'USAGE',
   'ACL-E2 authenticated EFFECTIVE sequence privileges are USAGE only');
 
--- service_role is intentionally untouched by this initiative, and its sequence
--- posture is environment-dependent: `rwU` on hosted Production, `wU` on a clean
--- replay. Only the lane-invariant part is asserted; exact preservation is proven
--- against the pre-migration snapshot by the migration itself.
-SELECT ok(
-  has_sequence_privilege(to_regrole('service_role')::oid, 'public.papers_insert_order_seq'::regclass, 'USAGE')
-  AND has_sequence_privilege(to_regrole('service_role')::oid, 'public.papers_insert_order_seq'::regclass, 'UPDATE')
-  AND pg_temp.direct_privs('public.papers_insert_order_seq'::regclass, to_regrole('service_role')::oid)
-      IN ('SELECT,UPDATE,USAGE', 'UPDATE,USAGE'),
-  'ACL-E3 service_role keeps its existing sequence posture (not narrowed by this initiative)');
+-- service_role held `rwU` (hosted) or `wU` (clean replay) until C57; no server
+-- path inserts into `papers`, so it now holds nothing, directly or effectively.
+SELECT is(
+  pg_temp.direct_privs('public.papers_insert_order_seq'::regclass, to_regrole('service_role')::oid) || ' / '
+    || pg_temp.eff_seq_privs('public.papers_insert_order_seq'::regclass, to_regrole('service_role')::oid),
+  ' / ',
+  'ACL-E3 service_role holds no privilege on papers_insert_order_seq, direct or effective (C57)');
 
--- ══ F. service_role table privileges are preserved, not narrowed ════════════
+-- ══ F. service_role table privileges: the telemetry INSERT and nothing else ══
 SELECT is(
   (SELECT coalesce(string_agg(e.relname || ' expected[' || e.svc_privs || '] actual['
                               || pg_temp.direct_privs(to_regclass('public.' || quote_ident(e.relname)), to_regrole('service_role')::oid) || ']',
@@ -317,7 +316,7 @@ SELECT is(
     WHERE pg_temp.direct_privs(to_regclass('public.' || quote_ident(e.relname)), to_regrole('service_role')::oid)
           IS DISTINCT FROM e.svc_privs),
   '',
-  'ACL-F1 service_role table privileges are exactly the posture this initiative preserved');
+  'ACL-F1 service_role table privileges are exactly the C57 target (telemetry INSERT only)');
 
 -- ══ G. Future-object defaults (D1a) ═════════════════════════════════════════
 SELECT is(
@@ -336,13 +335,16 @@ SELECT is(
   0,
   'ACL-G2 postgres holds no GLOBAL table/sequence default privileges (an IN SCHEMA revoke could not override one)');
 
-SELECT ok(
-  (SELECT coalesce(string_agg(a.privilege_type, ',' ORDER BY a.privilege_type), '')
+-- Until C57 the platform's service_role entry was preserved here (broad on
+-- hosted Production, `Dxtm`/`w` on a clean replay and after Supabase's own
+-- revoke). C57 removed it: a new table or sequence grants service_role nothing.
+SELECT is(
+  (SELECT coalesce(string_agg(d.defaclobjtype::text || ':' || a.privilege_type, ',' ORDER BY d.defaclobjtype::text, a.privilege_type), '')
      FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
-    WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'r'
-      AND a.grantee = to_regrole('service_role')::oid)
-  IN ('DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE', 'MAINTAIN,REFERENCES,TRIGGER,TRUNCATE'),
-  'ACL-G3 service_role table defaults are left exactly as the platform maintains them (broad, or narrowed by Supabase)');
+    WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype IN ('r','S')
+      AND a.grantee = to_regrole('service_role')::oid),
+  '',
+  'ACL-G3 postgres table/sequence defaults in public grant service_role nothing (C57)');
 
 -- G1 names the client roles. G6 is the allowlist over the whole entry, and it is
 -- the assertion that catches a default grantee nobody named (NC6c in the
@@ -354,9 +356,9 @@ SELECT is(
      FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
     WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid
       AND d.defaclobjtype IN ('r','S')
-      AND a.grantee NOT IN (to_regrole('postgres')::oid, to_regrole('service_role')::oid)),
+      AND a.grantee <> to_regrole('postgres')::oid),
   '',
-  'ACL-G6 postgres table/sequence defaults in public name no grantee but the owner and service_role');
+  'ACL-G6 postgres table/sequence defaults in public name no grantee but the owner');
 
 -- ══ H. SECURITY INVOKER routine inventory (guard only; no grant is changed) ══
 -- Eleven since DB-INVOKER-EXECUTE-HARDENING-001A (C49): the original six, plus
@@ -597,12 +599,13 @@ SELECT is(
 -- K6 names the client roles; K7 is the allowlist over the whole entry, which is
 -- what catches a default grantee nobody named (the ACL-G6 pattern).
 SELECT is(
-  (SELECT coalesce(string_agg(pg_get_userbyid(a.grantee) || ':' || a.privilege_type, ', ' ORDER BY a.grantee::text), '')
+  (SELECT coalesce(string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type,
+                              ', ' ORDER BY a.grantee::text), '')
      FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
     WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
-      AND a.grantee NOT IN (to_regrole('postgres')::oid, to_regrole('service_role')::oid)),
+      AND a.grantee <> to_regrole('postgres')::oid),
   '',
-  'ACL-K7 postgres''s public FUNCTION defaults name no grantee but the owner and service_role');
+  'ACL-K7 postgres''s public FUNCTION defaults name no grantee but the owner');
 
 SELECT is(
   (SELECT coalesce(string_agg(a.privilege_type, ',' ORDER BY a.privilege_type), '<absent>')
@@ -612,16 +615,15 @@ SELECT is(
   'EXECUTE',
   'ACL-K8 postgres''s public FUNCTION default entry exists and keeps the owner''s own EXECUTE');
 
--- service_role's FUTURE-function default in public is platform-maintained and
--- deliberately preserved: present on hosted Production, absent on a clean
--- replay. Only those two shapes are accepted (the ACL-G3 pattern).
-SELECT ok(
+-- service_role's FUTURE-function default in public was preserved by C56
+-- (present on hosted Production, absent on a clean replay); C57 removed it.
+SELECT is(
   (SELECT coalesce(string_agg(a.privilege_type, ',' ORDER BY a.privilege_type), '')
      FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
     WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
-      AND a.grantee = to_regrole('service_role')::oid)
-  IN ('EXECUTE', ''),
-  'ACL-K9 service_role''s public FUNCTION default is left as the platform maintains it (hosted EXECUTE, or absent on a clean replay)');
+      AND a.grantee = to_regrole('service_role')::oid),
+  '',
+  'ACL-K9 postgres''s public FUNCTION defaults grant service_role nothing (C57)');
 
 -- The defaults, proved on real objects: what the next migration's function
 -- actually inherits, in public and in a schema nobody configured. Dropped
@@ -634,9 +636,9 @@ SELECT is(
   (SELECT coalesce(string_agg(CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type, ', '), '')
      FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) a
     WHERE p.oid = 'public.zz_acl_probe_fn()'::regprocedure
-      AND a.grantee NOT IN (to_regrole('postgres')::oid, to_regrole('service_role')::oid)),
+      AND a.grantee <> to_regrole('postgres')::oid),
   '',
-  'ACL-K10 a newly created public function grants nothing DIRECTLY to any role but its owner and service_role');
+  'ACL-K10 a newly created public function grants nothing DIRECTLY to any role but its owner');
 
 SELECT is(
   (SELECT coalesce(string_agg(r, ', ' ORDER BY r), '')
@@ -647,10 +649,8 @@ SELECT is(
 
 SELECT is(
   has_function_privilege(to_regrole('service_role')::oid, 'public.zz_acl_probe_fn()'::regprocedure, 'EXECUTE'),
-  EXISTS (SELECT 1 FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace, aclexplode(d.defaclacl) a
-           WHERE n.nspname = 'public' AND d.defaclrole = to_regrole('postgres')::oid AND d.defaclobjtype = 'f'
-             AND a.grantee = to_regrole('service_role')::oid),
-  'ACL-K12 service_role can execute a new public function exactly when its preserved default entry says so');
+  false,
+  'ACL-K12 service_role cannot execute a newly created public function (C57)');
 
 SELECT is(
   (SELECT coalesce(p.proacl::text, '<default>') || ' / '
@@ -678,9 +678,9 @@ CREATE MATERIALIZED VIEW public.zz_acl_probe_matview AS SELECT 1 AS one;
 CREATE TABLE public.zz_acl_probe_part (id int NOT NULL) PARTITION BY RANGE (id);
 
 SELECT is(
-  pg_temp.grants_outside(('public.' || probe)::regclass, ARRAY[to_regrole('postgres')::oid, to_regrole('service_role')::oid]),
+  pg_temp.grants_outside(('public.' || probe)::regclass, ARRAY[to_regrole('postgres')::oid]),
   '',
-  'ACL-G4 a newly created ' || probe || ' inherits nothing for any role but its owner and service_role'
+  'ACL-G4 a newly created ' || probe || ' inherits nothing for any role but its owner'
 ) FROM unnest(ARRAY['zz_acl_probe_tbl','zz_acl_probe_view','zz_acl_probe_matview','zz_acl_probe_part','zz_acl_probe_tbl_id_seq']) probe;
 
 -- ══ G5. Supabase's own documented revoke cannot undo D1a ════════════════════
@@ -690,8 +690,8 @@ SELECT is(
 -- leaving TRUNCATE/REFERENCES/TRIGGER/MAINTAIN behind. Running it here proves
 -- the interaction is safe in the only direction that matters: a REVOKE cannot
 -- restore a privilege, so the platform's rollout cannot re-open what D1a closed.
--- (It also revokes from service_role, which is the platform's business, not this
--- initiative's; the assertions below deliberately look only at client roles.)
+-- (It also revokes from service_role, which holds no default here since C57, so
+-- that half is a no-op; G5b proves the combined result still reaches no one.)
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
@@ -708,9 +708,9 @@ SELECT is(
 
 CREATE TABLE public.zz_acl_probe_after_platform (id bigserial PRIMARY KEY);
 SELECT is(
-  pg_temp.grants_outside('public.zz_acl_probe_after_platform'::regclass, ARRAY[to_regrole('postgres')::oid, to_regrole('service_role')::oid]),
+  pg_temp.grants_outside('public.zz_acl_probe_after_platform'::regclass, ARRAY[to_regrole('postgres')::oid]),
   '',
-  'ACL-G5b a table created after that platform revoke still reaches no role but its owner and service_role');
+  'ACL-G5b a table created after that platform revoke still reaches no role but its owner');
 
 DROP TABLE public.zz_acl_probe_after_platform;
 DROP TABLE public.zz_acl_probe_part;
