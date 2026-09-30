@@ -57,7 +57,7 @@ Commercial state (current plan, current subscription status, current billing per
 
 - It is **written by the server only** in response to provider webhooks or quota-consuming actions, never by the client.
 - It changes on different cadences (period rollovers, webhook-driven status flips) than profile data.
-- It needs stricter RLS (read-only to the client; writes only via SECURITY DEFINER RPCs or service-role Edge Functions). A service-role writer gets **no standing grant**: under C57 (prepared, not yet deployed) `service_role` holds nothing on the commercial tables, so the billing webhook's own migration must grant exactly the privileges it uses when C27 resumes.
+- It needs stricter RLS (read-only to the client; writes only via SECURITY DEFINER RPCs or service-role Edge Functions). A service-role writer gets **no standing grant**: under C57 (live in Production since 2026-09-29) `service_role` holds nothing on the commercial tables, so the billing webhook's own migration must grant exactly the privileges it uses when C27 resumes.
 - It is an **append-and-snapshot** shape (history of subscriptions + current entitlement snapshot), not a single-row profile.
 
 For these reasons commercial state lives in **dedicated tables** described below, not as new columns on `profiles`. Profile data and commercial data may be joined in queries, but the source-of-truth tables are separate.

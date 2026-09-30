@@ -4379,15 +4379,16 @@ Edge Function source only. There is no migration, frontend or `_shared` change. 
   - **Acceptance.** An unauthenticated boot probe got the function's own 401. The authenticated Crossref-fallback call was **skipped**, because no safe existing acceptance credential was available in the session and none was created. The deployed-source read-back is the identity proof.
   - No rollback has been performed.
 
-## 2026-09-29 — SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001: `service_role` keeps only the telemetry INSERT and the refund EXECUTE (`20260929084252`) — **PREPARED / NOT DEPLOYED**
+## 2026-09-29 — SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001: `service_role` keeps only the telemetry INSERT and the refund EXECUTE (`20260929084252`) — **DEPLOYED / LIVE IN PRODUCTION, 2026-09-29**
 
-Decision **C57**. It implements the read-only audit `SERVICE-ROLE-LEAST-PRIVILEGE-AUDIT-001` (verdict **HARDENING_RECOMMENDED**). **Not applied:** Production stays at ledger 96 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.18). This removes historical, unused authority; it is not an incident response.
+Decision **C57**. It implements the read-only audit `SERVICE-ROLE-LEAST-PRIVILEGE-AUDIT-001` (verdict **HARDENING_RECOMMENDED**). **Applied 2026-09-29** after merging as `3a3e0957` (PR #322, approved head `f5c81c12`), in a migration-only rollout (`SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001B`; [deployment.md](deployment.md) §6.18): ledger **96 → 97**, from starting shape **H**. This removes historical, unused authority; it is not an incident response.
 
 | | 20 tables | `papers_insert_order_seq` | `postgres`/`public` defaults (TABLES / SEQUENCES / FUNCTIONS) | `ai_provider_usage_events` | `refund_ai_quota(uuid)` |
 |---|---|---|---|---|---|
-| **Production now** (read-only, 2026-09-29; ledger **96**) | `arwdDxtm` | `rwU` | `arwdDxtm` / `rwU` / `X` | INSERT | EXECUTE |
-| **Clean replay before** (through `20260928133918`) | `arwdDxtm` | `wU` | `Dxtm` / `w` / none | INSERT | EXECUTE |
-| **After, every starting shape** | nothing | nothing | nothing / nothing / nothing | INSERT | EXECUTE |
+| **Production before rollout** (read-only, 2026-09-29; ledger **96**; shape H) | `arwdDxtm` | `rwU` | `arwdDxtm` / `rwU` / `X` | INSERT | EXECUTE |
+| **Clean replay before** (through `20260928133918`; shape R) | `arwdDxtm` | `wU` | `Dxtm` / `w` / none | INSERT | EXECUTE |
+| **After, every starting shape** (local proof: R, H and P) | nothing | nothing | nothing / nothing / nothing | INSERT | EXECUTE |
+| **Production now — observed** (read-only, 2026-09-29; ledger **97**) | nothing | nothing | nothing / nothing / nothing | INSERT | EXECUTE |
 
 - **What stays, and why.**
   - Telemetry INSERT is used by `analyze-paper` and `suggest-paper-organization` (C42).
@@ -4429,4 +4430,17 @@ Decision **C57**. It implements the read-only audit `SERVICE-ROLE-LEAST-PRIVILEG
   - A new starting-shape lane resets to `20260928133918` three times (R, H against a new frozen reference, and P as H plus Supabase's two statements verbatim). In each it proves `026` fails before and `026`/`015` pass after, runs six refusal controls on R, and requires one canonical privilege state across the three.
 - **Fixtures.** The E2E seed, entitled-model and account-deletion fixtures write and verify rows as the local database owner, through the lifecycle's existing `docker exec … psql` path with an identity check. The local secret key is kept for Auth administration and Storage only.
 - **Historical migrations are untouched.**
-- **Rollout — not performed.** See [deployment.md](deployment.md) §6.18.
+- **Rollout — complete, 2026-09-29** ([deployment.md](deployment.md) §6.18).
+  - **Merge and CI.** PR #322 merged as the two-parent `3a3e0957` (parents `4e8bc485` and `f5c81c12`; tree identical to the approved head's). Merged-`main` Validate, Extension and DB Tests passed on attempt 1.
+  - **Preflight.** The merged file's §0–§1 ran read-only against Production, and every precondition passed with starting shape **H**. The migration list showed exactly one local-only migration, and the dry run listed exactly this file.
+  - **Apply.** `npx supabase db push --linked --yes` (CLI 2.111.0), 12:25:46Z–12:26:07Z UTC, exit 0, applied exactly `20260929084252_harden_service_role_least_privilege.sql`, with no seeds and no roles. Ledger **96 → 97**, latest `20260929084252`, present once.
+  - **Durable outcome** (verified read-only after the apply and again the same day):
+    - `service_role` holds exactly `INSERT` on `ai_provider_usage_events` and `EXECUTE` on `refund_ai_quota(uuid)`, plus the platform's `USAGE` without `CREATE` on `public`;
+    - nothing on the other 28 tables or on `papers_insert_order_seq`, and no column grant;
+    - the refund's owner, SECURITY DEFINER mode, `search_path`, body `4224750d…` and ACL are unchanged;
+    - `postgres`'s `public` defaults are owner-only: `S={postgres=rwU/postgres} f={postgres=X/postgres} r={postgres=arwdDxtm/postgres}`;
+    - the global C56 entry is unchanged;
+    - no `zz_c57_probe_*` object remains.
+  - **Nothing else moved.** The migration's own whole-state snapshot was byte-identical before and after. That covers the client-role matrix, platform schemas, definitions, function rows, roles and memberships. Every row count was identical, and the migration's own §3i check proved, before COMMIT, that it wrote no row in `public`, `auth` or `storage`, so there was no application row mutation.
+  - **No runtime change.** No Edge Function was deployed (all six keep their versions and `ezbr_sha256`), and no secret, Auth or Storage setting changed. The Security Advisor's 31 findings are unchanged. Vercel's automatic Production deployment for the merge commit needed no manual action.
+  - **Rollback.** None performed; any correction would be a new forward migration.

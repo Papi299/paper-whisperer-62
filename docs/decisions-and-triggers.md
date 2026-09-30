@@ -151,7 +151,7 @@ The decisions below are commercial / product decisions, not performance / archit
 **Rationale:**
 
 - `profiles` is client-writable for the owning user (display name, PubMed API key); commercial state must be **server-write-only**. Splitting tables avoids fine-grained per-column GRANTs and the bug class of the wrong column slipping into a client update.
-- Commercial state has different lifecycle (webhook-driven), different write authority (service-role only), and a multi-row history per user, none of which fit a single profile row. *(Note, 2026-09-29: "service-role only" means server-side only. It is not a standing grant. Under C57, prepared and not yet applied, `service_role` holds no table privilege on the commercial tables until the billing writer's own migration grants the minimum it needs.)*
+- Commercial state has different lifecycle (webhook-driven), different write authority (service-role only), and a multi-row history per user, none of which fit a single profile row. *(Note, 2026-09-29: "service-role only" means server-side only. It is not a standing grant. Under C57, live in Production since 2026-09-29, `service_role` holds no table privilege on the commercial tables until the billing writer's own migration grants the minimum it needs.)*
 - Cleaner RLS surface: a single-purpose `user_entitlements` table is easier to lock down than a multi-purpose `profiles` table.
 - Provider-specific fields (`billing_customer_id`, `billing_subscription_id`, `raw_payload`) belong with the subscription record, not with profile/settings data.
 
@@ -929,12 +929,12 @@ Specifically, and durably:
 - **Future objects are hardened at the default (D1a), because the next author will forget.** `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES/SEQUENCES FROM PUBLIC, anon, authenticated` makes a forgotten ACL fail **closed** — the new table is simply unreachable — instead of shipping a table the platform default already exposed. It is scoped to `postgres` and to `public`, and it covers tables, views, materialized views, partitioned tables and sequences.
 - **D1a does not replace the per-object rule (D2).** Every migration that creates an API-reachable object still REVOKEs by role and GRANTs its exact surface explicitly. D1a cannot cover objects created by other owners, cannot touch functions, and a project-level setting could re-grant those defaults at any time; it is a second layer, not the contract.
 - **Supabase's own 2026-10-30 platform change is compatible in both orders.** Supabase moves existing projects to opt-in Data API defaults on that date, keeping existing table grants. Its documented statements are `REVOKE`s and strictly narrower than D1a (they leave `TRUNCATE`/`REFERENCES`/`TRIGGER`/`MAINTAIN` on tables and `UPDATE` on sequences), so running them after this migration restores nothing, and if they land first the migration accepts that shape and removes the remainder. Suite 015 runs Supabase's exact statements against the converged state and proves it.
-- **`service_role` is excluded deliberately, not by omission.** Its **table** privileges were already aligned between Production and a clean replay; its sequence and default postures are environment-dependent (hosted vs replay: `rwU` vs `wU` on the sequence, ALL vs `Dxtm` on table defaults, `rwU` vs `w` on sequence defaults). So this initiative deliberately preserves the exact pre-migration `service_role` posture rather than converging or narrowing it — narrowing it would be a new decision. It also bypasses RLS, which makes object privilege its only gate, and it is the role behind every Edge Function: a wrong revoke fails server-side in paths no browser test covers. The migration deliberately references it in its preconditions and verification, but names it in no privilege-mutating `GRANT`, `REVOKE` or `ALTER DEFAULT PRIVILEGES` statement; its exact observed posture is preserved, and the migration refuses to commit if that posture moved.
+- **`service_role` is excluded deliberately, not by omission.** Its **table** privileges were already aligned between Production and a clean replay; its sequence and default postures are environment-dependent (hosted vs replay: `rwU` vs `wU` on the sequence, ALL vs `Dxtm` on table defaults, `rwU` vs `w` on sequence defaults). So this initiative deliberately preserves the exact pre-migration `service_role` posture rather than converging or narrowing it — narrowing it would be a new decision. It also bypasses RLS, which makes object privilege its only gate, and it is the role behind every Edge Function: a wrong revoke fails server-side in paths no browser test covers. The migration deliberately references it in its preconditions and verification, but names it in no privilege-mutating `GRANT`, `REVOKE` or `ALTER DEFAULT PRIVILEGES` statement; its exact observed posture is preserved, and the migration refuses to commit if that posture moved. *(Follow-up, 2026-09-29: narrowing it became its own decision, **C57**, applied to Production on 2026-09-29. `service_role` now holds only the telemetry `INSERT` and the refund `EXECUTE` on application-owned objects. Its sequence and default postures are no longer environment-dependent: Production and a full replay both end with no `service_role` sequence grant and owner-only `postgres`/`public` defaults. The preserved posture described here is the pre-C57 state.)*
 - **Function EXECUTE privileges are excluded, and the reason is mechanical.** The five SECURITY INVOKER helpers carry PUBLIC EXECUTE, but that comes from PostgreSQL's built-in **global** default for functions, which `ALTER DEFAULT PRIVILEGES … IN SCHEMA public` cannot revoke — Supabase's own documented `revoke execute on functions from public` is per-schema and therefore ineffective against it. Removing it needs a global, cross-schema default change that would also affect functions `postgres` creates in `extensions`, where the installed extensions live. Suite 015 adds a fail-closed inventory guard so a **new** invoker routine cannot inherit it unnoticed; the revoke itself is a separate initiative. *(Correction, 2026-09-28 — `DB-DEFAULT-FUNCTION-EXECUTE-HARDENING-AUDIT-001`, C56. Three parts of this bullet, and the matching header of `20260910212202`, which stays untouched as applied history, were imprecise. **(1)** PUBLIC EXECUTE on an **existing** function is answered by a per-object `REVOKE`; only **future** inheritance needs a default-privilege change. **(2)** Default privileges never touch existing objects, so a global `postgres` default change does not change the functions already installed in `extensions`. It governs functions `postgres` creates **later**, in any schema, and extension objects `postgres` itself owns because it installed a non-superuser extension; `pgmq` is the proven example. Supautils-privileged and trusted extensions install as `supabase_admin` and are unaffected. **(3)** On hosted Production, `anon`, `authenticated` and `service_role` did not execute these functions only through PUBLIC: Supabase's `postgres`/`public` function default also gave each an explicit grant. C56 applies the per-object revoke and the global default change; see C56.)*
 - **`paper_tags` / `paper_projects` keep `SELECT, INSERT, DELETE`.** Today's browser only reads them and every mutation goes through a SECURITY DEFINER RPC, so the grants are arguably surplus — but narrowing them is a change to the repository's established contract, not convergence toward it, and it is out of scope here. *(Follow-up, 2026-09-25: that narrowing is now its own decision, **C48** — the two junctions go to `SELECT` only, while `projects` / `tags` keep their full grant. That follow-up is complete: migration `20260925134526` was applied to Production on 2026-09-25, so the live junction grant is now `SELECT` only; the `SELECT, INSERT, DELETE` recorded here is the pre-C48 state.)*
 - **The rollout needed no ordering, and none was used.** No web-first deploy, no Edge deploy, no operator drain and no lock barrier: every privilege removed is one RLS already denies that role every row of, or one no application path uses, and `authenticated`'s live DML surface is identical before and after. The one observable difference is that an operation which never worked now fails with `42501` instead of reporting "0 rows affected".
 
-**Re-evaluation triggers:** an unauthenticated Data API path is ever introduced (today there is none); `service_role` least-privilege hardening is authorized *(fired 2026-09-29: C57, prepared and not yet applied)*; the function-EXECUTE initiative is authorized *(fired 2026-09-28: C56, applied to Production 2026-09-28)*; a new client-reachable relation kind (view, materialized view, partitioned or foreign table) is added to `public`; or Supabase changes what its platform default grants, in which case the migration's accepted starting shapes and suite 015's default-privilege assertions are re-derived rather than relaxed.
+**Re-evaluation triggers:** an unauthenticated Data API path is ever introduced (today there is none); `service_role` least-privilege hardening is authorized *(fired 2026-09-29: C57, applied to Production 2026-09-29)*; the function-EXECUTE initiative is authorized *(fired 2026-09-28: C56, applied to Production 2026-09-28)*; a new client-reachable relation kind (view, materialized view, partitioned or foreign table) is added to `public`; or Supabase changes what its platform default grants, in which case the migration's accepted starting shapes and suite 015's default-privilege assertions are re-derived rather than relaxed.
 
 ### C39. AI provider protocol is isolated behind reviewed server-side adapters: the database catalog authorizes MODELS, the runtime registry authorizes PROTOCOLS (2026-09-12)
 
@@ -1947,7 +1947,7 @@ It does **not** reach:
 **Privacy.** Privilege posture only. No data category, recipient, retention or processor changes, and no Privacy Policy amendment ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)).
 
 **Not in scope, unchanged.**
-- `service_role` least privilege, including its `public` function default *(taken up 2026-09-29 by C57, prepared and not yet applied)*;
+- `service_role` least privilege, including its `public` function default *(taken up 2026-09-29 by C57, applied to Production 2026-09-29, which removed that default)*;
 - database `TEMPORARY`;
 - the 24 retained `authenticated` SECURITY DEFINER contracts;
 - C30;
@@ -1957,15 +1957,37 @@ It does **not** reach:
 
 **Re-evaluation triggers:**
 - enabling Supabase Queues (`pgmq`), Database Webhooks, or any extension or feature that `postgres` installs and that creates functions expecting inherited PUBLIC EXECUTE — review its execution surface and grant it explicitly in a migration;
-- Supabase changing its platform function defaults before or after the rollout — for example its 2026-10-30 existing-project rollout, announced for tables and sequences — which the preconditions judge. The owner-only `public` entry its documented opt-in produces is accepted; any other shape stops the file, to be re-derived rather than relaxed. *(Since the 2026-09-28 rollout the preconditions no longer run against Production. Compare `postgres`'s global and `public` function entries, read-only, against the Production outcome above; a platform change that adds a grantee back needs its own review.)*;
-- the separate `service_role` least-privilege review *(fired 2026-09-29: C57, prepared and not yet applied)*;
+- Supabase changing its platform function defaults before or after the rollout — for example its 2026-10-30 existing-project rollout, announced for tables and sequences — which the preconditions judge. The owner-only `public` entry its documented opt-in produces is accepted; any other shape stops the file, to be re-derived rather than relaxed. *(Since the 2026-09-28 rollout the preconditions no longer run against Production. Compare `postgres`'s global and `public` function entries, read-only, against the Production outcome above; a platform change that adds a grantee back needs its own review. Since C57, applied 2026-09-29, the `public` function entry is owner-only `{postgres=X/postgres}`, so compare it against C57's Production outcome instead.)*;
+- the separate `service_role` least-privilege review *(fired 2026-09-29: C57, applied to Production 2026-09-29)*;
 - a new function that genuinely needs PUBLIC or `anon` EXECUTE — classify it deliberately in suite `015`'s allowlist and state the grant in its migration;
 - a PostgreSQL change to when trigger EXECUTE is checked — suite `025` and the migration's trigger probe are where it shows;
 - a database whose state differs from the reviewed one (for example a new hosted environment), which the migration refuses — stop and re-review; do not edit the migration to fit (Production passed the reviewed preflight and was hardened on 2026-09-28).
 
 ### C57. `service_role` holds only the two grants a server path uses, and nothing by default (2026-09-29)
 
-**Status: PREPARED — NOT DEPLOYED.** Migration `20260929084252_harden_service_role_least_privilege.sql` implements it (`SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001`). It follows the read-only audit `SERVICE-ROLE-LEAST-PRIVILEGE-AUDIT-001` (2026-09-29), whose verdict was **HARDENING_RECOMMENDED**. Production has not been changed: it stays at ledger 96 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.18).
+**Status: COMPLETE — applied to Production 2026-09-29.** Migration `20260929084252_harden_service_role_least_privilege.sql` implements it (`SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001`). It follows the read-only audit `SERVICE-ROLE-LEAST-PRIVILEGE-AUDIT-001` (2026-09-29), whose verdict was **HARDENING_RECOMMENDED**. It merged as `3a3e0957` (PR #322, approved head `f5c81c12`). It was applied in a migration-only rollout (`SERVICE-ROLE-LEAST-PRIVILEGE-HARDENING-001B`; [deployment.md](deployment.md) §6.18).
+
+- **Production outcome** (observed read-only immediately after the apply, 2026-09-29, and again the same day for the documentation reconciliation):
+  - ledger **96 → 97**, latest `20260929084252`, present once. Production started from shape **H**. `npx supabase db push --linked --yes` exited 0 and applied exactly this file, with no seeds and no roles.
+  - `service_role`'s stored and effective relation privileges in `public` are exactly `INSERT` on `ai_provider_usage_events`. It holds nothing on the 20 tables or on the other 8, and it has no column grant.
+  - `papers_insert_order_seq` is `{postgres=rwU/postgres,authenticated=U/postgres}`: no `service_role` `USAGE`, `SELECT` or `UPDATE`.
+  - It executes exactly `refund_ai_quota(uuid)`, whose contract is unchanged:
+    - owner `postgres`, SECURITY DEFINER, `search_path=public, pg_temp`;
+    - body `4224750d…`;
+    - ACL `{postgres=X/postgres,service_role=X/postgres}`, and PUBLIC, anon and `authenticated` cannot execute it.
+
+    The telemetry ACL is unchanged: `{postgres=arwdDxtm/postgres,service_role=a/postgres}`.
+  - `postgres`'s `public` entries are `S={postgres=rwU/postgres} f={postgres=X/postgres} r={postgres=arwdDxtm/postgres}`. Its global entry is still C56's `f={postgres=X/postgres}`, and every other default-privilege entry is unchanged.
+  - `service_role` keeps `USAGE` without `CREATE` on `public`; its attributes and memberships are unchanged.
+  - The migration's own whole-state snapshot is identical before and after: the client-role matrix, platform schemas, relations, columns, constraints, indexes, policies, triggers, whole function rows, other default entries, roles, memberships and event triggers. Every row count is identical.
+  - No `zz_c57_probe_*` object remains.
+  - Security Advisor unchanged (24 × 0029, 6 × `rls_enabled_no_policy`, 1 leaked-password).
+  - No Edge Function was deployed, and all six keep their versions and bundle hashes. No secret, Auth or Storage setting changed. No application row was modified: the migration's own §3i check proved, before COMMIT, that it wrote no row in `public`, `auth` or `storage`.
+  - No Production AI or account-deletion canary was run. Runtime safety rests on four things:
+    - the two grants the runtime uses were kept byte-for-byte;
+    - the migration's in-transaction verification;
+    - the database suites;
+    - the local end-to-end run that deletes an account against the hardened schema.
 
 **Decision.** Five privilege statements, and nothing else:
 
@@ -2024,6 +2046,8 @@ With a SQL session that can become `service_role`, it can no longer truncate tab
 
 The migration recognises each shape as a whole and refuses any other combination. All three converge on the same state, with the `public` entries at `S={postgres=rwU/postgres} f={postgres=X/postgres} r={postgres=arwdDxtm/postgres}`.
 
+These are pre-C57 states. Production started from H on 2026-09-29 and has been at that target since. A replay of the tracked chain passes through R and then applies C57 itself, so it ends at the same target.
+
 **How it is gated.** Section 1 refuses before any change unless all of the following hold:
 - `public` holds exactly the reviewed 29 tables and one sequence, all owned by `postgres`;
 - the whole anon / authenticated / PUBLIC / `service_role` matrix is the reviewed one, with no other grantee;
@@ -2041,7 +2065,7 @@ Section 3 then proves:
 - a whole-state snapshot unchanged: every other grant; `authenticated`, anon and PUBLIC; platform schemas; relations; columns; constraints; indexes; policies; triggers; whole function rows; other default entries; roles and memberships; event triggers;
 - no lock on a `public` relation and no row written.
 
-**Evidence** (local, PostgreSQL 17.6 image, disposable databases; Production read-only only):
+**Evidence at preparation** (local, PostgreSQL 17.6 image, disposable databases; Production read-only only):
 - **Three starting shapes, from real resets.** Each of R, H and P is proven, then converges to one canonical privilege state. H is reproduced line for line against a committed read-only Production reference (`scripts/acl-parity/hosted-service-role-20260928133918.*`). P is H plus Supabase's two statements verbatim.
 - **Controls on the real file.** Each of the following is refused before any change, with no ledger row and the lane left byte-identical:
   - an extra table grant;
@@ -2061,7 +2085,7 @@ Section 3 then proves:
 
 **No runtime change.** No Edge Function, secret, Auth or Storage setting changes. The two grants the runtime uses are kept byte-for-byte.
 
-**Rollback — forward only; none performed.** Do not edit C57 after it is applied. A reversal is a new forward migration that re-grants exactly what a named server path needs. The pre-change effective posture can be restored with `GRANT ALL` on the 20 tables, `GRANT USAGE, SELECT, UPDATE` on the sequence and the matching `ALTER DEFAULT PRIVILEGES … GRANT` statements. The ACL text may list entries in a different order, which is not a difference in privilege.
+**Rollback — forward only; none performed.** Do not edit C57, which is applied, and do not `migration repair` its legitimate application. A reversal is a new forward migration that re-grants exactly what a named server path needs. The pre-change effective posture can be restored with `GRANT ALL` on the 20 tables, `GRANT USAGE, SELECT, UPDATE` on the sequence and the matching `ALTER DEFAULT PRIVILEGES … GRANT` statements. The ACL text may list entries in a different order, which is not a difference in privilege.
 
 **Privacy.** Privilege posture only. No data category, recipient, retention or processor changes.
 
@@ -2080,4 +2104,4 @@ Section 3 then proves:
 - a new AFTER trigger on the account-deletion cascade path, which must be SECURITY DEFINER or touch no table (suite `026` E1);
 - Supabase changing `service_role`'s attributes, memberships or platform defaults, or granting it `CREATE` on `public`;
 - a PostgreSQL upgrade — re-check `pg_default_acl` afterwards, because the upgrade documentation is silent on default privileges;
-- a database whose state differs from the reviewed one, which the migration refuses — stop and re-review; do not edit the migration to fit.
+- a database whose state differs from the reviewed one, which the migration refuses — stop and re-review; do not edit the migration to fit (Production passed the reviewed preflight as shape H and was hardened on 2026-09-29).
