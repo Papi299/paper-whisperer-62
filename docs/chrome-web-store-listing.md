@@ -1,13 +1,16 @@
 # Chrome Web Store listing — PaperLume extension
 
-> **Status: submission-ready draft. Nothing here has been submitted.**
+> **Status: the submission package for `0.1.0` — approved by Google and
+> PUBLISHED TO TESTERS since 2026-09-30.** Visibility is **Private**. The
+> publication record, and the evidence class behind each part of it, is **§0.13**.
 >
 > This is the authoritative repository record of **what a human would enter into
 > the Chrome Web Store Developer Dashboard** for the PaperLume extension: the
 > listing copy, the single-purpose statement, the permission justifications, the
 > privacy/data-use answers, and the listing images with their provenance.
 >
-> **A draft Store item now exists — see §0, which supersedes the paragraph
+> *Historical, and true when written (2026-08-30, at `001E3A`):* **A draft Store
+> item now exists — see §0, which supersedes the paragraph
 > below.** `CHROME-EXTENSION-IMPORT-001E3A` created one PaperLume draft item
 > (`cfanjbamcemoeglgkpbidnclkomaocmo`) on **2026-08-30** and uploaded the
 > approved 0.1.0 package. **No listing, privacy or distribution field has been
@@ -90,6 +93,9 @@ live field disagree, **the live field governs for this item** — and only for t
 item, since the Dashboard varies by item type, account and rollout.
 
 ### 0.1 The draft item
+
+> *The state at `001E3B`, 2026-08-30, preserved as observed. The item has since
+> been submitted, approved and published to testers — see §0.13.*
 
 | Fact | Live value |
 |---|---|
@@ -230,6 +236,10 @@ decision is a separate matter for the owner.* Nothing in C16 is changed here
 beyond removing the false implication that Google compels it.
 
 ### 0.8 Distribution — displayed draft state is not an owner decision
+
+> *Observed on the untouched form on 2026-08-30, and preserved. The owner then
+> chose `Unlisted` (§0.12), and later changed it to **`Private`** — the visibility
+> that was reviewed and published (§0.13).*
 
 Observed on the untouched Distribution form:
 
@@ -386,6 +396,18 @@ trader information must be completed **before** submission — and note that Chr
 makes verified trader information *"available to users of the Chrome Web Store"*,
 so this is a disclosure decision, not only a form field.
 
+> **Re-check performed 2026-09-30, immediately before publication
+> (`CHROME-WEB-STORE-PUBLISH-001A`).** The then-current
+> [trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure)
+> page was re-read (last updated 2024-02-09; the definitions quoted above are
+> unchanged). The owner was shown them and reconfirmed **Non-trader** as their
+> own intended self-declaration, and the Dashboard still showed Non-trader. The
+> declaration was not changed. This remains the **owner's self-declaration** — not a
+> legal determination by PaperLume, by Claude, or by Google. The gate above is
+> not retired by it: it runs again before any future submission, and a move to
+> Trader still requires trader verification and the public trader information
+> first.
+
 **No live account setting has been changed by any task in this series**, and none
 should be outside the separately authorized Store-entry task.
 
@@ -404,7 +426,7 @@ these choices:
 |---|---|
 | ~~**Category**~~ | Required field; owner has not chosen from the live list. `Workflow & Planning` remains a suggestion only. **CLOSED 2026-08-30 — owner chose `Workflow & Planning`; entered and saved (§0.12)** |
 | ~~**Language**~~ | Required field; English (United States) is expected but no live selection is saved. **CLOSED 2026-08-30 — owner chose `English (United States)`; entered and saved (§0.12)** |
-| ~~**Visibility**~~ | Public / Unlisted / Private — displayed state is a default, not a decision. **CLOSED 2026-08-30 — owner chose `Unlisted`; entered and saved (§0.12)** |
+| ~~**Visibility**~~ | Public / Unlisted / Private — displayed state is a default, not a decision. **CLOSED 2026-08-30 — owner chose `Unlisted`; entered and saved (§0.12)** *(later changed by the owner to `Private`, the visibility that was published — §0.13)* |
 | ~~**Regions**~~ | Displayed all-regions state is a default, not a decision. **CLOSED 2026-08-30 — owner chose `All regions`; entered and saved (§0.12)** |
 | **Homepage / Official / Support URLs** | All optional; none chosen. Official URL additionally needs Search Console ownership. **Still open — deliberately left blank in the saved draft** |
 | **Optional marketing assets** | Small promo tile, marquee tile, promo video — all optional, none required. **Still open — deliberately omitted from the saved draft** |
@@ -414,6 +436,14 @@ these choices:
 ---
 
 ### 0.12 The populated draft — 2026-08-30 (`001E3C` entry, `001E3D` audit)
+
+> **SUPERSEDED 2026-09-30 by §0.13.** This subsection records the draft as
+> `001E3C` saved it and `001E3D` audited it on 2026-08-30, and is preserved as
+> written. Two things moved afterwards: the owner changed visibility from
+> `Unlisted` to **`Private`**, and the item was **submitted, approved and
+> published to testers**. Its present-tense sentences — *"This subsection is the
+> current state"*, *"The item is still `Draft`"*, *"Submission remains a
+> separate, explicit owner decision"* — describe 2026-08-30.
 
 **This subsection is the current state.** It supersedes §0.11's open rows and
 §13.1's "still not performed" list. `CHROME-EXTENSION-IMPORT-001E3C` populated
@@ -463,7 +493,8 @@ browser. The additional-instructions text is the 419-character reviewer script.
 **No credential is recorded in this repository, and none may be.**
 
 **Distribution — saved.** `Free of charge`; visibility **`Unlisted`** (Public and
-Private both unselected); **`All regions`** with the companion `All unlisted
+Private both unselected) *(the 2026-08-30 saved state; `Private` by publication —
+§0.13)*; **`All regions`** with the companion `All unlisted
 regions` control also selected — 155 of 155 region controls checked, none
 deselected individually.
 
@@ -493,6 +524,99 @@ Google approving the extension, **not** a prediction that review will pass, and
 **not** authorization to submit. Submission remains a separate, explicit owner
 decision, and the §0.10 trader re-check and the standing signed-out `/privacy`
 check both still run immediately before it.
+
+---
+
+### 0.13 Submitted, approved and published to testers — current state (2026-09-30)
+
+**This subsection is the current state.** It supersedes §0.12, which is kept as
+the record of the populated draft.
+
+**Evidence classes, kept apart on purpose.** Nothing in this repository can query
+the Chrome Web Store. Each fact below is one of:
+
+- **repository-verifiable** — anyone can reproduce it from Git and the build;
+- **owner-provided Dashboard evidence** — the owner read it in an authenticated
+  Developer Dashboard session (and, for the pre-publication read, confirmed that
+  nothing was saved, edited, published or cancelled);
+- **owner-reported runtime acceptance** — the owner operated the extension and
+  reported the result.
+
+| Fact | Value | Evidence class |
+|---|---|---|
+| Item ID | `cfanjbamcemoeglgkpbidnclkomaocmo` | owner-provided |
+| Version | `0.1.0` — the version in `extension/manifest.json` on `main` | owner-provided; repository-verifiable for the source |
+| Status | **`Published to testers`** | owner-provided, 2026-09-30 |
+| Published | **2026-09-30**, by the owner, manually | owner-provided |
+| Visibility | **`Private`** — installable only by the testers and tester group configured for the item; there is no public or unlisted listing | owner-provided |
+| Regions | `All regions` | owner-provided |
+| Payment | `Free of charge` | owner-provided |
+| Trader declaration | **Non-trader** — the owner's self-declaration, reconfirmed 2026-09-30 (§0.10) | owner-provided |
+
+The tester list itself is not recorded here and should not be.
+
+**The chronology, THEN to NOW.**
+
+| When | What happened |
+|---|---|
+| 2026-08-29 | The `001E2` release candidate **failed** owner acceptance on the DOI case: a resolver redirects to the publisher before the toolbar can be reached |
+| 2026-08-29 | `001E2-CORRECTION-01` added the standard DOI-metadata fallback and the `scripting` permission — PR #255, merge `45a0516` |
+| 2026-08-30 | The owner approved the amended Privacy Policy extension section, and it went live — PR #258, merge `8144504` |
+| 2026-08-30 | `001E3A` created the draft item and uploaded the `0.1.0` package; `001E3B` read the live forms read-only (§0.1–§0.11) |
+| 2026-08-30 | `001E3C` populated and saved every page, with visibility **`Unlisted`**; `001E3D` audited it read-only (§0.12) |
+| on or after 2026-08-30 | The owner changed visibility to **`Private`**. The repository does not record the date |
+| on or after 2026-08-30 | The owner **submitted** `0.1.0` for review with deferred publication. The repository does not record the date |
+| before 2026-09-30 | Google **approved** the staged submission; the Dashboard read *"Ready to publish before Oct 13, 2026"* (owner-provided, 2026-09-30) |
+| 2026-09-30 | The final pre-publication gate `CHROME-WEB-STORE-PUBLISH-001A` returned `READY_FOR_OWNER_PUBLISH`: the full manual checklist, the policy re-read, the signed-out Privacy Policy check, the trader re-check and the visual asset approval ([chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8, §15) |
+| 2026-09-30 | The owner **published** manually. The Dashboard now reads **`Published to testers`** |
+
+**The `Unlisted` entries in §0.11 and §0.12 are genuine history.** `Unlisted` was
+the saved visibility on 2026-08-30; `Private` is the owner's later choice, and
+is the configuration that was reviewed and published.
+
+**Package provenance — the published package is the corrected one, and current
+source still builds it.** Repository-verifiable, by reproducible build on
+2026-09-30:
+
+- `45a0516` (PR #255, CORRECTION-01) builds a ZIP of **15788 bytes** with SHA-256
+  **`0feb935d914af2141c41aa129bf211cf08492a5d4ccb5e169bab8afb9f9c4634`** — exactly
+  the pre-upload hash recorded in §0.1;
+- the pre-correction `001E2` source (`89a7c24`) is **also** versioned `0.1.0` but
+  builds a different package — 14887 bytes, SHA-256 `1f4a6d93…`, permissions
+  `activeTab` only. The version number cannot tell the two apart; the Store's
+  permission display (`activeTab`, `scripting`, §0.1) can, and it rules the
+  earlier package out;
+- current `main` (`19692f7`) builds **byte-identical** output: `0feb935d…`,
+  15788 bytes. Since `45a0516` the only change in the extension's closure is a
+  type-visibility entry in `tsconfig.extension.json` that the test suites need,
+  and the bundler toolchain resolves to the same versions. The byte-identical
+  output is the evidence that none of it moved the package. **Current
+  source and build behaviour therefore match the published `0.1.0`.**
+
+What this does **not** claim: the Dashboard exposes no hash of the uploaded ZIP,
+so Google has attested nothing about these bytes. Identifying the Store's package
+with `0feb935d…` rests on the local pre-upload record, the Store's permission
+display, and the absence of any later upload — no second `0.1.0` upload is
+recorded.
+
+**After publication.** The owner reports that the published extension was
+exercised after publication and appears to work correctly (owner-reported; no
+itemised post-publication checklist was recorded). The itemised acceptance is the
+pre-publication run in [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8.
+
+**Residual policy risk, carried into publication.** One first-party
+documentation tension was found in the final policy re-read and accepted by the
+owner as **not a blocker for the approved `0.1.0` release** —
+[chrome-web-store-readiness.md](chrome-web-store-readiness.md) §15.
+
+**Not performed.** Repository-verifiable: no Git tag, no GitHub Release and no
+version bump.
+
+**What is open.** Nothing, for the initial publication: it is **COMPLETE —
+PUBLISHED TO TESTERS**. Anything further is a different lifecycle — a future
+extension version, a Store metadata change, a visibility change — and each of
+those is a new owner decision. Any that changes the package or a reviewed field
+goes through a new Google review. None of those is an open task.
 
 ---
 
@@ -1105,7 +1229,7 @@ is a **stop-and-report** event, not an edit.
 
 **Live field: `Privacy policy URL*` — required**, because this item declares
 user-data handling (Web history = Yes, Website content = Yes). Confirmed on the
-live form 2026-08-30. Not entered by any task so far.
+live form 2026-08-30, and entered and saved by `001E3C` the same day (§0.12).
 
 ```text
 https://app.paperlume.app/privacy
@@ -1160,11 +1284,24 @@ protection, a routing regression or a rewrite change can each break it without
 breaking anything else. See
 [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §8 items 23–24.
 
-That same signed-out Production check must additionally confirm the page shows
-the amended §4 and the **August 30, 2026** effective date. A Preview deployment is
-not Production and does not close this gate. **Last passed: 2026-08-30** — which
-is evidence for that date only, not a completed step; re-run it immediately before
-every actual submission.
+That same signed-out Production check must additionally confirm that the page's
+extension section (§4) still carries the amended disclosure and still matches the
+Store's privacy answers. A Preview deployment is not Production and does not close
+this gate.
+
+**Two dates, both correct — do not confuse them.** The extension disclosure was
+added, and verified live, on **2026-08-30**, when the policy's effective date was
+**August 30, 2026**. On **2026-09-18** later owner-approved amendments about AI
+providers moved the **policy-wide** effective date to **September 18, 2026**. The
+extension section itself did not change: its source is identical at `8144504`
+and at `19692f7`. Until 2026-09-30 this gate also required the page to show the
+August 30 date. It now checks the extension section's content instead, because the
+effective date belongs to the whole policy and moves whenever any section does.
+See [chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6.
+
+**Last passed: 2026-09-30**, immediately before publication (it had also passed on
+2026-08-30). That is evidence for that date only, not a completed step; re-run it
+immediately before every future submission.
 
 ---
 
@@ -1414,6 +1551,9 @@ and is not produced.
 
 ## 11. Category, language, and contact fields
 
+> *The drafting-time table (2026-08-29/30), preserved. Every required field was
+> entered by `001E3C` (§0.12), and the item is published to testers (§0.13).*
+
 | Field | Value | Status |
 |---|---|---|
 | `Category*` | Suggested: **Workflow & Planning** (research/reference tooling) | **REQUIRED field; still an owner decision.** No live selection made. Choose from the live list at entry time |
@@ -1429,8 +1569,10 @@ and is not produced.
 
 ## 12. Distribution paths
 
-Documented, **not chosen**. The owner has made no distribution decision, and
-these three do not carry the same gates.
+Documented before any choice was made, and these three do not carry the same
+gates. *(Chosen since: the owner took **path B with `Private` visibility**, and
+`0.1.0` is published to testers — §0.13. The analysis below is the pre-decision
+record, preserved.)*
 
 > **Live Distribution form state, 2026-08-30 — see §0.8.** The untouched form
 > displays `Free of charge` (correct: the package contains no purchase flow),
@@ -1509,6 +1651,8 @@ support surface it does not yet have. That is a recommendation, not a decision.
 > hold:** no promo video was produced or uploaded, no Verified CRX opt-in and the
 > public key was never viewed, no GitHub Release/tag/version bump, and — the one
 > that matters most — **no submission for review and no publication.**
+> *(Superseded again 2026-09-30: `0.1.0` has since been submitted, approved and
+> published to testers — §0.13. No GitHub Release, tag or version bump exists.)*
 
 Still **not** performed *(as at `001E3A`; read with the supersession above)*:
 
@@ -1546,6 +1690,10 @@ in this document authorizes it.
 > longer draft *population* but the **submission action itself**, which remains
 > unauthorized and requires a separate explicit owner decision. Nothing in this
 > document authorizes submission or publication.
+>
+> **Update, 2026-09-30.** The owner made both decisions: `0.1.0` was submitted,
+> approved by Google, and published to testers with `Private` visibility (§0.13).
+> Nothing is outstanding for the initial publication.
 
 ### 13.2 Historical — the state through 2026-08-29, preserved
 

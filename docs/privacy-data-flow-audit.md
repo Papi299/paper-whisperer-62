@@ -426,7 +426,7 @@ https://app.paperlume.app/extension-import?kind=doi&value=<URL-encoded DOI>
 
 ### 11.9 Distribution status
 
-The extension is **not published** to the Chrome Web Store and no listing exists (`docs/deployment.md`, `README.md` §167). `npm run package:extension` produces a local, gitignored release candidate ZIP and explicitly uploads, publishes and tags nothing. *(Updated 2026-08-30 — see §26 and §26.8: a **draft** Store item now exists, the `0.1.0` package has been uploaded to it, and the listing, privacy, test-instruction and distribution fields have since been **populated and saved**. The extension is **still not published and still not submitted**. The packaging command's behaviour is unchanged: it still uploads nothing; the upload and the form entry were separate, owner-authorized manual actions.)*
+The extension is **not published** to the Chrome Web Store and no listing exists (`docs/deployment.md`, `README.md` §167). `npm run package:extension` produces a local, gitignored release candidate ZIP and explicitly uploads, publishes and tags nothing. *(Updated 2026-08-30 — see §26 and §26.8: a **draft** Store item now exists, the `0.1.0` package has been uploaded to it, and the listing, privacy, test-instruction and distribution fields have since been **populated and saved**. The extension is **still not published and still not submitted**. The packaging command's behaviour is unchanged: it still uploads nothing; the upload and the form entry were separate, owner-authorized manual actions.)* *(Superseded 2026-09-30 — see §35: `0.1.0` was submitted, approved by Google and **published to testers** with **`Private`** visibility. The packaging command still uploads nothing.)*
 
 ---
 
@@ -1279,6 +1279,9 @@ byte-for-byte what those sections audited, and no source file was touched.
 
 ### 26.1 Current Store state
 
+> *The state at `001E3A`/`001E3B`, 2026-08-30, preserved as written. See §26.8
+> for the populated draft and §35 for submission, approval and publication.*
+
 | Fact | Value |
 |---|---|
 | Draft item ID | `cfanjbamcemoeglgkpbidnclkomaocmo` |
@@ -1469,6 +1472,9 @@ that the Dashboard exposes no known pre-submission completeness blocker — **no
 that Google has approved anything, and **not** authorization to submit. The
 standing signed-out `/privacy` check above still runs immediately before any
 actual submission; it passed again on **2026-08-30** under `001E3D`.
+
+> *Superseded 2026-09-30 — the item was submitted, approved by Google and
+> published to testers. See §35.*
 
 ---
 
@@ -1873,3 +1879,63 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
   - The only Production request was an unauthenticated boot probe, which the function rejected with its own 401 before any Crossref call.
 - ❌ "PaperLume's traffic is in Crossref's polite pool" as an observed fact — **not claimed.** That follows from Crossref's documented rule that an email in `mailto` or the agent header selects the polite pool. No Crossref response header was observed.
 - ❌ "The stale identity caused a problem" — **not established.** There is no evidence that Crossref tried to reach `support@paperindex.app`, or that PaperLume's traffic was ever throttled or blocked because of it.
+
+---
+
+## 35. Addendum — 2026-09-30 — `CHROME-WEB-STORE-PUBLISH-001A` / `001B` — the extension is published to testers
+
+**Scope.** This records, for this document's purposes, that the extension's
+`0.1.0` was published. **No verified data-flow fact moves**: the published package
+is the one §11 and §24–§26 audited. Store-state facts are **owner-provided
+Dashboard evidence**. The full publication record, with the evidence class of
+each fact, is [chrome-web-store-listing.md](chrome-web-store-listing.md) §0.13,
+and this addendum does not restate it.
+
+### 35.1 Distribution status now
+
+| Fact | Value |
+|---|---|
+| Status | **Published to testers** (owner-provided, 2026-09-30) |
+| Visibility | **`Private`** — installable only by the configured testers |
+| Version | `0.1.0` |
+| Regions / payment | All regions / Free of charge |
+
+The earlier states are preserved as written in §11.9, §26.1 and §26.8.
+
+### 35.2 The published package is the audited package
+
+A reproducible build of `45a0516` gives exactly the pre-upload package recorded
+in §26.1: 15788 bytes, SHA-256 `0feb935d…`. Current `main` builds the same bytes.
+So the data behaviour described in §11 and §24–§26 is the published behaviour.
+The Store exposes no hash; what the identification rests on is set out in the
+listing record.
+
+### 35.3 Disclosures
+
+- The Privacy-form answers entered on 2026-08-30 (§26.8) are the ones that went
+  to review. On 2026-09-30 the owner re-read **Website content = Yes** and
+  **remote code = No** read-only, and no change to any answer is recorded.
+- The posted policy's **extension section is unchanged since 2026-08-30**. Its
+  source is identical at `8144504` and at `19692f7`. The **policy-wide**
+  effective date is **September 18, 2026** because of the later AI-provider
+  amendments (§30.7). The signed-out Production check passed on 2026-09-30
+  ([chrome-web-store-readiness.md](chrome-web-store-readiness.md) §6).
+
+### 35.4 Residual policy risk
+
+Google's July 2026 disclosure-requirement change, and the tension between its
+consolidated policy and the User Data FAQ, bear directly on how the extension's
+data access is disclosed and consented to. The owner accepted it as **not a
+blocker for the approved `0.1.0` release**. The analysis is
+[chrome-web-store-readiness.md](chrome-web-store-readiness.md) §15.
+
+### 35.5 What this addendum does NOT claim
+
+- ❌ "Google attested the published bytes" — **not claimed.** The Dashboard shows
+  no hash.
+- ❌ "The published extension was re-audited after publication" — **not claimed.**
+  The owner reports that it was exercised after publication and appears to work
+  correctly; no itemised post-publication check is recorded.
+- ❌ "Google's approval settles the disclosure question" — **not claimed.** See
+  §35.4.
+- ❌ A legal determination of any kind — **not claimed.**
