@@ -1,11 +1,25 @@
 # Chrome Web Store readiness — PaperLume extension
 
-> **Status: audit and engineering record. Not a legal opinion, and not an approval.**
+> **Status: audit and engineering record. Not a legal opinion.**
 >
-> Nothing here states or implies that Google has reviewed, accepted, or will
-> accept this extension. Every policy claim below was read from Google's own
+> **Current state, 2026-09-30 — `0.1.0` is PUBLISHED TO TESTERS.** Google
+> reviewed and approved the `0.1.0` submission, the owner published it manually
+> on **2026-09-30**, and the Developer Dashboard reads **`Published to testers`**,
+> with visibility **`Private`** — installable only by the configured testers —
+> in all regions, free of charge. That Store state is **owner-provided Dashboard
+> evidence**; nothing in this repository can query the Store. The publication
+> record and its provenance are
+> [chrome-web-store-listing.md](chrome-web-store-listing.md) §0.13, the final
+> pre-publication acceptance run is §8, and the final policy re-read — including
+> one **residual policy risk** — is §15.
+>
+> Google's approval covers the `0.1.0` submission it reviewed. It is not a legal
+> opinion, not a permanent exemption from any policy, and nothing here states or
+> implies that Google will accept any future version. Every policy claim below was
+> read from Google's own
 > first-party documentation on **2026-08-28**, and every listing and image
-> requirement was re-read on **2026-08-29**. Two listing questions turned out
+> requirement was re-read on **2026-08-29**; the policy and permission pages were
+> re-read again on **2026-09-30**, immediately before publication (§15). Two listing questions turned out
 > **not to be answerable from the documentation at all** — whether a
 > promotional video is required (§11), and whether the store icon is a separate
 > upload or is read from the package (§10) — because Google's own pages
@@ -17,8 +31,8 @@
 > rule [store-launch-checklist.md](store-launch-checklist.md) applies to the
 > mobile stores.
 >
-> **Current state, 2026-08-30 — the draft Store item is fully populated;
-> nothing is submitted and nothing is published.**
+> *Historical, and true when written (2026-08-30):* **the draft Store item is
+> fully populated; nothing is submitted and nothing is published.**
 > `CHROME-EXTENSION-IMPORT-001E3A` created one PaperLume **draft** item
 > (`cfanjbamcemoeglgkpbidnclkomaocmo`) and uploaded the validated `0.1.0`
 > package. **`001E3C` has since populated and saved all four owner-facing pages**
@@ -239,7 +253,9 @@ Two things distinguish it, and both are matters of degree rather than kind:
 
 **Risk: MODERATE.** Defensible, not guaranteed. This is the single most likely
 reason for a rejection, and the submission should be made expecting the question
-to be asked.
+to be asked. *(2026-09-30: Google approved the `0.1.0` submission, so this did not
+block it. The rating stands for future versions — one approval does not bind a
+later review.)*
 
 **Not a blocker for 001E1.** Nothing in current published policy makes this
 extension *clearly* unpublishable, so 001E1 did not — and must not — invent
@@ -612,10 +628,36 @@ browser** with no cached session (§8 items 23–24). Deployment protection, a r
 regression, or a rewrite change can each break it without breaking anything else,
 so re-verify on every submission rather than trusting a previous check.
 
-**Last successful signed-out Production verification: 2026-08-30**, which also
-closed the one-time content mismatch below. That verification is evidence for
-*that* date only. This gate is re-armed for the next submission and **must be
-performed again immediately before every actual Chrome Web Store submission**.
+**Signed-out Production verifications: 2026-08-30**, which also closed the
+one-time content mismatch below, **and 2026-09-30**, immediately before
+publication. Each is evidence for its own date only. This gate is re-armed for the
+next submission and **must be performed again immediately before every actual
+Chrome Web Store submission**.
+
+**The 2026-09-30 pass.** `https://app.paperlume.app/privacy` was opened in a fresh
+headless Chromium context with no stored session: HTTP **200**, **zero**
+redirects, no cookie set, no sign-in form. The extension section carried every
+point listed below, all four DOI metadata names and the Limited Use sentence, and
+not the retired *"read the contents of the webpage or its DOM"* claim.
+
+**The effective date — two dates, both correct.** The page showed **Effective
+date: September 18, 2026**, not August 30. That is expected and is **not** a
+mismatch:
+
+- the extension disclosure was added and verified live on **2026-08-30**, when the
+  policy's effective date was **August 30, 2026** (the closure record below);
+- on **2026-09-18**, owner-approved amendments about AI providers (PR #287 and
+  its companions) moved the **policy-wide** effective date to **September 18,
+  2026**;
+- the extension section did not change: the source of
+  `<Section id="chrome-extension">` in `src/pages/Privacy.tsx` is identical at
+  `8144504` and at `19692f7`. It is therefore the same text that was live while
+  Google reviewed `0.1.0` (submitted on or after 2026-08-30), and it still matches the
+  Store's privacy answers.
+
+So this gate checks the **content of the extension section**, not a fixed
+effective date. The date belongs to the whole policy and moves whenever any
+section does. The owner accepted the 2026-09-30 result on that basis.
 
 The content the extension section must cover:
 
@@ -886,6 +928,10 @@ Build the candidate first: `npm run package:extension`.
 > doi.org and let the redirect complete before touching the toolbar. Racing the
 > redirect tests the old path and proves nothing about the new one.
 
+> *The status as of 2026-08-30, preserved. On 2026-09-30 the whole checklist was
+> run again and **passed**, immediately before publication — see* **Final
+> pre-publication acceptance — 2026-09-30** *below.*
+>
 > **Checklist status, 2026-08-30 — read this before quoting "zero blockers"
 > anywhere.** Three different things are easy to conflate here, and only one of
 > them is finished:
@@ -956,6 +1002,50 @@ Build the candidate first: `npm run package:extension`.
 > and then. **Treat the acceptance above as evidence for its date, not as a
 > completed step** — the same standing the 2026-08-30 privacy-policy visit has.
 
+> **Final pre-publication acceptance — 2026-09-30 (`CHROME-WEB-STORE-PUBLISH-001A`)
+> — every item PASSED.** The whole checklist was run immediately before the owner
+> published `0.1.0`. That makes it a **pre-publication** run. The repository
+> holds no record of a run immediately before the earlier review submission, and
+> this record does not claim one. The boxes below still carry no tick, for the
+> reason given above: the checklist is re-run in full for every future version.
+>
+> **Build under test.** `dist-extension/` built from `main` at `19692f7`, loaded
+> unpacked into **Google Chrome 154.0.8037.58**. Its release ZIP is
+> byte-identical to the recorded corrected pre-upload ZIP (SHA-256 `0feb935d…`,
+> 15788 bytes). [Listing doc](chrome-web-store-listing.md) §0.13 identifies that
+> package as the reviewed `0.1.0` by provenance, not by any Store-side hash,
+> since the Store exposes none. The run instructions
+> specified a fresh Chrome profile. **Tester:** the owner. **Evidence class:**
+> items 1–21 and 25 are **owner-reported** results, with no screenshots recorded.
+> Items 22–24 were performed by the agent from the repository environment.
+>
+> | Items | Result | Detail |
+> |---|---|---|
+> | 1–3 Load and icons | **PASS** | Toolbar mark checked on light and dark Chrome themes |
+> | 4–7 PubMed | **PASS** | Real toolbar click on a PubMed record; Continue opened one `kind=pmid` handoff tab |
+> | 8 DOI, direct resolver | **PASS** | Using the non-resolving DOI **`10.1234/paperlume-item-8-check`** — see below |
+> | 9–12 DOI after redirect | **PASS** | **`10.1038/s41586-020-2649-2`**, clicked only after the redirect to the publisher had completed |
+> | 13 A second publisher | **PASS** | **SAGE**, **`10.1177/0890117116646335`**, on `journals.sagepub.com`. That host is not a DOI resolver — the URL classifier recognises only `doi.org` and `dx.doi.org` — so this detection necessarily came from the page's standard metadata |
+> | 14–16 Unsupported and restricted | **PASS** | |
+> | 17–19 Authentication handoff | **PASS** | Signed out and signed in. Acceptance did not require an import |
+> | 20–21 Permissions and copy | **PASS** | |
+> | 22 Policy citations | **PASS**, with one **residual policy risk** the owner accepted as non-blocking | §15 |
+> | 23–24 Privacy Policy, signed out | **PASS** | Live Production, fresh context; the effective date reads September 18, 2026 and the extension section is unchanged — §6 |
+> | 25 Listing images | **PASS** | The owner visually approved all five. An agent review of every caption against the shipped behaviour found no false claim, and the files are byte-unchanged since the reviewed submission |
+>
+> **Why item 8 used a DOI that does not exist.** A resolving DOI redirects to the
+> publisher before a `doi.org` page is ever committed, so a click made while the
+> address bar still shows doi.org reads the *previous* page — racing the redirect
+> cannot exercise this path, and a first attempt made that way was reported as not
+> tested. A well-formed DOI that does not exist makes doi.org serve its own "DOI
+> Not Found" page, so the address genuinely stays on doi.org. The click then
+> exercises exactly the direct, URL-only path item 8 is about. That path never
+> reads the page body, so the error page underneath changes nothing that is
+> tested. The popup showed that DOI, and Continue opened one tab with
+> `kind=doi&value=10.1234%2Fpaperlume-item-8-check`.
+>
+> **Item 33** (trader declaration) was re-checked the same day — see item 33.
+
 ### Load and icons
 
 - [ ] 1. Load `dist-extension/` unpacked at `chrome://extensions` (Developer mode on) in a **clean Chrome profile**. Confirm it loads with **no error and no warning** — in particular no "could not load icon" warning.
@@ -1004,10 +1094,11 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 ### Before entering anything in the Dashboard
 
 - [ ] 22. Re-verify every policy citation in this document **and in [chrome-web-store-listing.md](chrome-web-store-listing.md)** against the live primary source (see the header) — including the `activeTab` and `chrome.scripting` pages this correction relies on.
-- [ ] 23. **Confirm the amended public Privacy Policy is live in Production** (§6). Check the served page — not the repository, and not a Preview deployment — and confirm it no longer says the extension does not read the page's contents or DOM, that it discloses the bounded DOI metadata read, and that the effective date reads **August 30, 2026**. Until the *served* page says all three, the disclosed **Website content = Yes** contradicts the posted policy.
+- [ ] 23. **Confirm the amended public Privacy Policy is live in Production** (§6). Check the served page — not the repository, and not a Preview deployment — and confirm it no longer says the extension does not read the page's contents or DOM, that it discloses the bounded DOI metadata read, and that its extension section still matches the Store's privacy answers. Until the *served* page says all three, the disclosed **Website content = Yes** contradicts the posted policy. *(Until 2026-09-30 this item also required the effective date to read **August 30, 2026**. The policy-wide date has since moved to **September 18, 2026** with owner-approved AI-provider amendments, and the extension section is unchanged — §6. Check the section, not a fixed date.)*
 - [ ] 24. Confirm the privacy policy URL is **published and publicly reachable in Production, signed out, from a clean browser**. Items 23 and 24 are satisfied by the same visit; do them together and record the date.
 
-> **Items 23 and 24 — last passed 2026-08-30, and deliberately left unchecked.**
+> **Items 23 and 24 — passed 2026-08-30 and again 2026-09-30 (before publication;
+> §6), and deliberately left unchecked.**
 > Both were performed and **passed** in public Production, signed out, on
 > **2026-08-30**, after PR #258 merged as
 > `8144504508df333e850c0ed38ec1352c9579ca24`; that visit is what closed the
@@ -1023,8 +1114,8 @@ written; the point is to be on the *publisher's* page when PaperLume is opened.
 - [x] 29. ~~**Change the Privacy form's remote-code answer to `No, I am not using remote code`, and re-read it after saving.**~~ **DISCHARGED 2026-08-30 — the saved live state is `No, I am not using remote code`, confirmed by re-reading after save under `001E3C` and again read-only under `001E3D`; it did not revert. The remote-code justification is **empty**, and the Dashboard's blocker panel never demanded one.** *Chronology, preserved:* the untouched live form had been observed on 2026-08-30 displaying **`Yes, I am using remote code`** with a `Justification` field. That was **factually wrong** for this package — no remote JS or Wasm, no external script import, no `eval`, no `new Function`, and the injected function is bundled inside `popup.js` (§4) — and it was corrected. **A live-form trap worth not re-litigating:** after selecting `No` the justification field **stays visible** and keeps a static `required` attribute in the DOM, as do all four textareas on that page — so the DOM attribute is **not** the form's requiredness signal; the `*` marker is, and that field carries none. **Still binding for any future re-entry:** do not write a remote-code justification, and if one is ever genuinely demanded after selecting `No`, stop and report rather than inventing text.
 - [x] 30. ~~**Provision and verify a dedicated low-privilege reviewer account** for the Dashboard's separate **`Test instructions`** page (Username ≤ 100, Password ≤ 100, Additional instructions ≤ 500).~~ **DISCHARGED 2026-08-30 — the account exists in PaperLume Production and its low-privilege posture was verified.** The gate existed because the extension can be checked signed out, but `Continue in PaperLume` → Projects/Tags → confirm import **requires PaperLume authentication**, and a reviewer without an account hits a login wall. **What was verified** on the provisioned account (`0bcf4221-31f5-4f0a-b52d-1a1c567461c0`): exactly one Auth user and one email identity, email confirmed; password sign-in succeeded, the authenticated UUID matched, and the session was discarded afterwards; one `profiles` row; one ordinary **Free** `user_entitlements` row (`plan` free, `plan_status` active, 1500 papers, 524288000 bytes storage, 15 lifetime AI requests, 0 monthly, premium taxonomy off, labs/team off); one lifetime `ai_analysis` usage counter; and **zero** rows in `internal_user_access`, subscriptions, subscription events and usage credits — no billing provider/customer/subscription id, no owner/manager/admin privilege, no AI quota exemption. The library is empty: 0 papers, projects, tags, attachments and filter presets. Provisioning used the supported Supabase Auth Admin `createUser` path with `email_confirm: true`; **no direct Auth-table SQL**, and the entire Production mutation was `+1` each to `auth.users`, `auth.identities`, `profiles`, `user_entitlements` and `usage_counters`, with every other audited table unchanged. **No preseeded fixture is required and none was created — see §12.** **The credentials exist, are owner-held outside Git and chat, and ~~have not been entered into the Chrome Web Store~~ are — as of 2026-08-30, under `001E3C` — populated in the Chrome Web Store's confidential `Test instructions` fields**; they go only into those fields, never into Git, a PR description, a report, or chat. Non-secret steps are drafted in §12.
 - [x] 31. ~~**Confirm each permission justification fits the live 1,000-character cap.**~~ **DISCHARGED 2026-08-30 — the entered short forms were re-measured immediately before entry and verified byte-identical after save: `activeTab` = **981** characters, `scripting` = **996** characters, both inside the live 1,000 cap.** The full drafts in [chrome-web-store-listing.md](chrome-web-store-listing.md) §6 remain **over** it (1,071 and 1,470) and are still the reference text, not the entry text. **The safeguard survives and is not discharged by this:** the cap is a property of the live form, so **if either justification is edited before a future submission, re-measure it** — and never paste the long reference version.
-- [x] 32. ~~**Confirm visibility and regions deliberately.**~~ **DISCHARGED 2026-08-30 — the owner chose deliberately and the choices are saved: visibility **`Unlisted`** (Public and Private both unselected) and **`All regions`**, with the companion `All unlisted regions` control selected consistently — 155 of 155 region controls checked, none deselected individually. Payment state remains `Free of charge`.** *The caution below was the right one and it held in practice:* the live Distribution form had displayed `Public` and all regions **by default**, those defaults were not decisions, and publishing worldwide by failing to look at them would have been an accident rather than a choice. **The visibility actually chosen differs from the default that was displayed** — which is the concrete evidence that the default was never treated as authorization.
-- [ ] 33. **Confirm the trader/non-trader declaration still matches the owner's intended self-declaration — before submitting, not before charging.** **Owner decision frozen 2026-08-30 for the current beta submission: Non-trader**, and the Dashboard is configured as Non-trader. That is the owner's **self-declaration**, which is what Chrome asks for — *"it is the developer's responsibility to accurately self-declare"* — and it is **not** a finding by Google that Non-trader is correct. Chrome's test is **purpose-based**: a trader is *"acting for purposes relating to his trade, business, craft or profession"*, a non-trader *"for purposes which are outside"* of them ([trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure), re-read 2026-08-30). Note what the decision does **not** rest on: being pre-commercial is not on its own a basis for declaring Non-trader, and not wanting to publish a home address is an owner concern rather than Chrome's legal test. **What survives as a gate:** immediately before the actual submission action, re-read the then-current trader-disclosure policy and confirm that the Dashboard declaration still matches the owner's intended self-declaration and that no relevant policy or factual change has occurred. **Do not silently change it during Store entry.** If the owner's assessment moves to Trader, complete trader verification and the required public trader information before submission; Chrome makes verified trader information public to Store users, so this is a disclosure decision, not just a form field. Do not treat this as a post-launch task. The earlier open-classification framing is preserved as chronology in listing doc §0.10.
+- [x] 32. ~~**Confirm visibility and regions deliberately.**~~ **DISCHARGED 2026-08-30 — the owner chose deliberately and the choices are saved: visibility **`Unlisted`** (Public and Private both unselected) *(the 2026-08-30 saved state; the owner later changed it to **`Private`**, which is what was reviewed and published — listing doc §0.13)* and **`All regions`**, with the companion `All unlisted regions` control selected consistently — 155 of 155 region controls checked, none deselected individually. Payment state remains `Free of charge`.** *The caution below was the right one and it held in practice:* the live Distribution form had displayed `Public` and all regions **by default**, those defaults were not decisions, and publishing worldwide by failing to look at them would have been an accident rather than a choice. **The visibility actually chosen differs from the default that was displayed** — which is the concrete evidence that the default was never treated as authorization.
+- [ ] 33. **Confirm the trader/non-trader declaration still matches the owner's intended self-declaration — before submitting, not before charging.** **Owner decision frozen 2026-08-30 for the current beta submission: Non-trader**, and the Dashboard is configured as Non-trader. That is the owner's **self-declaration**, which is what Chrome asks for — *"it is the developer's responsibility to accurately self-declare"* — and it is **not** a finding by Google that Non-trader is correct. Chrome's test is **purpose-based**: a trader is *"acting for purposes relating to his trade, business, craft or profession"*, a non-trader *"for purposes which are outside"* of them ([trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure), re-read 2026-08-30). Note what the decision does **not** rest on: being pre-commercial is not on its own a basis for declaring Non-trader, and not wanting to publish a home address is an owner concern rather than Chrome's legal test. **What survives as a gate:** immediately before the actual submission action, re-read the then-current trader-disclosure policy and confirm that the Dashboard declaration still matches the owner's intended self-declaration and that no relevant policy or factual change has occurred. **Do not silently change it during Store entry.** If the owner's assessment moves to Trader, complete trader verification and the required public trader information before submission; Chrome makes verified trader information public to Store users, so this is a disclosure decision, not just a form field. Do not treat this as a post-launch task. The earlier open-classification framing is preserved as chronology in listing doc §0.10. **Re-checked 2026-09-30, immediately before publication:** the current trader-disclosure page was re-read (last updated 2024-02-09; definitions unchanged), the owner reconfirmed **Non-trader** as their own self-declaration, and the Dashboard still showed Non-trader. The declaration was not changed. This is the owner's self-declaration, not a legal determination by PaperLume, by Claude or by Google, and the item stays unticked because it runs again before every future submission.
 
 Record the date, the Chrome version, and the tester for each submission.
 
@@ -1259,6 +1350,12 @@ Full provenance for every listing image is in
 
 ## 11. Store listing readiness
 
+> **A status board as of 2026-08-30 — superseded 2026-09-30.** Every submission
+> gate below was discharged for `0.1.0`, which was submitted, approved and
+> **published to testers** ([listing doc](chrome-web-store-listing.md) §0.13). The
+> bullets are kept as the record of what was open when. The few that describe a
+> genuine owner choice for a *future* version say so.
+
 Requirements re-read from
 [Prepare your Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)
 and [Image guidelines](https://developer.chrome.com/docs/webstore/images) on
@@ -1303,9 +1400,10 @@ restate its contents.
 
 - **Privacy policy URL reachability** — `https://app.paperlume.app/privacy`.
   **Standing, not one-off.** What remains is **confirming it loads in Production,
-  signed out, from a clean browser — and still shows the amended §4 and the
-  August 30, 2026 effective date** — before *each* submission. Last passed
-  **2026-08-30**
+  signed out, from a clean browser — and that its extension section still carries
+  the amended §4 disclosure** — before *each* submission. *(The policy-wide
+  effective date has been **September 18, 2026** since the AI-provider
+  amendments; §4 is unchanged — §6.)* Last passed **2026-09-30**
 - ~~**Promotional video — requirement unresolved.**~~ **RESOLVED 2026-08-30:
   OPTIONAL** in the live form (`Global promo video`, no `*`). No longer an owner
   gate; producing one is a marketing choice
@@ -1323,7 +1421,8 @@ restate its contents.
   all regions by **default**. That is not an owner decision, and must not be read
   as one (listing doc §0.8)~~ **CLOSED 2026-08-30 —** the owner decided
   **`Unlisted`** (not the displayed `Public` default) and **`All regions`**, and
-  both are saved. The default/decision distinction above was the right caution
+  both are saved. *(The owner later changed visibility to **`Private`**, which is
+  what was reviewed and published — listing doc §0.13.)* The default/decision distinction above was the right caution
   and it held: the visibility actually chosen differs from the default that was
   displayed
 - ~~**Reviewer account for Test instructions**~~ **DISCHARGED 2026-08-30 —
@@ -1356,19 +1455,23 @@ restate its contents.
   intended self-declaration; do not silently change it during Store entry. If
   the assessment moves to Trader, trader verification and the required public
   trader information must be completed first. See §8 item 33 and listing doc
-  §0.10
-- **Distribution** — public vs unlisted vs private, and region availability
+  §0.10. **Re-checked 2026-09-30 before publication: Non-trader reconfirmed by
+  the owner; the declaration was not changed**
+- ~~**Distribution** — public vs unlisted vs private, and region availability
   (listing doc §12 documents the three paths and their differing gates without
-  choosing between them)
-- **Final visual approval** of the five committed listing images
+  choosing between them)~~ **CLOSED — `Private`, all regions; published to
+  testers 2026-09-30** (listing doc §0.13)
+- ~~**Final visual approval** of the five committed listing images~~ **DONE
+  2026-09-30 — the owner approved all five** (§8 item 25)
 - **Whether to adopt the alternative Store summary** in the manifest as well as
-  the Dashboard (listing doc §3)
+  the Dashboard (listing doc §3). *A choice for a future version only: the
+  summary is package-derived, so changing it needs a new package*
 - **Whether the popup's own palette should follow the brand pack.** The popup
   ships a teal accent (`#0e6b68`) predating the brand system, so the screenshots
   show a teal control on a navy/violet brand ground. It is a cosmetic product
   decision, not a Store requirement, and was deliberately **not** changed here:
   restyling shipped UI to make a listing image tidier is not release-candidate
-  work
+  work. *A choice for a future version only*
 
 ### VISUAL ASSETS
 
@@ -1607,6 +1710,11 @@ in a browser as well as in a unit test.
 **decision candidate** for a future phase: whether to introduce `/v1/` (or a
 `v=1` parameter) *before* first publication, since it is far cheaper to add
 while the installed base is zero. Worth deciding at submission time, not after.
+*(Superseded 2026-09-30: `0.1.0` was published with the unversioned contract
+above, and the repository records no versioning decision. The installed base is
+no longer zero — tester installs of `0.1.0` depend on this exact path and
+parameter set — so any future versioning must be **additive**, as
+[deployment.md](deployment.md) §2 already requires.)*
 
 ---
 
@@ -1658,3 +1766,139 @@ that text needed was approved by the owner and implemented by
 `PRIVACY-POLICY-EXTENSION-METADATA-001B`, which merged as
 `8144504508df333e850c0ed38ec1352c9579ca24` and is live in Production — see §6,
 where that gate is now recorded as **CLOSED**.
+
+---
+
+## 15. Final pre-publication policy re-read — 2026-09-30
+
+Performed under `CHROME-WEB-STORE-PUBLISH-001A`, immediately before the owner
+published `0.1.0`. This is §8 item 22 for that run. **Result: no new blocker; one
+residual policy risk, accepted by the owner as non-blocking.**
+
+### What was re-read
+
+Google's own pages, fetched on 2026-09-30, with the "Last updated" footer each
+page displayed:
+
+| Page | Footer |
+|---|---|
+| [activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab) | 2012-09-21 |
+| [chrome.scripting](https://developer.chrome.com/docs/extensions/reference/api/scripting) | **2026-09-11** |
+| [Permissions list](https://developer.chrome.com/docs/extensions/reference/permissions-list) | **2026-09-09** |
+| [Permission warnings](https://developer.chrome.com/docs/extensions/develop/concepts/permission-warnings) | 2024-02-05 |
+| [Program policies (consolidated)](https://developer.chrome.com/docs/webstore/program-policies/policies) | 2025-05-22 |
+| [Use of permissions](https://developer.chrome.com/docs/webstore/program-policies/permissions) | 2022-11-01 |
+| [MV3 requirements (remote code)](https://developer.chrome.com/docs/webstore/program-policies/mv3-requirements) | 2024-04-03 |
+| [Improve extension security (remote code, cited in §4)](https://developer.chrome.com/docs/extensions/develop/migrate/improve-security) | 2023-03-08 |
+| [User data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq) | 2016-04-23 |
+| [Limited Use](https://developer.chrome.com/docs/webstore/program-policies/limited-use) | 2022-11-01 |
+| [Disclosure requirements](https://developer.chrome.com/docs/webstore/program-policies/disclosure-requirements) | 2022-11-01 |
+| [Minimum functionality](https://developer.chrome.com/docs/webstore/program-policies/minimum-functionality) | 2022-11-01 |
+| [Listing requirements](https://developer.chrome.com/docs/webstore/program-policies/listing-requirements) | 2024-07-10 |
+| [Quality guidelines](https://developer.chrome.com/docs/webstore/program-policies/quality-guidelines) | 2024-07-10 |
+| [Trader disclosure](https://developer.chrome.com/docs/webstore/program-policies/trader-disclosure) | 2024-02-09 |
+| [Privacy practices (Dashboard)](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy) | 2020-06-12 |
+| [Distribution (Dashboard)](https://developer.chrome.com/docs/webstore/cws-dashboard-distribution) | 2020-12-07 |
+| [Publish](https://developer.chrome.com/docs/webstore/publish) | 2014-02-28 |
+
+Plus two announcements that no footer reflects:
+[Chrome Web Store policy updates](https://developer.chrome.com/blog/cws-policy-updates-2026)
+(published 2026-07-01, enforced from **2026-08-01**) and
+[Chrome Web Store updates](https://developer.chrome.com/blog/cws-review-updates-2026)
+(published 2026-08-20).
+
+**The footers do not reliably track content.** The disclosure-requirements page
+carries the July 2026 wording quoted below under a 2022-11-01 footer. A re-read
+that looks only at footer dates would have missed the one material change. Read
+the announcements as well.
+
+### Unchanged, and still what PaperLume relies on
+
+- **`activeTab`** is granted by *"Executing an action"* among other gestures; it
+  allows `scripting.executeScript()` on that tab *"if the `"scripting"`
+  permission is also declared"*; access *"is revoked when the user navigates away
+  or closes the tab"*, with the same-origin example unchanged; and it *"displays
+  no warning message during installation"*.
+- **`scripting`** still requires *"the host permissions for the pages to inject
+  scripts into. Use the `"host_permissions"` key or the `"activeTab"`
+  permission, which grants temporary host permissions"*. Injection still defaults
+  to the main frame, and an injected `func` still loses *"any bound parameters
+  and execution context"*. The 2026-09-11 revision renamed the examples to
+  `browser.scripting` and changed none of these semantics.
+- The **permissions list** gives no warning for either `activeTab` or `scripting`.
+- **Remote code**, **use of permissions**, **minimum functionality**, **listing
+  requirements** and **trader definitions** are unchanged from the readings cited
+  elsewhere in this document.
+- **Staged publishing**: *"you will have up to 30 days to publish. After that
+  period expires, the staged submission will revert to a draft"* — consistent with
+  the Dashboard's *"Ready to publish before Oct 13, 2026"*.
+
+### The 2026 announcements
+
+- **Limited Use** — collected data must be *"strictly necessary to the
+  extension's disclosed single purpose"*. PaperLume reads only the active tab's URL
+  and, where needed, four DOI `<meta>` values, solely to identify the paper. It
+  complies.
+- **Regulated goods** (prediction markets) and **AI-guardrail circumvention** do
+  not apply.
+- **Publication limits** (2026-08-20) — each publisher has an individual limit,
+  by default two extensions and never fewer than it has already published. A
+  first published item fits within it. The same post adds pre-submission
+  installation checks and sunsets the "Featured" badge; neither affects `0.1.0`.
+- **Disclosure requirements** — the residual policy risk below.
+
+### RESIDUAL POLICY RISK / NOT A BLOCKER FOR THE APPROVED 0.1.0 RELEASE
+
+**The change.** The July 2026 announcement: *"We are updating our transparency
+standards to require that all data collection be prominently disclosed to the
+user—regardless of whether the data is closely related to the extension's
+single purpose."* The August audit (2026-08-28 to 2026-08-30) did not cite this announcement, although
+it was already published and in force. This section closes that gap.
+
+**The first-party tension.** Two current Google texts point in different
+directions:
+
+- the **consolidated policy** — *"If your Product handles any user data, then
+  prior to installation, it must: Prominently disclose what user data will be
+  collected and how it will be used. Obtain the user's affirmative and informed
+  consent for such use."*;
+- **User Data FAQ, question 10** — *"To obtain consent, the Product must ask the
+  user to agree to the prominent disclosure in a manner that requires them to take
+  a specific action clearly agreeing to the disclosure before collecting or
+  handling user data. The prominent disclosure and consent must occur within the
+  Product's user interface. Disclosures in the Chrome Web Store description or
+  inline installation page do not satisfy this requirement."*
+
+A disclosure made *prior to installation* cannot occur *within the Product's user
+interface*, so the two cannot both be read literally. The FAQ predates the July
+2026 change: its footer is 2016, and it was written when the requirement applied
+only to data *not* closely related to the described functionality.
+
+**PaperLume `0.1.0`'s position.**
+
+- It **discloses the data access in the Store listing** before installation: the
+  detailed description names the URL read and the four DOI metadata keys
+  (listing doc §4).
+- It **declares** Web history and **Website content** in the Privacy form.
+- It accesses a page **only after an explicit toolbar click**, only that tab, and
+  it transmits the identifier only on a second, explicit **Continue**.
+- The **popup explains the bounded behaviour** at every use: it checks the tab only
+  when opened, reads the address first and DOI metadata only when needed, stores
+  nothing, and passes on only the identifier.
+- Google **reviewed and approved** `0.1.0` after the policy's 2026-08-01
+  enforcement date: the submission was made on or after 2026-08-30.
+
+What it does **not** have is an in-product disclosure-and-consent step shown
+*before* the first read. That is the gap under the FAQ's reading.
+
+**The owner's decision, 2026-09-30.** The owner accepted this as a **residual
+policy risk that does not block the approved `0.1.0` release**.
+
+**What this does not claim.** Google's approval of `0.1.0` is not a permanent
+exemption, not a ruling on this question, and no guarantee that a future version
+— or a later enforcement review of `0.1.0` — will be judged the same way.
+
+**Optional future consideration — not implemented, not scheduled.** An in-popup
+first-run disclosure and consent step may be reconsidered for a later release if
+Google's guidance becomes clearer or Google requests it. It would be a package
+change, so it means a new version and a new Google review. It is not an open task.
