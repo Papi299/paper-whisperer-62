@@ -188,12 +188,17 @@ SELECT ok(
 -- seed nobody reviewed. A floating alias stays excluded on its own terms: it is
 -- not a stable thing to have chosen.
 --
--- The two approved ids are named exceptions rather than a relaxed pattern, so
--- the guard keeps its full force: a third Claude or GPT model still fails here.
+-- The approved ids are named exceptions rather than a relaxed pattern, so the
+-- guard keeps its full force: an unreviewed Claude or GPT model still fails
+-- here. AI-MODEL-CATALOG-REFRESH-001A added the three staged replacements
+-- (claude-sonnet-5-5, claude-opus-5-5, gpt-6.1-sol) under the same C43 review;
+-- suite 028 asserts them exhaustively.
 SELECT is(
   (SELECT count(*)::int FROM public.ai_model_catalog
     WHERE provider_model ~* '(claude|gpt|o[0-9]|preview|latest)'
-      AND id NOT IN ('anthropic/claude-sonnet-5', 'openai/gpt-5.6-terra')),
+      AND id NOT IN ('anthropic/claude-sonnet-5', 'openai/gpt-5.6-terra',
+                     'anthropic/claude-sonnet-5-5', 'anthropic/claude-opus-5-5',
+                     'openai/gpt-6.1-sol')),
   0, 'no unreviewed Claude / GPT / o-series / preview / -latest model reached the catalog');
 
 -- The catalog is product metadata. Its column set is pinned so a future change

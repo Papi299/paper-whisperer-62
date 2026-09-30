@@ -149,11 +149,14 @@ SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
 -- vocabulary and the Automatic matrix, which activation did not move.
 
 -- 001C seeded no non-Google model; AI-MULTI-PROVIDER-001E later added exactly
--- two. Suite 018 owns their full metadata.
+-- two, and AI-MODEL-CATALOG-REFRESH-001A staged exactly three more. Suites 018
+-- and 028 own their full metadata.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE provider <> 'google'
-              AND id NOT IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
-  0, 'the catalog holds no non-Google row beyond the two paid models');
+              AND id NOT IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra',
+                             'anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5',
+                             'openai/gpt-6.1-sol')),
+  0, 'the catalog holds no non-Google row beyond the two paid models and the three staged ones');
 
 -- The per-model fact Google publishes: 3.7 and 3.8 reject `minimal`.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
@@ -213,7 +216,7 @@ SELECT is(pg_temp.errcode_as('postgres','',
              ARRAY['off','low','medium','high','xhigh','max'],'off','medium',false)$q$),
   '00000', 'a well-formed future-provider row is accepted (fixture, deleted next)');
 DELETE FROM public.ai_model_catalog WHERE id = 'anthropic/suite-016-fixture';
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 6,
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 9,
   'the positive-control fixture left nothing behind');
 
 -- ════════════════════════════════════════════════════════════════════════════
