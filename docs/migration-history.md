@@ -4445,9 +4445,9 @@ Decision **C57**. It implements the read-only audit `SERVICE-ROLE-LEAST-PRIVILEG
   - **No runtime change.** No Edge Function was deployed (all six keep their versions and `ezbr_sha256`), and no secret, Auth or Storage setting changed. The Security Advisor's 31 findings are unchanged. Vercel's automatic Production deployment for the merge commit needed no manual action.
   - **Rollback.** None performed; any correction would be a new forward migration.
 
-## 2026-09-30 — SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001: `search_papers` flags every field that contributed a query term (`20260930161651`) — **PREPARED / NOT DEPLOYED**
+## 2026-09-30 — SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001: `search_papers` flags every field that contributed a query term (`20260930161651`) — **APPLIED / PRODUCTION-VERIFIED — 2026-09-30**
 
-Decision **C58**, **contributing-field attribution**. It implements the owner-approved Option B of the read-only audit `SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-AUDIT-001` (2026-09-30, classification **UX_ATTRIBUTION_DEFECT**). **Not applied:** Production stays at ledger 97 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.19).
+Decision **C58**, **contributing-field attribution**. It implements the owner-approved Option B of the read-only audit `SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-AUDIT-001` (2026-09-30, classification **UX_ATTRIBUTION_DEFECT**). **Applied 2026-09-30** after merging as `8a2a880c` (PR #325, approved head `1b496fed`), in a migration-only rollout ([deployment.md](deployment.md) §6.19).
 
 - **The defect.** FTS returned a paper when its combined `search_vector` held every query term, which may be spread over several fields. But each `matched_*` flag tested one field against the whole AND-query. `metformin smith` against keyword "metformin" + author "Smith" returned the paper, correctly, with all six flags false, and `PaperList` rendered no "Matched in:" line. The short and phrase paths could not do this, and the result set was always right.
 - **Migration `20260930161651_fix_search_match_cross_field_attribution`.** Created with `supabase migration new`. It is explicitly transactional and runs as `postgres` under transaction-local `search_path = pg_catalog, pg_temp` and `lock_timeout = 5s`.
@@ -4480,4 +4480,14 @@ Decision **C58**, **contributing-field attribution**. It implements the owner-ap
   - `024`, `000`, `003` and the ACL-parity references were re-reviewed and are unchanged.
 - **E2E.** `e2e/search-attribution.spec.ts` gains one cross-field case whose query needs terms from two fields of the seeded paper and expects exactly those two badges.
 - **Historical migrations are untouched.**
-- **Rollout — not performed.** See [deployment.md](deployment.md) §6.19.
+- **Rollout — complete, 2026-09-30** ([deployment.md](deployment.md) §6.19 holds the full record).
+  - **Merge and CI.** PR #325 merged as the two-parent `8a2a880c68e5263c57a3e4a7c541a8d68f1c88ac` (parents `0ae11d0e` and `1b496fed`; tree identical to the approved head's). Merged-`main` Validate, DB Tests and Extension passed on attempt 1.
+  - **Preflight.** Read-only against Production: ledger 97, latest `20260929084252`, this migration absent, and `search_papers` at body `d4a5f3af…` with the reviewed posture. The merged file's §0–§1 passed read-only. The migration list showed exactly one local-only migration, and the dry run listed exactly this file.
+  - **Apply.** One linked `npx supabase db push --linked --yes` (CLI 2.111.0), first attempt, exit 0. It applied exactly `20260930161651_fix_search_match_cross_field_attribution.sql`, with no seeds and no roles. Ledger **97 → 98**, latest `20260930161651`, present once, and no other migration was applied.
+  - **Durable outcome** (verified read-only after the apply):
+    - `search_papers` body `d4a5f3af…` → `1a72d57a…`;
+    - its OID, signature, owner, SECURITY INVOKER mode, volatility, parallel mode, `search_path` and authenticated-only ACL are unchanged;
+    - `search_vector`, `idx_papers_search_vector`, `papers` RLS and policies, and every other function are unchanged;
+    - no application row was written.
+  - **Evidence boundary.** No Production search was run and no real user content was read or used as a fixture. Behaviour rests on the deployed body, suite `027` and the local E2E case. No Edge Function, secret, Auth, Storage or manual Vercel action was involved; Vercel's automatic Production deployment of the merge commit (`dpl_3etF1C2pEFnveK4hhPLq6931GaLj`, READY) needed no manual action and was not what activated C58; the migration was.
+  - **Rollback.** None performed; any correction would be a new forward migration.
