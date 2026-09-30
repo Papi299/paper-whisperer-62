@@ -2110,7 +2110,14 @@ Section 3 then proves:
 
 ### C58. Full-text search attribution names every field that contributed a query term (2026-09-30)
 
-**Status: PREPARED — NOT DEPLOYED.** Migration `20260930161651_fix_search_match_cross_field_attribution.sql` implements it (`SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001`). It follows the read-only audit `SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-AUDIT-001` (2026-09-30, **UX_ATTRIBUTION_DEFECT**, P2) and the owner's approval of its Option B. Production has not been changed: it stays at ledger 97 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.19).
+**Status: COMPLETE — LIVE in Production since 2026-09-30.** Migration `20260930161651_fix_search_match_cross_field_attribution.sql` implements it (`SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001`). It follows the read-only audit `SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-AUDIT-001` (2026-09-30, **UX_ATTRIBUTION_DEFECT**, P2), and the owner chose its Option B, **contributing-field attribution**. It merged as the two-parent `8a2a880c68e5263c57a3e4a7c541a8d68f1c88ac` (PR #325, approved head `1b496fed`). It was applied on 2026-09-30 in a migration-only rollout (`SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001B`; [deployment.md](deployment.md) §6.19).
+
+- **Production outcome** (observed read-only immediately after the apply, and again the same day for the documentation reconciliation):
+  - ledger **97 → 98**, latest `20260930161651`, present once;
+  - `search_papers` body `d4a5f3afdc485d5dfda8e0798c61cc48` → `1a72d57a585779644c00636f0da3b253`, with every other attribute unchanged: owner, `plpgsql`, SECURITY INVOKER, VOLATILE, PARALLEL UNSAFE, `search_path=public`, and the authenticated-only ACL;
+  - membership (`p.search_vector @@ v_ts_query`) and rank (`ts_rank(p.search_vector, v_ts_query)`) are unchanged, and all six flags test `v_ts_any`;
+  - `search_vector`, its GIN index, `papers` RLS and policies, and every other function are unchanged.
+- **The known limitation below remains**, as characterized. C58 did not change it.
 
 **Decision — contributing-field attribution.** For the unquoted 3+ character full-text path (`search_papers`), a field's `matched_*` flag is true iff that field contains **at least one effective query term**. Row membership and rank do not change: a row must still contain every effective term somewhere in the combined six-field `search_vector`, and it is ranked by `ts_rank` against the same `&`-joined query. Precisely, with T the existing sanitizer's tokens and q(t) = `to_tsquery('english', t || ':*')`:
 

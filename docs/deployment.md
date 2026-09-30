@@ -737,7 +737,7 @@ Nothing else: not a body, signature, return type, argument default, volatility, 
    ROLLBACK;
    ```
    Expected (the live state since 2026-09-26):
-   - All five: `prosecdef` **false**; owner `postgres`; `{search_path=public}`; ACL `{postgres=X/postgres,authenticated=X/postgres}`; `auth_x` true, `anon_x` and `svc_x` false; bodies **unchanged** — `search_papers` `d4a5f3afdc485d5dfda8e0798c61cc48` *(C58, §6.19 — prepared, not yet applied — replaces this body; once it is applied, expect `1a72d57a585779644c00636f0da3b253`)*, `search_papers_short` `ce353564edcb73a5466092e84d0b8d1b`, `filter_papers_by_keywords` `b2f5a8e58589a5a094a7074c5ed9bb2d`, `get_keyword_options` `531010c10d84ee94c7c1e00d65a2e7f5`, `get_duplicate_papers` `3c914811a9b8c75b9df834e1cf51e1e0`.
+   - All five: `prosecdef` **false**; owner `postgres`; `{search_path=public}`; ACL `{postgres=X/postgres,authenticated=X/postgres}`; `auth_x` true, `anon_x` and `svc_x` false; bodies **unchanged** — `search_papers` `d4a5f3afdc485d5dfda8e0798c61cc48` *(its body at the C49 rollout. Since C58 was applied on 2026-09-30 (§6.19), the live body is `1a72d57a585779644c00636f0da3b253`, and re-running this query now returns that; its other attributes above are unchanged)*, `search_papers_short` `ce353564edcb73a5466092e84d0b8d1b`, `filter_papers_by_keywords` `b2f5a8e58589a5a094a7074c5ed9bb2d`, `get_keyword_options` `531010c10d84ee94c7c1e00d65a2e7f5`, `get_duplicate_papers` `3c914811a9b8c75b9df834e1cf51e1e0`.
    - `public_definer` **40 → 35**, `auth_definer` **32 → 27**.
    - `papers` / `synonym_pool` ACLs, RLS, FORCE RLS and all eight policies unchanged (policy digest `07603cbe4e78a4d6097e7ec33bd1e6c8`, the formula in the migration's §1d).
 6. Re-read the Security Advisor (read-only): `authenticated_security_definer_function_executable` **32 → 27**, with none of the five listed. The remaining 27 are expected at this phase — the 24 functions the audit found intentionally privileged, plus `bulk_update_keywords`, `bulk_update_study_types` and `safe_bulk_insert_papers`, which are later INVOKER groups. *(All three since converted on 2026-09-27: the two `bulk_update_*` functions by C52 (§6.13) and `safe_bulk_insert_papers` by C53 (§6.14), which took the count to 24.)*
@@ -1634,15 +1634,59 @@ The privilege DDL may prompt a routine PostgREST schema-cache reload through the
 
 ---
 
-### 6.19 `20260930161651` (contributing-field search attribution, C58) — migration-only; PREPARED — NOT DEPLOYED
+### 6.19 `20260930161651` (contributing-field search attribution, C58) — migration-only; APPLIED / PRODUCTION-VERIFIED — 2026-09-30
 
-> **Status — PREPARED IN THE REPOSITORY; NOT DEPLOYED.** Production is at ledger **97** (latest `20260929084252`). There, `search_papers` still has the previous body `d4a5f3afdc485d5dfda8e0798c61cc48`, which flags a field only when that field alone satisfies the whole query. Applying this migration needs its own separately authorized rollout. Nothing below has been run against Production.
+> **Status — APPLIED / PRODUCTION-VERIFIED — 2026-09-30.** The migration-only rollout (`SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001B`) finished on 2026-09-30, and C58 is live in Production. By design, and by the checks below, the only durable database changes were the migration-ledger entry and `search_papers`' body.
+>
+> - **Merged.** PR #325 as the two-parent commit `8a2a880c68e5263c57a3e4a7c541a8d68f1c88ac`. Its parents are `0ae11d0e` and the approved head `1b496fed4ba99ee0b5f724e967fcfe53f62fa89d`, and its tree `3809584b` is identical to the approved head's. The source branch was deleted after the rollout.
+> - **Hosted CI.** Merged-`main` on `8a2a880c`, all passing on attempt 1:
+>   - Validate (run `36757016310`);
+>   - DB Tests (`36757016305`): 28 files / 2,530 pgTAP assertions, including suite `027`;
+>   - Extension (`36757016311`).
+>
+>   `E2E (local)` does not run on a push to `main` ([README](../README.md#ci)). Its pull-request run on the exact approved head, `36749595519`, passed 260 tests. That lane does not include `e2e/search-attribution.spec.ts`; its cross-field case was run locally during implementation, with a red control.
+> - **Before — verified read-only after the merge and merged-`main` CI, immediately before the apply:**
+>   - PostgreSQL 17.6; ledger **97**, latest `20260929084252`; `20260930161651` absent.
+>   - `search_papers`:
+>     - body `d4a5f3afdc485d5dfda8e0798c61cc48`;
+>     - one overload, owner `postgres`, `plpgsql`, SECURITY INVOKER, VOLATILE, PARALLEL UNSAFE, `search_path=public`;
+>     - ACL `{postgres=X/postgres,authenticated=X/postgres}`, so `authenticated` can execute it and PUBLIC, `anon` and `service_role` cannot;
+>     - nothing depends on it.
+>   - Search infrastructure and RLS:
+>     - `search_vector` stored expression `8ddd960b4f4b11dd7afd35485d01fd25`;
+>     - `idx_papers_search_vector` valid, ready and live;
+>     - `papers` RLS and FORCE RLS on, with the `papers` / `synonym_pool` policy digest `07603cbe4e78a4d6097e7ec33bd1e6c8`;
+>     - `authenticated` is neither superuser nor BYPASSRLS.
+>   - This catalog fingerprint was identical to one taken before the merge.
+> - **Read-only preflight — the merged file's §0–§1.** The statements after the file's `BEGIN;`, through the end of §1, ran verbatim inside `BEGIN TRANSACTION READ ONLY; … ROLLBACK;` (`transaction_read_only = on`), and no DDL was sent. They passed as `postgres` with the transaction-local settings in effect, and recorded the previous body `d4a5f3af…`.
+> - **What was run — migration only, exactly as planned.**
+>   - `supabase migration list --linked` showed local and remote aligned through `20260929084252` (97 paired), exactly one local-only migration, `20260930161651`, and no remote-only one.
+>   - `supabase db push --linked --dry-run` listed exactly `20260930161651_fix_search_match_cross_field_attribution.sql`, with no seeds and no roles.
+>   - From a clean checkout of `main` at the merge commit, one `npx supabase db push --linked --yes` (Supabase CLI 2.111.0) applied exactly that file on its first and only attempt. It exited 0 and reported no seeds and no roles.
+>   - Ledger **97 → 98**.
+> - **After — verified read-only immediately after the apply.** The catalog fingerprint was re-read later the same day, unchanged, for the documentation reconciliation.
+>   - **Ledger:** **98**, latest `20260930161651`, present exactly once (name `fix_search_match_cross_field_attribution`, 8 recorded statements). The other 97 versions are unchanged, so no other migration was applied.
+>   - **Body:** `search_papers` is `1a72d57a585779644c00636f0da3b253`. All six `matched_*` flags test `v_ts_any`. The membership predicate `p.search_vector @@ v_ts_query` and the rank `ts_rank(p.search_vector, v_ts_query)` each occur once, verbatim.
+>   - **Function identity and posture:** its whole `pg_proc` row except the body is identical to the preflight snapshot — OID, signature, result, owner, language, security mode, volatility, parallel mode, cost, rows, `search_path` and ACL. Effective EXECUTE is still `authenticated` only.
+>   - **Other functions:** every other `public` function's row is identical, including `search_papers_short` (`ce353564edcb73a5466092e84d0b8d1b`) and the other read RPCs.
+>   - **Search infrastructure and RLS:** unchanged — `search_vector` (`8ddd960b…`), every `papers` index (with `idx_papers_search_vector` valid, ready and live), `papers`' owner, RLS, FORCE RLS, table ACL and grants, and the policy digest `07603cbe…`.
+>   - **No row writes:** the migration's own §3 proved, before COMMIT, that it wrote no row in `public`, `auth` or `storage`.
+> - **Runtime evidence boundary.** No Production user-content query and no Production UI search were run, no Production search fixture was created, and no real paper content was read. Acceptance rests on:
+>   - the exact deployed body and posture above;
+>   - merged-`main` DB Tests, including suite `027`, which compares rows, ranks and flags against the previous body;
+>   - the local E2E cross-field case from the implementation phase.
+>
+>   This is not an end-to-end Production UI acceptance.
+> - **Deployment isolation.** The migration push was the rollout's only intentional Production database mutation.
+>   - No Edge Function was deployed. The six were read after the apply at their existing versions — `analyze-paper` v33, `delete-account` v6, `fetch-paper-metadata` v23, `get-gemini-provider-quota` v9, `search-pubmed` v6, `suggest-paper-organization` v16 — and none had been updated since 2026-09-28.
+>   - No secret, Auth or Storage change was made.
+> - **No manual Vercel action.** Vercel's Git integration created its usual Production deployment for the merge commit: `dpl_3etF1C2pEFnveK4hhPLq6931GaLj`, source `8a2a880c`, target production, READY, aliased to `app.paperlume.app`. The frontend needed no change for C58. The database migration, not that deployment, activated it.
 
 **What the migration does** (C58). One `CREATE OR REPLACE FUNCTION public.search_papers(uuid,text,integer,integer)` inside a fail-closed transaction. The same sanitized tokens are also joined with ` | ` into `v_ts_any`, once per call, and the six `matched_*` flags test `v_ts_any` instead of the membership query. The guard, sanitizer, `&`-join, empty-input return, membership `WHERE`, `ts_rank`, `ORDER BY` and `LIMIT/OFFSET` are the previous body's text verbatim, and section 3 proves it. Signature, return columns, defaults, `LANGUAGE plpgsql`, SECURITY INVOKER, VOLATILE, PARALLEL UNSAFE, COST 100, ROWS 1000, `search_path=public`, owner and ACL are all unchanged, and every attribute is restated explicitly. No GRANT or REVOKE. `search_papers_short`, `papers`, `search_vector`, the GIN index and every policy are untouched, and no row is written. The new body is `1a72d57a585779644c00636f0da3b253`.
 
 **No ordering constraint.** The shipped web app renders whatever flags the RPC returns, and the RPC's name, arguments and result columns do not change, so the generated types do not change either. No Edge Function calls `search_papers`, so there is no web-first or Edge-first step, and no Vercel or Edge deployment is part of this rollout.
 
-**Reference procedure — the plan, not a record.**
+**Reference procedure — the plan as written before the rollout, kept for re-verification and as the pattern for a comparable migration-only change; not a pending step.** The completed record is the status box above; these steps describe the procedure and are not themselves a record of what was run.
 1. Merge the independently approved exact head with a regular two-parent merge commit. Wait for merged-`main` CI (Validate, DB Tests, Extension) to be green on that commit. `E2E (local)` is not a merged-`main` check; its evidence is the pull-request run on the exact approved head.
 2. Read-only preflight: send the merged file's statements after `BEGIN;`, through the end of §1, verbatim inside `BEGIN TRANSACTION READ ONLY; … ROLLBACK;`. Send no DDL. It must pass as `postgres` with the transaction-local settings in effect. Section 1 refuses any other pre-state; a refusal must be explained before anyone retries.
 3. `supabase migration list --linked`: local and remote aligned through `20260929084252`, and exactly one local-only migration, `20260930161651`. `supabase db push --linked --dry-run` must list exactly that file, with no seeds and no roles. Anything else: stop (§6.2).
