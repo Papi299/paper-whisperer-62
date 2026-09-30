@@ -2105,3 +2105,42 @@ Section 3 then proves:
 - Supabase changing `service_role`'s attributes, memberships or platform defaults, or granting it `CREATE` on `public`;
 - a PostgreSQL upgrade — re-check `pg_default_acl` afterwards, because the upgrade documentation is silent on default privileges;
 - a database whose state differs from the reviewed one, which the migration refuses — stop and re-review; do not edit the migration to fit (Production passed the reviewed preflight as shape H and was hardened on 2026-09-29).
+
+## Search attribution (2026-09-30)
+
+### C58. Full-text search attribution names every field that contributed a query term (2026-09-30)
+
+**Status: PREPARED — NOT DEPLOYED.** Migration `20260930161651_fix_search_match_cross_field_attribution.sql` implements it (`SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001`). It follows the read-only audit `SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-AUDIT-001` (2026-09-30, **UX_ATTRIBUTION_DEFECT**, P2) and the owner's approval of its Option B. Production has not been changed: it stays at ledger 97 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.19).
+
+**Decision — contributing-field attribution.** For the unquoted 3+ character full-text path (`search_papers`), a field's `matched_*` flag is true iff that field contains **at least one effective query term**. Row membership and rank do not change: a row must still contain every effective term somewhere in the combined six-field `search_vector`, and it is ranked by `ts_rank` against the same `&`-joined query. Precisely, with T the existing sanitizer's tokens and q(t) = `to_tsquery('english', t || ':*')`:
+
+- membership: `search_vector @@ (q(t1) & q(t2) & …)` (unchanged);
+- rank: `ts_rank(search_vector, q(t1) & q(t2) & …)` (unchanged);
+- `matched_f`: `to_tsvector('english', coalesce(f, '')) @@ (q(t1) | q(t2) | …)` (new), built once per call from the same tokens.
+
+**Why.** Under whole-query attribution, a paper whose terms were split across fields came back with all six flags false. `PaperList` then showed no "Matched in:" line, so it could not explain a correct result. The README and read-path docs promised a line on each matching row. The code comment the flags shipped with ("at least one of these will also be true") was false for multi-term queries. The closed PR #90, the first design, matched OR over tokens × words. Contributing-field attribution is that intent, computed on the server with the search's own parser.
+
+**Consequences, all intentional:**
+- a flag does not mean the field satisfies the whole query on its own;
+- a field holding the whole query is flagged together with every other field holding one of its terms, and suite `027` case G pins this so whole-query-only attribution is not restored by accident;
+- English stopwords drop out of both queries alike and never flag a field;
+- a single-letter token is an ordinary prefix term (`smith j` also flags a journal starting with "J");
+- a single-term query flags exactly what it flagged before, and every previously true flag stays true.
+
+**Known limitation — characterized, not changed.** A punctuation-joined token (`a,b`, `a;b`, `a+b`, `covid-19`) is parsed as a phrase. `search_vector`'s concatenation makes the last word of one field adjacent to the first word of the next, so such a phrase can match across that seam. The row is returned, and when every term is such a phrase it can have no flag. Suite `027` pins one case. Fixing it would change sanitizer or membership semantics.
+
+**How it is gated.** The migration refuses unless `search_papers` is exactly the reviewed function, including body `d4a5f3af…`, and `search_vector`, its GIN index and the `papers` RLS boundary are as reviewed. After the replacement it proves, before COMMIT:
+- the same OID and every `pg_proc` attribute except the body;
+- the exact new body `1a72d57a…`;
+- the previous body's membership and rank text, verbatim;
+- nothing else moved.
+
+**Not in scope, unchanged:**
+- `search_papers_short`, which also serves the quoted-phrase path;
+- the sanitizer and tokenizer;
+- the frontend runtime.
+
+**Re-evaluation triggers:**
+- a product decision to give users an explicit "matched across fields" indicator, which would need a new return column rather than a new meaning for the six booleans;
+- any change to the sanitizer, tokenizer or `search_vector` composition, including one that removes the phrase-seam limitation — re-derive suite `027`'s characterization deliberately;
+- single-letter or very short prefix terms producing attribution that users find misleading.

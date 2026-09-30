@@ -185,8 +185,10 @@ SELECT is(
   '1 overload | postgres | SECURITY INVOKER | search_path=public | body ' || e.body_md5
     || ' | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated',
   'posture: ' || e.sig)
+-- search_papers' body digest is C58's (20260930161651), which replaced only its
+-- attribution; its identity guard (section 7) and security mode are unchanged.
 FROM (VALUES
-  ('public.search_papers(uuid,text,integer,integer)',                  'd4a5f3afdc485d5dfda8e0798c61cc48'),
+  ('public.search_papers(uuid,text,integer,integer)',                  '1a72d57a585779644c00636f0da3b253'),
   ('public.search_papers_short(uuid,text)',                            'ce353564edcb73a5466092e84d0b8d1b'),
   ('public.filter_papers_by_keywords(uuid,text[])',                    'b2f5a8e58589a5a094a7074c5ed9bb2d'),
   ('public.get_keyword_options(uuid,uuid[],integer,integer,text[])',   '531010c10d84ee94c7c1e00d65a2e7f5'),

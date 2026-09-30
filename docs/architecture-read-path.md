@@ -115,7 +115,20 @@ matched_title, matched_abstract, matched_authors,
 matched_journal, matched_notes, matched_keywords
 ```
 
-For the FTS path each flag is computed server-side by testing the field's own `to_tsvector('english', coalesce(field, ''))` against the same prefix-aware tsquery used in the `WHERE` clause; for the short / phrase paths each flag is the corresponding `ILIKE` / `EXISTS … ILIKE`. `useFilterState.ts` assembles a `Map<paper_id, MatchFlags>` (type defined in `src/hooks/papers/types.ts`) and threads it to `PaperList`, which renders an authoritative "Matched in: …" sub-line on each matching row in fixed UI order — **Title → Abstract → Authors → Journal → Notes → Keywords**. Attribution is **server-driven**; the client must not re-tokenize the query or re-derive the flags. (Migration: `20260420010000_keywords_in_search_with_attribution.sql`.)
+**FTS path — contributing-field attribution (C58).** *Status: PREPARED — NOT DEPLOYED. It is in the repository schema (migration `20260930161651`); Production still runs the previous whole-query attribution, in which a flag is true only when that one field satisfies the entire query, until the separately authorized rollout in [deployment.md](deployment.md) §6.19.* Row membership and rank are unchanged: a row is returned only when the combined six-field `search_vector` contains **every** effective query term, and those terms may be spread across different fields. Each flag tests the field's own `to_tsvector('english', coalesce(field, ''))` against the `|`-joined twin of the `WHERE` clause's `&`-joined tsquery. The twin is built once per call from the same sanitized tokens, with the same `:*` prefixes, and parsed with the same `to_tsquery('english', …)`. So **a flag is true iff that field contains at least one effective query term**, and "Matched in:" lists every field that contributed a term.
+
+What a flag does not mean, and the edge cases:
+- It does **not** mean the listed field satisfies the whole query on its own. `metformin smith` against a paper with keyword "metformin" and author "Smith" returns the paper with **Authors, Keywords**. A field that holds the whole query is flagged together with every other field holding one of its terms.
+- English stopwords drop out of both queries alike, so they never flag a field.
+- A single-letter token is an ordinary prefix term: in `smith j`, `j:*` also flags a journal whose name starts with "J".
+- A single-term query flags exactly the fields it always did.
+- The migration (`20260930161651_fix_search_match_cross_field_attribution.sql`) proves in-transaction that the membership and rank text is unchanged. Suite `027` proves the rows and ranks against the previous body.
+
+**Known limitation.** Punctuation inside one whitespace token (`a,b`, `a;b`, `a+b`, `covid-19`) makes PostgreSQL parse a phrase (`'a' <-> 'b'`). Because `search_vector` concatenates the fields with shifted positions, the last word of one field is adjacent to the first word of the next, so such a phrase can match across that seam. The row is returned, but no single field holds the phrase. When every term of the query is such a phrase, the row can therefore have no true flag and render no "Matched in:" line. Suite `027` characterizes one case. Changing it would change sanitizer or membership semantics, which C58 deliberately does not do.
+
+**Short / phrase paths.** Each flag is the corresponding `ILIKE` / `EXISTS … ILIKE`, the same expressions whose OR is the `WHERE` clause, so every returned row has at least one true flag.
+
+**Rendering.** `useFilterState.ts` assembles a `Map<paper_id, MatchFlags>` (type defined in `src/hooks/papers/types.ts`) and threads it to `PaperList`. `PaperList` renders an authoritative "Matched in: …" sub-line, in fixed UI order (**Title → Abstract → Authors → Journal → Notes → Keywords**), on every matching row that has at least one true flag. Attribution is **server-driven**: the client must not re-tokenize the query or re-derive the flags. (Migrations: `20260420010000_keywords_in_search_with_attribution.sql` introduced the flags, and `20260930161651_fix_search_match_cross_field_attribution.sql` (C58) made FTS attribution contributing-field.)
 
 ## Security mode of the read RPCs
 
@@ -127,7 +140,7 @@ As INVOKER they run as the calling `authenticated` role, exactly like the list q
 - **Defense-in-depth, unchanged:** the four functions that take `p_user_id` still refuse a NULL id, a missing `auth.uid()` or a mismatch with `Unauthorized: user mismatch`. `get_duplicate_papers` still derives the caller from `auth.uid()`.
 - **Nothing client-visible changes.** Signatures, return shapes, ranking, tokenization, attribution flags and the `EXECUTE` grant (`authenticated` only) are identical, and so are the generated types.
 
-`search_papers`' stored body still carries a historical inline comment saying SECURITY DEFINER bypasses RLS. It predates C49 and no longer describes the function. The migration supersedes it, and it can be removed the next time that body is legitimately recreated.
+`search_papers`' stored body carried a historical inline comment saying SECURITY DEFINER bypasses RLS. It predated C49 and no longer described the function. C58 (`20260930161651`) legitimately recreates that body and replaces the comment with one that describes SECURITY INVOKER. Until that migration is applied, the Production body still carries the old comment.
 
 ## Abstract on-demand loading
 
