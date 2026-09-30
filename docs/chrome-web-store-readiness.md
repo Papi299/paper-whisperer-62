@@ -1009,10 +1009,12 @@ Build the candidate first: `npm run package:extension`.
 > this record does not claim one. The boxes below still carry no tick, for the
 > reason given above: the checklist is re-run in full for every future version.
 >
-> **Build under test.** `dist-extension/` built from `main` at `19692f7`, whose
-> release ZIP is byte-identical to the reviewed `0.1.0` package (SHA-256
-> `0feb935d…`, 15788 bytes — [listing doc](chrome-web-store-listing.md) §0.13),
-> loaded unpacked into **Google Chrome 154.0.8037.58**. The run instructions
+> **Build under test.** `dist-extension/` built from `main` at `19692f7`, loaded
+> unpacked into **Google Chrome 154.0.8037.58**. Its release ZIP is
+> byte-identical to the recorded corrected pre-upload ZIP (SHA-256 `0feb935d…`,
+> 15788 bytes). [Listing doc](chrome-web-store-listing.md) §0.13 identifies that
+> package as the reviewed `0.1.0` by provenance, not by any Store-side hash,
+> since the Store exposes none. The run instructions
 > specified a fresh Chrome profile. **Tester:** the owner. **Evidence class:**
 > items 1–21 and 25 are **owner-reported** results, with no screenshots recorded.
 > Items 22–24 were performed by the agent from the repository environment.

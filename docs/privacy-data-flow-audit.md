@@ -1885,8 +1885,9 @@ The September 17 date attached to the **earlier** 001D telemetry amendment (PR #
 ## 35. Addendum — 2026-09-30 — `CHROME-WEB-STORE-PUBLISH-001A` / `001B` — the extension is published to testers
 
 **Scope.** This records, for this document's purposes, that the extension's
-`0.1.0` was published. **No verified data-flow fact moves**: the published package
-is the one §11 and §24–§26 audited. Store-state facts are **owner-provided
+`0.1.0` was published. **No verified data-flow fact moves**: the best-supported
+identity of the published package is the corrected package that §11 and §24–§26
+audited (§35.2). Store-state facts are **owner-provided
 Dashboard evidence**. The full publication record, with the evidence class of
 each fact, is [chrome-web-store-listing.md](chrome-web-store-listing.md) §0.13,
 and this addendum does not restate it.
@@ -1902,13 +1903,20 @@ and this addendum does not restate it.
 
 The earlier states are preserved as written in §11.9, §26.1 and §26.8.
 
-### 35.2 The published package is the audited package
+### 35.2 Evidence tying the published release to the audited package
 
-A reproducible build of `45a0516` gives exactly the pre-upload package recorded
-in §26.1: 15788 bytes, SHA-256 `0feb935d…`. Current `main` builds the same bytes.
-So the data behaviour described in §11 and §24–§26 is the published behaviour.
-The Store exposes no hash; what the identification rests on is set out in the
-listing record.
+- A reproducible build of `45a0516` gives exactly the corrected pre-upload
+  package recorded in §26.1: 15788 bytes, SHA-256 `0feb935d…`. Current `main`
+  builds the same bytes.
+- The Store's permission display (`activeTab`, `scripting`) rules out the
+  pre-correction `0.1.0` package, which requests `activeTab` only, and no later
+  upload is recorded.
+- Together these identify that corrected package as the `0.1.0` release that was
+  reviewed and published. So the data behaviour described in §11 and §24–§26 is
+  the best-supported description of the published behaviour.
+- The Store exposes no hash of the uploaded package. This is therefore
+  **provenance inference, not a Google-provided byte-level attestation**. What the
+  identification rests on is set out in the listing record.
 
 ### 35.3 Disclosures
 

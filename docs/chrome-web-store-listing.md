@@ -574,9 +574,9 @@ The tester list itself is not recorded here and should not be.
 the saved visibility on 2026-08-30; `Private` is the owner's later choice, and
 is the configuration that was reviewed and published.
 
-**Package provenance — the published package is the corrected one, and current
-source still builds it.** Repository-verifiable, by reproducible build on
-2026-09-30:
+**Package provenance — the evidence identifying the corrected package as the
+published `0.1.0` release, and current source still builds it.**
+Repository-verifiable, by reproducible build on 2026-09-30:
 
 - `45a0516` (PR #255, CORRECTION-01) builds a ZIP of **15788 bytes** with SHA-256
   **`0feb935d914af2141c41aa129bf211cf08492a5d4ccb5e169bab8afb9f9c4634`** — exactly
@@ -591,13 +591,16 @@ source still builds it.** Repository-verifiable, by reproducible build on
   type-visibility entry in `tsconfig.extension.json` that the test suites need,
   and the bundler toolchain resolves to the same versions. The byte-identical
   output is the evidence that none of it moved the package. **Current
-  source and build behaviour therefore match the published `0.1.0`.**
+  source and build behaviour therefore match the recorded corrected pre-upload
+  package — the best-supported identity of the published `0.1.0`, within the
+  limit stated next.**
 
 What this does **not** claim: the Dashboard exposes no hash of the uploaded ZIP,
 so Google has attested nothing about these bytes. Identifying the Store's package
 with `0feb935d…` rests on the local pre-upload record, the Store's permission
 display, and the absence of any later upload — no second `0.1.0` upload is
-recorded.
+recorded. That is strong provenance inference, not a Google-provided byte-level
+attestation.
 
 **After publication.** The owner reports that the published extension was
 exercised after publication and appears to work correctly (owner-reported; no
