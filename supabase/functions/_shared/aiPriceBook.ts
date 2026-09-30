@@ -47,6 +47,13 @@
 // (2026-09-17) rather than copied from the 001B/001C source comments, which were
 // written to describe a protocol and never claimed to be a price.
 //
+// AI-MODEL-CATALOG-REFRESH-001A appends the three staged replacements — Claude
+// Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol — read from the same first-party
+// pages on 2026-09-30. The Sonnet 5 and Terra records stay exactly as they were
+// and stay open-ended: both models remain selectable while the replacements are
+// staged, so their requests must stay priceable. Retiring a model later is a
+// catalog change, not a reason to edit its price history.
+//
 // Pricing a model here does not make it reachable. These records exist so that
 // the FIRST paid request is measured rather than guessed at: a request whose
 // cost is `unpriced` is honest but useless for deciding whether a paid provider
@@ -155,22 +162,39 @@ const VERIFIED_2026_09_17 = "2026-09-17";
 const FROM_VERIFICATION_001E = "2026-09-17T00:00:00Z";
 
 /**
- * OpenAI's published prompt-size threshold for `gpt-5.6-terra`.
+ * OpenAI's published standard-tier prompt-size threshold, shared by every
+ * OpenAI model priced here: `gpt-5.6-terra` (read 2026-09-17) and `gpt-6.1-sol`
+ * (read 2026-09-30).
  *
- * The model page prices a request "exceeding 272K input tokens" at 2x the input
- * rate AND 1.5x the output rate, applied to the WHOLE request — not to the
- * excess. That is a second tier this record's four rates cannot express, so the
- * record stops here and a larger request is `unpriced`.
+ * Both model pages price a request above 272K input tokens at a long-context
+ * tier applied to the WHOLE request, not to the excess — Terra's page says 2x
+ * input and 1.5x output, Sol's says "2x input and cache rates and 1.5x output
+ * for the full request". Either way that is a second tier a record's four rates
+ * cannot express, so each record stops here and a larger request is `unpriced`
+ * rather than understated at short-context rates.
  *
- * `maxInputTokens` is compared with `>`, which lines up exactly with
- * "exceeding": a request of precisely 272,000 input tokens is still priced by
- * this record, and 272,001 is not.
+ * `maxInputTokens` is compared with `>`, which lines up exactly with both pages'
+ * wording ("exceeding" / "more than"): a request of precisely 272,000 input
+ * tokens is still priced by the record, and 272,001 is not.
+ *
+ * Named for the provider rather than for one model because the boundary is the
+ * same published fact for both; a model whose page ever publishes a different
+ * boundary gets its own constant, never an edit of this one.
  *
  * PaperLume's own prompts are nowhere near it — Suggest is hard-bounded far
  * below and Analyze is a title plus an abstract — so this is a correctness
  * property of the book rather than a case anyone expects to hit.
  */
-const OPENAI_TERRA_STANDARD_TIER_MAX_INPUT_TOKENS = 272_000;
+const OPENAI_STANDARD_TIER_MAX_INPUT_TOKENS = 272_000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The staged replacements — AI-MODEL-CATALOG-REFRESH-001A, verified 2026-09-30
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OPENAI_SOL_PRICING_URL = "https://developers.openai.com/api/docs/models/gpt-6.1-sol";
+const VERIFIED_2026_09_30 = "2026-09-30";
+/** See `FROM_VERIFICATION`: a record never predates the day it was read. */
+const FROM_VERIFICATION_REFRESH_001A = "2026-09-30T00:00:00Z";
 
 /** Every list-price record PaperLume knows. Append only. */
 export const AI_LIST_PRICE_RECORDS: readonly AiListPriceRecord[] = Object.freeze([
@@ -259,7 +283,7 @@ export const AI_LIST_PRICE_RECORDS: readonly AiListPriceRecord[] = Object.freeze
    * estimate `usage_incomplete` rather than guessing it was zero.
    *
    * `maxInputTokens` stops this record at the documented 272K threshold; see
-   * `OPENAI_TERRA_STANDARD_TIER_MAX_INPUT_TOKENS`. No second record is written
+   * `OPENAI_STANDARD_TIER_MAX_INPUT_TOKENS`. No second record is written
    * for the long-context tier: its 2x input and 1.5x output multipliers are two
    * different multipliers on one request, which the four-rate shape here can
    * express only by accident, and `unpriced` is the honest alternative.
@@ -274,9 +298,96 @@ export const AI_LIST_PRICE_RECORDS: readonly AiListPriceRecord[] = Object.freeze
     cachedInputUsdPerMTok: "0.20",
     cacheWriteInputUsdPerMTok: "2.50",
     outputUsdPerMTok: "12.00",
-    maxInputTokens: OPENAI_TERRA_STANDARD_TIER_MAX_INPUT_TOKENS,
+    maxInputTokens: OPENAI_STANDARD_TIER_MAX_INPUT_TOKENS,
     sourceUrl: OPENAI_TERRA_PRICING_URL,
     verifiedOn: VERIFIED_2026_09_17,
+  }),
+
+  /**
+   * Claude Sonnet 5.5 — Anthropic's published table, read 2026-09-30: base
+   * input $2, 5m cache writes $2.50, 1h cache writes $4, cache hits and
+   * refreshes $0.20, output $10, all per MTok. The same five numbers as Claude
+   * Sonnet 5, which is why the test suite pins the id and the model string
+   * rather than the rates to tell the two records apart.
+   *
+   * `cacheWriteInputUsdPerMTok` is null for exactly the reason the Sonnet 5
+   * record above gives: two published cache-write rates, one summed usage field,
+   * and a per-bucket breakdown that is only conditionally present. PaperLume
+   * sends no `cache_control`, so the expected reported cache write is 0, which
+   * prices fine; a positive one is `unpriced` rather than guessed.
+   *
+   * No prompt-size tier: Anthropic prices the full 1M context window at
+   * standard rates for Claude 4.6 and later models.
+   */
+  Object.freeze({
+    id: `anthropic/claude-sonnet-5-5@${VERIFIED_2026_09_30}`,
+    provider: "anthropic",
+    providerModel: "claude-sonnet-5-5",
+    validFrom: FROM_VERIFICATION_REFRESH_001A,
+    validUntil: null,
+    inputUsdPerMTok: "2.00",
+    cachedInputUsdPerMTok: "0.20",
+    cacheWriteInputUsdPerMTok: null,
+    outputUsdPerMTok: "10.00",
+    maxInputTokens: null,
+    sourceUrl: ANTHROPIC_PRICING_URL,
+    verifiedOn: VERIFIED_2026_09_30,
+  }),
+
+  /**
+   * Claude Opus 5.5 — Anthropic's published table, read 2026-09-30: base input
+   * $4, 5m cache writes $5, 1h cache writes $8, cache hits and refreshes $0.20,
+   * output $20, all per MTok.
+   *
+   * The cache-hit rate is NOT the usual 0.1x: Anthropic's table footnotes that
+   * cache hits on Opus 5.5 are priced at 0.05x base input, which is $0.20, not
+   * the $0.40 the standard multiplier would give. The record carries the
+   * published number.
+   *
+   * Cache writes are null for the same two-rates-one-field reason as both
+   * Sonnet records, and there is no prompt-size tier.
+   */
+  Object.freeze({
+    id: `anthropic/claude-opus-5-5@${VERIFIED_2026_09_30}`,
+    provider: "anthropic",
+    providerModel: "claude-opus-5-5",
+    validFrom: FROM_VERIFICATION_REFRESH_001A,
+    validUntil: null,
+    inputUsdPerMTok: "4.00",
+    cachedInputUsdPerMTok: "0.20",
+    cacheWriteInputUsdPerMTok: null,
+    outputUsdPerMTok: "20.00",
+    maxInputTokens: null,
+    sourceUrl: ANTHROPIC_PRICING_URL,
+    verifiedOn: VERIFIED_2026_09_30,
+  }),
+
+  /**
+   * GPT-6.1 Sol — OpenAI's model page, read 2026-09-30: input $2.00, cached
+   * input $0.10 ("5% of the uncached input token rate"), cache writes $2.50
+   * ("1.25x the uncached input token rate"), output $10.00, per MTok.
+   *
+   * Carries a cache-write rate for the reason the Terra record does: OpenAI
+   * publishes ONE cache-write rate, and the Responses API reports the dimension
+   * in its own `input_tokens_details.cache_write_tokens` field.
+   *
+   * `maxInputTokens` stops at the same published 272K boundary as Terra; above
+   * it Sol's page applies 2x input AND cache rates and 1.5x output to the full
+   * request, which this record cannot express, so such a request is `unpriced`.
+   */
+  Object.freeze({
+    id: `openai/gpt-6.1-sol@${VERIFIED_2026_09_30}`,
+    provider: "openai",
+    providerModel: "gpt-6.1-sol",
+    validFrom: FROM_VERIFICATION_REFRESH_001A,
+    validUntil: null,
+    inputUsdPerMTok: "2.00",
+    cachedInputUsdPerMTok: "0.10",
+    cacheWriteInputUsdPerMTok: "2.50",
+    outputUsdPerMTok: "10.00",
+    maxInputTokens: OPENAI_STANDARD_TIER_MAX_INPUT_TOKENS,
+    sourceUrl: OPENAI_SOL_PRICING_URL,
+    verifiedOn: VERIFIED_2026_09_30,
   }),
 ]);
 

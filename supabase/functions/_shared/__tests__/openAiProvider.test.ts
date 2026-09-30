@@ -1004,3 +1004,62 @@ describe("nothing provider-shaped or sensitive escapes", () => {
     expect(result).not.toHaveProperty("suggestions");
   });
 });
+
+// ── AI-MODEL-CATALOG-REFRESH-001A — the staged GPT-6.1 Sol ──────────────────
+//
+// Sol's `reasoning.effort` is `low | medium | high | xhigh | max`; "The none
+// and minimal reasoning efforts are not supported." Its catalog row therefore
+// lists only those five, and this adapter keeps `none` in its PROVIDER
+// vocabulary solely because GPT-5.6 Terra — still selectable while Sol is
+// staged — legitimately uses it. What this block pins is the exact body each
+// staged level produces for Sol.
+describe("the staged GPT-6.1 Sol — AI-MODEL-CATALOG-REFRESH-001A", () => {
+  const SOL: OpenAiProviderModel = { provider: OPENAI_AI_PROVIDER, providerModel: "gpt-6.1-sol" };
+  const STAGED_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+  it("still declares `none` at the provider level, for GPT-5.6 Terra only", () => {
+    // Removing it now would break the model users can still select. Narrowing
+    // this vocabulary is a Phase-D decision, taken after Terra is retired.
+    expect(OPENAI_AI_PROVIDER_ADAPTER.supportsReasoningLevel("none")).toBe(true);
+  });
+
+  it.each(STAGED_LEVELS.flatMap((level) => [[level, 4096], [level, 8192]] as const))(
+    "`%s` at a %d ceiling is exactly that reasoning.effort, stateless, store:false",
+    async (level, maxOutputTokens) => {
+      const { url, body, raw } = await captureRequest(REQUEST, SOL, {
+        reasoning: { kind: "level", level },
+        maxOutputTokens,
+      });
+      expect(url).toBe(OPENAI_RESPONSES_URL);
+      // The WHOLE body: no tools, no conversation state, no identity field,
+      // no sampling parameter can ride along at any level.
+      expect(body).toEqual({
+        model: "gpt-6.1-sol",
+        instructions: SYSTEM_INSTRUCTION,
+        input: USER_CONTENT,
+        max_output_tokens: maxOutputTokens,
+        store: false,
+        text: {
+          format: {
+            type: "json_schema",
+            name: SCHEMA_NAME,
+            schema: REQUEST.jsonSchema.schema,
+            strict: true,
+          },
+        },
+        reasoning: { effort: level },
+      });
+      expect(raw).not.toContain('"none"');
+      expect(raw).not.toContain('"minimal"');
+    },
+  );
+
+  it("reads a Sol response: reasoning item first, answer text only", async () => {
+    const harness = makeHarness([
+      openAiOk([reasoningItem("SENTINEL-SOL-REASONING"), messageItem('{"ok":true}')]),
+    ]);
+    const result = await generate(harness, REQUEST, SOL);
+    expect(result).toMatchObject({ ok: true, text: '{"ok":true}', attempts: 1 });
+    expect(JSON.stringify(result)).not.toContain("SENTINEL-SOL-REASONING");
+  });
+});

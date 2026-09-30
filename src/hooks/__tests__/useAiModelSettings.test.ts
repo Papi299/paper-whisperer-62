@@ -121,6 +121,43 @@ const GPT_56_TERRA = {
 };
 const ALL_SIX = [GEMINI_35, GEMINI_36, GEMINI_37, GEMINI_38, CLAUDE_SONNET_5, GPT_56_TERRA];
 
+/**
+ * The three replacement rows, as `20260930203613` stages them (Phase A of
+ * AI-MODEL-CATALOG-REFRESH-001): enabled, so an operator-written preference is
+ * honoured, but NOT selectable and NOT open to manual reasoning. Fixtures only —
+ * the hook names no model.
+ */
+const STAGED_ROW = {
+  enabled: true,
+  selectable: false,
+  reasoning_levels: ["low", "medium", "high", "xhigh", "max"],
+  auto_analyze_reasoning_level: "low",
+  auto_suggest_reasoning_level: "medium",
+  reasoning_selectable: false,
+};
+const CLAUDE_SONNET_55 = {
+  ...STAGED_ROW,
+  id: "anthropic/claude-sonnet-5-5",
+  provider: "anthropic",
+  display_name: "Claude Sonnet 5.5",
+  sort_order: 70,
+};
+const CLAUDE_OPUS_55 = {
+  ...STAGED_ROW,
+  id: "anthropic/claude-opus-5-5",
+  provider: "anthropic",
+  display_name: "Claude Opus 5.5",
+  sort_order: 80,
+};
+const GPT_61_SOL = {
+  ...STAGED_ROW,
+  id: "openai/gpt-6.1-sol",
+  provider: "openai",
+  display_name: "GPT-6.1 Sol",
+  sort_order: 90,
+};
+const STAGED_NINE = [...ALL_SIX, CLAUDE_SONNET_55, CLAUDE_OPUS_55, GPT_61_SOL];
+
 type Result = { data: unknown; error: unknown };
 
 /** `.select().order().order()` — thenable at the end of the chain. */
@@ -604,6 +641,43 @@ describe("useAiModelSettings — reads", () => {
     mockTables(rows({ ...GEMINI_35, reasoning_selectable: false }), prefRow(null));
     const { result } = await renderLoaded();
     expect(result.current.options[0].reasoningSelectable).toBe(false);
+  });
+
+  it("offers exactly the six current models while the replacements are staged", async () => {
+    // AI-MODEL-CATALOG-REFRESH-001A must change nothing a user can see. The
+    // three staged rows are routable (`enabled`) from paid providers this build
+    // can reach, so `selectable = false` is the ONLY thing keeping them out of
+    // the picker — and it does, with no model id named anywhere in the hook.
+    mockTables(rows(...STAGED_NINE), prefRow(null));
+    const { result } = await renderLoaded();
+    expect(result.current.options.map((o) => o.displayName)).toEqual([
+      "Gemini 3.5 Flash",
+      "Gemini 3.6 Flash",
+      "Gemini 3.7 Flash",
+      "Gemini 3.8 Flash",
+      "Claude Sonnet 5",
+      "GPT-5.6 Terra",
+    ]);
+    for (const staged of [CLAUDE_SONNET_55, CLAUDE_OPUS_55, GPT_61_SOL]) {
+      expect(result.current.options.some((o) => o.id === staged.id)).toBe(false);
+    }
+  });
+
+  it("shows an operator-written staged preference as active but not choosable", async () => {
+    // The Phase-C canary state: an operator saved Sonnet 5.5 for the acceptance
+    // account. The runtime honours it, so Settings must too — as the model in
+    // force, flagged unselectable, with manual reasoning closed on it.
+    mockTables(rows(...STAGED_NINE), prefRow(CLAUDE_SONNET_55.id));
+    const { result } = await renderLoaded();
+    expect(result.current.saved).toEqual({
+      status: "active",
+      modelId: CLAUDE_SONNET_55.id,
+      displayName: "Claude Sonnet 5.5",
+      selectable: false,
+      option: optionOf(CLAUDE_SONNET_55),
+    });
+    expect(result.current.savedReasoning).toEqual({ status: "automatic" });
+    expect(result.current.options.map((o) => o.id)).not.toContain(CLAUDE_SONNET_55.id);
   });
 
   it("drops a catalog level this build cannot name, rather than offering it", async () => {

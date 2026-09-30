@@ -627,3 +627,208 @@ describe("the staged paid providers — AI-MULTI-PROVIDER-001E", () => {
     expect(e.amountUsd).toBeNull();
   });
 });
+
+describe("the staged replacements — AI-MODEL-CATALOG-REFRESH-001A", () => {
+  // The shipped book, not injected records: this describe is about which rates
+  // PaperLume will actually apply to the three staged provider models, and that
+  // the two models they will eventually replace still price by their own.
+
+  it("selects the Claude Sonnet 5.5 record and prices it exactly", () => {
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5-5",
+      at: AT,
+      attempts: 1,
+      usage: usage({ inputTokens: reportedTokens(3000), outputTokens: reportedTokens(500) }),
+    });
+    // 3,000 x $2.00/M + 500 x $10.00/M = $0.006 + $0.005
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.011000000000000" });
+    expect(e.prices?.recordId).toBe("anthropic/claude-sonnet-5-5@2026-09-30");
+  });
+
+  it("keeps Sonnet 5 and Sonnet 5.5 on their own records despite identical rates", () => {
+    // The two Sonnet records publish the same five numbers, so an amount
+    // cannot tell them apart — the record id can. A lookup that fell back from
+    // one model string to the other would show up here and nowhere else.
+    const u = usage({ inputTokens: reportedTokens(3000), outputTokens: reportedTokens(500) });
+    const old = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5",
+      at: AT,
+      attempts: 1,
+      usage: u,
+    });
+    const next = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-sonnet-5-5",
+      at: AT,
+      attempts: 1,
+      usage: u,
+    });
+    expect(old.amountUsd).toBe(next.amountUsd);
+    expect(old.prices?.recordId).toBe("anthropic/claude-sonnet-5@2026-09-17");
+    expect(next.prices?.recordId).toBe("anthropic/claude-sonnet-5-5@2026-09-30");
+  });
+
+  it("selects the Claude Opus 5.5 record and prices it exactly", () => {
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-opus-5-5",
+      at: AT,
+      attempts: 1,
+      usage: usage({ inputTokens: reportedTokens(3000), outputTokens: reportedTokens(500) }),
+    });
+    // 3,000 x $4.00/M + 500 x $20.00/M = $0.012 + $0.010
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.022000000000000" });
+    expect(e.prices?.recordId).toBe("anthropic/claude-opus-5-5@2026-09-30");
+  });
+
+  it("prices an Opus 5.5 cache read at the published 0.05x rate, not the usual 0.1x", () => {
+    const e = estimateAiListPriceCost({
+      provider: "anthropic",
+      providerModel: "claude-opus-5-5",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(3000),
+        cachedInputTokens: reportedTokens(1000),
+        outputTokens: reportedTokens(500),
+      }),
+    });
+    // 2,000 x $4.00/M + 1,000 x $0.20/M + 500 x $20.00/M
+    //   = $0.008 + $0.0002 + $0.010. A 0.1x rate ($0.40) would give $0.0184.
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.018200000000000" });
+  });
+
+  it("refuses to price any positive cache write on either Claude 5.5 model", () => {
+    // Two published cache-write rates, one summed usage field — the same
+    // ambiguity as Sonnet 5, so the same refusal.
+    for (const model of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
+      const e = estimateAiListPriceCost({
+        provider: "anthropic",
+        providerModel: model,
+        at: AT,
+        attempts: 1,
+        usage: usage({
+          inputTokens: reportedTokens(3000),
+          cacheWriteInputTokens: reportedTokens(1),
+          outputTokens: reportedTokens(500),
+        }),
+      });
+      expect(e.status).toBe("unpriced");
+      expect(e.amountUsd).toBeNull();
+    }
+  });
+
+  it("selects the GPT-6.1 Sol record and prices it exactly", () => {
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-6.1-sol",
+      at: AT,
+      attempts: 1,
+      usage: usage({ inputTokens: reportedTokens(3000), outputTokens: reportedTokens(500) }),
+    });
+    // 3,000 x $2.00/M + 500 x $10.00/M = $0.006 + $0.005
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.011000000000000" });
+    expect(e.prices?.recordId).toBe("openai/gpt-6.1-sol@2026-09-30");
+  });
+
+  it("prices Sol's cache read and cache write at Sol's own rates", () => {
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-6.1-sol",
+      at: AT,
+      attempts: 1,
+      usage: usage({
+        inputTokens: reportedTokens(4000),
+        cachedInputTokens: reportedTokens(1000),
+        cacheWriteInputTokens: reportedTokens(1000),
+        outputTokens: reportedTokens(200),
+      }),
+    });
+    // 2,000 x $2.00/M + 1,000 x $0.10/M + 1,000 x $2.50/M + 200 x $10.00/M
+    //   = $0.004 + $0.0001 + $0.0025 + $0.002. Terra's rates would give $0.0091.
+    expect(e).toMatchObject({ status: "estimated", amountUsd: "0.008600000000000" });
+  });
+
+  it("prices a Sol request of exactly the 272K threshold — the boundary is inclusive", () => {
+    const e = estimateAiListPriceCost({
+      provider: "openai",
+      providerModel: "gpt-6.1-sol",
+      at: AT,
+      attempts: 1,
+      usage: usage({ inputTokens: reportedTokens(272_000), outputTokens: reportedTokens(0) }),
+    });
+    expect(e.status).toBe("estimated");
+    expect(e.amountUsd).toBe("0.544000000000000");
+  });
+
+  it("leaves a long-context Sol request unpriced rather than using the short-context rates", () => {
+    // Above 272K Sol's page applies 2x input AND cache rates and 1.5x output to
+    // the whole request. Priced at the short-context record every class would
+    // be understated, so the estimate refuses — for uncached input alone and
+    // with cached and cache-write subsets present.
+    for (const dims of [
+      { inputTokens: reportedTokens(272_001), outputTokens: reportedTokens(500) },
+      {
+        inputTokens: reportedTokens(300_000),
+        cachedInputTokens: reportedTokens(100_000),
+        cacheWriteInputTokens: reportedTokens(50_000),
+        outputTokens: reportedTokens(500),
+      },
+    ]) {
+      const e = estimateAiListPriceCost({
+        provider: "openai",
+        providerModel: "gpt-6.1-sol",
+        at: AT,
+        attempts: 1,
+        usage: usage(dims),
+      });
+      expect(e.status).toBe("unpriced");
+      expect(e.amountUsd).toBeNull();
+      expect(e.prices).toBeNull();
+    }
+  });
+
+  it("never adds reasoning tokens to output for any staged model", () => {
+    for (const [provider, model] of [
+      ["anthropic", "claude-sonnet-5-5"],
+      ["anthropic", "claude-opus-5-5"],
+      ["openai", "gpt-6.1-sol"],
+    ]) {
+      const base = { provider, providerModel: model, at: AT, attempts: 1 };
+      const without = estimateAiListPriceCost({
+        ...base,
+        usage: usage({ inputTokens: reportedTokens(1000), outputTokens: reportedTokens(800) }),
+      });
+      const with_ = estimateAiListPriceCost({
+        ...base,
+        usage: usage({
+          inputTokens: reportedTokens(1000),
+          outputTokens: reportedTokens(800),
+          reasoningOutputTokens: reportedTokens(600),
+        }),
+      });
+      expect(without.status).toBe("estimated");
+      expect(with_.amountUsd).toBe(without.amountUsd);
+    }
+  });
+
+  it("is unpriced for a staged model before its rates were verified", () => {
+    const before = new Date("2026-09-29T23:59:59Z");
+    for (const [provider, model] of [
+      ["anthropic", "claude-sonnet-5-5"],
+      ["anthropic", "claude-opus-5-5"],
+      ["openai", "gpt-6.1-sol"],
+    ]) {
+      const e = estimateAiListPriceCost({
+        provider,
+        providerModel: model,
+        at: before,
+        attempts: 1,
+        usage: usage({ inputTokens: reportedTokens(1000), outputTokens: reportedTokens(100) }),
+      });
+      expect(e.status).toBe("unpriced");
+    }
+  });
+});

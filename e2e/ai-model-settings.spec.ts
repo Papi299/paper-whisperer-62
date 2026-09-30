@@ -90,6 +90,12 @@ const PREFERENCE_RPCS = [
  * The two paid rows are the strongest case for that claim, because they were
  * present but NOT selectable for a whole phase: the same UI that renders them
  * now was already deployed and deliberately did not offer them.
+ *
+ * The same property is live again: AI-MODEL-CATALOG-REFRESH-001A
+ * (`20260930203613`, C59) stages Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1
+ * Sol in the replayed catalog as `enabled` but NOT `selectable`. Because the
+ * assertion below is the WHOLE listbox, exactly, it is the end-to-end proof that
+ * none of the three is offered — with no model id named in any UI code.
  */
 const EXPECTED_OPTIONS = [
   DEFAULT_LABEL,
