@@ -141,6 +141,16 @@ Gemini does not currently bill per-token in a way visible at request time — th
 >
 > Two deliberate refusals to guess (C44): Anthropic publishes **two** cache-write rates ($2.50 for a 5-minute write, $4.00 for a 1-hour one) against a single summed usage field, so any positive Anthropic cache write is `unpriced` rather than priced at the cheaper rate; and an OpenAI request above 272K input tokens is `unpriced` rather than priced at the short-context rate, because OpenAI applies 2x input **and** 1.5x output to the whole request above that threshold. PaperLume requests no caching and its prompts sit far below the threshold, so both are correctness properties rather than expected cases.
 >
+> **Staged replacement list prices (`AI-MODEL-CATALOG-REFRESH-001A`, verified 2026-09-30; repository only, not deployed).** Appended beside the two records above, which stay unchanged while their models remain selectable:
+>
+> | Model | Input | Cached input | Cache write | Output | Priced up to |
+> |---|---|---|---|---|---|
+> | `anthropic/claude-sonnet-5-5` | $2.00 / MTok | $0.20 / MTok | **unpriced** | $10.00 / MTok | no limit |
+> | `anthropic/claude-opus-5-5` | $4.00 / MTok | $0.20 / MTok | **unpriced** | $20.00 / MTok | no limit |
+> | `openai/gpt-6.1-sol` | $2.00 / MTok | $0.10 / MTok | $2.50 / MTok | $10.00 / MTok | 272,000 input tokens |
+>
+> The same two refusals apply. Anthropic still publishes two cache-write rates: $2.50 / $4 on Sonnet 5.5, $5 / $8 on Opus 5.5. Above 272K input tokens Sol moves the whole request to 2x input and cache rates and 1.5x output. Opus 5.5's cache-hit rate is Anthropic's published 0.05x, not the usual 0.1x.
+>
 > These rates reach the estimator only when the generation functions are redeployed from the accepted merge ([deployment.md](deployment.md) §14.1 step 7); until then a paid request would be `unpriced`.
 
 **Funnel metrics:**
