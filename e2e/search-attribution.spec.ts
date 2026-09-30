@@ -7,10 +7,11 @@ import { waitForDashboard } from "./helpers";
  * After the search wave (PRs #91–#93) every search RPC returns six per-field
  * `matched_*` booleans (title, abstract, authors, journal, notes, keywords)
  * which `PaperList` renders as outline `<Badge>`s in a fixed sub-line under
- * the matching row's title. The unit-test suite already covers the helpers
- * around `MATCH_FIELD_ORDER` and the hook plumbing — what we lacked was an
- * end-to-end check that for each of the six attribution sources, a search
- * targeting only that field surfaces the row with the correct badge.
+ * the matching row's title. No unit test covers that rendering or the hook
+ * plumbing; this spec is the end-to-end check that for each of the six
+ * attribution sources, a search targeting only that field surfaces the row
+ * with the correct badge — and that a full-text query whose terms sit in
+ * different fields shows every contributing field (C58).
  *
  * --- Strategy ---
  * UI-driven seeding through the existing Edit Paper dialog. The spec picks
@@ -168,6 +169,19 @@ async function expectAttribution(row: Locator, expectedLabel: string) {
   });
 }
 
+/**
+ * Assert that the row's `Matched in:` sub-line shows EXACTLY the expected
+ * badges, in `MATCH_FIELD_ORDER`, and nothing else. Each badge is a direct
+ * `<div>` child of the sub-line container; the `Matched in:` label is a
+ * `<span>`, so it is not counted.
+ */
+async function expectExactAttribution(row: Locator, expectedLabels: string[]) {
+  const matchedInLabel = row.getByText("Matched in:", { exact: true });
+  await expect(matchedInLabel).toBeVisible({ timeout: 10_000 });
+  const badges = matchedInLabel.locator("xpath=..").locator(":scope > div");
+  await expect(badges).toHaveText(expectedLabels, { timeout: 5_000 });
+}
+
 test.describe("Search attribution — Matched in: badges", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -260,5 +274,17 @@ test.describe("Search attribution — Matched in: badges", () => {
   test("keywords: searching a keyword-only token shows Matched in: Keywords", async ({ page }) => {
     await page.getByPlaceholder(/search titles/i).fill(TOKENS.keywords);
     await expectAttribution(seededRow(page), BADGE_LABELS.keywords);
+  });
+
+  // Contributing-field attribution (C58). Full-text search requires EVERY
+  // term, but across all six fields together, so a query made of the title
+  // token and the author token — which live in different fields — still finds
+  // the paper. The server then flags each field holding at least one term.
+  // Before C58 this row came back with every flag false and showed no
+  // `Matched in:` line at all. The badges come from the server flags only.
+  test("cross-field: terms split over title and authors show Matched in: Title, Authors", async ({ page }) => {
+    await page.getByPlaceholder(/search titles/i).fill(`${TOKENS.title} ${TOKENS.authors}`);
+    await expect(seededRow(page)).toBeVisible({ timeout: 15_000 });
+    await expectExactAttribution(seededRow(page), [BADGE_LABELS.title, BADGE_LABELS.authors]);
   });
 });

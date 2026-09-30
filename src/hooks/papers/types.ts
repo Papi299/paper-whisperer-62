@@ -71,7 +71,13 @@ export function areServerFiltersReady(params: ServerFilterParams): boolean {
 /**
  * Per-field match flags returned by `search_papers` and `search_papers_short`.
  * Each flag is true iff the corresponding paper field matched the active
- * search query under the path-appropriate rule (FTS prefix or ILIKE substring).
+ * search query under the path-appropriate rule:
+ *   - FTS (`search_papers`, contributing-field attribution, C58): the field
+ *     contains at least one effective query term (prefix-aware, stemmed).
+ *     The row itself matched because its six fields together contain every
+ *     term, so a flag does not mean the field alone satisfies the query.
+ *   - Short / phrase (`search_papers_short`): the field contains the query as
+ *     an ILIKE substring.
  *
  * Authoritative — derived server-side, not inferred on the client. The UI
  * renders the "Matched in: …" sub-line in the paper row directly from these

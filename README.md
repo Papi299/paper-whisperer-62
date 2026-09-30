@@ -49,7 +49,7 @@ The main search box operates in one of four mutually-exclusive modes, selected b
 - **Unquoted, 3+ characters** → prefix-aware FTS (`search_papers` RPC).
 - **Quoted** (`"..."` with non-empty inner string) → literal phrase match (no stemming, Unicode-safe, punctuation-preserving).
 
-Every non-empty mode searches six fields: **title, abstract, authors, journal, notes, keywords**. Each matching row renders a **server-driven** "Matched in: …" sub-line showing which of those six fields matched (fixed order, no client-side re-tokenization). The `"..."` phrase syntax is taught via the search-input placeholder.
+Every non-empty mode searches six fields: **title, abstract, authors, journal, notes, keywords**. Matching rows render a **server-driven** "Matched in: …" sub-line naming the fields that matched (fixed order, no client-side re-tokenization). For 3+ character search a paper must contain every search term, but the terms may be spread across its fields: `metformin smith` finds a paper whose keywords contain "metformin" and whose authors include "Smith", and shows **Matched in: Authors, Keywords**. The line lists each field that contains at least one of the terms. It does not mean that each listed field matches the whole query on its own. *(C58, prepared in the repository and not yet applied to Production; see [deployment.md](docs/deployment.md) §6.19.)* The `"..."` phrase syntax is taught via the search-input placeholder.
 
 Deeper DB optimization is evidence-deferred until the library grows past ~2,000–5,000 papers. See [docs/decisions-and-triggers.md](docs/decisions-and-triggers.md) for the exact re-evaluation criteria.
 

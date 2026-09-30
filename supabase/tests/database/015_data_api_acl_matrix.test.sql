@@ -517,6 +517,8 @@ SELECT is(
   'postgres | SECURITY INVOKER | ' || e.path || ' | body ' || e.body_md5
     || ' | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated',
   'ACL-J1 ' || e.sig || ': owner postgres, SECURITY INVOKER, ' || e.path || ', reviewed body, authenticated EXECUTE only')
+-- search_papers' body is C58's contributing-field attribution body
+-- (20260930161651); suite 027 owns that body's behaviour.
 FROM (VALUES
   ('public.bulk_update_keywords(jsonb)',                               'search_path=public, pg_temp', 'c002702d05a14e7febd00feaf1e97786'),
   ('public.bulk_update_study_types(jsonb)',                            'search_path=public, pg_temp', '6086d69c0915c8a7c67089556b40041b'),
@@ -524,7 +526,7 @@ FROM (VALUES
   ('public.get_duplicate_papers()',                                    'search_path=public',          '3c914811a9b8c75b9df834e1cf51e1e0'),
   ('public.get_keyword_options(uuid,uuid[],integer,integer,text[])',   'search_path=public',          '531010c10d84ee94c7c1e00d65a2e7f5'),
   ('public.safe_bulk_insert_papers(uuid,jsonb)',                       'search_path=public, pg_temp', '119925245a5c3c8529ada3d2e10fba96'),
-  ('public.search_papers(uuid,text,integer,integer)',                  'search_path=public',          'd4a5f3afdc485d5dfda8e0798c61cc48'),
+  ('public.search_papers(uuid,text,integer,integer)',                  'search_path=public',          '1a72d57a585779644c00636f0da3b253'),
   ('public.search_papers_short(uuid,text)',                            'search_path=public',          'ce353564edcb73a5466092e84d0b8d1b')
 ) AS e(sig, path, body_md5)
 ORDER BY e.sig;

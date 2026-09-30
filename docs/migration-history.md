@@ -4444,3 +4444,40 @@ Decision **C57**. It implements the read-only audit `SERVICE-ROLE-LEAST-PRIVILEG
   - **Nothing else moved.** The migration's own whole-state snapshot was byte-identical before and after. That covers the client-role matrix, platform schemas, definitions, function rows, roles and memberships. Every row count was identical, and the migration's own §3i check proved, before COMMIT, that it wrote no row in `public`, `auth` or `storage`, so there was no application row mutation.
   - **No runtime change.** No Edge Function was deployed (all six keep their versions and `ezbr_sha256`), and no secret, Auth or Storage setting changed. The Security Advisor's 31 findings are unchanged. Vercel's automatic Production deployment for the merge commit needed no manual action.
   - **Rollback.** None performed; any correction would be a new forward migration.
+
+## 2026-09-30 — SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-001: `search_papers` flags every field that contributed a query term (`20260930161651`) — **PREPARED / NOT DEPLOYED**
+
+Decision **C58**, **contributing-field attribution**. It implements the owner-approved Option B of the read-only audit `SEARCH-MATCH-ATTRIBUTION-CROSS-FIELD-AUDIT-001` (2026-09-30, classification **UX_ATTRIBUTION_DEFECT**). **Not applied:** Production stays at ledger 97 until a separately authorized migration-only rollout ([deployment.md](deployment.md) §6.19).
+
+- **The defect.** FTS returned a paper when its combined `search_vector` held every query term, which may be spread over several fields. But each `matched_*` flag tested one field against the whole AND-query. `metformin smith` against keyword "metformin" + author "Smith" returned the paper, correctly, with all six flags false, and `PaperList` rendered no "Matched in:" line. The short and phrase paths could not do this, and the result set was always right.
+- **Migration `20260930161651_fix_search_match_cross_field_attribution`.** Created with `supabase migration new`. It is explicitly transactional and runs as `postgres` under transaction-local `search_path = pg_catalog, pg_temp` and `lock_timeout = 5s`.
+  - **§0** context: role, settings, `track_counts` and the write baseline.
+  - **§1** preconditions:
+    - `search_papers` exactly as reviewed: one overload, owner, `plpgsql`, INVOKER, VOLATILE, PARALLEL UNSAFE, cost/rows, result, arguments/defaults, `search_path=public`, no comment, no dependents, ACL and effective EXECUTE, and body `d4a5f3af…`;
+    - `search_vector` at C54's `8ddd960b…`, with `idx_papers_search_vector` a valid GIN index on it;
+    - `papers` RLS/FORCE and the policy digest `07603cbe…`;
+    - snapshots for §3.
+  - **§2** one `CREATE OR REPLACE`. The same tokens are also `|`-joined into `v_ts_any`, once per call, and the six flags test it. Every attribute is restated. The two stale comments (SECURITY DEFINER, "at least one … will be true") are corrected.
+  - **§3** verification:
+    - same OID and whole `pg_proc` row except `prosrc`;
+    - new body `1a72d57a…`;
+    - the guard, sanitizer, `&`-join, empty return, membership query, rank and `WHERE`/`ORDER`/`LIMIT` occur verbatim once in both bodies;
+    - all six flags on `v_ts_any`;
+    - no other function, `papers` definition or index, policy or row moved.
+  - Fifteen local refusal probes each stopped the file with a named message: nine precondition drifts, the no-transaction case and five postcondition drifts. The positive control passed, and the catalog was byte-identical afterwards.
+- **Membership and ranking are unchanged**, and so are `search_papers_short`, the RPC shape and the generated types. No frontend runtime change: `PaperList` already renders every true flag. The `MatchFlags` doc comment was corrected.
+- **Known limitation, characterized, not changed.** A punctuation-joined token (`a,b`) parses to a phrase that can match across the seam between two fields. That row is still returned, and can have no flag.
+- **Tests.**
+  - New `027` (105) compares against the previous body, created verbatim in `pg_temp`:
+    - posture and body structure;
+    - cases A–G;
+    - query semantics;
+    - a deterministic 240-paper × 110-query property check: rows, ranks, monotonic flags, single-term equality, every row flagged, and LIMIT/OFFSET;
+    - the limitation;
+    - security, including RLS live inside the new body.
+  - Run against the previous body, `027` fails 24 assertions and passes the rest.
+  - `015` and `020` re-pin `search_papers`' body digest only.
+  - `024`, `000`, `003` and the ACL-parity references were re-reviewed and are unchanged.
+- **E2E.** `e2e/search-attribution.spec.ts` gains one cross-field case whose query needs terms from two fields of the seeded paper and expects exactly those two badges.
+- **Historical migrations are untouched.**
+- **Rollout — not performed.** See [deployment.md](deployment.md) §6.19.
