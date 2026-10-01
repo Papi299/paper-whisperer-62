@@ -201,30 +201,25 @@ Consumption is likewise unchanged, and is now harder to get wrong. `finalize_att
 
 The server-controlled **allowlist** of AI models Paperlume has explicitly approved for selection (`20260902120000`, C33). Columns: `id` (TEXT PK, provider-qualified), `provider`, `provider_model`, `display_name`, `enabled`, `selectable`, `sort_order`, timestamps. Constraints require every text column to be non-empty and already trimmed, and `(provider, provider_model)` is unique.
 
-**Six rows** across the three registered provider families, all enabled and selectable, in `sort_order` 10 / 20 / 30 / 40 / 50 / 60:
+**Seven rows** across the three registered provider families — the live catalog since the C59 Phase-D cutover `20261001092335` on 2026-10-01. Every row is `enabled`, `selectable` **and** `reasoning_selectable`:
 
-| `id` | `provider_model` | `display_name` | Added by |
-|---|---|---|---|
-| `google/gemini-3.5-flash` | `gemini-3.5-flash` | Gemini 3.5 Flash | `20260902120000` (C33) |
-| `google/gemini-3.6-flash` | `gemini-3.6-flash` | Gemini 3.6 Flash | `20260902120000` (C33) |
-| `google/gemini-3.7-flash` | `gemini-3.7-flash` | Gemini 3.7 Flash | `20260903120000` (C35) |
-| `google/gemini-3.8-flash` | `gemini-3.8-flash` | Gemini 3.8 Flash | `20260903120000` (C35) |
-| `anthropic/claude-sonnet-5` | `claude-sonnet-5` | Claude Sonnet 5 | `20260917201856` (C43), selectable by `20260918210017` |
-| `openai/gpt-5.6-terra` | `gpt-5.6-terra` | GPT-5.6 Terra | `20260917201856` (C43), selectable by `20260918210017` |
+| sort | `id` | `provider_model` | `display_name` | reasoning levels | Automatic Analyze / Suggest | Added by |
+|---|---|---|---|---|---|---|
+| 10 | `google/gemini-3.5-flash` | `gemini-3.5-flash` | Gemini 3.5 Flash | `minimal, low, medium, high` | `minimal` / `medium` | `20260902120000` (C33) |
+| 20 | `google/gemini-3.6-flash` | `gemini-3.6-flash` | Gemini 3.6 Flash | `minimal, low, medium, high` | `minimal` / `medium` | `20260902120000` (C33) |
+| 30 | `google/gemini-3.7-flash` | `gemini-3.7-flash` | Gemini 3.7 Flash | `low, medium, high` | `low` / `medium` | `20260903120000` (C35) |
+| 40 | `google/gemini-3.8-flash` | `gemini-3.8-flash` | Gemini 3.8 Flash | `low, medium, high` | `low` / `medium` | `20260903120000` (C35) |
+| 50 | `anthropic/claude-sonnet-5-5` | `claude-sonnet-5-5` | Claude Sonnet 5.5 | `low, medium, high, xhigh, max` | `low` / `medium` | `20260930203613` (C59), opened by `20261001092335` |
+| 60 | `anthropic/claude-opus-5-5` | `claude-opus-5-5` | Claude Opus 5.5 | `low, medium, high, xhigh, max` | `low` / `medium` | `20260930203613` (C59), opened by `20261001092335` |
+| 70 | `openai/gpt-6.1-sol` | `gpt-6.1-sol` | GPT-6.1 Sol | `low, medium, high, xhigh, max` | `low` / `medium` | `20260930203613` (C59), opened by `20261001092335` |
 
-The two paid rows were staged `enabled` but **not** `selectable` on 2026-09-18 so Phase 7 could canary them without exposing them, and Phase 8 made them selectable on 2026-09-19. Selecting one still requires `can_select_ai_model`.
+Selecting any row still requires `can_select_ai_model`; being in this table never grants entitlement. **No surviving row offers `off` or `none`**, and only the two Gemini 3.5/3.6 rows offer `minimal` — so those three values are not current options on any paid model.
 
-**Three staged replacement rows — APPLIED in Production 2026-10-01, and Phase-C accepted** (`AI-MODEL-CATALOG-REFRESH-001A`, `20260930203613`, C59). The Phase-D cutover `20261001092335`, which would retire Claude Sonnet 5 and GPT-5.6 Terra and open these three, is prepared and **not yet applied**. They are added after every current row. Each is `enabled` but neither `selectable` nor `reasoning_selectable`, so none is offered in Settings and none can be chosen through the setter. An operator-written preference can route to one, and that is the Phase-C canary path ([deployment.md](deployment.md) §16):
+**Two rows were RETIRED BY DELETION on 2026-10-01** and no longer exist in the catalog: `anthropic/claude-sonnet-5` (`claude-sonnet-5`, Claude Sonnet 5) and `openai/gpt-5.6-terra` (`gpt-5.6-terra`, GPT-5.6 Terra), both seeded by `20260917201856` (C43) and made selectable by `20260918210017`. They are **deleted, not hidden, disabled or dormant** — the Phase-D migration removed the rows outright, after first migrating every saved preference naming them onto the successor model. Their historical telemetry and price records deliberately survive; see "Retiring a model" below.
 
-| `id` | `provider_model` | `display_name` | `sort_order` |
-|---|---|---|---|
-| `anthropic/claude-sonnet-5-5` | `claude-sonnet-5-5` | Claude Sonnet 5.5 | 70 |
-| `anthropic/claude-opus-5-5` | `claude-opus-5-5` | Claude Opus 5.5 | 80 |
-| `openai/gpt-6.1-sol` | `gpt-6.1-sol` | GPT-6.1 Sol | 90 |
+*(Historical: the two paid rows were staged `enabled` but **not** `selectable` on 2026-09-18 so Phase 7 could canary them without exposing them, and Phase 8 made them selectable on 2026-09-19. The three replacements were staged the same way by `20260930203613` on 2026-10-01 — `enabled`, neither `selectable` nor `reasoning_selectable`, reachable only through an operator-written preference — which is the path Phase C's 9 / 9 canaries used before Phase D opened them.)*
 
-They are intended to replace Claude Sonnet 5 and GPT-5.6 Terra at a later, separately authorized cutover. Until then both of those stay selectable.
-
-`sort_order` is sparse on purpose, and 001D **appended** 30 and 40 rather than renumbering — a preference someone already saved keeps its position. Nothing beyond the six rows above and the three staged rows is in the catalog: Gemini Pro models, preview models and the floating `gemini-flash-latest` alias remain absent by decision, and a floating alias is excluded on its own terms since it is not a stable thing for a user to have chosen. *(Until `AI-MULTI-PROVIDER-001E` this sentence also excluded Anthropic/Claude and OpenAI/GPT; `20260917201856` seeded one model from each, so that part is historical.)* **Being in this table makes a model selectable, never default** — Paperlume's system default is `gemini-3.5-flash`, resolved server-side from `GEMINI_MODEL` (C34), and no migration changes it.
+`sort_order` is sparse on purpose. 001D **appended** 30 and 40 rather than renumbering, so a preference someone already saved kept its position; the C59 cutover did renumber the three replacements from their staged 70 / 80 / 90 down to 50 / 60 / 70, which is safe because `sort_order` is display ordering only — a saved preference names a row by `id`, never by position. Nothing beyond the seven rows above is in the catalog: Gemini Pro models, preview models and the floating `gemini-flash-latest` alias remain absent by decision, and a floating alias is excluded on its own terms since it is not a stable thing for a user to have chosen. *(Until `AI-MULTI-PROVIDER-001E` this sentence also excluded Anthropic/Claude and OpenAI/GPT; `20260917201856` seeded one model from each, so that part is historical.)* **Being in this table makes a model selectable, never default** — Paperlume's system default is `gemini-3.5-flash`, resolved server-side from `GEMINI_MODEL` (C34), and no migration changes it.
 
 Adding a model **for a provider that already has a registered runtime adapter** is a reviewed migration and **nothing else**: 001D added Gemini 3.7 and 3.8 on the existing Google protocol with zero changes to `_shared/aiModelSelection.ts`, `AiModelSettingsSection.tsx` and `useAiModelSettings.ts`, which is the property the two sections below describe. Adding a model from a **new** provider is not catalog work alone: it also needs a reviewed runtime adapter (§4.9a), that provider's own server-side credential, the matching Settings provider-family change, and explicit provider, privacy and cost acceptance — all before its row is seeded (C39).
 
@@ -232,7 +227,14 @@ Adding a model **for a provider that already has a registered runtime adapter** 
 
 **This table is the runtime allowlist.** `_shared/aiModelSelection.ts` deliberately hard-codes **no** list of model strings — a TypeScript copy would be a second authorization surface that could disagree with this one. A saved preference is honoured only when its catalog row exists, its `id` matches the id that was requested, `enabled` is `true`, `provider_model` is a non-empty trimmed string, and the row's `provider` has a registered runtime adapter (§4.9a). Repository `main` registers `google`, `anthropic` and `openai` (§4.9c), and the catalog holds rows for all three. *(Historical: before `AI-MULTI-PROVIDER-001E` only `google` had catalog rows, and before the 2026-09-17 Phase 6 deploy the deployed generation runtime was the pre-001A Google-only build.)*
 
-Posture: `authenticated` holds **SELECT only** (plus a SELECT policy); `anon` and `service_role` hold nothing. Rows are added or retired by a reviewed migration, never at runtime. The table holds **no API key, secret name or credential** — it is product metadata. Retire a model with `enabled = false` rather than `DELETE`, so saved preferences and model history survive.
+Posture: `authenticated` holds **SELECT only** (plus a SELECT policy); `anon` and `service_role` hold nothing. Rows are added or retired by a reviewed migration, never at runtime. The table holds **no API key, secret name or credential** — it is product metadata.
+
+**Retiring a model.** `user_ai_preferences.preferred_model_id` references this table with **no `ON DELETE` action**, so a `DELETE` can never orphan or null a saved choice — it simply fails if any preference still points at the row. That makes two retirement shapes available, and the choice is a product decision rather than a safety one:
+
+- **Hide it** — `enabled = false` (or `selectable = false` to close it to *new* choices while honouring existing ones). The row and its history stay in place. This is what the column comment originally prescribed.
+- **Delete it** — only after a migration has moved every saved preference onto a successor model in the same transaction, with the deletion gated on there being zero remaining references. The `NO ACTION` foreign key is the fail-closed backstop if that order were ever wrong, not a substitute for the gate.
+
+C59's Phase-D cutover used the second shape for Claude Sonnet 5 and GPT-5.6 Terra, because the approved destination was a catalog of exactly seven rows rather than nine with two hidden. **Deleting a catalog row does not delete history:** `ai_provider_usage_events` has **no** foreign key to this table, so telemetry keeps naming the provider and model that actually served each past request, and the retired models' price-book records are kept so those historical rows stay interpretable. The column comment was corrected in the cutover migration to state this rule.
 
 ### 4.8 `user_ai_preferences` — LIVE (schema, write RPCs, and runtime routing)
 
@@ -274,8 +276,8 @@ The decision, in order:
 > **What is true now (repository `main` at the head of this branch).** §§4.9a–4.9c below are a *chronology*: each records the state at a named phase, and several of their statements were true only at that phase. This box is the current-state anchor; where a bullet below disagrees with it, this box wins and the bullet is history.
 >
 > - **Three registered provider families** — `google`, `anthropic`, `openai` — in [`_shared/aiProviderRegistry.ts`](../supabase/functions/_shared/aiProviderRegistry.ts). The registry authorizes provider **protocols**; `ai_model_catalog` authorizes **models** (§4.7). A catalog row alone still cannot make PaperLume speak a protocol it has no reviewed adapter for.
-> - **Six enabled and selectable models** in the catalog established by the migration chain: four Gemini (3.5/3.6/3.7/3.8 Flash), `anthropic/claude-sonnet-5`, and `openai/gpt-5.6-terra`. Three **staged** replacements are also live in the catalog since 2026-10-01 — Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol — each `enabled` but neither `selectable` nor `reasoning_selectable`, so the selectable set is still the six (§4.7, C59). The prepared Phase-D cutover would make the final selectable set **seven** by retiring Claude Sonnet 5 and GPT-5.6 Terra; it is not yet applied.
-> - **Manual reasoning is activated for all six**, by `20260919075655` (C45), which also granted `set_current_user_ai_reasoning` to `authenticated` only. Automatic remains the first and recommended option and is PaperLume's own per-model, per-operation choice (§4.9c).
+> - **Seven enabled and selectable models** in the catalog, live since the C59 Phase-D cutover `20261001092335` on 2026-10-01: four Gemini (3.5/3.6/3.7/3.8 Flash), `anthropic/claude-sonnet-5-5`, `anthropic/claude-opus-5-5` and `openai/gpt-6.1-sol` (§4.7). `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` were **retired by deletion** in that cutover and no longer exist as catalog rows; their historical telemetry and price records are deliberately kept.
+> - **Manual reasoning is open on every current row.** `20260919075655` (C45) activated it on the six models selectable then and granted `set_current_user_ai_reasoning` to `authenticated` only; the C59 cutover opened the three replacements on the same terms, so all **seven** live rows are `reasoning_selectable` and each offers exactly the levels its own row lists (§4.7). Automatic remains the first and recommended option and is PaperLume's own per-model, per-operation choice (§4.9c).
 > - **Selection is capability-gated, not plan-name-gated.** `can_select_ai_model` is re-proven server-side on every AI operation; a saved preference never substitutes for it. The **system default stays server-side** (`GEMINI_MODEL`, C34) and is Google.
 > - **One credential name per provider**, server-side only — no generic shared key, and no credential value in the catalog, a request body, a log line or the browser.
 > - **Transport, per current source:** Gemini 90 s with **zero** retries (permanent, C46); Anthropic and OpenAI one attempt each on their own independent 60 s ceilings.

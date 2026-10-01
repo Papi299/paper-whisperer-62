@@ -141,7 +141,7 @@ Gemini does not currently bill per-token in a way visible at request time — th
 >
 > Two deliberate refusals to guess (C44): Anthropic publishes **two** cache-write rates ($2.50 for a 5-minute write, $4.00 for a 1-hour one) against a single summed usage field, so any positive Anthropic cache write is `unpriced` rather than priced at the cheaper rate; and an OpenAI request above 272K input tokens is `unpriced` rather than priced at the short-context rate, because OpenAI applies 2x input **and** 1.5x output to the whole request above that threshold. PaperLume requests no caching and its prompts sit far below the threshold, so both are correctness properties rather than expected cases.
 >
-> **Staged replacement list prices (`AI-MODEL-CATALOG-REFRESH-001A`, verified 2026-09-30; DEPLOYED 2026-10-01 in `analyze-paper` v34 / `suggest-paper-organization` v17, and exercised by the Phase-C canaries).** Appended beside the two records above, which stay unchanged — and are KEPT after the prepared Phase-D cutover retires their catalog rows, because historical telemetry still names those models and telemetry has no foreign key to the catalog:
+> **Current paid-model list prices (`AI-MODEL-CATALOG-REFRESH-001A`, verified 2026-09-30; DEPLOYED 2026-10-01 in `analyze-paper` v34 / `suggest-paper-organization` v17, exercised by the Phase-C canaries, and the live paid options since the Phase-D cutover on 2026-10-01).** Appended beside the two records above, which stay unchanged — and are **KEPT now that the Phase-D cutover has deleted their catalog rows**, because historical telemetry still names those models and telemetry has no foreign key to the catalog, so those past rows stay interpretable:
 >
 > | Model | Input | Cached input | Cache write | Output | Priced up to |
 > |---|---|---|---|---|---|
@@ -151,7 +151,7 @@ Gemini does not currently bill per-token in a way visible at request time — th
 >
 > The same two refusals apply. Anthropic still publishes two cache-write rates: $2.50 / $4 on Sonnet 5.5, $5 / $8 on Opus 5.5. Above 272K input tokens Sol moves the whole request to 2x input and cache rates and 1.5x output. Opus 5.5's cache-hit rate is Anthropic's published 0.05x, not the usual 0.1x.
 >
-> These rates reach the estimator only when the generation functions are redeployed from the accepted merge ([deployment.md](deployment.md) §14.1 step 7); until then a paid request would be `unpriced`.
+> These rates reached the estimator when the generation functions were redeployed in Phase B on 2026-10-01 (`analyze-paper` v34, `suggest-paper-organization` v17), which is why the Phase-C canaries priced at `estimated` against the exact `…@2026-09-30` records rather than falling to `unpriced` ([deployment.md](deployment.md) §16.1).
 
 **Funnel metrics:**
 
