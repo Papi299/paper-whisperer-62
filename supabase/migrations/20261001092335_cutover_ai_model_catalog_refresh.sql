@@ -89,18 +89,41 @@
 --     1. public.user_ai_preferences  IN EXCLUSIVE MODE
 --     2. public.ai_model_catalog     IN EXCLUSIVE MODE
 --
--- Why EXCLUSIVE and not something weaker or stronger:
+-- Why EXCLUSIVE and not something weaker or stronger. The four functions that
+-- write `user_ai_preferences`, and the locks each one actually takes:
 --
---   * Both setters take `SELECT … FOR UPDATE` on the caller's preference row,
---     which is a ROW SHARE table lock, and their INSERT/UPDATE/DELETE is ROW
---     EXCLUSIVE. EXCLUSIVE is the weakest standard mode that conflicts with
---     BOTH, so it is the weakest lock that actually blocks a racing setter.
---     SHARE ROW EXCLUSIVE would block the write but not the `FOR UPDATE`.
---   * EXCLUSIVE does NOT conflict with ACCESS SHARE, so plain readers keep
---     working throughout: an in-flight Analyze or Suggest can still resolve a
---     preference and read the catalog, and Settings can still render. That is
---     the difference between a short mutual-exclusion window and a read outage,
---     which is why this is not ACCESS EXCLUSIVE.
+--   * `set_current_user_ai_model(text)` — reads the entitlement, reads the
+--     catalog with a PLAIN SELECT, then takes `SELECT … FOR UPDATE` on the
+--     caller's preference row (ROW SHARE at table level) and writes it with an
+--     UPDATE, or with `INSERT … ON CONFLICT (user_id) DO NOTHING` when there
+--     was no row to lock (ROW EXCLUSIVE).
+--   * `set_current_user_ai_reasoning(text)` — takes `SELECT … FOR UPDATE` on
+--     the caller's preference row FIRST, and only then reads the catalog row
+--     that row names, so the level is validated against the model under the
+--     same lock that carries the write (ROW SHARE, then ROW EXCLUSIVE).
+--   * `clear_current_user_ai_model()` — a bare DELETE of the caller's row. No
+--     `FOR UPDATE`; it conflicts through ROW EXCLUSIVE alone.
+--   * `clear_current_user_ai_reasoning()` — a bare UPDATE of the caller's row.
+--     No `FOR UPDATE`; ROW EXCLUSIVE alone.
+--
+-- So the modes that must be blocked on `user_ai_preferences` are ROW SHARE (the
+-- two setters' `FOR UPDATE`) and ROW EXCLUSIVE (every write, both clear paths
+-- included). EXCLUSIVE is the weakest standard mode that conflicts with BOTH:
+-- SHARE and SHARE ROW EXCLUSIVE block the writes but not the `FOR UPDATE`, and
+-- every mode weaker than those blocks neither. That is the whole reason for the
+-- choice — not a preference for a strong lock.
+--
+--   * Preference-table EXCLUSIVE therefore blocks all four callers: the model
+--     setter's INSERT/UPDATE, the reasoning setter's `FOR UPDATE` and UPDATE,
+--     and both clear paths. No preference mutation can COMMIT while this
+--     transaction is rewriting references and deleting the old catalog rows.
+--     That — not the FK, and not speed — is what makes the zero-reference gate
+--     ahead of the DELETE mean anything.
+--   * Catalog EXCLUSIVE serializes conflicting catalog-level mutations while
+--     still permitting ordinary ACCESS SHARE reads. `authenticated` holds
+--     SELECT and nothing else on this table (20260902120000), so the catalog
+--     has no client writers at all: this lock is a migration/admin mutation
+--     boundary, not a client-write boundary.
 --   * Both locks are taken by this transaction and released automatically when
 --     it commits or rolls back. Nothing here holds a lock across statements that
 --     wait on anything external, and the whole body is bounded work over a
@@ -108,21 +131,52 @@
 --
 -- Why preferences FIRST, then the catalog. A writer must never be able to hold
 -- one of these locks while waiting for the other in the opposite order, or the
--- two deadlock. `set_current_user_ai_model` reads the catalog with a plain
--- SELECT (ACCESS SHARE, which EXCLUSIVE does not conflict with), then locks the
--- caller's preference row, and only then does its write take the FK's
--- `FOR KEY SHARE` on the catalog row. So the only locks a setter holds in a
--- conflicting mode are taken preferences-first, catalog-second — the same order
--- as here. With preferences locked first, no setter can be sitting between the
--- two, and no new reference to a retiring row can appear after the check.
+-- two deadlock. None of the four can. The model setter's catalog read is a
+-- plain SELECT — ACCESS SHARE, which EXCLUSIVE does not conflict with, so it is
+-- not a lock either side can wait on — and the first CONFLICTING lock it takes
+-- is the preference-row `FOR UPDATE`; only afterwards does its write take the
+-- FK's `FOR KEY SHARE` on the catalog row. The reasoning setter locks the
+-- preference row before it reads the catalog at all. Both clear paths touch
+-- preferences only. So every conflicting lock any of them takes is
+-- preferences-first, catalog-second — the same order as here. With preferences
+-- locked first, none of them can be sitting between the two, and no new
+-- reference to a retiring row can appear after the check.
 --
--- ## One statement, on purpose
+-- ## What the locks do NOT promise: in-flight readers get no single snapshot
 --
--- Everything above is ONE `DO` block. `supabase db push` wraps a migration file
--- in a transaction, but `supabase db reset` runs it statement-at-a-time, so only
--- a single statement keeps the locks, the preconditions, all three mutations and
--- the postconditions in one transaction under BOTH. A multi-statement version
--- would take its locks and release them before the work under `db reset`.
+-- `resolveEffectiveAiModel` (`_shared/aiModelSelection.ts`) performs three
+-- SEPARATE reads — the access RPC, then the preference row, then the catalog
+-- row. Those are ordinary reads, deliberately not blocked by these locks, and
+-- under READ COMMITTED each statement sees the database as of its own start. So
+-- a request can straddle this transaction's COMMIT: read a preference still
+-- naming `anthropic/claude-sonnet-5` just before it, and read the catalog just
+-- after it, when that id no longer exists. EXCLUSIVE not conflicting with
+-- ACCESS SHARE means those readers are never BLOCKED; it does not give them one
+-- snapshot of either the old or the new state.
+--
+-- The resolver already models exactly that case: a preference naming an absent
+-- catalog row is `model_missing`, which falls back to the system default on
+-- Automatic and logs that bounded reason. The outcome is one request served by
+-- the default model instead of the pinned one, for the width of the cutover. It
+-- is NOT data corruption, NOT reachability of a retired model, NOT an orphaned
+-- preference and NOT a security bypass: the saved row is already rewritten to
+-- the successor, and the next request reads the successor.
+--
+-- Closing that window would mean giving the resolver a single snapshot across
+-- all three reads — a repeatable-read transaction, or one round trip. That is
+-- an architecture change to the generation path, not part of this cutover, and
+-- it is deliberately not attempted here.
+--
+-- ## One state-changing statement, on purpose
+--
+-- The locks, the preconditions, all three mutations and the postconditions are
+-- ONE `DO` block. `supabase db push` wraps a migration file in a transaction,
+-- but `supabase db reset` runs it statement-at-a-time, so only a single
+-- statement keeps them in one transaction under BOTH. A multi-statement version
+-- would take its locks and release them before the work under `db reset`. The
+-- FILE is not literally one statement: a `COMMENT ON COLUMN` follows the block.
+-- That is metadata only — it changes no row and needs no part of this
+-- atomicity, so it is left where it is rather than folded in for symmetry.
 --
 -- Durable decisions: C33 (the capability and the catalog), C34 (the system
 -- default), C39 (a provider needs a reviewed adapter AND its own credential),
