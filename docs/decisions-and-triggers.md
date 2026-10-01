@@ -2156,7 +2156,16 @@ Section 3 then proves:
 
 ### C59. Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol replace Claude Sonnet 5 and GPT-5.6 Terra through stage → canary → cutover; all three expose `low … max` with PaperLume's own Automatic `low` / `medium` (2026-09-30)
 
-**Status: Phase B LIVE, Phase C PASSED, Phase D PREPARED / NOT YET APPLIED.** Migration `20260930203613` was applied on 2026-10-01 (ledger **99**) and both generation functions were deployed with the new price records, so Production holds nine catalog rows with the original six still the only selectable ones. Phase C's bounded canaries **passed 9 / 9** on 2026-10-01 across all three replacements — Analyze Automatic `low`, Suggest Automatic `medium`, Analyze manual `max` — every one `completed` / `succeeded` with `cost_status = estimated` against its exact `…@2026-09-30` price record and no Google fallback. The Phase-D cutover migration `20261001092335` is prepared, reviewed and locally validated but **not applied**: it is what retires Claude Sonnet 5 and GPT-5.6 Terra and takes the catalog to the final **seven**. The runbook is [deployment.md](deployment.md) §16.
+**Status: COMPLETE / LIVE — all four phases executed, Production-verified 2026-10-01.**
+
+- **Phase A — implemented.** The staging migration, its tests and the catalog metadata were prepared and reviewed in the repository.
+- **Phase B — staged in Production.** Migration `20260930203613` was applied on 2026-10-01 (ledger **98 → 99**) and both generation functions were deployed with the new `…@2026-09-30` price records (`analyze-paper` v34, `suggest-paper-organization` v17), leaving nine catalog rows with the original six still the only selectable ones.
+- **Phase C — passed 9 / 9.** Bounded Production canaries on 2026-10-01 across all three replacements — Analyze Automatic `low`, Suggest Automatic `medium`, Analyze manual `max` — every one routed to the exact model in one provider attempt, `completed` / `succeeded`, usage `reported`, `cost_status = estimated` against its exact `…@2026-09-30` price record, and no Google fallback. The acceptance account's lifetime quota was temporarily raised for the window and restored afterwards, with the genuinely consumed usage deliberately **kept** rather than reset.
+- **Phase D — merged and applied.** PR #328 merged as `63a590a798326a55fa8a333599d1384ad469e415` (a normal two-parent merge of the approved head `5156ec27`); merged-`main` Validate, DB Tests and Extension all passed on attempt 1. One `supabase db push --linked --yes` applied migration `20261001092335` — **ledger 99 → 100**, one attempt, no seeds and no roles. It migrated every saved preference off Claude Sonnet 5 and GPT-5.6 Terra onto their successors, **deleted** those two catalog rows, and opened the three replacements.
+
+**Live result.** The catalog holds exactly **seven** rows, all `enabled`, `selectable` and `reasoning_selectable`: Gemini 3.5/3.6/3.7/3.8 Flash at sort 10/20/30/40, then **Claude Sonnet 5.5 (50), Claude Opus 5.5 (60), GPT-6.1 Sol (70)**. `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` no longer exist as catalog rows — deleted, not hidden. No Edge Function was deployed and no provider call was made for Phase D; the catalog is the allowlist, so the row change was the whole change. Entitlements, usage counters, credits and all telemetry were provably unchanged. Executed evidence is [deployment.md](deployment.md) §16; the ledger entry is [migration-history.md](migration-history.md).
+
+**Adapter vocabulary narrowing — OPTIONAL / DEFERRED CLEANUP, outside C59's completion criteria.** The rollout plan below originally contemplated narrowing the adapters' provider-level `off` / `none` vocabularies as a fourth step after cutover; that is recorded as a historical consideration, not an unfinished phase. C59's completion criteria were the owner's: the final seven models live, the old two retired, saved preferences migrated, the reasoning policy live, and the provider canaries passed — all met. **Final disposition: deferred.** The catalog is authoritative, no live row offers either literal, so neither is reachable through catalog policy; the branches are an unreachable superset rather than a correctness or security defect, and they do not justify an Edge deployment on their own. **Revisit if** the adapter vocabulary becomes misleading or a maintenance/testing burden; a future model reuses `off` or `none` with different semantics; or an Edge deployment is already being made for related provider work.
 
 **Decision.** The owner's target is seven selectable models: the four Gemini Flash rows, Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol. Claude Sonnet 5 and GPT-5.6 Terra are retired. It is reached by C43's three separately authorized steps, extended by a fourth that C43 never needed:
 
@@ -2176,18 +2185,19 @@ Each is PaperLume's explicit policy (C41), never a provider default: Sonnet 5.5 
 - `none` and `minimal` are rejected by Sol.
 - `between_tools` (Sonnet 5.5 only) and `adaptive` are Anthropic **thinking modes**, not effort levels. PaperLume runs adaptive thinking at all five levels and introduces neither. The canonical-vocabulary CHECK keeps both out of the catalog; suite `028` proves it.
 
-**Why the adapters keep `off` and `none` during staging.** The catalog row is the per-model capability authority. The adapter vocabulary is per-**protocol**, and Claude Sonnet 5 and Terra legitimately use those levels while they remain selectable. Narrowing an adapter first would break a live model. The staged rows never list those levels, and a saved level a row does not list falls back to that model's Automatic level before any request is built (C41).
+**Why the adapters kept `off` and `none` through the rollout, and still do.** The catalog row is the per-model capability authority. The adapter vocabulary is per-**protocol**, and Claude Sonnet 5 and Terra legitimately used those levels for as long as they remained selectable — narrowing an adapter first would have broken a live model. The staged rows never listed those levels, and a saved level a row does not list falls back to that model's Automatic level before any request is built (C41). *Now that the cutover has removed both old rows, no catalog row offers either value, so the adapter branches are unreachable through catalog policy rather than load-bearing.* They are left in place because removing them would need an Edge deployment and is deferred optional cleanup (above), not because they are still needed.
 
 **Pricing** (C44, applied again). The records are `…@2026-09-30`.
 - Both Claude 5.5 records carry cache-write `null`: two published TTL rates against one summed usage field.
 - Sol is priced up to the same published 272K boundary as Terra and is `unpriced` above it.
-- The old records stay unchanged and open-ended while their models remain selectable.
+- The old `…@2026-09-17` records stay unchanged and open-ended **for historical telemetry interpretation only**. Their catalog rows were deleted by the Phase-D cutover, so those models are neither selectable nor routable; a price record has never been an authorization surface.
 
-**Preference migration at cutover — fixed now, executed later.**
+**Preference migration at cutover — executed 2026-10-01.**
 - Model mapping: `claude-sonnet-5 → claude-sonnet-5-5`, `gpt-5.6-terra → gpt-6.1-sol`.
 - Levels `low … max` are preserved.
 - `off` (Claude) and `none` (OpenAI) become `NULL`, i.e. Automatic.
 - `NULL` stays `NULL`.
+- **Observed at rollout:** the single saved preference then in Production, `anthropic/claude-sonnet-5` at `xhigh`, migrated to `anthropic/claude-sonnet-5-5` at `xhigh`, with the preference row count unchanged and zero preferences left on either retired id. That population was the state on the day, not a property of the migration, which is set-based and unconditional on count.
 
 The cutover handles whatever population exists when it runs; it must not assume today's single saved preference. Order is forced by the foreign key: `user_ai_preferences.preferred_model_id` has no `ON DELETE` action, so preferences move before the old rows go.
 

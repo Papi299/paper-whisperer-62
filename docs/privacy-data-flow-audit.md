@@ -1948,22 +1948,23 @@ blocker for the approved `0.1.0` release**. The analysis is
   §35.4.
 - ❌ A legal determination of any kind — **not claimed.**
 
-## 36. Addendum — 2026-09-30 — `AI-MODEL-CATALOG-REFRESH-001A` staged replacement models
+## 36. Addendum — 2026-09-30 — `AI-MODEL-CATALOG-REFRESH-001` replacement models (now LIVE)
 
-`AI-MODEL-CATALOG-REFRESH-001A` stages Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol as catalog rows that are `enabled` but neither `selectable` nor `reasoning_selectable`. They are intended to replace Claude Sonnet 5 and GPT-5.6 Terra at a later cutover (decision C59; [deployment.md](deployment.md) §16).
+`AI-MODEL-CATALOG-REFRESH-001` replaced the two paid models with Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol, and added Claude Opus 5.5 as a third paid choice. It ran as four phases: Phase A staged the migration in the repository, Phase B applied it to Production, Phase C canaried each replacement on the dedicated acceptance account, and **Phase D completed the cutover on 2026-10-01** (decision C59; [deployment.md](deployment.md) §16).
 
 ### 36.1 Repository and Production
 
-**Updated 2026-10-01.** The staging is applied, the canaries have run, and the cutover is prepared but not applied.
+**Updated 2026-10-01.** The staging is applied, the canaries passed, and **the cutover is applied — the seven-model catalog is live.**
 
-- **APPLIED.** Migration `20260930203613` went in on 2026-10-01 (ledger **99**), and both generation functions were deployed with the three price records — `analyze-paper` v34, `suggest-paper-organization` v17.
-- **Production holds nine catalog rows.** The selectable set is still exactly the six: Anthropic and OpenAI remain reachable *for users* only through Claude Sonnet 5 and GPT-5.6 Terra. A staged model is reachable only through an operator-written preference on the dedicated acceptance account.
-- **Phase C ran, and only on that account.** Nine bounded canaries on 2026-10-01 — three per replacement model — each one an ordinary Analyze or Suggest request carrying the same allow-listed payload as any other, against the dedicated synthetic acceptance paper. No real user's content reached a replacement model, and no user could select one.
-- **Phase D is PREPARED, not applied.** Migration `20261001092335` would migrate every saved preference off Claude Sonnet 5 and GPT-5.6 Terra, delete those two rows, and open the three replacements — a final catalog of **seven**. Until it is applied, no user can select a replacement model.
+- **Phase B APPLIED.** Migration `20260930203613` went in on 2026-10-01 (ledger **98 → 99**), and both generation functions were deployed with the three price records — `analyze-paper` v34, `suggest-paper-organization` v17. That left nine catalog rows: the original six selectable, the three replacements `enabled` but neither `selectable` nor `reasoning_selectable`.
+- **Phase C ran, and only on the dedicated acceptance account.** Nine bounded canaries on 2026-10-01 — three per replacement model — each one an ordinary Analyze or Suggest request carrying the same allow-listed payload as any other, against the dedicated synthetic acceptance paper. **No real user's content reached a replacement model, and no user could select one at that point**, because a staged row was reachable only through an operator-written preference. That remains the historical acceptance evidence for these three models.
+- **Phase D APPLIED.** Migration `20261001092335` went in on 2026-10-01 (ledger **99 → 100**). It migrated every saved preference off Claude Sonnet 5 and GPT-5.6 Terra onto their successors, **deleted** those two catalog rows, and opened the three replacements.
+- **Production now holds the final seven catalog rows**, all `enabled`, `selectable` and `reasoning_selectable`: Gemini 3.5/3.6/3.7/3.8 Flash, Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol. All seven are selectable by any user who holds the existing `can_select_ai_model` entitlement — the cutover added no new gate and removed none. The `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` rows **no longer exist**; they were deleted, not hidden.
+- **What that means for users.** Anthropic and OpenAI are reachable *for entitled users* through Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol instead of Claude Sonnet 5 and GPT-5.6 Terra. The provider families, endpoints and credentials are unchanged, so this is a change of model string, not of recipient. **No Edge Function was deployed for Phase D** — the catalog is the allowlist, so the row change is the whole change (`analyze-paper` v34 and `suggest-paper-organization` v17 are still the deployed runtime).
 
 ### 36.2 What changes for personal data — no new recipient and no new data category
 
-- **Recipients** are still exactly Anthropic and OpenAI, through the same endpoints (`api.anthropic.com/v1/messages`, `api.openai.com/v1/responses`), with the same adapters and the same `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. No provider, credential or endpoint is added.
+- **Recipients** are still exactly Anthropic and OpenAI, through the same endpoints (`api.anthropic.com/v1/messages`, `api.openai.com/v1/responses`), with the same adapters and the same `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. No provider, credential or endpoint was added by the refresh, and none was removed by the cutover — the recipient set is still Google, Anthropic and OpenAI.
 - **Payload** is byte-for-byte the §30.2 / §30.3 allow-list; only the `model` string differs. No new user, research-content or identity field is sent. The OpenAI request still sets `store: false` and sends no `metadata`, `safety_identifier`, `user`, `conversation` or `previous_response_id`. The Anthropic request sends no `metadata` or `user_id`. Neither adds a tool, conversation state or `cache_control`.
 - **Hidden reasoning** is still never returned, logged or persisted. Opus 5.5 and Sonnet 5.5 open responses with `thinking` blocks, and Sol with a `reasoning` item. The extractors ignore both, and tests pin this for the new models.
 - **Telemetry** stays content-free. It records the exact provider model and its own price record; the schema is unchanged.

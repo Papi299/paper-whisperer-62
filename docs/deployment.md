@@ -1713,9 +1713,9 @@ The privilege DDL may prompt a routine PostgREST schema-cache reload through the
 
 **Status: APPLIED.** `AI-MODEL-CATALOG-REFRESH-001A` prepared it and Phase B applied it on 2026-10-01 with one bare `supabase db push --linked --yes`; the ledger went **98 → 99**. It inserted `anthropic/claude-sonnet-5-5`, `anthropic/claude-opus-5-5` and `openai/gpt-6.1-sol` as `enabled = true`, `selectable = false`, `reasoning_selectable = false`, and wrote nothing else. The same phase redeployed both generation functions so the new price records shipped — `analyze-paper` **v34** (`23edb1e6…`) and `suggest-paper-organization` **v17** (`c1230563…`). See §16.1 for the executed record.
 
-### 6.21 `20261001092335` (the final seven-model cutover, C59) — PREPARED; NOT YET APPLIED
+### 6.21 `20261001092335` (the final seven-model cutover, C59) — APPLIED 2026-10-01
 
-**Status: prepared by `AI-MODEL-CATALOG-REFRESH-001D`; not applied to Production, and nothing here authorizes applying it.** It is Phase D of §16 and does three things in one transaction, in an order the foreign key makes mandatory: migrates every saved preference off `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` onto their successors, DELETES those two rows, then opens the three replacements (`selectable` and `reasoning_selectable`) at final sort positions 50 / 60 / 70. The result is exactly **seven** rows, all fully open.
+**Status: APPLIED.** Prepared by `AI-MODEL-CATALOG-REFRESH-001D`, its locking rationale corrected by `-001D-R1`, and applied to Production on 2026-10-01 by `-001E` in a migration-only rollout (ledger **99 → 100**; merge `63a590a7`; executed evidence in §16.3). It is Phase D of §16 and did three things in one transaction, in an order the foreign key makes mandatory: migrated every saved preference off `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` onto their successors, DELETED those two rows, then opened the three replacements (`selectable` and `reasoning_selectable`) at final sort positions 50 / 60 / 70. The result is exactly **seven** rows, all fully open — which is what Production holds now.
 
 **It locks before it reads.** `public.user_ai_preferences` then `public.ai_model_catalog`, both `IN EXCLUSIVE MODE`.
 
@@ -1723,9 +1723,9 @@ Four functions write `user_ai_preferences`, and they do not all lock alike. `set
 
 So the modes to block on the preference table are ROW SHARE (the two setters' `FOR UPDATE`) and ROW EXCLUSIVE (every write, both clear paths included). **EXCLUSIVE is the weakest standard mode that conflicts with both** — SHARE and SHARE ROW EXCLUSIVE block the writes but not the `FOR UPDATE`, and anything weaker blocks neither — so **no preference mutation can commit** while the cutover rewrites references and deletes the old rows. That, not the FK and not speed, is what makes the zero-reference gate ahead of the DELETE mean anything. On the catalog, EXCLUSIVE serializes conflicting catalog-level mutations while still allowing ACCESS SHARE reads; `authenticated` holds SELECT and nothing else there, so it is a migration/admin mutation boundary rather than a client-write boundary. Preferences are locked first because every conflicting lock any of the four takes is preferences-first, catalog-second (the model setter's catalog `FOR KEY SHARE` comes from its write, after the preference lock), so the two cannot deadlock. Both release at COMMIT.
 
-**What the locks do not promise.** EXCLUSIVE not conflicting with ACCESS SHARE means in-flight readers are never *blocked* — it does **not** give them one snapshot. `resolveEffectiveAiModel` performs three separate reads (access RPC, preference row, catalog row), so under READ COMMITTED a request can straddle the COMMIT: read a preference still naming a retiring id just before, and the catalog just after, when that id is gone. The resolver already classifies that as `model_missing` and falls back to the system default on Automatic. The cost is **one request served by the default model instead of the pinned one**, for the width of the cutover — not corruption, not reachability of a retired model, not an orphaned preference, and not a security bypass, since the saved row is already rewritten and the next request reads the successor. Giving the resolver a single snapshot would be an architecture change to the generation path and is deliberately out of scope here.
+**What the locks do not promise.** EXCLUSIVE not conflicting with ACCESS SHARE means in-flight readers are never *blocked* — it does **not** give them one snapshot. `resolveEffectiveAiModel` performs three separate reads (access RPC, preference row, catalog row), so under READ COMMITTED a request can straddle the COMMIT: read a preference still naming a retiring id just before, and the catalog just after, when that id is gone. The resolver already classifies that as `model_missing` and falls back to the system default on Automatic. The cost was **at most one request served by the default model instead of the pinned one**, for the width of the cutover transaction — not corruption, not reachability of a retired model, not an orphaned preference, and not a security bypass, since the saved row is rewritten in the same transaction and the next request reads the successor. That was a bounded rollout race, now closed: the cutover has committed. Giving the resolver a single snapshot across its three reads would be an architecture change to the generation path and is deliberately out of scope.
 
-**Migration-only.** No Edge Function source changes, so **no deployment is required**: the resolver, the reasoning policy, both setters and the Settings control are all data-driven from this table. The price book keeps all five paid records, including the two retired models' — historical telemetry still names them, and telemetry has no FK to the catalog. Rollback is a forward migration; see §16.3.
+**Migration-only.** No Edge Function source changed, so **no deployment was required, and none was performed** — `analyze-paper` v34 and `suggest-paper-organization` v17 remain the deployed runtime: the resolver, the reasoning policy, both setters and the Settings control are all data-driven from this table, so the row change was the whole change. The price book keeps all five paid records, including the two retired models' — historical telemetry still names them, and telemetry has no FK to the catalog. Rollback is a forward migration; see §16.3.
 
 ## 7. Edge Function deployment
 
@@ -2643,13 +2643,25 @@ C and D are the load-bearing cases: one saved level overrode **both** halves of 
 
 Do **not** sweep every level against every provider: the per-level encoding is already pinned by the adapter suites and the activation chain test.
 
-## 16. AI model catalog refresh (AI-MODEL-CATALOG-REFRESH-001) — Phase B LIVE, Phase C PASSED, Phase D PREPARED / NOT YET APPLIED
+## 16. AI model catalog refresh (AI-MODEL-CATALOG-REFRESH-001) — COMPLETE: Phase B LIVE, Phase C PASSED, Phase D APPLIED / PRODUCTION-VERIFIED
 
-**Current state in Production: NINE catalog rows.** Phase A's staging migration `20260930203613` (§6.20) is **applied** (ledger 99) and both generation functions carry the new price records. Phase C's canaries **passed** on all three replacements. The seven-model catalog is **not live**: the six current models are still the selectable set, Claude Sonnet 5 and GPT-5.6 Terra are **not yet retired**, and no saved preference has been migrated. Phase D's cutover migration `20261001092335` (§6.21) is prepared in the repository and **not applied** — that is what takes Production from nine rows to seven. Decision **C59** holds the policy; this section is the operator runbook.
+**Current state in Production: SEVEN catalog rows, all fully open.** All four phases are executed. Phase A's staging migration `20260930203613` (§6.20) was applied on 2026-10-01 (ledger 98 → 99) and both generation functions carry the new price records; Phase C's canaries **passed 9 / 9** on all three replacements; and Phase D's cutover `20261001092335` (§6.21) was applied on 2026-10-01 (**ledger 99 → 100**), which is what took Production from nine rows to seven. Claude Sonnet 5 and GPT-5.6 Terra are **retired by deletion** — those rows no longer exist — and the saved preferences that named them were migrated to their successors in the same transaction. Decision **C59** holds the policy; this section is the executed rollout record and the runbook that produced it.
 
-**The owner-approved destination** — seven user-selectable models, reached only after Phase D: Gemini 3.5 / 3.6 / 3.7 / 3.8 Flash, Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol. Claude Sonnet 5 and GPT-5.6 Terra are retired at Phase D, not before.
+**The owner-approved destination, now live** — seven user-selectable models, every one `enabled`, `selectable` and `reasoning_selectable`:
 
-**What Phase A stages** — identical reasoning metadata on all three rows:
+| sort | `id` | `display_name` | `reasoning_levels` | Automatic Analyze / Suggest |
+|---|---|---|---|---|
+| 10 | `google/gemini-3.5-flash` | Gemini 3.5 Flash | `minimal, low, medium, high` | `minimal` / `medium` |
+| 20 | `google/gemini-3.6-flash` | Gemini 3.6 Flash | `minimal, low, medium, high` | `minimal` / `medium` |
+| 30 | `google/gemini-3.7-flash` | Gemini 3.7 Flash | `low, medium, high` | `low` / `medium` |
+| 40 | `google/gemini-3.8-flash` | Gemini 3.8 Flash | `low, medium, high` | `low` / `medium` |
+| 50 | `anthropic/claude-sonnet-5-5` | Claude Sonnet 5.5 | `low, medium, high, xhigh, max` | `low` / `medium` |
+| 60 | `anthropic/claude-opus-5-5` | Claude Opus 5.5 | `low, medium, high, xhigh, max` | `low` / `medium` |
+| 70 | `openai/gpt-6.1-sol` | GPT-6.1 Sol | `low, medium, high, xhigh, max` | `low` / `medium` |
+
+No surviving row offers `off` or `none`. Selecting any of the seven still requires `can_select_ai_model`, unchanged by this refresh.
+
+**What Phase A staged** — identical reasoning metadata on all three rows. The `sort_order` values below are the **staged** ones; Phase D renumbered them to 50 / 60 / 70 and flipped both flags to `true`:
 
 | `id` | `provider_model` | `display_name` | `sort_order` | `enabled` / `selectable` / `reasoning_selectable` | `reasoning_levels` | Automatic Analyze / Suggest |
 |---|---|---|---|---|---|---|
@@ -2701,15 +2713,42 @@ The mechanism actually used on 2026-10-01, and the one to use again, is a **temp
 
 **Stop conditions.** Any 4xx attributable to the request or reasoning shape **blocks activation** for that model. An `incomplete_response` at a manual level is recorded and reviewed before that level is opened at Phase D.
 
-### 16.3 Phase D — cutover — PREPARED as `20261001092335`; NOT YET APPLIED
+### 16.3 Phase D — cutover — APPLIED / PRODUCTION-VERIFIED — 2026-10-01
 
-**Status: prepared, reviewed and locally validated by `AI-MODEL-CATALOG-REFRESH-001D`; NOT applied to Production.** Its prerequisite is met — every Phase-C model passed (§16.2) — so applying it needs only its own authorization. Until it is applied, Production still has nine rows and the old pair is still what users see.
+**Status: APPLIED.** Prepared, reviewed and locally validated by `AI-MODEL-CATALOG-REFRESH-001D`, its locking rationale corrected by `-001D-R1`, and rolled out by `AI-MODEL-CATALOG-REFRESH-001E` on 2026-10-01. Its prerequisite was met — every Phase-C model passed (§16.2). **No Edge deployment, no secret change and no Settings change accompanied it** — see §6.21.
 
-**Applying it is one step:** a read-only preflight confirming ledger **99**, latest `20260930203613`, the exact nine-row catalog and the exact staged flags; then `supabase db push --linked --dry-run` showing exactly this one file; then one `supabase db push --linked`. Ledger **99 → 100**. **No Edge deployment, no secret change and no Settings change accompanies it** — see §6.21.
+**Merge.** PR #328 merged as **`63a590a798326a55fa8a333599d1384ad469e415`** — a normal two-parent merge commit (parent 1 the pre-merge `main` `1e281b9b`, parent 2 the approved head `5156ec27`), whose tree is byte-identical to the approved head's, with a zero-file diff between them. Merged with `--match-head-commit`, so GitHub itself refused any head drift.
 
-**Rollback** is a forward migration, not a revert: re-inserting the two deleted rows would restore the catalog but not any preference the cutover rewrote, and the rewritten preferences are valid for their successors. If the seven-model list had to be withdrawn, the honest move is to set `selectable = false` on whichever replacements should not be offered, leaving every migrated preference routable.
+**Merged-`main` CI — every applicable lane, attempt 1, success:**
 
-The design below is what the prepared migration implements.
+| workflow | run id | attempt | conclusion |
+|---|---|---|---|
+| Validate | `36893886837` | 1 | success |
+| DB Tests | `36893886822` | 1 | success |
+| Extension (package + real browser) | `36893886894` | 1 | success |
+
+`E2E (local)` has **no `push` trigger** by design (`CI-E2E-EXECUTION-POLICY-001`: pull requests, a daily schedule and manual dispatch only), so it did not run on the merge and was not expected to. It had already passed on the approved head.
+
+**Read-only preflight, immediately before the apply:** ledger **99**, latest `20260930203613`, `20261001092335` absent; exactly **nine** catalog rows with **six** selectable and the **three** replacements `enabled` / not `selectable` / not `reasoning_selectable` at their staged metadata; the Phase-C gate intact at **9** conforming events; `analyze-paper` v34 and `suggest-paper-organization` v17 at their exact bundle hashes; and exactly **one** pending migration — proven both by `supabase migration list --linked` (100 entries, one local-only, zero remote-only orphans) and by `supabase db push --linked --dry-run`, which listed that one file with `seeds: []` and `roles: []`.
+
+**Apply.** One `supabase db push --linked --yes`. **One attempt, success.** Exactly one migration, no seeds, no roles, nothing executed by hand — no manual `DO` block, no manual preference rewrite, no manual delete, no manual activation. **Ledger 99 → 100**, latest `20261001092335`, present exactly once, with the previous 99 versions' ordered digest unchanged.
+
+**Post-state, verified read-only:**
+
+- exactly **seven** catalog rows, in the §16 order at sorts 10–70, every one `enabled`, `selectable` **and** `reasoning_selectable`;
+- `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` absent **by id and by `(provider, provider_model)` wire pair** — deleted, not hidden;
+- the three replacement rows matching their approved metadata field for field, and the four Google rows byte-identical to the preflight digest;
+- no surviving row offering `off` or `none`;
+- the saved preference migration succeeded — the one pre-cutover row, `anthropic/claude-sonnet-5` / `xhigh`, became `anthropic/claude-sonnet-5-5` / `xhigh`, with the preference row count unchanged and zero preferences left on either retired id;
+- **unrelated state provably unchanged** by digest and count: `user_entitlements` (7 rows), `usage_counters` (10), `usage_credits` (0), all **77** `ai_provider_usage_events` rows, the Phase-C 9-event evidence, the retired models' historical telemetry, and the preference foreign key — the migration wrote no telemetry, no quota and no entitlement;
+- **Edge unchanged** — `analyze-paper` v34 and `suggest-paper-organization` v17 at the same bundle hashes;
+- **no post-cutover provider call.** Phase C had already proved all three models, so no further quota was consumed.
+
+**Incidental Vercel deployment.** The merge triggered the normal automatic Git-integration Production deployment `dpl_2GYkNn3HyyfKHFmCgYbjcJaMqAqs` from `63a590a7`, which reached **Ready** and carries the `app.paperlume.app` and `paper-whisperer-62.vercel.app` aliases. No manual deploy, promote or redeploy occurred. **It did not perform the cutover** — no frontend runtime source changed in the PR, and the model list is database-driven.
+
+**Rollback** is a forward migration, not a revert: the applied migration is immutable. Re-inserting the two deleted rows would restore the catalog but not un-rewrite any preference the cutover changed, and the rewritten preferences are valid for their successors. If the seven-model list had to be withdrawn, the honest move is to set `selectable = false` on whichever replacements should not be offered, leaving every migrated preference routable.
+
+The design below is what the applied migration implements, kept as the reference record of what was executed.
 
 One transactional migration, fail-closed at both ends in the style of `20260930203613`. Order matters: `user_ai_preferences.preferred_model_id` references `ai_model_catalog(id)` with **no** `ON DELETE` action, so an old row cannot be deleted while any preference still names it — the delete itself fails closed.
 
