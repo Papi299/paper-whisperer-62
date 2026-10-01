@@ -244,7 +244,6 @@ Meaningful open items. This is a pointer list, not a backlog database — none o
 
 - **Optional hosted staging** remains unselected; local-first is the accepted path.
 - **The Crossref contact is temporary.** Since 2026-09-28, `fetch-paper-metadata` v23 identifies PaperLume to Crossref as `PaperLume/1.0 (mailto:mutrisport@gmail.com)` and adds the same `mailto` parameter ([deployment.md](deployment.md) §7d). Once a dedicated PaperLume address is active, switch `CROSSREF_CONTACT_EMAIL` to it and redeploy that one function ([deployment.md](deployment.md) §8a). This is a planned improvement, not an open defect.
-- **`DB-MIGRATION-SIGNATURE-PARSING-AUDIT-001` — low priority, separate from C53.** Audit fail-closed migration/test helpers for places where PostgreSQL function/operator signatures are serialized and later split with delimiters that can occur inside the signature, starting with the confirmed C52 §1g comma-splitting defect (its `search_vector` EXECUTE precondition skipped multi-argument signatures; the intended Production fact holds, and suite `022` checks it by OID). Do not edit applied migrations; determine whether any current reusable checker/test pattern needs forward hardening ([migration-history.md](migration-history.md), C52 entry).
 
 ## 11. Before selecting the next task
 
