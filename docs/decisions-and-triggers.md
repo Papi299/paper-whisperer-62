@@ -2151,3 +2151,48 @@ Section 3 then proves:
 - a product decision to give users an explicit "matched across fields" indicator, which would need a new return column rather than a new meaning for the six booleans;
 - any change to the sanitizer, tokenizer or `search_vector` composition, including one that removes the phrase-seam limitation — re-derive suite `027`'s characterization deliberately;
 - single-letter or very short prefix terms producing attribution that users find misleading.
+
+## AI model catalog refresh (2026-09-30)
+
+### C59. Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol replace Claude Sonnet 5 and GPT-5.6 Terra through stage → canary → cutover; all three expose `low … max` with PaperLume's own Automatic `low` / `medium` (2026-09-30)
+
+**Status: Phase A PREPARED in the repository only** (`AI-MODEL-CATALOG-REFRESH-001A`, migration `20260930203613`). Nothing is applied in Production, no replacement has been canaried, and no cutover is authorized. The runbook for Phases B–D is [deployment.md](deployment.md) §16.
+
+**Decision.** The owner's target is seven selectable models: the four Gemini Flash rows, Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol. Claude Sonnet 5 and GPT-5.6 Terra are retired. It is reached by C43's three separately authorized steps, extended by a fourth that C43 never needed:
+
+1. **Stage** the three replacements `enabled = true`, `selectable = false`, `reasoning_selectable = false`, beside the six current rows, touching nothing else.
+2. **Canary** each on Analyze and Suggest through an operator-written preference on the acceptance account.
+3. **Cut over** in one forward migration that moves saved preferences, then removes the old rows, then opens the new ones.
+4. Only afterwards, narrow the adapters' provider-level vocabularies.
+
+Steps 3 and 4 are one migration and one Edge change, each separately reviewed.
+
+**Reasoning metadata — the same for all three rows.**
+- `reasoning_levels = low, medium, high, xhigh, max`.
+- Automatic Analyze `low`, Automatic Suggest `medium`.
+
+Each is PaperLume's explicit policy (C41), never a provider default: Sonnet 5.5 defaults to `high`, and Opus 5.5 and Sol to `medium`. Not catalog levels, and why:
+- `off` is `thinking: {type: "disabled"}`, which both Claude 5.5 models reject at every effort level.
+- `none` and `minimal` are rejected by Sol.
+- `between_tools` (Sonnet 5.5 only) and `adaptive` are Anthropic **thinking modes**, not effort levels. PaperLume runs adaptive thinking at all five levels and introduces neither. The canonical-vocabulary CHECK keeps both out of the catalog; suite `028` proves it.
+
+**Why the adapters keep `off` and `none` during staging.** The catalog row is the per-model capability authority. The adapter vocabulary is per-**protocol**, and Claude Sonnet 5 and Terra legitimately use those levels while they remain selectable. Narrowing an adapter first would break a live model. The staged rows never list those levels, and a saved level a row does not list falls back to that model's Automatic level before any request is built (C41).
+
+**Pricing** (C44, applied again). The records are `…@2026-09-30`.
+- Both Claude 5.5 records carry cache-write `null`: two published TTL rates against one summed usage field.
+- Sol is priced up to the same published 272K boundary as Terra and is `unpriced` above it.
+- The old records stay unchanged and open-ended while their models remain selectable.
+
+**Preference migration at cutover — fixed now, executed later.**
+- Model mapping: `claude-sonnet-5 → claude-sonnet-5-5`, `gpt-5.6-terra → gpt-6.1-sol`.
+- Levels `low … max` are preserved.
+- `off` (Claude) and `none` (OpenAI) become `NULL`, i.e. Automatic.
+- `NULL` stays `NULL`.
+
+The cutover handles whatever population exists when it runs; it must not assume today's single saved preference. Order is forced by the foreign key: `user_ai_preferences.preferred_model_id` has no `ON DELETE` action, so preferences move before the old rows go.
+
+**Trigger to revisit:**
+- any Phase C call failing with a 4xx attributable to the request or reasoning shape;
+- a manual level that routinely ends `incomplete_response` inside the unchanged output ceilings;
+- a provider changing one of these models' effort vocabulary, default or pricing;
+- a replacement becoming a Covered Model with a data-retention requirement, which re-opens the privacy review.

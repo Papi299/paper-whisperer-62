@@ -121,13 +121,17 @@ SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
   'exactly one GPT-5.6 Terra row exists');
 
 -- Nothing ELSE arrived under either provider: the catalog is the allowlist, so
--- a stray sibling model would be a route nobody approved.
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
-            WHERE provider = 'anthropic'), 1,
-  'the catalog holds exactly one anthropic row');
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
-            WHERE provider = 'openai'), 1,
-  'the catalog holds exactly one openai row');
+-- a stray sibling model would be a route nobody approved. The only siblings are
+-- the three replacements AI-MODEL-CATALOG-REFRESH-001A staged (suite 028), so
+-- each provider's rows are asserted as an exact set rather than as a count.
+SELECT set_eq(
+  $$SELECT id FROM public.ai_model_catalog WHERE provider = 'anthropic'$$,
+  ARRAY['anthropic/claude-sonnet-5','anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5'],
+  'the anthropic rows are exactly Sonnet 5 and the two staged Claude 5.5 models');
+SELECT set_eq(
+  $$SELECT id FROM public.ai_model_catalog WHERE provider = 'openai'$$,
+  ARRAY['openai/gpt-5.6-terra','openai/gpt-6.1-sol'],
+  'the openai rows are exactly Terra and the staged GPT-6.1 Sol');
 
 -- The provider/provider_model pair is what the adapter actually sends, so it is
 -- asserted exactly rather than by pattern.
@@ -151,10 +155,12 @@ SELECT is((SELECT display_name FROM public.ai_model_catalog WHERE id = 'openai/g
 -- things: `enabled` is what makes a saved preference ROUTABLE, `selectable` is
 -- what lets a user acquire that preference in the first place.
 SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog
-            WHERE provider IN ('anthropic','openai')),
+            WHERE id IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
   'both paid models are enabled, so a saved preference for one is routable');
+-- Scoped by id since three staged siblings (NOT selectable) share these
+-- providers. Staging them did not close either of these two.
 SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog
-            WHERE provider IN ('anthropic','openai')),
+            WHERE id IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
   'both paid models are selectable, so an entitled user can choose one');
 
 -- ════════════════════════════════════════════════════════════════════════════

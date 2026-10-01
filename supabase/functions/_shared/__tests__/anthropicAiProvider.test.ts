@@ -952,3 +952,85 @@ describe("nothing provider-shaped or sensitive escapes", () => {
     expect(result).not.toHaveProperty("suggestions");
   });
 });
+
+// ── AI-MODEL-CATALOG-REFRESH-001A — the staged Claude 5.5 models ────────────
+//
+// Claude Sonnet 5.5 and Claude Opus 5.5 reject `thinking: {type: "disabled"}`
+// at every effort level (Opus 5.5's thinking is always on; Sonnet 5.5's lowest
+// setting is the Sonnet-only `between_tools` mode instead). Their catalog rows
+// therefore list only `low … max`, and this adapter keeps `off` in its
+// PROVIDER vocabulary solely because Claude Sonnet 5 — still selectable while
+// the replacements are staged — legitimately uses it. The per-model authority
+// is the catalog row; what this block pins is the exact body each staged level
+// produces for each staged model, so no level the rows list can ever become a
+// disabled or `between_tools` request.
+describe("the staged Claude 5.5 models — AI-MODEL-CATALOG-REFRESH-001A", () => {
+  const STAGED_CLAUDE = ["claude-sonnet-5-5", "claude-opus-5-5"] as const;
+  const STAGED_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+  it("still declares `off` at the provider level, for Claude Sonnet 5 only", () => {
+    // Removing it now would break the model users can still select. Narrowing
+    // this vocabulary is a Phase-D decision, taken after Sonnet 5 is retired.
+    expect(ANTHROPIC_AI_PROVIDER_ADAPTER.supportsReasoningLevel("off")).toBe(true);
+  });
+
+  for (const providerModel of STAGED_CLAUDE) {
+    it.each(STAGED_LEVELS.flatMap((level) => [[level, 4096], [level, 8192]] as const))(
+      `${providerModel}: \`%s\` at a %d ceiling is adaptive thinking at exactly that effort`,
+      async (level, maxOutputTokens) => {
+        const { url, body, raw } = await captureRequest(
+          REQUEST,
+          { provider: ANTHROPIC_AI_PROVIDER, providerModel },
+          { reasoning: { kind: "level", level }, maxOutputTokens },
+        );
+        expect(url).toBe(ANTHROPIC_MESSAGES_URL);
+        // The WHOLE body, so nothing else can ride along at any level.
+        expect(body).toEqual({
+          model: providerModel,
+          max_tokens: maxOutputTokens,
+          system: SYSTEM_INSTRUCTION,
+          messages: [{ role: "user", content: USER_CONTENT }],
+          output_config: {
+            format: { type: "json_schema", schema: REQUEST.jsonSchema.schema },
+            effort: level,
+          },
+          thinking: { type: "adaptive" },
+        });
+        expect(raw).not.toContain("disabled");
+        expect(raw).not.toContain("between_tools");
+        expect(raw).not.toContain("budget_tokens");
+      },
+    );
+  }
+
+  it("reads a 5.5-shaped response: progress-update thinking first, answer text only", async () => {
+    // On both 5.5 models every response can open with `thinking` blocks —
+    // empty at the default `display: "omitted"`, or carrying progress text —
+    // before the `text` block. None of it is the answer.
+    const harness = makeHarness([
+      anthropicOk([
+        { type: "thinking", thinking: "", signature: "sig-1" },
+        { type: "thinking", thinking: "SENTINEL-PROGRESS-UPDATE", signature: "sig-2" },
+        textBlock('{"ok":true}'),
+      ]),
+    ]);
+    const result = await generate(harness, REQUEST, {
+      provider: ANTHROPIC_AI_PROVIDER,
+      providerModel: "claude-opus-5-5",
+    });
+    expect(result).toMatchObject({ ok: true, text: '{"ok":true}', attempts: 1 });
+    expect(JSON.stringify(result)).not.toContain("SENTINEL-PROGRESS-UPDATE");
+  });
+
+  it("treats a 5.5 refusal as an incomplete response, never as an answer", async () => {
+    // Both 5.5 models decline in more categories than Sonnet 5. A refusal is a
+    // 200 whose stop_reason is not `end_turn`, so it fails closed here.
+    const harness = makeHarness([anthropicOk([textBlock("SENTINEL-REFUSAL-TEXT")], "refusal")]);
+    const result = await generate(harness, REQUEST, {
+      provider: ANTHROPIC_AI_PROVIDER,
+      providerModel: "claude-sonnet-5-5",
+    });
+    expect(result).toMatchObject({ ok: false, kind: "incomplete_response", attempts: 1 });
+    expect(JSON.stringify(result)).not.toContain("SENTINEL-REFUSAL-TEXT");
+  });
+});

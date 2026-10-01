@@ -271,8 +271,8 @@ The following **cannot** be established from this repository and must be verifie
 |---|---|---|---|---|---|
 | **Supabase** (Postgres, Auth, Storage, Edge Functions) | The entire backend | Everything in §4–§6; auth credentials | Everything the app displays | Both — browser talks to Supabase directly with the anon key under RLS; Edge Functions run in Supabase's runtime | [`src/integrations/supabase/client.ts`](../src/integrations/supabase/client.ts), all migrations |
 | **Google Gemini** (`generativelanguage.googleapis.com`) | AI analysis and organisation suggestions — the **system default** recipient, and the recipient whenever no model is pinned or any fallback occurs | §8.1 / §8.2 | Generated text | **Server (Edge Function) only** | [`analyze-paper/index.ts`](../supabase/functions/analyze-paper/index.ts), [`suggest-paper-organization/handler.ts`](../supabase/functions/suggest-paper-organization/handler.ts) |
-| **Anthropic** (`api.anthropic.com`) | The same two AI features, **only** when the effective routed model for that request is `anthropic/claude-sonnet-5` — i.e. an entitled user's saved preference for it was honoured in full by the server-side resolver. A preference that fails any check routes to Google instead (§8) | §8.1 / §8.2 — byte-for-byte the same allow-listed payload as Google (§30.2 / §30.3) | Generated text | **Server (Edge Function) only** | [`_shared/anthropicAiProvider.ts`](../supabase/functions/_shared/anthropicAiProvider.ts) |
-| **OpenAI** (`api.openai.com`) | The same two AI features, **only** when the effective routed model for that request is `openai/gpt-5.6-terra` — same server-side condition as the Anthropic row (§8) | §8.1 / §8.2 — the same allow-listed payload; the adapter sends `store: false` | Generated text | **Server (Edge Function) only** | [`_shared/openAiProvider.ts`](../supabase/functions/_shared/openAiProvider.ts) |
+| **Anthropic** (`api.anthropic.com`) | The same two AI features, **only** when the effective routed model for that request is an `anthropic/*` catalog model — i.e. a saved preference for it was honoured in full by the server-side resolver. For users that model is `anthropic/claude-sonnet-5`. The staged Claude Sonnet 5.5 and Opus 5.5 rows, once applied, are reachable only through an operator-written canary preference (§36). A preference that fails any check routes to Google instead (§8) | §8.1 / §8.2 — byte-for-byte the same allow-listed payload as Google (§30.2 / §30.3) | Generated text | **Server (Edge Function) only** | [`_shared/anthropicAiProvider.ts`](../supabase/functions/_shared/anthropicAiProvider.ts) |
+| **OpenAI** (`api.openai.com`) | The same two AI features, **only** when the effective routed model for that request is an `openai/*` catalog model — for users `openai/gpt-5.6-terra`. The staged GPT-6.1 Sol row, once applied, is reachable only through an operator-written canary preference (§36). Same server-side condition as the Anthropic row (§8) | §8.1 / §8.2 — the same allow-listed payload; the adapter sends `store: false` | Generated text | **Server (Edge Function) only** | [`_shared/openAiProvider.ts`](../supabase/functions/_shared/openAiProvider.ts) |
 | **NCBI E-utilities / PubMed** (`eutils.ncbi.nlm.nih.gov`) | Metadata lookup and PubMed search | A PMID, a DOI, a title string, or the user's **raw search query**; plus the user's NCBI API key when they have supplied one | Bibliographic records (ESearch/ESummary/EFetch XML/JSON) | **Server only** | [`_shared/pubmedSearch.ts`](../supabase/functions/_shared/pubmedSearch.ts), [`fetch-paper-metadata/index.ts`](../supabase/functions/fetch-paper-metadata/index.ts) |
 | **Crossref** (`api.crossref.org`) | DOI and title metadata fallback | A DOI or a title string, plus a `User-Agent` header | Bibliographic records | **Server only** | [`fetch-paper-metadata/index.ts:412-434`](../supabase/functions/fetch-paper-metadata/index.ts#L412-L434) |
 | **Google Cloud Monitoring** (`monitoring.googleapis.com`, `oauth2.googleapis.com`) | Owner/manager provider-quota panel | **No user data** — a service-account JWT and a metrics query for the shared project | Aggregate metric time series | **Server only**, owner/manager gated, currently unreferenced by any UI | [`get-gemini-provider-quota/index.ts`](../supabase/functions/get-gemini-provider-quota/index.ts) |
@@ -572,8 +572,8 @@ Only claims supportable by implementation. Each is safe to state; nothing below 
 | **Where the database, Storage and Edge Functions run** | The same Supabase project — so **user research data, attachments and auth records are stored in India** | VERIFIED |
 | **Vercel hosting** | `app.paperlume.app` on Vercel; the app is a static SPA served from Vercel's global edge network. No region is pinned in [`vercel.json`](../vercel.json), which contains only an SPA rewrite | PARTIALLY VERIFIED — the specific edge regions are Vercel's |
 | **Google Gemini** | `generativelanguage.googleapis.com` — a global endpoint. **No region is specified in the request**, so the processing location is Google's to determine | PARTIALLY VERIFIED |
-| **Anthropic** | `api.anthropic.com` — a global endpoint, reached only when the effective routed model for the request is the Claude model (§8). **No region is specified in the request** | PARTIALLY VERIFIED |
-| **OpenAI** | `api.openai.com` — a global endpoint, reached only when the effective routed model for the request is the GPT model (§8). **No region is specified in the request** | PARTIALLY VERIFIED |
+| **Anthropic** | `api.anthropic.com` — a global endpoint, reached only when the effective routed model for the request is a Claude model (§8). **No region is specified in the request** | PARTIALLY VERIFIED |
+| **OpenAI** | `api.openai.com` — a global endpoint, reached only when the effective routed model for the request is a GPT model (§8). **No region is specified in the request** | PARTIALLY VERIFIED |
 | **NCBI / PubMed** | US government service (NLM/NIH), United States | VERIFIED (from the endpoint) |
 | **Crossref** | Not-for-profit; global infrastructure | PARTIALLY VERIFIED |
 | **Resend** | Transactional email; region not established here | EXTERNAL POLICY VERIFICATION REQUIRED |
@@ -1947,3 +1947,43 @@ blocker for the approved `0.1.0` release**. The analysis is
 - ❌ "Google's approval settles the disclosure question" — **not claimed.** See
   §35.4.
 - ❌ A legal determination of any kind — **not claimed.**
+
+## 36. Addendum — 2026-09-30 — `AI-MODEL-CATALOG-REFRESH-001A` staged replacement models
+
+`AI-MODEL-CATALOG-REFRESH-001A` stages Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol as catalog rows that are `enabled` but neither `selectable` nor `reasoning_selectable`. They are intended to replace Claude Sonnet 5 and GPT-5.6 Terra at a later cutover (decision C59; [deployment.md](deployment.md) §16).
+
+### 36.1 Repository and Production
+
+- **Repository only.** Migration `20260930203613` and three price records in `_shared/aiPriceBook.ts`. The migration is not applied and the bundle is not deployed.
+- **Production is unchanged:** six catalog rows; Anthropic and OpenAI reachable only through Claude Sonnet 5 and GPT-5.6 Terra.
+- **Once applied,** a staged model is reachable only through an operator-written preference on the dedicated acceptance account. No user can select one until the separately authorized cutover.
+
+### 36.2 What changes for personal data — no new recipient and no new data category
+
+- **Recipients** are still exactly Anthropic and OpenAI, through the same endpoints (`api.anthropic.com/v1/messages`, `api.openai.com/v1/responses`), with the same adapters and the same `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. No provider, credential or endpoint is added.
+- **Payload** is byte-for-byte the §30.2 / §30.3 allow-list; only the `model` string differs. No new user, research-content or identity field is sent. The OpenAI request still sets `store: false` and sends no `metadata`, `safety_identifier`, `user`, `conversation` or `previous_response_id`. The Anthropic request sends no `metadata` or `user_id`. Neither adds a tool, conversation state or `cache_control`.
+- **Hidden reasoning** is still never returned, logged or persisted. Opus 5.5 and Sonnet 5.5 open responses with `thinking` blocks, and Sol with a `reasoning` item. The extractors ignore both, and tests pin this for the new models.
+- **Telemetry** stays content-free. It records the exact provider model and its own price record; the schema is unchanged.
+
+### 36.3 Provider terms, re-read first-party on 2026-09-30
+
+The §30.4 reading still holds; nothing read materially changes it.
+
+- **Anthropic retention.** The commercial retention article (updated 2026-07-01) still gives automatic deletion within 30 days, with the same exceptions.
+- **Anthropic training.** The training article (updated 2026-08-18) still says commercial API inputs and outputs are not used for training by default.
+- **Anthropic Covered Models.** A new model-specific retention rule designates *Covered Models*, which require 30-day retention and are not available under zero data retention. They are Claude Fable 5.1, Mythos 5.1, Fable 5 and Mythos 5 — **not** Sonnet 5.5 or Opus 5.5.
+- **OpenAI.** The data-controls page still gives:
+  - a 30-day Responses retention unless `store` is false;
+  - abuse-monitoring logs kept up to 30 days, longer where required by law or reasonably necessary to protect the services;
+  - no training on API data by default;
+  - Modified Abuse Monitoring and Zero Data Retention as the two approved controls.
+
+  Sol's page adds data-residency options only.
+
+**The public Privacy Policy needs no change.** It names providers, not models: "may make AI models from Google (Gemini), Anthropic (Claude), and OpenAI available", with transmission disclosed "when you select" a model. The recipients, data categories and retention terms it states are unchanged.
+
+### 36.4 What this addendum does NOT claim
+
+- ❌ That any replacement model is live or selectable — **not claimed**; none is applied in Production.
+- ❌ Any PaperLume account arrangement with either provider, in either direction — **not claimed** (§30.8).
+- ❌ That the re-read terms are a standing guarantee — **not claimed**; re-verify before relying on them.

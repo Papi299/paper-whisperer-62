@@ -60,6 +60,21 @@ const TERRA = {
   auto_suggest_reasoning_level: "medium",
 };
 
+// AI-MODEL-CATALOG-REFRESH-001A — the three staged replacements, as migration
+// 20260930203613 inserts them. One shape for all three: five effort levels,
+// none of `off` / `none` / `minimal`, and PaperLume's own Automatic policy
+// (Analyze low, Suggest medium) rather than any provider's default.
+const STAGED_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+const SONNET_55 = {
+  provider: "anthropic",
+  provider_model: "claude-sonnet-5-5",
+  reasoning_levels: STAGED_LEVELS,
+  auto_analyze_reasoning_level: "low",
+  auto_suggest_reasoning_level: "medium",
+};
+const OPUS_55 = { ...SONNET_55, provider_model: "claude-opus-5-5" };
+const SOL = { ...SONNET_55, provider: "openai", provider_model: "gpt-6.1-sol" };
+
 type Row = Record<string, unknown> | null;
 
 interface Recorded {
@@ -176,6 +191,11 @@ describe("Automatic resolves to PaperLume's own level, per model and per operati
   it.each([
     ["claude-sonnet-5", SONNET_5, "off", "medium"],
     ["gpt-5.6-terra", TERRA, "none", "medium"],
+    // Staged: Analyze stays on the lowest tier each model OFFERS, which for
+    // these three is `low` — not the `off`/`none` of the rows they replace.
+    ["claude-sonnet-5-5", SONNET_55, "low", "medium"],
+    ["claude-opus-5-5", OPUS_55, "low", "medium"],
+    ["gpt-6.1-sol", SOL, "low", "medium"],
   ])("future %s: analyze -> %s, suggest -> %s", async (model, row, analyze, suggest) => {
     const sel = selection(row.provider, model);
     expect(levelOf((await resolve("analyze", sel, { row })).decision)).toBe(analyze);
@@ -185,7 +205,17 @@ describe("Automatic resolves to PaperLume's own level, per model and per operati
   it("gives Analyze the cheaper level and Suggest the higher one, on every model", async () => {
     // The shape of the whole matrix, stated once: organization suggestions
     // weigh a library, Analyze extracts three fields from one abstract.
-    for (const row of [GEMINI_35, GEMINI_36, GEMINI_37, GEMINI_38, SONNET_5, TERRA]) {
+    for (const row of [
+      GEMINI_35,
+      GEMINI_36,
+      GEMINI_37,
+      GEMINI_38,
+      SONNET_5,
+      TERRA,
+      SONNET_55,
+      OPUS_55,
+      SOL,
+    ]) {
       const sel = selection(row.provider, row.provider_model);
       const analyze = levelOf((await resolve("analyze", sel, { row })).decision);
       const suggest = levelOf((await resolve("suggest", sel, { row })).decision);
@@ -239,6 +269,9 @@ describe("a manual level overrides Automatic on both operations", () => {
     ["anthropic", SONNET_5, "max"],
     ["openai", TERRA, "max"],
     ["openai", TERRA, "none"],
+    ["anthropic", SONNET_55, "xhigh"],
+    ["anthropic", OPUS_55, "max"],
+    ["openai", SOL, "low"],
   ])("%s %s -> %s on analyze AND suggest", async (_provider, row, level) => {
     const sel = selection(row.provider, row.provider_model, {
       reasoningPreference: level as AiReasoningLevel,
@@ -319,6 +352,32 @@ describe("an invalid saved manual level", () => {
     const { queries } = await resolve("analyze", sel, { row: GEMINI_38 });
     expect(queries.every((q) => q.table === "ai_model_catalog")).toBe(true);
     expect(queries).toHaveLength(1);
+  });
+});
+
+describe("a saved level a staged model rejects — AI-MODEL-CATALOG-REFRESH-001A", () => {
+  // `off` would be `thinking: {type: "disabled"}`, a 400 on both Claude 5.5
+  // models; `none` and `minimal` are 400s on Sol. None is in a staged row, so
+  // none may reach the wire: each resolves to that model's Automatic level.
+  it.each([
+    ["claude-sonnet-5-5", SONNET_55, "off"],
+    ["claude-opus-5-5", OPUS_55, "off"],
+    ["gpt-6.1-sol", SOL, "none"],
+    ["gpt-6.1-sol", SOL, "minimal"],
+    ["claude-opus-5-5", OPUS_55, "none"],
+  ] as const)("%s with a saved %s runs at Automatic", async (_model, row, level) => {
+    const sel = selection(row.provider, row.provider_model, {
+      reasoningPreference: level as AiReasoningLevel,
+    });
+    const analyze = await resolve("analyze", sel, { row });
+    const suggest = await resolve("suggest", sel, { row });
+    expect(levelOf(analyze.decision)).toBe("low");
+    expect(levelOf(suggest.decision)).toBe("medium");
+    expect(analyze.decision).toMatchObject({ source: "automatic", reason: "manual_level_unsupported" });
+    expect(analyze.warns).toEqual([
+      "test-op reasoning_policy_fallback reason=manual_level_unsupported " +
+        `provider=${row.provider} model=${row.provider_model}`,
+    ]);
   });
 });
 

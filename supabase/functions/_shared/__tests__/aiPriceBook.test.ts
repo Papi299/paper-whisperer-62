@@ -80,7 +80,7 @@ describe("every shipped record", () => {
 });
 
 describe("the seeded set is exactly what was verified", () => {
-  it("prices the four routable Gemini models and the two staged paid models", () => {
+  it("prices the four routable Gemini models, the two current paid models and the three staged replacements", () => {
     expect(AI_LIST_PRICE_RECORDS.map((r) => r.id)).toEqual([
       "google/gemini-3.5-flash@2026-09-13",
       "google/gemini-3.6-flash@2026-09-13",
@@ -91,6 +91,12 @@ describe("the seeded set is exactly what was verified", () => {
       "google/gemini-3.8-flash@2027-01-01",
       "anthropic/claude-sonnet-5@2026-09-17",
       "openai/gpt-5.6-terra@2026-09-17",
+      // AI-MODEL-CATALOG-REFRESH-001A — appended, not substituted: the two
+      // records above stay because both models remain selectable while the
+      // replacements are only staged.
+      "anthropic/claude-sonnet-5-5@2026-09-30",
+      "anthropic/claude-opus-5-5@2026-09-30",
+      "openai/gpt-6.1-sol@2026-09-30",
     ]);
   });
 
@@ -98,18 +104,33 @@ describe("the seeded set is exactly what was verified", () => {
     // The uniqueness and non-overlap suites above run over the whole book, so
     // this is the narrower claim they cannot make: each paid model got ONE
     // record, so a lookup at any instant is never a choice between two rates.
-    for (const [provider, model] of [
-      ["anthropic", "claude-sonnet-5"],
-      ["openai", "gpt-5.6-terra"],
+    for (const [provider, model, verifiedOn] of [
+      ["anthropic", "claude-sonnet-5", "2026-09-17"],
+      ["openai", "gpt-5.6-terra", "2026-09-17"],
+      ["anthropic", "claude-sonnet-5-5", "2026-09-30"],
+      ["anthropic", "claude-opus-5-5", "2026-09-30"],
+      ["openai", "gpt-6.1-sol", "2026-09-30"],
     ]) {
       const matches = AI_LIST_PRICE_RECORDS.filter(
         (r) => r.provider === provider && r.providerModel === model,
       );
       expect(matches).toHaveLength(1);
       expect(matches[0].validUntil).toBeNull();
-      expect(matches[0].verifiedOn).toBe("2026-09-17");
-      expect(matches[0].validFrom).toBe("2026-09-17T00:00:00Z");
+      expect(matches[0].verifiedOn).toBe(verifiedOn);
+      expect(matches[0].validFrom).toBe(`${verifiedOn}T00:00:00Z`);
     }
+  });
+
+  it("still resolves both current paid models after the replacements were added", () => {
+    // Staging must not strand a model users can still select: a later instant
+    // than every new record's validFrom still finds each old record, unchanged.
+    const at = new Date("2026-10-15T00:00:00Z");
+    expect(findAiListPriceRecord("anthropic", "claude-sonnet-5", at)?.id).toBe(
+      "anthropic/claude-sonnet-5@2026-09-17",
+    );
+    expect(findAiListPriceRecord("openai", "gpt-5.6-terra", at)?.id).toBe(
+      "openai/gpt-5.6-terra@2026-09-17",
+    );
   });
 
   it("carries Google's published rates, read 2026-09-13", () => {
@@ -220,6 +241,90 @@ describe("the seeded set is exactly what was verified", () => {
     expect(findAiListPriceRecord("openai", "gpt-5.6-terra", before)).toBeNull();
   });
 
+  it("carries Anthropic's published Claude Sonnet 5.5 rates, read 2026-09-30", () => {
+    const record = findAiListPriceRecord(
+      "anthropic",
+      "claude-sonnet-5-5",
+      new Date("2026-10-01T00:00:00Z"),
+    );
+    expect(record).toMatchObject({
+      id: "anthropic/claude-sonnet-5-5@2026-09-30",
+      inputUsdPerMTok: "2.00",
+      cachedInputUsdPerMTok: "0.20",
+      outputUsdPerMTok: "10.00",
+      sourceUrl: "https://platform.claude.com/docs/en/about-claude/pricing",
+      verifiedOn: "2026-09-30",
+    });
+    // Anthropic still publishes two cache-write rates ($2.50 for 5 minutes, $4
+    // for 1 hour) against one summed usage field, so the record holds neither.
+    expect(record!.cacheWriteInputUsdPerMTok).toBeNull();
+    expect(record!.maxInputTokens).toBeNull();
+  });
+
+  it("carries Anthropic's published Claude Opus 5.5 rates, read 2026-09-30", () => {
+    const record = findAiListPriceRecord(
+      "anthropic",
+      "claude-opus-5-5",
+      new Date("2026-10-01T00:00:00Z"),
+    );
+    expect(record).toMatchObject({
+      id: "anthropic/claude-opus-5-5@2026-09-30",
+      inputUsdPerMTok: "4.00",
+      // 0.05x base input, per Anthropic's Opus 5.5 footnote — not the usual 0.1x.
+      cachedInputUsdPerMTok: "0.20",
+      outputUsdPerMTok: "20.00",
+      sourceUrl: "https://platform.claude.com/docs/en/about-claude/pricing",
+      verifiedOn: "2026-09-30",
+    });
+    // $5 (5m) and $8 (1h) cache writes: two rates, one field — neither held.
+    expect(record!.cacheWriteInputUsdPerMTok).toBeNull();
+    expect(record!.maxInputTokens).toBeNull();
+  });
+
+  it("carries OpenAI's published GPT-6.1 Sol rates, read 2026-09-30", () => {
+    const record = findAiListPriceRecord("openai", "gpt-6.1-sol", new Date("2026-10-01T00:00:00Z"));
+    expect(record).toMatchObject({
+      id: "openai/gpt-6.1-sol@2026-09-30",
+      inputUsdPerMTok: "2.00",
+      cachedInputUsdPerMTok: "0.10",
+      cacheWriteInputUsdPerMTok: "2.50",
+      outputUsdPerMTok: "10.00",
+      sourceUrl: "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      verifiedOn: "2026-09-30",
+    });
+    // The same published 272K standard-tier boundary as Terra: above it the
+    // whole request moves to 2x input and cache rates and 1.5x output.
+    expect(record!.maxInputTokens).toBe(272_000);
+  });
+
+  it("gives each replacement its own rates — none was copied from the model it replaces", () => {
+    const at = new Date("2026-10-01T00:00:00Z");
+    const terra = findAiListPriceRecord("openai", "gpt-5.6-terra", at)!;
+    const sol = findAiListPriceRecord("openai", "gpt-6.1-sol", at)!;
+    // Terra and Sol share input and cache-write rates; cached input and output
+    // are where OpenAI's pages differ, so those are what this pins.
+    expect(sol.cachedInputUsdPerMTok).not.toBe(terra.cachedInputUsdPerMTok);
+    expect(sol.outputUsdPerMTok).not.toBe(terra.outputUsdPerMTok);
+    expect(sol.sourceUrl).not.toBe(terra.sourceUrl);
+
+    const sonnet5 = findAiListPriceRecord("anthropic", "claude-sonnet-5", at)!;
+    const sonnet55 = findAiListPriceRecord("anthropic", "claude-sonnet-5-5", at)!;
+    const opus55 = findAiListPriceRecord("anthropic", "claude-opus-5-5", at)!;
+    // Sonnet 5.5 publishes the same numbers as Sonnet 5, so the two records
+    // differ in identity and provenance rather than in rates.
+    expect(sonnet55.id).not.toBe(sonnet5.id);
+    expect(sonnet55.verifiedOn).not.toBe(sonnet5.verifiedOn);
+    expect(opus55.inputUsdPerMTok).not.toBe(sonnet55.inputUsdPerMTok);
+    expect(opus55.outputUsdPerMTok).not.toBe(sonnet55.outputUsdPerMTok);
+  });
+
+  it("is unpriced for each staged replacement before its rates were verified", () => {
+    const before = new Date("2026-09-29T23:59:59Z");
+    expect(findAiListPriceRecord("anthropic", "claude-sonnet-5-5", before)).toBeNull();
+    expect(findAiListPriceRecord("anthropic", "claude-opus-5-5", before)).toBeNull();
+    expect(findAiListPriceRecord("openai", "gpt-6.1-sol", before)).toBeNull();
+  });
+
   it("prices no paid model PaperLume did not stage", () => {
     // The catalog is the allowlist, and the book must not quietly imply a
     // wider one: a sibling model of either provider has no record here.
@@ -228,6 +333,21 @@ describe("the seeded set is exactly what was verified", () => {
     expect(findAiListPriceRecord("anthropic", "claude-sonnet-4-6", at)).toBeNull();
     expect(findAiListPriceRecord("openai", "gpt-5.6", at)).toBeNull();
     expect(findAiListPriceRecord("openai", "gpt-5.6-terra-mini", at)).toBeNull();
+    // Near-misses of the three staged strings: exact matching means none of
+    // these borrows a staged model's rates.
+    for (const [provider, model] of [
+      ["anthropic", "claude-sonnet-5.5"],
+      ["anthropic", "claude-sonnet-5-5-latest"],
+      ["anthropic", "claude-opus-5-5-fast"],
+      ["anthropic", "Claude-Opus-5-5"],
+      ["openai", "gpt-6.1"],
+      ["openai", "gpt-6.1-sol-mini"],
+      ["openai", "gpt-6-sol"],
+      ["anthropic", "gpt-6.1-sol"],
+      ["openai", "claude-opus-5-5"],
+    ]) {
+      expect(findAiListPriceRecord(provider, model, at)).toBeNull();
+    }
   });
 
   it("never records a free tier as a zero price", () => {

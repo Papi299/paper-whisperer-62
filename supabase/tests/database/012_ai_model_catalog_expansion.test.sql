@@ -74,7 +74,7 @@ CREATE FUNCTION pg_temp.claims(p_uid text) RETURNS text LANGUAGE sql IMMUTABLE A
   SELECT '{"sub":"' || p_uid || '","role":"authenticated"}';
 $hlp$;
 
-SELECT plan(52);
+SELECT plan(53);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. The catalog is exactly the four approved models
@@ -87,8 +87,13 @@ SELECT plan(52);
 -- NOT selectable, and its Phase 8 migration (20260918210017) then made them
 -- selectable once the Production canaries had passed. This suite still owns
 -- "the catalog as a list", so the list it asserts is the whole list.
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 6,
-  'the catalog holds exactly the six approved models');
+--
+-- AI-MODEL-CATALOG-REFRESH-001A (20260930203613) appended three STAGED rows —
+-- Claude Sonnet 5.5, Claude Opus 5.5, GPT-6.1 Sol — enabled but not selectable,
+-- after every current row. The list below is therefore nine rows long; what
+-- each staged row is and may do is owned by suite 028.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 9,
+  'the catalog holds exactly the six current and three staged models');
 
 -- Ordered by the two keys the Settings control itself orders by (`sort_order`
 -- then `id`), so this is the order a user actually sees in the dropdown.
@@ -96,43 +101,55 @@ SELECT is(
   (SELECT array_agg(id ORDER BY sort_order, id) FROM public.ai_model_catalog),
   ARRAY['google/gemini-3.5-flash','google/gemini-3.6-flash',
         'google/gemini-3.7-flash','google/gemini-3.8-flash',
-        'anthropic/claude-sonnet-5','openai/gpt-5.6-terra'],
-  'catalog ids are provider-qualified and ordered 3.5, 3.6, 3.7, 3.8, Sonnet, Terra');
+        'anthropic/claude-sonnet-5','openai/gpt-5.6-terra',
+        'anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5','openai/gpt-6.1-sol'],
+  'catalog ids are provider-qualified and ordered 3.5, 3.6, 3.7, 3.8, Sonnet, Terra, then the staged three');
 
 SELECT is(
   (SELECT array_agg(provider_model ORDER BY sort_order, id) FROM public.ai_model_catalog),
   ARRAY['gemini-3.5-flash','gemini-3.6-flash','gemini-3.7-flash','gemini-3.8-flash',
-        'claude-sonnet-5','gpt-5.6-terra'],
-  'provider model strings are exactly the six approved models');
+        'claude-sonnet-5','gpt-5.6-terra',
+        'claude-sonnet-5-5','claude-opus-5-5','gpt-6.1-sol'],
+  'provider model strings are exactly the nine approved models');
 
 SELECT is(
   (SELECT array_agg(display_name ORDER BY sort_order, id) FROM public.ai_model_catalog),
   ARRAY['Gemini 3.5 Flash','Gemini 3.6 Flash','Gemini 3.7 Flash','Gemini 3.8 Flash',
-        'Claude Sonnet 5','GPT-5.6 Terra'],
-  'display names are exactly the six approved labels');
+        'Claude Sonnet 5','GPT-5.6 Terra',
+        'Claude Sonnet 5.5','Claude Opus 5.5','GPT-6.1 Sol'],
+  'display names are exactly the nine approved labels');
 
 SELECT is(
   (SELECT array_agg(provider ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY['google','google','google','google','anthropic','openai'],
+  ARRAY['google','google','google','google','anthropic','openai',
+        'anthropic','anthropic','openai'],
   'each model names one of the three registered provider adapters');
 
 -- Sparse and unchanged: 001D appended 30 and 40 rather than renumbering 3.5 or
 -- 3.6, so a preference someone already saved keeps its position in the list.
+-- The staged rows append the same way, at 70 / 80 / 90.
 SELECT is(
   (SELECT array_agg(sort_order ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY[10,20,30,40,50,60],
-  'sort order is exactly 10 / 20 / 30 / 40 / 50 / 60');
+  ARRAY[10,20,30,40,50,60,70,80,90],
+  'sort order is exactly 10 / 20 / 30 / 40 / 50 / 60, then 70 / 80 / 90');
 
 SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog),
-  'all six models are enabled');
+  'all nine models are enabled');
 -- The two classes parted company while the paid rows were staged (001E:
 -- enabled but NOT selectable) and rejoined when Phase 8 activated them
--- (20260918210017). The whole-catalog claim is therefore true again, and it is
--- asserted over the whole catalog rather than scoped, because that is the
--- stronger statement: a row that silently lost selectability — of either class
--- — fails here.
-SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog),
-  'all six models are selectable');
+-- (20260918210017). They part again under AI-MODEL-CATALOG-REFRESH-001A, which
+-- stages three rows enabled but NOT selectable. The claim is therefore split
+-- into its two exact halves rather than weakened: every CURRENT row is
+-- selectable (a current row that silently lost selectability still fails
+-- here), and every staged row is not.
+SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog
+            WHERE id NOT IN ('anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5',
+                             'openai/gpt-6.1-sol')),
+  'all six current models are selectable');
+SELECT ok((SELECT NOT bool_or(selectable) FROM public.ai_model_catalog
+            WHERE id IN ('anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5',
+                         'openai/gpt-6.1-sol')),
+  'none of the three staged models is selectable');
 SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog WHERE provider = 'google'),
   'all four Google models are selectable');
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
@@ -248,12 +265,12 @@ UPDATE public.user_entitlements
 
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d2000000-0000-0000-0000-000000000002'),
   $q$SELECT count(*)::text FROM public.ai_model_catalog$q$),
-  '6', 'an ordinary signed-in user can read all six catalog rows');
+  '9', 'an ordinary signed-in user can read all nine catalog rows');
 
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d2000000-0000-0000-0000-000000000001'),
   $q$SELECT string_agg(id, ',' ORDER BY sort_order, id) FROM public.ai_model_catalog$q$),
-  'google/gemini-3.5-flash,google/gemini-3.6-flash,google/gemini-3.7-flash,google/gemini-3.8-flash,anthropic/claude-sonnet-5,openai/gpt-5.6-terra',
-  'an entitled user reads the expanded catalog in the rendered order');
+  'google/gemini-3.5-flash,google/gemini-3.6-flash,google/gemini-3.7-flash,google/gemini-3.8-flash,anthropic/claude-sonnet-5,openai/gpt-5.6-terra,anthropic/claude-sonnet-5-5,anthropic/claude-opus-5-5,openai/gpt-6.1-sol',
+  'an entitled user reads the expanded catalog in catalog order');
 
 SELECT is(pg_temp.errcode_as('anon','',
   $q$SELECT count(*) FROM public.ai_model_catalog$q$),

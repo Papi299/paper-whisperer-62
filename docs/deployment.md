@@ -1709,6 +1709,10 @@ The privilege DDL may prompt a routine PostgREST schema-cache reload through the
 
 **Rollback — reference only; none has been performed, and this section authorizes none.** Prefer fixing forward. A reversal is a new forward migration that re-creates the previous body (`d4a5f3af…`, the `search_papers` text of `20260802025704`) with every attribute stated, including SECURITY INVOKER, behind the same kind of preconditions. It restores the zero-flag rows C58 removes and changes no result set. It needs its own decision against C58.
 
+### 6.20 `20260930203613` (stage the three replacement AI models, C59) — NOT APPLIED; repository only
+
+**Status: prepared by `AI-MODEL-CATALOG-REFRESH-001A`; not applied to Production, and nothing here authorizes applying it.** It inserts `anthropic/claude-sonnet-5-5`, `anthropic/claude-opus-5-5` and `openai/gpt-6.1-sol` as `enabled = true`, `selectable = false`, `reasoning_selectable = false`, and writes nothing else. Applying it is Phase B of §16, which also redeploys both generation functions so the new price records ship; the full order, the canary design and the later cutover live there.
+
 ## 7. Edge Function deployment
 
 Edge Function code does **not** ship via a GitHub merge or a Vercel build. Each affected function must be deployed explicitly:
@@ -2624,3 +2628,75 @@ C and D are the load-bearing cases: one saved level overrode **both** halves of 
 **Restoration, verified.** The temporary `ai_model_selection_enabled = true` was returned to its prior `false`; the account's original preference state was the **absence** of a preference row, and that absence was restored rather than merely setting reasoning to Automatic; the substantive entitlement fields matched the captured baseline afterwards (`updated_at` moved normally because of its trigger, which cannot be restored); the durable synthetic canary paper remained; and no non-acceptance account was intentionally changed.
 
 Do **not** sweep every level against every provider: the per-level encoding is already pinned by the adapter suites and the activation chain test.
+
+## 16. AI model catalog refresh (AI-MODEL-CATALOG-REFRESH-001) — Phase A PREPARED in the repository; B–D NOT AUTHORIZED
+
+**Current state: nothing has changed in Production.** Phase A adds, in the repository only, the staging migration `20260930203613_stage_ai_model_catalog_refresh.sql` (§6.20) and three price records in `_shared/aiPriceBook.ts`. The six current models stay selectable, Claude Sonnet 5 and GPT-5.6 Terra are not retired, no saved preference has been migrated, and no provider canary has run against a replacement. Decision **C59** holds the policy; this section is the operator runbook.
+
+**The owner-approved destination** — seven user-selectable models, reached only after Phase D: Gemini 3.5 / 3.6 / 3.7 / 3.8 Flash, Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol. Claude Sonnet 5 and GPT-5.6 Terra are retired at Phase D, not before.
+
+**What Phase A stages** — identical reasoning metadata on all three rows:
+
+| `id` | `provider_model` | `display_name` | `sort_order` | `enabled` / `selectable` / `reasoning_selectable` | `reasoning_levels` | Automatic Analyze / Suggest |
+|---|---|---|---|---|---|---|
+| `anthropic/claude-sonnet-5-5` | `claude-sonnet-5-5` | Claude Sonnet 5.5 | 70 | true / false / false | `low, medium, high, xhigh, max` | `low` / `medium` |
+| `anthropic/claude-opus-5-5` | `claude-opus-5-5` | Claude Opus 5.5 | 80 | true / false / false | `low, medium, high, xhigh, max` | `low` / `medium` |
+| `openai/gpt-6.1-sol` | `gpt-6.1-sol` | GPT-6.1 Sol | 90 | true / false / false | `low, medium, high, xhigh, max` | `low` / `medium` |
+
+The only shipped Edge source change is `_shared/aiPriceBook.ts`: three appended records (`…@2026-09-30`), and the Terra-specific 272K constant renamed to a provider-generic one with the same value. Every request builder, adapter, prompt, parser, timeout, retry rule, output ceiling (Analyze 4,096 / Suggest 8,192) and credential name is unchanged.
+
+### 16.1 Phase B — staging rollout (each step separately authorized)
+
+1. Independent exact-head review of the PR; merge it as a regular two-parent merge; wait for merged-`main` CI.
+2. Read-only preflight: ledger **98**, latest `20260930161651`, `20260930203613` absent, and the catalog still exactly the six rows the migration's §1 asserts. Running the file's §1 inside `BEGIN TRANSACTION READ ONLY … ROLLBACK` proves its preconditions without writing — the INSERT then fails as a read-only write, after every check has passed.
+3. `supabase db push --linked --dry-run` must list exactly that one file; then one `supabase db push --linked`. Ledger **98 → 99**.
+4. Verify read-only: nine rows; the six current rows byte-unchanged; the three staged rows exactly as tabled above; `enabled AND selectable` still returns exactly the six current ids in order; preferences, entitlements, usage counters, usage credits and telemetry unchanged.
+5. Deploy **both** generation functions — `analyze-paper` and `suggest-paper-organization` — from the exact merge commit. Required before Phase C even though no request builder changed: the price records live in the bundle, and without them every replacement canary is `unpriced`. Record versions and bundle hashes before and after, and read the deployed source back (`functions download --use-api`) to prove it matches the commit.
+
+Order of steps 3 and 5 is not safety-critical — the migration alone creates rows no user can select and no preference names, and the bundle alone adds price records for models nothing routes to — but both must be done before Phase C. Rollback of step 5 is a redeploy of the previous closure; rollback of step 3 is a forward migration deleting the three rows (they can have no dependents until Phase C).
+
+### 16.2 Phase C — bounded provider canaries (separately authorized; paid)
+
+Use the §14.2 mechanism unchanged: on the dedicated acceptance account only, one provider block at a time, temporarily set `ai_model_selection_enabled = true`, write the preference row directly (the setter refuses a staged model with `model_not_selectable`, by design), run the operations, then restore both — on every exit path. **Never** flip `selectable` or `reasoning_selectable` for a canary. Suite `028` proves an operator-written preference for each staged model resolves to it, and `aiModelCatalogRefreshStaging.test.ts` proves the runtime routes it without falling back.
+
+**Budget first.** The acceptance account's lifetime AI quota was last recorded at **11 / 15** (2026-09-19) — re-verify read-only before planning. The minimum matrix below needs **six** successful operations, so Phase C needs an owner decision on quota headroom (for example a bounded, recorded `usage_credits` grant to that account alone) before the first call.
+
+**Minimum matrix — six calls:** for each of Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol, Analyze and Suggest once each at **Automatic** (reasoning `NULL`), which exercises `low` and `medium`.
+
+**Bounded manual coverage — recommended, owner's call:** the operator writes `preferred_reasoning_level` directly (the reasoning setter refuses a staged row with `reasoning_not_selectable`; the runtime honours a saved level the row lists). One Analyze per model at `max` — the level most likely to exhaust the unchanged 4,096 Analyze ceiling — plus `high` and `xhigh` once per provider protocol. That is at most six further calls; do not sweep every level of every model, because the per-level wire encoding is already pinned by the adapter suites.
+
+**A call passes only if:**
+
+- telemetry names the exact staged `provider` / `provider_model`, with `model_selection_source = user_preference` — a `google` row means the canary silently fell back and **proves nothing**;
+- `reasoning_source` and `resolved_reasoning_level` are as intended (`automatic` → Analyze `low`, Suggest `medium`);
+- `provider_attempts = 1`, provider outcome `completed`;
+- `cost_status = estimated` against `…@2026-09-30` — `unpriced` means Phase B step 5 was skipped;
+- no content in telemetry or logs, and Suggest mutates no library data.
+
+**Stop conditions.** Any 4xx attributable to the request or reasoning shape **blocks activation** for that model. An `incomplete_response` at a manual level is recorded and reviewed before that level is opened at Phase D.
+
+### 16.3 Phase D — cutover (a separate forward migration, only after every Phase C model passes)
+
+One transactional migration, fail-closed at both ends in the style of `20260930203613`. Order matters: `user_ai_preferences.preferred_model_id` references `ai_model_catalog(id)` with **no** `ON DELETE` action, so an old row cannot be deleted while any preference still names it — the delete itself fails closed.
+
+1. Assert the three replacement rows exist exactly as staged (or as Phase C left them).
+2. Migrate **every** then-current saved preference, whatever the population is at that moment:
+
+   | From `preferred_model_id` | To |
+   |---|---|
+   | `anthropic/claude-sonnet-5` | `anthropic/claude-sonnet-5-5` |
+   | `openai/gpt-5.6-terra` | `openai/gpt-6.1-sol` |
+
+   | Old `preferred_reasoning_level` | Claude Sonnet 5 → Sonnet 5.5 | GPT-5.6 Terra → Sol |
+   |---|---|---|
+   | `low` / `medium` / `high` / `xhigh` / `max` | unchanged | unchanged |
+   | `off` | `NULL` (Automatic) — Sonnet 5.5 rejects disabled thinking | not applicable |
+   | `none` | not applicable | `NULL` (Automatic) — Sol rejects `none` |
+   | `NULL` (Automatic) | `NULL` | `NULL` |
+
+   Assert afterwards that no preference names an old row and that every migrated level is listed by its new row.
+3. Only then delete (or disable) the two old catalog rows.
+4. Set `selectable = true` and `reasoning_selectable = true` on the three replacement rows; optionally normalize the final `sort_order`.
+5. Postconditions: exactly seven rows, all `enabled` and `selectable`; every other table's rows unchanged except the migrated preferences; the system default untouched.
+
+**Afterwards, and only once no row or preference can name them:** the provider-level `off` (Anthropic adapter) and `none` (OpenAI adapter) may be removed in a reviewed Edge change — until then they must stay, because the catalog is the per-model authority and Sonnet 5 / Terra legitimately use them. The two old price records stay in the book unchanged: historical telemetry carries its own record id and rates, and a record prices nothing that is no longer routed.

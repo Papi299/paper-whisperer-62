@@ -4491,3 +4491,22 @@ Decision **C58**, **contributing-field attribution**. It implements the owner-ap
     - no application row was written.
   - **Evidence boundary.** No Production search was run and no real user content was read or used as a fixture. Behaviour rests on the deployed body, suite `027` and the local E2E case. No Edge Function, secret, Auth, Storage or manual Vercel action was involved; Vercel's automatic Production deployment of the merge commit (`dpl_3etF1C2pEFnveK4hhPLq6931GaLj`, READY) needed no manual action and was not what activated C58; the migration was.
   - **Rollback.** None performed; any correction would be a new forward migration.
+
+## 2026-09-30 — AI-MODEL-CATALOG-REFRESH-001A: stage Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol (`20260930203613`) — **PREPARED in the repository; NOT applied**
+
+Decision **C59**, Phase A of four. Production is unchanged: ledger 98, six catalog rows. The rollout runbook is [deployment.md](deployment.md) §16.
+
+- **Migration `20260930203613_stage_ai_model_catalog_refresh`.** Created with `supabase migration new`. One `DO` statement holds the preconditions, the INSERT and the in-statement proof, so it stays atomic under both `db push` and `db reset`.
+  - **Preconditions:** the six current rows exactly as `20260919075655` left them, field by field; no row for any replacement, by id or by provider model; and `reasoning_selectable` still defaulting to false.
+  - **The write:** a plain INSERT, no `ON CONFLICT`, of three rows. Each is `enabled`, not `selectable` and not `reasoning_selectable`, with sort 70/80/90, levels `low … max`, and Automatic `low` / `medium`.
+  - **In-statement proof:** exactly three rows inserted; only they carry the statement's timestamp; whole-table digests of `user_ai_preferences`, `user_entitlements`, `usage_counters`, `usage_credits` and `ai_provider_usage_events` are unchanged.
+  - **Verify block:** nine rows; every row exact; the offered list and the manual-reasoning list are both exactly the six current models; no staged row lists `off`, `none` or `minimal`; the catalog is still read-only to clients and credential-free.
+- **Local evidence.**
+  - Replay against a populated pre-staging database (a Sonnet 5 / `xhigh` preference, a Terra / `none` preference, entitlements, a counter, a credit and a telemetry row) left every fingerprint identical.
+  - Five refusal probes each stopped the file with its named message: a drifted Sonnet 5 row, a pre-existing Sol row, and injected writes to a preference, to a current catalog row and to telemetry.
+- **Edge source.** `_shared/aiPriceBook.ts` gains three `…@2026-09-30` records. The Terra-specific 272K constant becomes the provider-generic `OPENAI_STANDARD_TIER_MAX_INPUT_TOKENS`, same value. No adapter, request builder, registry, ceiling or credential changed. Not deployed.
+- **Tests.**
+  - New pgTAP `028`; `011`, `012`, `016`, `018` and `019` re-scoped to the nine-row catalog without weakening what they pinned.
+  - New Vitest `aiModelCatalogRefreshStaging.test.ts`, an end-to-end resolver → policy → adapter → telemetry chain.
+  - Extended price-book, cost-estimate, adapter, reasoning-policy and Settings-hook suites.
+- **Historical migrations are untouched.**

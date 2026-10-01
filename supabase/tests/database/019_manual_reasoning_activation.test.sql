@@ -169,8 +169,13 @@ SELECT set_eq(
         'google/gemini-3.7-flash','google/gemini-3.8-flash',
         'anthropic/claude-sonnet-5','openai/gpt-5.6-terra'],
   'exactly the six approved models offer manual reasoning');
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE NOT reasoning_selectable),
-  0, 'no catalog row is left closed to manual reasoning');
+-- Every row closed to manual reasoning is one of the three replacements
+-- AI-MODEL-CATALOG-REFRESH-001A staged closed on purpose (suite 028 owns
+-- them); no row activation opened has since been closed again.
+SELECT set_eq(
+  $$SELECT id FROM public.ai_model_catalog WHERE NOT reasoning_selectable$$,
+  ARRAY['anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5','openai/gpt-6.1-sol'],
+  'the only rows closed to manual reasoning are the three staged replacements');
 
 -- Whole-row identity: `reasoning_selectable` is the only field activation moved.
 -- The vocabulary (order included) and the Automatic matrix are exactly what
