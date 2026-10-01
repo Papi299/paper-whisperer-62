@@ -90,10 +90,18 @@ SELECT plan(53);
 --
 -- AI-MODEL-CATALOG-REFRESH-001A (20260930203613) appended three STAGED rows —
 -- Claude Sonnet 5.5, Claude Opus 5.5, GPT-6.1 Sol — enabled but not selectable,
--- after every current row. The list below is therefore nine rows long; what
--- each staged row is and may do is owned by suite 028.
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 9,
-  'the catalog holds exactly the six current and three staged models');
+-- after every current row, taking the list to nine.
+--
+-- AI-MODEL-CATALOG-REFRESH-001D (20261001092335, Phase D) then completed that
+-- refresh: it migrated every saved preference off Claude Sonnet 5 and GPT-5.6
+-- Terra, DELETED those two rows, and opened the three replacements at 50 / 60 /
+-- 70. The list is therefore SEVEN rows long, and for the first time since 001E
+-- every row in it is both selectable and open to manual reasoning. What each
+-- replacement row is remains owned by 028; the cutover itself — the two
+-- retirements, the preference mapping and the setters' behaviour once only these
+-- seven exist — is owned by suite 029.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 7,
+  'the catalog holds exactly the seven approved final models');
 
 -- Ordered by the two keys the Settings control itself orders by (`sort_order`
 -- then `id`), so this is the order a user actually sees in the dropdown.
@@ -101,60 +109,56 @@ SELECT is(
   (SELECT array_agg(id ORDER BY sort_order, id) FROM public.ai_model_catalog),
   ARRAY['google/gemini-3.5-flash','google/gemini-3.6-flash',
         'google/gemini-3.7-flash','google/gemini-3.8-flash',
-        'anthropic/claude-sonnet-5','openai/gpt-5.6-terra',
         'anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5','openai/gpt-6.1-sol'],
-  'catalog ids are provider-qualified and ordered 3.5, 3.6, 3.7, 3.8, Sonnet, Terra, then the staged three');
+  'catalog ids are provider-qualified and ordered 3.5, 3.6, 3.7, 3.8, Sonnet 5.5, Opus 5.5, Sol');
 
 SELECT is(
   (SELECT array_agg(provider_model ORDER BY sort_order, id) FROM public.ai_model_catalog),
   ARRAY['gemini-3.5-flash','gemini-3.6-flash','gemini-3.7-flash','gemini-3.8-flash',
-        'claude-sonnet-5','gpt-5.6-terra',
         'claude-sonnet-5-5','claude-opus-5-5','gpt-6.1-sol'],
-  'provider model strings are exactly the nine approved models');
+  'provider model strings are exactly the seven approved models');
 
 SELECT is(
   (SELECT array_agg(display_name ORDER BY sort_order, id) FROM public.ai_model_catalog),
   ARRAY['Gemini 3.5 Flash','Gemini 3.6 Flash','Gemini 3.7 Flash','Gemini 3.8 Flash',
-        'Claude Sonnet 5','GPT-5.6 Terra',
         'Claude Sonnet 5.5','Claude Opus 5.5','GPT-6.1 Sol'],
-  'display names are exactly the nine approved labels');
+  'display names are exactly the seven approved labels');
 
 SELECT is(
   (SELECT array_agg(provider ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY['google','google','google','google','anthropic','openai',
-        'anthropic','anthropic','openai'],
+  ARRAY['google','google','google','google','anthropic','anthropic','openai'],
   'each model names one of the three registered provider adapters');
 
--- Sparse and unchanged: 001D appended 30 and 40 rather than renumbering 3.5 or
--- 3.6, so a preference someone already saved keeps its position in the list.
--- The staged rows append the same way, at 70 / 80 / 90.
+-- Sparse: 001D appended 30 and 40 rather than renumbering 3.5 or 3.6, and the
+-- Phase-A staging appended 70 / 80 / 90 the same way, so nobody's saved
+-- position moved while a replacement was merely staged.
+--
+-- Phase D is the one point where renumbering was correct: the rows that held 50
+-- and 60 were deleted, and leaving the replacements at 70 / 80 / 90 would have
+-- left a permanent gap recording two models no user can ever see again. The
+-- four Google positions are still untouched.
 SELECT is(
   (SELECT array_agg(sort_order ORDER BY sort_order, id) FROM public.ai_model_catalog),
-  ARRAY[10,20,30,40,50,60,70,80,90],
-  'sort order is exactly 10 / 20 / 30 / 40 / 50 / 60, then 70 / 80 / 90');
+  ARRAY[10,20,30,40,50,60,70],
+  'sort order is exactly 10 / 20 / 30 / 40 / 50 / 60 / 70');
 
 SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog),
-  'all nine models are enabled');
--- The two classes parted company while the paid rows were staged (001E:
--- enabled but NOT selectable) and rejoined when Phase 8 activated them
--- (20260918210017). They part again under AI-MODEL-CATALOG-REFRESH-001A, which
--- stages three rows enabled but NOT selectable. The claim is therefore split
--- into its two exact halves rather than weakened: every CURRENT row is
--- selectable (a current row that silently lost selectability still fails
--- here), and every staged row is not.
-SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog
-            WHERE id NOT IN ('anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5',
-                             'openai/gpt-6.1-sol')),
-  'all six current models are selectable');
-SELECT ok((SELECT NOT bool_or(selectable) FROM public.ai_model_catalog
-            WHERE id IN ('anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5',
-                         'openai/gpt-6.1-sol')),
-  'none of the three staged models is selectable');
+  'all seven models are enabled');
+-- `enabled` and `selectable` parted company twice — while the 001E paid rows
+-- were staged, and again while the 001A replacements were — and each time the
+-- claim here was split into its two exact halves rather than weakened. Phase D
+-- rejoins them for good: the staged set is empty, so the whole catalog is
+-- selectable again and the single `bool_and` is the strongest available form.
+-- A row that silently lost selectability still fails here.
+SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog),
+  'all seven final models are selectable — no row is staged or hidden');
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE NOT selectable),
+  0, 'no row survives in a non-selectable state');
 SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog WHERE provider = 'google'),
   'all four Google models are selectable');
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE provider <> 'google' AND selectable),
-  2, 'both paid models are selectable after Phase 8');
+  3, 'all three paid models are selectable after the Phase-D cutover');
 
 -- Whole-row identity, so a column cannot drift onto the wrong model while every
 -- individual array above still lines up.
@@ -265,12 +269,12 @@ UPDATE public.user_entitlements
 
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d2000000-0000-0000-0000-000000000002'),
   $q$SELECT count(*)::text FROM public.ai_model_catalog$q$),
-  '9', 'an ordinary signed-in user can read all nine catalog rows');
+  '7', 'an ordinary signed-in user can read all seven catalog rows');
 
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('d2000000-0000-0000-0000-000000000001'),
   $q$SELECT string_agg(id, ',' ORDER BY sort_order, id) FROM public.ai_model_catalog$q$),
-  'google/gemini-3.5-flash,google/gemini-3.6-flash,google/gemini-3.7-flash,google/gemini-3.8-flash,anthropic/claude-sonnet-5,openai/gpt-5.6-terra,anthropic/claude-sonnet-5-5,anthropic/claude-opus-5-5,openai/gpt-6.1-sol',
-  'an entitled user reads the expanded catalog in catalog order');
+  'google/gemini-3.5-flash,google/gemini-3.6-flash,google/gemini-3.7-flash,google/gemini-3.8-flash,anthropic/claude-sonnet-5-5,anthropic/claude-opus-5-5,openai/gpt-6.1-sol',
+  'an entitled user reads the final catalog in catalog order');
 
 SELECT is(pg_temp.errcode_as('anon','',
   $q$SELECT count(*) FROM public.ai_model_catalog$q$),

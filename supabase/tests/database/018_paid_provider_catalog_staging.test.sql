@@ -1,19 +1,33 @@
--- AI-MULTI-PROVIDER-001E suite 018: the two paid-provider catalog rows.
+-- AI-MULTI-PROVIDER-001E suite 018: the two paid-provider catalog rows —
+-- staged, activated, and now RETIRED.
 --
--- Owns the database half of BOTH 001E migrations:
+-- Owns the database half of BOTH 001E migrations, and now of their end:
 --
 --   * 20260917201856 staged `anthropic/claude-sonnet-5` and
 --     `openai/gpt-5.6-terra` in `public.ai_model_catalog` as ENABLED but NOT
 --     SELECTABLE, so Phase 7 could canary them without exposing them;
 --   * 20260918210017 (Phase 8) then set `selectable = true` on exactly those
---     two rows, once the Production canaries had passed.
+--     two rows, once the Production canaries had passed;
+--   * 20261001092335 (AI-MODEL-CATALOG-REFRESH-001D, Phase D) DELETED both
+--     rows, after migrating every saved preference onto their successors.
 --
 -- The filename still says "staging" because that is where these rows came from
 -- and renaming a suite loses its history; what it asserts is the CURRENT state.
 -- Every database suite runs against the FINAL migration state, so the
--- staging-era claims here were inverted rather than deleted. That is not lost
--- coverage: 20260917201856 carries its own fail-closed verify block proving it
--- inserted the rows non-selectable, and that block is replayed on every reset.
+-- staging-era claims here were inverted rather than deleted when Phase 8
+-- landed, and the activation-era claims were inverted the same way when Phase D
+-- retired both subjects. That is not lost coverage: 20260917201856 and
+-- 20260918210017 each carry their own fail-closed verify block proving what
+-- they inserted and activated, and both are replayed on every reset.
+--
+-- So what this suite now owns is the RETIREMENT: that neither row exists under
+-- any spelling, that each provider's row set is exactly the successors, that
+-- `off` and `none` left the catalog with the rows that carried them, and that
+-- the setter treats both retired ids as models that never existed — while the
+-- Google rows, the entitlement gate and the client grant posture are untouched.
+-- The seven-row final list is owned by 012; the cutover's own mechanics,
+-- including the preference mapping, are owned by 029 and by
+-- `runCatalogCutoverLane` in `scripts/e2e-local.mjs`.
 --
 -- ## Why a separate suite, and where the boundary is
 --
@@ -104,64 +118,77 @@ CREATE FUNCTION pg_temp.claims(p_uid text) RETURNS text LANGUAGE sql IMMUTABLE A
   SELECT '{"sub":"' || p_uid || '","role":"authenticated"}';
 $hlp$;
 
-SELECT plan(45);
+SELECT plan(48);
 
 -- ════════════════════════════════════════════════════════════════════════════
--- 1. Exactly one row per staged model, and exactly the approved metadata
+-- 1. Both subjects are RETIRED — no row, under any spelling
 -- ════════════════════════════════════════════════════════════════════════════
 --
 -- Asserted BEFORE any fixture row is inserted, so these describe the migrated
 -- catalog and nothing this suite manufactured.
+--
+-- This section previously asserted "exactly one row exists" for each model,
+-- with its provider, wire model, label and both flags. Phase D deleted both
+-- rows, so each of those claims is inverted to its retirement form rather than
+-- deleted — and the deleted half is not lost coverage, because 20260917201856
+-- and 20260918210017 both carry their own fail-closed verify blocks proving
+-- what they inserted and activated, and those are replayed on every reset.
 
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
-            WHERE id = 'anthropic/claude-sonnet-5'), 1,
-  'exactly one Claude Sonnet 5 row exists');
+            WHERE id = 'anthropic/claude-sonnet-5'), 0,
+  'no Claude Sonnet 5 row exists — Phase D deleted it');
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
-            WHERE id = 'openai/gpt-5.6-terra'), 1,
-  'exactly one GPT-5.6 Terra row exists');
+            WHERE id = 'openai/gpt-5.6-terra'), 0,
+  'no GPT-5.6 Terra row exists — Phase D deleted it');
+-- By the wire model too: a row carrying `claude-sonnet-5` or `gpt-5.6-terra`
+-- under some other id would still send a retired model to a provider.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE (provider, provider_model) IN (('anthropic','claude-sonnet-5'),
+                                                 ('openai','gpt-5.6-terra'))),
+  0, 'no row sends either retired wire model under any id');
+-- Retired by DELETION, not by hiding: a disabled or closed survivor would still
+-- be a row, and this suite's subject is that there is none.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE display_name IN ('Claude Sonnet 5','GPT-5.6 Terra')),
+  0, 'neither retired label survives on any row');
 
 -- Nothing ELSE arrived under either provider: the catalog is the allowlist, so
--- a stray sibling model would be a route nobody approved. The only siblings are
--- the three replacements AI-MODEL-CATALOG-REFRESH-001A staged (suite 028), so
--- each provider's rows are asserted as an exact set rather than as a count.
+-- a stray sibling model would be a route nobody approved. Each provider's rows
+-- are asserted as an exact set rather than as a count, and after Phase D those
+-- sets are exactly the three replacements (suites 028 and 029).
 SELECT set_eq(
   $$SELECT id FROM public.ai_model_catalog WHERE provider = 'anthropic'$$,
-  ARRAY['anthropic/claude-sonnet-5','anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5'],
-  'the anthropic rows are exactly Sonnet 5 and the two staged Claude 5.5 models');
+  ARRAY['anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5'],
+  'the anthropic rows are exactly the two Claude 5.5 models');
 SELECT set_eq(
   $$SELECT id FROM public.ai_model_catalog WHERE provider = 'openai'$$,
-  ARRAY['openai/gpt-5.6-terra','openai/gpt-6.1-sol'],
-  'the openai rows are exactly Terra and the staged GPT-6.1 Sol');
+  ARRAY['openai/gpt-6.1-sol'],
+  'the openai rows are exactly GPT-6.1 Sol');
 
 -- The provider/provider_model pair is what the adapter actually sends, so it is
--- asserted exactly rather than by pattern.
-SELECT is((SELECT provider FROM public.ai_model_catalog WHERE id = 'anthropic/claude-sonnet-5'),
-  'anthropic', 'Sonnet row names provider anthropic');
-SELECT is((SELECT provider_model FROM public.ai_model_catalog WHERE id = 'anthropic/claude-sonnet-5'),
-  'claude-sonnet-5', 'Sonnet row sends provider model claude-sonnet-5');
-SELECT is((SELECT provider FROM public.ai_model_catalog WHERE id = 'openai/gpt-5.6-terra'),
-  'openai', 'Terra row names provider openai');
-SELECT is((SELECT provider_model FROM public.ai_model_catalog WHERE id = 'openai/gpt-5.6-terra'),
-  'gpt-5.6-terra', 'Terra row sends provider model gpt-5.6-terra');
+-- asserted exactly rather than by pattern — now for the successors.
+SELECT is((SELECT provider_model FROM public.ai_model_catalog WHERE id = 'anthropic/claude-sonnet-5-5'),
+  'claude-sonnet-5-5', 'the Sonnet successor sends provider model claude-sonnet-5-5');
+SELECT is((SELECT provider_model FROM public.ai_model_catalog WHERE id = 'anthropic/claude-opus-5-5'),
+  'claude-opus-5-5', 'the Opus row sends provider model claude-opus-5-5');
+SELECT is((SELECT provider_model FROM public.ai_model_catalog WHERE id = 'openai/gpt-6.1-sol'),
+  'gpt-6.1-sol', 'the Terra successor sends provider model gpt-6.1-sol');
+SELECT is((SELECT display_name FROM public.ai_model_catalog WHERE id = 'anthropic/claude-sonnet-5-5'),
+  'Claude Sonnet 5.5', 'the Sonnet successor carries its approved label');
+SELECT is((SELECT display_name FROM public.ai_model_catalog WHERE id = 'openai/gpt-6.1-sol'),
+  'GPT-6.1 Sol', 'the Terra successor carries its approved label');
 
-SELECT is((SELECT display_name FROM public.ai_model_catalog WHERE id = 'anthropic/claude-sonnet-5'),
-  'Claude Sonnet 5', 'Sonnet row carries its approved label');
-SELECT is((SELECT display_name FROM public.ai_model_catalog WHERE id = 'openai/gpt-5.6-terra'),
-  'GPT-5.6 Terra', 'Terra row carries its approved label');
-
--- ── enabled AND selectable — the activated combination ─────────────────────
--- Phase 8 (20260918210017) flipped `selectable` and nothing else. `enabled` is
--- asserted separately from `selectable` because they still mean different
--- things: `enabled` is what makes a saved preference ROUTABLE, `selectable` is
--- what lets a user acquire that preference in the first place.
+-- ── enabled AND selectable, on every paid row that remains ─────────────────
+-- `enabled` is still asserted separately from `selectable` because they still
+-- mean different things: `enabled` is what makes a saved preference ROUTABLE,
+-- `selectable` is what lets a user acquire that preference in the first place.
+-- Phase D is the first point at which both are true for every paid row at once.
 SELECT ok((SELECT bool_and(enabled) FROM public.ai_model_catalog
-            WHERE id IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
-  'both paid models are enabled, so a saved preference for one is routable');
--- Scoped by id since three staged siblings (NOT selectable) share these
--- providers. Staging them did not close either of these two.
+            WHERE provider <> 'google'),
+  'every remaining paid model is enabled, so a saved preference for one is routable');
 SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog
-            WHERE id IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
-  'both paid models are selectable, so an entitled user can choose one');
+            WHERE provider <> 'google'),
+  'every remaining paid model is selectable, so an entitled user can choose one');
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 2. The C41 reasoning metadata, exactly and in order
@@ -172,55 +199,66 @@ SELECT ok((SELECT bool_and(selectable) FROM public.ai_model_catalog
 -- manual-reasoning control would render, and the two providers' vocabularies
 -- differ at exactly the first element (`off` vs `none`).
 
-SELECT is((SELECT reasoning_levels FROM public.ai_model_catalog
-            WHERE id = 'anthropic/claude-sonnet-5'),
-  ARRAY['off','low','medium','high','xhigh','max'],
-  'Sonnet reasoning levels are off/low/medium/high/xhigh/max, in order');
-SELECT is((SELECT reasoning_levels FROM public.ai_model_catalog
-            WHERE id = 'openai/gpt-5.6-terra'),
-  ARRAY['none','low','medium','high','xhigh','max'],
-  'Terra reasoning levels are none/low/medium/high/xhigh/max, in order');
+-- `off` and `none` were the FIRST element of each retired row's list, and they
+-- left the product with those rows. Both are still canonical vocabulary (016
+-- owns that), but no row may offer either any more: every surviving model
+-- rejects them at the provider, so a row listing one would let Automatic or a
+-- user send a request the provider refuses, at the cost of a quota unit.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE 'off' = ANY (reasoning_levels)),
+  0, 'no row offers Anthropic''s `off` any more — it retired with Claude Sonnet 5');
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE 'none' = ANY (reasoning_levels)),
+  0, 'no row offers OpenAI''s `none` any more — it retired with GPT-5.6 Terra');
 
--- The spellings are NOT interchangeable: Anthropic has no `none` and OpenAI no
--- `off`, and collapsing them would let an adapter be handed the other's word.
-SELECT ok((SELECT NOT ('none' = ANY (reasoning_levels)) FROM public.ai_model_catalog
-            WHERE id = 'anthropic/claude-sonnet-5'),
-  'Sonnet does not offer OpenAI''s spelling `none`');
-SELECT ok((SELECT NOT ('off' = ANY (reasoning_levels)) FROM public.ai_model_catalog
-            WHERE id = 'openai/gpt-5.6-terra'),
-  'Terra does not offer Anthropic''s spelling `off`');
--- Neither provider publishes Google's `minimal`.
+-- The successors' lists, in order. Both providers converged on the same five
+-- effort levels, which is why the first-element divergence above is gone.
+SELECT is((SELECT reasoning_levels FROM public.ai_model_catalog
+            WHERE id = 'anthropic/claude-sonnet-5-5'),
+  ARRAY['low','medium','high','xhigh','max'],
+  'Claude Sonnet 5.5 reasoning levels are low/medium/high/xhigh/max, in order');
+SELECT is((SELECT reasoning_levels FROM public.ai_model_catalog
+            WHERE id = 'openai/gpt-6.1-sol'),
+  ARRAY['low','medium','high','xhigh','max'],
+  'GPT-6.1 Sol reasoning levels are low/medium/high/xhigh/max, in order');
+
+-- The spellings are still NOT interchangeable, and the guard is still worth
+-- stating: collapsing the vocabularies would let an adapter be handed the
+-- other's word. No paid row may carry any of the three foreign spellings.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE provider IN ('anthropic','openai')
-              AND 'minimal' = ANY (reasoning_levels)),
-  0, 'neither paid model offers Google''s `minimal`');
+              AND reasoning_levels && ARRAY['off','none','minimal']),
+  0, 'no paid row offers off, none or Google''s minimal');
 
 -- ── Automatic: the per-operation levels PaperLume chose ────────────────────
-SELECT is((SELECT auto_analyze_reasoning_level FROM public.ai_model_catalog
-            WHERE id = 'anthropic/claude-sonnet-5'),
-  'off', 'Sonnet Automatic Analyze is off');
-SELECT is((SELECT auto_suggest_reasoning_level FROM public.ai_model_catalog
-            WHERE id = 'anthropic/claude-sonnet-5'),
-  'medium', 'Sonnet Automatic Suggest is medium');
-SELECT is((SELECT auto_analyze_reasoning_level FROM public.ai_model_catalog
-            WHERE id = 'openai/gpt-5.6-terra'),
-  'none', 'Terra Automatic Analyze is none');
-SELECT is((SELECT auto_suggest_reasoning_level FROM public.ai_model_catalog
-            WHERE id = 'openai/gpt-5.6-terra'),
-  'medium', 'Terra Automatic Suggest is medium');
+-- The retired rows' Automatic Analyze levels were the two provider-rejected
+-- values; every successor uses the lowest tier it really offers.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE provider <> 'google' AND auto_analyze_reasoning_level = 'low'),
+  3, 'Automatic Analyze is low on every remaining paid model');
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE provider <> 'google' AND auto_suggest_reasoning_level = 'medium'),
+  3, 'Automatic Suggest is medium on every remaining paid model');
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
+            WHERE auto_analyze_reasoning_level IN ('off','none')
+               OR auto_suggest_reasoning_level IN ('off','none')),
+  0, 'no row''s Automatic policy still names a provider-rejected level');
 
 -- Whole-row identity, so a column cannot drift onto the wrong model while every
--- individual assertion above still lines up.
+-- individual assertion above still lines up. Suite 029 owns the full seven-row
+-- form; here it is scoped to the paid rows that replaced this suite's subjects.
 SELECT is(
   (SELECT count(*)::int FROM public.ai_model_catalog
     WHERE (id, provider, provider_model, display_name, enabled, selectable, sort_order,
            reasoning_levels, auto_analyze_reasoning_level, auto_suggest_reasoning_level,
            reasoning_selectable) IN (
-      ('anthropic/claude-sonnet-5','anthropic','claude-sonnet-5','Claude Sonnet 5',
-       true,true,50,ARRAY['off','low','medium','high','xhigh','max'],'off','medium',true),
-      ('openai/gpt-5.6-terra','openai','gpt-5.6-terra','GPT-5.6 Terra',
-       true,true,60,ARRAY['none','low','medium','high','xhigh','max'],'none','medium',true))),
-  2, 'each paid row matches its approved metadata as a whole row');
+      ('anthropic/claude-sonnet-5-5','anthropic','claude-sonnet-5-5','Claude Sonnet 5.5',
+       true,true,50,ARRAY['low','medium','high','xhigh','max'],'low','medium',true),
+      ('anthropic/claude-opus-5-5','anthropic','claude-opus-5-5','Claude Opus 5.5',
+       true,true,60,ARRAY['low','medium','high','xhigh','max'],'low','medium',true),
+      ('openai/gpt-6.1-sol','openai','gpt-6.1-sol','GPT-6.1 Sol',
+       true,true,70,ARRAY['low','medium','high','xhigh','max'],'low','medium',true))),
+  3, 'each remaining paid row matches its approved metadata as a whole row');
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 3. The four Google rows are exactly as they were
@@ -244,25 +282,31 @@ SELECT is(
        ARRAY['low','medium','high'],'low','medium',true),
       ('google/gemini-3.8-flash','google','gemini-3.8-flash','Gemini 3.8 Flash',true,true,40,
        ARRAY['low','medium','high'],'low','medium',true))),
-  4, 'all four Google rows are unchanged by 001E, as whole rows');
+  4, 'all four Google rows are unchanged by 001E and by the Phase-D cutover, as whole rows');
 
--- The paid rows appended; they did not renumber anyone.
+-- Phase D renumbered the paid rows to 50 / 60 / 70, closing the gap the two
+-- deletions left — and it still did not renumber a Google row.
 SELECT is((SELECT array_agg(sort_order ORDER BY sort_order)
              FROM public.ai_model_catalog WHERE provider = 'google'),
   ARRAY[10,20,30,40], 'the Google rows kept their original sort positions');
 SELECT ok((SELECT min(sort_order) FROM public.ai_model_catalog WHERE provider <> 'google')
           > (SELECT max(sort_order) FROM public.ai_model_catalog WHERE provider = 'google'),
-  'both paid models sort after every Google model');
+  'every paid model still sorts after every Google model');
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 4. No user preference was created or rewritten
 -- ════════════════════════════════════════════════════════════════════════════
 
 SELECT is((SELECT count(*)::int FROM public.user_ai_preferences), 0,
-  'the migration created no user preference row');
+  'the migrations created no user preference row');
+-- On a fresh replay there is nothing to migrate, so this is the structural
+-- half: no preference can reference a retired model, because the FK would have
+-- refused it and Phase D proved zero references before deleting the rows. The
+-- POPULATED case — a saved preference at every old level, migrated to its
+-- successor — is proved by `runCatalogCutoverLane` in `scripts/e2e-local.mjs`.
 SELECT is((SELECT count(*)::int FROM public.user_ai_preferences
             WHERE preferred_model_id IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')),
-  0, 'nobody was migrated onto a paid model');
+  0, 'no preference references a retired paid model');
 SELECT is((SELECT count(*)::int FROM public.user_ai_preferences
             WHERE preferred_reasoning_level IS NOT NULL),
   0, 'no manual reasoning preference exists');
@@ -301,25 +345,38 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-
   $q$SELECT saved::text FROM public.set_current_user_ai_model('google/gemini-3.8-flash')$q$),
   'true', 'control: that save reported success');
 
+-- Both retired ids are now refused as `unknown_model` — not `model_disabled`
+-- and not `model_not_selectable`. That distinction is the whole difference
+-- between deleting a row and hiding one, and it is visible right here: the
+-- catalog lookup finds nothing at all, so the setter never reaches a flag.
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5')$q$),
-  'ok', 'the setter accepts Claude Sonnet 5 for an entitled caller');
+  'unknown_model', 'the setter refuses the retired Claude Sonnet 5 as unknown');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
   $q$SELECT saved::text FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5')$q$),
-  'true', 'that Claude selection reported success');
-SELECT is((SELECT preferred_model_id FROM public.user_ai_preferences
-            WHERE user_id = 'e8000000-0000-0000-0000-000000000001'),
-  'anthropic/claude-sonnet-5', 'the caller''s saved model is now Claude Sonnet 5');
-
+  'false', 'that refused Claude selection was not saved');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
-  'ok', 'the setter accepts GPT-5.6 Terra for an entitled caller');
+  'unknown_model', 'the setter refuses the retired GPT-5.6 Terra as unknown');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
   $q$SELECT saved::text FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
-  'true', 'that Terra selection reported success');
+  'false', 'that refused Terra selection was not saved');
+-- Four refusals, and the control's save is still exactly where it was.
 SELECT is((SELECT preferred_model_id FROM public.user_ai_preferences
             WHERE user_id = 'e8000000-0000-0000-0000-000000000001'),
-  'openai/gpt-5.6-terra', 'the caller''s saved model is now GPT-5.6 Terra');
+  'google/gemini-3.8-flash', 'the retired-model refusals left the caller''s saved model untouched');
+
+-- And each successor IS accepted for the same entitled caller, which is what
+-- makes the refusals above about the retirement rather than about the caller.
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
+  $q$SELECT reason FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5-5')$q$),
+  'ok', 'the setter accepts the Sonnet successor for an entitled caller');
+SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
+  $q$SELECT reason FROM public.set_current_user_ai_model('openai/gpt-6.1-sol')$q$),
+  'ok', 'the setter accepts the Terra successor for an entitled caller');
+SELECT is((SELECT preferred_model_id FROM public.user_ai_preferences
+            WHERE user_id = 'e8000000-0000-0000-0000-000000000001'),
+  'openai/gpt-6.1-sol', 'the caller''s saved model is now GPT-6.1 Sol');
 
 -- ── Entitlement is untouched by activation ────────────────────────────────
 -- The corollary that matters most: making a model choosable did not make
@@ -329,12 +386,15 @@ SELECT is((SELECT preferred_model_id FROM public.user_ai_preferences
 INSERT INTO auth.users (id, email) VALUES
   ('e8000000-0000-0000-0000-000000000002','suite018-unentitled@paperlume.test');
 
+-- Asserted against a model that EXISTS, so the refusal is attributable to
+-- entitlement rather than to the retirement: a retired id would be refused for
+-- the wrong reason and prove nothing about the gate.
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000002'),
-  $q$SELECT reason FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5')$q$),
-  'not_entitled', 'an unentitled caller is refused Claude Sonnet 5 as not entitled');
+  $q$SELECT reason FROM public.set_current_user_ai_model('anthropic/claude-sonnet-5-5')$q$),
+  'not_entitled', 'an unentitled caller is refused Claude Sonnet 5.5 as not entitled');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000002'),
-  $q$SELECT saved::text FROM public.set_current_user_ai_model('openai/gpt-5.6-terra')$q$),
-  'false', 'an unentitled caller cannot save GPT-5.6 Terra either');
+  $q$SELECT saved::text FROM public.set_current_user_ai_model('openai/gpt-6.1-sol')$q$),
+  'false', 'an unentitled caller cannot save GPT-6.1 Sol either');
 SELECT is((SELECT count(*)::int FROM public.user_ai_preferences
             WHERE user_id = 'e8000000-0000-0000-0000-000000000002'),
   0, 'the refused unentitled caller has no saved preference at all');
@@ -355,8 +415,8 @@ SELECT is((SELECT count(*)::int FROM public.user_ai_preferences
 -- pinned by the Vitest suites for `_shared/aiModelSelection.ts`.
 
 INSERT INTO public.user_ai_preferences (user_id, preferred_model_id)
-VALUES ('e8000000-0000-0000-0000-000000000001', 'anthropic/claude-sonnet-5')
-ON CONFLICT (user_id) DO UPDATE SET preferred_model_id = 'anthropic/claude-sonnet-5';
+VALUES ('e8000000-0000-0000-0000-000000000001', 'anthropic/claude-sonnet-5-5')
+ON CONFLICT (user_id) DO UPDATE SET preferred_model_id = 'anthropic/claude-sonnet-5-5';
 
 SELECT is(
   (SELECT c.provider_model
@@ -364,17 +424,17 @@ SELECT is(
      JOIN public.ai_model_catalog c ON c.id = p.preferred_model_id
     WHERE p.user_id = 'e8000000-0000-0000-0000-000000000001'
       AND c.enabled),
-  'claude-sonnet-5',
-  'an operator-written Sonnet preference still resolves to a routable provider model');
+  'claude-sonnet-5-5',
+  'a saved Sonnet 5.5 preference resolves to a routable provider model');
 
--- And it is now selectable as well as routable: after activation the two flags
--- agree for these rows, which is exactly what Phase 8 changed.
+-- And it is selectable as well as routable: after Phase D the two flags agree
+-- for every paid row, which is what the cutover completed.
 SELECT ok(
   (SELECT c.enabled AND c.selectable
      FROM public.user_ai_preferences p
      JOIN public.ai_model_catalog c ON c.id = p.preferred_model_id
     WHERE p.user_id = 'e8000000-0000-0000-0000-000000000001'),
-  'that routable preference names a model that is now user-selectable too');
+  'that routable preference names a model that is user-selectable too');
 
 DELETE FROM public.user_ai_preferences WHERE user_id = 'e8000000-0000-0000-0000-000000000001';
 
@@ -402,10 +462,20 @@ SELECT is(pg_temp.errcode_as('anon','',
   $q$SELECT count(*) FROM public.ai_model_catalog$q$),
   '42501', 'anon still cannot read the catalog');
 
+-- Targets a row that EXISTS. A write refusal aimed at a retired id would be
+-- weaker evidence: a reader could take it for "nothing matched" rather than
+-- "the grant refused it". The grant check fires before any row is examined, and
+-- naming a live row is what makes that unambiguous.
 SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
-  $q$UPDATE public.ai_model_catalog SET selectable = true WHERE id = 'anthropic/claude-sonnet-5'$q$),
+  $q$UPDATE public.ai_model_catalog SET selectable = false WHERE id = 'anthropic/claude-sonnet-5-5'$q$),
   '42501',
-  'an entitled user cannot make a paid model selectable by writing the catalog');
+  'an entitled user cannot close a paid model by writing the catalog');
+-- And cannot bring a retired one back, which is the Phase-D-specific form.
+SELECT is(pg_temp.errcode_as('authenticated', pg_temp.claims('e8000000-0000-0000-0000-000000000001'),
+  $q$INSERT INTO public.ai_model_catalog (id, provider, provider_model, display_name)
+     VALUES ('anthropic/claude-sonnet-5','anthropic','claude-sonnet-5','Claude Sonnet 5')$q$),
+  '42501',
+  'nor re-create a retired paid model');
 
 SELECT * FROM finish();
 ROLLBACK;

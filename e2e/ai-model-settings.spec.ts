@@ -47,8 +47,9 @@ const GEMINI_35_LABEL = "Gemini 3.5 Flash";
 const GEMINI_36_LABEL = "Gemini 3.6 Flash";
 const GEMINI_37_LABEL = "Gemini 3.7 Flash";
 const GEMINI_38_LABEL = "Gemini 3.8 Flash";
-const CLAUDE_SONNET_5_LABEL = "Claude Sonnet 5";
-const GPT_56_TERRA_LABEL = "GPT-5.6 Terra";
+const CLAUDE_SONNET_55_LABEL = "Claude Sonnet 5.5";
+const CLAUDE_OPUS_55_LABEL = "Claude Opus 5.5";
+const GPT_61_SOL_LABEL = "GPT-6.1 Sol";
 const AUTOMATIC_REASONING_LABEL = "Automatic (Recommended)";
 const REASONING_RESET_TOAST =
   "Reasoning was reset to Automatic because the new model does not support your previous level.";
@@ -64,8 +65,13 @@ const EXPECTED_REASONING_OPTIONS: ReadonlyArray<readonly [string, readonly strin
   [GEMINI_36_LABEL, ["Minimal", "Low", "Medium", "High"]],
   [GEMINI_37_LABEL, ["Low", "Medium", "High"]],
   [GEMINI_38_LABEL, ["Low", "Medium", "High"]],
-  [CLAUDE_SONNET_5_LABEL, ["Off", "Low", "Medium", "High", "Extra High", "Max"]],
-  [GPT_56_TERRA_LABEL, ["None", "Low", "Medium", "High", "Extra High", "Max"]],
+  // All three paid rows converged on one five-level vocabulary at Phase D. The
+  // retired rows' `Off` and `None` first entries went with them: Claude Sonnet
+  // 5.5 rejects disabled thinking and GPT-6.1 Sol does not support `none`, so
+  // neither is a catalog level any more and neither may appear here.
+  [CLAUDE_SONNET_55_LABEL, ["Low", "Medium", "High", "Extra High", "Max"]],
+  [CLAUDE_OPUS_55_LABEL, ["Low", "Medium", "High", "Extra High", "Max"]],
+  [GPT_61_SOL_LABEL, ["Low", "Medium", "High", "Extra High", "Max"]],
 ];
 
 /** The four preference RPCs — the only writes the Settings surface may make. */
@@ -78,24 +84,25 @@ const PREFERENCE_RPCS = [
 
 /**
  * Exactly what the dropdown must contain after a full local migration replay:
- * the sentinel first, then the six catalog models in `sort_order`. 3.7 and 3.8
- * arrive from migration `20260903120000` (AI-MODEL-SELECTION-001D, C35); Claude
- * Sonnet 5 and GPT-5.6 Terra arrive from `20260917201856` but become offerable
- * only with the Phase 8 activation `20260918210017`
- * (AI-MULTI-PROVIDER-001E, C43). None of them needed a frontend change: this
- * list is read out of the live local database through the ordinary
+ * the sentinel first, then the SEVEN catalog models in `sort_order`. 3.7 and
+ * 3.8 arrive from migration `20260903120000` (AI-MODEL-SELECTION-001D, C35);
+ * Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol are staged by
+ * `20260930203613` and opened by the Phase-D cutover `20261001092335`
+ * (AI-MODEL-CATALOG-REFRESH-001, C59). None of them needed a frontend change:
+ * this list is read out of the live local database through the ordinary
  * authenticated catalog SELECT, so it is the end-to-end evidence that a
  * reviewed row is all a new model needs.
  *
- * The two paid rows are the strongest case for that claim, because they were
- * present but NOT selectable for a whole phase: the same UI that renders them
- * now was already deployed and deliberately did not offer them.
+ * The paid rows are the strongest case for that claim, because each was present
+ * but NOT selectable for a whole phase: the same UI that renders them now was
+ * already deployed and deliberately did not offer them. The same UI also stops
+ * offering a model the moment its row is deleted.
  *
- * The same property is live again: AI-MODEL-CATALOG-REFRESH-001A
- * (`20260930203613`, C59) stages Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1
- * Sol in the replayed catalog as `enabled` but NOT `selectable`. Because the
- * assertion below is the WHOLE listbox, exactly, it is the end-to-end proof that
- * none of the three is offered — with no model id named in any UI code.
+ * Because the assertion below is the WHOLE listbox, exactly, it is also the
+ * end-to-end proof of the Phase-D RETIREMENT: `Claude Sonnet 5` and
+ * `GPT-5.6 Terra` were offered here until `20261001092335` deleted their rows,
+ * and their absence from this list is asserted by the list being exact — with
+ * no model id named in any UI code, and no frontend change in the cutover.
  */
 const EXPECTED_OPTIONS = [
   DEFAULT_LABEL,
@@ -103,8 +110,9 @@ const EXPECTED_OPTIONS = [
   GEMINI_36_LABEL,
   GEMINI_37_LABEL,
   GEMINI_38_LABEL,
-  CLAUDE_SONNET_5_LABEL,
-  GPT_56_TERRA_LABEL,
+  CLAUDE_SONNET_55_LABEL,
+  CLAUDE_OPUS_55_LABEL,
+  GPT_61_SOL_LABEL,
 ];
 
 function requireEnv(name: string): string {
@@ -288,11 +296,11 @@ async function attemptDirectTableWrites(page: Page) {
       .eq("user_id", uid);
     const upsert = await mod.supabase
       .from("user_ai_preferences")
-      .upsert({ user_id: uid, preferred_model_id: "openai/gpt-5.6-terra", preferred_reasoning_level: "max" });
+      .upsert({ user_id: uid, preferred_model_id: "openai/gpt-6.1-sol", preferred_reasoning_level: "max" });
     const catalog = await mod.supabase
       .from("ai_model_catalog")
       .update({ reasoning_selectable: false })
-      .eq("id", "openai/gpt-5.6-terra");
+      .eq("id", "openai/gpt-6.1-sol");
     return {
       update: update.error?.code ?? null,
       upsert: upsert.error?.code ?? null,
@@ -579,8 +587,8 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
       await expect(page.getByRole("listbox")).toHaveCount(0);
     }
 
-    // Walking all six models pinned each in turn and chose no level.
-    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-5.6-terra", level: null });
+    // Walking all seven models pinned each in turn and chose no level.
+    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-6.1-sol", level: null });
 
     await chooseModel(page, DEFAULT_LABEL);
     expect(await readSavedPreference(page)).toBeNull();
@@ -639,29 +647,44 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
     ).toHaveText(AUTOMATIC_REASONING_LABEL);
     expect(await readSavedPreference(page)).toEqual({ model: "google/gemini-3.8-flash", level: null });
 
-    // ── Across providers: Claude's Off is not Terra's None ─────────────────
-    await chooseModel(page, CLAUDE_SONNET_5_LABEL);
-    await chooseReasoning(page, "Off");
-    expect(await readSavedPreference(page)).toEqual({ model: "anthropic/claude-sonnet-5", level: "off" });
-    await chooseModel(page, GPT_56_TERRA_LABEL);
+    // ── Across families: a paid-only level does not survive a move to Gemini ─
+    //
+    // Until Phase D this was Claude's `Off` against Terra's `None` — a
+    // divergence at the two retired rows' first level. All three surviving paid
+    // rows share one vocabulary, so the reset is now exercised where a real
+    // divergence remains: `Max` is a paid level no Gemini model lists.
+    await chooseModel(page, CLAUDE_SONNET_55_LABEL);
+    await chooseReasoning(page, "Max");
+    expect(await readSavedPreference(page)).toEqual({ model: "anthropic/claude-sonnet-5-5", level: "max" });
+    await chooseModel(page, GEMINI_37_LABEL);
     await expect(
       settingsDialog(page).getByRole("combobox", { name: "Reasoning level" }),
     ).toHaveText(AUTOMATIC_REASONING_LABEL);
-    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-5.6-terra", level: null });
+    expect(await readSavedPreference(page)).toEqual({ model: "google/gemini-3.7-flash", level: null });
+
+    // ── Across providers: a level BOTH list survives the move ──────────────
+    // Anthropic -> OpenAI, which is the strongest form of the keep case: the
+    // level crosses a provider boundary because both catalog rows list it.
+    await chooseModel(page, CLAUDE_OPUS_55_LABEL);
+    await chooseReasoning(page, "Extra High");
+    expect(await readSavedPreference(page)).toEqual({ model: "anthropic/claude-opus-5-5", level: "xhigh" });
+    await chooseModel(page, GPT_61_SOL_LABEL);
+    await expect(
+      settingsDialog(page).getByRole("combobox", { name: "Reasoning level" }),
+    ).toHaveText("Extra High");
+    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-6.1-sol", level: "xhigh" });
 
     // ── Automatic clears the level and ONLY the level ──────────────────────
-    await chooseReasoning(page, "Extra High");
-    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-5.6-terra", level: "xhigh" });
     await closeSettings(page);
     await openSettings(page);
     await expect(
       settingsDialog(page).getByRole("combobox", { name: "Reasoning level" }),
     ).toHaveText("Extra High");
     await chooseReasoning(page, AUTOMATIC_REASONING_LABEL);
-    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-5.6-terra", level: null });
+    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-6.1-sol", level: null });
     await expect(
       settingsDialog(page).getByRole("combobox", { name: "AI model" }),
-    ).toHaveText(GPT_56_TERRA_LABEL);
+    ).toHaveText(GPT_61_SOL_LABEL);
 
     // ── The browser wrote through the four RPCs and nothing else ───────────
     const uiWrites = [...writes];
@@ -675,9 +698,12 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
       .filter((w) => /\/rpc\/(set|clear)_current_user_ai_reasoning$/.test(w.path))
       .map((w) => `${w.path.split("/").pop()} ${w.body ?? ""}`.trim());
     // Exactly the three levels chosen, as canonical values, and one clear.
+    // `Minimal` on Gemini 3.5, `Max` on Sonnet 5.5 and `Extra High` on Opus 5.5
+    // — the wire values, not the labels. The second was `off` on Claude Sonnet 5
+    // until Phase D retired that row and the value with it.
     expect(reasoningWrites).toEqual([
       'set_current_user_ai_reasoning {"p_reasoning_level":"minimal"}',
-      'set_current_user_ai_reasoning {"p_reasoning_level":"off"}',
+      'set_current_user_ai_reasoning {"p_reasoning_level":"max"}',
       'set_current_user_ai_reasoning {"p_reasoning_level":"xhigh"}',
       "clear_current_user_ai_reasoning {}",
     ]);
@@ -695,11 +721,11 @@ test.describe("Settings → AI Model — entitled disposable account", () => {
     expect(
       await callRpcDirectly(page, "set_current_user_ai_reasoning", { p_reasoning_level: "off" }),
     ).toEqual({ errorCode: null, saved: false, reason: "reasoning_level_not_supported" });
-    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-5.6-terra", level: null });
+    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-6.1-sol", level: null });
 
     // ── Back to PaperLume default: model and level go together ─────────────
     await chooseReasoning(page, "Low");
-    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-5.6-terra", level: "low" });
+    expect(await readSavedPreference(page)).toEqual({ model: "openai/gpt-6.1-sol", level: "low" });
     await chooseModel(page, DEFAULT_LABEL);
     expect(await readSavedPreference(page)).toBeNull();
     await expect(

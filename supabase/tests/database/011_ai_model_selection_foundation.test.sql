@@ -190,14 +190,17 @@ SELECT ok(
 --
 -- The approved ids are named exceptions rather than a relaxed pattern, so the
 -- guard keeps its full force: an unreviewed Claude or GPT model still fails
--- here. AI-MODEL-CATALOG-REFRESH-001A added the three staged replacements
--- (claude-sonnet-5-5, claude-opus-5-5, gpt-6.1-sol) under the same C43 review;
--- suite 028 asserts them exhaustively.
+-- here. AI-MODEL-CATALOG-REFRESH-001A added the three replacements
+-- (claude-sonnet-5-5, claude-opus-5-5, gpt-6.1-sol) under the same C43 review,
+-- and 001D's Phase-D cutover (20261001092335) then RETIRED claude-sonnet-5 and
+-- gpt-5.6-terra by deletion. Both are dropped from the exception list rather
+-- than left in it: an exception for a row that no longer exists would silently
+-- re-admit either model if a future seed brought it back unreviewed. Suites 028
+-- and 029 assert the three survivors exhaustively.
 SELECT is(
   (SELECT count(*)::int FROM public.ai_model_catalog
     WHERE provider_model ~* '(claude|gpt|o[0-9]|preview|latest)'
-      AND id NOT IN ('anthropic/claude-sonnet-5', 'openai/gpt-5.6-terra',
-                     'anthropic/claude-sonnet-5-5', 'anthropic/claude-opus-5-5',
+      AND id NOT IN ('anthropic/claude-sonnet-5-5', 'anthropic/claude-opus-5-5',
                      'openai/gpt-6.1-sol')),
   0, 'no unreviewed Claude / GPT / o-series / preview / -latest model reached the catalog');
 
