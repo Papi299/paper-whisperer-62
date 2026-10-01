@@ -4329,6 +4329,334 @@ const SVC_REFUSAL_CASES = [
   },
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AI-MODEL-CATALOG-REFRESH-001D (C59, Phase D) — populated cutover replay
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Suite 029 asserts the FINAL seven-row catalog, but it cannot assert the
+// PREFERENCE MIGRATION: by the time any pgTAP suite runs, the cutover has
+// already replayed against an empty database, so there was nothing to migrate.
+// This lane supplies the missing half. It resets to the staged nine-row
+// baseline, seeds a saved preference at EVERY level each retiring row ever
+// offered, applies the real migration file through the real CLI, and checks
+// each mapping exactly — plus the refusal controls, which likewise need a
+// pre-cutover database to inject drift into.
+const CUT_MIGRATION = "supabase/migrations/20261001092335_cutover_ai_model_catalog_refresh.sql";
+const CUT_BASELINE_VERSION = "20260930203613";
+const CUT_SUITE = "supabase/tests/database/029_ai_model_catalog_refresh_cutover.test.sql";
+const CUT_UID = (n) => `ca700000-0000-0000-0000-0000000000${n}`;
+const CUT_VERSION = CUT_MIGRATION.split("/").pop().split("_")[0];
+
+/**
+ * The owner-approved mapping, stated as data: old pair in, new pair out.
+ *
+ * `off` and `none` become Automatic (NULL) because they are exactly the two
+ * values the successor models reject; every other level is preserved verbatim.
+ * Rows 15 and 16 are unrelated Gemini preferences that must come out
+ * byte-identical, and user 17 has no preference row at all.
+ */
+const CUT_PREF_MATRIX = [
+  ["01", "anthropic/claude-sonnet-5", null,      "anthropic/claude-sonnet-5-5", null],
+  ["02", "anthropic/claude-sonnet-5", "off",     "anthropic/claude-sonnet-5-5", null],
+  ["03", "anthropic/claude-sonnet-5", "low",     "anthropic/claude-sonnet-5-5", "low"],
+  ["04", "anthropic/claude-sonnet-5", "medium",  "anthropic/claude-sonnet-5-5", "medium"],
+  ["05", "anthropic/claude-sonnet-5", "high",    "anthropic/claude-sonnet-5-5", "high"],
+  ["06", "anthropic/claude-sonnet-5", "xhigh",   "anthropic/claude-sonnet-5-5", "xhigh"],
+  ["07", "anthropic/claude-sonnet-5", "max",     "anthropic/claude-sonnet-5-5", "max"],
+  ["08", "openai/gpt-5.6-terra",      null,      "openai/gpt-6.1-sol",          null],
+  ["09", "openai/gpt-5.6-terra",      "none",    "openai/gpt-6.1-sol",          null],
+  ["10", "openai/gpt-5.6-terra",      "low",     "openai/gpt-6.1-sol",          "low"],
+  ["11", "openai/gpt-5.6-terra",      "medium",  "openai/gpt-6.1-sol",          "medium"],
+  ["12", "openai/gpt-5.6-terra",      "high",    "openai/gpt-6.1-sol",          "high"],
+  ["13", "openai/gpt-5.6-terra",      "xhigh",   "openai/gpt-6.1-sol",          "xhigh"],
+  ["14", "openai/gpt-5.6-terra",      "max",     "openai/gpt-6.1-sol",          "max"],
+  ["15", "google/gemini-3.5-flash",   "minimal", "google/gemini-3.5-flash",     "minimal"],
+  ["16", "google/gemini-3.8-flash",   null,      "google/gemini-3.8-flash",     null],
+];
+/** The user with no preference row: a cutover must not invent one. */
+const CUT_NO_PREF = "17";
+
+const CUT_OLD_SONNET_ROW =
+  `('anthropic/claude-sonnet-5','anthropic','claude-sonnet-5','Claude Sonnet 5',` +
+  `true,true,50,ARRAY['off','low','medium','high','xhigh','max'],'off','medium',true)`;
+const CUT_OLD_TERRA_ROW =
+  `('openai/gpt-5.6-terra','openai','gpt-5.6-terra','GPT-5.6 Terra',` +
+  `true,true,60,ARRAY['none','low','medium','high','xhigh','max'],'none','medium',true)`;
+const CUT_CATALOG_COLS =
+  "(id, provider, provider_model, display_name, enabled, selectable, sort_order, " +
+  "reasoning_levels, auto_analyze_reasoning_level, auto_suggest_reasoning_level, reasoning_selectable)";
+
+/**
+ * Every refusal control §24 requires. Each injects ONE unreviewed state into
+ * the staged baseline, and the migration must refuse it — naming the
+ * precondition it refused on — before changing anything.
+ */
+const CUT_REFUSAL_CASES = [
+  {
+    id: "CUT-NC1", what: "a drifted staged Claude Sonnet 5.5 row",
+    inject: `UPDATE public.ai_model_catalog SET display_name = 'Claude Sonnet 5.5 (drifted)' WHERE id = 'anthropic/claude-sonnet-5-5';`,
+    undo: `UPDATE public.ai_model_catalog SET display_name = 'Claude Sonnet 5.5' WHERE id = 'anthropic/claude-sonnet-5-5';`,
+    refusal: /three replacement rows are not in their exact staged state/,
+  },
+  {
+    id: "CUT-NC2", what: "a drifted staged Claude Opus 5.5 reasoning list",
+    inject: `UPDATE public.ai_model_catalog SET reasoning_levels = ARRAY['low','medium','high','xhigh'] WHERE id = 'anthropic/claude-opus-5-5';`,
+    undo: `UPDATE public.ai_model_catalog SET reasoning_levels = ARRAY['low','medium','high','xhigh','max'] WHERE id = 'anthropic/claude-opus-5-5';`,
+    refusal: /three replacement rows are not in their exact staged state/,
+  },
+  {
+    id: "CUT-NC3", what: "a staged GPT-6.1 Sol row already made selectable",
+    inject: `UPDATE public.ai_model_catalog SET selectable = true WHERE id = 'openai/gpt-6.1-sol';`,
+    undo: `UPDATE public.ai_model_catalog SET selectable = false WHERE id = 'openai/gpt-6.1-sol';`,
+    refusal: /three replacement rows are not in their exact staged state/,
+  },
+  {
+    id: "CUT-NC4", what: "a missing old Claude Sonnet 5 row",
+    inject: `DELETE FROM public.ai_model_catalog WHERE id = 'anthropic/claude-sonnet-5';`,
+    undo: `INSERT INTO public.ai_model_catalog ${CUT_CATALOG_COLS} VALUES ${CUT_OLD_SONNET_ROW};`,
+    // The nine-row count is checked first, so a MISSING row refuses there.
+    refusal: /catalog holds 8 row\(s\)/,
+  },
+  {
+    id: "CUT-NC5", what: "an old GPT-5.6 Terra row already closed to users",
+    inject: `UPDATE public.ai_model_catalog SET selectable = false WHERE id = 'openai/gpt-5.6-terra';`,
+    undo: `UPDATE public.ai_model_catalog SET selectable = true WHERE id = 'openai/gpt-5.6-terra';`,
+    refusal: /two retiring rows are not in their exact reviewed live state/,
+  },
+  {
+    id: "CUT-NC6", what: "a saved level the retiring row never offered",
+    // The table's CHECK allows the whole canonical vocabulary, so `minimal` on
+    // a Claude Sonnet 5 preference is storable but unmappable.
+    inject:
+      `INSERT INTO auth.users (id, email) VALUES ('${CUT_UID("99")}','cut-nc6@paperlume.test') ON CONFLICT DO NOTHING;\n` +
+      `INSERT INTO public.user_ai_preferences (user_id, preferred_model_id, preferred_reasoning_level)\n` +
+      `VALUES ('${CUT_UID("99")}','anthropic/claude-sonnet-5','minimal')\n` +
+      `ON CONFLICT (user_id) DO UPDATE SET preferred_model_id = EXCLUDED.preferred_model_id,\n` +
+      `  preferred_reasoning_level = EXCLUDED.preferred_reasoning_level;`,
+    undo: `DELETE FROM auth.users WHERE id = '${CUT_UID("99")}';`,
+    refusal: /Claude Sonnet 5 preference\(s\) carry a level that row never offered/,
+  },
+  {
+    id: "CUT-NC7", what: "an unexpected tenth catalog row",
+    inject:
+      `INSERT INTO public.ai_model_catalog ${CUT_CATALOG_COLS} VALUES\n` +
+      `('google/gemini-9.9-flash','google','gemini-9.9-flash','Gemini 9.9 Flash',\n` +
+      ` true,true,95,ARRAY['low','medium','high'],'low','medium',true);`,
+    undo: `DELETE FROM public.ai_model_catalog WHERE id = 'google/gemini-9.9-flash';`,
+    refusal: /catalog holds 10 row\(s\)/,
+  },
+];
+
+/** The whole catalog as one comparable string: id, flags, sort and metadata. */
+const CUT_CATALOG_STATE_SQL =
+  "SELECT COALESCE(string_agg(id || '|' || provider || '|' || provider_model || '|' || display_name || '|' || " +
+  "enabled::text || '|' || selectable::text || '|' || reasoning_selectable::text || '|' || sort_order::text || '|' || " +
+  "array_to_string(reasoning_levels, ',') || '|' || auto_analyze_reasoning_level || '|' || " +
+  "auto_suggest_reasoning_level, E'\\n' ORDER BY sort_order, id), '(empty)') FROM public.ai_model_catalog;";
+
+/** Every saved preference as one comparable string, including updated_at. */
+const CUT_PREF_STATE_SQL =
+  "SELECT COALESCE(string_agg(user_id::text || '=' || preferred_model_id || ':' || " +
+  "COALESCE(preferred_reasoning_level, 'AUTOMATIC') || '@' || updated_at::text, E'\\n' ORDER BY user_id), '(none)') " +
+  "FROM public.user_ai_preferences;";
+
+/** Reset to the staged baseline and confirm the cutover is still pending. */
+async function cutResetToBaseline(tag) {
+  const code = await runInherit(
+    "supabase",
+    ["db", "reset", "--local", "--no-seed", "--version", CUT_BASELINE_VERSION],
+  );
+  if (code !== 0) throw new Error(`${tag}: \`supabase db reset --version ${CUT_BASELINE_VERSION}\` failed.`);
+  const container = await resolveLocalDbContainer();
+  const at = await dbScalar(container, "SELECT max(version) FROM supabase_migrations.schema_migrations;");
+  if (at !== CUT_BASELINE_VERSION) {
+    throw new Error(`${tag}: expected the ledger at ${CUT_BASELINE_VERSION}, found ${at}.`);
+  }
+  const pending = await dbScalar(container,
+    `SELECT count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '${CUT_VERSION}';`);
+  if (pending !== "0") throw new Error(`${tag}: the cutover ${CUT_VERSION} is already in the ledger.`);
+  const nine = await dbScalar(container, "SELECT count(*)::text FROM public.ai_model_catalog;");
+  if (nine !== "9") throw new Error(`${tag}: the staged baseline holds ${nine} catalog rows, expected 9.`);
+  return container;
+}
+
+/** One refusal control: inject, require a named refusal, prove nothing moved. */
+async function runCutoverRefusalControl(container, c) {
+  const clean = await dbScalar(container, CUT_CATALOG_STATE_SQL);
+  const cleanPrefs = await dbScalar(container, CUT_PREF_STATE_SQL);
+  const inject = await dockerPsql(container, c.inject);
+  if (inject.code !== 0) {
+    throw new Error(`catalog cutover lane (${c.id}): could not inject ${c.what}: ${inject.err.trim() || "(no stderr)"}`);
+  }
+  try {
+    const injected = await dbScalar(container, CUT_CATALOG_STATE_SQL);
+    const injectedPrefs = await dbScalar(container, CUT_PREF_STATE_SQL);
+    // A control that changed nothing would "pass" while proving nothing. Some
+    // cases drift the catalog and one drifts a preference, so the guard is that
+    // SOMETHING moved — not that a particular table did.
+    if (injected === clean && injectedPrefs === cleanPrefs) {
+      throw new Error(`catalog cutover lane (${c.id}): the injection changed neither the catalog nor any preference, so the control would prove nothing.`);
+    }
+    const up = await runCapture("supabase", ["migration", "up", "--local"]);
+    const said = `${up.out}\n${up.err}`;
+    if (up.code === 0) {
+      throw new Error(`catalog cutover lane (${c.id}): the migration ACCEPTED ${c.what}. It must refuse it before changing anything.`);
+    }
+    if (!c.refusal.test(said)) {
+      throw new Error(
+        `catalog cutover lane (${c.id}): the migration failed, but not with the expected precondition refusal — ` +
+          `it failed for the wrong reason:\n${said.trim().split("\n").slice(-6).join("\n")}`,
+      );
+    }
+    const inLedger = await dbScalar(container,
+      `SELECT count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '${CUT_VERSION}';`);
+    if (inLedger !== "0") {
+      throw new Error(`catalog cutover lane (${c.id}): the refused migration ${CUT_VERSION} is in the ledger.`);
+    }
+    if ((await dbScalar(container, CUT_CATALOG_STATE_SQL)) !== injected) {
+      throw new Error(`catalog cutover lane (${c.id}): the refused migration still changed the catalog — it did not roll back as one transaction.`);
+    }
+    if ((await dbScalar(container, CUT_PREF_STATE_SQL)) !== injectedPrefs) {
+      throw new Error(`catalog cutover lane (${c.id}): the refused migration still rewrote a preference — it did not roll back as one transaction.`);
+    }
+  } finally {
+    const undo = await dockerPsql(container, c.undo);
+    if (undo.code !== 0) {
+      throw new Error(`catalog cutover lane (${c.id}): could not remove the injected state: ${undo.err.trim() || "(no stderr)"}`);
+    }
+  }
+  if ((await dbScalar(container, CUT_CATALOG_STATE_SQL)) !== clean) {
+    throw new Error(`catalog cutover lane (${c.id}): the catalog is not byte-identical to its pre-control state after clean-up.`);
+  }
+  if ((await dbScalar(container, CUT_PREF_STATE_SQL)) !== cleanPrefs) {
+    throw new Error(`catalog cutover lane (${c.id}): a preference row survived the control's clean-up.`);
+  }
+  log(`${c.id} OK: the migration refused ${c.what} before any change — not in the ledger, catalog and preferences untouched.`);
+}
+
+/**
+ * The lane. Resets to a migration baseline and replays forward, so it runs
+ * after everything that needs the fully-migrated schema.
+ */
+async function runCatalogCutoverLane() {
+  log("running AI model catalog cutover lane (AI-MODEL-CATALOG-REFRESH-001D)…");
+
+  for (const rel of [CUT_MIGRATION, CUT_SUITE]) {
+    if (!existsSync(resolve(ROOT, rel))) throw new Error(`catalog cutover lane: missing ${rel}.`);
+  }
+  if (!(CUT_VERSION > CUT_BASELINE_VERSION)) {
+    throw new Error(`catalog cutover lane: ${CUT_VERSION} is not after the baseline ${CUT_BASELINE_VERSION}.`);
+  }
+
+  // ── 1. Populated replay: every level each retiring row ever offered ───────
+  let container = await cutResetToBaseline("catalog cutover lane (populated)");
+
+  const users = [...CUT_PREF_MATRIX.map(([n]) => n), CUT_NO_PREF];
+  let seed = users
+    .map((n) => `INSERT INTO auth.users (id, email) VALUES ('${CUT_UID(n)}','cut-${n}@paperlume.test') ON CONFLICT DO NOTHING;`)
+    .join("\n");
+  seed += "\n" + CUT_PREF_MATRIX
+    .map(([n, model, level]) =>
+      `INSERT INTO public.user_ai_preferences (user_id, preferred_model_id, preferred_reasoning_level) ` +
+      `VALUES ('${CUT_UID(n)}','${model}',${level === null ? "NULL" : `'${level}'`});`)
+    .join("\n");
+  const seeded = await dockerPsql(container, seed);
+  if (seeded.code !== 0) throw new Error(`catalog cutover lane: seeding the preference matrix failed: ${seeded.err.trim() || "(no stderr)"}`);
+
+  const seededCount = await dbScalar(container, "SELECT count(*)::text FROM public.user_ai_preferences;");
+  if (seededCount !== String(CUT_PREF_MATRIX.length)) {
+    throw new Error(`catalog cutover lane: seeded ${seededCount} preferences, expected ${CUT_PREF_MATRIX.length}.`);
+  }
+  // The two rows that must come out byte-identical, updated_at included.
+  const untouchedBefore = await dbScalar(container,
+    "SELECT COALESCE(string_agg(user_id::text || '=' || preferred_model_id || ':' || " +
+    "COALESCE(preferred_reasoning_level,'AUTOMATIC') || '@' || updated_at::text, E'\\n' ORDER BY user_id), '(none)') " +
+    `FROM public.user_ai_preferences WHERE user_id IN ('${CUT_UID("15")}','${CUT_UID("16")}');`);
+  log(`catalog cutover lane: seeded ${seededCount} preferences across ${users.length} accounts (one with none).`);
+
+  // ── 2. Apply the real migration file, through the real CLI path ───────────
+  const upCode = await runInherit("supabase", ["migration", "up", "--local"]);
+  if (upCode !== 0) throw new Error("catalog cutover lane: `supabase migration up --local` failed on the populated database.");
+  const applied = await dbScalar(container,
+    `SELECT count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '${CUT_VERSION}';`);
+  if (applied !== "1") throw new Error(`catalog cutover lane: ${CUT_VERSION} is not in the ledger after \`migration up\`.`);
+
+  // ── 3. Every mapping, exactly ─────────────────────────────────────────────
+  const want = CUT_PREF_MATRIX
+    .map(([n, , , model, level]) => `${CUT_UID(n)}=${model}:${level === null ? "AUTOMATIC" : level}`)
+    .sort()
+    .join("\n");
+  const got = await dbScalar(container,
+    "SELECT COALESCE(string_agg(user_id::text || '=' || preferred_model_id || ':' || " +
+    "COALESCE(preferred_reasoning_level,'AUTOMATIC'), E'\\n' ORDER BY user_id), '(none)') FROM public.user_ai_preferences;");
+  if (got !== want) {
+    const a = want.split("\n");
+    const b = got.split("\n");
+    throw new Error(
+      "catalog cutover lane: the migrated preferences are not the approved mapping.\n" +
+        `  missing: ${a.filter((l) => !b.includes(l)).join(" ; ") || "none"}\n` +
+        `  extra:   ${b.filter((l) => !a.includes(l)).join(" ; ") || "none"}`,
+    );
+  }
+  log(`catalog cutover lane: all ${CUT_PREF_MATRIX.length} preference mappings exact (off -> Automatic, none -> Automatic, every other level preserved).`);
+
+  // Unrelated Gemini preferences are byte-identical, `updated_at` included, so
+  // the BEFORE UPDATE timestamp trigger fired only on the migrated rows.
+  const untouchedAfter = await dbScalar(container,
+    "SELECT COALESCE(string_agg(user_id::text || '=' || preferred_model_id || ':' || " +
+    "COALESCE(preferred_reasoning_level,'AUTOMATIC') || '@' || updated_at::text, E'\\n' ORDER BY user_id), '(none)') " +
+    `FROM public.user_ai_preferences WHERE user_id IN ('${CUT_UID("15")}','${CUT_UID("16")}');`);
+  if (untouchedAfter !== untouchedBefore) {
+    throw new Error(
+      "catalog cutover lane: an unrelated Gemini preference was rewritten (updated_at included):\n" +
+        `  before: ${untouchedBefore}\n  after:  ${untouchedAfter}`,
+    );
+  }
+  log("catalog cutover lane: unrelated Gemini preferences byte-identical, updated_at included.");
+
+  // Nobody gained a row, and the user who had none still has none.
+  const afterCount = await dbScalar(container, "SELECT count(*)::text FROM public.user_ai_preferences;");
+  if (afterCount !== String(CUT_PREF_MATRIX.length)) {
+    throw new Error(`catalog cutover lane: preference count moved ${CUT_PREF_MATRIX.length} -> ${afterCount}.`);
+  }
+  const noPref = await dbScalar(container,
+    `SELECT count(*)::text FROM public.user_ai_preferences WHERE user_id = '${CUT_UID(CUT_NO_PREF)}';`);
+  if (noPref !== "0") throw new Error("catalog cutover lane: the cutover invented a preference for an account that had none.");
+
+  // ── 4. The resulting catalog, and the suite that owns it ─────────────────
+  const shape = await dbScalar(container,
+    "SELECT count(*)::text || '|' || " +
+    "(SELECT count(*)::text FROM public.ai_model_catalog WHERE enabled AND selectable AND reasoning_selectable) || '|' || " +
+    "(SELECT count(*)::text FROM public.ai_model_catalog WHERE id IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra')) " +
+    "FROM public.ai_model_catalog;");
+  if (shape !== "7|7|0") {
+    throw new Error(`catalog cutover lane: after the cutover the catalog is ${shape}, expected 7|7|0 (rows|fully-open|retired-survivors).`);
+  }
+  const suite = await runDbSuite(CUT_SUITE);
+  if (!suite.passed) {
+    throw new Error(
+      `catalog cutover lane: ${CUT_SUITE} fails against the populated cutover ` +
+        `(${suite.failed.slice(0, 6).join("; ") || "no assertion named"}).`,
+    );
+  }
+  log("catalog cutover lane: suite 029 passes against the POPULATED cutover, not only an empty replay.");
+
+  // ── 5. Refusal controls, each on a fresh staged baseline ─────────────────
+  for (const c of CUT_REFUSAL_CASES) {
+    container = await cutResetToBaseline(`catalog cutover lane (${c.id})`);
+    await runCutoverRefusalControl(container, c);
+  }
+
+  // ── 6. Leave the database fully migrated for anything that follows ───────
+  const finalReset = await runInherit("supabase", ["db", "reset", "--local", "--no-seed"]);
+  if (finalReset !== 0) throw new Error("catalog cutover lane: the final full reset failed.");
+  const finalContainer = await resolveLocalDbContainer();
+  const finalShape = await dbScalar(finalContainer, "SELECT count(*)::text FROM public.ai_model_catalog;");
+  if (finalShape !== "7") throw new Error(`catalog cutover lane: the clean replay ends with ${finalShape} catalog rows, expected 7.`);
+  log(`catalog cutover lane OK: ${CUT_PREF_MATRIX.length} mappings exact, ${CUT_REFUSAL_CASES.length} refusal controls, clean replay ends at seven rows.`);
+}
+
+
 /** Every grant in public and every default-privilege entry, as order-free canonical lines. */
 const SVC_CANONICAL_STATE_SQL = [
   "SELECT 'ledger|' || count(*) || '|' || max(version) FROM supabase_migrations.schema_migrations;",
@@ -4652,6 +4980,12 @@ async function cmdDbTests() {
     // baseline three times, so it runs after everything that needs the
     // fully-migrated schema.
     await runServiceRoleParityLane();
+
+    // AI-MODEL-CATALOG-REFRESH-001D (C59). Resets to the staged nine-row
+    // baseline and replays forward nine times (once populated, seven refusal
+    // controls, then a clean full replay), so it runs after everything that
+    // needs the fully-migrated schema.
+    await runCatalogCutoverLane();
 
     log("all local database-security tests passed.");
   } catch (err) {

@@ -149,14 +149,16 @@ SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
 -- vocabulary and the Automatic matrix, which activation did not move.
 
 -- 001C seeded no non-Google model; AI-MULTI-PROVIDER-001E later added exactly
--- two, and AI-MODEL-CATALOG-REFRESH-001A staged exactly three more. Suites 018
--- and 028 own their full metadata.
+-- two, AI-MODEL-CATALOG-REFRESH-001A staged three more, and 001D's Phase-D
+-- cutover retired the original two by deletion. Exactly three non-Google rows
+-- remain, and both retired ids are dropped from the exception list rather than
+-- left in it — an exception for a deleted row would re-admit it unreviewed.
+-- Suites 028 and 029 own their full metadata.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
             WHERE provider <> 'google'
-              AND id NOT IN ('anthropic/claude-sonnet-5','openai/gpt-5.6-terra',
-                             'anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5',
+              AND id NOT IN ('anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5',
                              'openai/gpt-6.1-sol')),
-  0, 'the catalog holds no non-Google row beyond the two paid models and the three staged ones');
+  0, 'the catalog holds no non-Google row beyond the three replacement models');
 
 -- The per-model fact Google publishes: 3.7 and 3.8 reject `minimal`.
 SELECT is((SELECT count(*)::int FROM public.ai_model_catalog
@@ -216,7 +218,7 @@ SELECT is(pg_temp.errcode_as('postgres','',
              ARRAY['off','low','medium','high','xhigh','max'],'off','medium',false)$q$),
   '00000', 'a well-formed future-provider row is accepted (fixture, deleted next)');
 DELETE FROM public.ai_model_catalog WHERE id = 'anthropic/suite-016-fixture';
-SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 9,
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog), 7,
   'the positive-control fixture left nothing behind');
 
 -- ════════════════════════════════════════════════════════════════════════════

@@ -1,15 +1,19 @@
 -- AI-MANUAL-REASONING-001 suite 019: manual reasoning, activated for users.
 --
 -- Owns the database half of migration 20260919075655, which set
--- `reasoning_selectable = true` on exactly the six catalog rows and granted
--- EXECUTE on `set_current_user_ai_reasoning(text)` to `authenticated`.
+-- `reasoning_selectable = true` on exactly the six catalog rows that existed
+-- then, and granted EXECUTE on `set_current_user_ai_reasoning(text)` to
+-- `authenticated`. The OPEN SET has since moved twice — 001A staged three rows
+-- closed, and 001D's Phase-D cutover (20261001092335) retired two rows and
+-- opened the three replacements — so what this suite asserts is the CURRENT
+-- open set of seven, with the grant and the client path unchanged.
 --
 -- ## Where the boundary is
 --
 --   * 016 owns the MECHANISM that 001C built: the vocabulary constraints, the
 --     setter's business rules, the model setter's reset-on-switch, the row
 --     locks and write truthfulness, and the clear RPC.
---   * 018 owns what the two paid rows ARE and that they are user-selectable.
+--   * 018 owns what the two 001E paid rows WERE and that they are now retired.
 --   * 019 — this suite — owns the ACTIVATION: which rows are open, who may call
 --     the setter and nobody else, and that the real client path works end to end
 --     for every level of every model and refuses everything else.
@@ -156,30 +160,34 @@ LANGUAGE sql IMMUTABLE AS $hlp$
   FROM unnest(p_levels) WITH ORDINALITY AS t(l, o);
 $hlp$;
 
-SELECT plan(79);
+SELECT plan(83);
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 1. The activated catalog — asserted before any fixture exists
 -- ════════════════════════════════════════════════════════════════════════════
 
--- Exactly the six approved rows are open, and no other.
+-- Exactly the approved rows are open, and no other.
+--
+-- 20260919075655 opened six. AI-MODEL-CATALOG-REFRESH-001A then staged three
+-- rows deliberately CLOSED, and 001D's Phase-D cutover (20261001092335) retired
+-- the two 001E rows and opened the three replacements — so the open set is now
+-- the seven final models, and the closed set is empty. Both halves are still
+-- asserted as exact sets rather than weakened to a count.
 SELECT set_eq(
   $$SELECT id FROM public.ai_model_catalog WHERE reasoning_selectable$$,
   ARRAY['google/gemini-3.5-flash','google/gemini-3.6-flash',
         'google/gemini-3.7-flash','google/gemini-3.8-flash',
-        'anthropic/claude-sonnet-5','openai/gpt-5.6-terra'],
-  'exactly the six approved models offer manual reasoning');
--- Every row closed to manual reasoning is one of the three replacements
--- AI-MODEL-CATALOG-REFRESH-001A staged closed on purpose (suite 028 owns
--- them); no row activation opened has since been closed again.
-SELECT set_eq(
-  $$SELECT id FROM public.ai_model_catalog WHERE NOT reasoning_selectable$$,
-  ARRAY['anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5','openai/gpt-6.1-sol'],
-  'the only rows closed to manual reasoning are the three staged replacements');
+        'anthropic/claude-sonnet-5-5','anthropic/claude-opus-5-5','openai/gpt-6.1-sol'],
+  'exactly the seven approved models offer manual reasoning');
+-- No row is closed to manual reasoning any more: the staged set is empty, and
+-- no row activation opened has since been closed again.
+SELECT is((SELECT count(*)::int FROM public.ai_model_catalog WHERE NOT reasoning_selectable),
+  0, 'no row is closed to manual reasoning after the Phase-D cutover');
 
--- Whole-row identity: `reasoning_selectable` is the only field activation moved.
--- The vocabulary (order included) and the Automatic matrix are exactly what
--- 001C and 001E staged.
+-- Whole-row identity: `reasoning_selectable` is the only field activation moved,
+-- and Phase D moved only it, `selectable` and `sort_order` on the three
+-- replacements. The vocabulary (order included) and the Automatic matrix are
+-- exactly what 001C and 001A staged.
 SELECT is(
   (SELECT count(*)::int FROM public.ai_model_catalog
     WHERE (id, provider, provider_model, display_name, enabled, selectable, sort_order,
@@ -193,13 +201,15 @@ SELECT is(
        ARRAY['low','medium','high'],'low','medium',true),
       ('google/gemini-3.8-flash','google','gemini-3.8-flash','Gemini 3.8 Flash',true,true,40,
        ARRAY['low','medium','high'],'low','medium',true),
-      ('anthropic/claude-sonnet-5','anthropic','claude-sonnet-5','Claude Sonnet 5',true,true,50,
-       ARRAY['off','low','medium','high','xhigh','max'],'off','medium',true),
-      ('openai/gpt-5.6-terra','openai','gpt-5.6-terra','GPT-5.6 Terra',true,true,60,
-       ARRAY['none','low','medium','high','xhigh','max'],'none','medium',true))),
-  6, 'all six rows match their approved metadata as whole rows, now reasoning_selectable');
+      ('anthropic/claude-sonnet-5-5','anthropic','claude-sonnet-5-5','Claude Sonnet 5.5',true,true,50,
+       ARRAY['low','medium','high','xhigh','max'],'low','medium',true),
+      ('anthropic/claude-opus-5-5','anthropic','claude-opus-5-5','Claude Opus 5.5',true,true,60,
+       ARRAY['low','medium','high','xhigh','max'],'low','medium',true),
+      ('openai/gpt-6.1-sol','openai','gpt-6.1-sol','GPT-6.1 Sol',true,true,70,
+       ARRAY['low','medium','high','xhigh','max'],'low','medium',true))),
+  7, 'all seven rows match their approved metadata as whole rows, all reasoning_selectable');
 
--- A FUTURE row still starts closed: activation opened six rows, not the column.
+-- A FUTURE row still starts closed: activation opened rows, not the column.
 SELECT col_default_is('public', 'ai_model_catalog', 'reasoning_selectable', 'false',
   'reasoning_selectable still defaults to false for any future model');
 
@@ -302,8 +312,11 @@ UPDATE public.user_entitlements
 -- The downgraded account: it chose a model and a level while entitled, and has
 -- since lost the capability. Written directly because that history predates
 -- this suite; its row is DORMANT, not deleted, exactly as C33 requires.
+-- Names a model that still exists: the FK has NO ON DELETE action, so after the
+-- Phase-D retirement a fixture naming `anthropic/claude-sonnet-5` would be
+-- refused with 23503 rather than testing dormancy.
 INSERT INTO public.user_ai_preferences (user_id, preferred_model_id, preferred_reasoning_level)
-VALUES ('e9000000-0000-0000-0000-000000000004', 'anthropic/claude-sonnet-5', 'high');
+VALUES ('e9000000-0000-0000-0000-000000000004', 'anthropic/claude-sonnet-5-5', 'high');
 
 -- A bystander on a pinned model with Automatic reasoning, to prove nothing in
 -- this suite — or in activation — writes anyone else's row.
@@ -360,35 +373,51 @@ SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['minimal',
   pg_temp.all_refused('google/gemini-3.8-flash', 'high', ARRAY['minimal','off','none','xhigh','max']),
   'Gemini 3.8 Flash REFUSES minimal (and off, none, xhigh, max), and keeps high');
 
--- ── Claude Sonnet 5: off | low | medium | high | xhigh | max ────────────────
-SELECT is(pg_temp.set_model('e9000000-0000-0000-0000-000000000001', 'anthropic/claude-sonnet-5'),
-  'ok:false', 'switching Gemini 3.8 -> Claude keeps high, which both list');
-SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['off','low','medium','high','xhigh','max']),
-  pg_temp.all_ok('anthropic/claude-sonnet-5', ARRAY['off','low','medium','high','xhigh','max']),
-  'Claude Sonnet 5 accepts off, low, medium, high, xhigh and max');
-SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['none','minimal']),
-  pg_temp.all_refused('anthropic/claude-sonnet-5', 'max', ARRAY['none','minimal']),
-  'Claude Sonnet 5 refuses OpenAI''s none and Google''s minimal, and keeps max');
+-- The three paid rows this suite sweeps are the Phase-D survivors. Claude
+-- Sonnet 5 and GPT-5.6 Terra were swept here until 20261001092335 retired them;
+-- their `off` / `none` first elements went with them, so the three sweeps below
+-- share one five-level vocabulary and all three reject the same three foreign
+-- spellings. Switching between them keeps `max`, which every one of them lists.
 
--- ── GPT-5.6 Terra: none | low | medium | high | xhigh | max ─────────────────
-SELECT is(pg_temp.set_model('e9000000-0000-0000-0000-000000000001', 'openai/gpt-5.6-terra'),
-  'ok:false', 'switching Claude -> Terra keeps max, which both list');
-SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['none','low','medium','high','xhigh','max']),
-  pg_temp.all_ok('openai/gpt-5.6-terra', ARRAY['none','low','medium','high','xhigh','max']),
-  'GPT-5.6 Terra accepts none, low, medium, high, xhigh and max');
-SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['off','minimal']),
-  pg_temp.all_refused('openai/gpt-5.6-terra', 'max', ARRAY['off','minimal']),
-  'GPT-5.6 Terra refuses Anthropic''s off and Google''s minimal, and keeps max');
+-- ── Claude Sonnet 5.5: low | medium | high | xhigh | max ────────────────────
+SELECT is(pg_temp.set_model('e9000000-0000-0000-0000-000000000001', 'anthropic/claude-sonnet-5-5'),
+  'ok:false', 'switching Gemini 3.8 -> Claude Sonnet 5.5 keeps high, which both list');
+SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['low','medium','high','xhigh','max']),
+  pg_temp.all_ok('anthropic/claude-sonnet-5-5', ARRAY['low','medium','high','xhigh','max']),
+  'Claude Sonnet 5.5 accepts low, medium, high, xhigh and max');
+SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['off','none','minimal']),
+  pg_temp.all_refused('anthropic/claude-sonnet-5-5', 'max', ARRAY['off','none','minimal']),
+  'Claude Sonnet 5.5 refuses off, none and minimal, and keeps max');
+
+-- ── Claude Opus 5.5: low | medium | high | xhigh | max ──────────────────────
+SELECT is(pg_temp.set_model('e9000000-0000-0000-0000-000000000001', 'anthropic/claude-opus-5-5'),
+  'ok:false', 'switching Sonnet 5.5 -> Opus 5.5 keeps max, which both list');
+SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['low','medium','high','xhigh','max']),
+  pg_temp.all_ok('anthropic/claude-opus-5-5', ARRAY['low','medium','high','xhigh','max']),
+  'Claude Opus 5.5 accepts low, medium, high, xhigh and max');
+SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['off','none','minimal']),
+  pg_temp.all_refused('anthropic/claude-opus-5-5', 'max', ARRAY['off','none','minimal']),
+  'Claude Opus 5.5 refuses off, none and minimal, and keeps max');
+
+-- ── GPT-6.1 Sol: low | medium | high | xhigh | max ──────────────────────────
+SELECT is(pg_temp.set_model('e9000000-0000-0000-0000-000000000001', 'openai/gpt-6.1-sol'),
+  'ok:false', 'switching Opus 5.5 -> Sol keeps max, which both list');
+SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['low','medium','high','xhigh','max']),
+  pg_temp.all_ok('openai/gpt-6.1-sol', ARRAY['low','medium','high','xhigh','max']),
+  'GPT-6.1 Sol accepts low, medium, high, xhigh and max');
+SELECT is(pg_temp.sweep('e9000000-0000-0000-0000-000000000001', ARRAY['off','none','minimal']),
+  pg_temp.all_refused('openai/gpt-6.1-sol', 'max', ARRAY['off','none','minimal']),
+  'GPT-6.1 Sol refuses off, none and minimal, and keeps max');
 
 -- ── The shape of a successful save ───────────────────────────────────────────
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e9000000-0000-0000-0000-000000000001'),
   $q$SELECT saved::text || ':' || reason || ':' || preferred_model_id || ':' || preferred_reasoning_level
        FROM public.set_current_user_ai_reasoning('low')$q$),
-  'true:ok:openai/gpt-5.6-terra:low',
+  'true:ok:openai/gpt-6.1-sol:low',
   'a save reports saved = true with the model it was validated against and the stored level');
 -- Setting the level it already holds is an ordinary save: same answer, same pair.
 SELECT is(pg_temp.step_level('e9000000-0000-0000-0000-000000000001', 'low'),
-  'ok>openai/gpt-5.6-terra:low', 'saving the same level again is safe and changes nothing');
+  'ok>openai/gpt-6.1-sol:low', 'saving the same level again is safe and changes nothing');
 SELECT is(pg_temp.set_level('e9000000-0000-0000-0000-000000000001', 'automatic'),
   'invalid_reasoning_level', '"automatic" is still not a level — Automatic is the clear RPC');
 
@@ -397,7 +426,7 @@ SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e9000000-0000-0000-
   $q$SELECT reason FROM public.clear_current_user_ai_reasoning()$q$),
   'ok', 'clear_current_user_ai_reasoning returns the caller to Automatic');
 SELECT is(pg_temp.pair('e9000000-0000-0000-0000-000000000001'),
-  'openai/gpt-5.6-terra:AUTOMATIC', 'Automatic is NULL, and the saved model survived the clear');
+  'openai/gpt-6.1-sol:AUTOMATIC', 'Automatic is NULL, and the saved model survived the clear');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e9000000-0000-0000-0000-000000000001'),
   $q$SELECT reason FROM public.clear_current_user_ai_reasoning()$q$),
   'no_reasoning_preference', 'clearing again is an idempotent no-op');
@@ -419,12 +448,12 @@ SELECT is(pg_temp.pair('e9000000-0000-0000-0000-000000000002'), 'NO_ROW',
 SELECT is(pg_temp.set_level('e9000000-0000-0000-0000-000000000004', 'low'),
   'not_entitled', 'a downgraded caller cannot choose a new level for a dormant model');
 SELECT is(pg_temp.pair('e9000000-0000-0000-0000-000000000004'),
-  'anthropic/claude-sonnet-5:high', 'the refused call moved nothing');
+  'anthropic/claude-sonnet-5-5:high', 'the refused call moved nothing');
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e9000000-0000-0000-0000-000000000004'),
   $q$SELECT reason FROM public.clear_current_user_ai_reasoning()$q$),
   'ok', 'the downgraded caller can still clear the old manual level');
 SELECT is(pg_temp.pair('e9000000-0000-0000-0000-000000000004'),
-  'anthropic/claude-sonnet-5:AUTOMATIC', 'cleared to Automatic, dormant model kept');
+  'anthropic/claude-sonnet-5-5:AUTOMATIC', 'cleared to Automatic, dormant model kept');
 
 -- Capability flag set, plan no longer active.
 SELECT is(pg_temp.set_level('e9000000-0000-0000-0000-000000000005', 'high'),
@@ -502,34 +531,47 @@ SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'google/gem
   'ok:true>google/gemini-3.8-flash:AUTOMATIC',
   '3.6 minimal -> 3.8: reset to Automatic in the same statement, and reported');
 
-SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'anthropic/claude-sonnet-5'),
-  'ok:false>anthropic/claude-sonnet-5:AUTOMATIC', 'setup: pin Claude Sonnet 5');
-SELECT is(pg_temp.step_level('e9000000-0000-0000-0000-000000000006', 'off'),
-  'ok>anthropic/claude-sonnet-5:off', 'setup: choose manual off on Claude');
-SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'openai/gpt-5.6-terra'),
-  'ok:true>openai/gpt-5.6-terra:AUTOMATIC',
-  'Claude off -> Terra: reset, because Terra spells it none, not off');
+-- The paid rows used to disagree at their FIRST level — Claude spelled it `off`,
+-- Terra `none` — and this block exercised a reset in both directions across
+-- that divergence. Phase D retired both rows, and the three replacements share
+-- one five-level vocabulary, so a paid-to-paid switch now always KEEPS the
+-- level. The reset property itself is unchanged and is exercised below across
+-- the boundaries where a real divergence still exists: paid levels Gemini does
+-- not list (`xhigh`, `max`), and Google's `minimal`, which no paid row lists.
 
-SELECT is(pg_temp.step_level('e9000000-0000-0000-0000-000000000006', 'none'),
-  'ok>openai/gpt-5.6-terra:none', 'setup: choose manual none on Terra');
-SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'anthropic/claude-sonnet-5'),
-  'ok:true>anthropic/claude-sonnet-5:AUTOMATIC',
-  'Terra none -> Claude: reset, because Claude spells it off, not none');
+SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'anthropic/claude-sonnet-5-5'),
+  'ok:false>anthropic/claude-sonnet-5-5:AUTOMATIC', 'setup: pin Claude Sonnet 5.5');
+SELECT is(pg_temp.step_level('e9000000-0000-0000-0000-000000000006', 'max'),
+  'ok>anthropic/claude-sonnet-5-5:max', 'setup: choose manual max on Sonnet 5.5');
+SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'anthropic/claude-opus-5-5'),
+  'ok:false>anthropic/claude-opus-5-5:max',
+  'Sonnet 5.5 max -> Opus 5.5: kept, because both Claude rows list max');
+SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'openai/gpt-6.1-sol'),
+  'ok:false>openai/gpt-6.1-sol:max',
+  'Opus 5.5 max -> Sol: kept across providers, because all three paid rows list max');
 
 SELECT is(pg_temp.step_level('e9000000-0000-0000-0000-000000000006', 'xhigh'),
-  'ok>anthropic/claude-sonnet-5:xhigh', 'setup: choose manual xhigh on Claude');
-SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'openai/gpt-5.6-terra'),
-  'ok:false>openai/gpt-5.6-terra:xhigh',
-  'Claude xhigh -> Terra: kept, because both paid models list xhigh');
+  'ok>openai/gpt-6.1-sol:xhigh', 'setup: choose manual xhigh on Sol');
 SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'google/gemini-3.7-flash'),
   'ok:true>google/gemini-3.7-flash:AUTOMATIC',
-  'Terra xhigh -> Gemini 3.7: reset, because no Gemini model lists xhigh');
+  'Sol xhigh -> Gemini 3.7: reset, because no Gemini model lists xhigh');
 
 SELECT is(pg_temp.step_level('e9000000-0000-0000-0000-000000000006', 'low'),
   'ok>google/gemini-3.7-flash:low', 'setup: choose manual low on Gemini 3.7');
-SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'openai/gpt-5.6-terra'),
-  'ok:false>openai/gpt-5.6-terra:low',
-  'Gemini 3.7 low -> Terra: kept across providers, because both list low');
+SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'openai/gpt-6.1-sol'),
+  'ok:false>openai/gpt-6.1-sol:low',
+  'Gemini 3.7 low -> Sol: kept across providers, because both list low');
+
+-- The surviving cross-family divergence, in the other direction: Google's
+-- `minimal` is listed by no paid row at all.
+SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'google/gemini-3.5-flash'),
+  'ok:false>google/gemini-3.5-flash:low',
+  'Sol low -> Gemini 3.5: kept, because 3.5 lists low too');
+SELECT is(pg_temp.step_level('e9000000-0000-0000-0000-000000000006', 'minimal'),
+  'ok>google/gemini-3.5-flash:minimal', 'setup: choose manual minimal on Gemini 3.5 Flash');
+SELECT is(pg_temp.step_model('e9000000-0000-0000-0000-000000000006', 'anthropic/claude-sonnet-5-5'),
+  'ok:true>anthropic/claude-sonnet-5-5:AUTOMATIC',
+  'Gemini 3.5 minimal -> Sonnet 5.5: reset, because no paid row lists minimal');
 
 -- Returning to PaperLume default drops the model AND the level together.
 SELECT is(pg_temp.scalar_as('authenticated', pg_temp.claims('e9000000-0000-0000-0000-000000000006'),

@@ -2156,7 +2156,7 @@ Section 3 then proves:
 
 ### C59. Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol replace Claude Sonnet 5 and GPT-5.6 Terra through stage → canary → cutover; all three expose `low … max` with PaperLume's own Automatic `low` / `medium` (2026-09-30)
 
-**Status: Phase A PREPARED in the repository only** (`AI-MODEL-CATALOG-REFRESH-001A`, migration `20260930203613`). Nothing is applied in Production, no replacement has been canaried, and no cutover is authorized. The runbook for Phases B–D is [deployment.md](deployment.md) §16.
+**Status: Phase B LIVE, Phase C PASSED, Phase D PREPARED / NOT YET APPLIED.** Migration `20260930203613` was applied on 2026-10-01 (ledger **99**) and both generation functions were deployed with the new price records, so Production holds nine catalog rows with the original six still the only selectable ones. Phase C's bounded canaries **passed 9 / 9** on 2026-10-01 across all three replacements — Analyze Automatic `low`, Suggest Automatic `medium`, Analyze manual `max` — every one `completed` / `succeeded` with `cost_status = estimated` against its exact `…@2026-09-30` price record and no Google fallback. The Phase-D cutover migration `20261001092335` is prepared, reviewed and locally validated but **not applied**: it is what retires Claude Sonnet 5 and GPT-5.6 Terra and takes the catalog to the final **seven**. The runbook is [deployment.md](deployment.md) §16.
 
 **Decision.** The owner's target is seven selectable models: the four Gemini Flash rows, Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol. Claude Sonnet 5 and GPT-5.6 Terra are retired. It is reached by C43's three separately authorized steps, extended by a fourth that C43 never needed:
 
