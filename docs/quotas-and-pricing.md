@@ -141,7 +141,7 @@ Gemini does not currently bill per-token in a way visible at request time — th
 >
 > Two deliberate refusals to guess (C44): Anthropic publishes **two** cache-write rates ($2.50 for a 5-minute write, $4.00 for a 1-hour one) against a single summed usage field, so any positive Anthropic cache write is `unpriced` rather than priced at the cheaper rate; and an OpenAI request above 272K input tokens is `unpriced` rather than priced at the short-context rate, because OpenAI applies 2x input **and** 1.5x output to the whole request above that threshold. PaperLume requests no caching and its prompts sit far below the threshold, so both are correctness properties rather than expected cases.
 >
-> **Staged replacement list prices (`AI-MODEL-CATALOG-REFRESH-001A`, verified 2026-09-30; repository only, not deployed).** Appended beside the two records above, which stay unchanged while their models remain selectable:
+> **Staged replacement list prices (`AI-MODEL-CATALOG-REFRESH-001A`, verified 2026-09-30; DEPLOYED 2026-10-01 in `analyze-paper` v34 / `suggest-paper-organization` v17, and exercised by the Phase-C canaries).** Appended beside the two records above, which stay unchanged — and are KEPT after the prepared Phase-D cutover retires their catalog rows, because historical telemetry still names those models and telemetry has no foreign key to the catalog:
 >
 > | Model | Input | Cached input | Cache write | Output | Priced up to |
 > |---|---|---|---|---|---|

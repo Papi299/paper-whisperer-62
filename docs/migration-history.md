@@ -4510,3 +4510,41 @@ Decision **C59**, Phase A of four. Production is unchanged: ledger 98, six catal
   - New Vitest `aiModelCatalogRefreshStaging.test.ts`, an end-to-end resolver → policy → adapter → telemetry chain.
   - Extended price-book, cost-estimate, adapter, reasoning-policy and Settings-hook suites.
 - **Historical migrations are untouched.**
+
+## 2026-10-01 — AI-MODEL-CATALOG-REFRESH-001: Phase B APPLIED, Phase C PASSED, and the Phase-D cutover (`20261001092335`) — **PREPARED in the repository; NOT applied**
+
+Decision **C59**. This entry **supersedes the 2026-09-30 entry above**, which recorded Phase A as prepared and not applied. Phase A's migration is now live; the entry above is left as written, as the record of what was reviewed at that point. The rollout runbook is [deployment.md](deployment.md) §16.
+
+**Phase B — APPLIED to Production, 2026-10-01.**
+
+- Merge `1e281b9b`; merged-`main` Validate, DB Tests and Extension CI all passed.
+- One bare `supabase db push --linked --yes` applied `20260930203613`. Ledger **98 → 99**.
+- The catalog went to **nine** rows; the original six are byte-unchanged; the offered list and the manual-reasoning list both stayed exactly the six.
+- Both generation functions were deployed from the merge commit so the new price records shipped: `analyze-paper` v33 → **v34** (`23edb1e633b7c59bdc1c930594ae099bba7ce4c0024e59a0bbbb7770b503cdc8`), `suggest-paper-organization` v16 → **v17** (`c1230563980fb9d76553945d4a0f3bd0b0929b9e7f607d4a185d81e6ba2e7ee6`). Both bundles read back byte-identical to the commit.
+- Preferences, entitlements, usage counters, usage credits and telemetry were all unwritten.
+
+**Phase C — PASSED, 2026-10-01 (9 / 9).**
+
+- Nine provider calls on the dedicated acceptance account, one attempt each, no retries, no failures, no refunds. Total list-price estimate **$0.105908**; telemetry 68 → 77.
+- Per model — Claude Sonnet 5.5, Claude Opus 5.5, GPT-6.1 Sol — Analyze at **Automatic → `low`**, Suggest at **Automatic → `medium`**, Analyze at **manual → `max`**.
+- Every event: `model_selection_source = user_preference`, `provider_attempts = 1`, `provider_outcome = completed`, `operation_outcome = succeeded`, `usage_status = reported`, `cost_status = estimated`, and its own model's exact `…@2026-09-30` price record. **No Google fallback; nothing `unpriced`.**
+- The unchanged 4,096 Analyze ceiling was not reached at manual `max` (2,583 / 1,214 / 1,126 output tokens). Suggest persisted no library data. The bounded Edge-log scan found no email, UUID, JWT, key prefix, title or abstract in either function's console or invocation logs.
+- Quota: a temporary `ai_lifetime_quota` **15 → 20** on that account only, restored to **15** afterwards with the consumed usage deliberately kept. The account ends at **quota 15 / used 20 / remaining 0** — operational context, not a product invariant.
+
+**Phase D — migration `20261001092335_cutover_ai_model_catalog_refresh`, PREPARED and NOT applied.**
+
+- Created with `supabase migration new`. One `DO` statement holds the locks, the preconditions, all three mutations and the postconditions, so it stays atomic under both `db push` and `db reset`.
+  - **Locks first:** `public.user_ai_preferences` then `public.ai_model_catalog`, both `IN EXCLUSIVE MODE` — the weakest standard mode that conflicts with both the `SELECT … FOR UPDATE` and the write a racing `set_current_user_ai_model` performs, and one that still lets plain readers (an in-flight Analyze or Suggest) through. Preferences first, because that is the order a setter takes its own conflicting locks, so the two cannot deadlock.
+  - **Preconditions:** exactly nine rows; the four Google rows field by field; both retiring rows field by field and still fully live; the three replacements field by field and still staged closed; and the offered list still exactly the six.
+  - **Refusal before any write:** a preference on a retiring row carrying a level that row never listed aborts the file with a named message rather than getting an invented mapping. The table's CHECK permits the whole canonical vocabulary, so such a row is storable and this check is not theoretical.
+  - **The preference migration:** set-based and unconditional on count, so it is correct for zero, one or many rows, and no observed population is encoded. `anthropic/claude-sonnet-5` → `anthropic/claude-sonnet-5-5` and `openai/gpt-5.6-terra` → `openai/gpt-6.1-sol`; `low`/`medium`/`high`/`xhigh`/`max` preserved; `off` and `none` → `NULL` (Automatic), because those are exactly the two values the successors reject.
+  - **Then, and only then, the deletion:** exactly two rows, gated on zero remaining references. The FK's `NO ACTION` is the fail-closed backstop, not a substitute for the gate.
+  - **Activation:** `selectable` and `reasoning_selectable` true, sort 50 / 60 / 70 — provider, provider model, display name and all reasoning metadata deliberately absent from the SET list.
+  - **Postconditions:** exactly seven rows; both retired ids gone by id and by wire model; the seven as whole rows in final order; all three flags true on all seven; no row offering `off` or `none`; Google rows byte-identical; entitlements, counters, credits and telemetry unwritten; retired-model telemetry count unmoved; the catalog still credential-free and client-unwritable.
+- **The FK's design comment is corrected** in the same file: it said to retire a model with `enabled = false` "rather than deleting a row users have chosen". The property it protected still holds, by a stronger route — `NO ACTION` means a deletion can never orphan a saved choice, so a retirement *must* migrate preferences first and the DELETE fails closed if it did not. That is the rule now stated.
+- **No runtime change.** The resolver, the reasoning policy, both setters and the Settings control are all data-driven from the catalog, so **no Edge deployment is required**. The adapters keep their `off` / `none` compatibility paths as a harmless unreachable superset — after the cutover no catalog row offers either value. All five paid price records are kept, including the two retired models', because historical telemetry still names them and telemetry has no FK to the catalog.
+- **Local evidence.**
+  - A populated migration replay (`runCatalogCutoverLane` in `scripts/e2e-local.mjs`) seeds a saved preference at **every** level each retiring row offered — 7 Claude, 7 Terra — plus two unrelated Gemini preferences and one account with none, applies the real file through the real CLI, and checks all 16 mappings exactly. The Gemini rows come out byte-identical, `updated_at` included; the account with no preference still has none.
+  - **Seven refusal controls**, each on a fresh staged baseline: drift on each of the three staged rows, a missing old Sonnet row, an old Terra row already closed, an unmappable saved level, and an unexpected tenth catalog row. Each must fail with its own named precondition, stay out of the ledger, and leave catalog and preferences untouched.
+  - New pgTAP `029`; `011`, `012`, `016`, `018`, `019` and `028` reconciled to the seven-row state without weakening what they pinned. `018`'s two subjects are retired, so it now owns their absence; `028`'s staging-gate assertions moved to `029` rather than becoming a second copy of them.
+- **Historical migrations are untouched.**
