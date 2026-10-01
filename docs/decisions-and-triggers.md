@@ -2165,7 +2165,7 @@ Section 3 then proves:
 
 **Live result.** The catalog holds exactly **seven** rows, all `enabled`, `selectable` and `reasoning_selectable`: Gemini 3.5/3.6/3.7/3.8 Flash at sort 10/20/30/40, then **Claude Sonnet 5.5 (50), Claude Opus 5.5 (60), GPT-6.1 Sol (70)**. `anthropic/claude-sonnet-5` and `openai/gpt-5.6-terra` no longer exist as catalog rows — deleted, not hidden. No Edge Function was deployed and no provider call was made for Phase D; the catalog is the allowlist, so the row change was the whole change. Entitlements, usage counters, credits and all telemetry were provably unchanged. Executed evidence is [deployment.md](deployment.md) §16; the ledger entry is [migration-history.md](migration-history.md).
 
-**Step 4 of the plan below — narrowing the adapters' provider-level vocabularies — is deliberately still open.** It needs an Edge deployment and was explicitly out of scope for the cutover. It is a tidy-up, not a defect: no surviving catalog row offers `off` or `none`, so neither value is reachable through catalog policy, and the adapter branches are an unreachable superset.
+**Adapter vocabulary narrowing — OPTIONAL / DEFERRED CLEANUP, outside C59's completion criteria.** The rollout plan below originally contemplated narrowing the adapters' provider-level `off` / `none` vocabularies as a fourth step after cutover; that is recorded as a historical consideration, not an unfinished phase. C59's completion criteria were the owner's: the final seven models live, the old two retired, saved preferences migrated, the reasoning policy live, and the provider canaries passed — all met. **Final disposition: deferred.** The catalog is authoritative, no live row offers either literal, so neither is reachable through catalog policy; the branches are an unreachable superset rather than a correctness or security defect, and they do not justify an Edge deployment on their own. **Revisit if** the adapter vocabulary becomes misleading or a maintenance/testing burden; a future model reuses `off` or `none` with different semantics; or an Edge deployment is already being made for related provider work.
 
 **Decision.** The owner's target is seven selectable models: the four Gemini Flash rows, Claude Sonnet 5.5, Claude Opus 5.5 and GPT-6.1 Sol. Claude Sonnet 5 and GPT-5.6 Terra are retired. It is reached by C43's three separately authorized steps, extended by a fourth that C43 never needed:
 
@@ -2185,18 +2185,19 @@ Each is PaperLume's explicit policy (C41), never a provider default: Sonnet 5.5 
 - `none` and `minimal` are rejected by Sol.
 - `between_tools` (Sonnet 5.5 only) and `adaptive` are Anthropic **thinking modes**, not effort levels. PaperLume runs adaptive thinking at all five levels and introduces neither. The canonical-vocabulary CHECK keeps both out of the catalog; suite `028` proves it.
 
-**Why the adapters kept `off` and `none` through the rollout, and still do.** The catalog row is the per-model capability authority. The adapter vocabulary is per-**protocol**, and Claude Sonnet 5 and Terra legitimately used those levels for as long as they remained selectable — narrowing an adapter first would have broken a live model. The staged rows never listed those levels, and a saved level a row does not list falls back to that model's Automatic level before any request is built (C41). *Now that the cutover has removed both old rows, no catalog row offers either value, so the adapter branches are unreachable through catalog policy rather than load-bearing.* They are left in place because removing them is an Edge deployment (step 4 above), not because they are still needed.
+**Why the adapters kept `off` and `none` through the rollout, and still do.** The catalog row is the per-model capability authority. The adapter vocabulary is per-**protocol**, and Claude Sonnet 5 and Terra legitimately used those levels for as long as they remained selectable — narrowing an adapter first would have broken a live model. The staged rows never listed those levels, and a saved level a row does not list falls back to that model's Automatic level before any request is built (C41). *Now that the cutover has removed both old rows, no catalog row offers either value, so the adapter branches are unreachable through catalog policy rather than load-bearing.* They are left in place because removing them would need an Edge deployment and is deferred optional cleanup (above), not because they are still needed.
 
 **Pricing** (C44, applied again). The records are `…@2026-09-30`.
 - Both Claude 5.5 records carry cache-write `null`: two published TTL rates against one summed usage field.
 - Sol is priced up to the same published 272K boundary as Terra and is `unpriced` above it.
-- The old records stay unchanged and open-ended while their models remain selectable.
+- The old `…@2026-09-17` records stay unchanged and open-ended **for historical telemetry interpretation only**. Their catalog rows were deleted by the Phase-D cutover, so those models are neither selectable nor routable; a price record has never been an authorization surface.
 
-**Preference migration at cutover — fixed now, executed later.**
+**Preference migration at cutover — executed 2026-10-01.**
 - Model mapping: `claude-sonnet-5 → claude-sonnet-5-5`, `gpt-5.6-terra → gpt-6.1-sol`.
 - Levels `low … max` are preserved.
 - `off` (Claude) and `none` (OpenAI) become `NULL`, i.e. Automatic.
 - `NULL` stays `NULL`.
+- **Observed at rollout:** the single saved preference then in Production, `anthropic/claude-sonnet-5` at `xhigh`, migrated to `anthropic/claude-sonnet-5-5` at `xhigh`, with the preference row count unchanged and zero preferences left on either retired id. That population was the state on the day, not a property of the migration, which is set-based and unconditional on count.
 
 The cutover handles whatever population exists when it runs; it must not assume today's single saved preference. Order is forced by the foreign key: `user_ai_preferences.preferred_model_id` has no `ON DELETE` action, so preferences move before the old rows go.
 
