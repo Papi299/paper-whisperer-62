@@ -813,6 +813,8 @@ async function taxonomyRowGeometry(scope: Locator) {
         height: r.height,
         paddingRight: parseFloat(getComputedStyle(row).paddingRight),
         badgeRight: badge ? badge.getBoundingClientRect().right : null,
+        badgeText: badge ? badge.textContent : null,
+        describedBy: row.getAttribute("aria-describedby"),
         labelClipped: label ? label.scrollWidth > label.clientWidth : true,
         hitAtLabel: l ? lands(l.left + l.width / 2, l.top + l.height / 2) : false,
         hitAtFarEnd: lands(r.right - 4, r.top + r.height / 2),
@@ -846,6 +848,51 @@ async function dismissWithEscape(page: Page, dialog: Locator) {
   await expect(dialog).toBeHidden();
 }
 
+/** A project row as PostgREST returns it — served by `page.route`, never stored. */
+function syntheticProject(n: number) {
+  return {
+    id: `00000000-0000-4000-8000-00000000000${n}`,
+    user_id: "00000000-0000-4000-8000-000000000000",
+    name: `Synthetic project ${n}`,
+    description: null,
+    color: "#6366f1",
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
+
+/**
+ * The focused element's keyboard focus ring: whether it is drawn, and how many
+ * px of it fall outside the ScrollArea viewport that clips it. An outset
+ * `ring-2 ring-offset-2` ring reaches 4px past the box, so on a control as wide
+ * as the viewport its sides are cut off; an inset ring stays inside.
+ */
+async function focusRing(page: Page) {
+  return page.evaluate(() => {
+    const el = document.activeElement as HTMLElement;
+    const { boxShadow } = getComputedStyle(el);
+    // Outward reach: the largest spread among the non-inset shadows.
+    const outward = Math.max(
+      0,
+      ...(boxShadow === "none" ? [] : boxShadow.split(/,(?![^(]*\))/))
+        .filter((shadow) => !/inset/.test(shadow))
+        .map((shadow) => parseFloat(shadow.match(/-?[\d.]+px/g)?.[3] ?? "0")),
+    );
+    const r = el.getBoundingClientRect();
+    const v = el.closest("[data-radix-scroll-area-viewport]")!.getBoundingClientRect();
+    return {
+      focusVisible: el.matches(":focus-visible"),
+      drawn: boxShadow !== "none",
+      clippedPx: Math.max(
+        0,
+        v.left - (r.left - outward),
+        r.right + outward - v.right,
+        v.top - (r.top - outward),
+        r.bottom + outward - v.bottom,
+      ),
+    };
+  });
+}
+
 /** Name of the focused element: its aria-label, else its text. */
 async function focusedName(page: Page) {
   return page.evaluate(() => {
@@ -858,6 +905,17 @@ test.describe("Sidebar taxonomy rows", () => {
   test("each row is one control, compact on desktop, with its count on the right", async ({
     page,
   }) => {
+    // A zero count is hidden on every row, and the shared seed's counts are
+    // normally all zero, so two synthetic projects are served to give the badge
+    // checks something to measure. Only the browser's GET is answered: nothing
+    // reaches or changes the database.
+    await page.route(
+      (url) => url.pathname.endsWith("/rest/v1/projects"),
+      (route) =>
+        route.request().method() === "GET"
+          ? route.fulfill({ json: [syntheticProject(1), syntheticProject(2)] })
+          : route.fallback(),
+    );
     await page.setViewportSize(DESKTOP);
     await page.goto("/", { waitUntil: "networkidle" });
     await waitForDashboard(page);
@@ -879,8 +937,24 @@ test.describe("Sidebar taxonomy rows", () => {
       expect(row!.right, `${name}: inside the viewport`).toBeLessThanOrEqual(geo.viewport!.right);
     }
 
+    // Only positive counts are shown, each as its row's description; a row
+    // with no badge carries no description at all.
+    for (const row of geo.rows) {
+      if (row!.badgeText === null) {
+        expect(row!.describedBy, `${row!.name}: a hidden count describes nothing`).toBeNull();
+      } else {
+        expect(Number(row!.badgeText), `${row!.name}: only positive counts show`).toBeGreaterThan(0);
+        await expect(
+          sidebar.getByRole("button", { name: row!.name, exact: true }),
+        ).toHaveAccessibleDescription(row!.badgeText);
+      }
+    }
+    await expect(
+      sidebar.getByRole("button", { name: "Manage projects", exact: true }),
+    ).toHaveAccessibleDescription("2");
+
     // Count badges sit at the row's right edge, not after labels of different
-    // lengths. Synonyms always shows its count, so at least one is measured.
+    // lengths. The synthetic projects guarantee at least one is measured.
     const withBadge = geo.rows.filter((row) => row!.badgeRight !== null);
     expect(withBadge.length).toBeGreaterThan(0);
     for (const row of withBadge) {
@@ -932,18 +1006,23 @@ test.describe("Sidebar taxonomy rows", () => {
     // One stop per row, in rail order, and then the real Settings row.
     expect(forward).toEqual([...MANAGE_BUTTON_NAMES, "Settings"]);
 
+    // Settings spans the viewport like the rows do. Before POLISH-001 its
+    // ring was outset, and the viewport cut 4px off each side.
+    const settingsRing = await focusRing(page);
+    expect(settingsRing.focusVisible, "Settings: keyboard focus is focus-visible").toBe(true);
+    expect(settingsRing.drawn, "Settings: a focus ring is drawn").toBe(true);
+    expect(settingsRing.clippedPx, "Settings: no part of the ring is clipped").toBe(0);
+
     // Back up by keyboard: each row is reached once more, and a keyboard
-    // focus on a row draws a visible ring.
+    // focus on a row draws a ring the viewport does not clip.
     const backward: (string | null)[] = [];
     for (let i = 0; i < MANAGE_BUTTON_NAMES.length; i++) {
       await page.keyboard.press("Shift+Tab");
       backward.push(await focusedName(page));
-      const ring = await page.evaluate(() => {
-        const el = document.activeElement as HTMLElement;
-        return { focusVisible: el.matches(":focus-visible"), boxShadow: getComputedStyle(el).boxShadow };
-      });
+      const ring = await focusRing(page);
       expect(ring.focusVisible, `${backward[i]}: keyboard focus is focus-visible`).toBe(true);
-      expect(ring.boxShadow, `${backward[i]}: a focus ring is drawn`).not.toBe("none");
+      expect(ring.drawn, `${backward[i]}: a focus ring is drawn`).toBe(true);
+      expect(ring.clippedPx, `${backward[i]}: no part of the ring is clipped`).toBe(0);
     }
     expect(backward).toEqual([...MANAGE_BUTTON_NAMES].reverse());
 
