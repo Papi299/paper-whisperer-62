@@ -833,6 +833,19 @@ async function taxonomyRowGeometry(scope: Locator) {
   }, MANAGE_BUTTON_NAMES);
 }
 
+/**
+ * Escape out of an open dialog. Radix attaches its Escape handler in an
+ * effect, so a keypress in the frame the dialog appears can be lost (seen in
+ * CI): wait for focus to enter it first — a real synchronization point.
+ */
+async function dismissWithEscape(page: Page, dialog: Locator) {
+  await expect
+    .poll(() => dialog.evaluate((d) => d.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+}
+
 /** Name of the focused element: its aria-label, else its text. */
 async function focusedName(page: Page) {
   return page.evaluate(() => {
@@ -894,16 +907,14 @@ test.describe("Sidebar taxonomy rows", () => {
     await sidebar.getByText("Study Type Pool", { exact: true }).click();
     const studyTypes = page.getByRole("dialog", { name: /Manage Study Type Pool/ });
     await expect(studyTypes).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(studyTypes).toBeHidden();
+    await dismissWithEscape(page, studyTypes);
 
     const exclusionsRow = sidebar.getByRole("button", { name: "Manage exclusions", exact: true });
     const box = await exclusionsRow.boundingBox();
     await exclusionsRow.click({ position: { x: box!.width - 4, y: box!.height / 2 } });
     const exclusions = page.getByRole("dialog", { name: /Manage Exclusion Pools/ });
     await expect(exclusions).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(exclusions).toBeHidden();
+    await dismissWithEscape(page, exclusions);
   });
 
   test("Tab reaches each row exactly once; Enter and Space both open it", async ({ page }) => {
@@ -943,8 +954,7 @@ test.describe("Sidebar taxonomy rows", () => {
       await synonymsRow.focus();
       await page.keyboard.press(key);
       await expect(synonyms, `${key} opens the row's manager`).toBeVisible();
-      await page.keyboard.press("Escape");
-      await expect(synonyms).toBeHidden();
+      await dismissWithEscape(page, synonyms);
       await expect(synonymsRow, `focus returns to the row after ${key}`).toBeFocused();
     }
   });
@@ -990,8 +1000,7 @@ test.describe("Sidebar taxonomy rows", () => {
     await expect(drawer).toBeHidden();
     const keywords = page.getByRole("dialog", { name: /Manage Keyword Pool/ });
     await expect(keywords).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(keywords).toBeHidden();
+    await dismissWithEscape(page, keywords);
     await expect(page.getByRole("button", { name: "Open navigation menu" })).toBeFocused();
   });
 });
