@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { BookOpen, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { PaperLumeMark } from "@/components/brand/PaperLumeMark";
 
 const ResetPassword = () => {
   const [password, setPassword] = useState("");
@@ -60,9 +61,8 @@ const ResetPassword = () => {
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
-            <div className="rounded-full bg-primary/10 p-3">
-              <BookOpen className="h-8 w-8 text-primary" />
-            </div>
+            {/* Nothing visible on this card names the brand, so the mark does. */}
+            <PaperLumeMark className="h-12 w-12" alt="PaperLume" />
           </div>
           <CardTitle className="text-2xl font-bold">Set New Password</CardTitle>
           <CardDescription>

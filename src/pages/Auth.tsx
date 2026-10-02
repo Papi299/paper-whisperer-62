@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { BookOpen, Loader2 } from "lucide-react";
+import { PaperLumeMark } from "@/components/brand/PaperLumeMark";
+import { Loader2 } from "lucide-react";
 import { z } from "zod";
 import { DEFAULT_POST_AUTH_PATH, parseSafeReturnTo } from "@/lib/safeReturnTo";
 
@@ -185,9 +186,7 @@ const Auth = () => {
         <Card className="w-full">
           <CardHeader className="space-y-1 text-center">
             <div className="flex justify-center mb-4">
-              <div className="rounded-full bg-primary/10 p-3">
-                <BookOpen className="h-8 w-8 text-primary" />
-              </div>
+              <PaperLumeMark className="h-12 w-12" />
             </div>
             <CardTitle className="text-2xl font-bold">PaperLume</CardTitle>
             <CardDescription>

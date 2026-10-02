@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { sidebarManageButton } from "./helpers";
 
 test.describe("Pools & Sidebar", () => {
   test.beforeEach(async ({ page }) => {
@@ -15,27 +16,18 @@ test.describe("Pools & Sidebar", () => {
   });
 
   test("should open keyword pool management", async ({ page }) => {
-    // The Settings button is inside a justify-between row containing "Keyword Pool"
-    // Structure: div.justify-between > [div > span("Keyword Pool"), button(gear)]
-    const gearBtn = page
-      .getByText("Keyword Pool")
-      .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-      .locator("button");
+    const manageKeywordPool = sidebarManageButton(page, "Manage keyword pool");
 
-    await expect(gearBtn).toBeVisible();
-    await gearBtn.click();
+    await expect(manageKeywordPool).toBeVisible();
+    await manageKeywordPool.click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
   });
 
   test("should open study type pool management", async ({ page }) => {
-    // Same structure as keyword pool
-    const gearBtn = page
-      .getByText("Study Type Pool")
-      .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-      .locator("button");
+    const manageStudyTypePool = sidebarManageButton(page, "Manage study type pool");
 
-    await expect(gearBtn).toBeVisible();
-    await gearBtn.click();
+    await expect(manageStudyTypePool).toBeVisible();
+    await manageStudyTypePool.click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
   });
 

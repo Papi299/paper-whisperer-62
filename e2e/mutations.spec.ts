@@ -7,6 +7,7 @@ import {
   deleteTag,
   deletePapersByTitleSubstrings,
   collectConsoleErrors,
+  sidebarManageButton,
 } from "./helpers";
 
 /**
@@ -33,12 +34,7 @@ test.describe("Mutation persistence regression", () => {
     await createProject(page, TEST_PROJECT);
 
     // Re-open Manage Projects to verify it's listed
-    const gearBtn = page
-      .getByText("Projects")
-      .first()
-      .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-      .locator("button");
-    await gearBtn.click();
+    await sidebarManageButton(page, "Manage projects").click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("dialog").getByText(TEST_PROJECT)).toBeVisible();
     await page.keyboard.press("Escape");
@@ -62,12 +58,7 @@ test.describe("Mutation persistence regression", () => {
     await createTag(page, TEST_TAG);
 
     // Re-open Manage Tags to verify it's listed
-    const gearBtn = page
-      .getByText("Tags")
-      .first()
-      .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-      .locator("button");
-    await gearBtn.click();
+    await sidebarManageButton(page, "Manage tags").click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("dialog").getByText(TEST_TAG)).toBeVisible();
     await page.keyboard.press("Escape");
