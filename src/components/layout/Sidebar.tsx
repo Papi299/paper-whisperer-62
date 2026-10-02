@@ -177,9 +177,9 @@ function SidebarNav({
       </div>
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4">
-          {/* Taxonomy & Settings section header */}
+          {/* Library organization section header */}
           <div className="px-0 py-2 mt-2">
-            <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Taxonomy & Settings</h2>
+            <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Library organization</h2>
           </div>
 
           <ul className="space-y-1">
@@ -506,7 +506,7 @@ export function Sidebar({
             <SheetHeader className="sr-only">
               <SheetTitle>PaperLume navigation</SheetTitle>
               <SheetDescription>
-                Taxonomy, settings and account actions for your paper library.
+                Library organization, settings and account actions for your paper library.
               </SheetDescription>
             </SheetHeader>
             {nav}
