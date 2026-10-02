@@ -427,3 +427,68 @@ export function detectIdentifier(identifier: string): DetectedIdentifier {
 
   return { type: "title" };
 }
+
+/**
+ * The ASCII letters DOI equivalence folds, as a code-point range pair:
+ * U+0041..U+005A onto U+0061..U+007A, exactly the two ranges DOI Handbook
+ * §4.3.4 names. Code points rather than `toLowerCase()`, which performs full
+ * Unicode case mapping (`Á`→`á`, `İ`→`i̇`) and would merge DOI names the
+ * Handbook says are different.
+ */
+const ASCII_UPPER_A = 0x41;
+const ASCII_UPPER_Z = 0x5a;
+const ASCII_CASE_OFFSET = 0x61 - 0x41;
+
+/**
+ * The equivalence key of a DOI name: two DOI names name the same DOI exactly
+ * when their keys are `===`.
+ *
+ * DOI Handbook §4.3.4: no normalization is performed, and two DOI names are
+ * equivalent if and only if their code point sequences are identical, except
+ * that a code point in U+0041..U+005A is identical to the corresponding one in
+ * U+0061..U+007A. The fold is therefore ASCII only, and nothing else is
+ * touched — no trimming, no percent-decoding, no Unicode normalization, no
+ * punctuation rewriting.
+ *
+ * This is the Edge copy of `doiEquivalenceKey` in `src/lib/doiIdentifiers.ts`,
+ * which documents the rule and its sources in full. The deployed function and
+ * the bundled application are separate bundling domains, so the rule exists
+ * twice; `__tests__/identifierDetection.test.ts` pins the two to the same
+ * answers.
+ *
+ * The key is for comparison only. It is not a DOI name: do not display it,
+ * store it or send it to a provider.
+ *
+ * @returns The comparison key, or `null` when the value is not a string.
+ */
+export function doiEquivalenceKey(doiName: string | null | undefined): string | null {
+  if (typeof doiName !== "string") return null;
+
+  let key = "";
+  // By code point, so a surrogate pair can never be split.
+  for (const character of doiName) {
+    const code = character.codePointAt(0) as number;
+    key +=
+      code >= ASCII_UPPER_A && code <= ASCII_UPPER_Z
+        ? String.fromCodePoint(code + ASCII_CASE_OFFSET)
+        : character;
+  }
+
+  return key;
+}
+
+/**
+ * Whether two DOI names name the same DOI, per Handbook §4.3.4.
+ *
+ * A non-string on either side is not a DOI name and is equivalent to nothing,
+ * including to another non-string.
+ */
+export function doiNamesAreEquivalent(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const keyA = doiEquivalenceKey(a);
+  const keyB = doiEquivalenceKey(b);
+
+  return keyA !== null && keyB !== null && keyA === keyB;
+}

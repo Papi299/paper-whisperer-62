@@ -24,11 +24,17 @@ import { describe, it, expect } from "vitest";
 import {
   canonicalDoiUrl,
   detectIdentifier,
+  doiEquivalenceKey,
+  doiNamesAreEquivalent,
   extractDoiFromDoiUrl,
   extractPmidFromPubMedUrl,
 } from "../identifierDetection.ts";
 import { extractPmidFromPubMedUrl as frontendExtractPmid } from "@/lib/pubmedIdentifiers";
-import { canonicalDoiUrl as frontendCanonicalDoiUrl } from "@/lib/doiIdentifiers";
+import {
+  canonicalDoiUrl as frontendCanonicalDoiUrl,
+  doiEquivalenceKey as frontendDoiEquivalenceKey,
+  doiNamesAreEquivalent as frontendDoiNamesAreEquivalent,
+} from "@/lib/doiIdentifiers";
 import {
   DOI_CANONICAL_URL_VECTORS,
   DOI_UNUSABLE_NAMES,
@@ -512,5 +518,101 @@ describe("provider API encoding is a different concern from resolver constructio
   it("the resolver keeps the separator literal, so the two must stay distinct", () => {
     expect(canonicalDoiUrl(doi)).toBe("https://doi.org/10.1000/a%23b");
     expect(canonicalDoiUrl(doi)).not.toContain(encodeURIComponent(doi));
+  });
+});
+
+/**
+ * DOI name pairs with the answer DOI Handbook §4.3.4 gives. Used both for the
+ * Edge semantics and for the frontend parity block below.
+ */
+const DOI_EQUIVALENCE_PAIRS: ReadonlyArray<
+  readonly [label: string, a: string | null | undefined, b: string | null | undefined, equivalent: boolean]
+> = [
+  ["identical names", "10.1000/abc", "10.1000/abc", true],
+  ["ASCII case in the suffix", "10.1000/ABC", "10.1000/abc", true],
+  ["mixed ASCII case", "10.1000/AbC", "10.1000/aBc", true],
+  ["ASCII case in the prefix", "10.1000A/x", "10.1000a/x", true],
+  ["the Handbook's equivalent example", "10.5594/SMPTE.ST2067-21.2020", "10.5594/sMPTE.sT2067-21.2020", true],
+  ["a surrogate pair beside an ASCII fold", "10.1000/\u{1F4C4}-A", "10.1000/\u{1F4C4}-a", true],
+  ["a different suffix", "10.1000/abc", "10.1000/abd", false],
+  ["a different registrant", "10.1000/abc", "10.1001/abc", false],
+  ["a suffix extended by one character", "10.1000/abc", "10.1000/abc1", false],
+  [
+    "the Handbook's NON-equivalent example",
+    "10.26321/Á.GUTIÉRREZ.ZARZA.02.2018.03",
+    "10.26321/á.gutiérrez.zarza.02.2018.03",
+    false,
+  ],
+  ["Ö / ö", "10.1000/Ö", "10.1000/ö", false],
+  ["Greek Σ / σ", "10.1000/Σ", "10.1000/σ", false],
+  ["Cyrillic А / а", "10.1000/А", "10.1000/а", false],
+  ["Kelvin sign / k", "10.1000/K", "10.1000/k", false],
+  ["ß / ss", "10.1000/ß", "10.1000/ss", false],
+  ["a leading space (no trimming)", " 10.1000/abc", "10.1000/abc", false],
+  ["a trailing space (no trimming)", "10.1000/abc ", "10.1000/abc", false],
+  ["an escape vs its character (no percent-decoding)", "10.1000/a%23b", "10.1000/a#b", false],
+  ["NFC vs NFD (no Unicode normalization)", "10.1000/café", "10.1000/café", false],
+  ["hyphen vs en dash (no punctuation rewriting)", "10.1000/a-b", "10.1000/a–b", false],
+  ["a resolver URL vs its DOI name", "https://doi.org/10.1000/abc", "10.1000/abc", false],
+  ["null", null, "10.1000/abc", false],
+  ["undefined", undefined, "10.1000/abc", false],
+  ["null with null", null, null, false],
+  ["undefined with undefined", undefined, undefined, false],
+];
+
+describe("doiNamesAreEquivalent — DOI Handbook §4.3.4", () => {
+  it.each(DOI_EQUIVALENCE_PAIRS)("%s", (_label, a, b, equivalent) => {
+    expect(doiNamesAreEquivalent(a, b)).toBe(equivalent);
+    expect(doiNamesAreEquivalent(b, a)).toBe(equivalent);
+  });
+
+  it("calls a non-string equivalent to nothing", () => {
+    expect(doiNamesAreEquivalent(10.1038 as unknown as string, "10.1038")).toBe(false);
+    expect(doiNamesAreEquivalent({} as unknown as string, {} as unknown as string)).toBe(false);
+  });
+});
+
+describe("doiEquivalenceKey", () => {
+  it("folds ASCII letters and nothing else", () => {
+    expect(doiEquivalenceKey("10.1000/AbC")).toBe("10.1000/abc");
+    expect(doiEquivalenceKey("10.26321/Á.X")).toBe("10.26321/Á.x");
+    expect(doiEquivalenceKey(" 10.1000/a%23b ")).toBe(" 10.1000/a%23b ");
+  });
+
+  it("is not String.prototype.toLowerCase", () => {
+    // The two agree on every ASCII input; the Kelvin sign is one place they
+    // part, because Unicode lowercases U+212A to ASCII `k`.
+    const kelvin = "10.1000/K";
+    expect(kelvin.toLowerCase()).toBe("10.1000/k");
+    expect(doiEquivalenceKey(kelvin)).toBe(kelvin);
+  });
+
+  it("leaves surrogate pairs intact", () => {
+    const astral = "10.1000/\u{1F4C4}-A";
+    expect(doiEquivalenceKey(astral)).toBe("10.1000/\u{1F4C4}-a");
+    expect([...(doiEquivalenceKey(astral) as string)]).toHaveLength([...astral].length);
+  });
+
+  it("returns null for a non-string", () => {
+    expect(doiEquivalenceKey(null)).toBeNull();
+    expect(doiEquivalenceKey(undefined)).toBeNull();
+    expect(doiEquivalenceKey(10.1038 as unknown as string)).toBeNull();
+  });
+});
+
+describe("parity with the frontend DOI equivalence rule", () => {
+  // Same arrangement as the canonical-builder block above: the rule exists in
+  // both bundling domains, and this block keeps the two copies from drifting.
+  // Every pair, and each value in it, goes through both implementations.
+  it.each(DOI_EQUIVALENCE_PAIRS)("Edge and frontend agree on %s", (_label, a, b) => {
+    expect(doiNamesAreEquivalent(a, b)).toBe(frontendDoiNamesAreEquivalent(a, b));
+    expect(doiEquivalenceKey(a)).toBe(frontendDoiEquivalenceKey(a));
+    expect(doiEquivalenceKey(b)).toBe(frontendDoiEquivalenceKey(b));
+  });
+
+  it("covers both answers", () => {
+    // Guards against a corpus edit that leaves `it.each` proving only one side.
+    expect(DOI_EQUIVALENCE_PAIRS.some(([, , , equivalent]) => equivalent)).toBe(true);
+    expect(DOI_EQUIVALENCE_PAIRS.some(([, , , equivalent]) => !equivalent)).toBe(true);
   });
 });

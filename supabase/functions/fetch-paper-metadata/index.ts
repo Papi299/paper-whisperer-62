@@ -20,6 +20,7 @@ import { requireEdgeEnv } from "../_shared/env.ts";
 import { boundedErrorName } from "../_shared/boundedLogging.ts";
 import { createFetchWithRetry } from "./upstreamFetch.ts";
 import { crossrefRequestInit, crossrefTitleSearchUrl, crossrefWorkUrl } from "./crossrefRequest.ts";
+import { createFetchByDoi } from "./doiLookup.ts";
 import { canonicalDoiUrl, detectIdentifier } from "../_shared/identifierDetection.ts";
 import type { AuthorProvenance } from "../_shared/authorProvenance.ts";
 import { extractCrossrefAuthors } from "../_shared/crossrefAuthors.ts";
@@ -28,7 +29,6 @@ import { extractPubMedAuthors } from "../_shared/pubmedAuthors.ts";
 import {
   extractPublicationTypes,
   joinPublicationTypes,
-  pubmedStudyTypeOverride,
 } from "../_shared/publicationTypes.ts";
 
 const corsHeaders = {
@@ -443,58 +443,25 @@ async function searchCrossrefByTitle(
 
 /**
  * For DOIs: PubMed first (via DOI search → PMID → full fetch), Crossref fallback.
- * Crossref results are enriched with PubMed data if a PMID cross-reference is found.
+ * Crossref results are enriched with PubMed data when PubMed holds a record
+ * naming the same DOI.
  *
  * `doi` is the DOI name `detectIdentifier` proved — from a bare DOI, a `doi:`
  * prefixed one, or the path of an authenticated resolver URL. It is used as
  * given: re-deriving or re-cleaning it here would be a second normalization
  * authority that could disagree with the one that classified the input.
+ *
+ * The decision lives in `./doiLookup.ts` (DOI-PUBMED-MATCH-HARDENING-001): a
+ * PubMed record is returned for a DOI, or used to enrich a Crossref record,
+ * only when its own DOI is equivalent to the DOI that was searched for. The
+ * provider calls stay in this file and are injected.
  */
-async function fetchByDoi(doi: string, apiKey?: string): Promise<PaperMetadata | null> {
-  // Try PubMed first
-  const pmid = await searchPubMedByDoi(doi, apiKey);
-  if (pmid) {
-    const pubmedResult = await fetchFromPubMed(pmid, apiKey);
-    if (pubmedResult) {
-      pubmedResult.doi = pubmedResult.doi || doi;
-      // The searched-for DOI backfills the link only when PubMed supplied no
-      // DOI of its own. Same precedence as before, canonically encoded.
-      pubmedResult.journal_url = pubmedResult.journal_url || canonicalDoiUrl(doi);
-      return pubmedResult;
-    }
-  }
-
-  // Fallback to Crossref
-  console.log("PubMed unavailable for DOI, falling back to Crossref");
-  const crossrefResult = await fetchFromCrossrefByDoi(doi);
-  if (!crossrefResult) return null;
-
-  // Try to cross-reference with PubMed for enrichment
-  if (crossrefResult.doi) {
-    const enrichPmid = await searchPubMedByDoi(crossrefResult.doi, apiKey);
-    if (enrichPmid) {
-      const pubmedData = await fetchFromPubMed(enrichPmid, apiKey);
-      if (pubmedData) {
-        crossrefResult.pmid = enrichPmid;
-        crossrefResult.keywords = pubmedData.keywords || [];
-        crossrefResult.mesh_terms = pubmedData.mesh_terms || [];
-        crossrefResult.substances = pubmedData.substances || [];
-        // Study-type provenance transfers as a pair: when the PubMed value is
-        // adopted its publication-type boundaries come with it, and when it is
-        // not, the Crossref record keeps its own `study_type` and gains no
-        // PubMed structure it cannot account for.
-        const studyTypeOverride = pubmedStudyTypeOverride(pubmedData);
-        if (studyTypeOverride) {
-          crossrefResult.study_type = studyTypeOverride.study_type;
-          crossrefResult.publication_types = studyTypeOverride.publication_types;
-        }
-        crossrefResult.pubmed_url = pubmedData.pubmed_url;
-      }
-    }
-  }
-
-  return crossrefResult;
-}
+const fetchByDoi = createFetchByDoi<PaperMetadata>({
+  searchPubMedByDoi,
+  fetchFromPubMed,
+  fetchFromCrossrefByDoi,
+  logger: console,
+});
 
 /**
  * For titles: PubMed first, Crossref fallback.
