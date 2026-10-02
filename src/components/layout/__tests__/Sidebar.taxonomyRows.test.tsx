@@ -2,7 +2,7 @@ import { useState } from "react";
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import type { Project } from "@/types/database";
+import type { Project, Tag } from "@/types/database";
 
 /**
  * PAPERLUME-SIDEBAR-UX-BRAND-001 — each taxonomy row is ONE button.
@@ -16,7 +16,8 @@ import type { Project } from "@/types/database";
  *  - no gear buttons survive (the one real Settings row is untouched);
  *  - each row opens its own modal, and on a narrow screen it still closes the
  *    drawer first and opens the modal only afterwards;
- *  - the count, hidden from the name by `aria-label`, is the row's description;
+ *  - a positive count, hidden from the name by `aria-label`, is the row's
+ *    description; a zero count is hidden on every row (POLISH-001);
  *  - the brand row shows the canonical PaperLume mark, decoratively.
  *
  * Keyboard activation (Tab/Enter/Space), geometry and focus visibility are
@@ -112,6 +113,8 @@ function poolsStub() {
   };
 }
 
+const CREATED = "2026-01-01T00:00:00Z";
+
 function project(n: number): Project {
   return {
     id: `project-${n}`,
@@ -119,9 +122,17 @@ function project(n: number): Project {
     name: `Project ${n}`,
     description: null,
     color: "#000000",
-    created_at: "2026-01-01T00:00:00Z",
+    created_at: CREATED,
   };
 }
+
+function tag(n: number): Tag {
+  return { id: `tag-${n}`, user_id: "user-1", name: `Tag ${n}`, color: "#000000", created_at: CREATED };
+}
+
+/** `count` rows of `make(i)`, numbered from 1. */
+const rows = <T,>(count: number, make: (i: number) => T) =>
+  Array.from({ length: count }, (_, i) => make(i + 1));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -136,9 +147,11 @@ beforeEach(() => {
  */
 function SidebarHost({
   projects = [],
+  tags = [],
   onNavOpenChange,
 }: {
   projects?: Project[];
+  tags?: Tag[];
   onNavOpenChange?: (open: boolean) => void;
 }) {
   const [navOpen, setNavOpen] = useState(false);
@@ -156,7 +169,7 @@ function SidebarHost({
       </button>
       <Sidebar
         projects={projects}
-        tags={[]}
+        tags={tags}
         onCreateProject={vi.fn()}
         onCreateTag={vi.fn()}
         onEditProject={vi.fn()}
@@ -226,27 +239,52 @@ describe("taxonomy rows", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
-  it("carries the count as the row's description, not its name", () => {
-    renderSidebar({ projects: [project(1), project(2), project(3)] });
+  it("shows a positive count on every row, as the row's description, not its name", () => {
+    // A distinct count per row, so a badge wired to the wrong row would show.
+    mockUsePools.mockReturnValue({
+      ...poolsStub(),
+      poolKeywords: rows(4, (i) => ({ id: `kw-${i}`, user_id: "user-1", keyword: `kw ${i}`, created_at: CREATED })),
+      poolStudyTypes: rows(5, (i) => ({
+        id: `st-${i}`,
+        user_id: "user-1",
+        study_type: `type ${i}`,
+        specificity_weight: 1,
+        group_name: null,
+        hierarchy_rank: i,
+        created_at: CREATED,
+      })),
+      synonymGroups: rows(6, (i) => ({
+        id: `syn-${i}`,
+        canonical_term: `term ${i}`,
+        synonyms: [],
+        user_id: "user-1",
+        created_at: CREATED,
+      })),
+      excludedKeywords: rows(3, (i) => ({ id: `xk-${i}`, user_id: "user-1", keyword: `x ${i}`, created_at: CREATED })),
+      excludedStudyTypes: rows(4, (i) => ({ id: `xs-${i}`, user_id: "user-1", study_type: `x ${i}`, created_at: CREATED })),
+    });
+    renderSidebar({ projects: rows(2, project), tags: rows(3, tag) });
 
-    const projects = within(rail()).getByRole("button", { name: "Manage projects" });
-    expect(projects).toHaveAccessibleName("Manage projects");
-    expect(projects).toHaveAccessibleDescription("3");
+    // Exclusions counts both pools: 3 keywords + 4 study types.
+    const expected = ["2", "3", "4", "5", "6", "7"];
+    ROWS.forEach(({ name }, i) => {
+      const row = within(rail()).getByRole("button", { name });
+      expect(row).toHaveAccessibleName(name);
+      expect(row).toHaveAccessibleDescription(expected[i]);
+      expect(row).toHaveTextContent(new RegExp(`${expected[i]}$`));
+    });
   });
 
-  it("keeps the existing zero-count behaviour", () => {
+  it("hides a zero count on every row, Synonyms included", () => {
     renderSidebar();
 
-    // A zero count is hidden on every row except Synonyms (`alwaysShowCount`),
-    // exactly as before — and a hidden count describes nothing.
+    // One rule for all six rows: no badge at zero, and a hidden count
+    // describes nothing.
     for (const { name } of ROWS) {
       const row = within(rail()).getByRole("button", { name });
-      if (name === "Manage synonyms") {
-        expect(row).toHaveAccessibleDescription("0");
-      } else {
-        expect(row).not.toHaveAttribute("aria-describedby");
-        expect(row).toHaveTextContent(/^[^0-9]+$/);
-      }
+      expect(row).not.toHaveAttribute("aria-describedby");
+      expect(row).not.toHaveAccessibleDescription(/./);
+      expect(row).toHaveTextContent(/^[^0-9]+$/);
     }
   });
 });

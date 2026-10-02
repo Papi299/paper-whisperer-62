@@ -67,14 +67,12 @@ const NAV_ITEMS: {
   manageLabel: string;
   Icon: typeof FolderOpen;
   iconClassName: string;
-  /** Whether the count badge renders when the count is 0. */
-  alwaysShowCount?: boolean;
 }[] = [
   { key: "projects", label: "Projects", manageLabel: "Manage projects", Icon: FolderOpen, iconClassName: "text-indigo-500" },
   { key: "tags", label: "Tags", manageLabel: "Manage tags", Icon: TagIcon, iconClassName: "text-violet-500" },
   { key: "keywords", label: "Keyword Pool", manageLabel: "Manage keyword pool", Icon: Sparkles, iconClassName: "text-amber-500" },
   { key: "studyTypes", label: "Study Type Pool", manageLabel: "Manage study type pool", Icon: FileText, iconClassName: "text-cyan-500" },
-  { key: "synonyms", label: "Synonyms", manageLabel: "Manage synonyms", Icon: RefreshCw, iconClassName: "text-muted-foreground", alwaysShowCount: true },
+  { key: "synonyms", label: "Synonyms", manageLabel: "Manage synonyms", Icon: RefreshCw, iconClassName: "text-muted-foreground" },
   { key: "exclusions", label: "Exclusions", manageLabel: "Manage exclusions", Icon: Ban, iconClassName: "text-muted-foreground" },
 ];
 
@@ -185,9 +183,10 @@ function SidebarNav({
           </div>
 
           <ul className="space-y-1">
-            {NAV_ITEMS.map(({ key, label, manageLabel, Icon, iconClassName, alwaysShowCount }) => {
+            {NAV_ITEMS.map(({ key, label, manageLabel, Icon, iconClassName }) => {
               const count = counts[key];
-              const showCount = alwaysShowCount || count > 0;
+              // A zero count is hidden on every row: it is noise, not navigation.
+              const showCount = count > 0;
               const countId = `${countIdPrefix}-${key}-count`;
               return (
                 <li key={key}>
@@ -228,7 +227,13 @@ function SidebarNav({
 
           {/* Settings */}
           <div className="pt-2 border-t">
-            <Button variant="ghost" className="w-full justify-start" onClick={onOpenSettings}>
+            {/* Inset ring, as on the taxonomy rows: this button spans the
+                ScrollArea viewport, which clips an outset ring's sides. */}
+            <Button
+              variant="ghost"
+              className="w-full justify-start focus-visible:ring-inset focus-visible:ring-offset-0"
+              onClick={onOpenSettings}
+            >
               <Settings className="mr-2 h-4 w-4" aria-hidden="true" />
               Settings
             </Button>
