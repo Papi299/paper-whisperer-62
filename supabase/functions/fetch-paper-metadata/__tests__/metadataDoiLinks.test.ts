@@ -42,10 +42,11 @@ describe("DOI resolver links are built, never interpolated", () => {
   });
 
   it("builds every DOI-derived journal_url with canonicalDoiUrl", () => {
-    // Three sites: the PubMed mapping, the Crossref mapping, and the DOI-search
-    // backfill that runs when PubMed returned no DOI of its own.
+    // Two sites: the PubMed mapping and the Crossref mapping. The third, the
+    // DOI-search backfill, was removed by DOI-PUBMED-MATCH-HARDENING-001 — see
+    // the next test.
     const assignments = source.match(/journal_url[^,;\n]*canonicalDoiUrl\(doi\)/g) ?? [];
-    expect(assignments).toHaveLength(3);
+    expect(assignments).toHaveLength(2);
   });
 
   it("imports the builder from the shared Edge module", () => {
@@ -57,13 +58,14 @@ describe("DOI resolver links are built, never interpolated", () => {
     );
   });
 
-  it("keeps the PubMed backfill's precedence, not just its encoding", () => {
-    // `||` preserves a DOI PubMed itself supplied; only an absent link is
-    // backfilled from the searched-for DOI. Behaviour outside encoding is
-    // unchanged by this PR.
-    expect(source).toMatch(
-      /pubmedResult\.journal_url = pubmedResult\.journal_url \|\| canonicalDoiUrl\(doi\)/,
-    );
+  it("no longer backfills a link from the searched-for DOI", () => {
+    // DOI-PUBMED-MATCH-HARDENING-001. A PubMed record that carried no DOI of
+    // its own used to be returned for a DOI request with the searched-for DOI —
+    // and this link — filled in, though nothing proved it was that paper. Such
+    // a record is no longer accepted at all, and an accepted one keeps the link
+    // built from its own DOI, so there is nothing to backfill. The behaviour is
+    // tested in `doiLookup.test.ts`.
+    expect(source).not.toMatch(/journal_url = [^;\n]*\|\| canonicalDoiUrl\(/);
   });
 });
 
