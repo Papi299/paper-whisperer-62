@@ -184,6 +184,13 @@ board were simply not in scope, and remain to be produced:
 - the Chrome extension's `icons/icon-{16,32,48,128}.png` — copied byte for byte
   out of `png/` by `vite.extension.config.ts` at build time, never committed a
   second time under `extension/`;
+- the web app's favicon — `index.html` links `svg/paperlume-symbol.svg`
+  (preferred) and `png/paperlume-32.png` (fallback for browsers without SVG
+  favicons) directly, and Vite emits each as a hashed build asset, byte for byte;
+- the web app's in-app mark — the sidebar brand row, the sign-in and
+  reset-password cards and the Privacy Policy header — rendered by
+  `src/components/brand/PaperLumeMark.tsx`, which imports
+  `svg/paperlume-symbol.svg` itself rather than a copy of it;
 - the Chrome Web Store listing images in `assets/store/` — a 128×128 Store-icon
   **candidate** (the symbol re-fitted to the Store's documented 96 + 16 px
   transparent padding: one uniform scale and one offset, no geometry change), a
@@ -204,6 +211,6 @@ second wordmark waiting to drift.
 Store **promotional video** (**confirmed OPTIONAL** on the live Dashboard on
 2026-08-30 — the `Global promo video` field carries no required marker; the
 first-party documentation conflict that once made this unresolved is recorded in
-the listing document §10); favicon wiring; any
+the listing document §10); any
 privacy policy. Nothing here is
 registered as a trademark — "Paperlume" is **not** a registered mark.

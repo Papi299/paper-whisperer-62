@@ -1,8 +1,10 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
+import { badgeVariants } from "@/components/ui/badge";
+import { PaperLumeMark } from "@/components/brand/PaperLumeMark";
+import { cn } from "@/lib/utils";
 import {
   Sheet,
   SheetContent,
@@ -20,7 +22,6 @@ import {
   Settings,
   Sparkles,
   FileText,
-  BookOpen,
   LogOut,
   User,
   UserCog,
@@ -47,9 +48,10 @@ import { usePools } from "@/contexts/PoolsContext";
 /**
  * The taxonomy rows are keyed so the desktop rail and the narrow-screen drawer
  * render from ONE list rather than two hand-maintained copies of the same six
- * rows. `manageLabel` is the button's accessible name — six buttons that all
- * announced "Settings" is exactly the defect PFA-C09 set out to fix, so each
- * entry names its own destination.
+ * rows. Each row is a single button, and `manageLabel` is its accessible name —
+ * six buttons that all announced "Settings" is exactly the defect PFA-C09 set
+ * out to fix, so each entry names its own destination. The visible label is
+ * contained in that name, so a speech-input user can say what they see.
  */
 type ManageKey =
   | "projects"
@@ -134,6 +136,9 @@ function SidebarNav({
   onOpenPrivacy: () => void;
 }) {
   const { user, signOut } = useAuth();
+  // Each count badge is referenced by id, and this component mounts twice
+  // below `md` (the CSS-hidden rail and the drawer), so ids are per-instance.
+  const countIdPrefix = useId();
 
   /**
    * An Account-menu item that opens a dialog or leaves the page runs only once
@@ -168,7 +173,8 @@ function SidebarNav({
   return (
     <>
       <div className="flex items-center gap-2 px-4 py-4">
-        <BookOpen className="h-6 w-6 text-primary" aria-hidden="true" />
+        {/* Decorative: the visible text beside it already names the brand. */}
+        <PaperLumeMark className="h-7 w-7" />
         <span className="font-bold text-lg">PaperLume</span>
       </div>
       <ScrollArea className="flex-1 p-4">
@@ -178,34 +184,47 @@ function SidebarNav({
             <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Taxonomy & Settings</h2>
           </div>
 
-          {NAV_ITEMS.map(({ key, label, manageLabel, Icon, iconClassName, alwaysShowCount }) => {
-            const count = counts[key];
-            return (
-              <div key={key} className="flex items-center justify-between py-1 px-2">
-                <div className="flex items-center gap-2">
-                  <Icon className={`h-4 w-4 ${iconClassName}`} aria-hidden="true" />
-                  <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                  {(alwaysShowCount || count > 0) && (
-                    <Badge variant="secondary" className="text-xs">
-                      {count}
-                    </Badge>
-                  )}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  // Kept compact on the desktop rail; relaxed to a comfortable
-                  // tap target on narrow screens, where these six controls sit
-                  // in a single vertical stack.
-                  className="h-9 w-9 md:h-6 md:w-6"
-                  aria-label={manageLabel}
-                  onClick={() => onManage(key)}
-                >
-                  <Settings className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </div>
-            );
-          })}
+          <ul className="space-y-1">
+            {NAV_ITEMS.map(({ key, label, manageLabel, Icon, iconClassName, alwaysShowCount }) => {
+              const count = counts[key];
+              const showCount = alwaysShowCount || count > 0;
+              const countId = `${countIdPrefix}-${key}-count`;
+              return (
+                <li key={key}>
+                  {/* The whole row is the one control. `aria-label` replaces
+                      the button's content as its name, so the count is wired
+                      in as its description — otherwise a screen reader would
+                      never hear it. */}
+                  <Button
+                    variant="ghost"
+                    // 40px tall on narrow screens and on any coarse pointer (a
+                    // tablet gets the md+ rail); compact for a desktop mouse.
+                    // The ring is inset because the ScrollArea viewport clips
+                    // horizontally and these rows span its full width.
+                    className="group h-10 w-full justify-start px-2 text-muted-foreground focus-visible:ring-inset focus-visible:ring-offset-0 md:h-8 coarse:min-h-10"
+                    aria-label={manageLabel}
+                    aria-describedby={showCount ? countId : undefined}
+                    onClick={() => onManage(key)}
+                  >
+                    <Icon className={`h-4 w-4 ${iconClassName}`} aria-hidden="true" />
+                    <span className="min-w-0 truncate">{label}</span>
+                    {showCount && (
+                      <span
+                        id={countId}
+                        // A <span>, not <Badge>: Badge renders a <div>, which a
+                        // <button> may not contain. The hover swap keeps the
+                        // pill distinct from the row's hover tint, which is
+                        // the same colour as `bg-secondary`.
+                        className={cn(badgeVariants({ variant: "secondary" }), "ml-auto group-hover:bg-background")}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
 
           {/* Settings */}
           <div className="pt-2 border-t">

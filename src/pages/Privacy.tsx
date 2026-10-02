@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { Link } from "react-router";
-import { BookOpen } from "lucide-react";
+import { PaperLumeMark } from "@/components/brand/PaperLumeMark";
 
 /**
  * The public PaperLume Privacy Policy.
@@ -91,7 +91,7 @@ const Privacy = () => {
             to="/"
             className="flex items-center gap-2 rounded-sm font-semibold hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
-            <BookOpen className="h-5 w-5 text-primary" aria-hidden="true" />
+            <PaperLumeMark className="h-6 w-6" />
             PaperLume
           </Link>
         </div>

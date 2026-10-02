@@ -161,17 +161,20 @@ export async function deletePapersByTitleSubstrings(
 }
 
 /**
+ * The sidebar row that opens a taxonomy manager, found by its accessible name
+ * ("Manage projects", "Manage tags", …). Each row is a single button named for
+ * its destination, so nothing here depends on how the row is laid out.
+ */
+export function sidebarManageButton(page: Page, name: string) {
+  return page.getByRole("complementary").getByRole("button", { name, exact: true });
+}
+
+/**
  * Create a project via the sidebar Manage Projects modal.
  * Returns the project name.
  */
 export async function createProject(page: Page, name: string) {
-  // Click the gear button next to "Projects" in the sidebar
-  const gearBtn = page
-    .getByText("Projects")
-    .first()
-    .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-    .locator("button");
-  await gearBtn.click();
+  await sidebarManageButton(page, "Manage projects").click();
   await expect(page.getByRole("dialog")).toBeVisible();
 
   // Fill in new project name and click Add
@@ -190,13 +193,7 @@ export async function createProject(page: Page, name: string) {
  * Returns the tag name.
  */
 export async function createTag(page: Page, name: string) {
-  // Click the gear button next to "Tags" in the sidebar
-  const gearBtn = page
-    .getByText("Tags")
-    .first()
-    .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-    .locator("button");
-  await gearBtn.click();
+  await sidebarManageButton(page, "Manage tags").click();
   await expect(page.getByRole("dialog")).toBeVisible();
 
   // Fill in new tag name and click Add
@@ -214,12 +211,7 @@ export async function createTag(page: Page, name: string) {
  * Delete a project by name via the Manage Projects modal.
  */
 export async function deleteProject(page: Page, name: string) {
-  const gearBtn = page
-    .getByText("Projects")
-    .first()
-    .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-    .locator("button");
-  await gearBtn.click();
+  await sidebarManageButton(page, "Manage projects").click();
   await expect(page.getByRole("dialog")).toBeVisible();
 
   // Find the project row and click its delete button (skip if already gone)
@@ -243,12 +235,7 @@ export async function deleteProject(page: Page, name: string) {
  * Delete a tag by name via the Manage Tags modal.
  */
 export async function deleteTag(page: Page, name: string) {
-  const gearBtn = page
-    .getByText("Tags")
-    .first()
-    .locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
-    .locator("button");
-  await gearBtn.click();
+  await sidebarManageButton(page, "Manage tags").click();
   await expect(page.getByRole("dialog")).toBeVisible();
 
   // Find the tag row and click its delete button (skip if already gone)

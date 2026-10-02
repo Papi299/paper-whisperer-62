@@ -781,3 +781,244 @@ test.describe("PFA-C09 focus and labelling", () => {
     expect(active.isBody || active.tag === "HTML", `focus was on <${active.tag}>`).toBe(true);
   });
 });
+
+/**
+ * PAPERLUME-SIDEBAR-UX-BRAND-001 — each taxonomy row is ONE button.
+ *
+ * The six separate gear buttons are gone; the whole row (icon, label, count) is
+ * now the control that carries the PFA-C09 name. Geometry is measured with
+ * `elementFromPoint`, because a visible control is not necessarily a reachable
+ * one. Read-only: dialogs are opened and closed, nothing is written.
+ */
+async function taxonomyRowGeometry(scope: Locator) {
+  return scope.evaluate((root, names) => {
+    const viewport = root.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]");
+    const vp = viewport?.getBoundingClientRect();
+    const rows = names.map((name) => {
+      const row = root.querySelector<HTMLElement>(`button[aria-label="${name}"]`);
+      if (!row) return null;
+      const r = row.getBoundingClientRect();
+      const label = row.querySelector<HTMLElement>(":scope > span:not([id])");
+      const badge = row.querySelector<HTMLElement>(":scope > span[id]");
+      const l = label?.getBoundingClientRect();
+      // A real hit-test: what the pointer would land on at that point.
+      const lands = (x: number, y: number) => {
+        const hit = document.elementFromPoint(x, y);
+        return !!hit && row.contains(hit);
+      };
+      return {
+        name,
+        left: r.left,
+        right: r.right,
+        height: r.height,
+        paddingRight: parseFloat(getComputedStyle(row).paddingRight),
+        badgeRight: badge ? badge.getBoundingClientRect().right : null,
+        labelClipped: label ? label.scrollWidth > label.clientWidth : true,
+        hitAtLabel: l ? lands(l.left + l.width / 2, l.top + l.height / 2) : false,
+        hitAtFarEnd: lands(r.right - 4, r.top + r.height / 2),
+        nestedInteractive: row.querySelectorAll("button, a, input, select, textarea, [tabindex]").length,
+      };
+    });
+    return {
+      rows,
+      viewport: vp
+        ? {
+            left: vp.left,
+            right: vp.right,
+            scrollWidth: viewport!.scrollWidth,
+            clientWidth: viewport!.clientWidth,
+          }
+        : null,
+    };
+  }, MANAGE_BUTTON_NAMES);
+}
+
+/**
+ * Escape out of an open dialog. Radix attaches its Escape handler in an
+ * effect, so a keypress in the frame the dialog appears can be lost (seen in
+ * CI): wait for focus to enter it first — a real synchronization point.
+ */
+async function dismissWithEscape(page: Page, dialog: Locator) {
+  await expect
+    .poll(() => dialog.evaluate((d) => d.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+}
+
+/** Name of the focused element: its aria-label, else its text. */
+async function focusedName(page: Page) {
+  return page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return el?.getAttribute("aria-label") ?? el?.textContent?.trim() ?? null;
+  });
+}
+
+test.describe("Sidebar taxonomy rows", () => {
+  test("each row is one control, compact on desktop, with its count on the right", async ({
+    page,
+  }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const sidebar = page.getByRole("complementary");
+
+    const geo = await taxonomyRowGeometry(sidebar);
+    expect(geo.viewport, "sidebar ScrollArea viewport resolved").not.toBeNull();
+    for (const row of geo.rows) {
+      expect(row, "row resolved").not.toBeNull();
+      const { name } = row!;
+      expect(row!.nestedInteractive, `${name}: nothing interactive inside the row`).toBe(0);
+      expect(row!.hitAtLabel, `${name}: the label is part of the target`).toBe(true);
+      expect(row!.hitAtFarEnd, `${name}: the row's far end is part of the target`).toBe(true);
+      expect(row!.labelClipped, `${name}: the label fits the w-64 rail`).toBe(false);
+      // Desktop density is deliberate: 32px, not promoted to the 40px touch size.
+      expect(row!.height, `${name}: compact desktop row`).toBeGreaterThanOrEqual(32);
+      expect(row!.height, `${name}: not promoted to touch sizing`).toBeLessThan(40);
+      expect(row!.left, `${name}: inside the viewport`).toBeGreaterThanOrEqual(geo.viewport!.left);
+      expect(row!.right, `${name}: inside the viewport`).toBeLessThanOrEqual(geo.viewport!.right);
+    }
+
+    // Count badges sit at the row's right edge, not after labels of different
+    // lengths. Synonyms always shows its count, so at least one is measured.
+    const withBadge = geo.rows.filter((row) => row!.badgeRight !== null);
+    expect(withBadge.length).toBeGreaterThan(0);
+    for (const row of withBadge) {
+      expect(
+        Math.abs(row!.right - row!.paddingRight - row!.badgeRight!),
+        `${row!.name}: badge is flush with the row's right padding`,
+      ).toBeLessThanOrEqual(1);
+    }
+
+    // No gear survives: the rail's one Settings icon is the Settings row's own.
+    await expect(sidebar.locator("svg.lucide-settings")).toHaveCount(1);
+    await expect(
+      sidebar.getByRole("button", { name: "Settings", exact: true }).locator("svg.lucide-settings"),
+    ).toHaveCount(1);
+  });
+
+  test("clicking the label or the far end of a row opens its manager", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const sidebar = page.getByRole("complementary");
+
+    // Pre-change the label was inert text; only the gear beside it opened anything.
+    await sidebar.getByText("Study Type Pool", { exact: true }).click();
+    const studyTypes = page.getByRole("dialog", { name: /Manage Study Type Pool/ });
+    await expect(studyTypes).toBeVisible();
+    await dismissWithEscape(page, studyTypes);
+
+    const exclusionsRow = sidebar.getByRole("button", { name: "Manage exclusions", exact: true });
+    const box = await exclusionsRow.boundingBox();
+    await exclusionsRow.click({ position: { x: box!.width - 4, y: box!.height / 2 } });
+    const exclusions = page.getByRole("dialog", { name: /Manage Exclusion Pools/ });
+    await expect(exclusions).toBeVisible();
+    await dismissWithEscape(page, exclusions);
+  });
+
+  test("Tab reaches each row exactly once; Enter and Space both open it", async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const sidebar = page.getByRole("complementary");
+
+    await sidebar.getByRole("button", { name: MANAGE_BUTTON_NAMES[0], exact: true }).focus();
+    const forward = [await focusedName(page)];
+    for (let i = 0; i < MANAGE_BUTTON_NAMES.length; i++) {
+      await page.keyboard.press("Tab");
+      forward.push(await focusedName(page));
+    }
+    // One stop per row, in rail order, and then the real Settings row.
+    expect(forward).toEqual([...MANAGE_BUTTON_NAMES, "Settings"]);
+
+    // Back up by keyboard: each row is reached once more, and a keyboard
+    // focus on a row draws a visible ring.
+    const backward: (string | null)[] = [];
+    for (let i = 0; i < MANAGE_BUTTON_NAMES.length; i++) {
+      await page.keyboard.press("Shift+Tab");
+      backward.push(await focusedName(page));
+      const ring = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement;
+        return { focusVisible: el.matches(":focus-visible"), boxShadow: getComputedStyle(el).boxShadow };
+      });
+      expect(ring.focusVisible, `${backward[i]}: keyboard focus is focus-visible`).toBe(true);
+      expect(ring.boxShadow, `${backward[i]}: a focus ring is drawn`).not.toBe("none");
+    }
+    expect(backward).toEqual([...MANAGE_BUTTON_NAMES].reverse());
+
+    // Enter and Space each activate the focused row, and focus comes back to it.
+    const synonymsRow = sidebar.getByRole("button", { name: "Manage synonyms", exact: true });
+    const synonyms = page.getByRole("dialog", { name: /Manage Synonyms/ });
+    for (const key of ["Enter", "Space"]) {
+      await synonymsRow.focus();
+      await page.keyboard.press(key);
+      await expect(synonyms, `${key} opens the row's manager`).toBeVisible();
+      await dismissWithEscape(page, synonyms);
+      await expect(synonymsRow, `focus returns to the row after ${key}`).toBeFocused();
+    }
+  });
+
+  test("in the narrow drawer every row is a 40px target, and a tap hands off to the manager", async ({
+    page,
+  }) => {
+    await page.setViewportSize(NARROW);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+
+    await page.getByRole("button", { name: "Open navigation menu" }).click();
+    const drawer = page.getByRole("dialog", { name: /PaperLume navigation/i });
+    await expect(drawer).toBeVisible();
+    // The Sheet slides in, and `toBeVisible()` passes on its first frame: a
+    // hit-test taken mid-slide aims at points the rows have not reached yet.
+    // Wait for the animation to finish, then assert the drawer really landed.
+    await expect
+      .poll(() =>
+        drawer.evaluate(
+          (el) =>
+            el.getAnimations({ subtree: true }).filter((a) => a.playState === "running").length,
+        ),
+      )
+      .toBe(0);
+    expect((await drawer.boundingBox())!.x, "the drawer has finished sliding in").toBe(0);
+
+    const geo = await taxonomyRowGeometry(drawer);
+    expect(geo.viewport, "drawer ScrollArea viewport resolved").not.toBeNull();
+    // A nowrap row must not widen the ScrollArea past its viewport.
+    expect(geo.viewport!.scrollWidth).toBeLessThanOrEqual(geo.viewport!.clientWidth);
+    for (const row of geo.rows) {
+      const { name } = row!;
+      expect(row!.height, `${name}: touch-sized in the drawer`).toBeGreaterThanOrEqual(40);
+      expect(row!.hitAtLabel, `${name}: the label is part of the target`).toBe(true);
+      expect(row!.hitAtFarEnd, `${name}: the row's far end is part of the target`).toBe(true);
+      expect(row!.labelClipped, `${name}: the label fits the drawer`).toBe(false);
+      expect(row!.right, `${name}: inside the drawer viewport`).toBeLessThanOrEqual(geo.viewport!.right);
+    }
+
+    // Activating a row by its label closes the drawer and opens the manager.
+    await drawer.getByText("Keyword Pool", { exact: true }).click();
+    await expect(drawer).toBeHidden();
+    const keywords = page.getByRole("dialog", { name: /Manage Keyword Pool/ });
+    await expect(keywords).toBeVisible();
+    await dismissWithEscape(page, keywords);
+    await expect(page.getByRole("button", { name: "Open navigation menu" })).toBeFocused();
+  });
+});
+
+test.describe("Sidebar taxonomy rows on a coarse pointer", () => {
+  test.use({ hasTouch: true });
+
+  test("the md+ rail relaxes every row to a 40px touch target", async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.goto("/", { waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(true);
+
+    const geo = await taxonomyRowGeometry(page.getByRole("complementary"));
+    for (const row of geo.rows) {
+      expect(row!.height, `${row!.name}: touch-sized on a tablet rail`).toBeGreaterThanOrEqual(40);
+      expect(row!.hitAtLabel, `${row!.name}: the label is part of the target`).toBe(true);
+      expect(row!.labelClipped, `${row!.name}: the label fits the rail`).toBe(false);
+    }
+  });
+});

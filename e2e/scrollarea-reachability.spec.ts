@@ -178,8 +178,8 @@ async function openKeywordPool(page: Page, narrow = false) {
   /*
    * The rail and the drawer render the SAME navigation body, so below `md` both
    * are in the tree and an unscoped lookup is ambiguous. Scope to whichever one
-   * the user is actually looking at, and address the gear by its accessible
-   * name rather than by walking up from the label text.
+   * the user is actually looking at, and address the row by its accessible
+   * name rather than by its visible label text.
    */
   const nav = narrow
     ? page.getByRole("dialog", { name: "PaperLume navigation" })

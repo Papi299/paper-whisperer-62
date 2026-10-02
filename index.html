@@ -3,7 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>" />
+    <!-- The canonical PaperLume symbol, taken straight from the brand pack
+         (assets/brand/brand-spec.md); Vite emits both as hashed build assets.
+         The SVG is preferred; the 32px PNG export serves browsers without SVG
+         favicons, and its `sizes` keeps Chromium from picking it over the SVG. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/brand/png/paperlume-32.png" />
+    <link rel="icon" type="image/svg+xml" href="/assets/brand/svg/paperlume-symbol.svg" />
     <title>PaperLume</title>
     <meta name="description" content="Manage your scientific paper collections" />
 
