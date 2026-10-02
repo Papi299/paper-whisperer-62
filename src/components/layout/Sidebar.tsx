@@ -506,7 +506,7 @@ export function Sidebar({
             <SheetHeader className="sr-only">
               <SheetTitle>PaperLume navigation</SheetTitle>
               <SheetDescription>
-                Taxonomy, settings and account actions for your paper library.
+                Library organization, settings and account actions for your paper library.
               </SheetDescription>
             </SheetHeader>
             {nav}
