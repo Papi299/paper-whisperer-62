@@ -2235,4 +2235,5 @@ The cutover handles whatever population exists when it runs; it must not assume 
 **Re-evaluation trigger:**
 - a paid Consensus plan, or measured use, that justifies pagination or filters;
 - a decision to offer Consensus to anyone but the owner — that needs an owner-approved Privacy Policy update and a per-user quota and authorization design, not a widened role check;
+- granting the `owner` role to any additional account: the schema permits several `owner` rows, so the owner-only premise is a data fact this decision depends on, not a constraint;
 - Consensus changing its `/v1/search` contract.

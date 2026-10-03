@@ -315,7 +315,7 @@ describe("search-consensus — CONSENSUS_API_KEY", () => {
     ["absent", undefined],
     ["empty", ""],
     ["whitespace only", "   "],
-  ])("answers an %s key with 503 not_configured and zero upstream calls", async (_label, apiKey) => {
+  ])("answers a key that is %s with 503 not_configured and zero upstream calls", async (_label, apiKey) => {
     const harness = makeHarness({ apiKey });
     const response = await handleSearchConsensusRequest(post({ query: QUERY }), harness.deps);
     expect(response.status).toBe(503);
@@ -438,32 +438,22 @@ describe("search-consensus — the one upstream request", () => {
 
 describe("search-consensus — upstream error mapping", () => {
   it.each([
-    [
-      "the documented monthly-allowance 429",
-      () => jsonResponse({ detail: "You have used all included searches for this month." }, 429),
-      429,
-      "quota_exhausted",
-    ],
-    [
-      "the documented per-second 429",
-      () => jsonResponse({ detail: "Too many requests" }, 429, { "retry-after": "1" }),
-      429,
-      "rate_limited",
-    ],
-    ["an unrecognized 429", () => new Response("", { status: 429 }), 429, "rate_limited"],
-    ["a Consensus 401 (bad or revoked key)", () => jsonResponse({ detail: "Invalid API key sk-live-123" }, 401), 502, "consensus_unavailable"],
-    ["a Consensus 402 (billing past due)", () => jsonResponse({ detail: "Billing past due" }, 402), 502, "consensus_unavailable"],
-    ["a Consensus 403 (feature not allowed)", () => jsonResponse({ code: "feature_not_allowed" }, 403), 502, "consensus_unavailable"],
-    ["a 500", () => jsonResponse({ detail: "Traceback: internal secret" }, 500), 502, "upstream_unavailable"],
-    ["a 502", () => new Response("<html>bad gateway</html>", { status: 502 }), 502, "upstream_unavailable"],
-    ["a 400", () => jsonResponse({ detail: "bad request" }, 400), 502, "upstream_unavailable"],
-    ["a 422", () => jsonResponse({ detail: [{ loc: ["query"] }] }, 422), 502, "upstream_unavailable"],
-    ["a network error", () => new TypeError("fetch failed"), 502, "upstream_unavailable"],
-    ["a timeout", () => new DOMException("The operation timed out.", "TimeoutError"), 504, "upstream_timeout"],
-    ["a body that is not JSON", () => new Response("<html>ok?</html>", { status: 200 }), 502, "upstream_unavailable"],
-    ["a JSON envelope without results", () => jsonResponse({ page: 0, page_size: 20 }), 502, "upstream_unavailable"],
-    ["a JSON array instead of an envelope", () => jsonResponse([consensusResult()]), 502, "upstream_unavailable"],
-  ])("answers %s with %i %s and forwards no upstream text", async (_label, make, status, code) => {
+    ["the documented monthly-allowance 429", 429, "quota_exhausted", () => jsonResponse({ detail: "You have used all included searches for this month." }, 429)],
+    ["the documented per-second 429", 429, "rate_limited", () => jsonResponse({ detail: "Too many requests" }, 429, { "retry-after": "1" })],
+    ["an unrecognized 429", 429, "rate_limited", () => new Response("", { status: 429 })],
+    ["a Consensus 401 (bad or revoked key)", 502, "consensus_unavailable", () => jsonResponse({ detail: "Invalid API key sk-live-123" }, 401)],
+    ["a Consensus 402 (billing past due)", 502, "consensus_unavailable", () => jsonResponse({ detail: "Billing past due" }, 402)],
+    ["a Consensus 403 (feature not allowed)", 502, "consensus_unavailable", () => jsonResponse({ code: "feature_not_allowed" }, 403)],
+    ["a 500", 502, "upstream_unavailable", () => jsonResponse({ detail: "Traceback: internal secret" }, 500)],
+    ["a 502", 502, "upstream_unavailable", () => new Response("<html>bad gateway</html>", { status: 502 })],
+    ["a 400", 502, "upstream_unavailable", () => jsonResponse({ detail: "bad request" }, 400)],
+    ["a 422", 502, "upstream_unavailable", () => jsonResponse({ detail: [{ loc: ["query"] }] }, 422)],
+    ["a network error", 502, "upstream_unavailable", () => new TypeError("fetch failed")],
+    ["a timeout", 504, "upstream_timeout", () => new DOMException("The operation timed out.", "TimeoutError")],
+    ["a body that is not JSON", 502, "upstream_unavailable", () => new Response("<html>ok?</html>", { status: 200 })],
+    ["a JSON envelope without results", 502, "upstream_unavailable", () => jsonResponse({ page: 0, page_size: 20 })],
+    ["a JSON array instead of an envelope", 502, "upstream_unavailable", () => jsonResponse([consensusResult()])],
+] as const)("answers %s with %i %s and forwards no upstream text", async (_label, status, code, make) => {
     const harness = makeHarness({ responses: [make()] });
     const response = await handleSearchConsensusRequest(post({ query: QUERY }), harness.deps);
     expect(response.status).toBe(status);
@@ -473,6 +463,32 @@ describe("search-consensus — upstream error mapping", () => {
     for (const upstream of ["Invalid API key", "sk-live-123", "Billing past due", "feature_not_allowed", "Traceback", "bad gateway", "detail"]) {
       expect(text).not.toContain(upstream);
     }
+  });
+
+  it("reads only a bounded prefix of a 429 body, however large, then releases the rest", async () => {
+    const encoder = new TextEncoder();
+    const chunk = encoder.encode("x".repeat(1024));
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"detail":"You have used all included searches."}'));
+      },
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunk); // an endless body
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const harness = makeHarness({ responses: [new Response(body, { status: 429 })] });
+    const response = await handleSearchConsensusRequest(post({ query: QUERY }), harness.deps);
+    expect(response.status).toBe(429);
+    expect((await errorBody(response)).error).toBe("quota_exhausted");
+    expect(cancelled).toBe(true);
+    // About 4 KiB was read from an unbounded stream — never the whole body.
+    expect(pulls).toBeLessThan(16);
   });
 
   it("uses the safe owner-facing copy for quota and rate limiting", () => {

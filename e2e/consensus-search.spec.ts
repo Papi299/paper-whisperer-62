@@ -98,6 +98,14 @@ const RESULTS: ConsensusFixture[] = [
   fixture(4, DOI_CHARLIE),
 ];
 
+/**
+ * DOI_BRAVO is answered the way the live `fetch-paper-metadata` answers a DOI
+ * it resolved on PubMed's path: the record is labelled with its PMID, and it
+ * carries the record's own DOI (here in another ASCII letter case, which is
+ * DOI-equivalent). The importer must still report it under the requested DOI.
+ */
+const BRAVO_PUBMED_PMID = "900300002";
+
 /** The canonical importer's answer per DOI — titles the library must show. */
 const CANONICAL_TITLES: Record<string, string> = {
   [DOI_ALPHA]: `${TITLE_PREFIX} canonical record Alpha`,
@@ -221,7 +229,26 @@ async function installStandIns(
       recorder.metadata.push({ identifiers, rawBody: raw });
 
       const results = identifiers.map((identifier) =>
-        CANONICAL_TITLES[identifier]
+        identifier === DOI_BRAVO
+          ? {
+              identifier: BRAVO_PUBMED_PMID,
+              title: CANONICAL_TITLES[DOI_BRAVO],
+              authors: ["Canonical, B"],
+              year: 2022,
+              journal: "Journal of Canonical Records",
+              pmid: BRAVO_PUBMED_PMID,
+              doi: DOI_BRAVO.toUpperCase(),
+              abstract: null,
+              keywords: [],
+              mesh_terms: [],
+              substances: [],
+              study_type: null,
+              publication_types: [],
+              pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${BRAVO_PUBMED_PMID}/`,
+              journal_url: null,
+              source: "pubmed",
+            }
+          : CANONICAL_TITLES[identifier]
           ? {
               identifier,
               title: CANONICAL_TITLES[identifier],
@@ -447,8 +474,15 @@ async function ownerJourney(page: Page, recorder: Recorder, mobile: boolean) {
   await dialog.getByRole("button", { name: "Import 2 Selected" }).click();
   await expect(dialog.getByText("Consensus Import Results")).toBeVisible({ timeout: 60_000 });
   await expect(dialog.getByText("Added (2)")).toBeVisible();
-  // The summary lists the DOI strings that were imported.
+  // The summary lists the DOI strings that were imported — including the one
+  // the importer resolved on PubMed's path, never that record's PMID.
   await expect(dialog.getByText(DOI_ALPHA, { exact: true })).toBeVisible();
+  await expect(dialog.getByText(DOI_BRAVO, { exact: true })).toBeVisible();
+  await expect(dialog.getByText(BRAVO_PUBMED_PMID, { exact: true })).toHaveCount(0);
+  // Both imported DOIs left the selection, whichever provider resolved them.
+  await expect(dialog.getByText(/papers? selected/)).toHaveCount(0);
+  await expect(resultCheckbox(dialog, DOI_ALPHA)).not.toBeChecked();
+  await expect(resultCheckbox(dialog, DOI_BRAVO)).not.toBeChecked();
 
   // THE ARCHITECTURAL ASSERTION: the canonical metadata function received
   // exactly the selected DOI strings, and nothing from Consensus beyond them.
@@ -555,6 +589,47 @@ test.describe("Owner-only Consensus discovery", () => {
     } finally {
       await context.close();
     }
+  });
+
+  test("owner: the Consensus source is operable by keyboard alone", async ({ page }) => {
+    const recorder = await installStandIns(page, { access: "owner" });
+    await openDashboard(page);
+    const dialog = await openSearchMode(page);
+    const source = sourceGroup(dialog);
+    const pubmed = source.getByRole("radio", { name: "PubMed" });
+    const consensus = source.getByRole("radio", { name: "Consensus" });
+
+    // Arrow keys move between the sources; they choose nothing and search nothing.
+    await pubmed.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(consensus).toBeFocused();
+    await expect(consensus).toHaveAttribute("aria-checked", "false");
+    await page.keyboard.press("Space");
+    await expect(consensus).toHaveAttribute("aria-checked", "true");
+    expect(recorder.consensus).toHaveLength(0);
+
+    // Tab reaches the question; a REAL Enter is the one explicit submission.
+    await page.keyboard.press("Tab");
+    const field = dialog.getByLabel("Search Consensus");
+    await expect(field).toBeFocused();
+    await page.keyboard.type(QUERY);
+    expect(recorder.consensus).toHaveLength(0);
+    await page.keyboard.press("Enter");
+    await expect(dialog.getByRole("list", { name: "Consensus search results" })).toBeVisible();
+    expect(recorder.consensus).toEqual([{ query: QUERY, bodyKeys: ["query"], authorizationIsBearer: true }]);
+    // Focus the owner placed in the field is not taken away by the results.
+    await expect(field).toBeFocused();
+
+    // A result's checkbox toggles from the keyboard.
+    const alpha = resultCheckbox(dialog, DOI_ALPHA);
+    await alpha.focus();
+    await page.keyboard.press("Space");
+    await expect(alpha).toBeChecked();
+    await expect(dialog.getByText("1 paper selected")).toBeVisible();
+
+    await closeDialog(page);
+    expect(recorder.consensus).toHaveLength(1);
+    expect(recorder.providerRequests).toEqual([]);
   });
 
   test("ordinary user: the real access lookup answers 'user' and no Consensus control exists", async ({ page }) => {

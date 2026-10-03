@@ -2019,7 +2019,7 @@ The §30.4 reading still holds; nothing read materially changes it.
 | **Recipient** | Consensus (`api.consensus.app`) |
 | **Who can trigger it** | The **owner** only. The Add Papers dialog shows the Consensus source only when `get_current_user_access()` resolves the role `owner`, and the Edge Function re-checks that role server-side, as the caller, before it reads its key or contacts Consensus. Managers and ordinary users cannot trigger it. |
 | **When** | Only when the owner presses **Search** in the Consensus source — never on opening the dialog, switching source, typing, selecting or importing, and never automatically retried. |
-| **Data sent** | The owner's natural-language **research question** (trimmed, 1–500 characters) and `page_size=20`, plus PaperLume's Consensus API key in an `x-api-key` header. No user id, email, account id, library content, attachment, note or Project/Tag data. The browser sends the question to PaperLume's function in a POST body, never in a URL. |
+| **Data sent** | The owner's natural-language **research question** (trimmed, 1–500 characters) and `page_size=20`, plus the owner's own Consensus API key in an `x-api-key` header. No user id, email, account id, library content, attachment, note or Project/Tag data. The browser sends the question to PaperLume's function in a POST body; the function then sends it to Consensus as the `query` parameter of a GET request URL (`/v1/search?query=…&page_size=20`), so the question appears in Consensus's request URL and may appear in its request logs — terms §37.3 records as unverified. |
 | **Data received** | Up to 20 paper records — title, authors, journal, year, abstract, DOI, citation counts, study metadata, a Consensus-generated takeaway, a consensus.app link — of which the function forwards only an allow-listed subset to the browser. |
 | **Client or server** | **Server (Edge Function) only.** The browser contacts only `search-consensus`; it never contacts Consensus and never receives the key. |
 | **Persistence** | **None.** Results live in the open dialog's memory and are discarded on close. Nothing Consensus returns is written to the database: importing a result hands only its validated DOI to the existing importer, which fetches that paper's metadata from PubMed/Crossref (§9.1) exactly as the Import IDs tab does. The library never contains Consensus's title, abstract, authors or takeaway. |
@@ -2032,9 +2032,11 @@ The §30.4 reading still holds; nothing read materially changes it.
 
 A research question can reveal an unpublished research direction, a clinical interest or a person's own condition. In this pilot the only person who can send one is the owner, sending their own question with their own Consensus account's key, so no other user's data reaches Consensus. The published Privacy Policy is therefore unchanged by this addendum.
 
+That premise is a **data fact, not a constraint**: `internal_user_access` allows any number of `owner` rows, and the function admits whoever holds the role. Granting `owner` to a second account would let that person's questions reach Consensus with no code change, so such a grant is a re-evaluation trigger (§37.3).
+
 ### 37.3 Owner and legal input required before any wider access
 
-Before any user other than the owner can send a query to Consensus:
+Before any user other than the owner can send a query to Consensus — including by granting the `owner` role to another account:
 
 - the published Privacy Policy (`src/pages/Privacy.tsx`) needs an **owner-approved** update naming Consensus as a recipient of research questions; and
 - Consensus's own terms for API queries — retention, training use, logging — must be read first-party. **This audit has not verified them**: Consensus's documentation pages sit behind a Cloudflare browser challenge, and only its `llms.txt` / `llms-full.txt` exports and its GitHub README were read, for the request contract.

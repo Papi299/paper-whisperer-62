@@ -52,7 +52,7 @@ For local dev, the same two values go in a local `.env.local` (or the existing `
 | `GEMINI_API_KEY` | `analyze-paper`, `suggest-paper-organization` | Required. **One key serves both**, for their Gemini `generateContent` calls — `suggest-paper-organization` reuses the existing secret and introduced no new one, so rotating this value rotates it for both. Without it, each fails safely with a generic 500 **before** any provider call, naming the secret only in its Edge log — `analyze-paper` via its clear in-source throw (preserved by PR #139), which surfaces in the log rather than the response. `analyze-paper` refunds the unit it already consumed; `suggest-paper-organization` checks the key first and consumes nothing. **It was the only AI provider credential installed until 2026-09-18, when the two paid-provider keys were added (rows below).** Repository `main` — and, since the 2026-09-17 Phase 6 deploy, the live generation runtime — registers `google`, `anthropic` and `openai` (C41), and `AI-MULTI-PROVIDER-001C` binds each to its own credential name through the one reviewed mapping in `_shared/aiProviderCredentials.ts` — `google` → this key, `anthropic` → `ANTHROPIC_API_KEY`, `openai` → `OPENAI_API_KEY`. Both of the other two are installed since 2026-09-18 (rows below), so a request that resolves to a paid catalog row now reaches that provider with that provider's own key. Each operation reads **only the selected provider's** variable; for a request that resolves to a Google row that is this key, presented as `x-goog-api-key`. Since Phase 8 on 2026-09-19 both paid rows are `selectable = true`, so an entitled user who explicitly selects Claude Sonnet 5 or GPT-5.6 Terra is served through that provider's own credential instead (§6.6a, §14). This key serves every request that resolves to a **Google** row: no entitlement, no saved preference, a saved Google preference, or a preference that cannot be safely resolved and falls back to the system default (C34). A missing selected-provider credential never falls back to another provider's key. There is no generic `AI_API_KEY` and no `AI_PROVIDER`. Installation of the paid-provider secrets was a separately authorized Phase-5 step (§6.6a) and completed on 2026-09-18. *Historical checkpoints:* at `AI-MULTI-PROVIDER-001A` (C39) completion the seam registered only the Google adapter, and `AI-MULTI-PROVIDER-001B` (C40) added the Anthropic/OpenAI adapters unregistered and no secret. Operator detail: §10.3. |
 | `ANTHROPIC_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `anthropic` catalog row | **Installed in Production on 2026-09-18** (§6.6a phase 5, §14.1). Named by `AI-MULTI-PROVIDER-001C` (C41) as the credential for the registered Anthropic adapter, and read only when a request resolves to an `anthropic` catalog row; a missing value never falls back to `GEMINI_API_KEY` or `OPENAI_API_KEY`. The `anthropic/claude-sonnet-5` row is `enabled` and — since Phase 8 on 2026-09-19 — `selectable`, so any entitled user can choose Claude Sonnet 5 from Settings and reach this credential; before Phase 8 only an operator-written preference on the acceptance account did (§14.2). Never store it under a generic name. |
 | `OPENAI_API_KEY` | `analyze-paper`, `suggest-paper-organization` — only for a request routed to an `openai` catalog row | **Installed in Production on 2026-09-18.** The same terms as `ANTHROPIC_API_KEY`, for the registered OpenAI adapter and the `openai/gpt-5.6-terra` row. |
-| `CONSENSUS_API_KEY` | `search-consensus` only | **NOT installed — future, owner-authorized rollout only (§7e).** The owner's own Consensus API key (owner-confirmed **Free** plan on 2026-10-02: 30 calls a month shared with the owner's Consensus MCP usage, 20 papers per request, 1 request/second). Read server-side by `search-consensus` **only after** the caller has been authenticated and authorized as the owner, and sent to Consensus only in the `x-api-key` header — never in a URL, never logged, never returned, never a `VITE_` variable, never stored in a profile column. Absent → the function answers `503 not_configured` before any Consensus request. Verify it **by name only**: `supabase secrets list` shows an unsalted SHA-256 digest of every value, which must not be printed or recorded for this key. |
+| `CONSENSUS_API_KEY` | `search-consensus` only | **NOT installed — future, owner-authorized rollout only (§7e).** The owner's own Consensus API key. The owner confirmed the **Free** plan on 2026-10-02; per Consensus's own plan table read on 2026-10-03, that plan allows 30 calls a month shared with the owner's Consensus MCP usage, 20 papers per request and 1 request/second. Read server-side by `search-consensus` **only after** the caller has been authenticated and authorized as the owner, and sent to Consensus only in the `x-api-key` header — never in a URL, never logged, never returned, never a `VITE_` variable, never stored in a profile column. Absent → the function answers `503 not_configured` before any Consensus request. Verify it **by name only**: `supabase secrets list` shows an unsalted SHA-256 digest of every value, which must not be printed or recorded for this key. |
 | `GEMINI_MODEL` | `analyze-paper`, `get-gemini-provider-quota`, `suggest-paper-organization` | **Optional. This is the SYSTEM DEFAULT model**, not necessarily the model every request uses. All three resolve it through the shared `_shared/geminiModel.ts` with the exact behavioral fallback `gemini-flash-latest`, so they can never disagree about the *default*. Since `AI-MODEL-SELECTION-001B` the two generation functions may route an individual request to an entitled user's saved preference instead (`_shared/aiModelSelection.ts`), while `get-gemini-provider-quota` deliberately keeps reporting this configured default — it is system-wide observational monitoring, not a per-user routing report, so the three may legitimately name different models for the same request. This value remains the fallback for every caller who is not entitled, has no preference, or whose preference cannot be safely resolved. Unset = fallback. **Production currently sets `gemini-3.5-flash`** — the system default under decision **C34**. Changing the default is an environment change here and nothing else: it is not a frontend deploy, not a migration and not a catalog edit, because the Settings control represents "follow the default" as a *sentinel meaning no saved preference* rather than embedding a model string in the browser. `gemini-3.6-flash`, `gemini-3.7-flash` and `gemini-3.8-flash` are all `enabled` and `selectable` in the catalog as explicit choices for entitled users (3.7 and 3.8 added by migration `20260903120000`, C35, **applied to Production on 2026-09-03**). Adding a catalog model never changes this value: the catalog decides what is *selectable*, this variable decides what is *default*. |
 | `GOOGLE_CLOUD_PROJECT_ID` | `get-gemini-provider-quota` | **Optional / feature-gated, and currently inert.** Google Cloud project that owns the Gemini API usage. Under C29 **no frontend surface calls this function**, so these three secrets affect nothing today; absent, the function's own response is a bounded "not configured" and ordinary analysis is unaffected. |
 | `GOOGLE_MONITORING_CLIENT_EMAIL` | `get-gemini-provider-quota` | Service-account email for the Monitoring reader (below). |
@@ -1788,7 +1788,7 @@ Each of those is refused before any privileged client is constructed, so none ca
 
 ### 7b. `search-pubmed` — deployed; endpoint-before-UI ordering applies
 
-**Current state: `search-pubmed` is deployed to the linked project and live.** It is the Edge Function behind the Add Papers → **PubMed Search** tab (`PUBMED-IN-APP-SEARCH-001`). The initial rollout completed on **2026-08-23** — its evidence (deployment identifiers, verification results, merge and Vercel provenance) is recorded in [migration-history.md](migration-history.md). Read the live version back rather than trusting any number written here: `supabase functions list --project-ref <project-ref>`.
+**Current state: `search-pubmed` is deployed to the linked project and live.** It is the Edge Function behind the Add Papers → **Search** mode's PubMed source (`PUBMED-IN-APP-SEARCH-001`; the mode was named **PubMed Search** until `CONSENSUS-SEARCH-MVP-001A`). The initial rollout completed on **2026-08-23** — its evidence (deployment identifiers, verification results, merge and Vercel provenance) is recorded in [migration-history.md](migration-history.md). Read the live version back rather than trusting any number written here: `supabase functions list --project-ref <project-ref>`.
 
 **What it is.** A read-only discovery endpoint. It authenticates the caller in-function with `auth.getUser()`, reads that user's optional `profiles.pubmed_api_key` server-side, calls NCBI E-utilities **ESearch** then **ESummary** with a finite timeout and a one-retry budget, and returns an application-owned page of PubMed summaries. It performs **no** insert, update, Project/Tag mutation, AI call or quota consumption, and it uses **no** elevated key. The user's API key is never returned, never logged, and never reaches the browser; the raw search query is never logged either — only its length.
 
@@ -2023,15 +2023,21 @@ Neither pre-existing shared module is changed, so no other function needs redepl
 ```text
 1.  independent review approves the exact PR head
 2.  explicit owner authorization for the secret installation and the Production Edge deployment
-3.  install the secret (never echo it; never paste it into a chat, PR, commit or log):
-      supabase secrets set CONSENSUS_API_KEY=<owner's Consensus API key> --project-ref <project-ref>
+3.  install the secret from a private file, so the value reaches neither shell history nor the
+    process list (and is never pasted into a chat, PR, commit or log):
+      umask 077 and write the single line CONSENSUS_API_KEY=<owner's key> to a new temp file
+      supabase secrets set --env-file <that temp file> --project-ref <project-ref>
+      delete the temp file
+    Typing `supabase secrets set CONSENSUS_API_KEY=<key>` inline would store the key in history.
     `secrets set` rolls EVERY function's `version` by +1 without redeploying anything — prove
     that with each function's unchanged `ezbr_sha256`, `updated_at` and `entrypoint_path`.
 4.  verify the secret BY NAME ONLY (`supabase secrets list` prints a digest — do not record it)
 5.  deploy the exact approved head from a worktree byte-identical to it:
       supabase functions deploy search-consensus --project-ref <project-ref>
 6.  verify the deployed source (`functions download --use-api` into a scratch workdir; byte-compare
-    the closure above) and the owner-only boundary with the non-consuming checks below
+    the closure above) and the owner-only boundary with the non-consuming checks below, and
+    confirm with a read-only count — no ids recorded — that exactly one account holds role
+    `owner` (the premise of privacy-data-flow-audit.md §37.2; the schema permits several)
 7.  OPTIONAL, only if separately authorized: ONE controlled authenticated owner canary. It spends
     one call from the owner's monthly allowance; run it once, never in a loop
 8.  re-check that the PR head is still exactly the approved one
@@ -2222,26 +2228,15 @@ Run from a real browser session signed into the production app. Tick each item; 
 
 ### 9.3b In-app PubMed search (Edge Function: `search-pubmed`)
 
-Run after a `search-pubmed` deployment, or after a frontend change affecting PubMed Search. The initial rollout completed on **2026-08-23**; its historical evidence is in [migration-history.md](migration-history.md). The boxes below stay unchecked because this is a reusable checklist, not a record of one run.
+Run after a `search-pubmed` deployment, or after a frontend change affecting the Search mode's PubMed source. The initial rollout completed on **2026-08-23**; its historical evidence is in [migration-history.md](migration-history.md). The boxes below stay unchecked because this is a reusable checklist, not a record of one run.
 
-- [ ] Add Papers → **PubMed Search** → query `resistance training hypertrophy` → press Search → results render with titles, authors, journal, date and PMID.
+- [ ] Add Papers → **Search** (PubMed source) → query `resistance training hypertrophy` → press Search → results render with titles, authors, journal, date and PMID.
 - [ ] The result count distinguishes the records shown from PubMed's total (e.g. `1–20 of 2,509`).
 - [ ] Next / Previous move between pages; a selection made on page 1 is still counted on page 2.
 - [ ] Select two results, optionally choose a Project/Tag, press **Import 2 Selected** → the papers import through the normal identifier path and the summary shows Added / Skipped — Duplicates / Failed.
 - [ ] Re-importing an already-imported PMID reports it as **Skipped — Duplicates**, and creates no second row.
 - [ ] A field-tagged query such as `("resistance training"[Title/Abstract]) AND muscle` returns sensibly different results from the plain-text one — proof the syntax reached PubMed unrewritten.
 - [ ] No Edge Function error toast, and the Function logs show `pubmed-search q_len=… outcome=ok` with **no query text**.
-
-### 9.3d Owner-only Consensus search (Edge Function: `search-consensus`) — NOT YET DEPLOYED
-
-Run once after the §7e rollout, and after any later change to `search-consensus` or the Consensus source. **Every Consensus search spends one call from the owner's monthly allowance**, so the authenticated items here run only when the owner has authorized spending one; the rest spend nothing. The boxes stay unchecked because this is a reusable checklist.
-
-- [ ] Signed in as an ordinary (non-owner) user: Add Papers → **Search** shows the PubMed experience directly, with no source selector and no "Consensus" anywhere in the dialog.
-- [ ] Signed in as the owner: Search shows the **PubMed | Consensus** selector, starting on **PubMed**. Choosing Consensus, typing and selecting make **no** request (browser network panel).
-- [ ] *(Spends one call — authorize first.)* One Search with a natural-language question → one `search-consensus` request → up to 20 results; a result without a DOI shows "No importable DOI available" and has no checkbox; "Open in Consensus" opens `consensus.app` in a new tab.
-- [ ] Select one result, optionally choose a Project/Tag, **Import 1 Selected** → the summary reads **Consensus Import Results** in the Added / Skipped — Duplicates / Failed vocabulary, listing the DOI. The library row carries the importer's canonical metadata, not Consensus's wording.
-- [ ] Close and reopen Add Papers → Search starts on **PubMed** again.
-- [ ] The Function logs show one `consensus-search outcome=ok q_len=… retry=0 …` line per search with **no query text, title, DOI or URL**.
 
 ### 9.4 AI analysis (Edge Function: `analyze-paper`)
 
@@ -2306,6 +2301,17 @@ What to expect today: a `provider_status=` warning is **terminal** for that prov
 - [ ] No **Paper List** row action, bulk suggest action, or suggestion column appeared anywhere.
 - [ ] On a phone-width viewport and with a finger: the section and every result action are reachable inside the Edit Paper scroll region, the dialog still has exactly one vertical scroll owner, the page behind the modal never scrolls, and the Select / Create & select / Dismiss targets are comfortably tappable.
 
+### 9.3d Owner-only Consensus search (Edge Function: `search-consensus`) — NOT YET DEPLOYED
+
+Run once after the §7e rollout, and after any later change to `search-consensus` or the Consensus source. **Every Consensus search spends one call from the owner's monthly allowance**, so the authenticated items here run only when the owner has authorized spending one; the rest spend nothing. The boxes stay unchecked because this is a reusable checklist.
+
+- [ ] Signed in as an ordinary (non-owner) user: Add Papers → **Search** shows the PubMed experience directly, with no source selector and no "Consensus" anywhere in the dialog.
+- [ ] Signed in as the owner: Search shows the **PubMed | Consensus** selector, starting on **PubMed**. Choosing Consensus, typing and selecting make **no** request (browser network panel).
+- [ ] *(Spends one call — authorize first.)* One Search with a natural-language question → one `search-consensus` request → up to 20 results; a result without a DOI shows "No importable DOI available" and has no checkbox; "Open in Consensus" opens `consensus.app` in a new tab.
+- [ ] Select one result, optionally choose a Project/Tag, **Import 1 Selected** → the summary reads **Consensus Import Results** in the Added / Skipped — Duplicates / Failed vocabulary, listing the DOI. The library row carries the importer's canonical metadata, not Consensus's wording.
+- [ ] Close and reopen Add Papers → Search starts on **PubMed** again.
+- [ ] The Function logs show one `consensus-search outcome=ok q_len=… retry=0 …` line per search with **no query text, title, DOI or URL**.
+
 ### 9.5 Paper operations
 
 - [ ] Add Paper manually → fills required fields → save → paper appears.
@@ -2343,7 +2349,7 @@ What to expect today: a `provider_status=` warning is **terminal** for that prov
 
 ### 10.2 Missing Edge env vars
 
-**Symptom:** an Edge Function returns a **generic HTTP 500 that does not name the variable.** All six deployed functions — and the not-yet-deployed `search-consensus` (§7e) — read `SUPABASE_URL` / `SUPABASE_ANON_KEY` through `requireEdgeEnv` **inside the request handler and inside that handler's outer `try`**, so the helper's actionable message is caught there, written to the Edge log, and replaced by the function's own neutral body. **Diagnose from the Edge Function logs, not from the response.**
+**Symptom:** an Edge Function returns a **generic HTTP 500 that does not name the variable.** All six deployed functions — and the not-yet-deployed `search-consensus` (§7e) — read `SUPABASE_URL` / `SUPABASE_ANON_KEY` through `requireEdgeEnv` **inside the request handler and inside that handler's outer `try`**, so the helper's actionable message is caught there, written to the Edge log — by `search-consensus` only as the bounded field `missing_env=<NAME>`, never as message text — and replaced by the function's own neutral body. **Diagnose from the Edge Function logs, not from the response.**
 
 **For a request that reaches the environment check** (see the gates below), the neutral body differs per function; the log line is what names the variable:
 

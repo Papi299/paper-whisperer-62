@@ -536,17 +536,17 @@ describe("Consensus — selection", () => {
   it("select-all selects only the importable rows, then disables itself", async () => {
     renderDialog();
     await consensusSearch();
-    fireEvent.click(screen.getByRole("button", { name: "Select all importable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all importable results" }));
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
     for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeChecked();
     expect(screen.getByText("2 papers selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select all importable" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Select all importable results" })).toBeDisabled();
   });
 
   it("clear selection empties it", async () => {
     renderDialog();
     await consensusSearch();
-    fireEvent.click(screen.getByRole("button", { name: "Select all importable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all importable results" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
     expect(screen.queryByText(/papers? selected/)).toBeNull();
     expect(importButton()).toBeDisabled();
@@ -590,7 +590,7 @@ describe("Consensus — canonical import handoff", () => {
   it("hands the importer NO Consensus discovery metadata whatsoever", async () => {
     const { onBulkImport } = renderDialog();
     await consensusSearch();
-    fireEvent.click(screen.getByRole("button", { name: "Select all importable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all importable results" }));
     fireEvent.click(importButton());
     await screen.findByText("Consensus Import Results");
 
@@ -620,7 +620,7 @@ describe("Consensus — canonical import handoff", () => {
       ]),
     });
     await consensusSearch();
-    fireEvent.click(screen.getByRole("button", { name: "Select all importable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all importable results" }));
     fireEvent.click(importButton());
     await screen.findByText("Consensus Import Results");
     expect(onBulkImport.mock.calls[0][0]).toEqual(["10.5555/SAME.Paper", "10.5555/consensus.3"]);
@@ -644,7 +644,7 @@ describe("Consensus — canonical import handoff", () => {
       onConsensusSearch: makeConsensusSearch([consensusResult(1), consensusResult(2), consensusResult(3)]),
     });
     await consensusSearch();
-    fireEvent.click(screen.getByRole("button", { name: "Select all importable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all importable results" }));
     fireEvent.click(importButton());
 
     await screen.findByText("Consensus Import Results");
@@ -661,7 +661,7 @@ describe("Consensus — canonical import handoff", () => {
       onConsensusSearch: makeConsensusSearch([consensusResult(1), consensusResult(2), consensusResult(3)]),
     });
     await consensusSearch();
-    fireEvent.click(screen.getByRole("button", { name: "Select all importable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all importable results" }));
     fireEvent.click(importButton());
     await screen.findByText("Failed (1)");
 
@@ -785,6 +785,81 @@ describe("Consensus — dialog lifecycle", () => {
     expect(screen.queryByText("Showing 3 Consensus results")).toBeNull();
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(consensusField()).toHaveValue("");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Focus and keyboard
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("Consensus — focus and keyboard", () => {
+  // A browser drops focus to <body> when the pressed Search button turns
+  // disabled for the request. jsdom does not, so these tests drop it themselves.
+  const loseFocus = () => (document.activeElement as HTMLElement | null)?.blur();
+
+  it("moves focus to the results heading when a search settles with focus lost", async () => {
+    renderDialog();
+    chooseSource("Consensus");
+    fireEvent.change(consensusField(), { target: { value: "creatine" } });
+    loseFocus();
+    fireEvent.click(searchButton());
+    const heading = await screen.findByText("Showing 3 Consensus results");
+    await waitFor(() => expect(heading).toHaveFocus());
+    // A focus target, never a Tab stop.
+    expect(heading).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("returns focus to the question field when a search ends with no results", async () => {
+    renderDialog({ onConsensusSearch: makeConsensusSearch([]) });
+    chooseSource("Consensus");
+    fireEvent.change(consensusField(), { target: { value: "nothing" } });
+    loseFocus();
+    fireEvent.click(searchButton());
+    await screen.findByText("No Consensus results found. Try rephrasing your question.");
+    await waitFor(() => expect(consensusField()).toHaveFocus());
+  });
+
+  it("never moves focus the owner has put somewhere", async () => {
+    renderDialog();
+    chooseSource("Consensus");
+    fireEvent.change(consensusField(), { target: { value: "creatine" } });
+    consensusField().focus();
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    expect(consensusField()).toHaveFocus();
+  });
+
+  it("moves between the two sources with the arrow keys, without searching", async () => {
+    const { onConsensusSearch, onPubMedSearch } = renderDialog();
+    sourceRadio("PubMed").focus();
+    fireEvent.keyDown(sourceRadio("PubMed"), { key: "ArrowRight" });
+    await waitFor(() => expect(sourceRadio("Consensus")).toHaveFocus());
+    fireEvent.keyDown(sourceRadio("Consensus"), { key: "ArrowLeft" });
+    await waitFor(() => expect(sourceRadio("PubMed")).toHaveFocus());
+    expect(onConsensusSearch).not.toHaveBeenCalled();
+    expect(onPubMedSearch).not.toHaveBeenCalled();
+  });
+
+  it("is a single Tab stop for the whole source group (roving focus)", () => {
+    renderDialog();
+    const stops = () =>
+      [sourceGroup(), ...within(sourceGroup()).getAllByRole("radio")].filter(
+        (element) => element.getAttribute("tabindex") === "0",
+      );
+    // Before focus enters the group, the group itself is the one Tab stop and
+    // every option is reached with the arrow keys.
+    expect(stops()).toEqual([sourceGroup()]);
+  });
+
+  it("treats focus parked on the dialog shell as lost, and moves it to the results", async () => {
+    renderDialog();
+    chooseSource("Consensus");
+    fireEvent.change(consensusField(), { target: { value: "creatine" } });
+    fireEvent.click(searchButton());
+    // Where Radix's focus trap puts focus once the focused node is removed.
+    (screen.getByRole("dialog") as HTMLElement).focus();
+    const heading = await screen.findByText("Showing 3 Consensus results");
+    await waitFor(() => expect(heading).toHaveFocus());
   });
 });
 

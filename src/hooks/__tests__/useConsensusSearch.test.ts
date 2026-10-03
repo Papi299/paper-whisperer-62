@@ -122,6 +122,35 @@ describe("useConsensusSearch — what can and cannot reach Consensus", () => {
     expect(search).toHaveBeenCalledTimes(1);
   });
 
+  it("two submissions in the same tick still start exactly one request", () => {
+    const { search } = deferredSearch();
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => {
+      hook.current.submitSearch();
+      hook.current.submitSearch();
+    });
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it("a reset releases the in-flight guard, so the reopened dialog can search again", async () => {
+    const { search, pending } = deferredSearch();
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("first"));
+    act(() => hook.current.submitSearch());
+    act(() => hook.current.reset());
+    act(() => hook.current.setDraftQuery("second"));
+    act(() => hook.current.submitSearch());
+    expect(search).toHaveBeenCalledTimes(2);
+
+    // The superseded request settling later must not release the newer one's guard.
+    await act(async () => {
+      pending[0].resolve({ results: RESULTS });
+    });
+    act(() => hook.current.submitSearch());
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["an empty draft", ""],
     ["a whitespace draft", "   "],
@@ -249,6 +278,49 @@ describe("useConsensusSearch — errors and re-runs", () => {
     });
     expect(hook.result.current.committedQuery).toBe("a different question");
     expect(hook.result.current.selectedDois).toEqual([]);
+  });
+});
+
+describe("useConsensusSearch — a same-query re-run never leaves an invisible selection", () => {
+  it("drops selected DOIs the new page no longer shows, and keeps the ones it still shows", async () => {
+    let page: ConsensusSearchResult[] = [result(1, "10.5555/a"), result(2, "10.5555/b")];
+    const search = vi.fn<ConsensusSearchFn>(async () => ({ results: page }));
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+    act(() => hook.current.toggleSelection("10.5555/a"));
+    act(() => hook.current.toggleSelection("10.5555/b"));
+
+    page = [result(1, "10.5555/B"), result(2, "10.5555/c")];
+    await act(async () => {
+      hook.current.submitSearch(); // same query, different page
+    });
+
+    // a is gone from the page, so it is gone from the selection; b is still
+    // shown (as a DOI-equivalent spelling), so it stays.
+    expect(hook.current.selectedDois).toEqual(["10.5555/b"]);
+  });
+
+  it("keeps the selection when the re-run fails — the old page is still on screen", async () => {
+    let fail = false;
+    const search = vi.fn<ConsensusSearchFn>(async () => {
+      if (fail) throw new ConsensusSearchError("upstream", "down");
+      return { results: [result(1, "10.5555/a")] };
+    });
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+    act(() => hook.current.toggleSelection("10.5555/a"));
+    fail = true;
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+    expect(hook.current.selectedDois).toEqual(["10.5555/a"]);
+    expect(hook.current.results).toHaveLength(1);
   });
 });
 

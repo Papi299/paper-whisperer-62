@@ -122,6 +122,14 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
    * the owner has already left.
    */
   const generation = useRef(0);
+  /**
+   * The generation of the request currently in flight, or `null`. Set and read
+   * synchronously, unlike `state.loading`, which only reaches `stateRef` on the
+   * next render — so two submissions in the same tick cannot both start a
+   * request. It is the hook's own guarantee of "one request in flight", not a
+   * property it borrows from how React happens to flush click events.
+   */
+  const inFlight = useRef<number | null>(null);
   /** Mirrors `state` for callbacks that must read it without re-creating. */
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -134,7 +142,7 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
     if (!search) return;
     const current = stateRef.current;
     // One request in flight at a time: a second press cannot spend a second call.
-    if (current.loading) return;
+    if (inFlight.current !== null || current.loading) return;
 
     const query = current.draftQuery.trim();
     if (query.length === 0 || query.length > CONSENSUS_SEARCH_MAX_QUERY_LENGTH) return;
@@ -142,9 +150,11 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
     // A different query is a new discovery session: its predecessor's results
     // and selection go. Re-running the same query keeps the selected DOIs —
     // stable identifiers — and leaves the current page on screen until the new
-    // one arrives, so a failed re-run never destroys usable results.
+    // one arrives, so a failed re-run never destroys usable results; when the
+    // re-run succeeds, only the selected DOIs its page still shows are kept.
     const isNewQuery = query !== current.committedQuery;
     const requestId = ++generation.current;
+    inFlight.current = requestId;
 
     setState((prev) => ({
       ...prev,
@@ -155,12 +165,36 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
       error: null,
     }));
 
+    const settle = () => {
+      // Only the request that set the flag clears it: a reset has already
+      // released it, and a newer request owns it from then on.
+      if (inFlight.current === requestId) inFlight.current = null;
+    };
+
     void search({ query })
       .then((response) => {
+        settle();
         if (generation.current !== requestId) return;
-        setState((prev) => ({ ...prev, results: response.results, loading: false, error: null }));
+        // A same-query re-run kept the selection, but Consensus may answer it
+        // with a different page. A selected DOI the new page no longer shows
+        // would otherwise stay counted — and be imported — with no row to see or
+        // uncheck, so only DOIs still on screen survive.
+        const visible = new Set(
+          response.results.flatMap((result) => {
+            const doi = toImportableDoi(result.importDoi);
+            return doi === null ? [] : [consensusSelectionKey(doi)];
+          }),
+        );
+        setState((prev) => ({
+          ...prev,
+          results: response.results,
+          selectedDois: prev.selectedDois.filter((doi) => visible.has(consensusSelectionKey(doi))),
+          loading: false,
+          error: null,
+        }));
       })
       .catch((error: unknown) => {
+        settle();
         if (generation.current !== requestId) return;
         setState((prev) => ({ ...prev, loading: false, error: toErrorState(error) }));
       });
@@ -218,6 +252,7 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
     // Bumping the generation is the point: a response still in flight when the
     // dialog closes must not repopulate the reopened dialog.
     generation.current++;
+    inFlight.current = null;
     setState(EMPTY_STATE);
   }, []);
 

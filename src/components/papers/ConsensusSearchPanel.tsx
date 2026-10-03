@@ -64,6 +64,13 @@ const ABSTRACT_EXCERPT_LENGTH = 280;
 /** Shown in place of a title the Consensus result did not supply. */
 const MISSING_TITLE_LABEL = "Title unavailable in Consensus result";
 
+/**
+ * Roles of the structural containers focus falls back to inside Add Papers —
+ * the dialog shell (Radix's focus trap) and the mode's tab panel. Focus resting
+ * on one of them is not focus the owner placed on a control.
+ */
+const FOCUS_CONTAINER_ROLES: ReadonlySet<string> = new Set(["dialog", "tabpanel"]);
+
 /** The owner-facing quota and privacy note. Stays true on any Consensus plan. */
 export const CONSENSUS_QUOTA_NOTE =
   "Consensus searches use your connected API allowance and run only when you press Search. Your question is sent to Consensus.";
@@ -233,14 +240,22 @@ export function ConsensusSearchPanel({ state, actions, importing }: ConsensusSea
   /**
    * Keep keyboard focus somewhere predictable after a search. Pressing Search
    * disables the button for the request's duration, and a disabled button drops
-   * focus onto `<body>`. When the request settles with focus lost, focus moves
-   * to the results heading (`tabIndex={-1}`, never a Tab stop) or back to the
-   * query field. Focus a user has already moved elsewhere is never stolen.
+   * focus onto `<body>`. Inside the Add Papers dialog it rarely stays there:
+   * Radix's focus trap parks it on the dialog shell once the loading line is
+   * removed, and the Search mode's tab panel is itself focusable. Focus resting
+   * on `<body>` or on one of those structural containers therefore counts as
+   * lost. When the request settles with focus lost, focus moves to the results
+   * heading (`tabIndex={-1}`, never a Tab stop) or back to the query field.
+   * Focus on any control the owner moved to is never stolen.
    */
   useEffect(() => {
     if (loading) return;
     const active = document.activeElement;
-    if (active !== document.body && active !== null) return;
+    const focusLost =
+      active === null ||
+      active === document.body ||
+      (active instanceof HTMLElement && FOCUS_CONTAINER_ROLES.has(active.getAttribute("role") ?? ""));
+    if (!focusLost) return;
     if (results && results.length > 0) resultsHeadingRef.current?.focus();
     else if (committedQuery) queryInputRef.current?.focus();
   }, [loading, results, committedQuery]);
@@ -342,7 +357,7 @@ export function ConsensusSearchPanel({ state, actions, importing }: ConsensusSea
               disabled={importing || importableKeys.size === 0 || allImportableSelected}
               onClick={actions.selectAllImportable}
             >
-              Select all importable
+              Select all importable results
             </Button>
           </div>
 

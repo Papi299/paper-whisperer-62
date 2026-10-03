@@ -4577,3 +4577,12 @@ Decision **C60**. Production is unchanged: `search-consensus` is not deployed, `
   - New Vitest: the parser/contract suite, the handler suite, the client and hook suites, an Edge↔browser boundary parity suite, a cross-boundary "one Search = at most one Consensus call" suite and the UI suite.
   - New Playwright `e2e/consensus-search.spec.ts`, added to the local lane.
   - The renamed tab is updated in the PubMed unit and E2E suites.
+- **Review-driven fixes (second commit, same PR).**
+  - **Import attribution.** `bulkImportPapers` now reports every fetched record under the identifier that was requested (`src/lib/metadataAttribution.ts`). It matches by label, then DOI equivalence, then PMID; it never uses position, and no change is made to what is imported. `fetch-paper-metadata` labels a record found on PubMed's path with its PMID, so before this a PubMed-resolved DOI was:
+    - summarised under that PMID;
+    - left selected after a Consensus import;
+    - reported `failed` in `BulkImportOutcome.items` although it was inserted.
+
+    The last is the status `/extension-import` acts on. That defect predates this PR and is live in Production for any DOI handoff PubMed indexes; this client-side change fixes it without an Edge deploy. A title import resolved on PubMed still reports its PMID, as before.
+  - **`useConsensusSearch`.** A synchronous in-flight guard stops two same-tick submissions from starting two Consensus requests. A successful same-query re-run keeps only the selected DOIs its page still shows.
+  - **Focus restoration.** It now treats focus parked on the dialog shell or the Search tab panel as lost, which is where Radix leaves it.

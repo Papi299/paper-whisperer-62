@@ -153,6 +153,34 @@ function isTimeout(error: unknown): boolean {
 const RATE_LIMIT_BODY_PREFIX = 4096;
 
 /**
+ * Read at most about `limit` bytes of a response body as text, then release
+ * the rest. An upstream error body is only ever inspected for one documented
+ * phrase, so it is never buffered whole — however large the upstream sends it.
+ */
+async function readBoundedText(response: Response, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let received = 0;
+  try {
+    while (received < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // Nothing left to release.
+    }
+  }
+  return text.slice(0, limit);
+}
+
+/**
  * The browser-facing code for each classified upstream failure. Credential,
  * billing and permission failures share one bounded "unavailable" answer: the
  * browser is never told whether the key was rejected, revoked or unpaid — the
@@ -272,9 +300,10 @@ export async function handleSearchConsensusRequest(
     if (!response.ok) {
       let bodyPrefix = "";
       if (response.status === 429) {
-        // Read only to tell the two documented 429s apart; then discarded.
+        // Read only to tell the two documented 429s apart — a bounded prefix,
+        // never the whole body — and then discarded.
         try {
-          bodyPrefix = (await response.text()).slice(0, RATE_LIMIT_BODY_PREFIX);
+          bodyPrefix = await readBoundedText(response, RATE_LIMIT_BODY_PREFIX);
         } catch {
           bodyPrefix = "";
         }
