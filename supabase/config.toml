@@ -69,3 +69,21 @@ verify_jwt = false
 # auto-provided elevated key, with no caller Authorization header.
 [functions.suggest-paper-organization]
 verify_jwt = false
+
+# search-consensus (CONSENSUS-SEARCH-MVP-001A) verifies auth inside the function
+# body (getUser()), exactly like the six functions above. Gateway JWT
+# verification is disabled so the CORS preflight is answered before any auth
+# logic and a stale/refreshing bearer token reaches the authoritative in-code
+# path (the client refreshes and retries once on the function's own 401) rather
+# than being refused before the function runs. This does NOT make the function
+# anonymous: it requires the Authorization header, validates the bearer token
+# with an authoritative auth.getUser() network call, and then re-checks the
+# caller's role server-side through get_current_user_access() AS THE CALLER —
+# only role "owner" may search (a manager may not). Authorization happens before
+# the server-side CONSENSUS_API_KEY secret is read and before any Consensus
+# request, so a refused caller costs zero Consensus calls. No role or user id is
+# accepted from the request body. The function is read-only discovery (one
+# Consensus /v1/search request per search, never retried) and uses no elevated
+# Supabase key.
+[functions.search-consensus]
+verify_jwt = false

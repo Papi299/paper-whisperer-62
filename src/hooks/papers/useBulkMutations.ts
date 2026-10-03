@@ -15,6 +15,7 @@ import {
   toEvaluatorPublicationTypes,
 } from "@/lib/publicationTypes";
 import { fetchPaperMetadata } from "@/lib/fetchPaperMetadataEdge";
+import { attributeToRequestedIdentifiers } from "@/lib/metadataAttribution";
 import { getErrorMessage } from "@/lib/errorUtils";
 import { processChunkedInsert } from "@/lib/chunkedInsert";
 import type {
@@ -138,13 +139,19 @@ export function useBulkMutations(
       onProgress?.(0, total, addedIds, skippedIds, failedIds);
       const allMetadata = await fetchPaperMetadata(identifiers);
 
-      // Separate successful fetches from failures
+      // Separate successful fetches from failures — each reported under the
+      // identifier that was REQUESTED. The metadata function labels a record
+      // it fetched from PubMed with its PMID even when a DOI or a PubMed URL was
+      // asked for; without this, such a paper would be summarised under a PMID
+      // nobody entered, never released from a Consensus selection, and reported
+      // `failed` in `itemStatus` (the outcome `/extension-import` reads) although
+      // it was inserted. See `attributeToRequestedIdentifiers`.
       const successfulResults: { identifier: string; meta: typeof allMetadata[0] }[] = [];
-      for (const meta of allMetadata) {
+      for (const { identifier, meta } of attributeToRequestedIdentifiers(identifiers, allMetadata)) {
         if (meta.error || !meta.title) {
-          failedIds.push(meta.identifier);
+          failedIds.push(identifier);
         } else {
-          successfulResults.push({ identifier: meta.identifier, meta });
+          successfulResults.push({ identifier, meta });
         }
       }
 

@@ -387,7 +387,7 @@ async function openPubMedTab(page: Page) {
   const dialog = dialogOf(page);
   await expect(dialog).toBeVisible();
   await waitForDialogSettled(page);
-  await dialog.getByRole("tab", { name: "PubMed Search" }).click();
+  await dialog.getByRole("tab", { name: "Search", exact: true }).click();
   await expect(dialog.getByLabel("Search PubMed")).toBeVisible();
   return dialog;
 }
@@ -1118,11 +1118,11 @@ test.describe("In-app PubMed discovery", () => {
       throw new Error("target never received focus within 80 Tab presses");
     };
 
-    // Reach the PubMed Search tab and activate it from the keyboard. Radix
+    // Reach the Search tab and activate it from the keyboard. Radix
     // roving tabindex moves between tabs with arrows, not Tab.
     await tabUntil((info) => info.role === "tab");
     await page.keyboard.press("Home");
-    await expect(dialog.getByRole("tab", { name: "PubMed Search" })).toBeFocused();
+    await expect(dialog.getByRole("tab", { name: "Search", exact: true })).toBeFocused();
     await expect(dialog.getByLabel("Search PubMed")).toBeVisible();
 
     // Focus the field, type, and submit with a REAL Enter keystroke.
@@ -1210,7 +1210,7 @@ test.describe("In-app PubMed discovery", () => {
       });
 
       expect(tabGeometry.tabs.map((t) => t.name)).toEqual([
-        "PubMed Search",
+        "Search",
         "Import IDs",
         "Import File",
         "Manual",
@@ -1236,7 +1236,7 @@ test.describe("In-app PubMed discovery", () => {
         expect(tab.width).toBeGreaterThanOrEqual(120);
       }
 
-      await dialog.getByRole("tab", { name: "PubMed Search" }).click();
+      await dialog.getByRole("tab", { name: "Search", exact: true }).click();
       await runSearch(page);
 
       // ── The hostile row ──
