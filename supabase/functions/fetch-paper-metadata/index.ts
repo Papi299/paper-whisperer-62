@@ -26,6 +26,7 @@ import type { AuthorProvenance } from "../_shared/authorProvenance.ts";
 import { extractCrossrefAuthors } from "../_shared/crossrefAuthors.ts";
 import { decodeHTMLEntities } from "../_shared/htmlEntities.ts";
 import { extractPubMedAuthors } from "../_shared/pubmedAuthors.ts";
+import { extractPubMedArticleDoi } from "../_shared/pubmedArticleIdentifiers.ts";
 import {
   extractPublicationTypes,
   joinPublicationTypes,
@@ -198,9 +199,9 @@ async function fetchFromPubMed(
       /<PubDate>[\s\S]*?<Year>(\d{4})<\/Year>/
     )?.[1];
     const journal = xml.match(/<Title>([^<]+)<\/Title>/)?.[1];
-    const doi = xml.match(
-      /<ArticleId IdType="doi">([^<]+)<\/ArticleId>/
-    )?.[1];
+    // The article's own DOI only, never a cited reference's
+    // (PUBMED-OWN-DOI-EXTRACTION-HARDENING-001).
+    const doi = extractPubMedArticleDoi(xml);
 
     const tAbstractStart = performance.now();
     const abstractMatch = xml.match(
@@ -272,7 +273,7 @@ async function fetchFromPubMed(
       study_type: joinPublicationTypes(publicationTypes),
       publication_types: publicationTypes,
       pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
-      // `doi` here is PubMed's own `ELocationID`/ArticleId value — a DOI *name*
+      // `doi` here is the article's own `ArticleId` value — a DOI *name*
       // — so it is encoded on the way into the resolver URL rather than
       // interpolated, which would truncate any suffix containing `#` or `?`.
       journal_url: canonicalDoiUrl(doi),

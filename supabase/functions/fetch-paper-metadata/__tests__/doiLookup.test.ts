@@ -19,6 +19,16 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { classifyPubMedDoiMatch, createFetchByDoi, type DoiLookupRecord } from "../doiLookup.ts";
 import { canonicalDoiUrl } from "../../_shared/identifierDetection.ts";
+import { extractPubMedArticleDoi } from "../../_shared/pubmedArticleIdentifiers.ts";
+import {
+  CITED_DOI,
+  OWN_NO_DOI_CITES_DOI,
+  articleId,
+  efetchDocument,
+  pubmedArticle,
+  reference,
+  referenceList,
+} from "../../_shared/__tests__/fixtures/pubmedEfetchXml.ts";
 
 interface TestRecord extends DoiLookupRecord {
   identifier: string;
@@ -393,6 +403,47 @@ describe("rejection logging is bounded", () => {
   });
 });
 
+describe("PubMed DOI provenance end to end (PUBMED-OWN-DOI-EXTRACTION-HARDENING-001)", () => {
+  // The record a PubMed candidate becomes: its `doi` is what fetchFromPubMed
+  // now derives from the EFetch XML, i.e. `extractPubMedArticleDoi(xml)`.
+  const candidateFrom = (xml: string) => pubmedRecord(PMID_P, extractPubMedArticleDoi(xml));
+
+  it("does not accept a PubMed candidate that only cites the requested DOI", async () => {
+    // The candidate states no DOI of its own; one of its references is the
+    // requested paper. Read globally, that reference DOI would have matched
+    // and passed the candidate off as the requested paper.
+    const candidate = candidateFrom(OWN_NO_DOI_CITES_DOI);
+    expect(candidate.doi).toBeNull();
+
+    const h = harness({
+      search: { [CITED_DOI]: PMID_P },
+      pubmed: { [PMID_P]: candidate },
+      crossref: { [CITED_DOI]: crossrefRecord(CITED_DOI) },
+    });
+    const result = await h.fetchByDoi(CITED_DOI);
+
+    expect(result).toEqual(crossrefRecord(CITED_DOI));
+    expect(h.issuedPubmed).not.toContain(result);
+    expect(h.warnings).toEqual([rejected("missing", "direct"), rejected("missing", "enrichment")]);
+  });
+
+  it("still accepts a candidate whose own identifiers state the requested DOI", async () => {
+    const xml = efetchDocument(
+      pubmedArticle({
+        ownIds: [articleId("doi", DOI_A)],
+        referenceLists: [referenceList(reference("Cited A.", [articleId("doi", CITED_DOI)]))],
+      }),
+    );
+    const h = harness({ search: { [DOI_A]: PMID_P }, pubmed: { [PMID_P]: candidateFrom(xml) } });
+
+    const result = await h.fetchByDoi(DOI_A);
+
+    expect(result).toBe(h.issuedPubmed[0]);
+    expect(result?.doi).toBe(DOI_A);
+    expect(h.warnings).toEqual([]);
+  });
+});
+
 describe("index.ts uses this lookup (source-level)", () => {
   // Resolved from the repository root, like the other suites here.
   const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
@@ -414,6 +465,15 @@ describe("index.ts uses this lookup (source-level)", () => {
     expect(INDEX.match(/fetchByDoi\s*=/g) ?? []).toHaveLength(1);
     expect(INDEX).not.toMatch(/function fetchByDoi/);
     expect(INDEX).toMatch(/result = await fetchByDoi\(detected\.doi, apiKey\);/);
+  });
+
+  it("takes the PubMed record's DOI from the article's own identifiers only", () => {
+    expect(INDEX).toMatch(
+      /import \{ extractPubMedArticleDoi \} from "\.\.\/_shared\/pubmedArticleIdentifiers\.ts";/,
+    );
+    expect(INDEX).toMatch(/const doi = extractPubMedArticleDoi\(xml\);/);
+    // No document-wide DOI search survives in the entrypoint.
+    expect(INDEX).not.toMatch(/IdType="doi"/);
   });
 
   it("keeps no second copy of the decision in index.ts", () => {
