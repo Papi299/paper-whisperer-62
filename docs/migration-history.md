@@ -4557,3 +4557,23 @@ Decision **C59**. This entry **supersedes the 2026-09-30 entry above**, which re
   - **Seven refusal controls**, each on a fresh staged baseline: drift on each of the three staged rows, a missing old Sonnet row, an old Terra row already closed, an unmappable saved level, and an unexpected tenth catalog row. Each must fail with its own named precondition, stay out of the ledger, and leave catalog and preferences untouched.
   - New pgTAP `029`; `011`, `012`, `016`, `018`, `019` and `028` reconciled to the seven-row state without weakening what they pinned. `018`'s two subjects are retired, so it now owns their absence; `028`'s staging-gate assertions moved to `029` rather than becoming a second copy of them.
 - **Historical migrations are untouched.**
+
+## 2026-10-03 — CONSENSUS-SEARCH-MVP-001A: owner-only Consensus discovery + `search-consensus` Edge Function — **PREPARED in the repository; NOT deployed**
+
+Decision **C60**. Production is unchanged: `search-consensus` is not deployed, `CONSENSUS_API_KEY` is not installed, `fetch-paper-metadata` stays v25, no migration. The rollout runbook — secret, then Edge deploy, then verification, then merge — is [deployment.md](deployment.md) §7e.
+
+- **Edge source (new).**
+  - `search-consensus/index.ts` (Deno shell) and `handler.ts`: CORS before auth, POST only, `getUser()`, then `get_current_user_access()` as the caller with role exactly `owner`.
+  - Only after that: the closed `{ query }` contract (1–500 characters), the `CONSENSUS_API_KEY` read, and one never-retried `GET /v1/search?page_size=20` with a 15 s timeout and `redirect: "error"`.
+  - Bounded error mapping, and one log line with no query text.
+  - `_shared/consensusSearch.ts` holds the contract, the DOI and link boundaries and the parser. `config.toml` sets `[functions.search-consensus] verify_jwt = false`.
+  - No pre-existing Edge file changed.
+- **Frontend.** The first Add Papers mode is renamed **PubMed Search → Search**. The owner-only **PubMed | Consensus** source selector defaults to PubMed and resets to it on close. The Dashboard gates it on `useCurrentUserAccess`, failing closed.
+  - New `searchConsensusEdge.ts`: one refresh-and-retry, on a PaperLume Edge 401 only.
+  - New `useConsensusSearch` and `ConsensusSearchPanel`.
+  - Only validated DOI strings reach `onBulkImport`.
+- **Endpoint contract.** `/v1/search`, which Consensus documents as the supported endpoint. `/v1/quick_search` is deprecated (removal 2027-02-07), and the official README calls `/v1/search` the same contract. V1 is query-only. No Consensus request was made by this task.
+- **Tests.**
+  - New Vitest: the parser/contract suite, the handler suite, the client and hook suites, an Edge↔browser boundary parity suite, a cross-boundary "one Search = at most one Consensus call" suite and the UI suite.
+  - New Playwright `e2e/consensus-search.spec.ts`, added to the local lane.
+  - The renamed tab is updated in the PubMed unit and E2E suites.

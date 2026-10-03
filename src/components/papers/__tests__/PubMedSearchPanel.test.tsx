@@ -185,7 +185,7 @@ function renderDialog(options: RenderOptions = {}) {
     />,
   );
 
-  if (options.startOnPubMed !== false) switchTab(/PubMed Search/i);
+  if (options.startOnPubMed !== false) switchTab(/^Search$/);
   return { onPubMedSearch, onBulkImport, onOpenChange };
 }
 
@@ -233,7 +233,7 @@ describe("PubMed Search — the fourth Add Papers mode", () => {
     renderDialog({ startOnPubMed: false });
 
     const tabs = screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label"));
-    expect(tabs).toEqual(["PubMed Search", "Import IDs", "Import File", "Manual"]);
+    expect(tabs).toEqual(["Search", "Import IDs", "Import File", "Manual"]);
     for (const tab of screen.getAllByRole("tab")) {
       expect(tab).toBeEnabled();
     }
@@ -242,7 +242,7 @@ describe("PubMed Search — the fourth Add Papers mode", () => {
   it("does not change the default mode", () => {
     renderDialog({ startOnPubMed: false });
     expect(screen.getByRole("tab", { name: "Import IDs" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "PubMed Search" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Search" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("exposes a labelled search field and a named Search button", () => {
@@ -770,7 +770,7 @@ describe("PubMed Search — stale-response protection", () => {
       );
     }
     render(<Controlled />);
-    switchTab(/PubMed Search/i);
+    switchTab(/^Search$/);
 
     typeQuery("in flight when closed");
     pressSearch();
@@ -778,7 +778,7 @@ describe("PubMed Search — stale-response protection", () => {
     // Close mid-flight, then reopen.
     fireEvent.click(screen.getAllByRole("button", { name: "Close", hidden: true })[0]);
     fireEvent.click(screen.getByRole("button", { name: "reopen" }));
-    switchTab(/PubMed Search/i);
+    switchTab(/^Search$/);
 
     await act(async () => {
       pending[0](pageOf(PAGE_ONE, 0));
@@ -1104,7 +1104,7 @@ describe("PubMed Search — session lifecycle", () => {
 
     switchTab(/Manual/i);
     expect(screen.queryByLabelText("Search PubMed")).toBeNull();
-    switchTab(/PubMed Search/i);
+    switchTab(/^Search$/);
 
     expect(searchField()).toHaveValue("resistance training hypertrophy");
     expect(screen.getByText("21–22 of 25")).toBeInTheDocument();
@@ -1130,7 +1130,7 @@ describe("PubMed Search — session lifecycle", () => {
       );
     }
     render(<Controlled />);
-    switchTab(/PubMed Search/i);
+    switchTab(/^Search$/);
     await search();
     fireEvent.click(resultCheckbox("11111111"));
     fireEvent.click(importButton());
@@ -1141,7 +1141,7 @@ describe("PubMed Search — session lifecycle", () => {
 
     // Reopens in the established default mode…
     expect(screen.getByRole("tab", { name: "Import IDs" })).toHaveAttribute("aria-selected", "true");
-    switchTab(/PubMed Search/i);
+    switchTab(/^Search$/);
     // …with a clean discovery session.
     expect(searchField()).toHaveValue("");
     expect(screen.queryByRole("checkbox")).toBeNull();
@@ -1194,7 +1194,7 @@ describe("PubMed Search — failure isolation", () => {
         tags={TAGS}
       />,
     );
-    switchTab(/PubMed Search/i);
+    switchTab(/^Search$/);
 
     fireEvent.change(screen.getByLabelText("Search PubMed"), { target: { value: "cancer" } });
     expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
@@ -1383,7 +1383,7 @@ describe("PubMed Search — the user's Study Type exclusions", () => {
     );
 
     const { rerender } = render(props(new Set(["journal article", "research support, non-u.s. gov't"])));
-    switchTab(/PubMed Search/i);
+    switchTab(/^Search$/);
     await search();
 
     expect(badgesFor("11111111")).toEqual([

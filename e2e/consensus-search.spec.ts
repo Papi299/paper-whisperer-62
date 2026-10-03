@@ -1,0 +1,608 @@
+import { test, expect, type Locator, type Page, type Request, type Route } from "@playwright/test";
+import { getPaperCount, waitForDashboard, createProject, createTag, deleteProject, deleteTag } from "./helpers";
+
+/**
+ * CONSENSUS-SEARCH-MVP-001A — owner-only Consensus discovery, end to end.
+ *
+ * Deterministic at three HTTP boundaries, fulfilled by Playwright:
+ *
+ *   • `/rest/v1/rpc/get_current_user_access` — ONLY in the owner, manager and
+ *     fail-closed tests, to present this browser as the owner, a manager or a
+ *     failed lookup. The ordinary-user test leaves it alone, so the real local
+ *     database answers.
+ *   • `/functions/v1/search-consensus`       — the discovery results.
+ *   • `/functions/v1/fetch-paper-metadata`   — the canonical import metadata.
+ *
+ * Everything between them is the real product: the real Add Papers dialog and
+ * its source selector, the real result list, selection and shared Project/Tag
+ * state, the real `supabase.functions.invoke` calls and Authorization header,
+ * the real `bulkImportPapers`, normalization worker and
+ * `safe_bulk_insert_papers` against the ephemeral local database, the real
+ * duplicate handling and the real refetch. No request ever reaches Consensus,
+ * NCBI, Crossref or doi.org — the egress watch below fails the test if one is
+ * even attempted — and no Consensus allowance is spent.
+ *
+ * Presenting the owner role through the client's own RPC response proves the
+ * ADVISORY gate only. The server's independent owner check, which no browser
+ * can influence, is pinned by `supabase/functions/search-consensus/__tests__`.
+ *
+ * ## The architectural regression this file exists to protect
+ *
+ * The canonical metadata stand-in answers with titles that deliberately differ
+ * from the Consensus discovery titles. The library rows must show the
+ * canonical ones: if Consensus display metadata were ever persisted directly,
+ * the discovery wording would appear in the library and these tests fail.
+ */
+
+const CONSENSUS_FUNCTION_PATH = "/functions/v1/search-consensus";
+const METADATA_FUNCTION_PATH = "/functions/v1/fetch-paper-metadata";
+const ACCESS_RPC_PATH = "/rest/v1/rpc/get_current_user_access";
+
+/** Hosts the browser must never reach during this spec (subdomains included). */
+const PROVIDER_HOSTS = ["consensus.app", "eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov", "api.crossref.org", "doi.org"];
+
+/** Cleanup handle: every library row this spec can create starts with it. */
+const TITLE_PREFIX = "CNS-E2E";
+const PROJECT_NAME = "CNS-E2E Project";
+const TAG_NAME = "CNS-E2E Tag";
+
+const QUERY = "Does creatine improve working memory in healthy adults?";
+const QUOTA_NOTE =
+  "Consensus searches use your connected API allowance and run only when you press Search. Your question is sent to Consensus.";
+
+// ── Deterministic fixtures ───────────────────────────────────────────────
+
+/** Reserved test-prefix DOIs: nothing here resolves anywhere. */
+const DOI_ALPHA = "10.5555/cns-e2e.alpha";
+const DOI_BRAVO = "10.5555/cns-e2e.bravo";
+const DOI_CHARLIE = "10.5555/cns-e2e.charlie";
+
+interface ConsensusFixture {
+  rank: number;
+  title: string;
+  authors: string[];
+  journal: string | null;
+  year: number | null;
+  abstract: string | null;
+  citationCount: number | null;
+  studyType: string | null;
+  takeaway: string | null;
+  consensusUrl: string | null;
+  importDoi: string | null;
+}
+
+/** Discovery wording that must never reach the library. */
+const DISCOVERY_MARK = "Consensus-only discovery wording";
+
+function fixture(rank: number, importDoi: string | null, overrides: Partial<ConsensusFixture> = {}): ConsensusFixture {
+  return {
+    rank,
+    title: `${DISCOVERY_MARK} ${rank}`,
+    authors: ["Ada Fixture", "Ben Placeholder", "Cara Example", "Dan Sample"],
+    journal: "Journal of Consensus Discovery Fixtures",
+    year: 2024,
+    abstract: `Invented Consensus abstract ${rank}: discovery text that is never persisted.`,
+    citationCount: 40 + rank,
+    studyType: "rct",
+    takeaway: `Invented Consensus takeaway ${rank}.`,
+    consensusUrl: `https://consensus.app/papers/cns-e2e-${rank}/0123456789abcdef0123456789abcde${rank}/?utm_source=publicapi`,
+    importDoi,
+    ...overrides,
+  };
+}
+
+const RESULTS: ConsensusFixture[] = [
+  fixture(1, DOI_ALPHA),
+  fixture(2, null, { title: `${DISCOVERY_MARK} without an importable DOI` }),
+  fixture(3, DOI_BRAVO),
+  fixture(4, DOI_CHARLIE),
+];
+
+/** The canonical importer's answer per DOI — titles the library must show. */
+const CANONICAL_TITLES: Record<string, string> = {
+  [DOI_ALPHA]: `${TITLE_PREFIX} canonical record Alpha`,
+  [DOI_BRAVO]: `${TITLE_PREFIX} canonical record Bravo`,
+  [DOI_CHARLIE]: `${TITLE_PREFIX} canonical record Charlie`,
+};
+
+const OWNER_ACCESS_ROW = {
+  role: "owner",
+  is_internal: true,
+  can_view_provider_quota: true,
+  ai_quota_exempt: false,
+  plan: null,
+  plan_status: null,
+  premium_taxonomy_enabled: false,
+  labs_team_enabled: false,
+  can_select_ai_model: false,
+};
+
+// ── Recorded boundary traffic ────────────────────────────────────────────
+
+interface Recorder {
+  /** One entry per POST to search-consensus. Never stores the bearer token. */
+  consensus: Array<{ query: string; bodyKeys: string[]; authorizationIsBearer: boolean }>;
+  metadata: Array<{ identifiers: string[]; rawBody: string }>;
+  accessRequests: number;
+  providerRequests: string[];
+}
+
+/** Echo exactly what the browser's CORS preflight asked for. Local scaffolding. */
+function corsFor(request: Request): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers":
+      request.headers()["access-control-request-headers"] ?? "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
+
+async function installStandIns(
+  page: Page,
+  options: { access: "owner" | "manager" | "real" | "fail" },
+): Promise<Recorder> {
+  const recorder: Recorder = { consensus: [], metadata: [], accessRequests: 0, providerRequests: [] };
+
+  page.on("request", (request) => {
+    let hostname: string;
+    try {
+      hostname = new URL(request.url()).hostname.toLowerCase();
+    } catch {
+      return;
+    }
+    if (PROVIDER_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`))) {
+      recorder.providerRequests.push(request.url());
+    }
+  });
+
+  if (options.access !== "real") {
+    await page.route(
+      (url) => url.pathname === ACCESS_RPC_PATH,
+      async (route: Route) => {
+        const request = route.request();
+        if (request.method() === "OPTIONS") {
+          await route.fulfill({ status: 204, headers: corsFor(request), body: "" });
+          return;
+        }
+        recorder.accessRequests += 1;
+        await route.fulfill(
+          options.access === "owner" || options.access === "manager"
+            ? {
+                status: 200,
+                contentType: "application/json",
+                headers: corsFor(request),
+                body: JSON.stringify([{ ...OWNER_ACCESS_ROW, role: options.access }]),
+              }
+            : {
+                status: 500,
+                contentType: "application/json",
+                headers: corsFor(request),
+                body: JSON.stringify({ code: "XX000", message: "stand-in access failure" }),
+              },
+        );
+      },
+    );
+  }
+
+  await page.route(
+    (url) => url.pathname === CONSENSUS_FUNCTION_PATH,
+    async (route: Route) => {
+      const request = route.request();
+      if (request.method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: corsFor(request), body: "" });
+        return;
+      }
+      const body = (request.postDataJSON() ?? {}) as Record<string, unknown>;
+      recorder.consensus.push({
+        query: String(body.query ?? ""),
+        bodyKeys: Object.keys(body).sort(),
+        authorizationIsBearer: /^Bearer \S+$/.test(request.headers()["authorization"] ?? ""),
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: corsFor(request),
+        body: JSON.stringify({ results: RESULTS }),
+      });
+    },
+  );
+
+  await page.route(
+    (url) => url.pathname === METADATA_FUNCTION_PATH,
+    async (route: Route) => {
+      const request = route.request();
+      if (request.method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers: corsFor(request), body: "" });
+        return;
+      }
+      const raw = request.postData() ?? "";
+      const body = (request.postDataJSON() ?? {}) as { identifiers?: unknown };
+      const identifiers = Array.isArray(body.identifiers) ? body.identifiers.map(String) : [];
+      recorder.metadata.push({ identifiers, rawBody: raw });
+
+      const results = identifiers.map((identifier) =>
+        CANONICAL_TITLES[identifier]
+          ? {
+              identifier,
+              title: CANONICAL_TITLES[identifier],
+              authors: ["Canonical, A"],
+              year: 2023,
+              journal: "Journal of Canonical Records",
+              pmid: null,
+              doi: identifier,
+              abstract: null,
+              keywords: [],
+              mesh_terms: [],
+              substances: [],
+              study_type: null,
+              journal_url: `https://doi.org/${identifier}`,
+              source: "crossref",
+            }
+          : { identifier, error: "No deterministic CNS-E2E fixture for this identifier" },
+      );
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: corsFor(request),
+        body: JSON.stringify({ results }),
+      });
+    },
+  );
+
+  return recorder;
+}
+
+// ── Page helpers ─────────────────────────────────────────────────────────
+
+const COARSE_POINTER_TARGET_PX = 40;
+
+const dialogOf = (page: Page) => page.getByRole("dialog", { name: "Add Papers" });
+
+async function openDashboard(page: Page) {
+  await page.goto("/", { waitUntil: "networkidle" });
+  await waitForDashboard(page);
+}
+
+/** Wait out the dialog's zoom-in animation before measuring anything in it. */
+async function waitForDialogSettled(page: Page) {
+  await page.waitForFunction(() => {
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement | null;
+    if (!dialog) return false;
+    if (dialog.getAnimations({ subtree: true }).some((animation) => animation.playState === "running")) return false;
+    for (let node: Element | null = dialog; node; node = node.parentElement) {
+      const transform = getComputedStyle(node).transform;
+      if (transform !== "none" && !/^matrix\(1, 0, 0, 1[,)]/.test(transform)) return false;
+    }
+    return true;
+  });
+}
+
+async function openSearchMode(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: /add papers/i }).first().click();
+  const dialog = dialogOf(page);
+  await expect(dialog).toBeVisible();
+  await waitForDialogSettled(page);
+  await dialog.getByRole("tab", { name: "Search", exact: true }).click();
+  await expect(dialog.getByLabel("Search PubMed")).toBeVisible();
+  return dialog;
+}
+
+async function closeDialog(page: Page) {
+  const dialog = dialogOf(page);
+  if (!(await dialog.isVisible().catch(() => false))) return;
+  await dialog.getByRole("button", { name: "Close", exact: true }).first().click();
+  await expect(dialog).toBeHidden({ timeout: 10_000 });
+}
+
+const sourceGroup = (dialog: Locator) => dialog.getByRole("radiogroup", { name: "Search source" });
+
+const resultCheckbox = (dialog: Locator, doi: string) =>
+  dialog.getByRole("checkbox", { name: new RegExp(`^Select DOI ${doi.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — `) });
+
+/** Choose the disposable Project and Tag through the shared assign section. */
+async function assignProjectAndTag(page: Page, dialog: Locator, mobile: boolean) {
+  if (!mobile) {
+    await dialog.getByRole("button", { name: /^Projects$/ }).click();
+    await page.getByRole("option", { name: new RegExp(PROJECT_NAME) }).click();
+    await page.keyboard.press("Escape");
+    await dialog.getByRole("button", { name: /^Tags$/ }).click();
+    await page.getByRole("option", { name: new RegExp(TAG_NAME) }).click();
+    await page.keyboard.press("Escape");
+  } else {
+    await dialog.getByRole("button", { name: /^(Projects|\d+ projects?)$/ }).click();
+    const projectSheet = page.getByRole("dialog").filter({ has: page.locator('input[aria-label="Search projects"]') });
+    await projectSheet.getByRole("checkbox", { name: PROJECT_NAME }).click();
+    await projectSheet.getByRole("button", { name: "Done" }).click();
+    await expect(projectSheet).toHaveCount(0);
+    await dialog.getByRole("button", { name: /^(Tags|\d+ tags?)$/ }).click();
+    const tagSheet = page.getByRole("dialog").filter({ has: page.locator('input[aria-label="Search tags"]') });
+    await tagSheet.getByRole("checkbox", { name: TAG_NAME }).click();
+    await tagSheet.getByRole("button", { name: "Done" }).click();
+    await expect(tagSheet).toHaveCount(0);
+  }
+  await expect(dialog.getByRole("button", { name: "1 project" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "1 tag" })).toBeVisible();
+}
+
+/** Every fixture paper this spec can create, removed through the real bulk-delete UI. */
+async function removeFixturePapers(page: Page): Promise<number> {
+  const rows = page.locator("tbody tr").filter({ hasText: TITLE_PREFIX });
+  if ((await rows.count()) === 0) return 0;
+  let selected = 0;
+  for (let guard = 0; guard < 20; guard++) {
+    const unchecked = page
+      .locator("tbody tr")
+      .filter({ hasText: TITLE_PREFIX })
+      .locator('[role="checkbox"][aria-checked="false"]');
+    if ((await unchecked.count()) === 0) break;
+    await unchecked.first().click();
+    selected++;
+  }
+  if (selected === 0) return 0;
+  const selectionSummary = page.getByText(/\d+\s+selected/i);
+  await expect(selectionSummary).toBeVisible();
+  await selectionSummary.locator("xpath=ancestor::div[1]").getByRole("button", { name: /delete/i }).click();
+  const confirmDialog = page.getByRole("dialog").filter({ hasText: /cannot be undone/i });
+  await expect(confirmDialog).toBeVisible();
+  await confirmDialog.getByRole("button", { name: /^delete$/i }).click();
+  await expect(confirmDialog).toBeHidden();
+  await expect(page.locator("tbody tr").filter({ hasText: TITLE_PREFIX })).toHaveCount(0, { timeout: 30_000 });
+  return selected;
+}
+
+/**
+ * The owner journey, identical at both viewports: default PubMed, an
+ * explicit Consensus search, results with a discovery-only row, selection,
+ * shared Project/Tag assignment, the canonical DOI handoff, the summary, and
+ * close/reopen returning to PubMed.
+ */
+async function ownerJourney(page: Page, recorder: Recorder, mobile: boolean) {
+  await openDashboard(page);
+  await removeFixturePapers(page);
+  const initialCount = await getPaperCount(page);
+  expect(initialCount).toBeGreaterThan(0);
+  expect(recorder.accessRequests).toBeGreaterThan(0);
+
+  let dialog = await openSearchMode(page);
+
+  // ── Default source: PubMed ──
+  const source = sourceGroup(dialog);
+  await expect(source).toBeVisible();
+  await expect(source.getByRole("radio", { name: "PubMed" })).toHaveAttribute("aria-checked", "true");
+  await expect(source.getByRole("radio", { name: "Consensus" })).toHaveAttribute("aria-checked", "false");
+  await expect(dialog.getByLabel("Search Consensus")).toHaveCount(0);
+
+  if (mobile) {
+    // The source choice is a real touch target and fits the phone without
+    // sideways scrolling.
+    for (const name of ["PubMed", "Consensus"] as const) {
+      const box = await source.getByRole("radio", { name }).boundingBox();
+      expect(box, `${name} source option has no box`).not.toBeNull();
+      expect(box!.height, `${name} source option is below the coarse-pointer target`).toBeGreaterThanOrEqual(
+        COARSE_POINTER_TARGET_PX,
+      );
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    }
+  }
+
+  // ── Switching the source issues no request ──
+  await source.getByRole("radio", { name: "Consensus" }).click();
+  await expect(source.getByRole("radio", { name: "Consensus" })).toHaveAttribute("aria-checked", "true");
+  await expect(dialog.getByLabel("Search Consensus")).toBeVisible();
+  await expect(dialog.getByText(QUOTA_NOTE)).toBeVisible();
+  expect(recorder.consensus).toHaveLength(0);
+
+  // ── Typing issues no request; pressing Search issues exactly one ──
+  await dialog.getByLabel("Search Consensus").fill(QUERY);
+  expect(recorder.consensus).toHaveLength(0);
+  await dialog.getByRole("button", { name: "Search", exact: true }).click();
+  const list = dialog.getByRole("list", { name: "Consensus search results" });
+  await expect(list).toBeVisible();
+  expect(recorder.consensus).toEqual([{ query: QUERY, bodyKeys: ["query"], authorizationIsBearer: true }]);
+
+  // ── Results ──
+  await expect(dialog.getByText("Showing 4 Consensus results")).toBeVisible();
+  await expect(list.locator(":scope > li")).toHaveCount(4);
+  const discoveryOnly = list.locator(":scope > li").filter({ hasText: `${DISCOVERY_MARK} without an importable DOI` });
+  await expect(discoveryOnly.getByText("No importable DOI available")).toBeVisible();
+  await expect(discoveryOnly.getByRole("checkbox")).toHaveCount(0);
+  const firstLink = list.locator(":scope > li").first().getByRole("link", { name: /Open in Consensus/ });
+  await expect(firstLink).toHaveAttribute("href", RESULTS[0].consensusUrl as string);
+  await expect(firstLink).toHaveAttribute("target", "_blank");
+  await expect(firstLink).toHaveAttribute("rel", "noopener noreferrer");
+
+  if (mobile) {
+    // The result list never needs sideways scrolling at 390px.
+    const overflow = await list.evaluate((element) => ({
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    }));
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+    // The 16px checkbox carries the same enlarged hit region as PubMed's:
+    // taps 16px from its centre in every direction still land on it.
+    const probes = await resultCheckbox(dialog, DOI_ALPHA).evaluate((checkbox) => {
+      const rect = checkbox.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      return [
+        [0, 0],
+        [-16, 0],
+        [16, 0],
+        [0, -16],
+        [0, 16],
+      ].map(([dx, dy]) => document.elementFromPoint(cx + dx, cy + dy)?.closest('[role="checkbox"]') === checkbox);
+    });
+    expect(probes).toEqual([true, true, true, true, true]);
+  }
+
+  // ── Selection ──
+  await resultCheckbox(dialog, DOI_ALPHA).click();
+  await resultCheckbox(dialog, DOI_BRAVO).click();
+  await expect(dialog.getByText("2 papers selected")).toBeVisible();
+
+  // ── Shared Project/Tag assignment ──
+  await assignProjectAndTag(page, dialog, mobile);
+
+  // ── The canonical handoff ──
+  await dialog.getByRole("button", { name: "Import 2 Selected" }).click();
+  await expect(dialog.getByText("Consensus Import Results")).toBeVisible({ timeout: 60_000 });
+  await expect(dialog.getByText("Added (2)")).toBeVisible();
+  // The summary lists the DOI strings that were imported.
+  await expect(dialog.getByText(DOI_ALPHA, { exact: true })).toBeVisible();
+
+  // THE ARCHITECTURAL ASSERTION: the canonical metadata function received
+  // exactly the selected DOI strings, and nothing from Consensus beyond them.
+  expect(recorder.metadata).toHaveLength(1);
+  expect(recorder.metadata[0].identifiers).toEqual([DOI_ALPHA, DOI_BRAVO]);
+  for (const leak of [
+    DISCOVERY_MARK,
+    "Ada Fixture",
+    "Journal of Consensus Discovery Fixtures",
+    "Invented Consensus abstract",
+    "Invented Consensus takeaway",
+    "consensus.app",
+    "citationCount",
+    "takeaway",
+  ]) {
+    expect(recorder.metadata[0].rawBody).not.toContain(leak);
+  }
+  // Importing searched nothing.
+  expect(recorder.consensus).toHaveLength(1);
+
+  // ── Close and reopen: back on PubMed, Consensus session cleared ──
+  await closeDialog(page);
+  dialog = await openSearchMode(page);
+  await expect(sourceGroup(dialog).getByRole("radio", { name: "PubMed" })).toHaveAttribute("aria-checked", "true");
+  await expect(dialog.getByLabel("Search Consensus")).toHaveCount(0);
+  await sourceGroup(dialog).getByRole("radio", { name: "Consensus" }).click();
+  await expect(dialog.getByLabel("Search Consensus")).toHaveValue("");
+  await expect(dialog.getByRole("list", { name: "Consensus search results" })).toHaveCount(0);
+  expect(recorder.consensus).toHaveLength(1);
+  await closeDialog(page);
+
+  // ── The library holds the CANONICAL records, never the discovery wording ──
+  await expect.poll(() => getPaperCount(page), { timeout: 30_000 }).toBe(initialCount + 2);
+  const alphaRow = page.locator("tbody tr").filter({ hasText: CANONICAL_TITLES[DOI_ALPHA] });
+  await expect(alphaRow).toHaveCount(1);
+  await expect(page.locator("tbody tr").filter({ hasText: CANONICAL_TITLES[DOI_BRAVO] })).toHaveCount(1);
+  await expect(page.locator("tbody tr").filter({ hasText: DISCOVERY_MARK })).toHaveCount(0);
+  if (!mobile) {
+    await expect(alphaRow.getByText(PROJECT_NAME)).toBeVisible();
+    await expect(alphaRow.getByText(TAG_NAME)).toBeVisible();
+  }
+
+  expect(recorder.providerRequests).toEqual([]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+
+test.describe("Owner-only Consensus discovery", () => {
+  test.setTimeout(180_000);
+
+  test.beforeAll(async ({ browser }) => {
+    const context = await browser.newContext({ storageState: "e2e/.auth/user.json" });
+    const page = await context.newPage();
+    try {
+      await openDashboard(page);
+      await removeFixturePapers(page);
+      await deleteProject(page, PROJECT_NAME);
+      await deleteTag(page, TAG_NAME);
+      await createProject(page, PROJECT_NAME);
+      await createTag(page, TAG_NAME);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test.afterAll(async ({ browser }) => {
+    const context = await browser.newContext({ storageState: "e2e/.auth/user.json" });
+    const page = await context.newPage();
+    try {
+      await openDashboard(page);
+      await removeFixturePapers(page);
+      await deleteProject(page, PROJECT_NAME);
+      await deleteTag(page, TAG_NAME);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test.afterEach(async ({ page }) => {
+    // Order-independence: restore the deterministic seed whatever happened.
+    await page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
+    await openDashboard(page);
+    await removeFixturePapers(page);
+  });
+
+  test("owner: explicit Consensus search, DOI-only canonical import, reset to PubMed (desktop)", async ({ page }) => {
+    const recorder = await installStandIns(page, { access: "owner" });
+    await ownerJourney(page, recorder, false);
+  });
+
+  test("owner: the same journey at 390×844", async ({ browser }) => {
+    // The viewport is set BEFORE navigating: resizing mid-test unmounts
+    // desktop-only surfaces rather than reflowing them.
+    const context = await browser.newContext({
+      storageState: "e2e/.auth/user.json",
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+      isMobile: true,
+    });
+    const page = await context.newPage();
+    try {
+      const recorder = await installStandIns(page, { access: "owner" });
+      await ownerJourney(page, recorder, true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("ordinary user: the real access lookup answers 'user' and no Consensus control exists", async ({ page }) => {
+    const recorder = await installStandIns(page, { access: "real" });
+    const accessResponse = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === ACCESS_RPC_PATH && response.request().method() === "POST",
+    );
+    await openDashboard(page);
+    const response = await accessResponse;
+    expect(response.status()).toBe(200);
+    const rows = (await response.json()) as Array<{ role?: unknown }>;
+    expect(rows[0]?.role).toBe("user");
+
+    const dialog = await openSearchMode(page);
+    await expect(dialog.getByRole("tab", { name: "Search", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(sourceGroup(dialog)).toHaveCount(0);
+    await expect(dialog.getByRole("radio")).toHaveCount(0);
+    await expect(dialog.getByLabel("Search Consensus")).toHaveCount(0);
+    await expect(dialog.getByText(/Consensus/)).toHaveCount(0);
+    await expect(dialog.getByText("Search PubMed, import by identifier, upload a file, or add manually.")).toBeVisible();
+    await closeDialog(page);
+
+    expect(recorder.consensus).toEqual([]);
+    expect(recorder.providerRequests).toEqual([]);
+  });
+
+  test("a manager gets no Consensus control — the pilot is owner-only", async ({ page }) => {
+    const recorder = await installStandIns(page, { access: "manager" });
+    await openDashboard(page);
+    await expect.poll(() => recorder.accessRequests).toBeGreaterThan(0);
+
+    const dialog = await openSearchMode(page);
+    await expect(sourceGroup(dialog)).toHaveCount(0);
+    await expect(dialog.getByLabel("Search Consensus")).toHaveCount(0);
+    await expect(dialog.getByText(/Consensus/)).toHaveCount(0);
+    await closeDialog(page);
+    expect(recorder.consensus).toEqual([]);
+  });
+
+  test("a failed access lookup fails closed: no Consensus control", async ({ page }) => {
+    const recorder = await installStandIns(page, { access: "fail" });
+    await openDashboard(page);
+    await expect.poll(() => recorder.accessRequests).toBeGreaterThan(0);
+
+    const dialog = await openSearchMode(page);
+    await expect(sourceGroup(dialog)).toHaveCount(0);
+    await expect(dialog.getByLabel("Search Consensus")).toHaveCount(0);
+    await closeDialog(page);
+    expect(recorder.consensus).toEqual([]);
+  });
+});

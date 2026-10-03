@@ -2003,3 +2003,44 @@ The §30.4 reading still holds; nothing read materially changes it.
 - ❌ That any replacement model is live or selectable — **not claimed**; none is applied in Production.
 - ❌ Any PaperLume account arrangement with either provider, in either direction — **not claimed** (§30.8).
 - ❌ That the re-read terms are a standing guarantee — **not claimed**; re-verify before relying on them.
+
+---
+
+## 37. Addendum — 2026-10-03 — `CONSENSUS-SEARCH-MVP-001A` owner-only Consensus discovery
+
+> **Status: implemented in repository source only — NOT live.** `search-consensus` is not deployed and `CONSENSUS_API_KEY` is not installed ([deployment.md](deployment.md) §7e). Until that owner-authorized rollout, nothing described here reaches Consensus. Update this line when it goes live.
+
+**Scope.** One new Edge Function and one new external endpoint (the §23 triggers): Consensus, `https://api.consensus.app/v1/search`, usable by the **owner only**. §9.1 is preserved as written; this section adds to it.
+
+### 37.1 The new data flow
+
+| | |
+|---|---|
+| **Recipient** | Consensus (`api.consensus.app`) |
+| **Who can trigger it** | The **owner** only. The Add Papers dialog shows the Consensus source only when `get_current_user_access()` resolves the role `owner`, and the Edge Function re-checks that role server-side, as the caller, before it reads its key or contacts Consensus. Managers and ordinary users cannot trigger it. |
+| **When** | Only when the owner presses **Search** in the Consensus source — never on opening the dialog, switching source, typing, selecting or importing, and never automatically retried. |
+| **Data sent** | The owner's natural-language **research question** (trimmed, 1–500 characters) and `page_size=20`, plus PaperLume's Consensus API key in an `x-api-key` header. No user id, email, account id, library content, attachment, note or Project/Tag data. The browser sends the question to PaperLume's function in a POST body, never in a URL. |
+| **Data received** | Up to 20 paper records — title, authors, journal, year, abstract, DOI, citation counts, study metadata, a Consensus-generated takeaway, a consensus.app link — of which the function forwards only an allow-listed subset to the browser. |
+| **Client or server** | **Server (Edge Function) only.** The browser contacts only `search-consensus`; it never contacts Consensus and never receives the key. |
+| **Persistence** | **None.** Results live in the open dialog's memory and are discarded on close. Nothing Consensus returns is written to the database: importing a result hands only its validated DOI to the existing importer, which fetches that paper's metadata from PubMed/Crossref (§9.1) exactly as the Import IDs tab does. The library never contains Consensus's title, abstract, authors or takeaway. |
+| **Logging** | One bounded line per request — lengths, counts, upstream status, duration and an outcome label. **No query text**, title, abstract, takeaway, DOI, URL, key or token. |
+| **Evidence** | [`search-consensus/handler.ts`](../supabase/functions/search-consensus/handler.ts), [`_shared/consensusSearch.ts`](../supabase/functions/_shared/consensusSearch.ts), [`src/lib/searchConsensusEdge.ts`](../src/lib/searchConsensusEdge.ts) and their tests |
+
+**Class: VERIFIED in repository source.** Not verified in Production, where it is not deployed.
+
+### 37.2 Why this needs no Privacy Policy change yet
+
+A research question can reveal an unpublished research direction, a clinical interest or a person's own condition. In this pilot the only person who can send one is the owner, sending their own question with their own Consensus account's key, so no other user's data reaches Consensus. The published Privacy Policy is therefore unchanged by this addendum.
+
+### 37.3 Owner and legal input required before any wider access
+
+Before any user other than the owner can send a query to Consensus:
+
+- the published Privacy Policy (`src/pages/Privacy.tsx`) needs an **owner-approved** update naming Consensus as a recipient of research questions; and
+- Consensus's own terms for API queries — retention, training use, logging — must be read first-party. **This audit has not verified them**: Consensus's documentation pages sit behind a Cloudflare browser challenge, and only its `llms.txt` / `llms-full.txt` exports and its GitHub README were read, for the request contract.
+
+### 37.4 What this addendum does NOT claim
+
+- ❌ That Consensus currently processes any user's data — **not claimed**; it is not deployed, and it is owner-only.
+- ❌ Anything about Consensus's retention or training terms — **not verified** (§37.3).
+- ❌ That a query was observed reaching Consensus from Production — **not claimed**. The only Consensus request ever made for PaperLume was the single owner-authorized capability audit call of 2026-10-02, outside this feature.

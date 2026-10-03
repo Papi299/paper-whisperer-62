@@ -2206,3 +2206,33 @@ The cutover handles whatever population exists when it runs; it must not assume 
 - a manual level that routinely ends `incomplete_response` inside the unchanged output ceilings;
 - a provider changing one of these models' effort vocabulary, default or pricing;
 - a replacement becoming a Covered Model with a data-retention requirement, which re-opens the privacy review.
+
+## Consensus discovery (2026-10-03)
+
+### C60. Consensus discovers DOIs for the owner only; the existing importer imports them; one Search is at most one Consensus call (2026-10-03)
+
+**Status:** implemented by `CONSENSUS-SEARCH-MVP-001A`; **not live** until the rollout in [deployment.md](deployment.md) §7e (secret → Edge deploy → verify → merge).
+
+**Decision:** Consensus search is an **owner-only discovery source** inside Add Papers → **Search** (the renamed first mode; there is no fifth mode). Specifically, and until re-decided:
+
+- **Discovery, never a metadata authority.** A Consensus result is transient display data. Only its validated DOI crosses into persistence, through the same `onBulkImport` the Import IDs tab and the PubMed source use — C31's rule, applied to DOIs. No Consensus title, author list, abstract, journal, study type, citation count, takeaway or link is written anywhere, and no second insert, normalization or duplicate path exists for it.
+- **The DOI boundary never repairs.** `importDoi` is set only for a bare DOI name that the Edge identifier logic (`detectIdentifier`) recognizes **unchanged**, and the browser re-validates it with its own helper; selection and de-duplication use DOI equivalence (`doiEquivalenceKey`) while one original spelling is imported. A missing or malformed DOI makes a result discovery-only. No Crossref title search, fuzzy match, inference from the title or abstract, or use of Consensus's internal id.
+- **Owner-only, enforced twice.** The UI offers the source only when the caller's resolved access role is exactly `owner`, failing closed while that lookup loads or after it fails. The `search-consensus` Edge Function independently re-checks `get_current_user_access()` **as the caller** before it reads `CONSENSUS_API_KEY` or contacts Consensus, so a refused caller costs zero Consensus calls. A manager is not authorized, and no role or identity is accepted from the request.
+- **Quota-conscious by construction.** One explicit Search is at most one Consensus request:
+  - no automatic retry of any Consensus outcome — 429, 5xx, timeout or network;
+  - no pagination, background search, search-as-you-type or related-paper search;
+  - no request on opening the dialog, switching the source or selecting a result;
+  - `page_size` is fixed at 20 by the server, and the browser contract is `{ query }` alone.
+
+  The only client retry is one refresh-and-retry on a **PaperLume** Edge 401, which the function produces only before any Consensus call.
+- **Query-only V1.** No filters and no full-text chunks.
+- **The key is server-only.** `CONSENSUS_API_KEY` is an Edge secret: no BYOK, no profile column, nothing in the browser, the logs or a URL.
+
+**Rationale:** The connected key belongs to the owner's own Consensus account. On the Free plan the owner confirmed on 2026-10-02, it carries a small monthly allowance (30 calls in the plan table read on 2026-10-03), shared with the owner's Consensus MCP use. So every request has a real cost, and a silent retry or an accidental search spends it. The canonical importer already owns DOI → PubMed/Crossref provenance, including the DOI-equivalence verification of PR #334 and the own-article DOI extraction of PR #335 (`fetch-paper-metadata` v25). Persisting Consensus's projection would create a second, poorer source of truth beside it.
+
+**Consequence:** one new Edge Function, a client wrapper, a hook, a panel and the Search-mode rename. No table, column, RPC, RLS policy or migration. Because the merged frontend shows the control to the owner, the secret and the endpoint must exist **before** the merge ([deployment.md](deployment.md) §7e).
+
+**Re-evaluation trigger:**
+- a paid Consensus plan, or measured use, that justifies pagination or filters;
+- a decision to offer Consensus to anyone but the owner — that needs an owner-approved Privacy Policy update and a per-user quota and authorization design, not a widened role check;
+- Consensus changing its `/v1/search` contract.

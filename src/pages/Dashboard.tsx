@@ -26,6 +26,9 @@ import { PaperList } from "@/components/papers/PaperList";
 import { BulkActionsToolbar } from "@/components/papers/BulkActionsToolbar";
 import { AddPaperDialog } from "@/components/papers/AddPaperDialog";
 import { searchPubMed } from "@/lib/searchPubMedEdge";
+import { searchConsensus } from "@/lib/searchConsensusEdge";
+import { useCurrentUserAccess } from "@/hooks/useCurrentUserAccess";
+import { isConsensusSearchAvailable } from "@/hooks/useConsensusSearch";
 import { EditPaperDialog } from "@/components/papers/EditPaperDialog";
 import { EditProjectDialog } from "@/components/projects/EditProjectDialog";
 import { EditTagDialog } from "@/components/tags/EditTagDialog";
@@ -557,8 +560,20 @@ function DashboardContent() {
   // decision C29 (Gemini Free Tier during development; automatic provider-quota
   // monitoring paused until commercialization). The Dashboard therefore neither
   // renders the card nor invokes the provider-quota Edge Function. That deployed
-  // function and the `useCurrentUserAccess` role model remain as deferred
-  // infrastructure for reactivation. See docs/decisions-and-triggers.md (C29).
+  // function remains as deferred infrastructure for reactivation. See
+  // docs/decisions-and-triggers.md (C29).
+
+  // CONSENSUS-SEARCH-MVP-001A — the owner-only Consensus pilot's ADVISORY gate.
+  // The caller's role comes from the same read-only `get_current_user_access`
+  // RPC the rest of the app uses, and the gate fails closed: while the lookup
+  // is loading, after it fails, or for any role but exactly "owner", the Add
+  // Papers dialog receives no Consensus callback and shows no Consensus
+  // control. Owner status is never inferred from an email, a user id, local
+  // storage, a JWT claim or an environment value. This only decides what the
+  // UI offers: the `search-consensus` Edge Function re-checks the owner role
+  // server-side on every request and is the real boundary — the role is never
+  // sent to it.
+  const consensusAvailable = isConsensusSearchAvailable(useCurrentUserAccess(userId));
 
   const {
     analyzingPaperId,
@@ -864,6 +879,11 @@ function DashboardContent() {
         // show; the papers the user then selects are imported through
         // `onBulkImport` above — the same canonical path Import IDs uses.
         onPubMedSearch={searchPubMed}
+        // Owner-only discovery. Absent for everyone else — and while access is
+        // unresolved — so the dialog renders no Consensus control. Like PubMed,
+        // it returns display-only results; the DOIs the owner selects are
+        // imported through `onBulkImport` above.
+        onConsensusSearch={consensusAvailable ? searchConsensus : undefined}
         // The SAME exclusion data the library table already uses — no second
         // query, no second source of truth. Discovery badges hide what the user
         // hid; what the importer later evaluates as `study_type` is untouched.
