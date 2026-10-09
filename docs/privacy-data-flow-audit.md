@@ -160,7 +160,7 @@ Additionally, a research library on medical or clinical topics can reveal a grea
 | Password reset redirect | `${window.location.origin}/reset-password` |
 | Client key | The Supabase **publishable/anon** key, build-inlined by Vite. No service-role key exists anywhere in `src/` (verified: `grep -rn SERVICE_ROLE src/` matches only two test files' assertion strings) |
 | Session handling | `persistSession: true`, `autoRefreshToken: true`, `storage: localStorage` ([`src/integrations/supabase/client.ts`](../src/integrations/supabase/client.ts)) |
-| Edge Function auth | All six functions set `verify_jwt = false` at the gateway and validate the bearer token **in-body** with an authoritative `auth.getUser()` network call. No function accepts a user id from a request body | [`supabase/config.toml`](../supabase/config.toml) |
+| Edge Function auth | All seven functions (`search-consensus` included, §37) set `verify_jwt = false` at the gateway and validate the bearer token **in-body** with an authoritative `auth.getUser()` network call. No function accepts a user id from a request body | [`supabase/config.toml`](../supabase/config.toml) |
 
 ### 7.2 Browser storage inventory
 
@@ -274,6 +274,7 @@ The following **cannot** be established from this repository and must be verifie
 | **Anthropic** (`api.anthropic.com`) | The same two AI features, **only** when the effective routed model for that request is an `anthropic/*` catalog model — i.e. a saved preference for it was honoured in full by the server-side resolver. For users that model is `anthropic/claude-sonnet-5`. The Claude Sonnet 5.5 and Opus 5.5 rows are live in the catalog since 2026-10-01 but not selectable, so they are reachable only through an operator-written canary preference; the prepared Phase-D cutover would make Sonnet 5.5 and Opus 5.5 the user-selectable Anthropic models and retire Claude Sonnet 5 (§36). A preference that fails any check routes to Google instead (§8) | §8.1 / §8.2 — byte-for-byte the same allow-listed payload as Google (§30.2 / §30.3) | Generated text | **Server (Edge Function) only** | [`_shared/anthropicAiProvider.ts`](../supabase/functions/_shared/anthropicAiProvider.ts) |
 | **OpenAI** (`api.openai.com`) | The same two AI features, **only** when the effective routed model for that request is an `openai/*` catalog model — for users `openai/gpt-5.6-terra`. The GPT-6.1 Sol row is live in the catalog since 2026-10-01 but not selectable, so it is reachable only through an operator-written canary preference; the prepared Phase-D cutover would make Sol the user-selectable OpenAI model and retire GPT-5.6 Terra (§36). Same server-side condition as the Anthropic row (§8) | §8.1 / §8.2 — the same allow-listed payload; the adapter sends `store: false` | Generated text | **Server (Edge Function) only** | [`_shared/openAiProvider.ts`](../supabase/functions/_shared/openAiProvider.ts) |
 | **NCBI E-utilities / PubMed** (`eutils.ncbi.nlm.nih.gov`) | Metadata lookup and PubMed search | A PMID, a DOI, a title string, or the user's **raw search query**; plus the user's NCBI API key when they have supplied one | Bibliographic records (ESearch/ESummary/EFetch XML/JSON) | **Server only** | [`_shared/pubmedSearch.ts`](../supabase/functions/_shared/pubmedSearch.ts), [`fetch-paper-metadata/index.ts`](../supabase/functions/fetch-paper-metadata/index.ts) |
+| **Consensus** (`api.consensus.app`) | Owner-only research discovery (Add Papers → Search → Consensus), live since 2026-10-09 | **The owner's** research question, sent as the `query` parameter of a `GET` URL with `page_size=20`, plus the owner's own Consensus API key in an `x-api-key` header. Only when the owner presses Search; a non-owner account cannot trigger it (§37.2) | Up to 20 paper records, shown transiently and never persisted | **Server (Edge Function) only**, owner-gated | [`search-consensus/handler.ts`](../supabase/functions/search-consensus/handler.ts); detail in §37 |
 | **Crossref** (`api.crossref.org`) | DOI and title metadata fallback | A DOI or a title string, plus a `User-Agent` header | Bibliographic records | **Server only** | [`fetch-paper-metadata/index.ts:412-434`](../supabase/functions/fetch-paper-metadata/index.ts#L412-L434) |
 | **Google Cloud Monitoring** (`monitoring.googleapis.com`, `oauth2.googleapis.com`) | Owner/manager provider-quota panel | **No user data** — a service-account JWT and a metrics query for the shared project | Aggregate metric time series | **Server only**, owner/manager gated, currently unreferenced by any UI | [`get-gemini-provider-quota/index.ts`](../supabase/functions/get-gemini-provider-quota/index.ts) |
 | **Vercel** | Static hosting of the SPA at `app.paperlume.app` | HTTP request metadata inherent to serving a page (IP address, user agent, requested path) — the standard consequence of hosting, not application code | The application bundle | Client ↔ hosting edge | [`vercel.json`](../vercel.json), `docs/deployment.md` §3.1 |
@@ -2006,11 +2007,11 @@ The §30.4 reading still holds; nothing read materially changes it.
 
 ---
 
-## 37. Addendum — 2026-10-03 — `CONSENSUS-SEARCH-MVP-001A` owner-only Consensus discovery
+## 37. Addendum — 2026-10-03 — `CONSENSUS-SEARCH-MVP-001A` owner-only Consensus discovery (now LIVE)
 
-> **Status: implemented in repository source only — NOT live.** `search-consensus` is not deployed and `CONSENSUS_API_KEY` is not installed ([deployment.md](deployment.md) §7e). Until that owner-authorized rollout, nothing described here reaches Consensus. Update this line when it goes live.
+> **Status — updated 2026-10-09: LIVE in Production, for the owner only.** `CONSENSUS_API_KEY` was installed and `search-consensus` deployed on 2026-10-03. The owner's UI went live when PR #336 merged on 2026-10-09 ([deployment.md](deployment.md) §7e). Since then, every time the owner presses **Search** in the Consensus source, the flow below runs: browser → PaperLume's `search-consensus` Edge Function → Consensus. The rollout itself sent nothing to Consensus. **The owner's Production acceptance on 2026-10-09 then sent one authorized owner query to Consensus**, which answered successfully: 20 results, all with an importable DOI. One selected DOI was added through PaperLume's canonical PubMed/Crossref importer, with no additional Consensus search. The library row holds the importer's PubMed-backed metadata, not Consensus's.
 
-**Scope.** One new Edge Function and one new external endpoint (the §23 triggers): Consensus, `https://api.consensus.app/v1/search`, usable by the **owner only**. §9.1 is preserved as written; this section adds to it.
+**Scope.** One new Edge Function and one new external endpoint (the §23 triggers): Consensus, `https://api.consensus.app/v1/search`, usable by the **owner only**. §9.1 lists Consensus as a current recipient since it went live; this section holds the detail.
 
 ### 37.1 The new data flow
 
@@ -2022,17 +2023,17 @@ The §30.4 reading still holds; nothing read materially changes it.
 | **Data sent** | The owner's natural-language **research question** (trimmed, 1–500 characters) and `page_size=20`, plus the owner's own Consensus API key in an `x-api-key` header. No user id, email, account id, library content, attachment, note or Project/Tag data. The browser sends the question to PaperLume's function in a POST body; the function then sends it to Consensus as the `query` parameter of a GET request URL (`/v1/search?query=…&page_size=20`), so the question appears in Consensus's request URL and may appear in its request logs — terms §37.3 records as unverified. |
 | **Data received** | Up to 20 paper records — title, authors, journal, year, abstract, DOI, citation counts, study metadata, a Consensus-generated takeaway, a consensus.app link — of which the function forwards only an allow-listed subset to the browser. |
 | **Client or server** | **Server (Edge Function) only.** The browser contacts only `search-consensus`; it never contacts Consensus and never receives the key. |
-| **Persistence** | **None.** Results live in the open dialog's memory and are discarded on close. Nothing Consensus returns is written to the database: importing a result hands only its validated DOI to the existing importer, which fetches that paper's metadata from PubMed/Crossref (§9.1) exactly as the Import IDs tab does. The library never contains Consensus's title, abstract, authors or takeaway. |
+| **Persistence** | **None.** Results live in the open dialog's memory and are discarded on close. Nothing Consensus returns is written to the database: importing a result hands only its validated DOI to the existing importer, which fetches that paper's metadata from PubMed/Crossref (§9.1) exactly as the Import IDs tab does. The library never contains Consensus's title, abstract, authors or takeaway. The research question is not persisted by PaperLume either: it lives in the dialog's state, which is reset when the dialog closes, and it is never written to the database, browser storage, the page URL or a PaperLume log. |
 | **Logging** | One bounded line per request — lengths, counts, upstream status, duration and an outcome label. **No query text**, title, abstract, takeaway, DOI, URL, key or token. |
 | **Evidence** | [`search-consensus/handler.ts`](../supabase/functions/search-consensus/handler.ts), [`_shared/consensusSearch.ts`](../supabase/functions/_shared/consensusSearch.ts), [`src/lib/searchConsensusEdge.ts`](../src/lib/searchConsensusEdge.ts) and their tests |
 
-**Class: VERIFIED in repository source.** Not verified in Production, where it is not deployed.
+**Class: VERIFIED in repository source, and the deployed function is byte-identical to that source** (read back on 2026-10-03 and 2026-10-09; [deployment.md](deployment.md) §7e). **The live flow is verified for the owner:** the 2026-10-09 acceptance query reached Consensus and returned successfully. Its log line carried only counts and statuses (`outcome=ok upstream_status=200 returned=20 importable=20 dropped=0 retry=0`), with no query text.
 
 ### 37.2 Why this needs no Privacy Policy change yet
 
 A research question can reveal an unpublished research direction, a clinical interest or a person's own condition. In this pilot the only person who can send one is the owner, sending their own question with their own Consensus account's key, so no other user's data reaches Consensus. The published Privacy Policy is therefore unchanged by this addendum.
 
-That premise is a **data fact, not a constraint**: `internal_user_access` allows any number of `owner` rows, and the function admits whoever holds the role. Granting `owner` to a second account would let that person's questions reach Consensus with no code change, so such a grant is a re-evaluation trigger (§37.3).
+That premise is a **data fact, not a constraint**: `internal_user_access` allows any number of `owner` rows, and the function admits whoever holds the role. Granting `owner` to a second account would let that person's questions reach Consensus with no code change, so such a grant is a re-evaluation trigger (§37.3). The premise held at rollout: a read-only count found exactly one `owner` account on 2026-10-03 and again on 2026-10-09, before the merge.
 
 ### 37.3 Owner and legal input required before any wider access
 
@@ -2043,6 +2044,8 @@ Before any user other than the owner can send a query to Consensus — including
 
 ### 37.4 What this addendum does NOT claim
 
-- ❌ That Consensus currently processes any user's data — **not claimed**; it is not deployed, and it is owner-only.
+- ❌ That Consensus receives any data other than the owner's own research questions — **not claimed**; the flow is live for the owner only.
 - ❌ Anything about Consensus's retention or training terms — **not verified** (§37.3).
-- ❌ That a query was observed reaching Consensus from Production — **not claimed**. The only Consensus request ever made for PaperLume was the single owner-authorized capability audit call of 2026-10-02, outside this feature.
+- ❌ That a successful live request says anything about how Consensus handles the query afterwards — **not claimed**. The owner's authorized acceptance query of 2026-10-09 did reach Consensus from Production and returned successfully. That shows the flow works, not what the provider retains, logs or trains on (§37.3).
+
+*History:* the rollout, from the secret installation through the merge, made no Consensus request. Before it, the only Consensus request made for PaperLume was the single owner-authorized capability audit call of 2026-10-02, outside this feature.

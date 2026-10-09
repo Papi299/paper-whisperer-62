@@ -2211,7 +2211,7 @@ The cutover handles whatever population exists when it runs; it must not assume 
 
 ### C60. Consensus discovers DOIs for the owner only; the existing importer imports them; one Search is at most one Consensus call (2026-10-03)
 
-**Status:** implemented by `CONSENSUS-SEARCH-MVP-001A`; **not live** until the rollout in [deployment.md](deployment.md) §7e (secret → Edge deploy → verify → merge).
+**Status:** implemented by `CONSENSUS-SEARCH-MVP-001A`, and for the current single-owner pilot **deployed, live in Production since 2026-10-09 and manually accepted by the owner the same day**. The rollout in [deployment.md](deployment.md) §7e ran in its required order: `CONSENSUS_API_KEY` installed and `search-consensus` deployed on 2026-10-03, then PR #336 merged as `0da8e9c7` on 2026-10-09, which made the owner UI live. The pilot assumes exactly one `owner` account; a read-only count confirmed that on 2026-10-03 and on 2026-10-09. Production acceptance completed on 2026-10-09: one explicit owner Consensus search returned 20 importable results, and one selected DOI was added through PaperLume's canonical PubMed/Crossref importer. The import required no additional Consensus search. The owner-only scope below is an explicit product decision, not a temporary technical limit.
 
 **Decision:** Consensus search is an **owner-only discovery source** inside Add Papers → **Search** (the renamed first mode; there is no fifth mode). Specifically, and until re-decided:
 
@@ -2228,9 +2228,9 @@ The cutover handles whatever population exists when it runs; it must not assume 
 - **Query-only V1.** No filters and no full-text chunks.
 - **The key is server-only.** `CONSENSUS_API_KEY` is an Edge secret: no BYOK, no profile column, nothing in the browser, the logs or a URL.
 
-**Rationale:** The connected key belongs to the owner's own Consensus account. On the Free plan the owner confirmed on 2026-10-02, it carries a small monthly allowance (30 calls in the plan table read on 2026-10-03), shared with the owner's Consensus MCP use. So every request has a real cost, and a silent retry or an accidental search spends it. The canonical importer already owns DOI → PubMed/Crossref provenance, including the DOI-equivalence verification of PR #334 and the own-article DOI extraction of PR #335 (`fetch-paper-metadata` v25). Persisting Consensus's projection would create a second, poorer source of truth beside it.
+**Rationale:** The connected key belongs to the owner's own Consensus account. On the Free plan the owner confirmed on 2026-10-02, it carries a small monthly allowance (30 calls in the plan table read on 2026-10-03), shared with the owner's Consensus MCP use. So every request has a real cost, and a silent retry or an accidental search spends it. The canonical importer already owns DOI → PubMed/Crossref provenance, including the DOI-equivalence verification of PR #334 and the own-article DOI extraction of PR #335 (deployed as `fetch-paper-metadata` v25 on 2026-10-03). Persisting Consensus's projection would create a second, poorer source of truth beside it.
 
-**Consequence:** one new Edge Function, a client wrapper, a hook, a panel and the Search-mode rename. No table, column, RPC, RLS policy or migration. Because the merged frontend shows the control to the owner, the secret and the endpoint must exist **before** the merge ([deployment.md](deployment.md) §7e).
+**Consequence:** one new Edge Function, a client wrapper, a hook, a panel and the Search-mode rename. No table, column, RPC, RLS policy or migration. Because the merged frontend shows the control to the owner, the secret and the endpoint had to exist **before** the merge, and they did. Any future change to the endpoint's contract is likewise deployed before the frontend that depends on it ([deployment.md](deployment.md) §7e).
 
 **Re-evaluation trigger:**
 - a paid Consensus plan, or measured use, that justifies pagination or filters;

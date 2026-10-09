@@ -4560,6 +4560,8 @@ Decision **C59**. This entry **supersedes the 2026-09-30 entry above**, which re
 
 ## 2026-10-03 — CONSENSUS-SEARCH-MVP-001A: owner-only Consensus discovery + `search-consensus` Edge Function — **PREPARED in the repository; NOT deployed**
 
+> **Superseded on 2026-10-09 by the entry below.** `search-consensus` was deployed and `CONSENSUS_API_KEY` installed on 2026-10-03, after this entry was written, and PR #336 merged on 2026-10-09. This entry is kept as written: it records the state reviewed at PR time.
+
 Decision **C60**. Production is unchanged: `search-consensus` is not deployed, `CONSENSUS_API_KEY` is not installed, `fetch-paper-metadata` stays v25, no migration. The rollout runbook — secret, then Edge deploy, then verification, then merge — is [deployment.md](deployment.md) §7e.
 
 - **Edge source (new).**
@@ -4586,3 +4588,18 @@ Decision **C60**. Production is unchanged: `search-consensus` is not deployed, `
     The last is the status `/extension-import` acts on. That defect predates this PR and is live in Production for any DOI handoff PubMed indexes; this client-side change fixes it without an Edge deploy. A title import resolved on PubMed still reports its PMID, as before.
   - **`useConsensusSearch`.** A synchronous in-flight guard stops two same-tick submissions from starting two Consensus requests. A successful same-query re-run keeps only the selected DOIs its page still shows.
   - **Focus restoration.** It now treats focus parked on the dialog shell or the Search tab panel as lost, which is where Radix leaves it.
+
+## 2026-10-09 — CONSENSUS-SEARCH-MVP-001A: `search-consensus` deployed and the owner-only Consensus source live — **DEPLOYED / LIVE IN PRODUCTION; owner acceptance PASSED**
+
+Decision **C60**. This entry **supersedes the 2026-10-03 entry above**, which recorded the feature as prepared and not deployed; that entry is left as written, as the record of what was reviewed at that point. This is release history, not a database change: **no migration** and no new database object. The runbook and the full rollout record are in [deployment.md](deployment.md) §7e.
+
+- **Edge — 2026-10-03.** `CONSENSUS_API_KEY` was installed as a server-side Edge secret and verified by name only. `search-consensus` **v1** was deployed from the approved head `712ed465`: id `9c81f006-b455-476a-b8a5-198ac7589246`, ACTIVE, `verify_jwt = false`, `ezbr_sha256` `937acf159df647dce0a050509e0346630551563acec0a10c41f8b383b8ca6cf6`. Read back with `functions download --use-api`, it was exactly the five-file closure, byte-identical to the head. Zero-cost smoke: `OPTIONS` 200, `GET` 405, unauthenticated `POST` 401.
+- **Version counters, not deployments.** Installing the secret advanced the other six functions' counters by one with no redeploy: `fetch-paper-metadata` 25 → 26, `analyze-paper` 34 → 35, `get-gemini-provider-quota` 9 → 10, `delete-account` 6 → 7, `search-pubmed` 6 → 7, `suggest-paper-organization` 17 → 18. Their `ezbr_sha256` and `updated_at` were unchanged. `fetch-paper-metadata` v26 therefore still runs the PR #335 source deployed as v25. Read back on 2026-10-09, it was 14 of 14 files byte-identical to `main`, with `updated_at` 2026-10-03T06:39:17Z.
+- **Merge — 2026-10-09.** PR #336 merged at the approved head `712ed465735ddd0024ad4cc11e07d58072ab5ee3` as the two-parent `0da8e9c7c1b2a2c16c8cb59398b6490d6507578f`: parents `7f4b2407` and `712ed465`, tree `a786dbc6`, identical to the head's. Merged-`main` Validate (`37936074413`), DB Tests (`37936074486`) and Extension (`37936074435`) passed on the first attempt. Before and after the merge, `search-consensus` was still v1 with the same bundle, and its read-back still matched.
+- **Frontend.** The automatic Vercel Production deployment of `0da8e9c7` (`dpl_F1x7tQncDf3LqASpbPAk6nVdzGiB`, source git, ref `main`) is aliased to `app.paperlume.app`, so the owner-only **PubMed | Consensus** selector is live. The client gate is advisory; the function's server-side owner check is authoritative. Only a validated DOI crosses into the canonical importer, and no Consensus title, author list, abstract, takeaway or link is persisted.
+- **Import attribution.** The correction from the same PR (`src/lib/metadataAttribution.ts`) ships in the Production frontend built from `0da8e9c7`. The defect the 2026-10-03 entry describes as live in Production — a PubMed-resolved DOI reported as `failed` on `/extension-import` — is therefore fixed by that deployment. The owner acceptance below observed it for the Consensus import path: the added DOI was reported under the requested DOI, not the resolved PMID. `/extension-import` itself was not re-exercised.
+- **Owner acceptance — PASSED, 2026-10-09 (search and import).** The rollout itself made no Consensus request. After the merge, Production acceptance completed through the owner's UI.
+  - One explicit owner Consensus search returned 20 importable results from one Consensus request (log: `outcome=ok upstream_status=200 returned=20 importable=20 dropped=0 retry=0`).
+  - One selected DOI was added through PaperLume's canonical PubMed/Crossref importer (**Added (1)**), and it left the selection.
+  - The new row carries PubMed-backed canonical metadata.
+  - The import required no additional Consensus search.
