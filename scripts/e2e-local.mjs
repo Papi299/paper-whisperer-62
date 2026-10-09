@@ -164,6 +164,17 @@ const DEFAULT_SPECS = [
   // `search-pubmed` and `fetch-paper-metadata` requests, so there is no live
   // NCBI egress and no served local Edge Function is required.
   "e2e/pubmed-search.spec.ts",
+  // CONSENSUS-SEARCH-MVP-001A owner-only Consensus discovery. Mutating, but
+  // only within fixtures it owns: it imports papers whose titles all start with
+  // "CNS-E2E" through the real Add Papers UI and the real bulk-insert RPC and
+  // removes every one of them in afterEach, plus one disposable project and tag
+  // created in beforeAll and deleted in afterAll — so it is order-independent.
+  // Every external boundary is deterministic: Playwright fulfils
+  // `search-consensus` and `fetch-paper-metadata`, and presents the owner role
+  // by fulfilling `get_current_user_access` in the owner tests only (the
+  // ordinary-user test lets the real local database answer). There is no live
+  // Consensus, NCBI or Crossref egress and no served local Edge Function.
+  "e2e/consensus-search.spec.ts",
   // SCROLLAREA-HORIZONTAL-REACHABILITY-AUDIT-001 geometry regressions. Mutating
   // only in that each test adds one long fixture keyword to the keyword pool
   // through the real modal and removes it again in afterEach, so it restores the
