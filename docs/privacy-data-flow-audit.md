@@ -2009,7 +2009,7 @@ The §30.4 reading still holds; nothing read materially changes it.
 
 ## 37. Addendum — 2026-10-03 — `CONSENSUS-SEARCH-MVP-001A` owner-only Consensus discovery (now LIVE)
 
-> **Status — updated 2026-10-09: LIVE in Production, for the owner only.** `CONSENSUS_API_KEY` was installed and `search-consensus` deployed on 2026-10-03. The owner's UI went live when PR #336 merged on 2026-10-09 ([deployment.md](deployment.md) §7e). Since then, every time the owner presses **Search** in the Consensus source, the flow below runs: browser → PaperLume's `search-consensus` Edge Function → Consensus. The rollout itself sent nothing to Consensus, and no Production query had been observed or reported when this status was written: the owner's first search, the acceptance canary, is pending (§37.4).
+> **Status — updated 2026-10-09: LIVE in Production, for the owner only.** `CONSENSUS_API_KEY` was installed and `search-consensus` deployed on 2026-10-03. The owner's UI went live when PR #336 merged on 2026-10-09 ([deployment.md](deployment.md) §7e). Since then, every time the owner presses **Search** in the Consensus source, the flow below runs: browser → PaperLume's `search-consensus` Edge Function → Consensus. The rollout itself sent nothing to Consensus. **The owner's Production acceptance on 2026-10-09 then sent one authorized owner query to Consensus**, which answered successfully: 20 results, all with an importable DOI. One selected DOI was added through PaperLume's canonical PubMed/Crossref importer, with no additional Consensus search. The library row holds the importer's PubMed-backed metadata, not Consensus's.
 
 **Scope.** One new Edge Function and one new external endpoint (the §23 triggers): Consensus, `https://api.consensus.app/v1/search`, usable by the **owner only**. §9.1 lists Consensus as a current recipient since it went live; this section holds the detail.
 
@@ -2027,7 +2027,7 @@ The §30.4 reading still holds; nothing read materially changes it.
 | **Logging** | One bounded line per request — lengths, counts, upstream status, duration and an outcome label. **No query text**, title, abstract, takeaway, DOI, URL, key or token. |
 | **Evidence** | [`search-consensus/handler.ts`](../supabase/functions/search-consensus/handler.ts), [`_shared/consensusSearch.ts`](../supabase/functions/_shared/consensusSearch.ts), [`src/lib/searchConsensusEdge.ts`](../src/lib/searchConsensusEdge.ts) and their tests |
 
-**Class: VERIFIED in repository source, and the deployed function is byte-identical to that source** (read back on 2026-10-03 and 2026-10-09; [deployment.md](deployment.md) §7e). A live query reaching Consensus has not been observed (§37.4).
+**Class: VERIFIED in repository source, and the deployed function is byte-identical to that source** (read back on 2026-10-03 and 2026-10-09; [deployment.md](deployment.md) §7e). **The live flow is verified for the owner:** the 2026-10-09 acceptance query reached Consensus and returned successfully. Its log line carried only counts and statuses (`outcome=ok upstream_status=200 returned=20 importable=20 dropped=0 retry=0`), with no query text.
 
 ### 37.2 Why this needs no Privacy Policy change yet
 
@@ -2046,4 +2046,6 @@ Before any user other than the owner can send a query to Consensus — including
 
 - ❌ That Consensus receives any data other than the owner's own research questions — **not claimed**; the flow is live for the owner only.
 - ❌ Anything about Consensus's retention or training terms — **not verified** (§37.3).
-- ❌ That a query has been observed reaching Consensus from Production — **not claimed**. The rollout made no Consensus request, and none had been reported when this addendum was updated on 2026-10-09; the owner's first search is the pending canary. Before the rollout, the only Consensus request made for PaperLume was the single owner-authorized capability audit call of 2026-10-02, outside this feature.
+- ❌ That a successful live request says anything about how Consensus handles the query afterwards — **not claimed**. The owner's authorized acceptance query of 2026-10-09 did reach Consensus from Production and returned successfully. That shows the flow works, not what the provider retains, logs or trains on (§37.3).
+
+*History:* the rollout, from the secret installation through the merge, made no Consensus request. Before it, the only Consensus request made for PaperLume was the single owner-authorized capability audit call of 2026-10-02, outside this feature.
