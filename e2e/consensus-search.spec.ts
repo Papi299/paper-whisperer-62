@@ -32,6 +32,14 @@ import { getPaperCount, waitForDashboard, createProject, createTag, deleteProjec
  * from the Consensus discovery titles. The library rows must show the
  * canonical ones: if Consensus display metadata were ever persisted directly,
  * the discovery wording would appear in the library and these tests fail.
+ *
+ * ## CONSENSUS-ADVANCED-FILTERS-001A
+ *
+ * The stand-in answers a request that carries any filter with its own cards,
+ * numbered by request (`… filtered discovery 2.1`), so a test can prove which
+ * submitted filter snapshot the cards on screen belong to. Every request body is
+ * recorded in full, so the exact filters the browser sent are asserted, and the
+ * count proves that editing filters sent nothing.
  */
 
 const CONSENSUS_FUNCTION_PATH = "/functions/v1/search-consensus";
@@ -48,7 +56,16 @@ const TAG_NAME = "CNS-E2E Tag";
 
 const QUERY = "Does creatine improve working memory in healthy adults?";
 const QUOTA_NOTE =
-  "Consensus searches use your connected API allowance and run only when you press Search. Your question is sent to Consensus.";
+  "Consensus searches use your connected API allowance and run only when you press Search. Your question and any filters you set are sent to Consensus.";
+const SETTINGS_CHANGED = "Search settings changed — press Search to apply.";
+const FILTER_CHECKBOXES = [
+  "Randomized controlled trial (RCT)",
+  "Meta-analysis",
+  "Systematic review",
+  "Cohort study",
+  "Human studies only",
+  "Exclude preprints",
+];
 
 // ── Deterministic fixtures ───────────────────────────────────────────────
 
@@ -98,6 +115,18 @@ const RESULTS: ConsensusFixture[] = [
   fixture(4, DOI_CHARLIE),
 ];
 
+/** Discovery wording for the cards a FILTERED request is answered with. Never persisted either. */
+const FILTERED_MARK = "Consensus-only filtered discovery";
+
+/** The answer to the Nth Consensus request when it carries filters: its titles name N. */
+function filteredResults(requestNumber: number): ConsensusFixture[] {
+  return [
+    fixture(1, DOI_ALPHA, { title: `${FILTERED_MARK} ${requestNumber}.1` }),
+    fixture(2, null, { title: `${FILTERED_MARK} ${requestNumber}.2 without an importable DOI` }),
+    fixture(3, DOI_BRAVO, { title: `${FILTERED_MARK} ${requestNumber}.3` }),
+  ];
+}
+
 /**
  * DOI_BRAVO is answered the way the live `fetch-paper-metadata` answers a DOI
  * it resolved on PubMed's path: the record is labelled with its PMID, and it
@@ -130,6 +159,8 @@ const OWNER_ACCESS_ROW = {
 interface Recorder {
   /** One entry per POST to search-consensus. Never stores the bearer token. */
   consensus: Array<{ query: string; bodyKeys: string[]; authorizationIsBearer: boolean }>;
+  /** The full JSON body of each search-consensus POST, in order. */
+  consensusBodies: Array<Record<string, unknown>>;
   metadata: Array<{ identifiers: string[]; rawBody: string }>;
   accessRequests: number;
   providerRequests: string[];
@@ -149,7 +180,7 @@ async function installStandIns(
   page: Page,
   options: { access: "owner" | "manager" | "real" | "fail" },
 ): Promise<Recorder> {
-  const recorder: Recorder = { consensus: [], metadata: [], accessRequests: 0, providerRequests: [] };
+  const recorder: Recorder = { consensus: [], consensusBodies: [], metadata: [], accessRequests: 0, providerRequests: [] };
 
   page.on("request", (request) => {
     let hostname: string;
@@ -206,11 +237,13 @@ async function installStandIns(
         bodyKeys: Object.keys(body).sort(),
         authorizationIsBearer: /^Bearer \S+$/.test(request.headers()["authorization"] ?? ""),
       });
+      recorder.consensusBodies.push(body);
+      const filtered = Object.keys(body).some((key) => key !== "query");
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         headers: corsFor(request),
-        body: JSON.stringify({ results: RESULTS }),
+        body: JSON.stringify({ results: filtered ? filteredResults(recorder.consensus.length) : RESULTS }),
       });
     },
   );
@@ -325,6 +358,43 @@ const sourceGroup = (dialog: Locator) => dialog.getByRole("radiogroup", { name: 
 
 const resultCheckbox = (dialog: Locator, doi: string) =>
   dialog.getByRole("checkbox", { name: new RegExp(`^Select DOI ${doi.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — `) });
+
+/**
+ * The region a finger can land in for one control, measured by hit-testing —
+ * not its box. A filter checkbox draws 16×16 and carries a transparent 44×44
+ * `::before` halo, which has no box of its own: walk outwards from the centre
+ * one CSS pixel at a time and count how far `elementFromPoint` still resolves
+ * to the control. The control's scroll container is moved first (never
+ * `scrollIntoView`, which would park the 16px box flush with an edge and clip
+ * the halo), so the measurement does not depend on what ran before it.
+ */
+async function hitExtent(control: Locator): Promise<{ width: number; height: number }> {
+  return control.evaluate((element) => {
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) {
+        const offset = element.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop;
+        node.scrollTop = Math.max(0, offset - node.clientHeight / 2);
+        break;
+      }
+    }
+    const rect = element.getBoundingClientRect();
+    const centreX = Math.round(rect.left + rect.width / 2);
+    const centreY = Math.round(rect.top + rect.height / 2);
+    const owns = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return false;
+      const hit = document.elementFromPoint(x, y);
+      return Boolean(hit && (hit === element || element.contains(hit)));
+    };
+    // Bounded: no legitimate target here is anywhere near 120px.
+    const reach = (dx: number, dy: number) => {
+      let steps = 0;
+      while (steps < 120 && owns(centreX + dx * (steps + 1), centreY + dy * (steps + 1))) steps++;
+      return steps;
+    };
+    if (!owns(centreX, centreY)) return { width: 0, height: 0 };
+    return { width: reach(-1, 0) + reach(1, 0) + 1, height: reach(0, -1) + reach(0, 1) + 1 };
+  });
+}
 
 /** Choose the disposable Project and Tag through the shared assign section. */
 async function assignProjectAndTag(page: Page, dialog: Locator, mobile: boolean) {
@@ -630,6 +700,199 @@ test.describe("Owner-only Consensus discovery", () => {
     await closeDialog(page);
     expect(recorder.consensus).toHaveLength(1);
     expect(recorder.providerRequests).toEqual([]);
+  });
+
+  test("owner: advanced filters — drafts search nothing; one Search sends the exact body; cards follow the committed filters", async ({
+    page,
+  }) => {
+    const recorder = await installStandIns(page, { access: "owner" });
+    await openDashboard(page);
+    await removeFixturePapers(page);
+    const initialCount = await getPaperCount(page);
+
+    let dialog = await openSearchMode(page);
+    await sourceGroup(dialog).getByRole("radio", { name: "Consensus" }).click();
+    await dialog.getByLabel("Search Consensus").fill(QUERY);
+
+    // ── Collapsed and unset by default; the keyboard opens it ──
+    const trigger = dialog.getByRole("button", { name: /^Advanced filters/ });
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(trigger).toHaveAccessibleName("Advanced filters");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    for (const name of FILTER_CHECKBOXES) await expect(dialog.getByRole("checkbox", { name })).not.toBeChecked();
+
+    // ── Edit every filter, by keyboard and pointer. Enter in a year field is not a Search ──
+    const fromYear = dialog.getByLabel("From year", { exact: true });
+    const toYear = dialog.getByLabel("To year", { exact: true });
+    await page.keyboard.press("Tab");
+    await expect(fromYear).toBeFocused();
+    await page.keyboard.type("2020");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Tab");
+    await expect(toYear).toBeFocused();
+    await page.keyboard.type("2026");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Tab");
+    const rct = dialog.getByRole("checkbox", { name: "Randomized controlled trial (RCT)" });
+    await expect(rct).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(rct).toBeChecked();
+    await dialog.getByRole("checkbox", { name: "Meta-analysis" }).click();
+    await dialog.getByRole("checkbox", { name: "Human studies only" }).click();
+    // The label is part of the target.
+    await dialog.locator("label", { hasText: "Exclude preprints" }).click();
+    await expect(dialog.getByRole("checkbox", { name: "Exclude preprints" })).toBeChecked();
+    // Four categories set: the years, the designs, human-only and no-preprints.
+    await expect(trigger).toHaveAccessibleName("Advanced filters · 4 set");
+    expect(recorder.consensus).toHaveLength(0);
+
+    // ── One explicit Search: exactly one request, carrying exactly these filters ──
+    await dialog.getByRole("button", { name: "Search", exact: true }).click();
+    const list = dialog.getByRole("list", { name: "Consensus search results" });
+    await expect(list.getByText(`${FILTERED_MARK} 1.1`, { exact: true })).toBeVisible();
+    expect(recorder.consensusBodies).toEqual([
+      { query: QUERY, yearMin: 2020, yearMax: 2026, studyTypes: ["rct", "meta-analysis"], human: true, excludePreprints: true },
+    ]);
+    expect(recorder.consensus[0].authorizationIsBearer).toBe(true);
+    const applied = dialog.getByText("Applied filters:", { exact: true }).locator("xpath=..");
+    await expect(applied).toHaveText("Applied filters: 2020–2026 · RCT + Meta-analysis · Human only · No preprints");
+    await expect(dialog.getByText(SETTINGS_CHANGED)).toHaveCount(0);
+    // A filtered search's discovery-only result is still not importable.
+    const discoveryOnly = list.locator(":scope > li").filter({ hasText: "without an importable DOI" });
+    await expect(discoveryOnly.getByText("No importable DOI available")).toBeVisible();
+    await expect(discoveryOnly.getByRole("checkbox")).toHaveCount(0);
+
+    // ── Changing a filter afterwards sends nothing and re-labels nothing ──
+    await dialog.getByRole("checkbox", { name: "Human studies only" }).click();
+    await expect(dialog.getByText(SETTINGS_CHANGED)).toBeVisible();
+    await expect(applied).toHaveText("Applied filters: 2020–2026 · RCT + Meta-analysis · Human only · No preprints");
+    await expect(list.getByText(`${FILTERED_MARK} 1.1`, { exact: true })).toBeVisible();
+    expect(recorder.consensus).toHaveLength(1);
+
+    // ── The next explicit Search applies the new snapshot, and its cards replace the old ──
+    await dialog.getByRole("button", { name: "Search", exact: true }).click();
+    await expect(list.getByText(`${FILTERED_MARK} 2.1`, { exact: true })).toBeVisible();
+    await expect(list.getByText(`${FILTERED_MARK} 1.1`, { exact: true })).toHaveCount(0);
+    expect(recorder.consensusBodies[1]).toEqual({
+      query: QUERY,
+      yearMin: 2020,
+      yearMax: 2026,
+      studyTypes: ["rct", "meta-analysis"],
+      excludePreprints: true,
+    });
+    await expect(applied).toHaveText("Applied filters: 2020–2026 · RCT + Meta-analysis · No preprints");
+    await expect(dialog.getByText(SETTINGS_CHANGED)).toHaveCount(0);
+
+    // ── Importing from a filtered search is still the canonical DOI handoff ──
+    await resultCheckbox(dialog, DOI_ALPHA).click();
+    await dialog.getByRole("button", { name: "Import 1 Selected" }).click();
+    await expect(dialog.getByText("Consensus Import Results")).toBeVisible({ timeout: 60_000 });
+    await expect(dialog.getByText("Added (1)")).toBeVisible();
+    expect(recorder.metadata).toHaveLength(1);
+    expect(recorder.metadata[0].identifiers).toEqual([DOI_ALPHA]);
+    for (const leak of [FILTERED_MARK, "yearMin", "studyTypes", "meta-analysis", "excludePreprints", "human", "consensus.app"]) {
+      expect(recorder.metadata[0].rawBody).not.toContain(leak);
+    }
+    expect(recorder.consensus).toHaveLength(2);
+
+    // ── Reset filters clears the draft only, and searches nothing ──
+    await dialog.getByRole("button", { name: "Reset filters" }).click();
+    await expect(fromYear).toHaveValue("");
+    await expect(toYear).toHaveValue("");
+    for (const name of FILTER_CHECKBOXES) await expect(dialog.getByRole("checkbox", { name })).not.toBeChecked();
+    await expect(dialog.getByLabel("Search Consensus")).toHaveValue(QUERY);
+    await expect(applied).toHaveText("Applied filters: 2020–2026 · RCT + Meta-analysis · No preprints");
+    expect(recorder.consensus).toHaveLength(2);
+
+    // ── Close and reopen: the question and every filter are reset ──
+    await closeDialog(page);
+    dialog = await openSearchMode(page);
+    await sourceGroup(dialog).getByRole("radio", { name: "Consensus" }).click();
+    await expect(dialog.getByLabel("Search Consensus")).toHaveValue("");
+    const reopened = dialog.getByRole("button", { name: /^Advanced filters/ });
+    await expect(reopened).toHaveAccessibleName("Advanced filters");
+    await expect(reopened).toHaveAttribute("aria-expanded", "false");
+    await reopened.click();
+    await expect(dialog.getByLabel("From year", { exact: true })).toHaveValue("");
+    for (const name of FILTER_CHECKBOXES) await expect(dialog.getByRole("checkbox", { name })).not.toBeChecked();
+    await expect(dialog.getByText("Applied filters:", { exact: true })).toHaveCount(0);
+    await closeDialog(page);
+
+    // ── The library holds the canonical record, never filtered discovery wording ──
+    await expect.poll(() => getPaperCount(page), { timeout: 30_000 }).toBe(initialCount + 1);
+    await expect(page.locator("tbody tr").filter({ hasText: CANONICAL_TITLES[DOI_ALPHA] })).toHaveCount(1);
+    await expect(page.locator("tbody tr").filter({ hasText: FILTERED_MARK })).toHaveCount(0);
+    expect(recorder.consensus).toHaveLength(2);
+    expect(recorder.providerRequests).toEqual([]);
+  });
+
+  test("owner: advanced filters at 390×844 — compact, touch-sized, and one tap of Search", async ({ browser }) => {
+    // The viewport is set BEFORE navigating: resizing mid-test unmounts
+    // desktop-only surfaces rather than reflowing them.
+    const context = await browser.newContext({
+      storageState: "e2e/.auth/user.json",
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+      isMobile: true,
+    });
+    const page = await context.newPage();
+    try {
+      const recorder = await installStandIns(page, { access: "owner" });
+      await openDashboard(page);
+      // The 44px sizes below are coarse-pointer sizes: prove this run is one.
+      expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(true);
+
+      const dialog = await openSearchMode(page);
+      await sourceGroup(dialog).getByRole("radio", { name: "Consensus" }).click();
+      await dialog.getByLabel("Search Consensus").fill(QUERY);
+      const trigger = dialog.getByRole("button", { name: /^Advanced filters/ });
+      await trigger.tap();
+      await expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+      // Buttons and year fields are at least 44px tall and fit the phone.
+      for (const control of [
+        trigger,
+        dialog.getByRole("button", { name: "Reset filters" }),
+        dialog.getByLabel("From year", { exact: true }),
+        dialog.getByLabel("To year", { exact: true }),
+      ]) {
+        const box = await control.boundingBox();
+        expect(box, "filter control has no box").not.toBeNull();
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      }
+      // Every 16px checkbox carries a hit region a finger can find.
+      for (const name of FILTER_CHECKBOXES) {
+        const extent = await hitExtent(dialog.getByRole("checkbox", { name }));
+        expect(extent.width, `${name} hit width`).toBeGreaterThanOrEqual(40);
+        expect(extent.height, `${name} hit height`).toBeGreaterThanOrEqual(40);
+      }
+      // Nothing in the dialog needs sideways scrolling.
+      const overflow = await dialog.evaluate((element) => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
+      expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+
+      // Taps edit the draft — a tap on a label included — and send nothing.
+      await dialog.getByLabel("From year", { exact: true }).fill("2015");
+      await dialog.locator("label", { hasText: "Systematic review" }).tap();
+      await dialog.getByRole("checkbox", { name: "Human studies only" }).tap();
+      await expect(dialog.getByRole("checkbox", { name: "Systematic review" })).toBeChecked();
+      expect(recorder.consensus).toHaveLength(0);
+
+      await dialog.getByRole("button", { name: "Search", exact: true }).tap();
+      await expect(dialog.getByRole("list", { name: "Consensus search results" })).toBeVisible();
+      expect(recorder.consensusBodies).toEqual([{ query: QUERY, yearMin: 2015, studyTypes: ["systematic review"], human: true }]);
+      await expect(dialog.getByText("Applied filters:", { exact: true }).locator("xpath=..")).toHaveText(
+        "Applied filters: From 2015 · Systematic review · Human only",
+      );
+
+      await closeDialog(page);
+      expect(recorder.consensus).toHaveLength(1);
+      expect(recorder.providerRequests).toEqual([]);
+    } finally {
+      await context.close();
+    }
   });
 
   test("ordinary user: the real access lookup answers 'user' and no Consensus control exists", async ({ page }) => {

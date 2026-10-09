@@ -2225,7 +2225,7 @@ The cutover handles whatever population exists when it runs; it must not assume 
   - `page_size` is fixed at 20 by the server, and the browser contract is `{ query }` alone.
 
   The only client retry is one refresh-and-retry on a **PaperLume** Edge 401, which the function produces only before any Consensus call.
-- **Query-only V1.** No filters and no full-text chunks.
+- **Query-only V1.** No filters and no full-text chunks. *(This is still the Production contract. An owner-only filter extension was prepared on 2026-10-10 and is not deployed — see "C60 extension" below.)*
 - **The key is server-only.** `CONSENSUS_API_KEY` is an Edge secret: no BYOK, no profile column, nothing in the browser, the logs or a URL.
 
 **Rationale:** The connected key belongs to the owner's own Consensus account. On the Free plan the owner confirmed on 2026-10-02, it carries a small monthly allowance (30 calls in the plan table read on 2026-10-03), shared with the owner's Consensus MCP use. So every request has a real cost, and a silent retry or an accidental search spends it. The canonical importer already owns DOI → PubMed/Crossref provenance, including the DOI-equivalence verification of PR #334 and the own-article DOI extraction of PR #335 (deployed as `fetch-paper-metadata` v25 on 2026-10-03). Persisting Consensus's projection would create a second, poorer source of truth beside it.
@@ -2237,3 +2237,29 @@ The cutover handles whatever population exists when it runs; it must not assume 
 - a decision to offer Consensus to anyone but the owner — that needs an owner-approved Privacy Policy update and a per-user quota and authorization design, not a widened role check;
 - granting the `owner` role to any additional account: the schema permits several `owner` rows, so the owner-only premise is a data fact this decision depends on, not a constraint;
 - Consensus changing its `/v1/search` contract.
+
+#### C60 extension — owner-only search filters (`CONSENSUS-ADVANCED-FILTERS-001A`, 2026-10-10) — PREPARED, NOT deployed
+
+**Status:** prepared in the repository on the owner's instruction of 2026-10-10 (Draft PR, unmerged). Nothing is deployed. Production still runs the query-only V1 above, and the 2026-10-09 acceptance above stands unchanged. This extension replaces the "Query-only V1" bullet only when its rollout ([deployment.md](deployment.md) §7f) completes; until then, that bullet describes Production.
+
+**Decision:** the owner may add four optional, server-validated filter categories to a Consensus Search:
+- publication years (`yearMin` / `yearMax`, whole years from 1900 to the current year + 1);
+- study designs (`studyTypes`, from a frozen four-value allowlist: `rct`, `meta-analysis`, `systematic review`, `cohort study`);
+- human studies only (`human`);
+- no preprints (`excludePreprints`).
+
+Consensus receives them as its documented `year_min`, `year_max`, `study_types`, `human` and `exclude_preprints` parameters. Every other C60 rule stands:
+- the source is owner-only, enforced twice;
+- one explicit Search is at most one Consensus request, with no retry of any outcome — and **no unfiltered fallback** when Consensus refuses the filters;
+- the first page only, `page_size` 20, no full-text chunks;
+- the browser contract stays closed, with PaperLume's own field names and nothing else;
+- the DOI-only import boundary holds, and nothing is persisted, filter settings included.
+
+**Rationale:** C60 named filters as a point to re-evaluate. The owner re-evaluated on 2026-10-10 and asked for them on the current Free plan: on an allowance of 30 calls a month, a page narrowed at the source is worth more than an unfiltered one. Pagination stays excluded. Consensus documents that "every plan can use every search filter", but PaperLume has never sent a filtered request with the owner's key, so Free-tier acceptance is **not yet demonstrated**. That is why the rollout puts one separately authorized canary request between the endpoint deployment and the merge.
+
+**Consequence:** `search-consensus` changes and must be deployed before the UI merges. No table, migration, secret, role or `verify_jwt` change is involved. When Consensus refuses a filtered search, the owner gets a distinct, actionable answer (`filters_not_allowed` for a 403, `filters_rejected` for a 400/422), never a retry.
+
+**Re-evaluation trigger (in addition to C60's):**
+- the canary or later use shows Consensus refusing, or ignoring, a filter on the owner's plan;
+- Consensus documents different parameter names or study-design values — notably the `exclude_preprints` / `excludePreprints` discrepancy recorded in [deployment.md](deployment.md) §7f;
+- a request for a study design outside the four-value allowlist, which needs the same two-source evidence or an owner-authorized live check.

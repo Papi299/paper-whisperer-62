@@ -144,3 +144,103 @@ describe("one Search press, at most one Consensus call", () => {
     expect(upstreamCalls).toHaveLength(0);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONSENSUS-ADVANCED-FILTERS-001A — the same property with filters
+// ══════════════════════════════════════════════════════════════════════════
+
+const FILTERED = {
+  query: QUERY,
+  yearMin: 2020,
+  yearMax: 2026,
+  studyTypes: ["rct", "meta-analysis"] as const,
+  human: true,
+  excludePreprints: true,
+};
+
+describe("one filtered Search press, at most one Consensus call", () => {
+  it("the browser's filters arrive at Consensus as exactly the documented parameters — in one request", async () => {
+    mockGetSession.mockResolvedValue(session("fresh-token"));
+    const { upstreamCalls } = wireRealHandler({ validTokens: new Set(["fresh-token"]), role: "owner", upstream: ok });
+
+    const response = await searchConsensus(FILTERED);
+
+    expect(response.results).toHaveLength(1);
+    expect(upstreamCalls).toHaveLength(1);
+    expect([...new URL(upstreamCalls[0]).searchParams.entries()]).toEqual([
+      ["query", QUERY],
+      ["page_size", "20"],
+      ["year_min", "2020"],
+      ["year_max", "2026"],
+      ["study_types", "rct,meta-analysis"],
+      ["human", "true"],
+      ["exclude_preprints", "true"],
+    ]);
+  });
+
+  it("an unfiltered search still reaches Consensus with exactly the V1 URL", async () => {
+    mockGetSession.mockResolvedValue(session("fresh-token"));
+    const { upstreamCalls } = wireRealHandler({ validTokens: new Set(["fresh-token"]), role: "owner", upstream: ok });
+
+    await searchConsensus({ query: QUERY, studyTypes: [], human: false, excludePreprints: false });
+
+    expect([...new URL(upstreamCalls[0]).searchParams.keys()]).toEqual(["query", "page_size"]);
+  });
+
+  it("a stale token is refreshed and the filtered search retried once — Consensus is still called once", async () => {
+    mockGetSession.mockResolvedValue(session("stale-token"));
+    mockRefreshSession.mockResolvedValue(session("fresh-token"));
+    const { upstreamCalls } = wireRealHandler({ validTokens: new Set(["fresh-token"]), role: "owner", upstream: ok });
+
+    await searchConsensus(FILTERED);
+
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(upstreamCalls).toHaveLength(1);
+    expect(new URL(upstreamCalls[0]).searchParams.get("study_types")).toBe("rct,meta-analysis");
+  });
+
+  it.each([
+    ["a Consensus 403 on the filters", () => new Response('{"code":"feature_not_allowed"}', { status: 403 }), "filters_not_allowed"],
+    ["a Consensus 422 on the filters", () => new Response('{"detail":[]}', { status: 422 }), "filters_rejected"],
+    ["a Consensus 429", () => new Response('{"detail":"You have used all included searches."}', { status: 429 }), "quota_exhausted"],
+    ["a timeout", () => new DOMException("The operation timed out.", "TimeoutError"), "upstream"],
+  ])("%s is reported once — never retried, and never retried without the filters", async (_label, upstream, kind) => {
+    mockGetSession.mockResolvedValue(session("fresh-token"));
+    const { upstreamCalls } = wireRealHandler({ validTokens: new Set(["fresh-token"]), role: "owner", upstream });
+
+    await expect(searchConsensus(FILTERED)).rejects.toMatchObject({ kind });
+
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockRefreshSession).not.toHaveBeenCalled();
+    expect(upstreamCalls).toHaveLength(1);
+    expect(new URL(upstreamCalls[0]).searchParams.has("study_types")).toBe(true);
+  });
+
+  it.each([
+    ["a year below PaperLume's floor", { yearMin: 1800 }],
+    ["a reversed range", { yearMin: 2024, yearMax: 2020 }],
+    ["a design outside the allowlist", { studyTypes: ["animal"] }],
+    ["a string where a boolean belongs", { human: "true" }],
+  ])("%s is refused before Consensus — zero calls, and no retry", async (_label, extra) => {
+    mockGetSession.mockResolvedValue(session("fresh-token"));
+    const { upstreamCalls } = wireRealHandler({ validTokens: new Set(["fresh-token"]), role: "owner", upstream: ok });
+
+    await expect(searchConsensus({ query: QUERY, ...extra } as unknown as { query: string })).rejects.toMatchObject({
+      kind: "validation",
+    });
+
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(upstreamCalls).toHaveLength(0);
+  });
+
+  it("a non-owner's filtered search never reaches Consensus, even across the auth retry", async () => {
+    mockGetSession.mockResolvedValue(session("stale-token"));
+    mockRefreshSession.mockResolvedValue(session("fresh-token"));
+    const { upstreamCalls } = wireRealHandler({ validTokens: new Set(["fresh-token"]), role: "manager", upstream: ok });
+
+    await expect(searchConsensus(FILTERED)).rejects.toMatchObject({ kind: "forbidden" });
+
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(upstreamCalls).toHaveLength(0);
+  });
+});

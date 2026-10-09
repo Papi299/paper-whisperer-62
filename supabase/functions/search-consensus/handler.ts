@@ -22,7 +22,17 @@
  * exactly `"owner"` (a manager is refused), and only then is the key read and
  * the one upstream request made. A refused caller costs zero Consensus calls.
  * The role is never taken from the request: the body contract is the query and
- * nothing else.
+ * PaperLume's four optional filter categories, and nothing else.
+ *
+ * ## Filters are validated before they can cost anything
+ *
+ * `yearMin`, `yearMax`, `studyTypes`, `human` and `excludePreprints` are checked
+ * in step 6, with the query, so a malformed or unsupported filter is a 400
+ * that spends zero Consensus calls and never touches the key. A valid filter
+ * set changes only the one upstream URL. When Consensus then refuses a
+ * filtered search (403, or 400/422), the owner is told the filters were the
+ * problem — and nothing is retried without them: a silent unfiltered fallback
+ * would both ignore what the owner asked for and spend a second call.
  *
  * ## Exactly one upstream attempt
  *
@@ -43,6 +53,8 @@
 import {
   buildConsensusSearchUrl,
   classifyConsensusFailure,
+  consensusFilterParamNames,
+  countResultsOutsideYearRange,
   parseConsensusSearchResponse,
   validateConsensusSearchRequest,
   type ConsensusSearchPage,
@@ -85,6 +97,15 @@ export const SEARCH_CONSENSUS_ERRORS = {
     message: "Consensus is receiving requests too quickly. Please wait a moment and try again.",
   },
   consensus_unavailable: { status: 502, message: "Consensus search is unavailable right now. Please try again later." },
+  filters_not_allowed: {
+    status: 422,
+    message:
+      "Consensus did not allow this filtered search, possibly because of the connected Consensus plan. Clear the advanced filters to search without them, or check the plan.",
+  },
+  filters_rejected: {
+    status: 422,
+    message: "Consensus did not accept these filters. Change or clear the advanced filters, then search again.",
+  },
   upstream_unavailable: {
     status: 502,
     message: "Consensus could not be reached right now. Please try again in a moment.",
@@ -184,12 +205,16 @@ async function readBoundedText(response: Response, limit: number): Promise<strin
  * The browser-facing code for each classified upstream failure. Credential,
  * billing and permission failures share one bounded "unavailable" answer: the
  * browser is never told whether the key was rejected, revoked or unpaid — the
- * owner reads the exact upstream status in the function log instead.
+ * owner reads the exact upstream status in the function log instead. A
+ * filtered search Consensus refused gets its own actionable answer, because
+ * clearing or changing the filters is something the owner can do about it.
  */
 const UPSTREAM_FAILURE_CODE = {
   upstream_auth: "consensus_unavailable",
   upstream_billing: "consensus_unavailable",
   upstream_forbidden: "consensus_unavailable",
+  filters_not_allowed: "filters_not_allowed",
+  filters_rejected: "filters_rejected",
   quota_exhausted: "quota_exhausted",
   rate_limited: "rate_limited",
   upstream_error: "upstream_unavailable",
@@ -268,22 +293,28 @@ export async function handleSearchConsensusRequest(
       record({ outcome: "invalid_request" });
       return fail("invalid_request", validation.message);
     }
-    const { query } = validation.request;
+    const { query, ...filters } = validation.request;
+    // The Consensus parameter names this search applies — logged by name only,
+    // and what makes a refusal attributable to the filters.
+    const filterParams = consensusFilterParamNames(filters);
+    const searched = { queryLength: query.length, filters: filterParams };
 
-    // 7. The server-side key. Read only now, after authorization. Never logged,
-    //    never returned, never placed in a URL.
+    // 7. The server-side key. Read only now, after authorization and after the
+    //    query and filters validated. Never logged, never returned, never
+    //    placed in a URL.
     const rawKey = deps.readApiKey();
     const apiKey = typeof rawKey === "string" ? rawKey.trim() : "";
     if (apiKey === "") {
-      record({ outcome: "not_configured", queryLength: query.length });
+      record({ outcome: "not_configured", ...searched });
       return fail("not_configured");
     }
 
-    // 8. The one upstream request. No retry on any outcome. `redirect: "error"`
-    //    means the key header can never follow a redirect to another host.
+    // 8. The one upstream request. No retry on any outcome — and no retry
+    //    without the filters either. `redirect: "error"` means the key header
+    //    can never follow a redirect to another host.
     let response: Response;
     try {
-      response = await deps.fetchImpl(buildConsensusSearchUrl(query), {
+      response = await deps.fetchImpl(buildConsensusSearchUrl(query, filters), {
         method: "GET",
         headers: { "x-api-key": apiKey, Accept: "application/json" },
         redirect: "error",
@@ -293,7 +324,7 @@ export async function handleSearchConsensusRequest(
       // The thrown value is not logged: a fetch error can quote the request
       // URL, and that URL carries the research query.
       const timedOut = isTimeout(error);
-      record({ outcome: timedOut ? "upstream_timeout" : "upstream_network_error", queryLength: query.length }, "warn");
+      record({ outcome: timedOut ? "upstream_timeout" : "upstream_network_error", ...searched }, "warn");
       return fail(timedOut ? "upstream_timeout" : "upstream_unavailable");
     }
 
@@ -314,8 +345,8 @@ export async function handleSearchConsensusRequest(
           // Nothing to release.
         }
       }
-      const failure = classifyConsensusFailure(response.status, bodyPrefix);
-      record({ outcome: failure, queryLength: query.length, upstreamStatus: response.status }, "warn");
+      const failure = classifyConsensusFailure(response.status, bodyPrefix, filterParams.length > 0);
+      record({ outcome: failure, ...searched, upstreamStatus: response.status }, "warn");
       return fail(UPSTREAM_FAILURE_CODE[failure]);
     }
 
@@ -327,7 +358,7 @@ export async function handleSearchConsensusRequest(
       record(
         {
           outcome: timedOut ? "upstream_timeout" : "malformed_response",
-          queryLength: query.length,
+          ...searched,
           upstreamStatus: response.status,
         },
         "warn",
@@ -337,17 +368,21 @@ export async function handleSearchConsensusRequest(
 
     const parsed = parseConsensusSearchResponse(payload);
     if (!parsed.ok) {
-      record({ outcome: "malformed_response", queryLength: query.length, upstreamStatus: response.status }, "warn");
+      record({ outcome: "malformed_response", ...searched, upstreamStatus: response.status }, "warn");
       return fail("upstream_unavailable");
     }
 
     record({
       outcome: "ok",
-      queryLength: query.length,
+      ...searched,
       upstreamStatus: response.status,
       returned: parsed.results.length,
       importable: parsed.results.filter((result) => result.importDoi !== null).length,
       dropped: parsed.dropped,
+      // Filter diagnostics, counted only for a filter the search applied. The
+      // results themselves are forwarded exactly as parsed.
+      yearOutside: countResultsOutsideYearRange(parsed.results, filters),
+      preprints: filters.excludePreprints ? parsed.preprints : null,
     });
     return json({ results: parsed.results });
   } catch (error) {
@@ -380,10 +415,19 @@ interface SearchLogFields {
   /** Only ever one of {@link RUNTIME_ENV_NAMES}. */
   missingEnv?: string;
   queryLength?: number;
+  /**
+   * The Consensus parameter names a validated search applied — never their
+   * values. Absent before validation; empty for an unfiltered search.
+   */
+  filters?: readonly string[];
   upstreamStatus?: number;
   returned?: number;
   importable?: number;
   dropped?: number;
+  /** Results outside the requested years; `null` when no year filter applied. */
+  yearOutside?: number | null;
+  /** Results Consensus flagged as preprints; `null` unless preprints were excluded. */
+  preprints?: number | null;
   durationMs: number;
 }
 
@@ -395,18 +439,25 @@ interface SearchLogFields {
  * only its length. Titles, abstracts, takeaways, authors, DOIs, Consensus URLs,
  * the request URL, the API key, the bearer token and every upstream body are
  * likewise absent: everything here is a length, a count, a status, a duration
- * or a bounded outcome label. `retry=0` is constant by design.
+ * or a bounded label. Filters appear as the fixed Consensus parameter names a
+ * search applied (`filters=none` without any, `na` before validation) — never
+ * a year, a study design or any other value. `year_outside` and `preprints`
+ * count, for a filter the search applied, the results that contradict it, so
+ * one authorized canary can show whether Consensus honoured that filter; they
+ * read `na` otherwise. `retry=0` is constant by design.
  */
 function logSearch(
   logger: NonNullable<SearchConsensusDeps["logger"]>,
   level: "log" | "warn" | "error",
   fields: SearchLogFields,
 ): void {
+  const filters = fields.filters === undefined ? "na" : fields.filters.length === 0 ? "none" : fields.filters.join(",");
   logger[level](
     `consensus-search outcome=${fields.outcome}${fields.missingEnv ? ` missing_env=${fields.missingEnv}` : ""} ` +
-      `q_len=${fields.queryLength ?? "na"} ` +
+      `q_len=${fields.queryLength ?? "na"} filters=${filters} ` +
       `upstream_status=${fields.upstreamStatus ?? "na"} returned=${fields.returned ?? 0} ` +
-      `importable=${fields.importable ?? 0} dropped=${fields.dropped ?? 0} retry=0 ` +
+      `importable=${fields.importable ?? 0} dropped=${fields.dropped ?? 0} ` +
+      `year_outside=${fields.yearOutside ?? "na"} preprints=${fields.preprints ?? "na"} retry=0 ` +
       `duration_ms=${Math.max(0, Math.round(fields.durationMs))}`,
   );
 }

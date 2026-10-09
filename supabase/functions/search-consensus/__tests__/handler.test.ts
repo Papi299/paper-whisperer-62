@@ -17,6 +17,7 @@ import {
   consensusResult,
   minimalConsensusResult,
 } from "../../_shared/__tests__/fixtures/consensusSearchResponse.ts";
+import { consensusFilterMaxYear } from "../../_shared/consensusSearch.ts";
 
 /**
  * CONSENSUS-SEARCH-MVP-001A — the search-consensus Edge Function's real request
@@ -358,7 +359,7 @@ describe("search-consensus — request validation", () => {
     ["an injected page_size", { query: QUERY, page_size: 200 }, "The request contains an unsupported field."],
     ["injected full-text chunks", { query: QUERY, include_full_text_chunks: true }, "The request contains an unsupported field."],
     ["an injected endpoint", { query: QUERY, url: "https://api.consensus.app/v1/quick_search" }, "The request contains an unsupported field."],
-    ["an unimplemented filter", { query: QUERY, yearMin: 2020 }, "The request contains an unsupported field."],
+    ["Consensus's own year_min name", { query: QUERY, year_min: 2020 }, "The request contains an unsupported field."],
   ])("refuses %s with 400 and zero upstream calls", async (_label, body, message) => {
     const harness = makeHarness();
     const response = await handleSearchConsensusRequest(post(body), harness.deps);
@@ -548,7 +549,7 @@ describe("search-consensus — upstream error mapping", () => {
       expect(response.status).toBe(500);
       expect(await response.text()).not.toContain(name);
       expect(harness.errors).toEqual([
-        `consensus-search outcome=internal_error missing_env=${name} q_len=na upstream_status=na returned=0 importable=0 dropped=0 retry=0 duration_ms=0`,
+        `consensus-search outcome=internal_error missing_env=${name} q_len=na filters=na upstream_status=na returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
       ]);
     },
   );
@@ -560,7 +561,7 @@ describe("search-consensus — upstream error mapping", () => {
     };
     await handleSearchConsensusRequest(post({ query: QUERY }), harness.deps);
     expect(harness.errors).toEqual([
-      "consensus-search outcome=internal_error q_len=na upstream_status=na returned=0 importable=0 dropped=0 retry=0 duration_ms=0",
+      "consensus-search outcome=internal_error q_len=na filters=na upstream_status=na returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0",
     ]);
   });
 });
@@ -620,7 +621,7 @@ describe("search-consensus — logging", () => {
     const harness = makeHarness({ responses: [happyResponse()] });
     await handleSearchConsensusRequest(post({ query: QUERY }), harness.deps);
     expect(harness.allLogLines()).toEqual([
-      `consensus-search outcome=ok q_len=${QUERY.length} upstream_status=200 returned=3 importable=2 dropped=0 retry=0 duration_ms=0`,
+      `consensus-search outcome=ok q_len=${QUERY.length} filters=none upstream_status=200 returned=3 importable=2 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
     ]);
   });
 
@@ -628,7 +629,7 @@ describe("search-consensus — logging", () => {
     const harness = makeHarness({ responses: [jsonResponse({ detail: "Too many requests" }, 429)] });
     await handleSearchConsensusRequest(post({ query: QUERY }), harness.deps);
     expect(harness.warns).toEqual([
-      `consensus-search outcome=rate_limited q_len=${QUERY.length} upstream_status=429 returned=0 importable=0 dropped=0 retry=0 duration_ms=0`,
+      `consensus-search outcome=rate_limited q_len=${QUERY.length} filters=none upstream_status=429 returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
     ]);
   });
 
@@ -669,13 +670,305 @@ describe("search-consensus — logging", () => {
     const forbidden = makeHarness({ access: { data: [MANAGER_ROW], error: null } });
     await handleSearchConsensusRequest(post({ query: QUERY }), forbidden.deps);
     expect(forbidden.allLogLines()).toEqual([
-      "consensus-search outcome=forbidden q_len=na upstream_status=na returned=0 importable=0 dropped=0 retry=0 duration_ms=0",
+      "consensus-search outcome=forbidden q_len=na filters=na upstream_status=na returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0",
     ]);
 
     const notConfigured = makeHarness({ apiKey: undefined });
     await handleSearchConsensusRequest(post({ query: QUERY }), notConfigured.deps);
     expect(notConfigured.allLogLines()).toEqual([
-      `consensus-search outcome=not_configured q_len=${QUERY.length} upstream_status=na returned=0 importable=0 dropped=0 retry=0 duration_ms=0`,
+      `consensus-search outcome=not_configured q_len=${QUERY.length} filters=none upstream_status=na returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
     ]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Advanced filters (CONSENSUS-ADVANCED-FILTERS-001A)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Every filter category set, in PaperLume's own contract names. */
+const FILTERED_BODY = {
+  query: QUERY,
+  yearMin: 2020,
+  yearMax: 2026,
+  studyTypes: ["rct", "meta-analysis"],
+  human: true,
+  excludePreprints: true,
+};
+
+/** The filter names the handler logs for FILTERED_BODY. */
+const FILTERED_PARAMS = "year_min,year_max,study_types,human,exclude_preprints";
+
+describe("search-consensus — advanced filters reach Consensus exactly once", () => {
+  it("sends a valid owner's filters as ONE request carrying exactly the documented parameters", async () => {
+    const harness = makeHarness({ responses: [happyResponse()] });
+    const response = await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+    expect(response.status).toBe(200);
+
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    const [rawUrl, init] = harness.fetchImpl.mock.calls[0] as [string, RequestInit];
+    const url = new URL(rawUrl);
+    expect(`${url.origin}${url.pathname}`).toBe("https://api.consensus.app/v1/search");
+    expect([...url.searchParams.entries()]).toEqual([
+      ["query", QUERY],
+      ["page_size", "20"],
+      ["year_min", "2020"],
+      ["year_max", "2026"],
+      ["study_types", "rct,meta-analysis"],
+      ["human", "true"],
+      ["exclude_preprints", "true"],
+    ]);
+    // The V1 transport guarantees hold for a filtered search too.
+    expect(init.method).toBe("GET");
+    expect(new Headers(init.headers).get("x-api-key")).toBe(FAKE_KEY);
+    expect(rawUrl).not.toContain(FAKE_KEY);
+    expect(init.redirect).toBe("error");
+    expect(harness.timeouts).toEqual([CONSENSUS_UPSTREAM_TIMEOUT_MS]);
+  });
+
+  it("sends only the filters that restrict something, with the designs in allowlist order", async () => {
+    const harness = makeHarness({ responses: [happyResponse()] });
+    await handleSearchConsensusRequest(
+      post({ query: QUERY, studyTypes: ["cohort study", "rct"], human: false, excludePreprints: false }),
+      harness.deps,
+    );
+    const [rawUrl] = harness.fetchImpl.mock.calls[0] as [string];
+    expect([...new URL(rawUrl).searchParams.entries()]).toEqual([
+      ["query", QUERY],
+      ["page_size", "20"],
+      ["study_types", "rct,cohort study"],
+    ]);
+  });
+
+  it("keeps an unfiltered request's upstream URL exactly the V1 URL", async () => {
+    const harness = makeHarness({ responses: [happyResponse()] });
+    await handleSearchConsensusRequest(post({ query: QUERY, studyTypes: [] }), harness.deps);
+    const [rawUrl] = harness.fetchImpl.mock.calls[0] as [string];
+    expect([...new URL(rawUrl).searchParams.keys()]).toEqual(["query", "page_size"]);
+  });
+
+  it("forwards the results exactly as parsed — filters never remove, hide or re-order a card", async () => {
+    const harness = makeHarness({
+      responses: [
+        jsonResponse(
+          consensusEnvelope([
+            consensusResult({ title: "Outside the range", doi: "10.5555/old", publish_year: 2001, is_preprint: true }),
+            consensusResult({ title: "Inside the range", doi: "10.5555/new", publish_year: 2022 }),
+          ]),
+        ),
+      ],
+    });
+    const response = await handleSearchConsensusRequest(
+      post({ query: QUERY, yearMin: 2020, excludePreprints: true }),
+      harness.deps,
+    );
+    const body = (await response.json()) as { results: Array<Record<string, unknown>> };
+    expect(body.results.map((r) => [r.rank, r.title, r.year])).toEqual([
+      [1, "Outside the range", 2001],
+      [2, "Inside the range", 2022],
+    ]);
+  });
+});
+
+describe("search-consensus — advanced filters never get past the boundary early", () => {
+  it.each([
+    ["a manager", [MANAGER_ROW]],
+    ["an ordinary user", [USER_ROW]],
+    ["no access row", []],
+  ])("refuses %s's filtered request with 403 — no key read, zero Consensus calls", async (_label, data) => {
+    const harness = makeHarness({ access: { data, error: null } });
+    const response = await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+    expect(response.status).toBe(403);
+    expect((await errorBody(response)).error).toBe("forbidden");
+    expect(harness.readApiKey).not.toHaveBeenCalled();
+    expect(harness.fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unauthenticated filtered request with 401 before any role check", async () => {
+    const harness = makeHarness({ user: null });
+    const response = await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+    expect(response.status).toBe(401);
+    expect(harness.rpcCalls).toEqual([]);
+    expect(harness.fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("authorizes before validating: a non-owner's INVALID filters still earn 403, not 400", async () => {
+    const harness = makeHarness({ access: { data: [MANAGER_ROW], error: null } });
+    const response = await handleSearchConsensusRequest(post({ query: QUERY, yearMin: 1066 }), harness.deps);
+    expect(response.status).toBe(403);
+  });
+
+  const ceiling = consensusFilterMaxYear();
+  it.each([
+    ["a year below the floor", { yearMin: 1899 }, `yearMin must be a whole year from 1900 to ${ceiling}.`],
+    ["a year past the ceiling", { yearMax: ceiling + 1 }, `yearMax must be a whole year from 1900 to ${ceiling}.`],
+    ["a fractional year", { yearMin: 2020.5 }, `yearMin must be a whole year from 1900 to ${ceiling}.`],
+    ["a year as a string", { yearMax: "2020" }, `yearMax must be a whole year from 1900 to ${ceiling}.`],
+    ["a reversed range", { yearMin: 2024, yearMax: 2020 }, "yearMin must not be later than yearMax."],
+    ["an unknown design", { studyTypes: ["case report"] }, "studyTypes must be a list of supported study designs."],
+    ["a repeated design", { studyTypes: ["rct", "rct"] }, "studyTypes must not repeat a study design."],
+    ["a design list as a string", { studyTypes: "rct,meta-analysis" }, "studyTypes must be a list of supported study designs."],
+    ['"true" for human', { human: "true" }, "human must be true or false."],
+    ["1 for excludePreprints", { excludePreprints: 1 }, "excludePreprints must be true or false."],
+    ["Consensus's own parameter name", { study_types: "rct" }, "The request contains an unsupported field."],
+    ["a page alongside valid filters", { yearMin: 2020, page: 1 }, "The request contains an unsupported field."],
+  ])("refuses %s with 400 — before the key is read, zero Consensus calls", async (_label, extra, message) => {
+    const harness = makeHarness({ responses: [happyResponse()] });
+    const response = await handleSearchConsensusRequest(post({ query: QUERY, ...extra }), harness.deps);
+    expect(response.status).toBe(400);
+    expect(await errorBody(response)).toEqual({ error: "invalid_request", message });
+    expect(harness.readApiKey).not.toHaveBeenCalled();
+    expect(harness.fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("search-consensus — Consensus refusing a filtered search", () => {
+  it.each([
+    [
+      "a 403 (feature_not_allowed)",
+      () => jsonResponse({ code: "feature_not_allowed", detail: "Upgrade your plan to use this filter" }, 403),
+      "filters_not_allowed",
+    ],
+    [
+      "a 422 (a filter Consensus would not validate)",
+      () => jsonResponse({ detail: [{ loc: ["query", "study_types"], msg: "value is not a valid enumeration member" }] }, 422),
+      "filters_rejected",
+    ],
+    ["a 400", () => jsonResponse({ detail: "bad filter combination" }, 400), "filters_rejected"],
+  ] as const)(
+    "answers %s with a bounded 422 %s — one attempt, and never an unfiltered fallback",
+    async (_label, make, code) => {
+      const harness = makeHarness({ responses: [make(), happyResponse(), happyResponse()] });
+      const response = await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+
+      expect(response.status).toBe(422);
+      const body = await errorBody(response);
+      expect(body).toEqual({ error: code, message: SEARCH_CONSENSUS_ERRORS[code].message });
+      // Exactly one request, and it was the filtered one: nothing was retried
+      // with the filters stripped.
+      expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+      const [rawUrl] = harness.fetchImpl.mock.calls[0] as [string];
+      expect(new URL(rawUrl).searchParams.get("study_types")).toBe("rct,meta-analysis");
+      const text = JSON.stringify(body);
+      for (const upstream of ["feature_not_allowed", "Upgrade your plan", "enumeration", "bad filter combination", "detail"]) {
+        expect(text).not.toContain(upstream);
+      }
+    },
+  );
+
+  it("tells the owner what to do, without claiming to know the plan", () => {
+    expect(SEARCH_CONSENSUS_ERRORS.filters_not_allowed.message).toMatch(/Clear the advanced filters/);
+    expect(SEARCH_CONSENSUS_ERRORS.filters_not_allowed.message).toMatch(/possibly/);
+    expect(SEARCH_CONSENSUS_ERRORS.filters_rejected.message).toMatch(/Change or clear the advanced filters/);
+  });
+
+  it.each([
+    ["a 403", () => jsonResponse({ code: "feature_not_allowed" }, 403), 502, "consensus_unavailable"],
+    ["a 422", () => jsonResponse({ detail: [{ loc: ["query"] }] }, 422), 502, "upstream_unavailable"],
+  ] as const)("keeps V1's answer for %s on an UNFILTERED search", async (_label, make, status, code) => {
+    const harness = makeHarness({ responses: [make()] });
+    const response = await handleSearchConsensusRequest(post({ query: QUERY }), harness.deps);
+    expect(response.status).toBe(status);
+    expect((await errorBody(response)).error).toBe(code);
+  });
+
+  it.each([
+    ["the monthly-allowance 429", () => jsonResponse({ detail: "You have used all included searches." }, 429), 429, "quota_exhausted"],
+    ["a per-second 429", () => jsonResponse({ detail: "Too many requests" }, 429, { "retry-after": "1" }), 429, "rate_limited"],
+    ["a timeout", () => new DOMException("The operation timed out.", "TimeoutError"), 504, "upstream_timeout"],
+    ["a network failure", () => new TypeError("fetch failed"), 502, "upstream_unavailable"],
+    ["a 500", () => jsonResponse({ detail: "boom" }, 500), 502, "upstream_unavailable"],
+    ["a Consensus 401", () => jsonResponse({ detail: "Invalid API key" }, 401), 502, "consensus_unavailable"],
+    ["a Consensus 402", () => jsonResponse({ detail: "Billing past due" }, 402), 502, "consensus_unavailable"],
+  ] as const)("answers %s on a filtered search as it would without filters — one attempt", async (_label, make, status, code) => {
+    const harness = makeHarness({ responses: [make(), happyResponse(), happyResponse()] });
+    const response = await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+    expect(response.status).toBe(status);
+    expect((await errorBody(response)).error).toBe(code);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("never answers 401 once the key has been read, filtered or not", async () => {
+    const outcomes: Array<() => Response | Error> = [
+      () => jsonResponse({}, 401),
+      () => jsonResponse({}, 403),
+      () => jsonResponse({}, 422),
+      () => jsonResponse({}, 400),
+      () => jsonResponse({}, 429),
+      () => jsonResponse({}, 500),
+      () => new TypeError("fetch failed"),
+      () => new DOMException("timeout", "TimeoutError"),
+      () => happyResponse(),
+    ];
+    for (const make of outcomes) {
+      const harness = makeHarness({ responses: [make()] });
+      const response = await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+      expect(harness.readApiKey).toHaveBeenCalledTimes(1);
+      expect(response.status).not.toBe(401);
+    }
+  });
+});
+
+describe("search-consensus — logging a filtered search", () => {
+  it("logs the applied filter NAMES and the filter diagnostics — never a filter value", async () => {
+    const harness = makeHarness({
+      responses: [
+        jsonResponse(
+          consensusEnvelope([
+            consensusResult({ doi: "10.5555/a", publish_year: 2019, is_preprint: true }),
+            consensusResult({ doi: "10.5555/b", publish_year: 2024, is_preprint: false }),
+            minimalConsensusResult({ publish_year: 2021 }),
+          ]),
+        ),
+      ],
+    });
+    await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+    expect(harness.allLogLines()).toEqual([
+      `consensus-search outcome=ok q_len=${QUERY.length} filters=${FILTERED_PARAMS} upstream_status=200 returned=3 importable=3 dropped=0 year_outside=1 preprints=1 retry=0 duration_ms=0`,
+    ]);
+    const logged = harness.allLogLines().join("\n");
+    for (const value of ["2020", "2026", "meta-analysis", "rct", "=true"]) {
+      expect(logged).not.toContain(value);
+    }
+  });
+
+  it("counts a diagnostic only for a filter the search applied", async () => {
+    const harness = makeHarness({ responses: [happyResponse()] });
+    await handleSearchConsensusRequest(post({ query: QUERY, studyTypes: ["rct"], human: true }), harness.deps);
+    expect(harness.allLogLines()).toEqual([
+      `consensus-search outcome=ok q_len=${QUERY.length} filters=study_types,human upstream_status=200 returned=3 importable=2 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
+    ]);
+  });
+
+  it("logs a refused filtered search with its filter names and the upstream status", async () => {
+    const harness = makeHarness({ responses: [jsonResponse({ code: "feature_not_allowed" }, 403)] });
+    await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+    expect(harness.warns).toEqual([
+      `consensus-search outcome=filters_not_allowed q_len=${QUERY.length} filters=${FILTERED_PARAMS} upstream_status=403 returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
+    ]);
+  });
+
+  it("logs an invalid filter as a bounded invalid_request, with no filter and no value", async () => {
+    const harness = makeHarness();
+    await handleSearchConsensusRequest(post({ query: QUERY, studyTypes: ["<script>"] }), harness.deps);
+    expect(harness.allLogLines()).toEqual([
+      "consensus-search outcome=invalid_request q_len=na filters=na upstream_status=na returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0",
+    ]);
+  });
+
+  it("never logs the query, the key, the token or any result text on a filtered search either", async () => {
+    const secretQuery = "unpublished-direction rare-disease-cohort-XYZ";
+    for (const responses of [
+      [happyResponse()],
+      [jsonResponse({ code: "feature_not_allowed" }, 403)],
+      [new TypeError(`fetch failed https://api.consensus.app/v1/search?query=${encodeURIComponent(secretQuery)}&year_min=2020`)],
+    ]) {
+      const harness = makeHarness({ responses });
+      await handleSearchConsensusRequest(post({ ...FILTERED_BODY, query: secretQuery }), harness.deps);
+      const logged = harness.allLogLines().join("\n");
+      expect(logged).toMatch(/^consensus-search outcome=/);
+      for (const forbidden of [secretQuery, "rare-disease", FAKE_KEY, "test-access-token", "Synthetic fixture", "10.5555", "consensus.app/papers", "api.consensus.app"]) {
+        expect(logged).not.toContain(forbidden);
+      }
+    }
   });
 });

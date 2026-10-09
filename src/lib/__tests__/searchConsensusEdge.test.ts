@@ -94,11 +94,60 @@ describe("searchConsensus — request", () => {
     expect(options.headers).toEqual({ Authorization: "Bearer valid-token" });
   });
 
-  it("never sends a page, page size, filter, endpoint, role, identity or key", async () => {
+  it("never sends a page, page size, Consensus parameter, endpoint, role, identity or key", async () => {
     mockInvoke.mockResolvedValue({ data: { results: [] }, error: null });
-    // Even if a caller passes extra properties, only the query is forwarded.
-    await searchConsensus({ query: QUERY, page: 2, page_size: 200, role: "owner" } as unknown as { query: string });
+    // Even if a caller passes extra properties, only contract fields are forwarded.
+    await searchConsensus({
+      query: QUERY,
+      page: 2,
+      page_size: 200,
+      year_min: 1800,
+      study_types: "animal",
+      include_full_text_chunks: true,
+      url: "https://api.consensus.app/v1/quick_search",
+      role: "owner",
+      userId: "11111111-2222-3333-4444-555555555555",
+      apiKey: "sk-live-123",
+    } as unknown as { query: string });
     expect(Object.keys(mockInvoke.mock.calls[0][1].body)).toEqual(["query"]);
+  });
+
+  it("sends the filters under exactly the contract names, in a body built field by field", async () => {
+    mockInvoke.mockResolvedValue({ data: { results: [] }, error: null });
+    const studyTypes = ["rct", "meta-analysis"] as const;
+    await searchConsensus({
+      query: QUERY,
+      yearMin: 2020,
+      yearMax: 2026,
+      studyTypes,
+      human: true,
+      excludePreprints: true,
+    });
+    const { body } = mockInvoke.mock.calls[0][1];
+    expect(body).toEqual({
+      query: QUERY,
+      yearMin: 2020,
+      yearMax: 2026,
+      studyTypes: ["rct", "meta-analysis"],
+      human: true,
+      excludePreprints: true,
+    });
+    // A copy: the request body shares no array with the caller.
+    expect(body.studyTypes).not.toBe(studyTypes);
+  });
+
+  it("leaves out every filter that restricts nothing — an unfiltered search sends exactly { query }", async () => {
+    mockInvoke.mockResolvedValue({ data: { results: [] }, error: null });
+    await searchConsensus({ query: QUERY, studyTypes: [], human: false, excludePreprints: false });
+    expect(mockInvoke.mock.calls[0][1].body).toEqual({ query: QUERY });
+  });
+
+  it("forwards a malformed filter as given, for the server to refuse — never silently drops it", async () => {
+    mockInvoke.mockResolvedValue(functionError(400, { error: "invalid_request", message: "human must be true or false." }));
+    await expect(
+      searchConsensus({ query: QUERY, human: "true", yearMin: "2020", studyTypes: "rct" } as unknown as { query: string }),
+    ).rejects.toMatchObject({ kind: "validation", message: "human must be true or false." });
+    expect(mockInvoke.mock.calls[0][1].body).toEqual({ query: QUERY, human: "true", yearMin: "2020", studyTypes: "rct" });
   });
 
   it("refreshes first when the stored token is about to expire", async () => {
@@ -141,6 +190,24 @@ describe("searchConsensus — retry policy", () => {
     expect(response.results).toHaveLength(1);
   });
 
+  it("retries a PaperLume Edge 401 with the very same filtered body", async () => {
+    mockInvoke
+      .mockResolvedValueOnce(functionError(401, { error: "unauthenticated", message: "You must be signed in to search Consensus." }))
+      .mockResolvedValueOnce({ data: { results: [] }, error: null });
+    const request = { query: QUERY, yearMin: 2015, studyTypes: ["systematic review"] as const, excludePreprints: true };
+
+    await searchConsensus(request);
+
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(mockInvoke.mock.calls[1][1].body).toEqual(mockInvoke.mock.calls[0][1].body);
+    expect(mockInvoke.mock.calls[1][1].body).toEqual({
+      query: QUERY,
+      yearMin: 2015,
+      studyTypes: ["systematic review"],
+      excludePreprints: true,
+    });
+  });
+
   it("does not loop: a second 401 after the refresh is reported as auth", async () => {
     mockInvoke.mockResolvedValue(functionError(401, { error: "unauthenticated", message: "You must be signed in to search Consensus." }));
 
@@ -166,6 +233,8 @@ describe("searchConsensus — retry policy", () => {
     ["a 403 forbidden", () => functionError(403, { error: "forbidden", message: "x" })],
     ["a 400 validation error", () => functionError(400, { error: "invalid_request", message: "x" })],
     ["a 500 access-check failure", () => functionError(500, { error: "access_check_failed", message: "x" })],
+    ["a refused filtered search (Consensus 403)", () => functionError(422, { error: "filters_not_allowed", message: "x" })],
+    ["filters Consensus did not accept (Consensus 400/422)", () => functionError(422, { error: "filters_rejected", message: "x" })],
     [
       "a transport error whose message merely mentions 401/JWT",
       () => ({ data: null, error: Object.assign(new Error("FunctionsFetchError: 401 Invalid JWT"), { context: new TypeError("x") }) }),
@@ -190,6 +259,8 @@ describe("searchConsensus — error kinds", () => {
     [503, "not_configured", "not_configured"],
     [429, "quota_exhausted", "quota_exhausted"],
     [429, "rate_limited", "rate_limited"],
+    [422, "filters_not_allowed", "filters_not_allowed"],
+    [422, "filters_rejected", "filters_rejected"],
     [502, "consensus_unavailable", "upstream"],
     [502, "upstream_unavailable", "upstream"],
     [504, "upstream_timeout", "upstream"],

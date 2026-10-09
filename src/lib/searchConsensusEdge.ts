@@ -36,6 +36,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { doiEquivalenceKey, extractDoiFromMetadataValue } from "@/lib/doiIdentifiers";
+import type { ConsensusStudyType } from "@/lib/consensusSearchFilters";
 
 /** PaperLume's own query bound. Mirrors the Edge Function, which enforces it. */
 export const CONSENSUS_SEARCH_MAX_QUERY_LENGTH = 500;
@@ -78,9 +79,19 @@ export interface ConsensusSearchResponse {
   results: ConsensusSearchResult[];
 }
 
-/** The complete request contract. The server refuses any other field. */
+/**
+ * The complete request contract: the question and PaperLume's four optional
+ * filter categories (CONSENSUS-ADVANCED-FILTERS-001A). The server validates
+ * every field again and refuses any other. Leaving a filter out, `false` and
+ * an empty `studyTypes` all mean "no restriction".
+ */
 export interface ConsensusSearchRequest {
   query: string;
+  yearMin?: number;
+  yearMax?: number;
+  studyTypes?: readonly ConsensusStudyType[];
+  human?: boolean;
+  excludePreprints?: boolean;
 }
 
 export type ConsensusSearchErrorKind =
@@ -90,6 +101,10 @@ export type ConsensusSearchErrorKind =
   | "not_configured"
   | "quota_exhausted"
   | "rate_limited"
+  /** Consensus refused a filtered search — possibly a plan restriction on the filters. */
+  | "filters_not_allowed"
+  /** Consensus did not accept the filters it was sent. */
+  | "filters_rejected"
   | "upstream"
   | "unexpected";
 
@@ -116,6 +131,9 @@ const DEFAULT_MESSAGES: Record<ConsensusSearchErrorKind, string> = {
   quota_exhausted:
     "The connected Consensus API allowance has been used up. It resets or can be raised from the Consensus account.",
   rate_limited: "Consensus is receiving requests too quickly. Please wait a moment and try again.",
+  filters_not_allowed:
+    "Consensus did not allow this filtered search, possibly because of the connected Consensus plan. Clear the advanced filters to search without them, or check the plan.",
+  filters_rejected: "Consensus did not accept these filters. Change or clear the advanced filters, then search again.",
   upstream: "Consensus could not be reached right now. Please try again in a moment.",
   unexpected: "Consensus search failed. Please try again.",
 };
@@ -132,6 +150,8 @@ const EDGE_ERROR_KINDS: Record<string, ConsensusSearchErrorKind> = {
   not_configured: "not_configured",
   quota_exhausted: "quota_exhausted",
   rate_limited: "rate_limited",
+  filters_not_allowed: "filters_not_allowed",
+  filters_rejected: "filters_rejected",
   consensus_unavailable: "upstream",
   upstream_unavailable: "upstream",
   upstream_timeout: "upstream",
@@ -333,16 +353,47 @@ async function describeFunctionError(error: { message?: string; context?: unknow
 }
 
 /**
+ * The request body: the question plus each filter that restricts something,
+ * under exactly the six contract names — never a spread of the caller's
+ * object, so no page, page size, Consensus parameter name, endpoint, role or
+ * identity can ride along.
+ *
+ * Unset (`undefined`), `false` and an empty design list mean "no restriction"
+ * and are left out, so an unfiltered search sends exactly `{ query }`, the V1
+ * body. Every other value is forwarded as given rather than dropped or
+ * repaired: a malformed filter is the server's to refuse, loudly and at no
+ * Consensus cost, never something to quietly search without.
+ */
+function requestBody(request: ConsensusSearchRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = { query: request.query };
+  if (request.yearMin !== undefined) body.yearMin = request.yearMin;
+  if (request.yearMax !== undefined) body.yearMax = request.yearMax;
+  const { studyTypes } = request;
+  if (Array.isArray(studyTypes)) {
+    // Copied, never aliased: the body shares no array with the caller.
+    if (studyTypes.length > 0) body.studyTypes = [...studyTypes];
+  } else if (studyTypes !== undefined) {
+    body.studyTypes = studyTypes;
+  }
+  if (request.human !== undefined && request.human !== false) body.human = request.human;
+  if (request.excludePreprints !== undefined && request.excludePreprints !== false) {
+    body.excludePreprints = request.excludePreprints;
+  }
+  return body;
+}
+
+/**
  * Run one Consensus discovery search for the signed-in owner.
  *
- * Sends exactly `{ query }`. There is no page, page size, filter, endpoint or
- * identity in the request — the server owns all of them and refuses extras.
+ * Sends `{ query }` plus the filters the request sets. There is no page, page
+ * size, endpoint or identity in the request — the server owns all of them and
+ * refuses extras.
  *
  * @throws {ConsensusSearchError} for every failure, already described in words
  *         the panel can show.
  */
 export async function searchConsensus(request: ConsensusSearchRequest): Promise<ConsensusSearchResponse> {
-  const body = { query: request.query };
+  const body = requestBody(request);
 
   // Fresh token BEFORE the call, passed explicitly, because
   // `supabase.functions.invoke()`'s internal token can be stale.
@@ -357,9 +408,11 @@ export async function searchConsensus(request: ConsensusSearchRequest): Promise<
   });
 
   // Exactly one refresh-and-retry, and only for a PaperLume Edge 401 — which
-  // the function produces before any Consensus call. Never for a Consensus
-  // outcome: a 429, a 5xx, a timeout, a network failure, a validation error or
-  // a 403 is reported, and the owner decides whether to search again.
+  // the function produces before any Consensus call. The retry sends the very
+  // same body. Never for a Consensus outcome: a 429, a 5xx, a timeout, a
+  // network failure, a validation error, a 403 or a refused filter is
+  // reported, and the owner decides whether to search again — with or without
+  // the filters. Nothing here ever drops them and tries again.
   if (response.error && isPaperLumeAuthRejection(response.error)) {
     const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
     if (refreshError || !refreshData.session) {

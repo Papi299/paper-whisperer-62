@@ -12,10 +12,20 @@
  * The owner's Consensus allowance is small and every search may spend part of
  * it, so the ONLY thing in this file that can cause a request is
  * {@link ConsensusSearchActions.submitSearch} — called from an explicit Search
- * press. Typing, switching sources, selecting, importing and resetting never
- * search. There is one result page and no pagination, one request in flight at
- * a time, and no retry: a failed search stays failed until the owner presses
- * Search again.
+ * press. Typing, editing or resetting filters, switching sources, selecting,
+ * importing and resetting never search. There is one result page and no
+ * pagination, one request in flight at a time, and no retry: a failed search
+ * stays failed until the owner presses Search again.
+ *
+ * ## Draft filters, committed filters (CONSENSUS-ADVANCED-FILTERS-001A)
+ *
+ * The advanced filters exist twice. `draftFilters` is what the owner is
+ * editing; changing it searches nothing and touches nothing on screen.
+ * `committedFilters` is the frozen snapshot taken when Search was pressed, sent
+ * with that search, and the only thing its results are ever described with. A
+ * search's identity is its question AND its filters: the same question under
+ * different filters is a new search, whose predecessor's results and selection
+ * go — exactly as a new question's do.
  *
  * ## Selection is keyed by DOI equivalence
  *
@@ -40,6 +50,14 @@ import {
   type ConsensusSearchResponse,
   type ConsensusSearchResult,
 } from "@/lib/searchConsensusEdge";
+import {
+  EMPTY_CONSENSUS_FILTER_DRAFT,
+  canonicalStudyTypes,
+  sameAppliedFilters,
+  validateConsensusFilterDraft,
+  type ConsensusAppliedFilters,
+  type ConsensusFilterDraft,
+} from "@/lib/consensusSearchFilters";
 
 /** The Edge-backed search, injected so the dialog stays callback-oriented. */
 export type ConsensusSearchFn = (request: ConsensusSearchRequest) => Promise<ConsensusSearchResponse>;
@@ -67,8 +85,16 @@ export interface ConsensusSearchErrorState {
 export interface ConsensusSearchState {
   /** What is currently typed. Changing it searches nothing and clears nothing. */
   draftQuery: string;
+  /** The advanced filters being edited. Changing them searches nothing and clears nothing. */
+  draftFilters: ConsensusFilterDraft;
   /** The query whose results are on screen (or whose brand-new attempt failed). */
   committedQuery: string | null;
+  /**
+   * The filters that search applied — the frozen snapshot taken when Search
+   * was pressed, never the draft. `null` before the first search; `{}` for an
+   * unfiltered one.
+   */
+  committedFilters: ConsensusAppliedFilters | null;
   /** The one result page, or `null` before the first successful search. */
   results: ConsensusSearchResult[] | null;
   /**
@@ -82,7 +108,14 @@ export interface ConsensusSearchState {
 
 export interface ConsensusSearchActions {
   setDraftQuery(value: string): void;
-  /** Run the draft query — the only action that can reach Consensus. */
+  /**
+   * Edit the draft filters. Searches nothing, and leaves the committed search —
+   * its results, selection and applied filters — exactly as it was.
+   */
+  setDraftFilters(patch: Partial<ConsensusFilterDraft>): void;
+  /** Put every draft filter back to unset. Keeps the question; searches nothing. */
+  resetDraftFilters(): void;
+  /** Run the draft query under the draft filters — the only action that can reach Consensus. */
   submitSearch(): void;
   /** Toggle one importable DOI. A value that is not importable is ignored. */
   toggleSelection(doi: string): void;
@@ -97,7 +130,9 @@ export interface ConsensusSearchActions {
 
 const EMPTY_STATE: ConsensusSearchState = {
   draftQuery: "",
+  draftFilters: EMPTY_CONSENSUS_FILTER_DRAFT,
   committedQuery: null,
+  committedFilters: null,
   results: null,
   selectedDois: [],
   loading: false,
@@ -138,6 +173,25 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
     setState((prev) => ({ ...prev, draftQuery: value }));
   }, []);
 
+  const setDraftFilters = useCallback((patch: Partial<ConsensusFilterDraft>) => {
+    setState((prev) => ({
+      ...prev,
+      draftFilters: {
+        ...prev.draftFilters,
+        ...patch,
+        // Only allowlisted designs, once each, in allowlist order — whatever
+        // the caller passed.
+        studyTypes: patch.studyTypes ? canonicalStudyTypes(patch.studyTypes) : prev.draftFilters.studyTypes,
+      },
+    }));
+  }, []);
+
+  const resetDraftFilters = useCallback(() => {
+    setState((prev) =>
+      prev.draftFilters === EMPTY_CONSENSUS_FILTER_DRAFT ? prev : { ...prev, draftFilters: EMPTY_CONSENSUS_FILTER_DRAFT },
+    );
+  }, []);
+
   const submitSearch = useCallback(() => {
     if (!search) return;
     const current = stateRef.current;
@@ -147,20 +201,29 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
     const query = current.draftQuery.trim();
     if (query.length === 0 || query.length > CONSENSUS_SEARCH_MAX_QUERY_LENGTH) return;
 
-    // A different query is a new discovery session: its predecessor's results
-    // and selection go. Re-running the same query keeps the selected DOIs —
-    // stable identifiers — and leaves the current page on screen until the new
-    // one arrives, so a failed re-run never destroys usable results; when the
-    // re-run succeeds, only the selected DOIs its page still shows are kept.
-    const isNewQuery = query !== current.committedQuery;
+    // The filters are checked here as well as in the panel: a draft the server
+    // would refuse is never sent. Valid ones become the frozen snapshot this
+    // search sends and its results are described with.
+    const checked = validateConsensusFilterDraft(current.draftFilters);
+    if (!checked.ok) return;
+    const filters = checked.filters;
+
+    // A different question or different filters make a new discovery session:
+    // its predecessor's results and selection go. Re-running the same search
+    // keeps the selected DOIs — stable identifiers — and leaves the current page
+    // on screen until the new one arrives, so a failed re-run never destroys
+    // usable results; when the re-run succeeds, only the selected DOIs its page
+    // still shows are kept.
+    const isNewSearch = query !== current.committedQuery || !sameAppliedFilters(filters, current.committedFilters);
     const requestId = ++generation.current;
     inFlight.current = requestId;
 
     setState((prev) => ({
       ...prev,
       committedQuery: query,
-      results: isNewQuery ? null : prev.results,
-      selectedDois: isNewQuery ? [] : prev.selectedDois,
+      committedFilters: filters,
+      results: isNewSearch ? null : prev.results,
+      selectedDois: isNewSearch ? [] : prev.selectedDois,
       loading: true,
       error: null,
     }));
@@ -171,11 +234,11 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
       if (inFlight.current === requestId) inFlight.current = null;
     };
 
-    void search({ query })
+    void search({ query, ...filters })
       .then((response) => {
         settle();
         if (generation.current !== requestId) return;
-        // A same-query re-run kept the selection, but Consensus may answer it
+        // A same-search re-run kept the selection, but Consensus may answer it
         // with a different page. A selected DOI the new page no longer shows
         // would otherwise stay counted — and be imported — with no row to see or
         // uncheck, so only DOIs still on screen survive.
@@ -259,6 +322,8 @@ export function useConsensusSearch(search?: ConsensusSearchFn): ConsensusSearchS
   return {
     ...state,
     setDraftQuery,
+    setDraftFilters,
+    resetDraftFilters,
     submitSearch,
     toggleSelection,
     selectAllImportable,

@@ -27,6 +27,18 @@
  * source switch. No remaining-call figure is shown: PaperLume has no source of
  * truth for the owner's remaining allowance and does not invent one.
  *
+ * ## Advanced filters (CONSENSUS-ADVANCED-FILTERS-001A)
+ *
+ * A collapsed **Advanced filters** section under the question offers four
+ * server-side restrictions — publication years, study designs, human studies
+ * only and no preprints — all unset by default. Editing them searches nothing:
+ * they are a draft until Search is pressed, and the Search they ride with is
+ * still the only request. The results always say which filters produced them
+ * (the frozen snapshot that search sent, never the draft), and once the draft
+ * differs from that snapshot a notice says so instead of re-filtering the cards
+ * in the browser. The year fields and the filter controls sit outside the
+ * search `<form>`, so pressing Enter in one of them cannot submit a search.
+ *
  * ## Layout rules carried over from `PubMedSearchPanel`
  *
  * The result row has the shape PRs #233–#236 fixed reachability defects in — a
@@ -39,13 +51,14 @@
  * nested; and the checkbox carries the same 44×44 transparent touch halo.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, ExternalLink, Loader2, Search } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, Info, Loader2, Search, SlidersHorizontal } from "lucide-react";
 import {
   CONSENSUS_SEARCH_MAX_QUERY_LENGTH,
   consensusSelectionKey,
@@ -53,6 +66,17 @@ import {
   toSafeConsensusUrl,
   type ConsensusSearchResult,
 } from "@/lib/searchConsensusEdge";
+import {
+  CONSENSUS_STUDY_TYPE_OPTIONS,
+  consensusFilterMaxYear,
+  countDraftFilters,
+  describeAppliedFilters,
+  sameAppliedFilters,
+  validateConsensusFilterDraft,
+  type ConsensusFilterDraft,
+  type ConsensusFilterDraftErrors,
+  type ConsensusStudyType,
+} from "@/lib/consensusSearchFilters";
 import type { ConsensusSearchActions, ConsensusSearchState } from "@/hooks/useConsensusSearch";
 
 /** How many authors are named before the row switches to a "+N" summary. */
@@ -73,7 +97,14 @@ const FOCUS_CONTAINER_ROLES: ReadonlySet<string> = new Set(["dialog", "tabpanel"
 
 /** The owner-facing quota and privacy note. Stays true on any Consensus plan. */
 export const CONSENSUS_QUOTA_NOTE =
-  "Consensus searches use your connected API allowance and run only when you press Search. Your question is sent to Consensus.";
+  "Consensus searches use your connected API allowance and run only when you press Search. Your question and any filters you set are sent to Consensus.";
+
+/** Inside the filter section: what the filters do, and what changing them does not. */
+export const CONSENSUS_FILTERS_NOTE =
+  "Consensus applies these filters to the search when you press Search. Changing them does not search.";
+
+/** Shown while the results on screen belong to a question or filters other than the draft. */
+export const CONSENSUS_SETTINGS_CHANGED_NOTICE = "Search settings changed — press Search to apply.";
 
 /**
  * The same transparent 44×44 hit region `PubMedSearchPanel` gives its 16×16
@@ -215,8 +246,224 @@ function ResultRow({
   );
 }
 
+const YEAR_MIN_ERROR_ID = "consensus-filter-year-min-error";
+const YEAR_MAX_ERROR_ID = "consensus-filter-year-max-error";
+const YEAR_RANGE_ERROR_ID = "consensus-filter-year-range-error";
+
+/** A stable element id for one study-design checkbox (`"cohort study"` → `…-cohort-study`). */
+function studyTypeInputId(value: ConsensusStudyType): string {
+  return `consensus-filter-study-type-${value.replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+/** One checkbox and its label. The label is part of the hit area; the checkbox carries the 44×44 halo. */
+function FilterCheckbox({
+  id,
+  label,
+  checked,
+  onCheckedChange,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  onCheckedChange(checked: boolean): void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex min-h-9 items-center gap-3 coarse:min-h-11">
+      <Checkbox
+        id={id}
+        checked={checked}
+        onCheckedChange={(next) => onCheckedChange(next === true)}
+        disabled={disabled}
+        className={`shrink-0 ${CHECKBOX_TOUCH_TARGET_CLASS}`}
+      />
+      <Label htmlFor={id} className="cursor-pointer text-sm font-normal leading-snug">
+        {label}
+      </Label>
+    </div>
+  );
+}
+
+/**
+ * The collapsible Advanced filters section. Purely a draft editor: every
+ * control here changes `draftFilters` and nothing else — no request, and no
+ * change to the results, selection or applied filters on screen.
+ */
+function AdvancedFilters({
+  draft,
+  errors,
+  open,
+  onOpenChange,
+  onChange,
+  onReset,
+  disabled,
+}: {
+  draft: ConsensusFilterDraft;
+  errors: ConsensusFilterDraftErrors;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  onChange(patch: Partial<ConsensusFilterDraft>): void;
+  onReset(): void;
+  disabled: boolean;
+}) {
+  const activeCount = countDraftFilters(draft);
+  const yearDescription = (ownErrorId: string | null) =>
+    [ownErrorId, errors.range ? YEAR_RANGE_ERROR_ID : null].filter(Boolean).join(" ") || undefined;
+
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <CollapsibleTrigger asChild>
+        <Button type="button" variant="outline" size="sm" className="gap-2 coarse:min-h-11" disabled={disabled}>
+          <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+          {/* One text run, so the accessible name reads "Advanced filters · 2 set". */}
+          <span>
+            Advanced filters
+            {activeCount > 0 && <span className="font-normal text-muted-foreground">{` · ${activeCount} set`}</span>}
+          </span>
+          {open ? (
+            <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+        </Button>
+      </CollapsibleTrigger>
+
+      <CollapsibleContent className="mt-3 space-y-4 rounded-md border p-3">
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium">Publication year</legend>
+          <div className="grid max-w-xs grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label htmlFor="consensus-filter-year-min" className="text-xs font-normal text-muted-foreground">
+                From year
+              </Label>
+              <Input
+                id="consensus-filter-year-min"
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={4}
+                placeholder="Any"
+                value={draft.yearMin}
+                onChange={(event) => onChange({ yearMin: event.target.value })}
+                disabled={disabled}
+                aria-invalid={Boolean(errors.yearMin || errors.range) || undefined}
+                aria-describedby={yearDescription(errors.yearMin ? YEAR_MIN_ERROR_ID : null)}
+                className="coarse:h-11"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="consensus-filter-year-max" className="text-xs font-normal text-muted-foreground">
+                To year
+              </Label>
+              <Input
+                id="consensus-filter-year-max"
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={4}
+                placeholder="Any"
+                value={draft.yearMax}
+                onChange={(event) => onChange({ yearMax: event.target.value })}
+                disabled={disabled}
+                aria-invalid={Boolean(errors.yearMax || errors.range) || undefined}
+                aria-describedby={yearDescription(errors.yearMax ? YEAR_MAX_ERROR_ID : null)}
+                className="coarse:h-11"
+              />
+            </div>
+          </div>
+          {errors.yearMin && (
+            <p id={YEAR_MIN_ERROR_ID} className="text-xs font-medium text-destructive">
+              {`From year: ${errors.yearMin}`}
+            </p>
+          )}
+          {errors.yearMax && (
+            <p id={YEAR_MAX_ERROR_ID} className="text-xs font-medium text-destructive">
+              {`To year: ${errors.yearMax}`}
+            </p>
+          )}
+          {errors.range && (
+            <p id={YEAR_RANGE_ERROR_ID} className="text-xs font-medium text-destructive">
+              {errors.range}
+            </p>
+          )}
+        </fieldset>
+
+        <fieldset className="space-y-1">
+          <legend className="text-sm font-medium">Study design</legend>
+          <div className="grid grid-cols-2 gap-x-4">
+            {CONSENSUS_STUDY_TYPE_OPTIONS.map((option) => (
+              <FilterCheckbox
+                key={option.value}
+                id={studyTypeInputId(option.value)}
+                label={option.label}
+                checked={draft.studyTypes.includes(option.value)}
+                onCheckedChange={(checked) =>
+                  onChange({
+                    studyTypes: checked
+                      ? [...draft.studyTypes, option.value]
+                      : draft.studyTypes.filter((type) => type !== option.value),
+                  })
+                }
+                disabled={disabled}
+              />
+            ))}
+          </div>
+        </fieldset>
+
+        <div className="grid grid-cols-2 gap-x-4">
+          <FilterCheckbox
+            id="consensus-filter-human"
+            label="Human studies only"
+            checked={draft.human}
+            onCheckedChange={(checked) => onChange({ human: checked })}
+            disabled={disabled}
+          />
+          <FilterCheckbox
+            id="consensus-filter-exclude-preprints"
+            label="Exclude preprints"
+            checked={draft.excludePreprints}
+            onCheckedChange={(checked) => onChange({ excludePreprints: checked })}
+            disabled={disabled}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground">{CONSENSUS_FILTERS_NOTE}</p>
+          {/* Resets the draft only: the question, the results and the applied
+              filters stay, and nothing is searched. Never disabled by an empty
+              draft, so pressing it cannot strand keyboard focus. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 shrink-0 text-xs coarse:min-h-11"
+            onClick={onReset}
+            disabled={disabled}
+          >
+            Reset filters
+          </Button>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** The text-only line naming the filters a displayed search applied. */
+function AppliedFiltersLine({ summary }: { summary: string }) {
+  return (
+    <p className="text-xs break-words">
+      <span className="font-medium">Applied filters:</span> <span className="text-muted-foreground">{summary}</span>
+    </p>
+  );
+}
+
 export function ConsensusSearchPanel({ state, actions, importing }: ConsensusSearchPanelProps) {
-  const { results, selectedDois, loading, error, committedQuery, draftQuery } = state;
+  const { results, selectedDois, loading, error, committedQuery, committedFilters, draftQuery, draftFilters } = state;
+
+  // Open on mount only when the draft already sets something — e.g. after
+  // switching back from PubMed — so set filters are never hidden by default.
+  const [filtersOpen, setFiltersOpen] = useState(() => countDraftFilters(draftFilters) > 0);
 
   const resultsHeadingRef = useRef<HTMLParagraphElement>(null);
   const queryInputRef = useRef<HTMLInputElement>(null);
@@ -235,7 +482,19 @@ export function ConsensusSearchPanel({ state, actions, importing }: ConsensusSea
 
   const trimmedLength = draftQuery.trim().length;
   const overLimit = trimmedLength > CONSENSUS_SEARCH_MAX_QUERY_LENGTH;
-  const submitDisabled = loading || importing || trimmedLength === 0 || overLimit;
+  const maxYear = consensusFilterMaxYear();
+  const draftCheck = useMemo(() => validateConsensusFilterDraft(draftFilters, maxYear), [draftFilters, maxYear]);
+  const submitDisabled = loading || importing || trimmedLength === 0 || overLimit || !draftCheck.ok;
+
+  // What the results on screen were searched with — the committed snapshot,
+  // never the draft — and whether the draft has moved away from it.
+  const appliedSummary = describeAppliedFilters(committedFilters);
+  const settingsChanged =
+    committedQuery !== null &&
+    results !== null &&
+    (draftQuery.trim() !== committedQuery ||
+      !draftCheck.ok ||
+      !sameAppliedFilters(draftCheck.filters, committedFilters));
 
   /**
    * Keep keyboard focus somewhere predictable after a search. Pressing Search
@@ -305,7 +564,23 @@ export function ConsensusSearchPanel({ state, actions, importing }: ConsensusSea
             {`Shorten the question to ${CONSENSUS_SEARCH_MAX_QUERY_LENGTH} characters or fewer (currently ${trimmedLength}).`}
           </p>
         )}
+        {/* Search is disabled by an invalid year; say why even when the
+            section that shows the detail is collapsed. */}
+        {!draftCheck.ok && !filtersOpen && (
+          <p className="text-xs font-medium text-destructive">Check the publication years in Advanced filters.</p>
+        )}
       </form>
+
+      {/* ── Advanced filters ── Outside the form: Enter here never searches. */}
+      <AdvancedFilters
+        draft={draftFilters}
+        errors={draftCheck.ok ? {} : draftCheck.errors}
+        open={filtersOpen}
+        onOpenChange={setFiltersOpen}
+        onChange={actions.setDraftFilters}
+        onReset={actions.resetDraftFilters}
+        disabled={importing}
+      />
 
       {/* ── Error ── */}
       {error && (
@@ -330,12 +605,32 @@ export function ConsensusSearchPanel({ state, actions, importing }: ConsensusSea
         </p>
       )}
 
-      {/* ── Empty result set ── A valid answer, not an error. */}
-      {showEmptyState && (
-        <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
-          No Consensus results found. Try rephrasing your question.
+      {/* ── The draft no longer matches what is on screen ── The cards are
+          never re-filtered in the browser; the owner decides whether to search. */}
+      {settingsChanged && (
+        <p aria-live="polite" className="flex items-start gap-2 rounded-md border bg-muted/50 p-2 text-xs font-medium">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 break-words">{CONSENSUS_SETTINGS_CHANGED_NOTICE}</span>
         </p>
       )}
+
+      {/* ── Empty result set ── A valid answer, not an error. Never broadened
+          automatically: with filters applied, the owner is told they may be
+          the reason, and chooses what to change. */}
+      {showEmptyState &&
+        (appliedSummary ? (
+          <div className="space-y-1 rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
+            <p>No Consensus results matched these filters.</p>
+            <AppliedFiltersLine summary={appliedSummary} />
+            <p className="text-xs">
+              The filters may be too restrictive. Change or clear them in Advanced filters, then press Search.
+            </p>
+          </div>
+        ) : (
+          <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
+            No Consensus results found. Try rephrasing your question.
+          </p>
+        ))}
 
       {/* ── Results ── */}
       {results !== null && results.length > 0 && (
@@ -360,6 +655,8 @@ export function ConsensusSearchPanel({ state, actions, importing }: ConsensusSea
               Select all importable results
             </Button>
           </div>
+
+          {appliedSummary && <AppliedFiltersLine summary={appliedSummary} />}
 
           <p className="text-xs text-muted-foreground">
             Results are for discovery only. Importing a result sends just its DOI to PaperLume&apos;s importer, which

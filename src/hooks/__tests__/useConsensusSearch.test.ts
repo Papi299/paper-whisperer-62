@@ -7,6 +7,12 @@ vi.mock("@/integrations/supabase/client", () => ({ supabase: {} }));
 
 import { isConsensusSearchAvailable, useConsensusSearch, type ConsensusSearchFn } from "../useConsensusSearch";
 import { ConsensusSearchError, type ConsensusSearchResponse, type ConsensusSearchResult } from "@/lib/searchConsensusEdge";
+import {
+  EMPTY_CONSENSUS_FILTER_DRAFT,
+  consensusFilterMaxYear,
+  type ConsensusFilterDraft,
+  type ConsensusStudyType,
+} from "@/lib/consensusSearchFilters";
 
 /**
  * CONSENSUS-SEARCH-MVP-001A — the dialog-owned Consensus discovery state.
@@ -68,7 +74,9 @@ describe("useConsensusSearch — what can and cannot reach Consensus", () => {
     const { result: hook } = renderHook(() => useConsensusSearch(vi.fn()));
     expect(hook.current).toMatchObject({
       draftQuery: "",
+      draftFilters: EMPTY_CONSENSUS_FILTER_DRAFT,
       committedQuery: null,
+      committedFilters: null,
       results: null,
       selectedDois: [],
       loading: false,
@@ -418,5 +426,306 @@ describe("isConsensusSearchAvailable — the Dashboard's advisory owner gate", (
 
   it("fails closed when the access lookup failed, even if a stale owner value is present", () => {
     expect(isConsensusSearchAvailable({ access: { role: "owner" }, isLoading: false, isError: true })).toBe(false);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONSENSUS-ADVANCED-FILTERS-001A — draft filters, committed filters
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("useConsensusSearch — editing filters never searches", () => {
+  it("draft filter edits and a filter reset reach nothing: no request, no change on screen", async () => {
+    const { hook, search } = await searched();
+    act(() => hook.result.current.toggleSelection("10.5555/two"));
+    search.mockClear();
+    const before = hook.result.current;
+
+    act(() => {
+      hook.result.current.setDraftFilters({ yearMin: "2020", yearMax: "2026" });
+      hook.result.current.setDraftFilters({ studyTypes: ["rct", "meta-analysis"] });
+      hook.result.current.setDraftFilters({ human: true, excludePreprints: true });
+    });
+    act(() => hook.result.current.resetDraftFilters());
+
+    expect(search).not.toHaveBeenCalled();
+    expect(hook.result.current.results).toBe(before.results);
+    expect(hook.result.current.selectedDois).toEqual(["10.5555/two"]);
+    expect(hook.result.current.committedFilters).toBe(before.committedFilters);
+    expect(hook.result.current.committedQuery).toBe("creatine cognition");
+  });
+
+  it("resetting filters clears only the filter draft — the question stays, and nothing is searched", async () => {
+    const { hook, search } = await searched();
+    act(() => hook.result.current.setDraftQuery("a question in progress"));
+    act(() => hook.result.current.setDraftFilters({ yearMin: "2020", human: true, studyTypes: ["rct"] }));
+    search.mockClear();
+
+    act(() => hook.result.current.resetDraftFilters());
+
+    expect(hook.result.current.draftFilters).toEqual(EMPTY_CONSENSUS_FILTER_DRAFT);
+    expect(hook.result.current.draftQuery).toBe("a question in progress");
+    expect(hook.result.current.results).toEqual(RESULTS);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("keeps only allowlisted designs in the draft, once each, in allowlist order", () => {
+    const { result: hook } = renderHook(() => useConsensusSearch(vi.fn<ConsensusSearchFn>()));
+    act(() =>
+      hook.current.setDraftFilters({
+        studyTypes: ["cohort study", "RCT", "rct", "rct", "case report"] as unknown as ConsensusStudyType[],
+      }),
+    );
+    expect(hook.current.draftFilters.studyTypes).toEqual(["rct", "cohort study"]);
+  });
+});
+
+describe("useConsensusSearch — one Search commits one frozen filter snapshot", () => {
+  it("sends the draft filters with the question, once, and commits exactly what it sent", async () => {
+    const search = vi.fn<ConsensusSearchFn>(async () => ({ results: RESULTS }));
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("  creatine cognition  "));
+    act(() =>
+      hook.current.setDraftFilters({
+        yearMin: "2020",
+        yearMax: "2026",
+        studyTypes: ["meta-analysis", "rct"],
+        human: true,
+        excludePreprints: true,
+      }),
+    );
+    expect(search).not.toHaveBeenCalled();
+
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledWith({
+      query: "creatine cognition",
+      yearMin: 2020,
+      yearMax: 2026,
+      studyTypes: ["rct", "meta-analysis"],
+      human: true,
+      excludePreprints: true,
+    });
+    expect(hook.current.committedFilters).toEqual({
+      yearMin: 2020,
+      yearMax: 2026,
+      studyTypes: ["rct", "meta-analysis"],
+      human: true,
+      excludePreprints: true,
+    });
+    expect(Object.isFrozen(hook.current.committedFilters)).toBe(true);
+  });
+
+  it("an unfiltered search sends exactly { query } and commits no restriction", async () => {
+    const { hook, search } = await searched();
+    expect(search).toHaveBeenCalledWith({ query: "creatine cognition" });
+    expect(hook.result.current.committedFilters).toEqual({});
+  });
+
+  it("later draft edits never reach the committed snapshot", async () => {
+    const search = vi.fn<ConsensusSearchFn>(async () => ({ results: RESULTS }));
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters({ yearMin: "2020", studyTypes: ["rct"] }));
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+    const committed = hook.current.committedFilters;
+
+    act(() => hook.current.setDraftFilters({ yearMin: "2001", studyTypes: ["cohort study"], human: true }));
+
+    expect(hook.current.committedFilters).toBe(committed);
+    expect(hook.current.committedFilters).toEqual({ yearMin: 2020, studyTypes: ["rct"] });
+  });
+
+  it.each([
+    ["a year below the floor", { yearMin: "1800" }],
+    ["a year past the ceiling", { yearMax: String(consensusFilterMaxYear() + 1) }],
+    ["a half-typed year", { yearMin: "20" }],
+    ["a reversed range", { yearMin: "2024", yearMax: "2020" }],
+  ])("never sends %s — no request, nothing committed", (_label, years) => {
+    const search = vi.fn<ConsensusSearchFn>();
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters(years));
+    act(() => hook.current.submitSearch());
+    expect(search).not.toHaveBeenCalled();
+    expect(hook.current).toMatchObject({ loading: false, committedQuery: null, committedFilters: null });
+  });
+});
+
+describe("useConsensusSearch — the same question under different filters is a new search", () => {
+  /** Search once with `initial` filters, select a DOI, then apply `change` and search again. */
+  async function changedSearch(initial: Partial<ConsensusFilterDraft>, change: Partial<ConsensusFilterDraft>) {
+    const { search, pending } = deferredSearch();
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters(initial));
+    act(() => hook.current.submitSearch());
+    await act(async () => {
+      pending[0].resolve({ results: RESULTS });
+    });
+    act(() => hook.current.toggleSelection("10.5555/two"));
+
+    act(() => hook.current.setDraftFilters(change));
+    act(() => hook.current.submitSearch());
+    return { hook, search, pending };
+  }
+
+  it.each([
+    ["the year changes", { yearMin: "2020" }, { yearMin: "2021" }],
+    ["a year is added", {}, { yearMax: "2024" }],
+    ["a study design is added", { studyTypes: ["rct"] as const }, { studyTypes: ["rct", "meta-analysis"] as const }],
+    ["a study design is removed", { studyTypes: ["rct", "meta-analysis"] as const }, { studyTypes: ["rct"] as const }],
+    ["human-only is toggled on", {}, { human: true }],
+    ["human-only is toggled off", { human: true }, { human: false }],
+    ["preprint exclusion is toggled on", {}, { excludePreprints: true }],
+    ["preprint exclusion is toggled off", { excludePreprints: true }, { excludePreprints: false }],
+  ])("when %s: one new request, and the old results and selection go at once", async (_label, initial, change) => {
+    const { hook, search } = await changedSearch(initial, change);
+
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls[1][0].query).toBe("creatine");
+    // The superseded search's cards and selection are gone while the new one runs.
+    expect(hook.current).toMatchObject({ loading: true, results: null, selectedDois: [] });
+  });
+
+  it("several filter changes before one Search press make ONE request carrying all of them", async () => {
+    const { hook, search, pending } = await changedSearch({ yearMin: "2020" }, { yearMin: "2015" });
+    await act(async () => {
+      pending[1].resolve({ results: RESULTS });
+    });
+    search.mockClear();
+
+    act(() => {
+      hook.current.setDraftFilters({ yearMax: "2024" });
+      hook.current.setDraftFilters({ studyTypes: ["systematic review"] });
+      hook.current.setDraftFilters({ human: true });
+      hook.current.setDraftFilters({ excludePreprints: true });
+    });
+    expect(search).not.toHaveBeenCalled();
+    act(() => hook.current.submitSearch());
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledWith({
+      query: "creatine",
+      yearMin: 2015,
+      yearMax: 2024,
+      studyTypes: ["systematic review"],
+      human: true,
+      excludePreprints: true,
+    });
+  });
+
+  it("re-running the same question under the SAME filters keeps the selection (the V1 rule)", async () => {
+    const search = vi.fn<ConsensusSearchFn>(async () => ({ results: RESULTS }));
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters({ yearMin: "2020", studyTypes: ["rct"] }));
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+    act(() => hook.current.toggleSelection("10.5555/two"));
+
+    // Edit away and back: the same restriction, so the same search.
+    act(() => hook.current.setDraftFilters({ yearMin: "2021" }));
+    act(() => hook.current.setDraftFilters({ yearMin: " 2020 " }));
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(hook.current.selectedDois).toEqual(["10.5555/two"]);
+  });
+
+  it("the results always carry the snapshot of the search that produced them", async () => {
+    const { hook, pending } = await changedSearch({ yearMin: "2020" }, { yearMin: "2015", human: true });
+    const newer = [result(1, "10.5555/newer")];
+    await act(async () => {
+      pending[1].resolve({ results: newer });
+    });
+    expect(hook.current.results).toEqual(newer);
+    expect(hook.current.committedFilters).toEqual({ yearMin: 2015, human: true });
+  });
+});
+
+describe("useConsensusSearch — filters across close and stale responses", () => {
+  it("closing the dialog during a pending filtered search discards its answer and clears the filters", async () => {
+    const { search, pending } = deferredSearch();
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters({ yearMin: "2020", studyTypes: ["rct"], excludePreprints: true }));
+    act(() => hook.current.submitSearch());
+
+    act(() => hook.current.reset());
+    await act(async () => {
+      pending[0].resolve({ results: RESULTS });
+    });
+
+    expect(hook.current).toMatchObject({
+      draftQuery: "",
+      draftFilters: EMPTY_CONSENSUS_FILTER_DRAFT,
+      committedQuery: null,
+      committedFilters: null,
+      results: null,
+      loading: false,
+    });
+  });
+
+  it("an older filtered response cannot overwrite a newer search's results or snapshot", async () => {
+    const { search, pending } = deferredSearch();
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters({ yearMin: "2020" }));
+    act(() => hook.current.submitSearch());
+    act(() => hook.current.reset());
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters({ studyTypes: ["cohort study"] }));
+    act(() => hook.current.submitSearch());
+
+    const newer = [result(1, "10.5555/newer")];
+    await act(async () => {
+      pending[1].resolve({ results: newer });
+    });
+    await act(async () => {
+      pending[0].resolve({ results: RESULTS });
+    });
+
+    expect(hook.current.results).toEqual(newer);
+    expect(hook.current.committedFilters).toEqual({ studyTypes: ["cohort study"] });
+  });
+
+  it("an error from an older filtered search is discarded too", async () => {
+    const { search, pending } = deferredSearch();
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters({ human: true }));
+    act(() => hook.current.submitSearch());
+    act(() => hook.current.reset());
+    await act(async () => {
+      pending[0].reject(new ConsensusSearchError("filters_not_allowed", "refused"));
+    });
+    expect(hook.current.error).toBeNull();
+  });
+
+  it("does not retry a refused filtered search — with or without the filters", async () => {
+    const search = vi.fn<ConsensusSearchFn>(async () => {
+      throw new ConsensusSearchError("filters_not_allowed", "Consensus did not allow this filtered search.");
+    });
+    const { result: hook } = renderHook(() => useConsensusSearch(search));
+    act(() => hook.current.setDraftQuery("creatine"));
+    act(() => hook.current.setDraftFilters({ studyTypes: ["rct"] }));
+    await act(async () => {
+      hook.current.submitSearch();
+    });
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(hook.current.error).toEqual({
+      kind: "filters_not_allowed",
+      message: "Consensus did not allow this filtered search.",
+    });
+    // The filters the owner chose are still set: nothing quietly dropped them.
+    expect(hook.current.draftFilters.studyTypes).toEqual(["rct"]);
   });
 });
