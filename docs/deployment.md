@@ -1980,7 +1980,7 @@ Nothing else changed: the DOI and title encoding, `rows=1`, the transport, and t
 
 > **Status — COMPLETE. `search-consensus` is live in Production for the owner and passed the owner's Production acceptance on 2026-10-09 (`CONSENSUS-SEARCH-MVP-001A`, C60).** The initial rollout ran in the required order below: the secret and the endpoint first, the merge last. Read the live state back rather than trusting this box — `supabase functions list --project-ref <project-ref>`, and `supabase secrets list --project-ref <project-ref>` **for the name only**.
 >
-> **The contract this section describes is the query-only V1, which the live frontend still uses.** The owner-only filter extension (`CONSENSUS-ADVANCED-FILTERS-001A`, 2026-10-10) has its endpoint live and its UI **not merged** — see §7f. Since 2026-10-10 `search-consensus` **v3** also accepts the filter fields, but the Production frontend still sends exactly `{ "query": string }`, for which v3 builds the same upstream request as v1.
+> **The contract this section describes is the query-only V1 of the 2026-10-03 → 2026-10-09 rollout, kept as that record.** Since 2026-10-10, Production has run `search-consensus` **v3** with the advanced-filter frontend (`CONSENSUS-ADVANCED-FILTERS-001A`; PR #338 merged as `8548d33d`), so the owner can add optional filters to a Search. A Search with no filter set still sends exactly `{ "query": string }`, for which v3 builds the same upstream request as v1. §7f records what v3 adds: four optional filter fields, their refusal mapping and three log fields.
 >
 > - **Owner premise.** A read-only, count-only check found exactly one account holding role `owner` on 2026-10-03, and again before the merge on 2026-10-09. No id was recorded.
 > - **Secret.** `CONSENSUS_API_KEY` was installed on 2026-10-03 from a private temp file (`secrets set --env-file`, file deleted afterwards) and verified by name only.
@@ -2074,11 +2074,11 @@ Neither pre-existing shared module is changed, so no other function needed redep
 
 **Rollback — none has been performed.** Remove the UI first, then the endpoint — the control must never outlive its function. A frontend that stops passing `onConsensusSearch` hides the control at once. Unsetting `CONSENSUS_API_KEY` alone is also safe: the function then answers `503 not_configured` without calling Consensus. Like any secret change, unsetting it needs explicit owner authorization. No database state is involved.
 
-**Expanding beyond the owner is a different project.** Access for managers or ordinary users, per-user keys, a commercial plan, pagination, filters, full-text chunks or Consensus-grounded synthesis would each change the quota, privacy and authorization model, and the published Privacy Policy would need an owner-approved update before any user other than the owner could send queries to Consensus ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)). *(2026-10-10: owner-only search filters were since prepared on the owner's instruction, without widening access; their endpoint is deployed and their UI is not merged — §7f.)*
+**Expanding beyond the owner is a different project.** Access for managers or ordinary users, per-user keys, a commercial plan, pagination, filters, full-text chunks or Consensus-grounded synthesis would each change the quota, privacy and authorization model, and the published Privacy Policy would need an owner-approved update before any user other than the owner could send queries to Consensus ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)). *(2026-10-10: owner-only search filters were since added on the owner's instruction, without widening access, and are live in Production, endpoint and UI — §7f.)*
 
-### 7f. `search-consensus` advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`) — endpoint v3 DEPLOYED and accepted at API level 2026-10-10; UI NOT merged; endpoint before UI
+### 7f. `search-consensus` advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`) — COMPLETE: endpoint v3 deployed and accepted at API level, UI merged and live 2026-10-10; endpoint before UI
 
-> **Status (2026-10-10) — backend live, filter UI not merged.** The Production frontend is still the query-only V1. It sends exactly `{ "query": string }`, for which v3 builds the same upstream request as v1. The filters are reachable only from the PR's Preview, which is built against the same Production Supabase project. Read the live state back before acting on this box.
+> **Status — COMPLETE (2026-10-10). Production runs the advanced-filter frontend with `search-consensus` v3.** PR #338 merged as `8548d33d`, and the automatic Vercel Production deployment put the filter UI on `app.paperlume.app` for the owner. A Search with no filter set still sends exactly `{ "query": string }`, for which v3 builds the same upstream request as v1. Read the live state back before acting on this box.
 >
 > **Rollout record, in order:**
 > 1. **v1 (2026-10-03).** The query-only endpoint went live with the Consensus MVP (§7e): `ezbr_sha256` `937acf15…`, deployed from `712ed465`.
@@ -2106,13 +2106,18 @@ Neither pre-existing shared module is changed, so no other function needed redep
 > 9. **Exclude-preprints canary — HTTP 200** (separately authorized; 07:22 UTC).
 >    - Log: `outcome=ok filters=exclude_preprints upstream_status=200 returned=20 importable=20 preprints=0 retry=0`.
 >    - Verdict: `PREPRINT_FILTER_REQUEST_ACCEPTED`.
-> 10. **The filter-enabled frontend is still unmerged.** PR #338 is a Draft.
+> 10. **Documentation and one source comment** (PR #338's third commit, `df1ead5c`). It reconciled the documentation with steps 1–9 and corrected one JSDoc comment in `_shared/consensusSearch.ts`. Its runtime equivalence with v3 was established, so v3 was not redeployed — see *Runtime equivalence of the comment-only correction* below. Exact-head CI passed on the first attempt.
+> 11. **Merge (2026-10-10, 14:15 UTC).** On the owner's explicit authorization, PR #338 was merged at its exact approved head `df1ead5c8c3a9c1cecf0e2797ea0335fdc815bbd`, behind a head-SHA guard, as the normal two-parent commit `8548d33d2cce58268cca010077814a1dad6e2a93`. Its parents are `f20442ac` (the previous `main`) and `df1ead5c`. Its tree, `cd37dfda232638acc30e8364d6e98d48baaebb1e`, is identical to the approved head's.
+> 12. **Merged-`main` CI passed, each on the first attempt:** Validate `38058876938`, DB Tests `38058876913` and Extension `38058876954`, all on `8548d33d`.
+> 13. **Vercel Production — automatic, READY.** `dpl_498eREuMfDWAeyvsiqqwzhsHvmJt` (source git, ref `main`, SHA `8548d33d`, target production) was READY at 14:17 UTC and is aliased to `app.paperlume.app`. Nothing was deployed or promoted by hand. The previous Production deployment, `dpl_8mCLafxCfCRhHy8ipCXskCYfk4iA` (from `f20442ac`), stays in Vercel's history.
+> 14. **Owner UI acceptance — bounded, passed (reported 14:25 UTC).** On `app.paperlume.app`, the owner found the filter controls present (the From/To years, the four study designs, **Human studies only**, **Exclude preprints**), **Reset filters** clearing them, and the PubMed source still available. **No Consensus search was submitted:** the Production logs for 14:10–14:38 UTC hold no `search-consensus` line and no Edge Function invocation. The non-owner view was not part of this check; it rests on the server-side owner check, code review and the deterministic suites.
+> 15. **Supabase was unchanged by the merge.** No Edge Function was deployed. All seven functions kept their version, `ezbr_sha256` and update time, and `search-consensus` is still v3 (`a09deb09…`, ACTIVE, `verify_jwt = false`). A `--use-api` read-back after the merge found four closure files byte-identical to `main`, and `_shared/consensusSearch.ts` differing only in the corrected comment. That difference is expected, not drift.
 >
 > **What this shows: `ALL_FOUR_FILTER_CATEGORIES_ACCEPTED_AT_API_LEVEL`, not `ALL_FILTER_SEMANTICS_VERIFIED`.** Each category was accepted by Consensus, on the owner's Free plan, in the requests tested. Each canary was one owner Search, with no retry, no unfiltered fallback and no import. *What the canaries do NOT prove* below bounds this evidence.
 > - **Not sent since the fix:** all four categories in one request; three or four designs; and the two designs whose values contain a space (`systematic review`, `cohort study`).
-> - **Allowance:** six Consensus requests were made on 2026-10-10, three through v2 (422, 422, 200) and three through v3 (200 each). Whether Consensus counted the two 422s against the allowance is unknown, and no reliable remaining-allowance count is available.
+> - **Allowance:** the rollout made six Consensus requests on 2026-10-10, all before the merge: three through v2 (422, 422, 200) and three through v3 (200 each). The merge and its verification made none. Whether Consensus counted the two 422s against the allowance is unknown, and no reliable remaining-allowance count is available.
 >
-> **This PR's final head adds documentation and one source comment only.** v3 stays deployed from `e7303abd`, and the merge needs no further Edge deployment — see *Runtime equivalence of the comment-only correction* below.
+> **`main` differs from the deployed v3 by one comment only.** PR #338's final head added documentation and corrected one source comment. v3 stays deployed from `e7303abd`, and the merge needed no Edge deployment — see *Runtime equivalence of the comment-only correction* below.
 
 **What changes.** The owner may add four optional, server-validated restrictions to a Search. Everything else in §7e — owner-only twice over, key read only after authorization and validation, one un-retried `GET /v1/search` with `page_size=20` on the first page, no full-text chunks, `redirect: "error"`, the 15 s timeout, the DOI-only import boundary, no persistence — is unchanged. An unfiltered request is byte-for-byte the V1 request: the same `{ "query": … }` body and the same upstream URL.
 
@@ -2191,8 +2196,8 @@ supabase/functions/_shared/env.ts                   # unchanged
 
 Against v2 (`700319c8`), `e7303abd`, the source of the live v3, changed only `_shared/consensusSearch.ts`. No other function imports `consensusSearch.ts`, so no other function needed redeploying. No secret, migration, RLS, role or `verify_jwt` change is involved. `CONSENSUS_API_KEY` was already installed and needed no change.
 
-**Runtime equivalence of the comment-only correction — no redeploy.** After v3 went live, one JSDoc comment in `_shared/consensusSearch.ts`, above `consensusFilterParams`, still said the repeated form had not been seen to work live. PR #338's final head corrects that comment and changes no other Edge byte. So `main` will differ from the deployed v3 only there:
-- v3 and `e7303abd` hold blob `1952eea8…` of that file, and the corrected head holds blob `e1179b74…`;
+**Runtime equivalence of the comment-only correction — no redeploy.** After v3 went live, one JSDoc comment in `_shared/consensusSearch.ts`, above `consensusFilterParams`, still said the repeated form had not been seen to work live. PR #338's final head (`df1ead5c`) corrected that comment and changed no other Edge byte. So `main` differs from the deployed v3 only there:
+- v3 and `e7303abd` hold blob `1952eea8…` of that file, and the corrected head, now `main`, holds blob `e1179b74…`;
 - the other four closure files stay byte-identical.
 
 The comparison was run with the repository's TypeScript 5.8.3 and esbuild 0.28.1, against both `e7303abd` and the v3 read-back. It found no executable change:
@@ -2203,25 +2208,27 @@ The comparison was run with the repository's TypeScript 5.8.3 and esbuild 0.28.1
 - the recursive import closure is the same five files with the same import specifiers;
 - the strict Edge typecheck reports 0 diagnostics before and after.
 
-v3 is therefore the runtime implementation this PR merges. Do not redeploy it only to synchronize the comment. A read-back after the merge should find four files byte-identical to `main`, and `_shared/consensusSearch.ts` differing only in that comment. Prove such a difference the same way, not with a redeploy.
+v3 is therefore the runtime implementation of merged `main`. Do not redeploy it only to synchronize the comment. The read-back after the merge (status box, step 15) found exactly that: four files byte-identical to `main` (`8548d33d`), and `_shared/consensusSearch.ts` differing only in that comment. Prove any such difference the same way, not with a redeploy.
 
-**Why the endpoint must be deployed before the frontend merges.**
+**Why the endpoint had to be deployed before the frontend merged — every pairing.**
 
-| Frontend | Endpoint | Unfiltered Search | Filtered Search |
-|---|---|---|---|
-| V1 (live) | v1 (2026-10-03 to 2026-10-10) | works | not offered |
-| V1 (live) | v2, comma encoding (2026-10-10, superseded) | works — the same request and URL as v1 | not offered |
-| **V1 (live)** | **v3, repeated encoding (live since 2026-10-10)** | **works — the same request and URL as v1; this is the live combination** | not offered |
-| **filters** | v1 | works | **`400 invalid_request` — "The request contains an unsupported field."** (zero Consensus calls) |
-| **filters** | v2, comma encoding | works | one design: accepted (once); two designs: **422** (twice) |
-| **filters** | **v3** | works | accepted (HTTP 200) in each tested request: years with `rct` + `meta-analysis`; human only; no preprints. Other combinations untested |
+| Frontend | Endpoint | Unfiltered Search | Filtered Search | When |
+|---|---|---|---|---|
+| V1 | v1 | works | not offered | Production, 2026-10-09 to 2026-10-10 04:11 UTC (history) |
+| V1 | v2, comma encoding | works — the same request and URL as v1 | not offered | Production, 2026-10-10 04:11–06:18 UTC (history; v2 superseded) |
+| V1 | v3, repeated encoding | works — the same request and URL as v1 | not offered | Production, 2026-10-10 06:18–14:17 UTC (history) |
+| filters | v1 | works | **`400 invalid_request` — "The request contains an unsupported field."** (zero Consensus calls) | never in Production; the reason the endpoint went first |
+| filters | v2, comma encoding | works | one design: accepted (once); two designs: **422** (twice) | the PR's Preview only, before the merge |
+| **filters** | **v3, repeated encoding** | **works — the same request and URL as v1** | **accepted (HTTP 200) in each tested request: years with `rct` + `meta-analysis`; human only; no preprints. Other combinations untested** | **the PR's Preview for the canaries; Production since 2026-10-10 14:17 UTC — the current combination** |
 
-The filters frontend runs only in the PR's Preview until the merge. So the endpoint went first, and that order kept the live V1 UI working. The merge goes last, after the canaries in the status box.
+Before the merge, the filters frontend ran only in the PR's Preview. The endpoint went first, and that order kept the live V1 UI working throughout; the merge went last, after the canaries in the status box. The V1 rows are history. The current Production combination is the advanced-filter frontend with v3, the last row.
 
-**Rollout order — kept as the reference procedure for later releases.** Each step needs the authorization named. On 2026-10-10:
+**Rollout order — EXECUTED for the 2026-10-10 release (every step complete); kept as the reference procedure for later releases.** Each step needs the authorization named. On 2026-10-10:
 - **for `700319c8` (v2),** steps 1–8 ran: v2 was deployed and verified (steps 4–6), the owner sent the canary and two follow-up searches (step 7, three requests in all), and step 8 stopped the merge;
 - **for the corrected head `e7303abd` (v3),** steps 1–9 ran (the status box): the redeploy (steps 3–6) and the two-design canary (step 7) were each authorized separately, and step 9 became one human-only and one no-preprints canary, each authorized separately;
-- **remaining:** steps 10–13. PR #338's final head adds only documentation and a comment to `e7303abd`, so step 10 includes the runtime-equivalence check above, with no redeploy.
+- **for the final head `df1ead5c`,** steps 10–13 ran (status box, steps 10–15). Step 10's exact-head re-check included the runtime-equivalence proof above, with no redeploy. Step 11 merged it as `8548d33d`. Step 12 found merged-`main` CI green and the Production deployment READY on `app.paperlume.app`. Step 13 was the owner's bounded UI check, which sent no Consensus search.
+
+Nothing in this list is pending. A later change starts again at step 1.
 
 ```text
 1.  the corrected head is complete (Draft, CI green on its exact head)
@@ -2277,17 +2284,19 @@ The filters frontend runs only in the PR's Preview until the merge. So the endpo
 - Neither shows that Consensus's metadata is complete.
 - **Human-only** has no observable field in PaperLume's forwarded shape, and Consensus's study-type labels on the cards come from its own classifier, which may use a different vocabulary from the filter. Neither the human-studies nor the study-design classification has been independently audited.
 - In the v3 canaries, each category was sent in one request. A two-design canary says nothing about human-only or no-preprints, which it does not send, and the four categories have not been sent together since the fix.
+- The canaries ran in the PR's Preview at `e7303abd`, whose frontend source is identical to merged `main`'s: PR #338's last commit changed only documentation and one Edge comment. The post-merge Production check sent no search, so it adds no API-level evidence.
 - How Consensus billed the two earlier 422 answers is unknown.
 
 State the canary results at exactly that strength.
 
-**Rollback.** Remove the UI first (revert the merge), then the endpoint if it must go too:
+**Rollback — none has been performed.** Remove the UI first, then the endpoint if it must go too:
+- the UI: revert PR #338's merge through a normal PR, or promote the previous READY Production deployment (`dpl_8mCLaf…`, built from `f20442ac`) from Vercel's deployment history (§8);
 - the v1 closure, `712ed465`, which the 2026-10-03 and 2026-10-09 read-backs found byte-identical to the deployed v1, removes the filters entirely;
 - the v2 closure (`700319c8`), which step 4 recorded before the v3 deploy, keeps the filter validator but also the refused comma encoding, so it is no target for a filter UI.
 
-The table above shows every endpoint is safe beside the V1 frontend, which never sends a filter. No database state is involved.
+The table above shows every endpoint is safe beside the V1 frontend, which never sends a filter, while the advanced-filter frontend's filtered searches need v3 — hence UI first. No database state is involved.
 
-*Not yet in [migration-history.md](migration-history.md):* this extension's entry — the 2026-10-10 v2 and v3 Edge deployments, the canaries and, later, the merge — is written once the rollout completes, as §7e's was. No database migration is involved.
+*Release history:* this extension's entry — the 2026-10-10 v2 and v3 Edge deployments, the canaries, the merge and its verification — is in [migration-history.md](migration-history.md) (2026-10-10). No database migration is involved.
 
 ---
 
@@ -2533,7 +2542,7 @@ What to expect today: a `provider_status=` warning is **terminal** for that prov
 - [ ] No **Paper List** row action, bulk suggest action, or suggestion column appeared anywhere.
 - [ ] On a phone-width viewport and with a finger: the section and every result action are reachable inside the Edit Paper scroll region, the dialog still has exactly one vertical scroll owner, the page behind the modal never scrolls, and the Select / Create & select / Dismiss targets are comfortably tappable.
 
-### 9.3d Owner-only Consensus search (Edge Function: `search-consensus`) — deployed; owner acceptance passed 2026-10-09
+### 9.3d Owner-only Consensus search (Edge Function: `search-consensus`) — deployed; owner acceptance passed 2026-10-09; advanced filters live 2026-10-10
 
 Run once after the §7e rollout, and after any later change to `search-consensus` or the Consensus source. **Status (2026-10-09):** the §7e rollout is complete, and the owner's initial Production acceptance **passed** on 2026-10-09. One explicit search returned 20 importable results, and one selected DOI was added through the canonical PubMed/Crossref importer. The import required no additional Consensus search (§7e has the bounded evidence). That acceptance covered the owner search, import and log items below. The non-owner view, the reset on reopen and the no-DOI display were not part of the reported evidence. The unchecked boxes are the reusable template for future changes, not a record of the 2026-10-09 run. **Every Consensus search spends one call from the owner's monthly allowance**, so the authenticated items here run only when the owner has authorized spending one; the rest spend nothing. The boxes stay unchecked because this is a reusable checklist.
 
@@ -2544,7 +2553,11 @@ Run once after the §7e rollout, and after any later change to `search-consensus
 - [ ] Close and reopen Add Papers → Search starts on **PubMed** again.
 - [ ] The Function logs show one `consensus-search outcome=ok q_len=… retry=0 …` line per search with **no query text, title, DOI or URL**.
 
-Advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`). §7f's corrected endpoint (v3) is deployed, and its pre-merge canaries ran through the PR's Preview on 2026-10-10. These boxes apply in Production once the filter UI is merged:
+Advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`) — **live in Production since 2026-10-10** (§7f: v3, then the PR #338 merge). The boxes below stay unchecked: they are the reusable template for future changes, not a record of the 2026-10-10 release.
+
+**What the owner observed on 2026-10-10**, on `app.paperlume.app` after the merge: the filter controls were present, **Reset filters** cleared them, and the PubMed source was still available. Search was not pressed, and the Production logs for 14:10–14:38 UTC hold no `search-consensus` line. No box that spends a call was run; the API-level evidence is §7f's pre-merge canaries. The non-owner view and the network-panel items were not part of it.
+
+The template:
 
 - [ ] Owner, Consensus source: **Advanced filters** is collapsed, and every filter is unset. Editing the years, the study designs, **Human studies only** or **Exclude preprints**, and pressing **Reset filters**, make **no** request (browser network panel).
 - [ ] *(Spends one call — authorize first. Before a merge, this is §7f's canary; for the 2026-10-10 release it has run, so repeat it only on the owner's authorization.)* One filtered Search → one `search-consensus` request → **Applied filters: …** names exactly what was sent. The log line names the same parameters in `filters=…`, with `retry=0`.
