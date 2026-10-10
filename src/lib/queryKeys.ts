@@ -43,6 +43,22 @@ export const queryKeys = {
     abstract: (paperId: string) =>
       ["papers", "abstract", paperId] as const,
   },
+  paperComparison: {
+    /**
+     * One comparison session (EVIDENCE-MATRIX-001A): an owner, the session
+     * that opened it and its frozen, sorted query ids.
+     *
+     * Deliberately OUTSIDE the `["papers", userId]` prefix: the library's
+     * routine invalidations (an edit, an import, a bulk action) must not
+     * refetch a comparison while it is open — it is a snapshot from the moment
+     * the user opened it. `sessionId` makes every open a new key, so reopening
+     * always reads fresh data rather than a previous session's.
+     */
+    session: (ownerUserId: string, sessionId: number, queryIds: readonly string[]) =>
+      ["paperComparison", ownerUserId, sessionId, queryIds] as const,
+    /** The key a closed comparison observes. It is never enabled, so it never holds data. */
+    inactive: () => ["paperComparison", "inactive"] as const,
+  },
   projects: {
     all: (userId: string) => ["projects", userId] as const,
   },
