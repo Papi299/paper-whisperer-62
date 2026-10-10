@@ -445,8 +445,11 @@ export function validateConsensusSearchRequest(
  * parameter per item. The official README's examples instead send one
  * comma-separated value (`study_types=rct,meta-analysis`); that form drew HTTP
  * 422 twice in the 2026-10-10 pre-merge canary, while one design alone was
- * accepted. Repeated parameters are the schema-grounded form, not yet one
- * Consensus has been seen to accept — see docs/deployment.md §7f.
+ * accepted. The repeated form drew HTTP 200 for `rct` + `meta-analysis` with a
+ * year range in the 2026-10-10 canary of the deployed v3. That shows Consensus
+ * accepted the request; whether every result is one of those designs is not
+ * independently verified, and other design combinations are untested — see
+ * docs/deployment.md §7f.
  */
 function consensusFilterParams(filters: ConsensusSearchFilters): Array<[name: string, value: string]> {
   const params: Array<[string, string]> = [];
