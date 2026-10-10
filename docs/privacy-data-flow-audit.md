@@ -2027,7 +2027,7 @@ The §30.4 reading still holds; nothing read materially changes it.
 | **Logging** | One bounded line per request — lengths, counts, upstream status, duration and an outcome label. **No query text**, title, abstract, takeaway, DOI, URL, key or token. |
 | **Evidence** | [`search-consensus/handler.ts`](../supabase/functions/search-consensus/handler.ts), [`_shared/consensusSearch.ts`](../supabase/functions/_shared/consensusSearch.ts), [`src/lib/searchConsensusEdge.ts`](../src/lib/searchConsensusEdge.ts) and their tests |
 
-**Class: VERIFIED in repository source, and the deployed function is byte-identical to that source** (read back on 2026-10-03 and 2026-10-09; [deployment.md](deployment.md) §7e). **The live flow is verified for the owner:** the 2026-10-09 acceptance query reached Consensus and returned successfully. Its log line carried only counts and statuses (`outcome=ok upstream_status=200 returned=20 importable=20 dropped=0 retry=0`), with no query text.
+**Class: VERIFIED in repository source.** The deployed function was byte-identical to that source at the 2026-10-03 and 2026-10-09 read-backs ([deployment.md](deployment.md) §7e). Since 2026-10-10 the deployed function has been the filter-capable **v3** (§37.5). v3 is byte-identical to PR #338's approved head `e7303abd`, and differs from that PR's final source only in one code comment, with no executable change ([deployment.md](deployment.md) §7f). **The live flow is verified for the owner:** the 2026-10-09 acceptance query reached Consensus and returned successfully. Its log line carried only counts and statuses (`outcome=ok upstream_status=200 returned=20 importable=20 dropped=0 retry=0`), with no query text.
 
 ### 37.2 Why this needs no Privacy Policy change yet
 
@@ -2049,3 +2049,23 @@ Before any user other than the owner can send a query to Consensus — including
 - ❌ That a successful live request says anything about how Consensus handles the query afterwards — **not claimed**. The owner's authorized acceptance query of 2026-10-09 did reach Consensus from Production and returned successfully. That shows the flow works, not what the provider retains, logs or trains on (§37.3).
 
 *History:* the rollout, from the secret installation through the merge, made no Consensus request. Before it, the only Consensus request made for PaperLume was the single owner-authorized capability audit call of 2026-10-02, outside this feature.
+
+### 37.5 Extension — owner-only search filters (2026-10-10): backend deployed, filter UI NOT merged
+
+`CONSENSUS-ADVANCED-FILTERS-001A`'s backend is deployed, and its filter-enabled Production frontend is **not**: the UI is not merged ([deployment.md](deployment.md) §7f).
+- **Only the owner may invoke it.** `search-consensus` **v3**, which accepts the filters, has been live since 2026-10-10. It keeps the owner-only check of §37.1.
+- **The Production app sends only the question,** as §37.1 describes.
+- **The exceptions were the owner's own pre-merge searches** on 2026-10-10. They were sent from the PR's Preview, which is built against the same Production Supabase project: three through the superseded v2, two of them refused with HTTP 422, and three through v3. In each v3 search, the owner's question and the selected filters reached Consensus, which accepted the request (HTTP 200): years with two study designs, human studies only, no preprints.
+- **Logging.** Those searches' PaperLume log lines carried only parameter names, counts and statuses. PaperLume logged no question, filter value or API key.
+- **What this shows.** Consensus accepted those parameter categories. It does not show what Consensus retains, logs or trains on (§37.3, §37.4).
+
+Once the filter UI is live, the flow changes only as follows:
+
+| | |
+|---|---|
+| **Data sent, in addition** | The filters the owner set for that search, as URL parameters of the same `GET`: `year_min` / `year_max` (whole years), `study_types` (one parameter per design, from `rct`, `meta-analysis`, `systematic review`, `cohort study`), `human=true` and `exclude_preprints=true`. An unset filter is not sent. Like the question, these parameters can appear in Consensus's request logs (§37.3). They are the owner's search settings and carry no account, library or user data. |
+| **Recipient, trigger, client or server** | Unchanged: Consensus; the owner only; only on an explicit Search; server-side only. Editing a filter sends nothing. |
+| **Persistence** | Unchanged: none. Filter settings live in the open dialog's memory, are reset when it closes, and are never written to the database, browser storage, the URL or a PaperLume log. |
+| **Logging** | Adds the applied parameter **names** (`filters=…`) and two result counts (`year_outside`, `preprints`). It never adds a filter value, and the question and the API key are still never logged. |
+
+The owner-only premise of §37.2 is unchanged, so this extension needs no Privacy Policy change. The owner-facing note in the dialog now reads "Your question and any filters you set are sent to Consensus."

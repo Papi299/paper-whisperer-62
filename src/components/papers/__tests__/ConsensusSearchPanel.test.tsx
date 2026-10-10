@@ -11,7 +11,12 @@ import {
 import type { ConsensusSearchFn } from "@/hooks/useConsensusSearch";
 
 import { AddPaperDialog } from "../AddPaperDialog";
-import { CONSENSUS_QUOTA_NOTE } from "../ConsensusSearchPanel";
+import {
+  CONSENSUS_FILTERS_NOTE,
+  CONSENSUS_QUOTA_NOTE,
+  CONSENSUS_SETTINGS_CHANGED_NOTICE,
+} from "../ConsensusSearchPanel";
+import { consensusFilterMaxYear } from "@/lib/consensusSearchFilters";
 
 /**
  * CONSENSUS-SEARCH-MVP-001A — the owner-only Consensus source inside Add
@@ -886,5 +891,430 @@ describe("Consensus — accessibility", () => {
     renderDialog();
     const radios = within(sourceGroup()).getAllByRole("radio");
     for (const radio of radios) expect(radio.tagName).toBe("BUTTON");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONSENSUS-ADVANCED-FILTERS-001A — advanced filters
+// ══════════════════════════════════════════════════════════════════════════
+
+const filtersTrigger = () => screen.getByRole("button", { name: /^Advanced filters/ });
+const toggleFilters = () => fireEvent.click(filtersTrigger());
+const fromYear = () => screen.getByLabelText("From year") as HTMLInputElement;
+const toYear = () => screen.getByLabelText("To year") as HTMLInputElement;
+const filterBox = (name: string) => screen.getByRole("checkbox", { name });
+const resetFiltersButton = () => screen.getByRole("button", { name: "Reset filters" });
+const FILTER_LABELS = [
+  "Randomized controlled trial (RCT)",
+  "Meta-analysis",
+  "Systematic review",
+  "Cohort study",
+  "Human studies only",
+  "Exclude preprints",
+];
+
+/** Owner: switch to Consensus, type the question and open the filters — no search yet. */
+function consensusWithFiltersOpen(query = "Does creatine improve cognition?") {
+  chooseSource("Consensus");
+  fireEvent.change(consensusField(), { target: { value: query } });
+  toggleFilters();
+}
+
+/** Set every filter category the way the E2E journey does. */
+function setEveryFilter() {
+  fireEvent.change(fromYear(), { target: { value: "2020" } });
+  fireEvent.change(toYear(), { target: { value: "2026" } });
+  fireEvent.click(filterBox("Randomized controlled trial (RCT)"));
+  fireEvent.click(filterBox("Meta-analysis"));
+  fireEvent.click(filterBox("Human studies only"));
+  fireEvent.click(filterBox("Exclude preprints"));
+}
+
+describe("Consensus — advanced filters: the unfiltered default", () => {
+  it("starts collapsed with nothing set, and a plain Search sends exactly { query }", async () => {
+    const { onConsensusSearch } = renderDialog();
+    chooseSource("Consensus");
+    expect(filtersTrigger()).toHaveAttribute("aria-expanded", "false");
+    expect(filtersTrigger()).toHaveTextContent(/^Advanced filters$/);
+    expect(screen.queryByLabelText("From year")).toBeNull();
+
+    fireEvent.change(consensusField(), { target: { value: "creatine" } });
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    expect(onConsensusSearch).toHaveBeenCalledWith({ query: "creatine" });
+    // Unfiltered results are never labelled as filtered.
+    expect(screen.queryByText(/Applied filters/)).toBeNull();
+  });
+
+  it("expands and collapses, with every filter unset — human-only and no-preprints included", () => {
+    renderDialog();
+    chooseSource("Consensus");
+    toggleFilters();
+    expect(filtersTrigger()).toHaveAttribute("aria-expanded", "true");
+    expect(fromYear()).toHaveValue("");
+    expect(toYear()).toHaveValue("");
+    for (const label of FILTER_LABELS) expect(filterBox(label)).not.toBeChecked();
+    expect(screen.getByText(CONSENSUS_FILTERS_NOTE)).toBeInTheDocument();
+
+    toggleFilters();
+    expect(filtersTrigger()).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText("From year")).toBeNull();
+  });
+
+  it("groups and labels every control: two fieldsets with legends, labelled fields and checkboxes", () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    const years = screen.getByRole("group", { name: "Publication year" });
+    expect(within(years).getByLabelText("From year")).toHaveAttribute("inputmode", "numeric");
+    expect(within(years).getByLabelText("To year")).toHaveAttribute("inputmode", "numeric");
+    const designs = screen.getByRole("group", { name: "Study design" });
+    expect(within(designs).getAllByRole("checkbox")).toHaveLength(4);
+    for (const name of FILTER_LABELS.slice(0, 4)) expect(within(designs).getByRole("checkbox", { name })).toBeInTheDocument();
+    expect(filtersTrigger()).toHaveAttribute("aria-controls");
+  });
+
+  it("keeps the year fields outside the search form, so Enter in them can never submit a search", () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    expect(consensusField().closest("form")).not.toBeNull();
+    expect(fromYear().closest("form")).toBeNull();
+    expect(toYear().closest("form")).toBeNull();
+    expect(filterBox("Human studies only").closest("form")).toBeNull();
+  });
+});
+
+describe("Consensus — advanced filters: editing never searches", () => {
+  it("editing every filter issues no request", () => {
+    const { onConsensusSearch, onPubMedSearch } = renderDialog();
+    consensusWithFiltersOpen();
+    setEveryFilter();
+    fireEvent.click(filterBox("Meta-analysis")); // and back off again
+    toggleFilters();
+    toggleFilters();
+    expect(onConsensusSearch).not.toHaveBeenCalled();
+    expect(onPubMedSearch).not.toHaveBeenCalled();
+  });
+
+  it("one explicit Search sends exactly the edited filters, once", async () => {
+    const { onConsensusSearch } = renderDialog();
+    consensusWithFiltersOpen("  creatine cognition  ");
+    setEveryFilter();
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+
+    expect(onConsensusSearch).toHaveBeenCalledTimes(1);
+    expect(onConsensusSearch).toHaveBeenCalledWith({
+      query: "creatine cognition",
+      yearMin: 2020,
+      yearMax: 2026,
+      studyTypes: ["rct", "meta-analysis"],
+      human: true,
+      excludePreprints: true,
+    });
+  });
+
+  it("study design is a true multi-select", async () => {
+    const { onConsensusSearch } = renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.click(filterBox("Cohort study"));
+    fireEvent.click(filterBox("Systematic review"));
+    fireEvent.click(filterBox("Randomized controlled trial (RCT)"));
+    fireEvent.click(filterBox("Systematic review")); // removed again
+    expect(filterBox("Cohort study")).toBeChecked();
+    expect(filterBox("Randomized controlled trial (RCT)")).toBeChecked();
+    expect(filterBox("Systematic review")).not.toBeChecked();
+
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    expect(onConsensusSearch).toHaveBeenCalledWith({ query: "Does creatine improve cognition?", studyTypes: ["rct", "cohort study"] });
+  });
+
+  it("says how many filter categories are set, even when collapsed", () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.change(fromYear(), { target: { value: "2020" } });
+    fireEvent.click(filterBox("Cohort study"));
+    toggleFilters();
+    expect(filtersTrigger()).toHaveTextContent("Advanced filters · 2 set");
+    expect(filtersTrigger()).toHaveAccessibleName("Advanced filters · 2 set");
+  });
+});
+
+describe("Consensus — advanced filters: year validation", () => {
+  const ceiling = consensusFilterMaxYear();
+  const yearMessage = `Enter a four-digit year from 1900 to ${ceiling}.`;
+
+  it.each(["1899", String(ceiling + 1), "20", "20.5", "abcd"])(
+    "explains an invalid From year (%s), marks it invalid and blocks Search",
+    (value) => {
+      const { onConsensusSearch } = renderDialog();
+      consensusWithFiltersOpen();
+      fireEvent.change(fromYear(), { target: { value } });
+
+      expect(fromYear()).toHaveAttribute("aria-invalid", "true");
+      expect(fromYear()).toHaveAccessibleDescription(`From year: ${yearMessage}`);
+      expect(searchButton()).toBeDisabled();
+      fireEvent.submit(consensusField().closest("form") as HTMLFormElement);
+      expect(onConsensusSearch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts a single year on either side, and clears the error once the year is fixed", () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.change(toYear(), { target: { value: "201" } });
+    expect(searchButton()).toBeDisabled();
+    fireEvent.change(toYear(), { target: { value: "2010" } });
+    expect(toYear()).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByText(/four-digit year/)).toBeNull();
+    expect(searchButton()).toBeEnabled();
+  });
+
+  it("explains a reversed range on both fields and blocks Search", () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.change(fromYear(), { target: { value: "2024" } });
+    fireEvent.change(toYear(), { target: { value: "2020" } });
+    const message = "The From year must be the same as or earlier than the To year.";
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(fromYear()).toHaveAccessibleDescription(message);
+    expect(toYear()).toHaveAccessibleDescription(message);
+    expect(searchButton()).toBeDisabled();
+  });
+
+  it("still explains the disabled Search when the section is collapsed", () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.change(fromYear(), { target: { value: "1066" } });
+    toggleFilters();
+    expect(searchButton()).toBeDisabled();
+    expect(screen.getByText("Check the publication years in Advanced filters.")).toBeInTheDocument();
+  });
+});
+
+describe("Consensus — advanced filters: draft versus applied", () => {
+  it("labels the results with the filters their search applied", async () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    setEveryFilter();
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    expect(screen.getByText("Applied filters:").closest("p")).toHaveTextContent(
+      "Applied filters: 2020–2026 · RCT + Meta-analysis · Human only · No preprints",
+    );
+    expect(screen.queryByText(CONSENSUS_SETTINGS_CHANGED_NOTICE)).toBeNull();
+  });
+
+  it("a filter change after the search shows the notice — and neither re-filters nor re-labels the cards", async () => {
+    const { onConsensusSearch } = renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.click(filterBox("Human studies only"));
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    fireEvent.click(resultCheckbox("10.5555/consensus.1"));
+
+    fireEvent.click(filterBox("Human studies only")); // unchecked in the draft only
+    fireEvent.click(filterBox("Cohort study"));
+
+    expect(screen.getByText(CONSENSUS_SETTINGS_CHANGED_NOTICE)).toBeInTheDocument();
+    // The cards, the selection and the applied label are still the committed search's.
+    expect(screen.getByText("Showing 3 Consensus results")).toBeInTheDocument();
+    expect(resultCheckbox("10.5555/consensus.1")).toBeChecked();
+    expect(screen.getByText("Applied filters:").closest("p")).toHaveTextContent("Applied filters: Human only");
+    expect(onConsensusSearch).toHaveBeenCalledTimes(1);
+
+    // Putting the draft back makes the notice go: the screen matches again.
+    fireEvent.click(filterBox("Cohort study"));
+    fireEvent.click(filterBox("Human studies only"));
+    expect(screen.queryByText(CONSENSUS_SETTINGS_CHANGED_NOTICE)).toBeNull();
+  });
+
+  it("the same question under different filters is a new search: one request, new cards, selection cleared", async () => {
+    const filtered = [consensusResult(1, { title: "Filtered paper", importDoi: "10.5555/filtered.1" }), consensusResult(2), consensusResult(3)];
+    let page = RESULTS;
+    const onConsensusSearch = vi.fn<ConsensusSearchFn>(async () => ({ results: page }));
+    renderDialog({ onConsensusSearch });
+    await consensusSearch("creatine");
+    fireEvent.click(resultCheckbox("10.5555/consensus.1"));
+    expect(screen.getByText("1 paper selected")).toBeInTheDocument();
+
+    toggleFilters();
+    fireEvent.click(filterBox("Exclude preprints"));
+    page = filtered;
+    fireEvent.click(searchButton());
+    await screen.findByText("Filtered paper");
+
+    expect(onConsensusSearch).toHaveBeenCalledTimes(2);
+    expect(onConsensusSearch.mock.calls[1][0]).toEqual({ query: "creatine", excludePreprints: true });
+    expect(screen.queryByText(/papers? selected/)).toBeNull();
+    expect(screen.getByText("Applied filters:").closest("p")).toHaveTextContent("Applied filters: No preprints");
+  });
+
+  it("Reset filters clears only the draft: the question, cards and applied label stay, and nothing is searched", async () => {
+    const { onConsensusSearch } = renderDialog();
+    consensusWithFiltersOpen("creatine");
+    setEveryFilter();
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+
+    resetFiltersButton().focus();
+    fireEvent.click(resetFiltersButton());
+
+    expect(fromYear()).toHaveValue("");
+    expect(toYear()).toHaveValue("");
+    for (const label of FILTER_LABELS) expect(filterBox(label)).not.toBeChecked();
+    expect(consensusField()).toHaveValue("creatine");
+    expect(screen.getByText("Showing 3 Consensus results")).toBeInTheDocument();
+    expect(screen.getByText("Applied filters:").closest("p")).toHaveTextContent(/2020–2026/);
+    expect(screen.getByText(CONSENSUS_SETTINGS_CHANGED_NOTICE)).toBeInTheDocument();
+    expect(onConsensusSearch).toHaveBeenCalledTimes(1);
+    // The button stays usable, so keyboard focus is not stranded.
+    expect(resetFiltersButton()).toBeEnabled();
+    expect(resetFiltersButton()).toHaveFocus();
+  });
+
+  it("zero results under filters says the filters may be restrictive — and broadens nothing", async () => {
+    const onConsensusSearch = makeConsensusSearch([]);
+    renderDialog({ onConsensusSearch });
+    consensusWithFiltersOpen("creatine");
+    fireEvent.change(fromYear(), { target: { value: "2026" } });
+    fireEvent.click(filterBox("Cohort study"));
+    fireEvent.click(searchButton());
+
+    await screen.findByText("No Consensus results matched these filters.");
+    expect(screen.getByText("Applied filters:").closest("p")).toHaveTextContent("Applied filters: From 2026 · Cohort study");
+    expect(
+      screen.getByText("The filters may be too restrictive. Change or clear them in Advanced filters, then press Search."),
+    ).toBeInTheDocument();
+    expect(onConsensusSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces a refused filtered search with its safe copy, keeps the filters, and sends nothing more", async () => {
+    const message =
+      "Consensus did not allow this filtered search, possibly because of the connected Consensus plan. Clear the advanced filters to search without them, or check the plan.";
+    const onConsensusSearch = vi.fn<ConsensusSearchFn>(async () => {
+      throw new ConsensusSearchError("filters_not_allowed", message);
+    });
+    renderDialog({ onConsensusSearch });
+    consensusWithFiltersOpen();
+    fireEvent.click(filterBox("Human studies only"));
+    fireEvent.click(searchButton());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(filterBox("Human studies only")).toBeChecked();
+    expect(onConsensusSearch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Consensus — advanced filters keep the import boundary", () => {
+  it("a filtered search's discovery-only row is still not selectable", async () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.click(filterBox("Meta-analysis"));
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    expect(within(rowOf("Discovery-only paper")).queryByRole("checkbox")).toBeNull();
+  });
+
+  it("importing after a filtered search still hands the importer only DOI strings — no filter, no metadata", async () => {
+    const { onBulkImport } = renderDialog();
+    consensusWithFiltersOpen();
+    setEveryFilter();
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    fireEvent.click(resultCheckbox("10.5555/consensus.3"));
+    fireEvent.click(importButton());
+    await screen.findByText("Consensus Import Results");
+
+    expect(onBulkImport).toHaveBeenCalledTimes(1);
+    expect(onBulkImport.mock.calls[0][0]).toEqual(["10.5555/consensus.3"]);
+    const serialized = JSON.stringify(onBulkImport.mock.calls[0].filter((arg) => typeof arg !== "function"));
+    for (const leak of ["2020", "2026", "meta-analysis", "rct", "human", "preprint", "yearMin", "studyTypes"]) {
+      expect(serialized).not.toContain(leak);
+    }
+  });
+
+  it("freezes every filter control while an import runs", async () => {
+    let finish: () => void = () => {};
+    const onBulkImport = vi.fn(
+      (ids: string[], onProgress?: ProgressFn) =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            onProgress?.(ids.length, ids.length, ids, [], []);
+            resolve();
+          };
+        }),
+    );
+    renderDialog({ onBulkImport: onBulkImport as unknown as ReturnType<typeof makeBulkImport> });
+    consensusWithFiltersOpen();
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+    fireEvent.click(resultCheckbox("10.5555/consensus.1"));
+    fireEvent.click(importButton());
+
+    expect(filtersTrigger()).toBeDisabled();
+    expect(fromYear()).toBeDisabled();
+    expect(toYear()).toBeDisabled();
+    for (const label of FILTER_LABELS) expect(filterBox(label)).toBeDisabled();
+    expect(resetFiltersButton()).toBeDisabled();
+
+    await act(async () => {
+      finish();
+    });
+    await screen.findByText("Consensus Import Results");
+    expect(fromYear()).toBeEnabled();
+  });
+});
+
+describe("Consensus — advanced filters across the dialog lifecycle", () => {
+  function Controlled({ search }: { search: ConsensusSearchFn }) {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button onClick={() => setOpen(true)}>reopen</button>
+        <AddPaperDialog
+          open={open}
+          onOpenChange={setOpen}
+          onPubMedSearch={pubmedSearchFn()}
+          onConsensusSearch={search}
+          onBulkImport={makeBulkImport()}
+          projects={PROJECTS}
+          tags={TAGS}
+        />
+      </>
+    );
+  }
+
+  it("closing Add Papers clears the whole filter session — draft and applied", async () => {
+    render(<Controlled search={makeConsensusSearch()} />);
+    switchTab(/^Search$/);
+    consensusWithFiltersOpen();
+    setEveryFilter();
+    fireEvent.click(searchButton());
+    await screen.findByText("Showing 3 Consensus results");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Close", hidden: true })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "reopen" }));
+    switchTab(/^Search$/);
+    chooseSource("Consensus");
+
+    expect(consensusField()).toHaveValue("");
+    expect(filtersTrigger()).toHaveTextContent(/^Advanced filters$/);
+    expect(filtersTrigger()).toHaveAttribute("aria-expanded", "false");
+    toggleFilters();
+    expect(fromYear()).toHaveValue("");
+    for (const label of FILTER_LABELS) expect(filterBox(label)).not.toBeChecked();
+    expect(screen.queryByText(/Applied filters/)).toBeNull();
+  });
+
+  it("switching to PubMed and back keeps the draft filters, and shows them open", () => {
+    renderDialog();
+    consensusWithFiltersOpen();
+    fireEvent.change(fromYear(), { target: { value: "2018" } });
+    toggleFilters();
+    chooseSource("PubMed");
+    chooseSource("Consensus");
+    expect(filtersTrigger()).toHaveAttribute("aria-expanded", "true");
+    expect(fromYear()).toHaveValue("2018");
   });
 });

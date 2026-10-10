@@ -2,15 +2,21 @@ import { describe, it, expect } from "vitest";
 import {
   buildConsensusSearchUrl,
   classifyConsensusFailure,
+  consensusFilterMaxYear,
+  consensusFilterParamNames,
+  countResultsOutsideYearRange,
   parseConsensusSearchResponse,
   toImportDoi,
   toSafeConsensusUrl,
   validateConsensusSearchRequest,
+  CONSENSUS_FILTER_MIN_YEAR,
   CONSENSUS_IMPORT_DOI_MAX_LENGTH,
   CONSENSUS_SEARCH_ENDPOINT,
   CONSENSUS_SEARCH_MAX_QUERY_LENGTH,
   CONSENSUS_SEARCH_PAGE_SIZE,
+  CONSENSUS_STUDY_TYPES,
   CONSENSUS_URL_MAX_LENGTH,
+  type ConsensusSearchFilters,
 } from "../consensusSearch.ts";
 import {
   AUDITED_CONSENSUS_RESULT_FIELDS,
@@ -103,8 +109,15 @@ describe("validateConsensusSearchRequest", () => {
     ["an endpoint", { query: "x", endpoint: "/v1/quick_search" }],
     ["a user id", { query: "x", userId: "11111111-2222-3333-4444-555555555555" }],
     ["a role claim", { query: "x", role: "owner" }],
-    ["an undocumented filter", { query: "x", year_min: 2020 }],
-    ["a PaperLume-named filter this V1 does not implement", { query: "x", yearMin: 2020 }],
+    ["a provider key", { query: "x", apiKey: "sk-live-123" }],
+    ["full-text chunks under another name", { query: "x", fullText: true }],
+    ["raw URL parameters", { query: "x", params: "year_min=1800&page=3" }],
+    ["a nested filter object", { query: "x", filters: { yearMin: 2020 } }],
+    ["Consensus's own year_min name", { query: "x", year_min: 2020 }],
+    ["Consensus's own study_types name", { query: "x", study_types: "rct" }],
+    ["Consensus's own exclude_preprints name", { query: "x", exclude_preprints: true }],
+    ["a documented Consensus filter PaperLume does not offer", { query: "x", sjrMax: 1 }],
+    ["a month filter PaperLume does not offer", { query: "x", monthMin: 3 }],
   ])("refuses a request that also carries %s — the contract is closed", (_label, body) => {
     expect(validateConsensusSearchRequest(body)).toEqual({
       ok: false,
@@ -123,6 +136,216 @@ describe("validateConsensusSearchRequest", () => {
   it("returns the query and nothing else", () => {
     const result = validateConsensusSearchRequest({ query: "x" });
     expect(result.ok && Object.keys(result.request)).toEqual(["query"]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Advanced filters (CONSENSUS-ADVANCED-FILTERS-001A)
+// ══════════════════════════════════════════════════════════════════════════
+
+/** A pinned clock: in 2026 a filter year may run from 1900 to 2027. */
+const NOW = new Date("2026-10-10T12:00:00Z");
+const validate = (body: unknown) => validateConsensusSearchRequest(body, { now: NOW });
+
+const FULL_FILTERS: ConsensusSearchFilters = {
+  yearMin: 2020,
+  yearMax: 2026,
+  studyTypes: ["rct", "meta-analysis"],
+  human: true,
+  excludePreprints: true,
+};
+
+describe("CONSENSUS_STUDY_TYPES — the curated V1 allowlist", () => {
+  it("is exactly the four designs whose REST spelling official sources agree on, in send order", () => {
+    expect(CONSENSUS_STUDY_TYPES).toEqual(["rct", "meta-analysis", "systematic review", "cohort study"]);
+  });
+
+  it("is frozen", () => {
+    expect(Object.isFrozen(CONSENSUS_STUDY_TYPES)).toBe(true);
+  });
+
+  it("leaves out every documented design whose REST value is not established", () => {
+    for (const excluded of [
+      "literature review", // MCP list only
+      "case report", // MCP list only
+      "non-rct experimental", // MCP spelling …
+      "non-randomized experimental study", // … contradicted by a REST example
+      "non-rct observational study",
+      "non-rct in vitro",
+      "animal",
+      "cross-sectional study",
+      "longitudinal / panel data study",
+      "Longitudinal / panel study", // a web-app label, not a value
+      "RCT",
+    ]) {
+      expect(CONSENSUS_STUDY_TYPES).not.toContain(excluded);
+    }
+  });
+
+  it("holds no value with a comma, so no design can be mistaken for a comma-joined list", () => {
+    for (const value of CONSENSUS_STUDY_TYPES) expect(value).not.toContain(",");
+  });
+});
+
+describe("validateConsensusSearchRequest — advanced filters", () => {
+  it("keeps an unfiltered request exactly the V1 shape", () => {
+    expect(validate({ query: "x" })).toEqual({ ok: true, request: { query: "x" } });
+  });
+
+  it("accepts the full filter set", () => {
+    expect(
+      validate({
+        query: "  Does creatine improve cognition?  ",
+        yearMin: 2020,
+        yearMax: 2026,
+        studyTypes: ["rct", "meta-analysis"],
+        human: true,
+        excludePreprints: true,
+      }),
+    ).toEqual({ ok: true, request: { query: "Does creatine improve cognition?", ...FULL_FILTERS } });
+  });
+
+  it.each([
+    ["a start year alone", { yearMin: 2015 }],
+    ["an end year alone", { yearMax: 2010 }],
+    ["a range", { yearMin: 2015, yearMax: 2020 }],
+    ["a single-year range", { yearMin: 2020, yearMax: 2020 }],
+    [`the floor (${CONSENSUS_FILTER_MIN_YEAR})`, { yearMin: 1900, yearMax: 1900 }],
+    ["the ceiling (the current UTC year + 1)", { yearMin: 2027 }],
+  ])("accepts %s", (_label, years) => {
+    expect(validate({ query: "x", ...years })).toEqual({ ok: true, request: { query: "x", ...years } });
+  });
+
+  it.each([
+    ["a year as a string", { yearMin: "2020" }, "yearMin"],
+    ["a fractional year", { yearMin: 2020.5 }, "yearMin"],
+    ["NaN", { yearMax: Number.NaN }, "yearMax"],
+    ["Infinity", { yearMax: Number.POSITIVE_INFINITY }, "yearMax"],
+    ["-Infinity", { yearMin: Number.NEGATIVE_INFINITY }, "yearMin"],
+    ["null", { yearMin: null }, "yearMin"],
+    ["a boolean", { yearMax: true }, "yearMax"],
+    ["a one-element list", { yearMin: [2020] }, "yearMin"],
+    ["a year below the floor", { yearMin: 1899 }, "yearMin"],
+    ["a year past the ceiling", { yearMax: 2028 }, "yearMax"],
+    ["a negative year", { yearMin: -2020 }, "yearMin"],
+    ["zero", { yearMin: 0 }, "yearMin"],
+    ["a five-digit year", { yearMax: 20260 }, "yearMax"],
+  ])("refuses %s with a fixed message naming the field", (_label, years, field) => {
+    expect(validate({ query: "x", ...years })).toEqual({
+      ok: false,
+      message: `${field} must be a whole year from 1900 to 2027.`,
+    });
+  });
+
+  it("refuses a reversed range", () => {
+    expect(validate({ query: "x", yearMin: 2024, yearMax: 2020 })).toEqual({
+      ok: false,
+      message: "yearMin must not be later than yearMax.",
+    });
+  });
+
+  it("reads the year ceiling from the UTC calendar", () => {
+    expect(consensusFilterMaxYear(new Date("2026-12-31T23:59:59Z"))).toBe(2027);
+    expect(consensusFilterMaxYear(new Date("2027-01-01T00:00:00Z"))).toBe(2028);
+    expect(validateConsensusSearchRequest({ query: "x", yearMax: 2028 }, { now: new Date("2027-01-01T00:00:00Z") }).ok).toBe(true);
+    expect(validateConsensusSearchRequest({ query: "x", yearMax: 2028 }, { now: new Date("2026-12-31T23:59:59Z") }).ok).toBe(false);
+  });
+
+  it("puts a valid multi-select in allowlist order, never changing a value", () => {
+    expect(validate({ query: "x", studyTypes: ["cohort study", "meta-analysis", "rct"] })).toEqual({
+      ok: true,
+      request: { query: "x", studyTypes: ["rct", "meta-analysis", "cohort study"] },
+    });
+  });
+
+  it("accepts every allowlisted design at once", () => {
+    const all = [...CONSENSUS_STUDY_TYPES].reverse();
+    expect(validate({ query: "x", studyTypes: all })).toEqual({
+      ok: true,
+      request: { query: "x", studyTypes: [...CONSENSUS_STUDY_TYPES] },
+    });
+  });
+
+  it("treats an empty study-design list as no restriction", () => {
+    expect(validate({ query: "x", studyTypes: [] })).toEqual({ ok: true, request: { query: "x" } });
+  });
+
+  it.each([
+    ["an unknown design", ["rct", "case-control study"]],
+    ["a documented design outside the V1 allowlist", ["case report"]],
+    ["a design only the MCP list documents", ["literature review"]],
+    ["an upper-case spelling", ["RCT"]],
+    ["a padded spelling", [" rct"]],
+    ["a display label instead of the value", ["Randomized controlled trial"]],
+    ["an empty value", [""]],
+    ["a number", [1]],
+    ["null", [null]],
+    ["an object entry", [{ value: "rct" }]],
+    ["a nested list", [["rct"]]],
+    ["a comma-joined string instead of a list", "rct,meta-analysis"],
+    ["a single string", "rct"],
+    ["an object", { 0: "rct" }],
+    ["null instead of a list", null],
+    ["more entries than the allowlist has", ["rct", "meta-analysis", "systematic review", "cohort study", "rct"]],
+  ])("refuses %s", (_label, studyTypes) => {
+    expect(validate({ query: "x", studyTypes })).toEqual({
+      ok: false,
+      message: "studyTypes must be a list of supported study designs.",
+    });
+  });
+
+  it("refuses a repeated design rather than de-duplicating it", () => {
+    expect(validate({ query: "x", studyTypes: ["rct", "meta-analysis", "rct"] })).toEqual({
+      ok: false,
+      message: "studyTypes must not repeat a study design.",
+    });
+  });
+
+  it("keeps human and excludePreprints only when true — false is no restriction", () => {
+    expect(validate({ query: "x", human: true, excludePreprints: true })).toEqual({
+      ok: true,
+      request: { query: "x", human: true, excludePreprints: true },
+    });
+    expect(validate({ query: "x", human: false, excludePreprints: false })).toEqual({ ok: true, request: { query: "x" } });
+  });
+
+  it.each([
+    ['the string "true"', "true"],
+    ['the string "false"', "false"],
+    ["1", 1],
+    ["0", 0],
+    ["null", null],
+    ["an object", {}],
+  ])("refuses %s where a boolean is required", (_label, value) => {
+    expect(validate({ query: "x", human: value })).toEqual({ ok: false, message: "human must be true or false." });
+    expect(validate({ query: "x", excludePreprints: value })).toEqual({
+      ok: false,
+      message: "excludePreprints must be true or false.",
+    });
+  });
+
+  it("never echoes a submitted value in a refusal", () => {
+    const marker = "<script>alert('filter')</script>";
+    for (const body of [
+      { query: "x", studyTypes: [marker] },
+      { query: "x", yearMin: marker },
+      { query: "x", human: marker },
+      { query: "x", excludePreprints: marker },
+    ]) {
+      const result = validate(body);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).not.toContain("script");
+    }
+  });
+
+  it("reads only the body's own fields: a polluted prototype cannot set a filter", () => {
+    const body = Object.create({ yearMin: 1000, human: "yes", studyTypes: ["bogus"] }) as Record<string, unknown>;
+    body.query = "x";
+    expect(validate(body)).toEqual({ ok: true, request: { query: "x" } });
+  });
+
+  it("checks the query before any filter", () => {
+    expect(validate({ yearMin: "not a year" })).toEqual({ ok: false, message: "query is required." });
   });
 });
 
@@ -162,6 +385,201 @@ describe("buildConsensusSearchUrl", () => {
   it("never puts a credential in the URL", () => {
     const built = buildConsensusSearchUrl("creatine");
     expect(built).not.toMatch(/api[-_]?key|x-api-key|token/i);
+  });
+
+  it("builds exactly the V1 URL for an unfiltered search — with or without an empty filter set", () => {
+    expect(buildConsensusSearchUrl("creatine cognition")).toBe(
+      "https://api.consensus.app/v1/search?query=creatine+cognition&page_size=20",
+    );
+    expect(buildConsensusSearchUrl("creatine cognition", {})).toBe(buildConsensusSearchUrl("creatine cognition"));
+    expect(buildConsensusSearchUrl("creatine cognition", { studyTypes: [] })).toBe(
+      buildConsensusSearchUrl("creatine cognition"),
+    );
+  });
+
+  it("maps every filter onto Consensus's documented snake_case parameter, after the V1 pair", () => {
+    const url = new URL(buildConsensusSearchUrl("creatine cognition", FULL_FILTERS));
+    expect([...url.searchParams.entries()]).toEqual([
+      ["query", "creatine cognition"],
+      ["page_size", "20"],
+      ["year_min", "2020"],
+      ["year_max", "2026"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
+      ["human", "true"],
+      ["exclude_preprints", "true"],
+    ]);
+  });
+
+  // CONSENSUS-ADVANCED-FILTERS-001C. Consensus's typed OpenAPI 3.1 schema makes
+  // `study_types` an array and sets no `style`/`explode`, so the defaults apply
+  // — `form`, exploded — and each design is its own parameter. The README's
+  // comma-joined value drew HTTP 422 live on 2026-10-10.
+  describe("study_types — one repeated parameter per design, never comma-joined", () => {
+    it("sends one design as exactly one parameter", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: ["rct"] });
+      expect(built).toBe("https://api.consensus.app/v1/search?query=x&page_size=20&study_types=rct");
+      expect(new URL(built).searchParams.getAll("study_types")).toEqual(["rct"]);
+    });
+
+    it("sends two designs as two parameters with the same name", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: ["rct", "meta-analysis"] });
+      expect(built).toBe(
+        "https://api.consensus.app/v1/search?query=x&page_size=20&study_types=rct&study_types=meta-analysis",
+      );
+      expect(new URL(built).searchParams.getAll("study_types")).toEqual(["rct", "meta-analysis"]);
+    });
+
+    it("sends all four allowlisted designs in allowlist order, each space form-encoded once", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: [...CONSENSUS_STUDY_TYPES] });
+      expect(built).toBe(
+        "https://api.consensus.app/v1/search?query=x&page_size=20" +
+          "&study_types=rct&study_types=meta-analysis&study_types=systematic+review&study_types=cohort+study",
+      );
+      expect([...new URL(built).searchParams.entries()]).toEqual([
+        ["query", "x"],
+        ["page_size", "20"],
+        ["study_types", "rct"],
+        ["study_types", "meta-analysis"],
+        ["study_types", "systematic review"],
+        ["study_types", "cohort study"],
+      ]);
+    });
+
+    it.each([1, 2, 3, 4])("keeps every one of %i designs — none is overwritten", (count) => {
+      const studyTypes = CONSENSUS_STUDY_TYPES.slice(0, count);
+      const url = new URL(buildConsensusSearchUrl("x", { studyTypes }));
+      expect(url.searchParams.getAll("study_types")).toEqual(studyTypes);
+      expect([...url.searchParams.keys()].filter((key) => key === "study_types")).toHaveLength(count);
+    });
+
+    it("never comma-joins: no value holds a comma, and the URL has no comma, raw or encoded", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: [...CONSENSUS_STUDY_TYPES] });
+      for (const value of new URL(built).searchParams.getAll("study_types")) expect(value).not.toContain(",");
+      expect(built).not.toMatch(/%2C/i);
+      expect(built).not.toContain(",");
+    });
+
+    it("places the designs between the years and the two booleans", () => {
+      const built = buildConsensusSearchUrl("x", { ...FULL_FILTERS, studyTypes: ["systematic review", "cohort study"] });
+      expect(built).toBe(
+        "https://api.consensus.app/v1/search?query=x&page_size=20&year_min=2020&year_max=2026" +
+          "&study_types=systematic+review&study_types=cohort+study&human=true&exclude_preprints=true",
+      );
+    });
+
+    it("cannot be extended through the query: the text stays one value, and only the chosen designs are sent", () => {
+      const query = "creatine&study_types=animal";
+      const url = new URL(buildConsensusSearchUrl(query, { studyTypes: ["rct"] }));
+      expect(url.searchParams.get("query")).toBe(query);
+      expect(url.searchParams.getAll("study_types")).toEqual(["rct"]);
+    });
+  });
+
+  it.each([
+    ["a start year", { yearMin: 2015 }, ["year_min"]],
+    ["an end year", { yearMax: 2010 }, ["year_max"]],
+    ["one design", { studyTypes: ["rct"] }, ["study_types"]],
+    ["two designs", { studyTypes: ["rct", "meta-analysis"] }, ["study_types", "study_types"]],
+    ["human studies only", { human: true }, ["human"]],
+    ["no preprints", { excludePreprints: true }, ["exclude_preprints"]],
+  ] as Array<[string, ConsensusSearchFilters, string[]]>)("sends only what is set: %s", (_label, filters, expected) => {
+    expect([...new URL(buildConsensusSearchUrl("x", filters)).searchParams.keys()]).toEqual([
+      "query",
+      "page_size",
+      ...expected,
+    ]);
+  });
+
+  it("never adds a page, full-text chunks or a credential, whatever the filters", () => {
+    const built = buildConsensusSearchUrl("x", FULL_FILTERS);
+    const url = new URL(built);
+    expect(url.searchParams.has("page")).toBe(false);
+    expect(url.searchParams.has("include_full_text_chunks")).toBe(false);
+    expect(url.searchParams.get("page_size")).toBe("20");
+    expect(built).not.toMatch(/api[-_]?key|x-api-key|token/i);
+  });
+
+  it("keeps the query exact beside the filters: a query cannot smuggle in a parameter", () => {
+    const query = `creatine & year_min=1800&page=3 #frag`;
+    const url = new URL(buildConsensusSearchUrl(query, { yearMin: 2020 }));
+    expect(url.searchParams.get("query")).toBe(query);
+    expect(url.searchParams.getAll("year_min")).toEqual(["2020"]);
+    expect(url.searchParams.has("page")).toBe(false);
+    expect(url.hash).toBe("");
+  });
+
+  it("consensusFilterParamNames names each filter parameter the URL carries, once, in URL order", () => {
+    const cases: ConsensusSearchFilters[] = [
+      {},
+      { yearMin: 2020 },
+      { yearMax: 2020 },
+      { studyTypes: ["cohort study"] },
+      { studyTypes: [...CONSENSUS_STUDY_TYPES] },
+      { studyTypes: [] },
+      { human: true, excludePreprints: true },
+      FULL_FILTERS,
+    ];
+    for (const filters of cases) {
+      const filterKeys = [...new URL(buildConsensusSearchUrl("x", filters)).searchParams.keys()].filter(
+        (key) => key !== "query" && key !== "page_size",
+      );
+      expect(consensusFilterParamNames(filters)).toEqual([...new Set(filterKeys)]);
+    }
+  });
+
+  it("names a repeated study_types once, so the log never shows a misleading duplicate", () => {
+    expect(consensusFilterParamNames({ studyTypes: [...CONSENSUS_STUDY_TYPES] })).toEqual(["study_types"]);
+    expect(consensusFilterParamNames(FULL_FILTERS)).toEqual([
+      "year_min",
+      "year_max",
+      "study_types",
+      "human",
+      "exclude_preprints",
+    ]);
+    expect(consensusFilterParamNames({})).toEqual([]);
+  });
+
+  it("round-trips: a validated body builds a URL carrying exactly its filters", () => {
+    const validated = validate({
+      query: "creatine",
+      excludePreprints: true,
+      studyTypes: ["meta-analysis", "rct"],
+      human: false,
+      yearMax: 2024,
+    });
+    if (!validated.ok) throw new Error("expected a valid request");
+    const { query, ...filters } = validated.request;
+    expect([...new URL(buildConsensusSearchUrl(query, filters)).searchParams.entries()]).toEqual([
+      ["query", "creatine"],
+      ["page_size", "20"],
+      ["year_max", "2024"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
+      ["exclude_preprints", "true"],
+    ]);
+  });
+
+  it.each([
+    ["reversed", ["cohort study", "systematic review", "meta-analysis", "rct"]],
+    ["interleaved", ["systematic review", "rct", "cohort study", "meta-analysis"]],
+    ["already in order", ["rct", "meta-analysis", "systematic review", "cohort study"]],
+  ])("round-trips every design in allowlist order, whatever order the body lists them in (%s)", (_label, studyTypes) => {
+    const validated = validate({ query: "x", yearMin: 2020, yearMax: 2026, studyTypes, human: true, excludePreprints: true });
+    if (!validated.ok) throw new Error("expected a valid request");
+    const { query, ...filters } = validated.request;
+    expect([...new URL(buildConsensusSearchUrl(query, filters)).searchParams.entries()]).toEqual([
+      ["query", "x"],
+      ["page_size", "20"],
+      ["year_min", "2020"],
+      ["year_max", "2026"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
+      ["study_types", "systematic review"],
+      ["study_types", "cohort study"],
+      ["human", "true"],
+      ["exclude_preprints", "true"],
+    ]);
   });
 });
 
@@ -277,6 +695,7 @@ describe("parseConsensusSearchResponse", () => {
     expect(parsed).toEqual({
       ok: true,
       dropped: 0,
+      preprints: 0,
       results: [
         {
           rank: 1,
@@ -437,7 +856,22 @@ describe("parseConsensusSearchResponse", () => {
   });
 
   it("answers an empty result list as a valid, empty answer", () => {
-    expect(parseConsensusSearchResponse(consensusEnvelope([]))).toEqual({ ok: true, results: [], dropped: 0 });
+    expect(parseConsensusSearchResponse(consensusEnvelope([]))).toEqual({ ok: true, results: [], dropped: 0, preprints: 0 });
+  });
+
+  it("counts forwarded records flagged is_preprint: true — and still never forwards the flag", () => {
+    const parsed = parseConsensusSearchResponse(
+      consensusEnvelope([
+        consensusResult({ is_preprint: true }),
+        consensusResult({ is_preprint: false }),
+        consensusResult({ is_preprint: "true" }), // not exactly `true`
+        minimalConsensusResult({ is_preprint: true }),
+        // Dropped as unusable, so it is not counted either.
+        consensusResult({ title: "", doi: "not a doi", url: "http://consensus.app/papers/x", is_preprint: true }),
+      ]),
+    );
+    expect(parsed).toMatchObject({ ok: true, dropped: 1, preprints: 2 });
+    expect(parsed.ok && JSON.stringify(parsed.results)).not.toMatch(/preprint/i);
   });
 
   it.each([
@@ -480,5 +914,68 @@ describe("classifyConsensusFailure", () => {
     expect(classifyConsensusFailure(429, '{"detail":"Too many requests"}')).toBe("rate_limited");
     expect(classifyConsensusFailure(429, "")).toBe("rate_limited");
     expect(classifyConsensusFailure(429, "<html>busy</html>")).toBe("rate_limited");
+  });
+
+  it.each([
+    [403, "filters_not_allowed"],
+    [400, "filters_rejected"],
+    [422, "filters_rejected"],
+    [401, "upstream_auth"],
+    [402, "upstream_billing"],
+    [404, "upstream_rejected"],
+    [500, "upstream_error"],
+    [503, "upstream_error"],
+  ])("maps HTTP %i on a FILTERED search to %s", (status, expected) => {
+    expect(classifyConsensusFailure(status, "", true)).toBe(expected);
+  });
+
+  it("keeps the two 429s apart on a filtered search too", () => {
+    expect(classifyConsensusFailure(429, "You have used all included searches.", true)).toBe("quota_exhausted");
+    expect(classifyConsensusFailure(429, '{"detail":"Too many requests"}', true)).toBe("rate_limited");
+  });
+
+  it("classifies an unfiltered search exactly as V1 did", () => {
+    expect(classifyConsensusFailure(403, "", false)).toBe("upstream_forbidden");
+    expect(classifyConsensusFailure(400, "", false)).toBe("upstream_rejected");
+    expect(classifyConsensusFailure(422, "", false)).toBe("upstream_rejected");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Filter diagnostics for the log line
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("countResultsOutsideYearRange — a log diagnostic, never a filter", () => {
+  const parsedYears = (years: unknown[]) => {
+    const parsed = parseConsensusSearchResponse(
+      consensusEnvelope(years.map((year, i) => consensusResult({ publish_year: year, doi: `10.5555/y${i}` }))),
+    );
+    if (!parsed.ok) throw new Error("expected a parsed page");
+    return parsed.results;
+  };
+
+  it("is null when the search set no year filter", () => {
+    expect(countResultsOutsideYearRange(parsedYears([1990, 2024]), {})).toBeNull();
+    expect(countResultsOutsideYearRange(parsedYears([1990]), { human: true, studyTypes: ["rct"] })).toBeNull();
+  });
+
+  it("counts results outside a range, on either side", () => {
+    expect(countResultsOutsideYearRange(parsedYears([2019, 2020, 2023, 2026, 2027]), { yearMin: 2020, yearMax: 2026 })).toBe(2);
+  });
+
+  it("counts against a single bound", () => {
+    expect(countResultsOutsideYearRange(parsedYears([2014, 2015, 2030]), { yearMin: 2015 })).toBe(1);
+    expect(countResultsOutsideYearRange(parsedYears([2009, 2010, 2011]), { yearMax: 2010 })).toBe(1);
+  });
+
+  it("does not count a result without a usable year", () => {
+    expect(countResultsOutsideYearRange(parsedYears(["2019", null, 2019.5, 2024]), { yearMin: 2020 })).toBe(0);
+  });
+
+  it("changes nothing it is given", () => {
+    const results = parsedYears([1990, 2024]);
+    const before = JSON.stringify(results);
+    countResultsOutsideYearRange(results, { yearMin: 2020 });
+    expect(JSON.stringify(results)).toBe(before);
   });
 });
