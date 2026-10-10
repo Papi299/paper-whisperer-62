@@ -182,7 +182,7 @@ describe("CONSENSUS_STUDY_TYPES — the curated V1 allowlist", () => {
     }
   });
 
-  it("holds no value with a comma, so the comma-separated parameter is unambiguous", () => {
+  it("holds no value with a comma, so no design can be mistaken for a comma-joined list", () => {
     for (const value of CONSENSUS_STUDY_TYPES) expect(value).not.toContain(",");
   });
 });
@@ -404,24 +404,83 @@ describe("buildConsensusSearchUrl", () => {
       ["page_size", "20"],
       ["year_min", "2020"],
       ["year_max", "2026"],
-      ["study_types", "rct,meta-analysis"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
       ["human", "true"],
       ["exclude_preprints", "true"],
     ]);
   });
 
-  it("sends study_types as ONE comma-separated value, encoded once", () => {
-    const built = buildConsensusSearchUrl("x", { studyTypes: ["systematic review", "cohort study"] });
-    expect(new URL(built).searchParams.getAll("study_types")).toEqual(["systematic review,cohort study"]);
-    // URLSearchParams form-encoding: a space is `+`, the separator is `%2C` —
-    // what the official README's JavaScript example (`new URLSearchParams`) sends.
-    expect(built).toContain("study_types=systematic+review%2Ccohort+study");
+  // CONSENSUS-ADVANCED-FILTERS-001C. Consensus's typed OpenAPI 3.1 schema makes
+  // `study_types` an array and sets no `style`/`explode`, so the defaults apply
+  // — `form`, exploded — and each design is its own parameter. The README's
+  // comma-joined value drew HTTP 422 live on 2026-10-10.
+  describe("study_types — one repeated parameter per design, never comma-joined", () => {
+    it("sends one design as exactly one parameter", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: ["rct"] });
+      expect(built).toBe("https://api.consensus.app/v1/search?query=x&page_size=20&study_types=rct");
+      expect(new URL(built).searchParams.getAll("study_types")).toEqual(["rct"]);
+    });
+
+    it("sends two designs as two parameters with the same name", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: ["rct", "meta-analysis"] });
+      expect(built).toBe(
+        "https://api.consensus.app/v1/search?query=x&page_size=20&study_types=rct&study_types=meta-analysis",
+      );
+      expect(new URL(built).searchParams.getAll("study_types")).toEqual(["rct", "meta-analysis"]);
+    });
+
+    it("sends all four allowlisted designs in allowlist order, each space form-encoded once", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: [...CONSENSUS_STUDY_TYPES] });
+      expect(built).toBe(
+        "https://api.consensus.app/v1/search?query=x&page_size=20" +
+          "&study_types=rct&study_types=meta-analysis&study_types=systematic+review&study_types=cohort+study",
+      );
+      expect([...new URL(built).searchParams.entries()]).toEqual([
+        ["query", "x"],
+        ["page_size", "20"],
+        ["study_types", "rct"],
+        ["study_types", "meta-analysis"],
+        ["study_types", "systematic review"],
+        ["study_types", "cohort study"],
+      ]);
+    });
+
+    it.each([1, 2, 3, 4])("keeps every one of %i designs — none is overwritten", (count) => {
+      const studyTypes = CONSENSUS_STUDY_TYPES.slice(0, count);
+      const url = new URL(buildConsensusSearchUrl("x", { studyTypes }));
+      expect(url.searchParams.getAll("study_types")).toEqual(studyTypes);
+      expect([...url.searchParams.keys()].filter((key) => key === "study_types")).toHaveLength(count);
+    });
+
+    it("never comma-joins: no value holds a comma, and the URL has no comma, raw or encoded", () => {
+      const built = buildConsensusSearchUrl("x", { studyTypes: [...CONSENSUS_STUDY_TYPES] });
+      for (const value of new URL(built).searchParams.getAll("study_types")) expect(value).not.toContain(",");
+      expect(built).not.toMatch(/%2C/i);
+      expect(built).not.toContain(",");
+    });
+
+    it("places the designs between the years and the two booleans", () => {
+      const built = buildConsensusSearchUrl("x", { ...FULL_FILTERS, studyTypes: ["systematic review", "cohort study"] });
+      expect(built).toBe(
+        "https://api.consensus.app/v1/search?query=x&page_size=20&year_min=2020&year_max=2026" +
+          "&study_types=systematic+review&study_types=cohort+study&human=true&exclude_preprints=true",
+      );
+    });
+
+    it("cannot be extended through the query: the text stays one value, and only the chosen designs are sent", () => {
+      const query = "creatine&study_types=animal";
+      const url = new URL(buildConsensusSearchUrl(query, { studyTypes: ["rct"] }));
+      expect(url.searchParams.get("query")).toBe(query);
+      expect(url.searchParams.getAll("study_types")).toEqual(["rct"]);
+    });
   });
 
   it.each([
     ["a start year", { yearMin: 2015 }, ["year_min"]],
     ["an end year", { yearMax: 2010 }, ["year_max"]],
     ["one design", { studyTypes: ["rct"] }, ["study_types"]],
+    ["two designs", { studyTypes: ["rct", "meta-analysis"] }, ["study_types", "study_types"]],
     ["human studies only", { human: true }, ["human"]],
     ["no preprints", { excludePreprints: true }, ["exclude_preprints"]],
   ] as Array<[string, ConsensusSearchFilters, string[]]>)("sends only what is set: %s", (_label, filters, expected) => {
@@ -450,12 +509,13 @@ describe("buildConsensusSearchUrl", () => {
     expect(url.hash).toBe("");
   });
 
-  it("consensusFilterParamNames names exactly the filter parameters the URL carries", () => {
+  it("consensusFilterParamNames names each filter parameter the URL carries, once, in URL order", () => {
     const cases: ConsensusSearchFilters[] = [
       {},
       { yearMin: 2020 },
       { yearMax: 2020 },
       { studyTypes: ["cohort study"] },
+      { studyTypes: [...CONSENSUS_STUDY_TYPES] },
       { studyTypes: [] },
       { human: true, excludePreprints: true },
       FULL_FILTERS,
@@ -464,8 +524,20 @@ describe("buildConsensusSearchUrl", () => {
       const filterKeys = [...new URL(buildConsensusSearchUrl("x", filters)).searchParams.keys()].filter(
         (key) => key !== "query" && key !== "page_size",
       );
-      expect(consensusFilterParamNames(filters)).toEqual(filterKeys);
+      expect(consensusFilterParamNames(filters)).toEqual([...new Set(filterKeys)]);
     }
+  });
+
+  it("names a repeated study_types once, so the log never shows a misleading duplicate", () => {
+    expect(consensusFilterParamNames({ studyTypes: [...CONSENSUS_STUDY_TYPES] })).toEqual(["study_types"]);
+    expect(consensusFilterParamNames(FULL_FILTERS)).toEqual([
+      "year_min",
+      "year_max",
+      "study_types",
+      "human",
+      "exclude_preprints",
+    ]);
+    expect(consensusFilterParamNames({})).toEqual([]);
   });
 
   it("round-trips: a validated body builds a URL carrying exactly its filters", () => {
@@ -482,7 +554,30 @@ describe("buildConsensusSearchUrl", () => {
       ["query", "creatine"],
       ["page_size", "20"],
       ["year_max", "2024"],
-      ["study_types", "rct,meta-analysis"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
+      ["exclude_preprints", "true"],
+    ]);
+  });
+
+  it.each([
+    ["reversed", ["cohort study", "systematic review", "meta-analysis", "rct"]],
+    ["interleaved", ["systematic review", "rct", "cohort study", "meta-analysis"]],
+    ["already in order", ["rct", "meta-analysis", "systematic review", "cohort study"]],
+  ])("round-trips every design in allowlist order, whatever order the body lists them in (%s)", (_label, studyTypes) => {
+    const validated = validate({ query: "x", yearMin: 2020, yearMax: 2026, studyTypes, human: true, excludePreprints: true });
+    if (!validated.ok) throw new Error("expected a valid request");
+    const { query, ...filters } = validated.request;
+    expect([...new URL(buildConsensusSearchUrl(query, filters)).searchParams.entries()]).toEqual([
+      ["query", "x"],
+      ["page_size", "20"],
+      ["year_min", "2020"],
+      ["year_max", "2026"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
+      ["study_types", "systematic review"],
+      ["study_types", "cohort study"],
+      ["human", "true"],
       ["exclude_preprints", "true"],
     ]);
   });

@@ -1980,7 +1980,7 @@ Nothing else changed: the DOI and title encoding, `rows=1`, the transport, and t
 
 > **Status — COMPLETE. `search-consensus` is live in Production for the owner and passed the owner's Production acceptance on 2026-10-09 (`CONSENSUS-SEARCH-MVP-001A`, C60).** The initial rollout ran in the required order below: the secret and the endpoint first, the merge last. Read the live state back rather than trusting this box — `supabase functions list --project-ref <project-ref>`, and `supabase secrets list --project-ref <project-ref>` **for the name only**.
 >
-> **The contract this section describes is the live, query-only V1.** An owner-only filter extension (`CONSENSUS-ADVANCED-FILTERS-001A`, 2026-10-10) is **prepared in the repository and NOT deployed** — see §7f. Until §7f's rollout runs, Production still accepts exactly `{ "query": string }`.
+> **The contract this section describes is the query-only V1, which the live frontend still uses.** An owner-only filter extension (`CONSENSUS-ADVANCED-FILTERS-001A`, 2026-10-10) is **not live as designed** — see §7f. Since 2026-10-10 a pre-merge `search-consensus` **v2** also accepts the filter fields, but the Production frontend still sends exactly `{ "query": string }`, for which v2 builds the same upstream request as v1; the filter UI is not merged.
 >
 > - **Owner premise.** A read-only, count-only check found exactly one account holding role `owner` on 2026-10-03, and again before the merge on 2026-10-09. No id was recorded.
 > - **Secret.** `CONSENSUS_API_KEY` was installed on 2026-10-03 from a private temp file (`secrets set --env-file`, file deleted afterwards) and verified by name only.
@@ -2076,9 +2076,13 @@ Neither pre-existing shared module is changed, so no other function needed redep
 
 **Expanding beyond the owner is a different project.** Access for managers or ordinary users, per-user keys, a commercial plan, pagination, filters, full-text chunks or Consensus-grounded synthesis would each change the quota, privacy and authorization model, and the published Privacy Policy would need an owner-approved update before any user other than the owner could send queries to Consensus ([privacy-data-flow-audit.md](privacy-data-flow-audit.md)). *(2026-10-10: owner-only search filters were since prepared on the owner's instruction, without widening access — §7f.)*
 
-### 7f. `search-consensus` advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`) — PREPARED, NOT deployed; endpoint before UI
+### 7f. `search-consensus` advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`) — corrected endpoint PREPARED, NOT deployed; UI not merged; endpoint before UI
 
-> **Status (2026-10-10) — PREPARED in the repository (Draft PR, unmerged). Nothing is deployed.** Production still runs `search-consensus` **v1** (`ezbr_sha256` `937acf15…`, read back 2026-10-10), which accepts exactly `{ "query": string }`, and the Production frontend sends exactly that. PaperLume has never sent Consensus a filtered request: the 2026-10-02 audit call and the 2026-10-09 acceptance search were both unfiltered, and this work made no Consensus search request. Whether the owner's **Free** REST plan accepts these filters is **documented but not yet demonstrated live** (see *Plan entitlement* below). Read the live state back before acting on this box.
+> **Status (2026-10-10) — not live as designed.**
+> - **Pre-merge endpoint, superseded encoding.** With owner authorization, `search-consensus` **v2** (`ezbr_sha256` `0d255baf…`, deployed 04:11 UTC from PR head `700319c8`) replaced v1 before the UI merged. v2 sends several study designs as **one comma-joined** `study_types` value. The Production frontend is still V1 and sends exactly `{ "query": string }`, for which v2 builds the same upstream request as v1.
+> - **Owner-run searches through the exact-head PR Preview (2026-10-10), three in all** — the first filtered requests PaperLume ever sent: years 2020–2026 with `rct` + `meta-analysis`, human only and no preprints → Consensus **422**; the same years and designs alone → **422**; years 2010–2026 with `meta-analysis` alone → **200** (20 results, `year_outside=0`). No import, no retry.
+> - **This head (`CONSENSUS-ADVANCED-FILTERS-001C`) corrects the encoding** to one `study_types` parameter per design — see *Study-design encoding* below. It is **NOT deployed**: v2 still runs the comma form. The UI is **NOT merged**.
+> - Whether the owner's **Free** REST plan accepts these filters stays **unresolved**: years with one design were accepted once; two designs have never been sent in the corrected form; human-only and no-preprints have never been tested on their own (see *Plan entitlement* below). Read the live state back before acting on this box.
 
 **What changes.** The owner may add four optional, server-validated restrictions to a Search. Everything else in §7e — owner-only twice over, key read only after authorization and validation, one un-retried `GET /v1/search` with `page_size=20` on the first page, no full-text chunks, `redirect: "error"`, the 15 s timeout, the DOI-only import boundary, no persistence — is unchanged. An unfiltered request is byte-for-byte the V1 request: the same `{ "query": … }` body and the same upstream URL.
 
@@ -2089,15 +2093,21 @@ Neither pre-existing shared module is changed, so no other function needed redep
 | `query` | string, trimmed, 1–500 characters (unchanged) | `query` | always |
 | `yearMin` | whole number from **1900** to **the current UTC year + 1**; alone or with `yearMax` | `year_min` | when set |
 | `yearMax` | the same bounds; `yearMin` ≤ `yearMax` when both are set | `year_max` | when set |
-| `studyTypes` | array of **distinct** values from the allowlist below, at most 4; `[]` = no restriction | `study_types`, one comma-separated value in allowlist order | when non-empty |
+| `studyTypes` | array of **distinct** values from the allowlist below, at most 4; `[]` = no restriction | `study_types`, **one parameter per design**, repeated, in allowlist order | when non-empty |
 | `human` | a real boolean; `false` = no restriction | `human=true` | when `true` |
 | `excludePreprints` | a real boolean; `false` = no restriction | `exclude_preprints=true` | when `true` |
 
 The year bounds are **PaperLume's own** sanity bounds — Consensus documents none. 1900 refuses a mistyped year before it can spend a call; the current year + 1 allows an issue dated ahead. Strings, fractions, `NaN`/`Infinity`, `null`, out-of-range years and a reversed range are refused; so are `"true"`, `1` or `null` where a boolean belongs, and unknown, empty, mis-cased, padded, repeated or non-string study designs. Nothing is coerced, trimmed, case-folded or de-duplicated, and no refusal message echoes a submitted value. The browser checks the same rules first (`src/lib/consensusSearchFilters.ts`, pinned to the Edge module by a parity suite), so a request the server would refuse is never sent.
 
-Example: `{"query":"Does creatine improve cognitive performance?","yearMin":2020,"yearMax":2026,"studyTypes":["rct","meta-analysis"],"human":true,"excludePreprints":true}` becomes `GET https://api.consensus.app/v1/search?query=Does+creatine+improve+cognitive+performance%3F&page_size=20&year_min=2020&year_max=2026&study_types=rct%2Cmeta-analysis&human=true&exclude_preprints=true`, built with `URLSearchParams` (the encoding the official README's JavaScript example produces).
+**Study-design encoding — schema-grounded, not yet proven live (`CONSENSUS-ADVANCED-FILTERS-001C`).**
+- **The typed schema.** Consensus's OpenAPI 3.1.0 document (see *Sources*) declares `study_types` on `GET /v1/search` an array of `StudyTypeKeywordEnum` values — 23 of them, including all four of PaperLume's — and sets no `style` or `explode` anywhere. The defaults of the [OpenAPI 3.1 specification](https://spec.openapis.org/oas/v3.1) therefore apply: a query parameter's style is `form`, a `form` parameter explodes by default, and an exploded array is one parameter per item — `study_types=rct&study_types=meta-analysis`.
+- **The inconsistency.** The official README, the Search quick start and the docs' curl examples send one comma-separated value instead (`study_types=rct,meta-analysis`). The docs' Python examples pass a list to `requests`, which sends repeated parameters.
+- **Live evidence.** The comma form — exactly what v2 sends — drew **HTTP 422 twice** for `rct` + `meta-analysis`, two valid enum values, while one design alone, identical in both forms, was accepted. The enum also holds `theoretical, modeling, or simulation study`, which a server that splits on commas could not accept.
+- **So this head sends repeated parameters**, in allowlist order, added with `URLSearchParams.append` (`set` would keep only the last design). That is the form the typed schema prescribes, **not one Consensus has yet been seen to accept**: the next canary tests exactly that. The log still names `study_types` once.
 
-**The V1 study-design allowlist.** A value is admitted only when its exact REST spelling appears in at least two official Consensus sources, at least one of them a REST source, and no official source spells that design differently.
+Example: `{"query":"Does creatine improve cognitive performance?","yearMin":2020,"yearMax":2026,"studyTypes":["rct","meta-analysis"],"human":true,"excludePreprints":true}` becomes `GET https://api.consensus.app/v1/search?query=Does+creatine+improve+cognitive+performance%3F&page_size=20&year_min=2020&year_max=2026&study_types=rct&study_types=meta-analysis&human=true&exclude_preprints=true`, built with `URLSearchParams`.
+
+**The V1 study-design allowlist.** A value is admitted only when its exact REST spelling appears in at least two official Consensus sources, at least one of them a REST source, and no official source spells that design differently. The typed schema, read later the same day, lists all four values verbatim in `StudyTypeKeywordEnum`.
 
 | Label shown | Value sent | Official evidence |
 |---|---|---|
@@ -2111,10 +2121,11 @@ Left out on purpose: `literature review` and `case report` appear only in the MC
 **Sources (retrieved 2026-10-10).**
 - The official `Consensus-NLP/consensus-api` README (latest commit `840b2058`, 2026-08-21), read through the GitHub API: `GET https://api.consensus.app/v1/search`; its request examples (`year_min=2015`, `study_types=rct,meta-analysis`); its filter table naming `year_min`, `year_max`, `study_types` (`rct`, `meta-analysis`, `systematic review`, `cohort study`, …), `human` and `exclude_preprints`; and `/v1/quick_search` as deprecated, removed 2027-02-07, "the same contract".
 - `https://docs.consensus.app/llms-full.txt`, the docs site's plain-text export, for the pages **API plans and access** (`/api-plans-and-access`), **Quick start: Search** (`/api-quickstart-search`), **Quick start: Threads** (Threads take "the same filters as `GET /v1/search`", e.g. `"human": true`), **Get started with Consensus MCP** (`/consensus-mcp`, whose search-tool table types `year_min`/`year_max` as integers, `study_types` as a string array with its values, and `human`/`exclude_preprints` as booleans), **How search works** ("`exclude_preprints` in the API and MCP") and the use-case pages' REST examples.
-- Not readable: the HTML pages the task named — `docs.consensus.app/reference/v1_search`, `/reference/v1_quick_search`, `/docs/mcp` — the docs' `openapi.json`, and `help.consensus.app/en/articles/16516328-the-consensus-api` all answered with a Cloudflare browser challenge (HTTP 403). The docs now live at `/api-reference/search`, `/api-reference/quick-search` and `/consensus-mcp`, whose text the export carries; the typed REST parameter reference itself (behind `openapi.json`) was not read.
-- **One conflicting statement, not followed:** `https://consensus.app/llms.txt` says to pass "`exclude_preprints=true` (MCP) or `excludePreprints=true` (REST API)". The README's REST filter table, the docs ("`exclude_preprints` in the API and MCP") and two REST request examples all use `exclude_preprints`; that page also links the deprecated quick-search page as its "REST API search" and an OpenAPI host whose TLS certificate does not match its name. PaperLume sends `exclude_preprints`. Because an API commonly ignores a parameter name it does not know, the canary below checks this filter's effect, not just its acceptance.
+- Not readable by plain HTTP requests: the HTML pages the task named — `docs.consensus.app/reference/v1_search`, `/reference/v1_quick_search`, `/docs/mcp` — the docs' `openapi.json`, and `help.consensus.app/en/articles/16516328-the-consensus-api` all answered with a Cloudflare browser challenge (HTTP 403). The docs now live at `/api-reference/search`, `/api-reference/quick-search` and `/consensus-mcp`, whose text the export carries; `/reference/v1_quick_search` itself now answers 404.
+- **The typed REST schema**, read later on 2026-10-10 through a browser session (`CONSENSUS-ADVANCED-FILTERS-001B`): `https://docs.consensus.app/openapi.json`, which `/api-reference/search` renders — OpenAPI 3.1.0, "Consensus API" 1.0, 78,878 bytes, SHA-256 `47aa3e10ad2ac525ee59eeefebc48d837cd9905d8a35177f2105cc837e6e778b`. It types `year_min` / `year_max` as integers, `study_types` as an array of `StudyTypeKeywordEnum` and `human` / `exclude_preprints` as booleans; sets no `style` or `explode` on any parameter; and documents `422` (`HTTPValidationError`) as the endpoint's only error response.
+- **One conflicting statement, not followed:** `https://consensus.app/llms.txt` says to pass "`exclude_preprints=true` (MCP) or `excludePreprints=true` (REST API)". The README's REST filter table, the docs ("`exclude_preprints` in the API and MCP"), two REST request examples and the typed schema all use `exclude_preprints`; that page also links the deprecated quick-search page as its "REST API search" and an OpenAPI host whose TLS certificate does not match its name. PaperLume sends `exclude_preprints`. Because an API commonly ignores a parameter name it does not know, a canary that sends this filter checks its effect, not just its acceptance.
 
-**Plan entitlement — documented, not demonstrated.** The plans page states: "Every plan can use every search filter." On the Free plan, `403 feature_not_allowed` is documented only for pagination past the first page and for full-text excerpts, neither of which PaperLume requests. PaperLume has never sent a filtered request with the owner's key, so Free-tier acceptance of these filters is **unverified live**. The owner confirmed the plan is Free on 2026-10-02.
+**Plan entitlement — documented, only partly demonstrated.** The plans page states: "Every plan can use every search filter." On the Free plan, `403 feature_not_allowed` is documented only for pagination past the first page and for full-text excerpts, neither of which PaperLume requests. Live so far (2026-10-10, the three owner-run searches above): years with one design were accepted once; two comma-joined designs were refused twice with `422` — the schema's validation status, not the documented plan refusal. Two designs in the corrected form, human-only and no-preprints are **unverified live**. The owner confirmed the plan is Free on 2026-10-02.
 
 **When Consensus refuses a filtered search.** Unfiltered answers map exactly as in §7e. With any filter applied:
 
@@ -2128,7 +2139,7 @@ Nothing is retried, and **nothing is ever retried without the filters**: a silen
 
 **Log line.** It gains three bounded fields:
 `consensus-search outcome=… q_len=… filters=… upstream_status=… returned=… importable=… dropped=… year_outside=… preprints=… retry=0 duration_ms=…`
-- `filters` lists the Consensus parameter **names** applied (`year_min,year_max,study_types,human,exclude_preprints`), `none` for an unfiltered search and `na` before validation. It never carries a year, a design or any other value.
+- `filters` lists the Consensus parameter **names** applied, each once (`year_min,year_max,study_types,human,exclude_preprints` — a repeated `study_types` is named once), `none` for an unfiltered search and `na` before validation. It never carries a year, a design or any other value.
 - `year_outside` counts forwarded results whose `publish_year` falls outside the requested range, and `preprints` counts forwarded results Consensus flagged `is_preprint: true`. Each is `na` unless that filter was applied. They are diagnostics for the canary only: nothing is removed, hidden or re-ordered.
 - The query text, titles, DOIs, URLs, the key and the token are still never logged.
 
@@ -2138,73 +2149,80 @@ Nothing is retried, and **nothing is ever retried without the filters**: a silen
 
 ```text
 supabase/functions/search-consensus/handler.ts      # CHANGED: filters, refusal mapping, log fields
-supabase/functions/_shared/consensusSearch.ts       # CHANGED: contract, allowlist, URL mapping, diagnostics
+supabase/functions/_shared/consensusSearch.ts       # CHANGED: contract, allowlist, URL mapping (repeated study_types), diagnostics
 supabase/functions/search-consensus/index.ts        # unchanged
 supabase/functions/_shared/identifierDetection.ts   # unchanged
 supabase/functions/_shared/env.ts                   # unchanged
 ```
 
-No other function imports `consensusSearch.ts`, so no other function needs redeploying. No secret, migration, RLS, role or `verify_jwt` change is involved. `CONSENSUS_API_KEY` is already installed and needs no change.
+Against the live pre-merge v2 (`700319c8`), this head changes only `_shared/consensusSearch.ts`. No other function imports `consensusSearch.ts`, so no other function needs redeploying. No secret, migration, RLS, role or `verify_jwt` change is involved. `CONSENSUS_API_KEY` is already installed and needs no change.
 
 **Why the endpoint must be deployed before the frontend merges.**
 
 | Frontend | Endpoint | Unfiltered Search | Filtered Search |
 |---|---|---|---|
-| V1 (live) | v1 (live) | works | not offered |
-| V1 (live) | **filters** | works — the same request and URL as before | not offered |
-| **filters** | v1 (live) | works | **`400 invalid_request` — "The request contains an unsupported field."** (zero Consensus calls) |
-| **filters** | **filters** | works | works, if Consensus accepts the filters |
+| V1 (live) | v1 | works | not offered |
+| V1 (live) | v2, comma encoding (live since 2026-10-10) | works — the same request and URL as v1 | not offered |
+| V1 (live) | **corrected** (this head) | works — the same request and URL as v1 | not offered |
+| **filters** | v1 | works | **`400 invalid_request` — "The request contains an unsupported field."** (zero Consensus calls) |
+| **filters** | v2, comma encoding | works | one design: accepted (once); two designs: **422** (twice) |
+| **filters** | **corrected** | works | works, if Consensus accepts repeated `study_types` and the other filters |
 
-So the endpoint goes first; that order is safe for the live V1 UI. The merge goes last, and only after the canary has shown that Consensus accepts the filters.
+So the endpoint goes first; that order is safe for the live V1 UI. The merge goes last, and only after a canary has shown that Consensus accepts the corrected filters.
 
-**Rollout order — NOT executed; each step needs the authorization named.**
+**Rollout order.** Steps 1–8 ran on 2026-10-10 for the superseded head `700319c8`: v2 was deployed and verified (steps 4–6), the owner sent the canary and two follow-up searches (step 7 — three requests in all), and step 8 stopped the merge. **For the corrected head — NOT executed; each step needs the authorization named:**
 
 ```text
-1.  this implementation PR is complete (Draft, CI green on its exact head)
+1.  the corrected head is complete (Draft, CI green on its exact head)
 2.  independent review approves the exact PR head
-3.  explicit owner authorization for the Production Edge deployment
-4.  record the live v1 closure first (`functions download --use-api` into a scratch workdir), as the
-    rollback source; then deploy ONLY search-consensus, from a worktree byte-identical to the head:
+3.  explicit owner authorization for the Production Edge redeploy
+4.  record the live closure first (`functions download --use-api` into a scratch workdir), as the
+    rollback source — today that is v2 (`700319c8`); then deploy ONLY search-consensus, from a
+    worktree byte-identical to the head:
       supabase functions deploy search-consensus --project-ref <project-ref>
 5.  verify: a new version, ACTIVE, verify_jwt=false; the `--use-api` download is byte-identical to the
     head's five-file closure; the other six functions' tuples are unchanged
 6.  zero-cost smoke tests (no Consensus call) — see below
-7.  separately authorized: AT MOST ONE owner-authenticated filtered Consensus request — the canary below
-8.  if Consensus refused the filters, or the evidence leaves the entitlement unresolved: DO NOT merge
-    the filter UI; report the blocker and ask the owner to decide
-9.  if the canary succeeded and the evidence is sufficient: independently re-check the exact PR head
-10. merge exactly that head
-11. verify merged-main CI and the automatic Vercel Production deployment (§8)
-12. bounded owner UI acceptance if needed (§9.3d), without unnecessary extra searches
+7.  separately authorized: AT MOST ONE owner-authenticated filtered Consensus request — the two-design
+    canary below
+8.  if Consensus refused it: DO NOT merge the filter UI; stop without retry, report the blocker and ask
+    the owner to decide
+9.  whether human-only and no-preprints need their own authorized canaries before the merge is a
+    separate owner decision
+10. if the evidence is sufficient: independently re-check the exact PR head
+11. merge exactly that head
+12. verify merged-main CI and the automatic Vercel Production deployment (§8)
+13. bounded owner UI acceptance if needed (§9.3d), without unnecessary extra searches
 ```
 
 **Zero-cost smoke tests (step 6).** None of these reaches Consensus:
 - `OPTIONS` → 200; `GET` → 405; `POST` without `Authorization` → 401 (as §7e);
 - a valid **non-owner** token with a filtered body → `403 forbidden`;
-- the **owner's** token with `{"query":"x","yearMin":1800}` → `400 invalid_request` with "yearMin must be a whole year from 1900 to …". The live v1 answers that same body with "The request contains an unsupported field.", so **the message proves which validator is deployed**, at zero cost;
+- the **owner's** token with `{"query":"x","yearMin":1800}` → `400 invalid_request` with "yearMin must be a whole year from 1900 to …". v1 answers that same body with "The request contains an unsupported field.", so **the message tells a filters build from v1**, at zero cost. It cannot tell this head from v2, whose validator is identical: only step 5's byte comparison shows the corrected encoding is live;
 - the logs then hold bounded `outcome=forbidden` / `outcome=invalid_request` lines with `filters=na` and no query text.
 
 **The canary (step 7) — at most ONE filtered Consensus request.**
 - **Before it:** step 5 passed; the owner authorizes spending one call from the shared monthly allowance; nothing loops; and no automatic retry exists anywhere to repeat it.
-- **How:** the owner presses **Search once**. Preferred harness: the exact PR head's Vercel Preview, **if** a read-only check shows that Preview is built against the Production Supabase project (the endpoint lives only there). Otherwise, the owner's single direct `POST` to the deployed function with their own session.
-- **What it sends:** all four categories at once. Use the owner's question, or the example body above: years 2020–2026, `rct` and `meta-analysis`, human only, no preprints.
+- **How:** the owner presses **Search once**, in the exact PR head's Vercel Preview — read-only checks on 2026-10-10 found Previews built with the same Supabase settings as Production, where the endpoint lives — or makes one direct `POST` to the deployed function with their own session.
+- **What it sends — the two-design test first:** a publication-year range and `rct` + `meta-analysis`, with **Human studies only** and **Exclude preprints** unset. That isolates the encoding that failed. It says nothing about human-only or no-preprints.
 - **Evidence:** the function's single log line (Management API logs, bounded fields only) and the returned cards (years and Consensus's study-type labels).
 
 | Outcome | Meaning | Next |
 |---|---|---|
-| `outcome=ok upstream_status=200` | The **combined** filtered request was accepted on the owner's plan | Read the diagnostics below, then step 8/9 |
+| `outcome=ok upstream_status=200` | Consensus accepted repeated `study_types` for that combination on the owner's plan | Read the diagnostics below, then step 8/9 |
 | `year_outside=0` | No returned year contradicts the range | Consistent with the year filter |
-| `preprints=0` | No returned record is flagged a preprint | Consistent with `exclude_preprints` taking effect (a page may simply contain none) |
-| `year_outside>0` or `preprints>0` | That filter was **not** honoured as sent (for `preprints`: possibly the `excludePreprints` naming conflict above) | Do not merge; report |
+| `year_outside>0` | The year filter was **not** honoured as sent | Do not merge; report |
+| `preprints=0` (only when **Exclude preprints** is sent) | No returned record is flagged a preprint | Consistent with `exclude_preprints` taking effect (a page may simply contain none) |
+| `preprints>0` (only when **Exclude preprints** is sent) | That filter was **not** honoured as sent (possibly the `excludePreprints` naming conflict above) | Do not merge; report |
 | `outcome=filters_not_allowed` (403) | Refused, possibly by plan entitlement | Do not merge; report; owner decision (drop a category, change plan, or stop) |
-| `outcome=filters_rejected` (400/422) | A parameter or value was not accepted | Do not merge; identifying which one needs further authorized calls — an owner decision |
+| `outcome=filters_rejected` (400/422) | The corrected encoding was refused too — the provider contract stays unresolved | Stop without retry; do not merge; owner decision |
 | `quota_exhausted` / `rate_limited` / 5xx / timeout | Nothing learned about the filters | Stop; any repeat is a new authorization |
 
-**What one successful canary does NOT prove.** It shows that Consensus accepted the combined request on the owner's plan. It does not prove each filter's semantic accuracy. In particular, **human-only** has no observable field in PaperLume's forwarded shape, and Consensus's study-type labels on the cards come from its own classifier, which may use a different vocabulary from the filter. State the canary result at exactly that strength.
+**What one successful canary does NOT prove.** It shows that Consensus accepted that request on the owner's plan. It does not prove each filter's semantic accuracy, and a two-design canary says nothing about human-only or no-preprints, which it does not send. **Human-only** also has no observable field in PaperLume's forwarded shape, and Consensus's study-type labels on the cards come from its own classifier, which may use a different vocabulary from the filter. State the canary result at exactly that strength.
 
-**Rollback.** Remove the UI first (revert the merge), then the endpoint: redeploy the v1 closure — `712ed465`, which the 2026-10-03 and 2026-10-09 read-backs found byte-identical to the deployed v1, and which step 4 records again. The table above shows each half on its own is safe: a v1 frontend never sends a filter, and a filters frontend on a v1 endpoint fails a filtered Search with a zero-cost `400`. No database state is involved.
+**Rollback.** Remove the UI first (revert the merge), then the endpoint: redeploy the closure step 4 recorded — v2 (`700319c8`), which keeps the filter validator — or the v1 closure, `712ed465`, which the 2026-10-03 and 2026-10-09 read-backs found byte-identical to the deployed v1, to remove the filters entirely. The table above shows every endpoint is safe beside the V1 frontend, which never sends a filter. No database state is involved.
 
-*Not recorded here until it happens:* the migration-history entry for this extension, written when it is deployed, as §7e's was.
+*Not recorded here until the rollout completes:* the migration-history entry for this extension, including the 2026-10-10 pre-merge v2 deployment, written then, as §7e's was.
 
 ---
 
@@ -2461,7 +2479,7 @@ Run once after the §7e rollout, and after any later change to `search-consensus
 - [ ] Close and reopen Add Papers → Search starts on **PubMed** again.
 - [ ] The Function logs show one `consensus-search outcome=ok q_len=… retry=0 …` line per search with **no query text, title, DOI or URL**.
 
-Advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`) — **only once §7f's endpoint is deployed**; until then these boxes do not apply:
+Advanced filters (`CONSENSUS-ADVANCED-FILTERS-001A`) — **only once §7f's corrected endpoint is deployed**; until then these boxes do not apply:
 
 - [ ] Owner, Consensus source: **Advanced filters** is collapsed, and every filter is unset. Editing the years, the study designs, **Human studies only** or **Exclude preprints**, and pressing **Reset filters**, make **no** request (browser network panel).
 - [ ] *(Spends one call — authorize first. Run before the merge, this is §7f's canary.)* One filtered Search → one `search-consensus` request → **Applied filters: …** names exactly what was sent. The log line names the same parameters in `filters=…`, with `retry=0`.

@@ -172,10 +172,31 @@ describe("one filtered Search press, at most one Consensus call", () => {
       ["page_size", "20"],
       ["year_min", "2020"],
       ["year_max", "2026"],
-      ["study_types", "rct,meta-analysis"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
       ["human", "true"],
       ["exclude_preprints", "true"],
     ]);
+  });
+
+  it("every design the browser sends reaches Consensus as its own study_types parameter, in allowlist order", async () => {
+    mockGetSession.mockResolvedValue(session("fresh-token"));
+    const { upstreamCalls } = wireRealHandler({ validTokens: new Set(["fresh-token"]), role: "owner", upstream: ok });
+
+    await searchConsensus({ query: QUERY, studyTypes: ["cohort study", "rct", "systematic review", "meta-analysis"] });
+
+    expect(upstreamCalls).toHaveLength(1);
+    const url = new URL(upstreamCalls[0]);
+    expect(url.searchParams.getAll("study_types")).toEqual(["rct", "meta-analysis", "systematic review", "cohort study"]);
+    expect([...url.searchParams.keys()]).toEqual([
+      "query",
+      "page_size",
+      "study_types",
+      "study_types",
+      "study_types",
+      "study_types",
+    ]);
+    expect(upstreamCalls[0]).not.toMatch(/%2C/i);
   });
 
   it("an unfiltered search still reaches Consensus with exactly the V1 URL", async () => {
@@ -196,7 +217,7 @@ describe("one filtered Search press, at most one Consensus call", () => {
 
     expect(mockInvoke).toHaveBeenCalledTimes(2);
     expect(upstreamCalls).toHaveLength(1);
-    expect(new URL(upstreamCalls[0]).searchParams.get("study_types")).toBe("rct,meta-analysis");
+    expect(new URL(upstreamCalls[0]).searchParams.getAll("study_types")).toEqual(["rct", "meta-analysis"]);
   });
 
   it.each([

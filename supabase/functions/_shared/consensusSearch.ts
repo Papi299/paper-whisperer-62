@@ -429,25 +429,30 @@ export function validateConsensusSearchRequest(
  * The Consensus parameters a filter set sends, in URL order — the single
  * place PaperLume's filter names become Consensus's documented ones:
  *
- * | PaperLume          | Consensus           | Sent when                          |
- * |--------------------|---------------------|------------------------------------|
- * | `yearMin`          | `year_min`          | set                                |
- * | `yearMax`          | `year_max`          | set                                |
- * | `studyTypes`       | `study_types`       | non-empty; comma-separated values  |
- * | `human`            | `human`             | `true` (as the string `true`)      |
- * | `excludePreprints` | `exclude_preprints` | `true` (as the string `true`)      |
+ * | PaperLume          | Consensus           | Sent when                                |
+ * |--------------------|---------------------|------------------------------------------|
+ * | `yearMin`          | `year_min`          | set                                      |
+ * | `yearMax`          | `year_max`          | set                                      |
+ * | `studyTypes`       | `study_types`       | non-empty; one parameter per design      |
+ * | `human`            | `human`             | `true` (as the string `true`)            |
+ * | `excludePreprints` | `exclude_preprints` | `true` (as the string `true`)            |
  *
- * `study_types` is one comma-separated value, the form the official README's
- * examples send (`study_types=rct,meta-analysis`); its allowlisted values
- * contain no comma, so joining them is unambiguous.
+ * `study_types` repeats, once per design, in the order given — allowlist order
+ * for a validated request: `study_types=rct&study_types=meta-analysis`.
+ * Consensus's typed OpenAPI 3.1 schema declares `study_types` an array of enum
+ * values and sets no `style` or `explode`, so the specification's defaults
+ * apply: a query parameter is `form`, and a `form` array is exploded into one
+ * parameter per item. The official README's examples instead send one
+ * comma-separated value (`study_types=rct,meta-analysis`); that form drew HTTP
+ * 422 twice in the 2026-10-10 pre-merge canary, while one design alone was
+ * accepted. Repeated parameters are the schema-grounded form, not yet one
+ * Consensus has been seen to accept — see docs/deployment.md §7f.
  */
 function consensusFilterParams(filters: ConsensusSearchFilters): Array<[name: string, value: string]> {
   const params: Array<[string, string]> = [];
   if (filters.yearMin !== undefined) params.push(["year_min", String(filters.yearMin)]);
   if (filters.yearMax !== undefined) params.push(["year_max", String(filters.yearMax)]);
-  if (filters.studyTypes !== undefined && filters.studyTypes.length > 0) {
-    params.push(["study_types", filters.studyTypes.join(",")]);
-  }
+  for (const studyType of filters.studyTypes ?? []) params.push(["study_types", studyType]);
   if (filters.human === true) params.push(["human", "true"]);
   if (filters.excludePreprints === true) params.push(["exclude_preprints", "true"]);
   return params;
@@ -455,11 +460,12 @@ function consensusFilterParams(filters: ConsensusSearchFilters): Array<[name: st
 
 /**
  * The names — never the values — of the Consensus parameters a filter set
- * sends, in URL order. Empty for an unfiltered search. The log line records
- * these, and the handler uses them to tell a filtered search from a plain one.
+ * sends, each once, in URL order: a repeated `study_types` is named once. Empty
+ * for an unfiltered search. The log line records these, and the handler uses
+ * them to tell a filtered search from a plain one.
  */
 export function consensusFilterParamNames(filters: ConsensusSearchFilters): string[] {
-  return consensusFilterParams(filters).map(([name]) => name);
+  return [...new Set(consensusFilterParams(filters).map(([name]) => name))];
 }
 
 /**
@@ -481,8 +487,10 @@ export function buildConsensusSearchUrl(query: string, filters: ConsensusSearchF
   const url = new URL(CONSENSUS_SEARCH_ENDPOINT);
   url.searchParams.set("query", query);
   url.searchParams.set("page_size", String(CONSENSUS_SEARCH_PAGE_SIZE));
+  // `append`, never `set`: `study_types` repeats, and `set` would keep only
+  // the last design.
   for (const [name, value] of consensusFilterParams(filters)) {
-    url.searchParams.set(name, value);
+    url.searchParams.append(name, value);
   }
   return url.toString();
 }

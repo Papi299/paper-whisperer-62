@@ -2050,13 +2050,13 @@ Before any user other than the owner can send a query to Consensus — including
 
 *History:* the rollout, from the secret installation through the merge, made no Consensus request. Before it, the only Consensus request made for PaperLume was the single owner-authorized capability audit call of 2026-10-02, outside this feature.
 
-### 37.5 Prepared extension — owner-only search filters (2026-10-10, NOT deployed)
+### 37.5 Prepared extension — owner-only search filters (2026-10-10, NOT live)
 
-`CONSENSUS-ADVANCED-FILTERS-001A` is prepared in the repository and **not deployed** ([deployment.md](deployment.md) §7f). Until its rollout, §37.1 describes the live flow exactly. Once deployed, the flow changes only as follows:
+`CONSENSUS-ADVANCED-FILTERS-001A` is prepared in the repository: its UI is **not merged**, and its corrected endpoint is **not deployed** ([deployment.md](deployment.md) §7f). The live app sends only the question, as §37.1 describes. The one exception was the owner's own pre-merge check on 2026-10-10: with a pre-merge endpoint (v2) that also accepts the filters, the owner sent three filtered searches through the PR's Preview. Once the extension is live, the flow changes only as follows:
 
 | | |
 |---|---|
-| **Data sent, in addition** | The filters the owner set for that search, as URL parameters of the same `GET`: `year_min` / `year_max` (whole years), `study_types` (from `rct`, `meta-analysis`, `systematic review`, `cohort study`), `human=true` and `exclude_preprints=true`. An unset filter is not sent. Like the question, these parameters can appear in Consensus's request logs (§37.3). They are the owner's search settings and carry no account, library or user data. |
+| **Data sent, in addition** | The filters the owner set for that search, as URL parameters of the same `GET`: `year_min` / `year_max` (whole years), `study_types` (one parameter per design, from `rct`, `meta-analysis`, `systematic review`, `cohort study`), `human=true` and `exclude_preprints=true`. An unset filter is not sent. Like the question, these parameters can appear in Consensus's request logs (§37.3). They are the owner's search settings and carry no account, library or user data. |
 | **Recipient, trigger, client or server** | Unchanged: Consensus; the owner only; only on an explicit Search; server-side only. Editing a filter sends nothing. |
 | **Persistence** | Unchanged: none. Filter settings live in the open dialog's memory, are reset when it closes, and are never written to the database, browser storage, the URL or a PaperLume log. |
 | **Logging** | Adds the applied parameter **names** (`filters=…`) and two result counts (`year_outside`, `preprints`). It never adds a filter value, and the question is still never logged. |

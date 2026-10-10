@@ -713,7 +713,8 @@ describe("search-consensus — advanced filters reach Consensus exactly once", (
       ["page_size", "20"],
       ["year_min", "2020"],
       ["year_max", "2026"],
-      ["study_types", "rct,meta-analysis"],
+      ["study_types", "rct"],
+      ["study_types", "meta-analysis"],
       ["human", "true"],
       ["exclude_preprints", "true"],
     ]);
@@ -735,8 +736,29 @@ describe("search-consensus — advanced filters reach Consensus exactly once", (
     expect([...new URL(rawUrl).searchParams.entries()]).toEqual([
       ["query", QUERY],
       ["page_size", "20"],
-      ["study_types", "rct,cohort study"],
+      ["study_types", "rct"],
+      ["study_types", "cohort study"],
     ]);
+  });
+
+  it("sends every allowlisted design as its own study_types parameter, in allowlist order, in one request", async () => {
+    const harness = makeHarness({ responses: [happyResponse()] });
+    await handleSearchConsensusRequest(
+      post({ query: QUERY, studyTypes: ["cohort study", "systematic review", "meta-analysis", "rct"] }),
+      harness.deps,
+    );
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    const [rawUrl] = harness.fetchImpl.mock.calls[0] as [string];
+    expect(new URL(rawUrl).searchParams.getAll("study_types")).toEqual([
+      "rct",
+      "meta-analysis",
+      "systematic review",
+      "cohort study",
+    ]);
+    expect(rawUrl).toContain(
+      "&study_types=rct&study_types=meta-analysis&study_types=systematic+review&study_types=cohort+study",
+    );
+    expect(rawUrl).not.toMatch(/%2C/i);
   });
 
   it("keeps an unfiltered request's upstream URL exactly the V1 URL", async () => {
@@ -847,7 +869,7 @@ describe("search-consensus — Consensus refusing a filtered search", () => {
       // with the filters stripped.
       expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
       const [rawUrl] = harness.fetchImpl.mock.calls[0] as [string];
-      expect(new URL(rawUrl).searchParams.get("study_types")).toBe("rct,meta-analysis");
+      expect(new URL(rawUrl).searchParams.getAll("study_types")).toEqual(["rct", "meta-analysis"]);
       const text = JSON.stringify(body);
       for (const upstream of ["feature_not_allowed", "Upgrade your plan", "enumeration", "bad filter combination", "detail"]) {
         expect(text).not.toContain(upstream);
@@ -929,6 +951,27 @@ describe("search-consensus — logging a filtered search", () => {
     for (const value of ["2020", "2026", "meta-analysis", "rct", "=true"]) {
       expect(logged).not.toContain(value);
     }
+  });
+
+  it("names a repeated study_types once — four designs log `filters=study_types`, never a value", async () => {
+    const harness = makeHarness({ responses: [happyResponse()] });
+    await handleSearchConsensusRequest(
+      post({ query: QUERY, studyTypes: ["rct", "meta-analysis", "systematic review", "cohort study"] }),
+      harness.deps,
+    );
+    expect(harness.allLogLines()).toEqual([
+      `consensus-search outcome=ok q_len=${QUERY.length} filters=study_types upstream_status=200 returned=3 importable=2 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
+    ]);
+  });
+
+  it("logs a 422 on several designs once, with each parameter named once and no retry", async () => {
+    const harness = makeHarness({ responses: [jsonResponse({ detail: [] }, 422), happyResponse()] });
+    const response = await handleSearchConsensusRequest(post(FILTERED_BODY), harness.deps);
+    expect(response.status).toBe(422);
+    expect(harness.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(harness.warns).toEqual([
+      `consensus-search outcome=filters_rejected q_len=${QUERY.length} filters=${FILTERED_PARAMS} upstream_status=422 returned=0 importable=0 dropped=0 year_outside=na preprints=na retry=0 duration_ms=0`,
+    ]);
   });
 
   it("counts a diagnostic only for a filter the search applied", async () => {
