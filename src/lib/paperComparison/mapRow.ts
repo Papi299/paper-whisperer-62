@@ -78,8 +78,9 @@ function mapTaxonomy(
 /**
  * Map one response row to a `ComparisonRow` for `ownerUserId`.
  *
- * Each field reads exactly one stored column (links and attachment counts are
- * derived from one column each). The row's id is taken as given here —
+ * Each field reads exactly one stored column, except `links`, whose PubMed and
+ * DOI URLs derive from `pmid` and `doi` respectively; attachment counts derive
+ * from the nested attachment records. The row's id is taken as given here —
  * `buildComparisonResult` has already checked it against the request — but
  * its owner and every nested record's paper and owner are checked, and any
  * mismatch throws `ComparisonIntegrityError` so the row can never be shown.

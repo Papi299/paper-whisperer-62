@@ -22,7 +22,10 @@ export interface UsePaperComparisonResult {
   result: ComparisonResult | null;
   /** Set only in `error`. `integrity` failures are never retried automatically. */
   errorKind: "transport" | "integrity" | null;
-  /** Re-run the same frozen request (the error state's "Try again"). */
+  /**
+   * Re-run the same frozen request — the error state's "Try again". It does
+   * nothing in any other state, so a loaded comparison is never re-read.
+   */
   retry: () => void;
 }
 
@@ -41,16 +44,17 @@ function shouldRetry(failureCount: number, error: Error): boolean {
  * Read-only comparison of the papers in a frozen `ComparisonRequest`
  * (EVIDENCE-MATRIX-001A). There is no UI caller yet.
  *
- * - **One read per session.** A single `papers` SELECT with the projects, tags
- *   and attachment metadata embedded (`buildComparisonQuery`); no RPC, Edge
- *   Function, Storage call, provider call or write.
+ * - **One query per session.** A single `papers` SELECT with the projects,
+ *   tags and attachment metadata embedded (`buildComparisonQuery`), repeated
+ *   only by the one automatic retry of a transient failure or by `retry` after
+ *   an error; no RPC, Edge Function, Storage call, provider call or write.
  * - **Owner-bound.** Nothing is fetched or returned unless `currentUserId` is
  *   the request's owner, so a session switch can never surface another user's
  *   comparison — not even one still in the cache. The key carries the owner.
  * - **A stable snapshot.** `staleTime: "static"` exempts the query from every
  *   `invalidateQueries`/`refetchQueries` (even an unfiltered one), and window
- *   focus and reconnect never refetch it, so an open comparison never changes
- *   under the reader. Only `retry` re-reads it.
+ *   focus and reconnect never refetch it, so a loaded comparison never changes
+ *   under the reader.
  * - **Fresh on every open, gone on close.** Each request carries its own
  *   `sessionId`, so reopening is a new key and a new read; `gcTime: 0` drops a
  *   session's data as soon as nothing observes it. Unmounting while the read
@@ -88,9 +92,10 @@ export function usePaperComparison(
   );
 
   const { refetch } = query;
+  const canRetry = needsRead && query.isError && !query.isFetching;
   const retry = useCallback(() => {
-    if (needsRead) void refetch();
-  }, [needsRead, refetch]);
+    if (canRetry) void refetch();
+  }, [canRetry, refetch]);
 
   if (!ownerMatches) return { status: "idle", result: null, errorKind: null, retry };
   if (emptyResult) return { status: "ready", result: emptyResult, errorKind: null, retry };

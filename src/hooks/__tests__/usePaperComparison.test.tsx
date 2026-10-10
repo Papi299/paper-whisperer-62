@@ -443,6 +443,22 @@ describe("usePaperComparison — failures and retry", () => {
     expect(result.current.status).toBe("ready");
   });
 
+  it("retry() does nothing once the comparison has loaded, or while a read is in flight", async () => {
+    const queryClient = makeQueryClient();
+    const { result } = render(queryClient, makeRequest(OWNER_ID, IDS), OWNER_ID);
+    act(() => result.current.retry());
+    await flush();
+    expect(reads).toHaveLength(1);
+
+    reads[0].respond(ok(ownerRows()));
+    await flush();
+    const snapshot = result.current.result;
+    act(() => result.current.retry());
+    await flush(5000);
+    expect(reads).toHaveLength(1);
+    expect(result.current.result).toBe(snapshot);
+  });
+
   it("retry() does nothing for a request that is not the signed-in user's", async () => {
     const queryClient = makeQueryClient();
     const { result } = render(queryClient, makeRequest(OWNER_ID, IDS), OTHER_USER_ID);
