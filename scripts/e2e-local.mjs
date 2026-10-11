@@ -132,6 +132,15 @@ const DEFAULT_SPECS = [
   // and toggles in-memory filter/assignment selections. No import is ever run.
   "e2e/touch-tablet-ux.spec.ts",
   "e2e/bulk-actions.spec.ts",
+  // EVIDENCE-MATRIX-001B read-only comparison. Mutating only within fixtures it
+  // owns: it sweeps and then inserts five synthetic `CMP-E2E` papers through the
+  // app's own client in beforeAll, deletes one of them on purpose to show an
+  // unavailable paper, and removes every `CMP-E2E` paper through
+  // `delete_papers_with_attachment_cleanup` in afterAll — order-independent.
+  // Seeded papers are only selected (through year filters), never written. The
+  // comparison itself is one Data API SELECT under RLS; no Edge Function, AI
+  // provider, RPC or Storage call is made.
+  "e2e/paper-comparison.spec.ts",
   "e2e/eager-load.spec.ts",
   "e2e/filters.spec.ts",
   "e2e/paper-import.spec.ts",

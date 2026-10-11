@@ -5,14 +5,16 @@ import { BulkActionsToolbar } from "../BulkActionsToolbar";
 import type { Project, Tag } from "@/types/database";
 
 /**
- * BULK-TOOLBAR-CONTAINMENT-001 — the toolbar's behaviour contract.
+ * BULK-TOOLBAR-CONTAINMENT-001 — the toolbar's behaviour contract, extended by
+ * EVIDENCE-MATRIX-001B with the Compare action.
  *
  * The responsive layout itself is proven in a real browser by
  * `e2e/bulk-actions.spec.ts`: jsdom has no layout, so nothing here asserts
  * geometry or class names. This suite pins what must NOT have changed — every
  * action still reaches its existing handler exactly once, through the same
  * confirmations — plus the disclosure semantics and the focus hand-back the
- * containment work added.
+ * containment work added. Compare is the one new control: it sits outside the
+ * disclosed list, so the list's own inventory below is unchanged.
  */
 
 const PROJECT: Project = {
@@ -32,7 +34,7 @@ const TAG: Tag = {
   created_at: "2026-01-01T00:00:00Z",
 };
 
-/** The existing actions, in their existing order. */
+/** The existing actions, in their existing order — the disclosed list's whole inventory. */
 const ACTION_NAMES = [
   "AI Analyze (3)",
   "Delete",
@@ -43,9 +45,13 @@ const ACTION_NAMES = [
   "Clear Selection",
 ];
 
+/** Every control in the panel, in DOM (and therefore Tab) order: Compare, the disclosure, then the list. */
+const PANEL_CONTROL_NAMES = ["Compare", "More actions", ...ACTION_NAMES];
+
 function renderToolbar(overrides: Partial<Parameters<typeof BulkActionsToolbar>[0]> = {}) {
   const props = {
     selectedCount: 3,
+    onCompare: vi.fn(),
     onClearSelection: vi.fn(),
     onBulkDelete: vi.fn().mockResolvedValue(undefined),
     onBulkSetProjects: vi.fn().mockResolvedValue(undefined),
@@ -100,6 +106,16 @@ describe("BulkActionsToolbar — structure", () => {
       .getAllByRole("button")
       .map((button) => button.textContent?.trim());
     expect(names).toEqual(ACTION_NAMES.slice(1));
+  });
+
+  it("adds Compare once, before the disclosure and outside the controlled list", () => {
+    renderToolbar();
+    const names = within(toolbar())
+      .getAllByRole("button")
+      .map((button) => button.textContent?.trim());
+    expect(names).toEqual(PANEL_CONTROL_NAMES);
+    expect(screen.getAllByRole("button", { name: "Compare" })).toHaveLength(1);
+    expect(within(controlledList()).queryByRole("button", { name: "Compare" })).toBeNull();
   });
 
   it("keeps Delete inside the selected-count badge's parent div (the E2E cleanup contract)", () => {
@@ -228,14 +244,69 @@ describe("BulkActionsToolbar — every action keeps its existing handler", () =>
   });
 });
 
+describe("BulkActionsToolbar — Compare eligibility (EVIDENCE-MATRIX-001B)", () => {
+  function compare() {
+    return screen.getByRole("button", { name: "Compare" });
+  }
+
+  it.each([2, 3, 10])("offers Compare for %i selected papers and calls the handler once per press", (selectedCount) => {
+    const { props } = renderToolbar({ selectedCount });
+    expect(compare()).not.toHaveAttribute("aria-disabled");
+    expect(compare()).not.toHaveAttribute("aria-describedby");
+    expect(compare()).toBeEnabled();
+    fireEvent.click(compare());
+    expect(props.onCompare).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [1, "Select 2–10 papers to compare."],
+    [11, "Compare works with up to 10 papers. Narrow the selection to compare."],
+    [125, "Compare works with up to 10 papers. Narrow the selection to compare."],
+  ])("with %i selected, Compare stays reachable, says why it is unavailable, and does nothing", (selectedCount, reason) => {
+    const { props } = renderToolbar({ selectedCount });
+    const button = compare();
+    // Not the `disabled` attribute: that would drop it from the tab order.
+    expect(button).not.toHaveAttribute("disabled");
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveAccessibleDescription(reason);
+    // The reason is visible text in the toolbar, not a hover-only tooltip.
+    expect(within(toolbar()).getByText(reason)).toBeVisible();
+
+    act(() => button.focus());
+    expect(button).toHaveFocus();
+    fireEvent.click(button);
+    fireEvent.keyDown(button, { key: "Enter" });
+    expect(props.onCompare).not.toHaveBeenCalled();
+  });
+
+  it("shows no reason once the selection becomes comparable", () => {
+    const { rerender, props } = renderToolbar({ selectedCount: 1 });
+    expect(screen.getByText("Select 2–10 papers to compare.")).toBeInTheDocument();
+    rerender(<BulkActionsToolbar {...props} selectedCount={2} />);
+    expect(screen.queryByText("Select 2–10 papers to compare.")).toBeNull();
+    expect(compare()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("is not reachable at all without a selection", () => {
+    renderToolbar({ selectedCount: 0 });
+    expect(screen.queryByRole("button", { name: "Compare" })).toBeNull();
+  });
+});
+
 describe("BulkActionsToolbar — busy states", () => {
   it("shows bulk-analysis progress and disables every action while it runs", () => {
-    renderToolbar({ bulkAnalyzing: true, bulkAnalyzeProgress: { current: 2, total: 5 } });
+    const { props } = renderToolbar({ bulkAnalyzing: true, bulkAnalyzeProgress: { current: 2, total: 5 } });
     const list = controlledList();
     expect(within(list).getByRole("button", { name: "Analyzing 2 of 5..." })).toBeDisabled();
     for (const button of within(list).getAllByRole("button")) {
       expect(button, `${button.textContent} is disabled`).toBeDisabled();
     }
+    // Compare waits too, but stays reachable so its reason can be read.
+    const compare = screen.getByRole("button", { name: "Compare" });
+    expect(compare).toHaveAttribute("aria-disabled", "true");
+    expect(compare).toHaveAccessibleDescription("Compare is available when the current bulk action finishes.");
+    fireEvent.click(compare);
+    expect(props.onCompare).not.toHaveBeenCalled();
   });
 
   it("disables every action while a confirmed bulk delete is in flight", async () => {
@@ -283,6 +354,7 @@ function SelectionHarness() {
       </button>
       <BulkActionsToolbar
         selectedCount={count}
+        onCompare={() => {}}
         onClearSelection={() => setCount(0)}
         onBulkDelete={async () => {
           setRowPresent(false);
