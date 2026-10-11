@@ -86,6 +86,16 @@ const ACTIONS = [
   "Clear Selection",
 ];
 
+/**
+ * EVIDENCE-MATRIX-001B added one control, Compare, ahead of the existing
+ * actions and outside the phone list. The md+ row therefore reads Compare
+ * first; the phone list's own inventory (`ACTIONS`) is unchanged.
+ */
+const INLINE_CONTROLS = ["Compare", ...ACTIONS];
+
+/** Compare's stated reason while one paper is selected. */
+const COMPARE_NEEDS_TWO = "Select 2–10 papers to compare.";
+
 /** The RPCs every bulk write goes through. A cancelled dialog must reach none of them. */
 const BULK_WRITE_RPC =
   /\/rest\/v1\/rpc\/(delete_papers_with_attachment_cleanup|bulk_set_paper_projects|bulk_set_paper_tags)\b/;
@@ -390,6 +400,30 @@ async function expectPhoneToolbar(page: Page, where: string) {
   expectReachable(togglePlacement, `${where} collapsed`);
   expect(togglePlacement.width, `${where}: toggle target width`).toBeGreaterThanOrEqual(40);
   expect(togglePlacement.height, `${where}: toggle target height`).toBeGreaterThanOrEqual(40);
+
+  // Compare sits beside the toggle, reachable without expanding anything. With
+  // one paper selected it is unavailable, still focusable, and says why.
+  const compare = bulkToolbar(page).getByRole("button", { name: "Compare", exact: true });
+  await expect(compare).toHaveCount(1);
+  expect(
+    await compare.evaluate((el, id) => !!el.closest(`[id="${id}"]`), await disclosureToggle(page).getAttribute("aria-controls")),
+    `${where}: Compare is not inside the disclosed list`,
+  ).toBe(false);
+  const comparePlacement = await placement(compare);
+  expectReachable(comparePlacement, `${where} collapsed`);
+  expect(comparePlacement.width, `${where}: Compare target width`).toBeGreaterThanOrEqual(40);
+  expect(comparePlacement.height, `${where}: Compare target height`).toBeGreaterThanOrEqual(40);
+  await expect(compare).toHaveAttribute("aria-disabled", "true");
+  await expect(compare).toHaveAccessibleDescription(COMPARE_NEEDS_TWO);
+  expectFullyVisible(await placement(bulkToolbar(page).getByText(COMPARE_NEEDS_TWO)), `${where} collapsed`);
+  expect(
+    minimumSeparation(await buttonBoxes(bulkToolbar(page))),
+    `${where}: separation between Compare and the toggle`,
+  ).toBeGreaterThanOrEqual(6);
+  await compare.focus();
+  await page.keyboard.press("Tab");
+  await expect(toggle, `${where}: Tab goes from Compare to the toggle`).toBeFocused();
+
   await toggle.focus();
   await page.keyboard.press("Tab");
   expect(await focusIsInside(list), `${where}: Tab skips the collapsed actions`).toBe(false);
@@ -473,10 +507,12 @@ async function expectInlineToolbar(page: Page, where: string, { coarse }: { coar
   await expect(disclosureToggle(page)).toHaveCount(0);
   expect(
     await toolbar.getByRole("button").evaluateAll((buttons) => buttons.map((b) => (b.textContent ?? "").trim())),
-    `${where}: every action, once, in the existing order`,
-  ).toEqual(ACTIONS);
+    `${where}: Compare, then every existing action, once, in the existing order`,
+  ).toEqual(INLINE_CONTROLS);
+  await expect(toolbar.getByRole("button", { name: "Compare", exact: true })).toHaveAccessibleDescription(COMPARE_NEEDS_TWO);
+  expectFullyVisible(await placement(toolbar.getByText(COMPARE_NEEDS_TWO)), where);
 
-  for (const name of ACTIONS) {
+  for (const name of INLINE_CONTROLS) {
     const p = await placement(toolbar.getByRole("button", { name, exact: true }));
     expectReachable(p, where);
     if (coarse) {
@@ -529,18 +565,18 @@ async function expectInlineToolbar(page: Page, where: string, { coarse }: { coar
     expect(middle, `${where}: separator sits beside the action block`).toBeLessThanOrEqual(layout.block.bottom);
   }
 
-  // Keyboard: the hidden toggle is no stop, so Shift+Tab from the first action
+  // Keyboard: the hidden toggle is no stop, so Shift+Tab from the first control
   // leaves the toolbar; Tab from it walks the rest in order and then leaves.
-  await toolbar.getByRole("button", { name: ACTIONS[1], exact: true }).focus();
+  await toolbar.getByRole("button", { name: INLINE_CONTROLS[1], exact: true }).focus();
   await page.keyboard.press("Shift+Tab");
   const firstRing = await focusRing(page);
-  expect(firstRing.name, `${where}: Shift+Tab order`).toBe(ACTIONS[0]);
-  expect(firstRing.focusVisible && firstRing.drawn, `${where}: "${ACTIONS[0]}" shows a focus ring`).toBe(true);
-  expect(firstRing.clippedPx, `${where}: "${ACTIONS[0]}" focus ring is not clipped`).toBeLessThanOrEqual(0);
+  expect(firstRing.name, `${where}: Shift+Tab order`).toBe(INLINE_CONTROLS[0]);
+  expect(firstRing.focusVisible && firstRing.drawn, `${where}: "${INLINE_CONTROLS[0]}" shows a focus ring`).toBe(true);
+  expect(firstRing.clippedPx, `${where}: "${INLINE_CONTROLS[0]}" focus ring is not clipped`).toBeLessThanOrEqual(0);
   await page.keyboard.press("Shift+Tab");
-  expect(await focusIsInside(toolbar), `${where}: nothing tabbable precedes the first action`).toBe(false);
-  await toolbar.getByRole("button", { name: ACTIONS[0], exact: true }).focus();
-  await expectTabSequence(page, ACTIONS.slice(1), where);
+  expect(await focusIsInside(toolbar), `${where}: nothing tabbable precedes the first control`).toBe(false);
+  await toolbar.getByRole("button", { name: INLINE_CONTROLS[0], exact: true }).focus();
+  await expectTabSequence(page, INLINE_CONTROLS.slice(1), where);
   await page.keyboard.press("Tab");
   expect(await focusIsInside(toolbar), `${where}: Tab leaves after the last action`).toBe(false);
 

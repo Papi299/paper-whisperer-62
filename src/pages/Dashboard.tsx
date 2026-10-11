@@ -21,9 +21,11 @@ import { useAnalyticsData } from "@/hooks/useAnalyticsData";
 import { useAnalyticsTargets } from "@/hooks/useAnalyticsTargets";
 import { useAuthorIdentities } from "@/hooks/useAuthorIdentities";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
+import { usePaperComparisonSession } from "@/hooks/usePaperComparisonSession";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
 import { BulkActionsToolbar } from "@/components/papers/BulkActionsToolbar";
+import { PaperComparisonDialog } from "@/components/papers/PaperComparisonDialog";
 import { AddPaperDialog } from "@/components/papers/AddPaperDialog";
 import { searchPubMed } from "@/lib/searchPubMedEdge";
 import { searchConsensus } from "@/lib/searchConsensusEdge";
@@ -513,6 +515,19 @@ function DashboardContent() {
     bulkSetTags,
   });
 
+  /**
+   * EVIDENCE-MATRIX-001B — the open comparison, if any. It lives here, not in
+   * the bulk toolbar, because the toolbar unmounts the moment the selection
+   * empties and an open comparison must not go with it. Compare freezes the
+   * selection as it is at that moment; nothing is read until then, and the
+   * selection itself is never changed.
+   */
+  const comparison = usePaperComparisonSession(userId);
+  const { open: openComparison } = comparison;
+  const handleCompare = useCallback(() => {
+    openComparison(selectedPaperIds);
+  }, [openComparison, selectedPaperIds]);
+
   // Dialog state
   const [addPaperOpen, setAddPaperOpen] = useState(false);
   const [dedupOpen, setDedupOpen] = useState(false);
@@ -856,6 +871,7 @@ function DashboardContent() {
 
           <BulkActionsToolbar
             selectedCount={selectedPaperIds.size}
+            onCompare={handleCompare}
             onClearSelection={handleClearSelection}
             onBulkDelete={handleBulkDelete}
             onBulkSetProjects={handleBulkSetProjects}
@@ -920,6 +936,10 @@ function DashboardContent() {
         onOpenChange={(open) => !open && setEditingTag(null)}
         onSave={updateTag}
       />
+
+      {/* Read-only and ephemeral: no AI, no provider, no write, nothing kept
+          after it closes. See `PaperComparisonDialog`. */}
+      <PaperComparisonDialog request={comparison.request} currentUserId={userId} onClose={comparison.close} />
 
       {dedupMounted && userId && (
         <DeduplicationDialog

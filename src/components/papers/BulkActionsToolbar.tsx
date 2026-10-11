@@ -9,8 +9,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2, FolderOpen, Tags, X, Loader2, FolderMinus, TagsIcon, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
+import { Trash2, FolderOpen, Tags, X, Loader2, FolderMinus, TagsIcon, Sparkles, ChevronDown, ChevronUp, Columns3 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MAX_COMPARISON_PAPERS, MIN_COMPARISON_PAPERS } from "@/lib/paperComparison/constants";
 import { Project, Tag } from "@/types/database";
 
 /**
@@ -54,8 +55,30 @@ const ACTION_BUTTON = "h-10 w-full shrink-0 justify-start md:h-9 md:w-auto md:ju
  */
 const SELECTION_FALLBACK_FOCUS = '[role="checkbox"][aria-label="Select all"]';
 
+/**
+ * Why Compare is unavailable, or `null` when it is available. The reason is
+ * shown next to Compare and is its accessible description, so a keyboard or
+ * screen-reader user gets it on reaching the control, not only on hover. A
+ * selection outside 2–10 is refused, never truncated.
+ */
+function compareUnavailableReason(selectedCount: number, busy: boolean): string | null {
+  if (busy) return "Compare is available when the current bulk action finishes.";
+  if (selectedCount < MIN_COMPARISON_PAPERS) {
+    return `Select ${MIN_COMPARISON_PAPERS}–${MAX_COMPARISON_PAPERS} papers to compare.`;
+  }
+  if (selectedCount > MAX_COMPARISON_PAPERS) {
+    return `Compare works with up to ${MAX_COMPARISON_PAPERS} papers. Narrow the selection to compare.`;
+  }
+  return null;
+}
+
 interface BulkActionsToolbarProps {
   selectedCount: number;
+  /**
+   * Open the read-only comparison of the current selection. Called only while
+   * the selection is comparable (2–10 papers, no bulk action running).
+   */
+  onCompare: () => void;
   onClearSelection: () => void;
   onBulkDelete: () => Promise<void>;
   onBulkSetProjects: (projectIds: string[]) => Promise<void>;
@@ -69,6 +92,7 @@ interface BulkActionsToolbarProps {
 
 export function BulkActionsToolbar({
   selectedCount,
+  onCompare,
   onClearSelection,
   onBulkDelete,
   onBulkSetProjects,
@@ -91,6 +115,7 @@ export function BulkActionsToolbar({
   // up they are always shown, so this state only matters on a narrow screen.
   const [actionsExpanded, setActionsExpanded] = useState(false);
   const actionsId = useId();
+  const compareReasonId = useId();
   const toggleRef = useRef<HTMLButtonElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
   // The focus bookkeeping that lets the toolbar give focus back when it
@@ -229,20 +254,32 @@ export function BulkActionsToolbar({
 
   if (!isVisible) return null;
 
+  const compareReason = compareUnavailableReason(selectedCount, loading || bulkAnalyzing);
+
   return (
     <>
       {/*
         One panel and one set of controls at every width. Only the arrangement
         changes, so no action is ever rendered twice.
 
-        - From `md` up the panel is a centred flex row: badge | the six actions,
-          wrapping inside their own box | Clear Selection. Because the wrapping
-          happens inside a box, a separator can never end up alone at the start
-          or end of a line.
-        - Below `md` it is a two-row grid. The bottom row holds the count and
-          the "More actions" toggle. The expanded list opens above that row, so
-          the toggle stays under the thumb, and the list is the row that
-          scrolls when the height cap binds.
+        - From `md` up the panel is a centred flex row: badge | Compare | the
+          six actions, wrapping inside their own box | Clear Selection. Because
+          the wrapping happens inside a box, a separator can never end up alone
+          at the start or end of a line.
+        - Below `md` it is a grid whose first row is the expanded list, so the
+          list opens above the controls and the "More actions" toggle stays
+          under the thumb, and the list is the row that scrolls when the height
+          cap binds. Compare sits beside the toggle, outside the list, so it is
+          reachable without expanding anything.
+        - From 480px to `md` the count, Compare and the toggle share one row.
+          Below 480px they cannot: the count, Compare and "Fewer actions" need
+          about 380px, and a 320px screen leaves the panel 262px. So the count
+          takes its own row, with Compare and the toggle side by side under it.
+          Compare drops its icon below `md` for the same reason.
+        - When Compare is unavailable, its reason takes a full-width row just
+          above Compare (below `md`), or a line of its own under the row (from
+          `md` up). Either way the buttons never move when it comes and goes:
+          below `md` the panel is anchored at its bottom edge.
 
         The badge must stay a direct child of this div, with Delete inside it:
         the E2E cleanup helpers find Delete through the badge's parent.
@@ -250,22 +287,46 @@ export function BulkActionsToolbar({
       <div
         role="region"
         aria-label="Bulk actions"
-        className="fixed z-50 mx-auto grid grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)_auto] items-center gap-x-3 rounded-lg border bg-background/95 px-3 py-2 shadow-2xl backdrop-blur md:flex md:w-fit md:px-4 md:py-2.5"
+        className="fixed z-50 mx-auto grid grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-3 rounded-lg border bg-background/95 px-3 py-2 shadow-2xl backdrop-blur min-[480px]:grid-cols-[minmax(0,1fr)_auto_auto] min-[480px]:grid-rows-[minmax(0,1fr)_auto_auto] md:flex md:w-fit md:flex-wrap md:px-4 md:py-2.5"
         style={PANEL_BOUNDS}
         onFocus={handleToolbarFocus}
         onBlur={handleToolbarBlur}
       >
-        <Badge variant="secondary" className="row-start-2 shrink-0 justify-self-start whitespace-nowrap text-sm font-medium">
+        <Badge
+          variant="secondary"
+          className="col-span-2 row-start-2 shrink-0 justify-self-start whitespace-nowrap text-sm font-medium min-[480px]:col-span-1 min-[480px]:row-start-3"
+        >
           {selectedCount} selected
         </Badge>
 
         <div className="hidden h-5 w-px shrink-0 bg-border md:block" />
 
+        {/*
+          Unavailable is `aria-disabled`, not `disabled`: a disabled button
+          leaves the tab order (and the shared Button turns off its pointer
+          events), so nobody could reach it to learn why. Pressing it while
+          unavailable does nothing.
+        */}
+        <Button
+          variant="outline"
+          size="sm"
+          data-comparison-trigger=""
+          className="col-start-1 row-start-4 mt-2 h-10 w-full shrink-0 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-background aria-disabled:hover:text-foreground min-[480px]:col-start-2 min-[480px]:row-start-3 min-[480px]:mt-0 min-[480px]:w-auto md:h-9 coarse:min-h-10"
+          aria-disabled={compareReason !== null || undefined}
+          aria-describedby={compareReason !== null ? compareReasonId : undefined}
+          onClick={() => {
+            if (compareReason === null) onCompare();
+          }}
+        >
+          <Columns3 className="mr-1 hidden h-4 w-4 md:block" aria-hidden="true" />
+          Compare
+        </Button>
+
         <Button
           ref={toggleRef}
           variant="outline"
           size="sm"
-          className="row-start-2 h-10 justify-self-end md:hidden"
+          className="col-start-2 row-start-4 mt-2 h-10 justify-self-end min-[480px]:col-start-3 min-[480px]:row-start-3 min-[480px]:mt-0 md:hidden"
           aria-expanded={actionsExpanded}
           aria-controls={actionsId}
           onClick={toggleActions}
@@ -273,6 +334,15 @@ export function BulkActionsToolbar({
           {actionsExpanded ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronUp className="h-4 w-4 mr-1" />}
           {actionsExpanded ? "Fewer actions" : "More actions"}
         </Button>
+
+        {compareReason !== null && (
+          <p
+            id={compareReasonId}
+            className="col-span-2 row-start-3 mt-1.5 min-w-0 text-xs text-muted-foreground min-[480px]:col-span-3 min-[480px]:row-start-2 min-[480px]:mb-1.5 min-[480px]:mt-0 md:order-last md:mb-0 md:mt-1 md:basis-full"
+          >
+            {compareReason}
+          </p>
+        )}
 
         {/*
           Below `md` this div is the disclosed list: `display: none` while
@@ -288,7 +358,7 @@ export function BulkActionsToolbar({
           id={actionsId}
           className={cn(
             actionsExpanded ? "flex" : "hidden",
-            "col-span-2 row-start-1 -mx-1.5 -mt-1.5 mb-1 min-h-0 scroll-py-1.5 flex-col gap-2 self-stretch overflow-y-auto overscroll-contain p-1.5 md:contents",
+            "col-span-2 row-start-1 -mx-1.5 -mt-1.5 mb-1 min-h-0 scroll-py-1.5 flex-col gap-2 self-stretch overflow-y-auto overscroll-contain p-1.5 min-[480px]:col-span-3 md:contents",
           )}
         >
           <div className="flex shrink-0 flex-col gap-2 md:min-w-0 md:flex-1 md:flex-row md:flex-wrap md:items-center md:gap-x-3 md:gap-y-2">
