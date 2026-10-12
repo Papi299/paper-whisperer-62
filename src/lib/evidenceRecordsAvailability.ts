@@ -1,5 +1,5 @@
 /**
- * Recognising "the study-records schema is not installed here".
+ * Recognising "a study-records table is not installed here".
  *
  * EVIDENCE-RECORDS-001A1 adds eight tables in a migration that reaches
  * Production separately from the code that reads them. In between — and on any
@@ -9,17 +9,21 @@
  * user asking for all of their data during a rollout should get all of it.
  *
  * Deliberately narrow, exactly like `authorIdentityAvailability.ts`: only the
- * "this object does not exist" family, naming one of the objects below, counts.
- * Permission errors, RLS refusals, network failures and malformed requests are
- * real errors and must surface. The shared matching lives in
- * `missingDatabaseObject.ts`; what is specific to study records is this list.
- * The RPCs of later PRs will be added here when they exist.
+ * "this object does not exist" family counts. Permission errors, RLS refusals,
+ * network failures and malformed requests are real errors and must surface. The
+ * shared matching lives in `missingDatabaseObject.ts`; what is specific to study
+ * records is the table list below.
+ *
+ * One error is evidence about ONE table. Whether the schema as a whole is
+ * absent is decided by the caller from every table's read together — see
+ * `fetchEvidenceExportTables`. The RPCs of later PRs will be added here when
+ * they exist.
  */
 
 import { isMissingDatabaseObjectError } from "./missingDatabaseObject";
 
-/** Every EVIDENCE-RECORDS-001A1 object name, so a missing-object error elsewhere is not misread. */
-const EVIDENCE_RECORDS_OBJECT_NAMES = [
+/** The eight EVIDENCE-RECORDS-001A1 tables. One migration creates all of them, in one transaction. */
+export const EVIDENCE_RECORDS_TABLES = [
   "evidence_studies",
   "evidence_study_reports",
   "evidence_source_snapshots",
@@ -30,12 +34,14 @@ const EVIDENCE_RECORDS_OBJECT_NAMES = [
   "evidence_events",
 ] as const;
 
+export type EvidenceRecordsTable = (typeof EVIDENCE_RECORDS_TABLES)[number];
+
 /**
- * Whether this error means the study-records schema is absent from this
- * environment. Requires BOTH a missing-object code AND a mention of one of the
- * objects above, so a missing UNRELATED table is never reported as "study
- * records not installed".
+ * Whether this error, from a read of `table`, says that `table` itself is
+ * absent from this environment. Requires BOTH a missing-object code AND that
+ * table's own name, so neither a missing UNRELATED table nor a missing SIBLING
+ * study-records table is ever read as this one being absent.
  */
-export function isEvidenceRecordsSchemaMissing(error: unknown): boolean {
-  return isMissingDatabaseObjectError(error, EVIDENCE_RECORDS_OBJECT_NAMES);
+export function isEvidenceRecordsTableMissing(error: unknown, table: EvidenceRecordsTable): boolean {
+  return isMissingDatabaseObjectError(error, [table]);
 }

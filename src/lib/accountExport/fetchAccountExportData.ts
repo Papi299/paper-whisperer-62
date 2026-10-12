@@ -4,7 +4,11 @@ import { fetchAllPages, type RangeableQuery } from "@/lib/fetchAllPages";
 import { fetchAllPagesInChunks } from "@/lib/fetchAllPagesInChunks";
 import { isAuthorIdentitySchemaMissing } from "@/lib/authorIdentityAvailability";
 import { isAiModelPreferenceSchemaMissing } from "@/lib/aiModelPreferenceAvailability";
-import { isEvidenceRecordsSchemaMissing } from "@/lib/evidenceRecordsAvailability";
+import {
+  EVIDENCE_RECORDS_TABLES,
+  isEvidenceRecordsTableMissing,
+  type EvidenceRecordsTable,
+} from "@/lib/evidenceRecordsAvailability";
 import { attachmentArchivePath, isSafeArchivePath } from "./sanitizeArchiveFilename";
 import {
   AccountExportError,
@@ -252,14 +256,50 @@ async function fetchAuthorIdentityExportTables(
 }
 
 /**
+ * Judge the eight settled study-record reads together, from their results
+ * alone — no further request is made.
+ *
+ *  - "installed": every read answered.
+ *  - "absent": every read failed with a missing-object error naming ITS OWN
+ *    table. That is the real pre-migration state, and the only one exported as
+ *    eight empty categories.
+ *
+ * Every other combination throws, so the export fails rather than misstate what
+ * the user has:
+ *
+ *  - any other failure on any read — permission denied, an RLS refusal, a
+ *    network error, a timeout, a malformed query, a missing-object error naming
+ *    some other table — is re-thrown unchanged, the first in table order;
+ *  - some tables missing while others answered is a broken installation. The
+ *    tables that answered may hold the user's rows, so neither exporting them
+ *    without the rest nor discarding them as "not installed" would be truthful.
+ */
+function judgeEvidenceReads(
+  reads: Record<EvidenceRecordsTable, PromiseSettledResult<unknown>>,
+): "installed" | "absent" {
+  const missing: EvidenceRecordsTable[] = [];
+  for (const table of EVIDENCE_RECORDS_TABLES) {
+    const read = reads[table];
+    if (read.status === "fulfilled") continue;
+    if (!isEvidenceRecordsTableMissing(read.reason, table)) throw read.reason;
+    missing.push(table);
+  }
+  if (missing.length === 0) return "installed";
+  if (missing.length === EVIDENCE_RECORDS_TABLES.length) return "absent";
+  throw new Error(
+    `The study-records schema is partially installed: ${missing.join(", ")} missing while the other study-record tables answered.`,
+  );
+}
+
+/**
  * Read the study-record collections (EVIDENCE-RECORDS-001A1), tolerating
  * exactly one thing: this environment predating the migration that creates
- * them. Same all-or-none shape, and the same reasons, as
- * `fetchAuthorIdentityExportTables`: the migration creates all eight tables in
- * one transaction, so `evidence_studies` is the probe. If IT reports "no such
- * table", all eight categories are exported empty; if it answers, every other
- * read must succeed on its own terms, and anything else — permission denied, an
- * RLS refusal, a network failure, a missing UNRELATED table — fails the export.
+ * them. The migration creates all eight tables in one transaction, so a real
+ * environment has all eight or none, and NO single read decides which: the
+ * eight settled reads are judged together by `judgeEvidenceReads`. Only when
+ * every one of them reports its own table missing are the eight categories
+ * exported empty. Anything else — a table that answered while another is
+ * missing, or any other failure on any read — fails the export.
  *
  * Each table is read in an order that is deterministic and meaningful: history
  * in (study, version, ordinal) order, copies in sequence order, groups and
@@ -318,15 +358,20 @@ async function fetchEvidenceExportTables(userId: string): Promise<EvidenceExport
       ),
     ]);
 
-  if (studies.status === "rejected") {
-    if (isEvidenceRecordsSchemaMissing(studies.reason)) {
-      return EMPTY_EVIDENCE_EXPORT;
-    }
-    throw studies.reason;
-  }
+  const installation = judgeEvidenceReads({
+    evidence_studies: studies,
+    evidence_study_reports: reports,
+    evidence_source_snapshots: snapshots,
+    evidence_arms: arms,
+    evidence_outcomes: outcomes,
+    evidence_field_values: values,
+    evidence_field_anchors: anchors,
+    evidence_events: events,
+  });
+  if (installation === "absent") return EMPTY_EVIDENCE_EXPORT;
 
   return {
-    studies: studies.value,
+    studies: requireFulfilled(studies),
     reports: requireFulfilled(reports),
     snapshots: requireFulfilled(snapshots),
     arms: requireFulfilled(arms),
@@ -538,8 +583,8 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
       // state of a correctly deployed environment. See
       // `fetchAuthorIdentityExportTables`.
       fetchAuthorIdentityExportTables(userId),
-      // EVIDENCE-RECORDS-001A1: the same all-or-none gate for the eight
-      // study-record tables. See `fetchEvidenceExportTables`.
+      // EVIDENCE-RECORDS-001A1: an all-or-none gate for the eight study-record
+      // tables, judged from all eight reads. See `fetchEvidenceExportTables`.
       fetchEvidenceExportTables(userId),
       // Same shape of gate, its own narrow classifier: the preference table is
       // the other object whose absence is an expected state of a correctly

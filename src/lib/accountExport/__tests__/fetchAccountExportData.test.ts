@@ -8,6 +8,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 }));
 
 import { fetchAccountExportData, isOwnedStoragePath } from "../fetchAccountExportData";
+import { EVIDENCE_RECORDS_TABLES } from "@/lib/evidenceRecordsAvailability";
 import {
   ACCOUNT_EXPORT_COLLECTIONS,
   ACCOUNT_EXPORT_EXCLUDED_TABLES,
@@ -1263,5 +1264,240 @@ describe("fetchAccountExportData — EVIDENCE-RECORDS-001A1 study records", () =
     install(createSupabaseMock({ tables: { ...baseTables(), ...evidenceTables(), ...overrides } }));
 
     await expect(fetchAccountExportData(USER)).rejects.toBeInstanceOf(AccountExportError);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * EVIDENCE-RECORDS-001A1 review fix — the rollout gate judges all eight reads
+ *
+ * The gate used to treat `evidence_studies` as a probe: if that one read said
+ * "no such table", all eight categories were exported empty and the other seven
+ * results were never looked at. Against a partially installed schema, an export
+ * could therefore discard rows it had read successfully, or hide a permission
+ * or network failure, and still be presented as complete.
+ *
+ * The schema now counts as absent only when every one of the eight reads says
+ * its OWN table is missing. Every other mixture refuses the export.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** Every study-records table except `evidence_studies`, the old probe. */
+const LATER_EVIDENCE_TABLES = EVIDENCE_TABLES.slice(1);
+
+/** The same "no such table", as Postgres itself raises it (older PostgREST, direct SQL). */
+function missingRelation(table: string): Error {
+  return Object.assign(new Error(`relation "public.${table}" does not exist`), {
+    code: "42P01",
+    details: null,
+    hint: null,
+  });
+}
+
+/** "No such table" from every study-records read except those named in `present`. */
+function evidenceMissingExcept(...present: string[]): Record<string, Error> {
+  return Object.fromEntries(
+    EVIDENCE_TABLES.filter((table) => !present.includes(table)).map((table) => [table, missingTable(table)]),
+  );
+}
+
+/** The export must be refused, with only the user-safe message on the surface. */
+async function expectRefusedExport(): Promise<AccountExportError> {
+  const error = await fetchAccountExportData(USER).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(AccountExportError);
+  const refusal = error as AccountExportError;
+  expect(refusal.stage).toBe("collecting");
+  expect(refusal.message).toBe("Could not read your account data.");
+  return refusal;
+}
+
+/** Read failures that never mean "this table is not installed", whatever the other reads say. */
+const GENUINE_EVIDENCE_READ_FAILURES: [string, (table: string) => Error][] = [
+  ["permission denied", (table) => Object.assign(new Error(`permission denied for table ${table}`), { code: "42501" })],
+  [
+    "an RLS refusal",
+    (table) => Object.assign(new Error(`new row violates row-level security policy for table "${table}"`), { code: "42501" }),
+  ],
+  ["an expired session", () => Object.assign(new Error("JWT expired"), { code: "PGRST301" })],
+  ["a network failure", () => new TypeError("Failed to fetch")],
+  ["a timeout", () => Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" })],
+  ["a malformed query", (table) => Object.assign(new Error(`column ${table}.nope does not exist`), { code: "42703" })],
+  ["a generic server error", () => Object.assign(new Error("Internal Server Error"), { code: "500" })],
+  ["an unknown error with no code", () => new Error("something went wrong")],
+  ["a missing-object error naming an UNRELATED table", () => missingTable("papers")],
+  [
+    "a missing-object error naming a SIBLING table instead of its own",
+    (table) => missingTable(table === "evidence_events" ? "evidence_studies" : "evidence_events"),
+  ],
+];
+
+describe("fetchAccountExportData — EVIDENCE-RECORDS-001A1 gate: every table answers for itself", () => {
+  it("judges exactly the eight study-record collections the archive exports", () => {
+    const exported = ACCOUNT_EXPORT_COLLECTIONS.filter((key) => key.startsWith("evidence_"));
+    expect([...EVIDENCE_RECORDS_TABLES].sort()).toEqual([...exported].sort());
+    expect([...EVIDENCE_RECORDS_TABLES].sort()).toEqual([...EVIDENCE_TABLES].sort());
+  });
+
+  it.each([
+    ["PostgREST's PGRST205", missingTable],
+    ["Postgres's 42P01", missingRelation],
+  ])("exports eight empty categories when all eight tables are absent (%s), one read per table", async (_label, missing) => {
+    const mock = install(
+      createSupabaseMock({
+        tables: baseTables(),
+        errors: Object.fromEntries(EVIDENCE_TABLES.map((table) => [table, missing(table)])),
+      }),
+    );
+
+    const data = await fetchAccountExportData(USER);
+
+    for (const table of EVIDENCE_TABLES) {
+      expect(data[table]).toEqual([]);
+      // Judged from the reads already made: no retry, no extra probe.
+      expect(mock.queriesFor(table)).toHaveLength(1);
+    }
+    expect(data.profile).not.toBeNull();
+    expect(data.papers).toHaveLength(2);
+    expect(data.paper_attachments).toHaveLength(1);
+  });
+
+  it("exports eight empty categories when all eight tables are installed and empty", async () => {
+    const empty = Object.fromEntries(EVIDENCE_TABLES.map((table) => [table, []]));
+    const mock = install(createSupabaseMock({ tables: { ...baseTables(), ...empty } }));
+
+    const data = await fetchAccountExportData(USER);
+
+    for (const table of EVIDENCE_TABLES) {
+      expect(data[table]).toEqual([]);
+      expect(mock.queriesFor(table)).toHaveLength(1);
+    }
+  });
+
+  it("exports every row of all eight tables when they are installed and populated", async () => {
+    install(createSupabaseMock({ tables: { ...baseTables(), ...evidenceTables() } }));
+
+    const data = await fetchAccountExportData(USER);
+
+    for (const table of EVIDENCE_TABLES) {
+      expect(data[table]).toEqual(evidenceTables()[table]);
+    }
+  });
+
+  it("pages through a study-record table past the 1000-row PostgREST boundary", async () => {
+    const history = Array.from({ length: 2500 }, (_, i) => ({
+      ...evidenceTables().evidence_events[1],
+      id: `ev-${i}`,
+      ordinal: i + 1,
+    }));
+    const mock = install(
+      createSupabaseMock({ tables: { ...baseTables(), ...evidenceTables(), evidence_events: history } }),
+    );
+
+    const data = await fetchAccountExportData(USER);
+
+    expect(data.evidence_events).toHaveLength(2500);
+    expect(mock.queriesFor("evidence_events")).toHaveLength(3);
+  });
+
+  it("refuses when only evidence_studies is missing and the other seven hold rows (the reviewed defect)", async () => {
+    // Before this fix the export succeeded here with all eight categories
+    // empty: seven tables' rows had been read, then thrown away.
+    install(
+      createSupabaseMock({
+        tables: { ...baseTables(), ...evidenceTables() },
+        errors: { evidence_studies: missingTable("evidence_studies") },
+      }),
+    );
+
+    const refusal = await expectRefusedExport();
+    expect((refusal.cause as Error).message).toBe(
+      "The study-records schema is partially installed: evidence_studies missing while the other study-record tables answered.",
+    );
+  });
+
+  it.each(LATER_EVIDENCE_TABLES)("refuses when evidence_studies is missing but %s answers with rows", async (table) => {
+    install(
+      createSupabaseMock({
+        tables: { ...baseTables(), ...evidenceTables() },
+        errors: evidenceMissingExcept(table),
+      }),
+    );
+
+    const refusal = await expectRefusedExport();
+    expect((refusal.cause as Error).message).toContain("partially installed");
+    expect((refusal.cause as Error).message).not.toContain(table);
+  });
+
+  it.each(LATER_EVIDENCE_TABLES)("refuses when evidence_studies is missing but %s answers, empty", async (table) => {
+    install(
+      createSupabaseMock({
+        tables: { ...baseTables(), [table]: [] },
+        errors: evidenceMissingExcept(table),
+      }),
+    );
+
+    const refusal = await expectRefusedExport();
+    expect((refusal.cause as Error).message).toContain("partially installed");
+  });
+
+  it.each(EVIDENCE_TABLES)("refuses when only %s is missing and the other seven answer", async (table) => {
+    install(
+      createSupabaseMock({
+        tables: { ...baseTables(), ...evidenceTables() },
+        errors: { [table]: missingTable(table) },
+      }),
+    );
+
+    const refusal = await expectRefusedExport();
+    expect((refusal.cause as Error).message).toBe(
+      `The study-records schema is partially installed: ${table} missing while the other study-record tables answered.`,
+    );
+  });
+
+  describe.each(GENUINE_EVIDENCE_READ_FAILURES)("never reads %s as an absent schema", (_label, failure) => {
+    it.each(EVIDENCE_TABLES)("refuses when %s fails this way and the other seven are missing", async (table) => {
+      // The case most tempting to misjudge: seven reads really do say "no such
+      // table". The eighth does not, so the schema must not be shown as absent.
+      const genuine = failure(table);
+      install(
+        createSupabaseMock({
+          tables: baseTables(),
+          errors: { ...evidenceMissingExcept(table), [table]: genuine },
+        }),
+      );
+
+      const refusal = await expectRefusedExport();
+      // Re-thrown unchanged, so the log keeps the real cause; never on the surface.
+      expect(refusal.cause).toBe(genuine);
+    });
+  });
+
+  it("re-throws the first genuine failure in table order when several reads fail", async () => {
+    const denied = Object.assign(new Error("permission denied for table evidence_arms"), { code: "42501" });
+    const offline = new TypeError("Failed to fetch");
+    install(
+      createSupabaseMock({
+        tables: { ...baseTables(), ...evidenceTables() },
+        errors: {
+          evidence_studies: missingTable("evidence_studies"),
+          evidence_arms: denied,
+          evidence_events: offline,
+        },
+      }),
+    );
+
+    const refusal = await expectRefusedExport();
+    expect(refusal.cause).toBe(denied);
+  });
+
+  it("relaxes no other check when the schema is genuinely absent", async () => {
+    const leaked = { ...baseTables().papers[0], id: "leaked", user_id: OTHER_USER };
+    install(
+      createSupabaseMock({
+        tables: baseTables({ papers: [...baseTables().papers, leaked] }),
+        leakTables: ["papers"],
+        errors: evidenceMissingExcept(),
+      }),
+    );
+
+    await expectRefusedExport();
   });
 });
