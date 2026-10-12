@@ -4,6 +4,7 @@ import { fetchAllPages, type RangeableQuery } from "@/lib/fetchAllPages";
 import { fetchAllPagesInChunks } from "@/lib/fetchAllPagesInChunks";
 import { isAuthorIdentitySchemaMissing } from "@/lib/authorIdentityAvailability";
 import { isAiModelPreferenceSchemaMissing } from "@/lib/aiModelPreferenceAvailability";
+import { isEvidenceRecordsSchemaMissing } from "@/lib/evidenceRecordsAvailability";
 import { attachmentArchivePath, isSafeArchivePath } from "./sanitizeArchiveFilename";
 import {
   AccountExportError,
@@ -11,6 +12,14 @@ import {
   AUTHOR_IDENTITY_EXPORT_COLUMNS,
   AUTHOR_IDENTITY_LINK_EXPORT_COLUMNS,
   AUTHOR_IDENTITY_MERGE_EXPORT_COLUMNS,
+  EVIDENCE_ARM_EXPORT_COLUMNS,
+  EVIDENCE_EVENT_EXPORT_COLUMNS,
+  EVIDENCE_FIELD_ANCHOR_EXPORT_COLUMNS,
+  EVIDENCE_FIELD_VALUE_EXPORT_COLUMNS,
+  EVIDENCE_OUTCOME_EXPORT_COLUMNS,
+  EVIDENCE_SOURCE_SNAPSHOT_EXPORT_COLUMNS,
+  EVIDENCE_STUDY_EXPORT_COLUMNS,
+  EVIDENCE_STUDY_REPORT_EXPORT_COLUMNS,
   PAPER_EXPORT_COLUMNS,
   SAFE_PROFILE_COLUMNS,
   USER_AI_PREFERENCE_EXPORT_COLUMNS,
@@ -20,6 +29,14 @@ import {
   type ExportedAuthorIdentityLink,
   type ExportedAuthorIdentityMerge,
   type ExportedAttachment,
+  type ExportedEvidenceArm,
+  type ExportedEvidenceEvent,
+  type ExportedEvidenceFieldAnchor,
+  type ExportedEvidenceFieldValue,
+  type ExportedEvidenceOutcome,
+  type ExportedEvidenceSourceSnapshot,
+  type ExportedEvidenceStudy,
+  type ExportedEvidenceStudyReport,
   type ExportedFilterPreset,
   type ExportedKeywordExclusion,
   type ExportedKeywordPool,
@@ -128,6 +145,30 @@ const EMPTY_AUTHOR_IDENTITY_EXPORT: AuthorIdentityExportTables = {
   merges: [],
 };
 
+/** The eight EVIDENCE-RECORDS-001A1 collections, read or stood in for as one unit. */
+interface EvidenceExportTables {
+  studies: ExportedEvidenceStudy[];
+  reports: ExportedEvidenceStudyReport[];
+  snapshots: ExportedEvidenceSourceSnapshot[];
+  arms: ExportedEvidenceArm[];
+  outcomes: ExportedEvidenceOutcome[];
+  values: ExportedEvidenceFieldValue[];
+  anchors: ExportedEvidenceFieldAnchor[];
+  events: ExportedEvidenceEvent[];
+}
+
+/** The pre-migration stand-in. Eight present-but-empty categories, never absent ones. */
+const EMPTY_EVIDENCE_EXPORT: EvidenceExportTables = {
+  studies: [],
+  reports: [],
+  snapshots: [],
+  arms: [],
+  outcomes: [],
+  values: [],
+  anchors: [],
+  events: [],
+};
+
 /** Unwrap a settled read, re-throwing the original failure unchanged. */
 function requireFulfilled<T>(settled: PromiseSettledResult<T>): T {
   if (settled.status === "rejected") throw settled.reason;
@@ -208,6 +249,166 @@ async function fetchAuthorIdentityExportTables(
     links: requireFulfilled(links),
     merges: requireFulfilled(merges),
   };
+}
+
+/**
+ * Read the study-record collections (EVIDENCE-RECORDS-001A1), tolerating
+ * exactly one thing: this environment predating the migration that creates
+ * them. Same all-or-none shape, and the same reasons, as
+ * `fetchAuthorIdentityExportTables`: the migration creates all eight tables in
+ * one transaction, so `evidence_studies` is the probe. If IT reports "no such
+ * table", all eight categories are exported empty; if it answers, every other
+ * read must succeed on its own terms, and anything else — permission denied, an
+ * RLS refusal, a network failure, a missing UNRELATED table — fails the export.
+ *
+ * Each table is read in an order that is deterministic and meaningful: history
+ * in (study, version, ordinal) order, copies in sequence order, groups and
+ * outcomes by position.
+ */
+async function fetchEvidenceExportTables(userId: string): Promise<EvidenceExportTables> {
+  const [studies, reports, snapshots, arms, outcomes, values, anchors, events] =
+    await Promise.allSettled([
+      fetchOwnedTable<ExportedEvidenceStudy>(
+        "evidence_studies",
+        EVIDENCE_STUDY_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["created_at", "id"],
+      ),
+      fetchOwnedTable<ExportedEvidenceStudyReport>(
+        "evidence_study_reports",
+        EVIDENCE_STUDY_REPORT_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["study_id", "created_at", "id"],
+      ),
+      fetchOwnedTable<ExportedEvidenceSourceSnapshot>(
+        "evidence_source_snapshots",
+        EVIDENCE_SOURCE_SNAPSHOT_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["study_id", "paper_id", "seq"],
+      ),
+      fetchOwnedTable<ExportedEvidenceArm>(
+        "evidence_arms",
+        EVIDENCE_ARM_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["study_id", "position", "id"],
+      ),
+      fetchOwnedTable<ExportedEvidenceOutcome>(
+        "evidence_outcomes",
+        EVIDENCE_OUTCOME_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["study_id", "position", "id"],
+      ),
+      fetchOwnedTable<ExportedEvidenceFieldValue>(
+        "evidence_field_values",
+        EVIDENCE_FIELD_VALUE_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["study_id", "created_at", "id"],
+      ),
+      fetchOwnedTable<ExportedEvidenceFieldAnchor>(
+        "evidence_field_anchors",
+        EVIDENCE_FIELD_ANCHOR_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["study_id", "value_id", "created_at", "id"],
+      ),
+      fetchOwnedTable<ExportedEvidenceEvent>(
+        "evidence_events",
+        EVIDENCE_EVENT_EXPORT_COLUMNS.join(", "),
+        userId,
+        ["study_id", "study_version", "ordinal"],
+      ),
+    ]);
+
+  if (studies.status === "rejected") {
+    if (isEvidenceRecordsSchemaMissing(studies.reason)) {
+      return EMPTY_EVIDENCE_EXPORT;
+    }
+    throw studies.reason;
+  }
+
+  return {
+    studies: studies.value,
+    reports: requireFulfilled(reports),
+    snapshots: requireFulfilled(snapshots),
+    arms: requireFulfilled(arms),
+    outcomes: requireFulfilled(outcomes),
+    values: requireFulfilled(values),
+    anchors: requireFulfilled(anchors),
+    events: requireFulfilled(events),
+  };
+}
+
+/**
+ * Every edge of the study-record graph must land inside this account's own
+ * objects. The database already guarantees it with composite (user_id, …)
+ * foreign keys — a link names an owned paper, a copy names a link of its own
+ * study, a value names a group or outcome of its own study, a reference names a
+ * value, a report and (for an abstract) a copy of its own study — so a
+ * violation here means a row reached the client that the schema says cannot
+ * exist. Same fail-closed treatment as the junction and identity checks.
+ */
+function assertEvidenceGraph(evidence: EvidenceExportTables, ownedPaperIds: Set<string>): void {
+  const key = (...parts: (string | null)[]) => parts.join("|");
+  const studyIds = new Set(evidence.studies.map((study) => study.id));
+  const links = new Set<string>();
+  for (const row of evidence.reports) {
+    if (!studyIds.has(row.study_id)) {
+      throw integrityFailure("evidence_study_reports referenced a study outside the account");
+    }
+    if (!ownedPaperIds.has(row.paper_id)) {
+      throw integrityFailure("evidence_study_reports referenced a paper outside the account");
+    }
+    links.add(key(row.study_id, row.paper_id));
+  }
+  const copies = new Set<string>();
+  for (const row of evidence.snapshots) {
+    if (!links.has(key(row.study_id, row.paper_id))) {
+      throw integrityFailure("evidence_source_snapshots referenced a link outside the account");
+    }
+    copies.add(key(row.study_id, row.paper_id, row.id));
+  }
+  const arms = new Set<string>();
+  for (const row of evidence.arms) {
+    if (!studyIds.has(row.study_id)) {
+      throw integrityFailure("evidence_arms referenced a study outside the account");
+    }
+    arms.add(key(row.study_id, row.id));
+  }
+  const outcomes = new Set<string>();
+  for (const row of evidence.outcomes) {
+    if (!studyIds.has(row.study_id)) {
+      throw integrityFailure("evidence_outcomes referenced a study outside the account");
+    }
+    outcomes.add(key(row.study_id, row.id));
+  }
+  const values = new Set<string>();
+  for (const row of evidence.values) {
+    if (!studyIds.has(row.study_id)) {
+      throw integrityFailure("evidence_field_values referenced a study outside the account");
+    }
+    if (row.arm_id !== null && !arms.has(key(row.study_id, row.arm_id))) {
+      throw integrityFailure("evidence_field_values referenced a group outside its study");
+    }
+    if (row.outcome_id !== null && !outcomes.has(key(row.study_id, row.outcome_id))) {
+      throw integrityFailure("evidence_field_values referenced an outcome outside its study");
+    }
+    values.add(key(row.study_id, row.id));
+  }
+  for (const row of evidence.anchors) {
+    if (!values.has(key(row.study_id, row.value_id))) {
+      throw integrityFailure("evidence_field_anchors referenced a value outside its study");
+    }
+    if (!links.has(key(row.study_id, row.paper_id))) {
+      throw integrityFailure("evidence_field_anchors referenced a report not linked to its study");
+    }
+    if (row.snapshot_id !== null && !copies.has(key(row.study_id, row.paper_id, row.snapshot_id))) {
+      throw integrityFailure("evidence_field_anchors referenced a copy outside its link");
+    }
+  }
+  for (const row of evidence.events) {
+    if (!studyIds.has(row.study_id)) {
+      throw integrityFailure("evidence_events referenced a study outside the account");
+    }
+  }
 }
 
 /**
@@ -299,6 +500,7 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
   let authorIdentityAliases: ExportedAuthorIdentityAlias[];
   let authorIdentityLinks: ExportedAuthorIdentityLink[];
   let authorIdentityMerges: ExportedAuthorIdentityMerge[];
+  let evidence: EvidenceExportTables;
   let userAiPreference: ExportedUserAiPreference | null;
 
   try {
@@ -313,7 +515,7 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     if (profileResult.error) throw profileResult.error;
     profile = (profileResult.data as SafeExportProfile | null) ?? null;
 
-    const [coreTables, identityTables, aiPreference] = await Promise.all([
+    const [coreTables, identityTables, evidenceTables, aiPreference] = await Promise.all([
       Promise.all([
         fetchOwnedTable<ExportedPaper>("papers", PAPERS_SELECT, userId, ["insert_order", "id"]),
         fetchOwnedTable<ExportedProject>("projects", ALL_COLUMNS, userId, ["created_at", "id"]),
@@ -336,6 +538,9 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
       // state of a correctly deployed environment. See
       // `fetchAuthorIdentityExportTables`.
       fetchAuthorIdentityExportTables(userId),
+      // EVIDENCE-RECORDS-001A1: the same all-or-none gate for the eight
+      // study-record tables. See `fetchEvidenceExportTables`.
+      fetchEvidenceExportTables(userId),
       // Same shape of gate, its own narrow classifier: the preference table is
       // the other object whose absence is an expected state of a correctly
       // deployed environment during rollout. See `fetchUserAiPreference`.
@@ -359,6 +564,7 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     authorIdentityAliases = identityTables.aliases;
     authorIdentityLinks = identityTables.links;
     authorIdentityMerges = identityTables.merges;
+    evidence = evidenceTables;
     userAiPreference = aiPreference;
   } catch (error) {
     if (error instanceof AccountExportError) throw error;
@@ -385,6 +591,14 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
   assertOwnedRows(authorIdentityAliases, userId, "author_identity_aliases");
   assertOwnedRows(authorIdentityLinks, userId, "author_identity_links");
   assertOwnedRows(authorIdentityMerges, userId, "author_identity_merges");
+  assertOwnedRows(evidence.studies, userId, "evidence_studies");
+  assertOwnedRows(evidence.reports, userId, "evidence_study_reports");
+  assertOwnedRows(evidence.snapshots, userId, "evidence_source_snapshots");
+  assertOwnedRows(evidence.arms, userId, "evidence_arms");
+  assertOwnedRows(evidence.outcomes, userId, "evidence_outcomes");
+  assertOwnedRows(evidence.values, userId, "evidence_field_values");
+  assertOwnedRows(evidence.anchors, userId, "evidence_field_anchors");
+  assertOwnedRows(evidence.events, userId, "evidence_events");
 
   if (profile && profile.user_id !== userId) {
     throw integrityFailure("profiles returned a row belonging to another user");
@@ -470,6 +684,8 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     }
   }
 
+  assertEvidenceGraph(evidence, ownedPaperIds);
+
   const attachments: ExportedAttachment[] = attachmentRows.map((row) => {
     if (!ownedPaperIds.has(row.paper_id)) {
       throw integrityFailure("paper_attachments referenced a paper outside the account");
@@ -504,6 +720,14 @@ export async function fetchAccountExportData(userId: string): Promise<AccountExp
     author_identity_aliases: authorIdentityAliases,
     author_identity_links: authorIdentityLinks,
     author_identity_merges: authorIdentityMerges,
+    evidence_studies: evidence.studies,
+    evidence_study_reports: evidence.reports,
+    evidence_source_snapshots: evidence.snapshots,
+    evidence_arms: evidence.arms,
+    evidence_outcomes: evidence.outcomes,
+    evidence_field_values: evidence.values,
+    evidence_field_anchors: evidence.anchors,
+    evidence_events: evidence.events,
     user_ai_preferences: userAiPreference,
   };
 }

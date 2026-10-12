@@ -29,6 +29,13 @@
 --     if they ever hold real provider data. See docs/commercial-architecture.md;
 --   * blast radius — a second, untouched account keeps every one of its rows, so
 --     the cascade is scoped to the deleted user and to that user alone;
+--   * study records (EVIDENCE-RECORDS-001A1) — the doomed account holds a study
+--     record with all three ON DELETE NO ACTION edges populated (link -> paper,
+--     reference -> link, reference -> copy), and the single DELETE still
+--     succeeds and leaves no evidence row; it succeeds again with the RI trigger
+--     order reversed; a negative control proves an uncleared NO ACTION edge
+--     WOULD block the deletion; and two diagnostics pin why every evidence
+--     table must cascade from auth.users directly (Part 7);
 --   * Storage is NOT covered by the database — storage.objects has no cascading
 --     FK to auth.users, which is exactly why the delete-account Edge Function
 --     must remove attachment binaries through the Storage API *before* deleting
@@ -108,7 +115,171 @@ BEGIN
 END;
 $hlp$;
 
-SELECT plan(98);
+-- EVIDENCE-RECORDS-001A1 helpers ─────────────────────────────────────────────
+
+-- Run p_sql, then evaluate p_check, then undo both by raising a sentinel in the
+-- same subtransaction. '00000 <check>' on success, else '<SQLSTATE>[:<constraint>]'.
+CREATE FUNCTION pg_temp.probe(p_sql text, p_check text DEFAULT NULL)
+RETURNS text LANGUAGE plpgsql AS $hlp$
+DECLARE
+  v_state text;
+  v_con   text;
+  v_check text;
+BEGIN
+  BEGIN
+    EXECUTE p_sql;
+    IF p_check IS NOT NULL THEN
+      EXECUTE p_check INTO v_check;
+    END IF;
+    RAISE EXCEPTION 'evidence-008 probe undo' USING ERRCODE = 'P0E08';
+  EXCEPTION WHEN others THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_con = CONSTRAINT_NAME;
+  END;
+  IF v_state = 'P0E08' THEN
+    RETURN '00000' || CASE WHEN p_check IS NOT NULL THEN ' ' || coalesce(v_check, '<null>') ELSE '' END;
+  END IF;
+  RETURN v_state || CASE WHEN coalesce(v_con, '') <> '' THEN ':' || v_con ELSE '' END;
+END;
+$hlp$;
+
+-- Every evidence table's rows for one user, as one comparable string.
+CREATE FUNCTION pg_temp.evidence_rows(p_uid uuid) RETURNS text LANGUAGE sql STABLE AS $hlp$
+  SELECT format('studies=%s links=%s copies=%s arms=%s outcomes=%s values=%s refs=%s events=%s',
+    (SELECT count(*) FROM public.evidence_studies          WHERE user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_study_reports    WHERE user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_source_snapshots WHERE user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_arms             WHERE user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_outcomes         WHERE user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_field_values     WHERE user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_field_anchors    WHERE user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_events           WHERE user_id = p_uid))
+$hlp$;
+
+-- A complete study record for p_user on p_paper, written as the database owner
+-- because no client write path exists (the RPCs come in 001A2/001A3). It
+-- populates all three NO ACTION edges: the link -> paper, two references ->
+-- link (a quote and a full-text locator), and the quote -> copy.
+CREATE FUNCTION pg_temp.plant_evidence(p_user uuid, p_paper uuid) RETURNS void LANGUAGE plpgsql AS $hlp$
+DECLARE
+  v_study   uuid := md5(p_user::text || ':study')::uuid;
+  v_copy    uuid := md5(p_user::text || ':copy')::uuid;
+  v_arm     uuid := md5(p_user::text || ':arm')::uuid;
+  v_outcome uuid := md5(p_user::text || ':outcome')::uuid;
+  v_value   uuid := md5(p_user::text || ':value')::uuid;
+  v_text    text := 'Planted abstract for the account-deletion cascade.';
+BEGIN
+  INSERT INTO public.evidence_studies (id, user_id, label, design_profile)
+  VALUES (v_study, p_user, 'Planted study', 'rct_parallel');
+  INSERT INTO public.evidence_study_reports (user_id, study_id, paper_id, link_status, link_basis)
+  VALUES (p_user, v_study, p_paper, 'user_confirmed', 'created_from_paper');
+  INSERT INTO public.evidence_source_snapshots
+    (id, user_id, study_id, paper_id, seq, source_kind, exact_text, exact_sha256,
+     normalized_sha256, normalization_version, char_count)
+  VALUES (v_copy, p_user, v_study, p_paper, 1, 'library_abstract', v_text,
+          sha256(convert_to(v_text, 'UTF8')), sha256(convert_to(v_text, 'UTF8')), 'v1',
+          char_length(v_text));
+  INSERT INTO public.evidence_arms (id, user_id, study_id, arm_role, display_label, position)
+  VALUES (v_arm, p_user, v_study, 'intervention', 'Planted group', 0);
+  INSERT INTO public.evidence_outcomes (id, user_id, study_id, display_label, position)
+  VALUES (v_outcome, p_user, v_study, 'Planted outcome', 0);
+  INSERT INTO public.evidence_field_values (id, user_id, study_id, field_key, value_state, value_text)
+  VALUES (v_value, p_user, v_study, 'population_description', 'reported', 'Planted population');
+  INSERT INTO public.evidence_field_values (user_id, study_id, arm_id, field_key, value_state, value_text)
+  VALUES (p_user, v_study, v_arm, 'description', 'reported', 'Planted intervention');
+  INSERT INTO public.evidence_field_anchors
+    (user_id, study_id, value_id, paper_id, snapshot_id, purpose, source_kind, position,
+     quote_text, match_start, match_end, match_occurrence, match_count, normalization_version, matched_at)
+  VALUES (p_user, v_study, v_value, p_paper, v_copy, 'supports', 'abstract', 0,
+          'Planted abstract', 0, 16, 1, 1, 'v1', now());
+  INSERT INTO public.evidence_field_anchors
+    (user_id, study_id, value_id, paper_id, purpose, source_kind, position, locator_kind, locator_text)
+  VALUES (p_user, v_study, v_value, p_paper, 'supports', 'full_text', 1, 'page', '4');
+  INSERT INTO public.evidence_events
+    (user_id, study_id, study_version, ordinal, event_type, request_id, op, payload_sha256, result)
+  VALUES (p_user, v_study, 1, 0, 'request', md5(p_user::text || ':request')::uuid, 'create_study',
+          sha256('planted'::bytea), jsonb_build_object('status', 'applied', 'study_version', 1));
+  INSERT INTO public.evidence_events (user_id, study_id, study_version, ordinal, event_type, request_id, target_id)
+  VALUES (p_user, v_study, 1, 1, 'study_created', md5(p_user::text || ':request')::uuid, v_study);
+END;
+$hlp$;
+
+-- The three NO ACTION edges a user's evidence populates: link -> paper,
+-- reference -> link, reference -> copy.
+CREATE FUNCTION pg_temp.evidence_edges(p_uid uuid) RETURNS text LANGUAGE sql STABLE AS $hlp$
+  SELECT format('edges %s/%s/%s',
+    (SELECT count(*) FROM public.evidence_study_reports r
+       JOIN public.papers p ON p.user_id = r.user_id AND p.id = r.paper_id WHERE r.user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_field_anchors a
+       JOIN public.evidence_study_reports r
+         ON r.user_id = a.user_id AND r.study_id = a.study_id AND r.paper_id = a.paper_id WHERE a.user_id = p_uid),
+    (SELECT count(*) FROM public.evidence_field_anchors a
+       JOIN public.evidence_source_snapshots c
+         ON c.user_id = a.user_id AND c.study_id = a.study_id AND c.paper_id = a.paper_id AND c.id = a.snapshot_id
+      WHERE a.user_id = p_uid))
+$hlp$;
+
+-- The ON DELETE action trigger auth.users fires for the key from p_child.
+-- Triggers on one table fire in name order, and an internal RI trigger is named
+-- RI_ConstraintTrigger_a_<oid>, compared as text.
+CREATE FUNCTION pg_temp.delete_trigger_of(p_child regclass) RETURNS text LANGUAGE sql STABLE AS $hlp$
+  SELECT min(t.tgname::text COLLATE "C")
+    FROM pg_trigger t JOIN pg_constraint c ON c.oid = t.tgconstraint
+   WHERE t.tgrelid = 'auth.users'::regclass AND t.tgisinternal AND (t.tgtype & 8) <> 0
+     AND c.conrelid = p_child
+$hlp$;
+
+-- Where the papers cascade fires relative to ALL eight evidence cascades.
+CREATE FUNCTION pg_temp.papers_position() RETURNS text LANGUAGE sql STABLE AS $hlp$
+  WITH e AS (
+    SELECT min(pg_temp.delete_trigger_of(to_regclass('public.' || t)) COLLATE "C") AS lo,
+           max(pg_temp.delete_trigger_of(to_regclass('public.' || t)) COLLATE "C") AS hi
+      FROM unnest(ARRAY['evidence_studies', 'evidence_study_reports', 'evidence_source_snapshots',
+                        'evidence_arms', 'evidence_outcomes', 'evidence_field_values',
+                        'evidence_field_anchors', 'evidence_events']) AS t)
+  SELECT CASE
+           WHEN pg_temp.delete_trigger_of('public.papers') COLLATE "C" < e.lo THEN 'first'
+           WHEN pg_temp.delete_trigger_of('public.papers') COLLATE "C" > e.hi THEN 'last'
+           ELSE 'between'
+         END
+    FROM e
+$hlp$;
+
+-- Re-create papers -> auth.users with its exact definition, so its RI trigger
+-- gets a newer OID and therefore a later name: the reverse firing order.
+CREATE FUNCTION pg_temp.flip_papers_cascade_sql() RETURNS text LANGUAGE sql IMMUTABLE AS $hlp$
+  SELECT $q$
+    DO $flip$
+    DECLARE v_def text;
+    BEGIN
+      SELECT pg_get_constraintdef(k.oid) INTO STRICT v_def
+        FROM pg_constraint k
+       WHERE k.conrelid = 'public.papers'::regclass AND k.conname = 'papers_user_id_fkey';
+      ALTER TABLE public.papers DROP CONSTRAINT papers_user_id_fkey;
+      EXECUTE 'ALTER TABLE public.papers ADD CONSTRAINT papers_user_id_fkey ' || v_def;
+    END
+    $flip$;$q$
+$hlp$;
+
+-- A table cleared only in the SECOND generation of the account cascade: it
+-- cascades from a study, not from auth.users, and holds a NO ACTION key to
+-- papers. Created only inside a probe.
+CREATE FUNCTION pg_temp.gen2_table_sql() RETURNS text LANGUAGE sql IMMUTABLE AS $hlp$
+  SELECT $q$
+    CREATE SCHEMA evidence_008_diag;
+    CREATE TABLE evidence_008_diag.gen2_links (
+      user_id  uuid NOT NULL,
+      study_id uuid NOT NULL,
+      paper_id uuid NOT NULL,
+      CONSTRAINT evidence_008_gen2_study_fkey FOREIGN KEY (user_id, study_id)
+        REFERENCES public.evidence_studies (user_id, id) ON DELETE CASCADE,
+      CONSTRAINT evidence_008_gen2_paper_fkey FOREIGN KEY (user_id, paper_id)
+        REFERENCES public.papers (user_id, id) ON DELETE NO ACTION);
+    INSERT INTO evidence_008_diag.gen2_links
+    VALUES ('c4000000-0000-0000-0000-0000000000d3', md5('c4000000-0000-0000-0000-0000000000d3:study')::uuid,
+            'c4000000-0000-0000-0000-0000000000a3');$q$
+$hlp$;
+
+SELECT plan(114);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Part 1 — catalog contract
@@ -176,6 +347,29 @@ SELECT is(pg_temp.auth_fk_action('attachment_cleanup_tombstone', 'user_id'), 'ca
 -- deletion. Retaining it would be an owner/privacy decision, not a default.
 SELECT is(pg_temp.auth_fk_action('ai_provider_usage_events', 'user_id'), 'cascade',
   'ai_provider_usage_events.user_id cascades from auth.users');
+-- EVIDENCE-RECORDS-001A1. Study records are the user's own work, so they leave
+-- with the account — and each of the eight tables cascades from auth.users
+-- DIRECTLY. That is load-bearing, not tidy: three of their keys are ON DELETE
+-- NO ACTION, and PostgreSQL runs a NO ACTION check raised by a cascaded delete
+-- only after every first-generation cascade has finished. A table reached only
+-- through a second-generation cascade would pass or fail by RI trigger-name
+-- order (Part 7, G1/G2).
+SELECT is(pg_temp.auth_fk_action('evidence_studies', 'user_id'), 'cascade',
+  'evidence_studies.user_id cascades from auth.users');
+SELECT is(pg_temp.auth_fk_action('evidence_study_reports', 'user_id'), 'cascade',
+  'evidence_study_reports.user_id cascades from auth.users (directly, not only via its study)');
+SELECT is(pg_temp.auth_fk_action('evidence_source_snapshots', 'user_id'), 'cascade',
+  'evidence_source_snapshots.user_id cascades from auth.users (directly, not only via its link)');
+SELECT is(pg_temp.auth_fk_action('evidence_arms', 'user_id'), 'cascade',
+  'evidence_arms.user_id cascades from auth.users');
+SELECT is(pg_temp.auth_fk_action('evidence_outcomes', 'user_id'), 'cascade',
+  'evidence_outcomes.user_id cascades from auth.users');
+SELECT is(pg_temp.auth_fk_action('evidence_field_values', 'user_id'), 'cascade',
+  'evidence_field_values.user_id cascades from auth.users');
+SELECT is(pg_temp.auth_fk_action('evidence_field_anchors', 'user_id'), 'cascade',
+  'evidence_field_anchors.user_id cascades from auth.users (directly, not only via its value)');
+SELECT is(pg_temp.auth_fk_action('evidence_events', 'user_id'), 'cascade',
+  'evidence_events.user_id cascades from auth.users (history leaves with the account)');
 SELECT is(
   (SELECT count(*)::int FROM pg_constraint
     WHERE contype='f' AND conrelid='public.attachment_cleanup_queue'::regclass
@@ -366,6 +560,18 @@ SELECT '2026-10-01T12:00:00Z', u, 1, 'analyze', 'google', 'gemini-flash-latest',
   FROM unnest(ARRAY['c4000000-0000-0000-0000-0000000000d1',
                     'c4000000-0000-0000-0000-0000000000d2']::uuid[]) AS u;
 
+-- EVIDENCE-RECORDS-001A1. A study record on each user's paper, every NO ACTION
+-- edge populated. Planted as the owner: no client write path exists yet.
+SELECT pg_temp.plant_evidence('c4000000-0000-0000-0000-0000000000d1', 'c4000000-0000-0000-0000-0000000000a1');
+SELECT pg_temp.plant_evidence('c4000000-0000-0000-0000-0000000000d2', 'c4000000-0000-0000-0000-0000000000a2');
+
+-- A second doomed account for Part 7, deleted only inside probes (always undone).
+INSERT INTO auth.users (id, email) VALUES
+  ('c4000000-0000-0000-0000-0000000000d3', 'pfa-c04-doomed-2@paperlume.test');
+INSERT INTO public.papers (id, user_id, title, insert_order) VALUES
+  ('c4000000-0000-0000-0000-0000000000a3', 'c4000000-0000-0000-0000-0000000000d3', 'Second doomed paper', 3);
+SELECT pg_temp.plant_evidence('c4000000-0000-0000-0000-0000000000d3', 'c4000000-0000-0000-0000-0000000000a3');
+
 -- Retained provider/audit history for the doomed user.
 INSERT INTO public.subscriptions (id, user_id, provider, status) VALUES
   ('c4000000-0000-0000-0000-0000000000e1', 'c4000000-0000-0000-0000-0000000000d1',
@@ -408,6 +614,16 @@ SELECT is(
   (SELECT count(*)::int FROM public.paper_projects
     WHERE paper_id = 'c4000000-0000-0000-0000-0000000000a1'),
   1, 'pre-delete: doomed paper_projects link exists');
+
+SELECT is(
+  pg_temp.evidence_rows('c4000000-0000-0000-0000-0000000000d1') || ' '
+  || pg_temp.evidence_edges('c4000000-0000-0000-0000-0000000000d1'),
+  'studies=1 links=1 copies=1 arms=1 outcomes=1 values=2 refs=2 events=2 edges 1/2/1',
+  'pre-delete: doomed holds a study record with all three NO ACTION edges populated (link->paper, reference->link, quote->copy)');
+-- AD1 runs in the order the migrations left the triggers in: the papers
+-- cascade first. Part 7 reverses it.
+SELECT is(pg_temp.papers_position(), 'first',
+  'AD1 order: the papers cascade fires before every evidence cascade (the order the migrations create)');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Part 3 — the deletion, exactly as the Edge Function performs it
@@ -468,6 +684,10 @@ SELECT is(pg_temp.rows_for('attachment_cleanup_tombstone', 'c4000000-0000-0000-0
   'cascade: permanent cleanup tombstone removed');
 SELECT is(pg_temp.rows_for('ai_provider_usage_events', 'c4000000-0000-0000-0000-0000000000d1'), 0,
   'cascade: provider-usage telemetry removed (no pseudonymous trace survives)');
+
+SELECT is(pg_temp.evidence_rows('c4000000-0000-0000-0000-0000000000d1'),
+  'studies=0 links=0 copies=0 arms=0 outcomes=0 values=0 refs=0 events=0',
+  'AD1 cascade: every evidence row is gone, despite three populated NO ACTION edges — copies and history included');
 
 -- Junction rows own no user_id, so they are the easiest thing to leave behind.
 SELECT is(
@@ -563,6 +783,66 @@ SELECT is(
   (SELECT count(*)::int FROM public.paper_projects
     WHERE paper_id = 'c4000000-0000-0000-0000-0000000000a2'),
   1, 'blast radius: neighbour paper_projects link intact');
+
+SELECT is(pg_temp.evidence_rows('c4000000-0000-0000-0000-0000000000d2') || ' '
+          || pg_temp.evidence_edges('c4000000-0000-0000-0000-0000000000d2'),
+  'studies=1 links=1 copies=1 arms=1 outcomes=1 values=2 refs=2 events=2 edges 1/2/1',
+  'blast radius: neighbour study record intact, every edge still in place');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Part 7 — study records: the reverse trigger order, the negative control, and
+-- the generation diagnostics (EVIDENCE-RECORDS-001A1)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Every probe below is undone, so the second doomed account starts each one
+-- with its full record and its paper.
+
+-- AD2. Reverse the order: the papers cascade now fires AFTER every evidence
+-- cascade. The deletion must still succeed.
+SELECT is(
+  pg_temp.probe(
+    pg_temp.flip_papers_cascade_sql()
+      || $q$ DELETE FROM auth.users WHERE id = 'c4000000-0000-0000-0000-0000000000d3';$q$,
+    $c$SELECT pg_temp.papers_position() || ' ' || pg_temp.evidence_rows('c4000000-0000-0000-0000-0000000000d3')
+           || ' papers=' || (SELECT count(*) FROM public.papers WHERE user_id = 'c4000000-0000-0000-0000-0000000000d3')
+           || ' | ' || pg_temp.evidence_rows('c4000000-0000-0000-0000-0000000000d2')$c$),
+  '00000 last studies=0 links=0 copies=0 arms=0 outcomes=0 values=0 refs=0 events=0 papers=0 | '
+  || 'studies=1 links=1 copies=1 arms=1 outcomes=1 values=2 refs=2 events=2',
+  'AD2 with the papers cascade firing LAST, account deletion still succeeds and clears every evidence row; the neighbour is untouched');
+
+-- N1. Negative control: the same deletion with one NO ACTION edge to papers that
+-- nothing clears in the first generation MUST be refused. Proves this suite can
+-- see a blocked deletion, so the successes above are not vacuous.
+SELECT is(
+  pg_temp.probe($q$
+    CREATE SCHEMA evidence_008_diag;
+    CREATE TABLE evidence_008_diag.uncleared_links (
+      user_id  uuid NOT NULL,
+      paper_id uuid NOT NULL,
+      CONSTRAINT evidence_008_uncleared_paper_fkey FOREIGN KEY (user_id, paper_id)
+        REFERENCES public.papers (user_id, id) ON DELETE NO ACTION);
+    INSERT INTO evidence_008_diag.uncleared_links
+    VALUES ('c4000000-0000-0000-0000-0000000000d3', 'c4000000-0000-0000-0000-0000000000a3');
+    DELETE FROM auth.users WHERE id = 'c4000000-0000-0000-0000-0000000000d3';$q$),
+  '23503:evidence_008_uncleared_paper_fkey',
+  'N1 negative control: an uncleared NO ACTION edge to papers blocks account deletion');
+
+-- G1/G2. Why every evidence table cascades from auth.users DIRECTLY. A table
+-- cleared only in the second generation (it cascades from a study) carries a
+-- NO ACTION key to papers. Its outcome is decided by RI trigger-name order:
+-- with the papers cascade first, the papers check runs before the study
+-- cascade reaches the row and the deletion fails; with it last, it succeeds.
+-- If PostgreSQL ever changes when these checks fire, these fail and say so.
+SELECT is(
+  pg_temp.probe(pg_temp.gen2_table_sql()
+    || $q$ DELETE FROM auth.users WHERE id = 'c4000000-0000-0000-0000-0000000000d3';$q$),
+  CASE WHEN pg_temp.papers_position() = 'first' THEN '23503:evidence_008_gen2_paper_fkey' ELSE '00000' END,
+  'G1 diagnostic: in the migration order, a second-generation-only table blocks account deletion, exactly as trigger order predicts');
+SELECT is(
+  pg_temp.probe(pg_temp.flip_papers_cascade_sql() || pg_temp.gen2_table_sql()
+      || $q$ DELETE FROM auth.users WHERE id = 'c4000000-0000-0000-0000-0000000000d3';$q$,
+    $c$SELECT pg_temp.papers_position()$c$),
+  '00000 last',
+  'G2 diagnostic: in the reverse order the same table no longer blocks it — the result depends on order, which is why no evidence table relies on it');
 
 SELECT * FROM finish();
 ROLLBACK;

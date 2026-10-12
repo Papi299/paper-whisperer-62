@@ -14,6 +14,14 @@ import {
   type AuthorIdentityColumnsAreExported,
   type AuthorIdentityLinkColumnsAreExported,
   type AuthorIdentityMergeColumnsAreExported,
+  type EvidenceArmColumnsAreExported,
+  type EvidenceEventColumnsAreExported,
+  type EvidenceFieldAnchorColumnsAreExported,
+  type EvidenceFieldValueColumnsAreExported,
+  type EvidenceOutcomeColumnsAreExported,
+  type EvidenceSourceSnapshotColumnsAreExported,
+  type EvidenceStudyColumnsAreExported,
+  type EvidenceStudyReportColumnsAreExported,
   type PaperColumnsAreClassified,
   type ProfileColumnsAreClassified,
   type UserAiPreferenceColumnsAreExported,
@@ -112,6 +120,26 @@ describe("account export compile-time guards", () => {
     const guard: AuthorIdentityMergeColumnsAreExported = true;
     expect(guard).toBe(true);
   });
+
+  /*
+   * EVIDENCE-RECORDS-001A1. Study records are the user's own work and none of
+   * their columns is a secret, so every column of all eight tables travels —
+   * saved abstract copies and history included. A column added later fails
+   * typecheck here until it is classified.
+   */
+  it("exports every column of all eight study-record tables", () => {
+    const guards: [
+      EvidenceStudyColumnsAreExported,
+      EvidenceStudyReportColumnsAreExported,
+      EvidenceSourceSnapshotColumnsAreExported,
+      EvidenceArmColumnsAreExported,
+      EvidenceOutcomeColumnsAreExported,
+      EvidenceFieldValueColumnsAreExported,
+      EvidenceFieldAnchorColumnsAreExported,
+      EvidenceEventColumnsAreExported,
+    ] = [true, true, true, true, true, true, true, true];
+    expect(guards.every(Boolean)).toBe(true);
+  });
 });
 
 describe("account export category registry", () => {
@@ -145,6 +173,16 @@ describe("account export category registry", () => {
         // reason and with the same version consequence: nothing existing
         // changed shape, so ACCOUNT_EXPORT_VERSION stays 2.
         "user_ai_preferences",
+        // EVIDENCE-RECORDS-001A1. Eight additive collection files; no existing
+        // file changed shape, so ACCOUNT_EXPORT_VERSION stays 3.
+        "evidence_studies",
+        "evidence_study_reports",
+        "evidence_source_snapshots",
+        "evidence_arms",
+        "evidence_outcomes",
+        "evidence_field_values",
+        "evidence_field_anchors",
+        "evidence_events",
       ].sort(),
     );
   });

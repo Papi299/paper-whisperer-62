@@ -24,7 +24,9 @@
  *                  upload-finalization linearization, and the AI model/
  *                  reasoning preference serialization, each with bounded,
  *                  fail-closed coordinator/worker processes whose deadlines all
- *                  start at barrier release → verify no
+ *                  start at barrier release → force both orders of each
+ *                  study-record NO ACTION edge with a held transaction and a
+ *                  blocked waiter (EVIDENCE-RECORDS-001A1) → verify no
  *                  row/catalog residue → stop the stack and delete its volumes →
  *                  authoritatively inspect that no current-project container
  *                  remains. Cleanup is MANDATORY and never honors
@@ -492,7 +494,7 @@ async function cmdRun(specArgs) {
     // stays in THIS process and is never added to the Playwright environment.
     const runsDeletionSpec = specs.some((spec) => spec.includes("account-deletion"));
     disposable = runsDeletionSpec
-      ? await provisionDisposableAccount({ apiUrl, anonKey, serviceRoleKey, log })
+      ? await provisionDisposableAccount({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
       : null;
 
     // AI-MODEL-SELECTION-001C entitled fixture. The seeded users are Free with
@@ -2130,6 +2132,213 @@ async function runPaperDeleteFinalizationProbe(container) {
   if (residual.some((c) => c !== 0)) {
     throw new Error(`paper-delete fixture not fully removed (user|papers|attachments|queue|tombstone|advisory = ${residual.join("|")}).`);
   }
+}
+
+// ── EVIDENCE-RECORDS-001A1 ───────────────────────────────────────────────────
+// The three ON DELETE NO ACTION edges of the study-record schema under real
+// concurrency. Its own user, papers and study; no barrier lock — each case is
+// one held transaction and one waiter, observed through pg_blocking_pids.
+const EV_PROBE_USER = "cc0000ee-0000-0000-0000-0000000000a0";
+const EV_STUDY = "cc0000ee-0000-0000-0000-0000000000b0";
+const EV_PAPER_LINKED = "cc0000ee-0000-0000-0000-0000000000c1"; // C1, C2: unlink vs reference
+const EV_PAPER_RACED = "cc0000ee-0000-0000-0000-0000000000c2"; // C3, C4: paper delete vs link
+const EV_COPY = "cc0000ee-0000-0000-0000-0000000000d0";
+const EV_VALUE = "cc0000ee-0000-0000-0000-0000000000e0";
+const EV_QUOTE = "cc0000ee-0000-0000-0000-0000000000f0";
+
+function evClaimsSql() {
+  return `PERFORM set_config('request.jwt.claims','{"sub":"${EV_PROBE_USER}","role":"authenticated"}', true);`;
+}
+
+/**
+ * A waiter session: print its pid, run `body` (PL/pgSQL statements) in a
+ * subtransaction, and print exactly one `OUTCOME=<sqlstate>:<constraint>` line
+ * whether the body succeeded or raised — so the expected 23503 is data, not a
+ * psql failure.
+ */
+function evWaiterSql(body) {
+  return (
+    "SELECT 'PID=' || pg_backend_pid();\n" +
+    "CREATE TEMP TABLE ev_outcome (v text);\n" +
+    "DO $w$\nDECLARE v_state text; v_con text;\nBEGIN\n  BEGIN\n" +
+    body +
+    "\n    RESET ROLE;\n    v_state := '00000'; v_con := '';\n" +
+    "  EXCEPTION WHEN others THEN\n" +
+    "    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_con = CONSTRAINT_NAME;\n" +
+    "  END;\n  INSERT INTO ev_outcome VALUES (v_state || ':' || coalesce(v_con, ''));\nEND\n$w$;\n" +
+    "SELECT 'OUTCOME=' || v FROM ev_outcome;\n"
+  );
+}
+
+/** Rows that decide each case's end state, read on a fresh connection. */
+async function evState(container) {
+  return dbScalar(
+    container,
+    `SELECT format('refs=%s link_c1=%s copy=%s paper_c2=%s link_c2=%s queue=%s', ` +
+      `(SELECT count(*) FROM public.evidence_field_anchors WHERE user_id='${EV_PROBE_USER}'), ` +
+      `(SELECT count(*) FROM public.evidence_study_reports WHERE user_id='${EV_PROBE_USER}' AND paper_id='${EV_PAPER_LINKED}'), ` +
+      `(SELECT count(*) FROM public.evidence_source_snapshots WHERE user_id='${EV_PROBE_USER}'), ` +
+      `(SELECT count(*) FROM public.papers WHERE id='${EV_PAPER_RACED}'), ` +
+      `(SELECT count(*) FROM public.evidence_study_reports WHERE user_id='${EV_PROBE_USER}' AND paper_id='${EV_PAPER_RACED}'), ` +
+      `(SELECT count(*) FROM public.attachment_cleanup_queue WHERE user_id='${EV_PROBE_USER}'));`,
+  );
+}
+
+/**
+ * One forced order: `holderSql` runs in an open transaction and stays open;
+ * the waiter must then be observed blocked BY THAT HOLDER (pg_blocking_pids),
+ * must not finish while the holder is open, and after the holder commits must
+ * report exactly `expected`. Every process is tracked and bounded.
+ */
+async function runEvidenceRaceCase(container, label, holderSql, waiterBody, expected) {
+  let held = null;
+  let waiter = null;
+  try {
+    held = spawnDockerPsql(container);
+    held.child.stdin.write("BEGIN;\n" + holderSql + "SELECT 'PID=' || pg_backend_pid();\nSELECT 'HELD_READY';\n");
+    await waitUntil(() => /HELD_READY/.test(held.readOut()), PROBE_WORKER_MS,
+      `evidence race ${label}: the held transaction never completed its work.`);
+    const holderPid = plPid(held.readOut());
+
+    waiter = spawnDockerPsql(container);
+    waiter.child.stdin.write(evWaiterSql(waiterBody));
+    waiter.child.stdin.end();
+    await waitUntil(() => plPid(waiter.readOut()) !== null, PROBE_WORKER_MS,
+      `evidence race ${label}: the waiter never reported its pid.`);
+    const waiterPid = plPid(waiter.readOut());
+    await waitUntil(
+      async () => (await dbScalar(container, `SELECT ${holderPid} = ANY (pg_blocking_pids(${waiterPid}));`)) === "t",
+      PROBE_BARRIER_MS,
+      `evidence race ${label}: the waiter was never blocked by the held transaction.`,
+    );
+    if (/OUTCOME=/.test(waiter.readOut())) {
+      throw new Error(`evidence race ${label}: the waiter finished while the holder was still open.`);
+    }
+
+    held.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n");
+    held.child.stdin.end();
+    const [heldRes, waitRes] = await Promise.all([
+      withTimeout(held.done, FIN_HOLD_MS, `evidence race ${label} held-transaction exit`),
+      withTimeout(waiter.done, FIN_HOLD_MS, `evidence race ${label} waiter exit`),
+    ]);
+    held = null;
+    waiter = null;
+    if (heldRes.code !== 0 || heldRes.signal !== null || !/HELD_COMMITTED/.test(heldRes.out)) {
+      throw new Error(`evidence race ${label}: the held transaction did not commit cleanly (code=${heldRes.code}).`);
+    }
+    if (waitRes.code !== 0 || waitRes.signal !== null) {
+      throw new Error(`evidence race ${label}: the waiter did not exit cleanly (code=${waitRes.code}).`);
+    }
+    const outcome = parseProbeOutcome(waitRes);
+    if (outcome !== expected) {
+      throw new Error(`evidence race ${label}: the waiter reported "${outcome}", expected "${expected}".`);
+    }
+  } catch (err) {
+    await killPsql(waiter);
+    await killPsql(held);
+    throw err;
+  }
+}
+
+/**
+ * True-concurrency probe of the study-record NO ACTION edges
+ * (EVIDENCE-RECORDS-001A1; FK-PROOF-001 C1-C4, repeated against the real
+ * schema). For each edge, both orders are forced: whichever transaction holds
+ * the row first, the other waits on it and then fails closed with 23503 —
+ * never a deadlock, never a dangling reference, never a deleted paper with a
+ * live link.
+ *
+ *   C1 a quote is being added   -> an unlink waits, then is refused
+ *   C2 an unlink is in flight   -> a new reference waits, then is refused
+ *   C3 a link is being added    -> the client paper-delete RPC waits, then is refused
+ *   C4 the paper-delete RPC is in flight -> a new link waits, then is refused
+ */
+async function runEvidenceForeignKeyRaceProbe(container) {
+  log("running true-concurrency evidence foreign-key race probe (C1-C4)…");
+
+  const text = "Race probe abstract.";
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO auth.users (id, email) VALUES ('${EV_PROBE_USER}','evidence-race@paperlume.test');\n` +
+      `INSERT INTO public.papers (id, user_id, title, keywords, insert_order) VALUES\n` +
+      `  ('${EV_PAPER_LINKED}','${EV_PROBE_USER}','Evidence race linked','[]'::jsonb,1),\n` +
+      `  ('${EV_PAPER_RACED}','${EV_PROBE_USER}','Evidence race raced','[]'::jsonb,2);\n` +
+      `INSERT INTO public.evidence_studies (id, user_id, label, design_profile) VALUES ('${EV_STUDY}','${EV_PROBE_USER}','Race study','rct_parallel');\n` +
+      `INSERT INTO public.evidence_study_reports (user_id, study_id, paper_id, link_status, link_basis) VALUES ('${EV_PROBE_USER}','${EV_STUDY}','${EV_PAPER_LINKED}','user_confirmed','created_from_paper');\n` +
+      `INSERT INTO public.evidence_source_snapshots (id, user_id, study_id, paper_id, seq, source_kind, exact_text, exact_sha256, normalized_sha256, normalization_version, char_count) ` +
+      `VALUES ('${EV_COPY}','${EV_PROBE_USER}','${EV_STUDY}','${EV_PAPER_LINKED}',1,'library_abstract','${text}',sha256(convert_to('${text}','UTF8')),sha256(convert_to('${text}','UTF8')),'v1',char_length('${text}'));\n` +
+      `INSERT INTO public.evidence_field_values (id, user_id, study_id, field_key, value_state, value_text) VALUES ('${EV_VALUE}','${EV_PROBE_USER}','${EV_STUDY}','condition','reported','Race condition');\n`,
+  );
+  if (setup.code !== 0) throw new Error(`evidence race fixture setup failed: ${setup.err.trim()}`);
+
+  // C1 — the quote holds KEY SHARE on the link (its FK check); the unlink waits.
+  await runEvidenceRaceCase(container, "C1",
+    `INSERT INTO public.evidence_field_anchors (id, user_id, study_id, value_id, paper_id, snapshot_id, purpose, source_kind, position, quote_text, match_start, match_end, match_occurrence, match_count, normalization_version, matched_at) ` +
+      `VALUES ('${EV_QUOTE}','${EV_PROBE_USER}','${EV_STUDY}','${EV_VALUE}','${EV_PAPER_LINKED}','${EV_COPY}','supports','abstract',0,'Race probe',0,10,1,1,'v1',now());\n`,
+    `    DELETE FROM public.evidence_study_reports WHERE user_id='${EV_PROBE_USER}' AND study_id='${EV_STUDY}' AND paper_id='${EV_PAPER_LINKED}';`,
+    "23503:evidence_field_anchors_link_fkey");
+  let state = await evState(container);
+  if (!state.startsWith("refs=1 link_c1=1 copy=1 ")) {
+    throw new Error(`evidence race C1: expected the quote committed and the link intact, got ${state}.`);
+  }
+  log("evidence race C1 OK: the unlink waited for the quote, then was refused (link and quote intact).");
+
+  // C2 — the unlink is in flight (the quote removed first); a new reference waits.
+  await runEvidenceRaceCase(container, "C2",
+    `DELETE FROM public.evidence_field_anchors WHERE id='${EV_QUOTE}';\n` +
+      `DELETE FROM public.evidence_study_reports WHERE user_id='${EV_PROBE_USER}' AND study_id='${EV_STUDY}' AND paper_id='${EV_PAPER_LINKED}';\n`,
+    `    INSERT INTO public.evidence_field_anchors (user_id, study_id, value_id, paper_id, purpose, source_kind, position, locator_kind, locator_text) ` +
+      `VALUES ('${EV_PROBE_USER}','${EV_STUDY}','${EV_VALUE}','${EV_PAPER_LINKED}','supports','full_text',0,'page','4');`,
+    "23503:evidence_field_anchors_link_fkey");
+  state = await evState(container);
+  if (!state.startsWith("refs=0 link_c1=0 copy=0 ")) {
+    throw new Error(`evidence race C2: expected the link and its copy gone and no reference, got ${state}.`);
+  }
+  log("evidence race C2 OK: the reference waited for the unlink, then was refused (no dangling reference).");
+
+  // C3 — the link holds KEY SHARE on the paper; the client delete RPC waits.
+  await runEvidenceRaceCase(container, "C3",
+    `INSERT INTO public.evidence_study_reports (user_id, study_id, paper_id, link_status, link_basis) VALUES ('${EV_PROBE_USER}','${EV_STUDY}','${EV_PAPER_RACED}','user_confirmed','user_linked');\n`,
+    `    ${evClaimsSql()}\n    SET LOCAL ROLE authenticated;\n` +
+      `    PERFORM * FROM public.delete_papers_with_attachment_cleanup(ARRAY['${EV_PAPER_RACED}']::uuid[]);`,
+    "23503:evidence_study_reports_paper_fkey");
+  state = await evState(container);
+  if (!state.endsWith("paper_c2=1 link_c2=1 queue=0")) {
+    throw new Error(`evidence race C3: expected the paper and its link kept and no cleanup intent, got ${state}.`);
+  }
+  log("evidence race C3 OK: the paper delete waited for the link, then was refused (paper and link kept).");
+
+  // Unlink again so C4's delete can start from an unlinked paper.
+  const unlink = await dockerPsql(container,
+    `DELETE FROM public.evidence_study_reports WHERE user_id='${EV_PROBE_USER}' AND paper_id='${EV_PAPER_RACED}';\n`);
+  if (unlink.code !== 0) throw new Error(`evidence race: could not reset between C3 and C4: ${unlink.err.trim()}`);
+
+  // C4 — the delete RPC is in flight; a new link waits on the deleted paper row.
+  await runEvidenceRaceCase(container, "C4",
+    `SELECT set_config('request.jwt.claims','{"sub":"${EV_PROBE_USER}","role":"authenticated"}', true);\n` +
+      `SET LOCAL ROLE authenticated;\n` +
+      `SELECT * FROM public.delete_papers_with_attachment_cleanup(ARRAY['${EV_PAPER_RACED}']::uuid[]);\n` +
+      `RESET ROLE;\n`,
+    `    INSERT INTO public.evidence_study_reports (user_id, study_id, paper_id, link_status, link_basis) VALUES ('${EV_PROBE_USER}','${EV_STUDY}','${EV_PAPER_RACED}','user_confirmed','user_linked');`,
+    "23503:evidence_study_reports_paper_fkey");
+  state = await evState(container);
+  if (!state.endsWith("paper_c2=0 link_c2=0 queue=0")) {
+    throw new Error(`evidence race C4: expected the paper gone and no link to it, got ${state}.`);
+  }
+  log("evidence race C4 OK: the link waited for the paper delete, then was refused (no link to a deleted paper).");
+
+  // Remove the fixture through the account cascade, and prove it is gone.
+  const cleanup = await dockerPsql(container, `DELETE FROM auth.users WHERE id='${EV_PROBE_USER}';\n`);
+  if (cleanup.code !== 0) throw new Error(`evidence race fixture cleanup failed: ${cleanup.err.trim()}`);
+  const residual = await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${EV_PROBE_USER}') + ` +
+    `(SELECT count(*) FROM public.papers WHERE user_id='${EV_PROBE_USER}') + ` +
+    `(SELECT count(*) FROM public.evidence_studies WHERE user_id='${EV_PROBE_USER}') + ` +
+    `(SELECT count(*) FROM public.evidence_study_reports WHERE user_id='${EV_PROBE_USER}') + ` +
+    `(SELECT count(*) FROM public.evidence_source_snapshots WHERE user_id='${EV_PROBE_USER}') + ` +
+    `(SELECT count(*) FROM public.evidence_field_values WHERE user_id='${EV_PROBE_USER}') + ` +
+    `(SELECT count(*) FROM public.evidence_field_anchors WHERE user_id='${EV_PROBE_USER}');`);
+  if (residual !== "0") throw new Error(`evidence race fixture not fully removed (${residual} row(s) remain).`);
 }
 
 // ── AI-MULTI-PROVIDER-001C-REVIEW-FIX-01 ─────────────────────────────────────
@@ -4832,9 +5041,15 @@ async function assertNoResidue(container, pgtapBefore, catalogBefore) {
     // AI-MULTI-PROVIDER-001D: every telemetry fixture lives inside a rolled-back
     // suite transaction, so a surviving event means one escaped.
     "(SELECT count(*) FROM public.ai_provider_usage_events) || '|' || " +
+    // EVIDENCE-RECORDS-001A1: every study-record fixture lives inside a
+    // rolled-back suite transaction or is removed by its probe.
+    "((SELECT count(*) FROM public.evidence_studies) + (SELECT count(*) FROM public.evidence_study_reports) + " +
+    "(SELECT count(*) FROM public.evidence_source_snapshots) + (SELECT count(*) FROM public.evidence_arms) + " +
+    "(SELECT count(*) FROM public.evidence_outcomes) + (SELECT count(*) FROM public.evidence_field_values) + " +
+    "(SELECT count(*) FROM public.evidence_field_anchors) + (SELECT count(*) FROM public.evidence_events)) || '|' || " +
     "(SELECT count(*) FROM pg_locks WHERE locktype='advisory');")).split("|").map((s) => parseInt(s, 10));
   if (counts.some((c) => c !== 0)) {
-    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|cleanup|tombstone|usage_events|advisory = ${counts.join("|")}).`);
+    throw new Error(`residue detected (users|papers|projects|tags|presets|attachments|entitlements|counters|storage|access|cleanup|tombstone|usage_events|evidence|advisory = ${counts.join("|")}).`);
   }
   const pgtapAfter = await pgtapState(container);
   if (pgtapAfter !== pgtapBefore) {
@@ -4985,6 +5200,7 @@ async function cmdDbTests() {
     await runMergeCycleProbe(container);
     await runAttachmentFinalizationProbe(container);
     await runPaperDeleteFinalizationProbe(container);
+    await runEvidenceForeignKeyRaceProbe(container);
     await runPreferenceLockProbe(container);
     await runAclParityProbe(container);
     await runMigrationCutoverProbe(container);

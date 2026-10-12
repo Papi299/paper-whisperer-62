@@ -338,6 +338,483 @@ export type Database = {
           },
         ]
       }
+      evidence_arms: {
+        Row: {
+          arm_role: string
+          created_at: string
+          display_label: string
+          id: string
+          position: number
+          study_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          arm_role: string
+          created_at?: string
+          display_label: string
+          id?: string
+          position: number
+          study_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          arm_role?: string
+          created_at?: string
+          display_label?: string
+          id?: string
+          position?: number
+          study_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_arms_study_fkey"
+            columns: ["user_id", "study_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_studies"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
+      evidence_events: {
+        Row: {
+          after: Json | null
+          before: Json | null
+          event_type: string
+          field_key: string | null
+          id: string
+          note: string | null
+          occurred_at: string
+          op: string | null
+          ordinal: number
+          payload_sha256: string | null
+          request_id: string
+          result: Json | null
+          study_id: string
+          study_version: number
+          target_id: string | null
+          user_id: string
+        }
+        Insert: {
+          after?: Json | null
+          before?: Json | null
+          event_type: string
+          field_key?: string | null
+          id?: string
+          note?: string | null
+          occurred_at?: string
+          op?: string | null
+          ordinal: number
+          payload_sha256?: string | null
+          request_id: string
+          result?: Json | null
+          study_id: string
+          study_version: number
+          target_id?: string | null
+          user_id: string
+        }
+        Update: {
+          after?: Json | null
+          before?: Json | null
+          event_type?: string
+          field_key?: string | null
+          id?: string
+          note?: string | null
+          occurred_at?: string
+          op?: string | null
+          ordinal?: number
+          payload_sha256?: string | null
+          request_id?: string
+          result?: Json | null
+          study_id?: string
+          study_version?: number
+          target_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_events_study_fkey"
+            columns: ["user_id", "study_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_studies"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
+      evidence_field_anchors: {
+        Row: {
+          created_at: string
+          id: string
+          locator_kind: string | null
+          locator_text: string | null
+          match_count: number | null
+          match_end: number | null
+          match_occurrence: number | null
+          match_start: number | null
+          matched_at: string | null
+          normalization_version: string | null
+          paper_id: string
+          position: number | null
+          purpose: string
+          quote_text: string | null
+          snapshot_id: string | null
+          source_kind: string
+          study_id: string
+          user_id: string
+          value_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          locator_kind?: string | null
+          locator_text?: string | null
+          match_count?: number | null
+          match_end?: number | null
+          match_occurrence?: number | null
+          match_start?: number | null
+          matched_at?: string | null
+          normalization_version?: string | null
+          paper_id: string
+          position?: number | null
+          purpose: string
+          quote_text?: string | null
+          snapshot_id?: string | null
+          source_kind: string
+          study_id: string
+          user_id: string
+          value_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          locator_kind?: string | null
+          locator_text?: string | null
+          match_count?: number | null
+          match_end?: number | null
+          match_occurrence?: number | null
+          match_start?: number | null
+          matched_at?: string | null
+          normalization_version?: string | null
+          paper_id?: string
+          position?: number | null
+          purpose?: string
+          quote_text?: string | null
+          snapshot_id?: string | null
+          source_kind?: string
+          study_id?: string
+          user_id?: string
+          value_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_field_anchors_link_fkey"
+            columns: ["user_id", "study_id", "paper_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_study_reports"
+            referencedColumns: ["user_id", "study_id", "paper_id"]
+          },
+          {
+            foreignKeyName: "evidence_field_anchors_snapshot_fkey"
+            columns: ["user_id", "study_id", "paper_id", "snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_source_snapshots"
+            referencedColumns: ["user_id", "study_id", "paper_id", "id"]
+          },
+          {
+            foreignKeyName: "evidence_field_anchors_study_fkey"
+            columns: ["user_id", "study_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_studies"
+            referencedColumns: ["user_id", "id"]
+          },
+          {
+            foreignKeyName: "evidence_field_anchors_value_fkey"
+            columns: ["user_id", "study_id", "value_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_field_values"
+            referencedColumns: ["user_id", "study_id", "id"]
+          },
+        ]
+      }
+      evidence_field_values: {
+        Row: {
+          arm_id: string | null
+          created_at: string
+          extraction_method: string
+          field_key: string
+          id: string
+          note: string | null
+          outcome_id: string | null
+          review_note: string | null
+          review_reason: string | null
+          review_status: string
+          reviewed_at: string | null
+          reviewed_version: number | null
+          state_reason: string | null
+          study_id: string
+          updated_at: string
+          user_id: string
+          value_code: string | null
+          value_int: number | null
+          value_list: string[] | null
+          value_state: string
+          value_text: string | null
+          value_version: number
+        }
+        Insert: {
+          arm_id?: string | null
+          created_at?: string
+          extraction_method?: string
+          field_key: string
+          id?: string
+          note?: string | null
+          outcome_id?: string | null
+          review_note?: string | null
+          review_reason?: string | null
+          review_status?: string
+          reviewed_at?: string | null
+          reviewed_version?: number | null
+          state_reason?: string | null
+          study_id: string
+          updated_at?: string
+          user_id: string
+          value_code?: string | null
+          value_int?: number | null
+          value_list?: string[] | null
+          value_state: string
+          value_text?: string | null
+          value_version?: number
+        }
+        Update: {
+          arm_id?: string | null
+          created_at?: string
+          extraction_method?: string
+          field_key?: string
+          id?: string
+          note?: string | null
+          outcome_id?: string | null
+          review_note?: string | null
+          review_reason?: string | null
+          review_status?: string
+          reviewed_at?: string | null
+          reviewed_version?: number | null
+          state_reason?: string | null
+          study_id?: string
+          updated_at?: string
+          user_id?: string
+          value_code?: string | null
+          value_int?: number | null
+          value_list?: string[] | null
+          value_state?: string
+          value_text?: string | null
+          value_version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_field_values_arm_fkey"
+            columns: ["user_id", "study_id", "arm_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_arms"
+            referencedColumns: ["user_id", "study_id", "id"]
+          },
+          {
+            foreignKeyName: "evidence_field_values_outcome_fkey"
+            columns: ["user_id", "study_id", "outcome_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_outcomes"
+            referencedColumns: ["user_id", "study_id", "id"]
+          },
+          {
+            foreignKeyName: "evidence_field_values_study_fkey"
+            columns: ["user_id", "study_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_studies"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
+      evidence_outcomes: {
+        Row: {
+          created_at: string
+          display_label: string
+          id: string
+          position: number
+          study_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          display_label: string
+          id?: string
+          position: number
+          study_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          display_label?: string
+          id?: string
+          position?: number
+          study_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_outcomes_study_fkey"
+            columns: ["user_id", "study_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_studies"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
+      evidence_source_snapshots: {
+        Row: {
+          captured_at: string
+          char_count: number
+          exact_sha256: string
+          exact_text: string
+          id: string
+          normalization_version: string
+          normalized_sha256: string
+          paper_id: string
+          seq: number
+          source_kind: string
+          study_id: string
+          user_id: string
+        }
+        Insert: {
+          captured_at?: string
+          char_count: number
+          exact_sha256: string
+          exact_text: string
+          id?: string
+          normalization_version: string
+          normalized_sha256: string
+          paper_id: string
+          seq: number
+          source_kind: string
+          study_id: string
+          user_id: string
+        }
+        Update: {
+          captured_at?: string
+          char_count?: number
+          exact_sha256?: string
+          exact_text?: string
+          id?: string
+          normalization_version?: string
+          normalized_sha256?: string
+          paper_id?: string
+          seq?: number
+          source_kind?: string
+          study_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_source_snapshots_link_fkey"
+            columns: ["user_id", "study_id", "paper_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_study_reports"
+            referencedColumns: ["user_id", "study_id", "paper_id"]
+          },
+          {
+            foreignKeyName: "evidence_source_snapshots_study_fkey"
+            columns: ["user_id", "study_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_studies"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
+      evidence_studies: {
+        Row: {
+          created_at: string
+          design_profile: string
+          id: string
+          label: string
+          notes: string | null
+          row_version: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          design_profile: string
+          id?: string
+          label: string
+          notes?: string | null
+          row_version?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          design_profile?: string
+          id?: string
+          label?: string
+          notes?: string | null
+          row_version?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      evidence_study_reports: {
+        Row: {
+          created_at: string
+          id: string
+          link_basis: string
+          link_status: string
+          paper_id: string
+          study_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          link_basis: string
+          link_status: string
+          paper_id: string
+          study_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          link_basis?: string
+          link_status?: string
+          paper_id?: string
+          study_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_study_reports_paper_fkey"
+            columns: ["user_id", "paper_id"]
+            isOneToOne: false
+            referencedRelation: "papers"
+            referencedColumns: ["user_id", "id"]
+          },
+          {
+            foreignKeyName: "evidence_study_reports_study_fkey"
+            columns: ["user_id", "study_id"]
+            isOneToOne: false
+            referencedRelation: "evidence_studies"
+            referencedColumns: ["user_id", "id"]
+          },
+        ]
+      }
       filter_presets: {
         Row: {
           created_at: string
