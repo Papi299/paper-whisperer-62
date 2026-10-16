@@ -2,16 +2,18 @@
 --
 -- Owns `20261012031537_add_evidence_records_foundation.sql`: eight tables with
 -- composite owner keys, three ON DELETE NO ACTION edges, single-row CHECKs,
--- forced owner-only RLS and a SELECT-only Data API surface. No function exists
--- yet, so every fixture here is planted by the database owner, exactly as a
--- reviewed SECURITY DEFINER RPC would plant it later.
+-- forced owner-only RLS and a SELECT-only Data API surface. That migration added
+-- no function, so every fixture here is planted by the database owner, exactly
+-- as a reviewed SECURITY DEFINER RPC would plant it. The lifecycle RPCs
+-- EVIDENCE-RECORDS-001A2 added later are owned by suite 031.
 --
 -- Proves, against the live local schema:
 --   A. the catalog contract — tables, columns, RLS, policies, the complete
 --      foreign-key inventory with every ON DELETE action, the D7 rules (every
 --      key carries user_id; every table cascades from auth.users; every child
 --      of a study cascades from it directly), the supporting indexes, the
---      durable request-header key, and that no trigger or function was added;
+--      durable request-header key, that no trigger was added, and that the
+--      only evidence functions are the six EVIDENCE-RECORDS-001A2 reviewed;
 --   B. the privilege surface — anon and service_role reach nothing, and a
 --      signed-in user can read only their own rows and write none (catalog AND
 --      real attempts);
@@ -39,7 +41,8 @@
 --
 -- What this suite does NOT claim: no cross-row rule (a value's state against
 -- its references, the current-copy rule, family-specific fields, limits) is
--- enforced yet — those belong to the RPCs of 001A2/001A3 and to their suites.
+-- enforced by the schema — those belong to the RPCs of 001A2/001A3 and to their
+-- suites.
 --
 -- Isolation: every probe runs in its own subtransaction and is undone by
 -- pg_temp.probe(), so later assertions always see the planted fixture. The
@@ -566,11 +569,17 @@ SELECT is(
   0,
   'A9 no trigger of any kind sits on an evidence table (nothing runs on the account-deletion cascade path)');
 
+-- EVIDENCE-RECORDS-001A1 added no function. EVIDENCE-RECORDS-001A2 later added
+-- exactly these six — four RPCs and two internal helpers, owned by suite 031 —
+-- so any other evidence function, or an overload of one of these, fails here.
 SELECT is(
-  (SELECT count(*)::int FROM pg_proc p
+  (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
+     FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'evidence\_%'),
-  0,
-  'A10 no evidence function exists yet: EVIDENCE-RECORDS-001A1 adds no write path');
+  'evidence_create_study_from_paper(uuid,text,text,text,uuid), evidence_delete_study(uuid,integer,uuid), '
+  || 'evidence_normalize_v1(text), evidence_records_assert_writable(), '
+  || 'evidence_set_link(uuid,uuid,text,integer,uuid), evidence_update_study(uuid,integer,text,text,text,uuid)',
+  'A10 the evidence functions are exactly the six EVIDENCE-RECORDS-001A2 reviewed; nothing else writes evidence');
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- B. Privilege surface (suite 015 owns the whole-schema matrix; these are the

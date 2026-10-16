@@ -1661,6 +1661,47 @@ export type Database = {
           queued_count: number
         }[]
       }
+      evidence_create_study_from_paper: {
+        Args: {
+          p_design_profile: string
+          p_label: string
+          p_link_status: string
+          p_paper_id: string
+          p_request_id: string
+        }
+        Returns: Json
+      }
+      evidence_delete_study: {
+        Args: {
+          p_expected_version: number
+          p_request_id: string
+          p_study_id: string
+        }
+        Returns: Json
+      }
+      evidence_normalize_v1: { Args: { p_text: string }; Returns: string }
+      evidence_records_assert_writable: { Args: never; Returns: undefined }
+      evidence_set_link: {
+        Args: {
+          p_action: string
+          p_expected_version: number
+          p_paper_id: string
+          p_request_id: string
+          p_study_id: string
+        }
+        Returns: Json
+      }
+      evidence_update_study: {
+        Args: {
+          p_design_profile: string
+          p_expected_version: number
+          p_label: string
+          p_notes: string
+          p_request_id: string
+          p_study_id: string
+        }
+        Returns: Json
+      }
       filter_papers_by_keywords: {
         Args: { p_keywords: string[]; p_user_id: string }
         Returns: {

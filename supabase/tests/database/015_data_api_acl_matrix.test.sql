@@ -56,7 +56,10 @@
 --     and the caller-owned bulk import that followed with
 --     `20260927123856_convert_safe_bulk_insert_security_invoker.sql` (C53):
 --     for them the relation matrix in section C is part of their security
---     boundary.
+--     boundary. Section L pins the six study-record functions
+--     `20261016104232_add_evidence_records_lifecycle_rpcs.sql`
+--     (EVIDENCE-RECORDS-001A2) added — the only write path to the evidence
+--     tables, which section C keeps SELECT-only.
 
 BEGIN;
 
@@ -174,7 +177,7 @@ CREATE TEMP TABLE acl_relation_allowlist (relname text PRIMARY KEY, why text NOT
 -- deliberately — section K fails on it until it is.
 CREATE TEMP TABLE acl_invoker_public_exec_allowlist (sig text PRIMARY KEY, why text NOT NULL);
 
-SELECT plan(135);
+SELECT plan(141);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -379,7 +382,9 @@ SELECT is(
 -- writes, and fourteen since DB-SAFE-BULK-INSERT-INVOKER-001 (C53) added the
 -- bulk import, both pinned in section J as well. Eleven again since
 -- DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001 (C55) dropped the three
--- immutable_english_tsvector_* helpers, so a re-created one fails here. Ordered
+-- immutable_english_tsvector_* helpers, so a re-created one fails here.
+-- Thirteen since EVIDENCE-RECORDS-001A2 added two owner-only helpers, the
+-- study-record gate and match normalization v1, pinned in section L. Ordered
 -- under the "C" collation so the expected string does not depend on the
 -- database's default collation (which sorts `search_papers_short` first).
 SELECT is(
@@ -387,12 +392,13 @@ SELECT is(
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND NOT p.prosecdef),
   'attachment_cleanup_path_is_safe(uuid,text,uuid), bulk_update_keywords(jsonb), '
-  || 'bulk_update_study_types(jsonb), filter_papers_by_keywords(uuid,text[]), '
+  || 'bulk_update_study_types(jsonb), evidence_normalize_v1(text), evidence_records_assert_writable(), '
+  || 'filter_papers_by_keywords(uuid,text[]), '
   || 'get_duplicate_papers(), get_keyword_options(uuid,uuid[],integer,integer,text[]), '
   || 'safe_bulk_insert_papers(uuid,jsonb), '
   || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text), '
   || 'set_updated_at(), update_updated_at_column()',
-  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified eleven');
+  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified thirteen');
 
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text), '')
@@ -678,6 +684,44 @@ SELECT is(
 DROP FUNCTION zz_acl_probe_schema.zz_acl_probe_fn();
 DROP SCHEMA zz_acl_probe_schema;
 DROP FUNCTION public.zz_acl_probe_fn();
+
+-- ══ L. The study-record functions (EVIDENCE-RECORDS-001A2) ══════════════════
+-- The only write path to the eight evidence tables, whose SELECT-only matrix is
+-- section C. Four client RPCs, SECURITY DEFINER and executable by
+-- authenticated alone, and two internal SECURITY INVOKER helpers executable by
+-- their owner alone. Each is pinned in one line — owner, security mode,
+-- search_path, stored ACL, and which of the four grantees that matter can
+-- execute it — so a failure names the attribute that moved. Behaviour is owned
+-- by 031; the definer inventory by 003 and 021.
+SELECT is(
+  (SELECT pg_get_userbyid(p.proowner)
+          || ' | ' || CASE WHEN p.prosecdef THEN 'SECURITY DEFINER' ELSE 'SECURITY INVOKER' END
+          || ' | ' || coalesce(array_to_string(p.proconfig, ','), '<no config>')
+          || ' | acl ' || coalesce(p.proacl::text, 'NULL')
+          || ' | exec ' || (SELECT coalesce(string_agg(r, ',' ORDER BY r COLLATE "C"), '<nobody>')
+                              FROM unnest(ARRAY['PUBLIC','anon','authenticated','service_role']) r
+                             WHERE CASE WHEN r = 'PUBLIC'
+                                        THEN EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f'::"char", p.proowner))) a
+                                                      WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+                                        ELSE has_function_privilege(to_regrole(r)::oid, p.oid, 'EXECUTE') END)
+     FROM pg_proc p WHERE p.oid = to_regprocedure(e.sig)),
+  e.expected,
+  'ACL-L1 ' || e.sig || ': ' || e.expected)
+FROM (VALUES
+  ('public.evidence_create_study_from_paper(uuid,text,text,text,uuid)',
+   'postgres | SECURITY DEFINER | search_path=public, pg_temp | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated'),
+  ('public.evidence_update_study(uuid,integer,text,text,text,uuid)',
+   'postgres | SECURITY DEFINER | search_path=public, pg_temp | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated'),
+  ('public.evidence_set_link(uuid,uuid,text,integer,uuid)',
+   'postgres | SECURITY DEFINER | search_path=public, pg_temp | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated'),
+  ('public.evidence_delete_study(uuid,integer,uuid)',
+   'postgres | SECURITY DEFINER | search_path=public, pg_temp | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated'),
+  ('public.evidence_records_assert_writable()',
+   'postgres | SECURITY INVOKER | search_path=public, pg_temp | acl {postgres=X/postgres} | exec <nobody>'),
+  ('public.evidence_normalize_v1(text)',
+   'postgres | SECURITY INVOKER | search_path=pg_catalog, pg_temp | acl {postgres=X/postgres} | exec <nobody>')
+) AS e(sig, expected)
+ORDER BY e.sig;
 
 -- ══ G4. The defaults, proved on real objects ════════════════════════════════
 -- Reading `pg_default_acl` says what is stored. This says what a new object
