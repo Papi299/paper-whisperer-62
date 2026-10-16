@@ -22,7 +22,8 @@
 -- then retired the three search-vector helpers: after C54 nothing called them.
 -- The suite now pins two live groups and the retirement:
 --
---   * hardened (1) — attachment_cleanup_path_is_safe: exactly
+--   * hardened (2) — attachment_cleanup_path_is_safe, and
+--     evidence_normalize_v1 (EVIDENCE-RECORDS-001A2): exactly
 --     `pg_catalog, pg_temp`, in that order, nothing else;
 --   * pg_catalog only (1) — set_updated_at(): its reviewed body names no data
 --     type, so it deliberately stays at exactly `pg_catalog`. That is tied to
@@ -36,8 +37,12 @@
 -- the three cleanup RPCs. Its accept/refuse matrix is owned by
 -- 014_attachment_cleanup_recovery.test.sql; section 6 here only confirms that
 -- the hardened configuration still accepts an ordinary own path and refuses an
--- out-of-namespace one. Section 3 pins the retirement; sections 4–5 concern the
--- generated search column and set_updated_at specifically.
+-- out-of-namespace one. evidence_normalize_v1 is the same kind of helper —
+-- INVOKER, pure, reading no table, owner-only — used only from inside the
+-- study-record RPCs; its golden vectors are owned by
+-- 031_evidence_records_lifecycle.test.sql. Section 3 pins the retirement;
+-- sections 4–5 concern the generated search column and set_updated_at
+-- specifically.
 --
 -- This suite pins that hardening and, just as importantly, pins that it stayed
 -- execution-environment-only. The bounded RPC surface is not this suite's remit:
@@ -46,16 +51,17 @@
 -- by 015, and the SECURITY DEFINER `public, pg_temp` inventory (C50) by 021.
 --
 -- Asserted here:
---   * attachment_cleanup_path_is_safe carries exactly search_path=pg_catalog,
---     pg_temp — `pg_catalog` first, `pg_temp` last, no other schema, and no
---     second GUC in proconfig;
+--   * attachment_cleanup_path_is_safe and evidence_normalize_v1 carry exactly
+--     search_path=pg_catalog, pg_temp — `pg_catalog` first, `pg_temp` last, no
+--     other schema, and no second GUC in proconfig;
 --   * set_updated_at() carries exactly search_path=pg_catalog, with its
 --     reviewed body; and no other public function is pinned to pg_catalog;
---   * both remain SECURITY INVOKER with their original volatility, parallel
---     safety, language and return type, so a later "fix" cannot quietly promote
---     one to SECURITY DEFINER or relax IMMUTABLE/PARALLEL SAFE;
---   * the EXECUTE ACLs are exactly owner-only on both: the attachment helper
---     always was, and set_updated_at() is since C56
+--   * all three remain SECURITY INVOKER with their original volatility,
+--     parallel safety, language and return type, so a later "fix" cannot
+--     quietly promote one to SECURITY DEFINER or relax IMMUTABLE/PARALLEL SAFE;
+--   * the EXECUTE ACLs are exactly owner-only on all three: the attachment
+--     helper always was, evidence_normalize_v1 is from the migration that
+--     creates it, and set_updated_at() is since C56
 --     (20260928133918_harden_default_function_execute.sql), which revoked the
 --     default posture it had carried until then (NULL on a clean replay,
 --     explicit on hosted Production). Its callers and the rest of the function
@@ -78,12 +84,16 @@ CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO extensions, public, pg_temp;
 
 -- ── Helpers ─────────────────────────────────────────────────────────────────
--- The C51-hardened function still live after C55, addressed by exact signature.
+-- The C51-hardened function still live after C55, addressed by exact signature,
+-- and EVIDENCE-RECORDS-001A2's match normalization v1, a pure built-in-only
+-- helper of the same kind (its behaviour is owned by suite 031).
 CREATE FUNCTION pg_temp.hardened_fns()
 RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
   SELECT * FROM (VALUES
     ('attachment_cleanup_path_is_safe(uuid,text,uuid)',
-       'public.attachment_cleanup_path_is_safe(uuid,text,uuid)'::regprocedure::oid)
+       'public.attachment_cleanup_path_is_safe(uuid,text,uuid)'::regprocedure::oid),
+    ('evidence_normalize_v1(text)',
+       'public.evidence_normalize_v1(text)'::regprocedure::oid)
   ) AS t(label, oid);
 $hlp$;
 
@@ -95,12 +105,12 @@ RETURNS TABLE (label text, oid oid) LANGUAGE sql AS $hlp$
   SELECT * FROM pg_temp.hardened_fns();
 $hlp$;
 
--- 6 (search_path) + 6 (posture + ACL) + 1 (retired helpers)
---   + 12 (generated search_vector) + 3 (set_updated_at) + 2 (attachment path) = 30
-SELECT plan(30);
+-- 9 (search_path) + 9 (posture + ACL) + 1 (retired helpers)
+--   + 12 (generated search_vector) + 3 (set_updated_at) + 2 (attachment path) = 36
+SELECT plan(36);
 
 -- ══ 1. Bounded search_path ══════════════════════════════════════════════════
--- ── 1a. The hardened helper — exactly `pg_catalog, pg_temp` ──────────────────
+-- ── 1a. The hardened helpers — exactly `pg_catalog, pg_temp` ─────────────────
 SELECT is(
   (SELECT array_to_string(p.proconfig, ',') FROM pg_proc p WHERE p.oid = f.oid),
   'search_path=pg_catalog, pg_temp',
@@ -144,8 +154,9 @@ SELECT is(
      FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace AND array_to_string(p.proconfig, ',') LIKE '%pg_catalog%'),
   'attachment_cleanup_path_is_safe(uuid,text,uuid) = search_path=pg_catalog, pg_temp; '
+  || 'evidence_normalize_v1(text) = search_path=pg_catalog, pg_temp; '
   || 'set_updated_at() = search_path=pg_catalog',
-  'search_path: the pg_catalog-pinned public functions are exactly the classified 1 + 1');
+  'search_path: the pg_catalog-pinned public functions are exactly the classified 2 + 1');
 
 -- ══ 2. The hardening stayed execution-environment-only ══════════════════════
 SELECT ok(
@@ -168,7 +179,9 @@ SELECT is(
       -- IMMUTABLE and PARALLEL SAFE are load-bearing, not incidental: the helper
       -- is a pure predicate over its arguments, and anything that made it read
       -- state would have to change one of them.
-      ('attachment_cleanup_path_is_safe(uuid,text,uuid)', 'i/s/sql/boolean')
+      ('attachment_cleanup_path_is_safe(uuid,text,uuid)', 'i/s/sql/boolean'),
+      -- Likewise pure: the same text always normalizes to the same text.
+      ('evidence_normalize_v1(text)',                      'i/s/plpgsql/text')
     ) AS v(label, expected) ON v.label = h.label
 ) f;
 
@@ -182,6 +195,7 @@ SELECT is(
 -- set_updated_at() is exactly owner-only since C56, in every environment: the
 -- migration converged both of its earlier reviewed forms (NULL on a clean
 -- replay, the explicit five-entry form on hosted Production) on this one.
+-- evidence_normalize_v1(text) is owner-only from the migration that creates it.
 -- Section 5 below still proves the trigger fires; 025 proves it fires for a
 -- caller holding no EXECUTE.
 SELECT is(

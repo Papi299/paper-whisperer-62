@@ -26,7 +26,10 @@
  *                  fail-closed coordinator/worker processes whose deadlines all
  *                  start at barrier release → force both orders of each
  *                  study-record NO ACTION edge with a held transaction and a
- *                  blocked waiter (EVIDENCE-RECORDS-001A1) → verify no
+ *                  blocked waiter (EVIDENCE-RECORDS-001A1) → race the
+ *                  study-record lifecycle RPCs the same way, plus
+ *                  barrier-released free rounds (EVIDENCE-RECORDS-001A2) →
+ *                  verify no
  *                  row/catalog residue → stop the stack and delete its volumes →
  *                  authoritatively inspect that no current-project container
  *                  remains. Cleanup is MANDATORY and never honors
@@ -2339,6 +2342,439 @@ async function runEvidenceForeignKeyRaceProbe(container) {
     `(SELECT count(*) FROM public.evidence_field_values WHERE user_id='${EV_PROBE_USER}') + ` +
     `(SELECT count(*) FROM public.evidence_field_anchors WHERE user_id='${EV_PROBE_USER}');`);
   if (residual !== "0") throw new Error(`evidence race fixture not fully removed (${residual} row(s) remain).`);
+}
+
+// ── EVIDENCE-RECORDS-001A2 ───────────────────────────────────────────────────
+// The study-record lifecycle RPCs under real concurrency, called exactly as a
+// client calls them: as `authenticated`, with an owner's JWT claims. Request
+// idempotency (FK-PROOF-001 I-1), optimistic concurrency, deletion and paper
+// protection. Its own owner, papers, request ids and barrier key.
+const EL_OWNER = "cc0000ef-0000-0000-0000-0000000000a0";
+const EL_PAPER_A = "cc0000ef-0000-0000-0000-0000000000c1"; // the studies under race
+const EL_PAPER_B = "cc0000ef-0000-0000-0000-0000000000c2"; // a create holds it; the paper delete waits
+const EL_PAPER_C = "cc0000ef-0000-0000-0000-0000000000c3"; // the paper delete holds it; a create waits
+const EL_BARRIER_KEY = 918273649;
+const EL_BARRIER_OBJID = EL_BARRIER_KEY & 0xffffffff;
+const EL_BARRIER_CLASSID = Math.floor(EL_BARRIER_KEY / 2 ** 32);
+const EL_FREE_ROUNDS = 5; // barrier-released rounds per free race, after the forced orders.
+
+/** One deterministic request id per probe step. */
+function elRq(n) {
+  return `cc0000f0-0000-0000-0000-${n.toString(16).padStart(12, "0")}`;
+}
+
+/** The RPC calls, as SQL expressions. Labels are plain ASCII without quotes. */
+const elCall = {
+  create: (paper, label, req) =>
+    `public.evidence_create_study_from_paper('${paper}'::uuid, '${label}', 'rct_parallel', 'user_confirmed', '${req}'::uuid)`,
+  update: (study, version, label, req) =>
+    `public.evidence_update_study('${study}'::uuid, ${version}, '${label}', 'rct_parallel', NULL, '${req}'::uuid)`,
+  remove: (study, version, req) => `public.evidence_delete_study('${study}'::uuid, ${version}, '${req}'::uuid)`,
+  deletePaper: (paper) =>
+    `(SELECT deleted_count || '/' || queued_count FROM public.delete_papers_with_attachment_cleanup(ARRAY['${paper}']::uuid[]))`,
+};
+
+function elClaimsSql() {
+  return `set_config('request.jwt.claims', '{"sub":"${EL_OWNER}","role":"authenticated"}', true)`;
+}
+
+/**
+ * A session that makes one call as the owner and prints exactly one
+ * `${tag}=OK <result>` or `${tag}=ERR <SQLSTATE> <message>` line, whether the
+ * call succeeded or raised — so an expected refusal is data, not a psql
+ * failure. A refused call rolls back in its own subtransaction.
+ */
+function elSessionSql(tag, callExpr, { isolation = null } = {}) {
+  return (
+    "SELECT 'PID=' || pg_backend_pid();\n" +
+    "CREATE TEMP TABLE el_outcome (v text);\n" +
+    (isolation ? `BEGIN ISOLATION LEVEL ${isolation};\n` : "") +
+    "DO $w$\nDECLARE v_out text; v_state text; v_msg text;\nBEGIN\n  BEGIN\n" +
+    `    PERFORM ${elClaimsSql()};\n` +
+    "    SET LOCAL ROLE authenticated;\n" +
+    `    v_out := 'OK ' || (${callExpr})::text;\n` +
+    "    RESET ROLE;\n" +
+    "  EXCEPTION WHEN others THEN\n" +
+    "    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;\n" +
+    "    v_out := 'ERR ' || v_state || ' ' || v_msg;\n" +
+    "  END;\n  INSERT INTO el_outcome VALUES (v_out);\nEND\n$w$;\n" +
+    (isolation ? "COMMIT;\n" : "") +
+    `SELECT '${tag}=' || v FROM el_outcome;\n`
+  );
+}
+
+/** The held transaction: one call as the owner, then stay open. */
+function elHolderSql(callExpr) {
+  return (
+    "BEGIN;\n" +
+    `SELECT ${elClaimsSql()};\n` +
+    "SET LOCAL ROLE authenticated;\n" +
+    `SELECT 'HELD=' || (${callExpr})::text;\n` +
+    "RESET ROLE;\n" +
+    "SELECT 'PID=' || pg_backend_pid();\n" +
+    "SELECT 'HELD_READY';\n"
+  );
+}
+
+/** The study id an answer names, or null. */
+function elStudyOf(line) {
+  const m = /"study_id": "([0-9a-f-]{36})"/.exec(`${line}`);
+  return m ? m[1] : null;
+}
+
+/** The status an answer reports, or the whole line. */
+function elStatusOf(line) {
+  const m = /"status": "([a-z_]+)"/.exec(`${line}`);
+  return m ? m[1] : `${line}`;
+}
+
+async function elCount(container, sql) {
+  return dbScalar(container, `SELECT count(*) FROM ${sql};`);
+}
+
+/** `row_version:label` of one study, or GONE. Read on a fresh connection. */
+function elVersion(container, study) {
+  return dbScalar(container,
+    `SELECT coalesce((SELECT row_version::text || ':' || label FROM public.evidence_studies WHERE id='${study}'), 'GONE');`);
+}
+
+function elHeaders(container, req) {
+  return elCount(container,
+    `public.evidence_events WHERE user_id='${EL_OWNER}' AND request_id='${req}' AND ordinal=0`);
+}
+
+function elLabelled(container, label) {
+  return elCount(container, `public.evidence_studies WHERE user_id='${EL_OWNER}' AND label='${label}'`);
+}
+
+/** Every evidence row of one study, across the eight tables. */
+function elStudyRows(container, study) {
+  return dbScalar(container,
+    `SELECT (SELECT count(*) FROM public.evidence_studies WHERE id='${study}') + ` +
+      ["evidence_study_reports", "evidence_source_snapshots", "evidence_arms", "evidence_outcomes",
+        "evidence_field_values", "evidence_field_anchors", "evidence_events"]
+        .map((t) => `(SELECT count(*) FROM public.${t} WHERE study_id='${study}')`).join(" + ") + ";");
+}
+
+/**
+ * One forced order. `holderCall` runs in an open transaction and stays open;
+ * the waiter must then be observed blocked BY THAT HOLDER, on a lock of one of
+ * `lockTypes` (advisory for the request and per-user locks, transactionid for
+ * a row), must not finish while the holder is open, and after the holder
+ * commits must report a line matching `expected`. Every process is tracked and
+ * bounded. Returns both sessions' result lines and the lock waited on.
+ */
+async function runElForcedOrder(container, label, holderCall, waiterCall, lockTypes, expected) {
+  let held = null;
+  let waiter = null;
+  try {
+    held = spawnDockerPsql(container);
+    held.child.stdin.write(elHolderSql(holderCall));
+    await waitUntil(() => /HELD_READY/.test(held.readOut()), PROBE_WORKER_MS,
+      `evidence lifecycle race ${label}: the held transaction never completed its call.`);
+    const holderPid = plPid(held.readOut());
+    const heldLine = plOutcome(held.readOut(), "HELD");
+
+    waiter = spawnDockerPsql(container);
+    waiter.child.stdin.write(elSessionSql("WAITER", waiterCall));
+    waiter.child.stdin.end();
+    await waitUntil(() => plPid(waiter.readOut()) !== null, PROBE_WORKER_MS,
+      `evidence lifecycle race ${label}: the waiter never reported its pid.`);
+    const waiterPid = plPid(waiter.readOut());
+    await waitUntil(
+      async () => (await dbScalar(container, `SELECT ${holderPid} = ANY (pg_blocking_pids(${waiterPid}));`)) === "t",
+      PROBE_BARRIER_MS,
+      `evidence lifecycle race ${label}: the waiter was never blocked by the held transaction.`,
+    );
+    const waitingOn = await dbScalar(container,
+      `SELECT coalesce(string_agg(DISTINCT locktype, ','), '') FROM pg_locks WHERE pid = ${waiterPid} AND NOT granted;`);
+    if (!lockTypes.includes(waitingOn)) {
+      throw new Error(`evidence lifecycle race ${label}: the waiter waits on "${waitingOn}", expected ${lockTypes.join(" or ")}.`);
+    }
+    if (/WAITER=/.test(waiter.readOut())) {
+      throw new Error(`evidence lifecycle race ${label}: the waiter finished while the holder was still open.`);
+    }
+
+    held.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n");
+    held.child.stdin.end();
+    const [heldRes, waitRes] = await Promise.all([
+      withTimeout(held.done, FIN_HOLD_MS, `evidence lifecycle race ${label} held-transaction exit`),
+      withTimeout(waiter.done, FIN_HOLD_MS, `evidence lifecycle race ${label} waiter exit`),
+    ]);
+    held = null;
+    waiter = null;
+    if (heldRes.code !== 0 || heldRes.signal !== null || !/HELD_COMMITTED/.test(heldRes.out)) {
+      throw new Error(`evidence lifecycle race ${label}: the held transaction did not commit cleanly (code=${heldRes.code}).`);
+    }
+    if (waitRes.code !== 0 || waitRes.signal !== null) {
+      throw new Error(`evidence lifecycle race ${label}: the waiter did not exit cleanly (code=${waitRes.code}).`);
+    }
+    const waited = plOutcome(waitRes.out, "WAITER");
+    if (!expected.test(waited)) {
+      throw new Error(`evidence lifecycle race ${label}: the waiter reported "${waited}", expected ${expected}.`);
+    }
+    return { held: heldLine, waited, waitingOn };
+  } catch (err) {
+    await killPsql(waiter);
+    await killPsql(held);
+    throw err;
+  }
+}
+
+async function countElBarrierWaiters(container) {
+  return parseInt(await dbScalar(container,
+    `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${EL_BARRIER_CLASSID} ` +
+      `AND objid=${EL_BARRIER_OBJID} AND NOT granted;`), 10);
+}
+
+/**
+ * One free round: both calls wait on a shared barrier and start together when
+ * the coordinator releases it. No order is forced; the caller judges the pair.
+ */
+async function runElFreeRound(container, label, callX, callY) {
+  let coord = null;
+  let wx = null;
+  let wy = null;
+  try {
+    coord = spawnDockerPsql(container);
+    coord.child.stdin.write(`SELECT pg_advisory_lock(${EL_BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
+    await waitUntil(() => /COORD_LOCKED/.test(coord.readOut()), PROBE_COORD_ACQUIRE_MS,
+      `evidence lifecycle race ${label}: the coordinator never acquired the barrier.`);
+    wx = spawnDockerPsql(container);
+    wy = spawnDockerPsql(container);
+    wx.child.stdin.write(`SELECT pg_advisory_lock_shared(${EL_BARRIER_KEY});\n` + elSessionSql("X", callX));
+    wx.child.stdin.end();
+    wy.child.stdin.write(`SELECT pg_advisory_lock_shared(${EL_BARRIER_KEY});\n` + elSessionSql("Y", callY));
+    wy.child.stdin.end();
+    await waitUntil(async () => (await countElBarrierWaiters(container)) >= 2, PROBE_BARRIER_MS,
+      `evidence lifecycle race ${label}: both workers did not reach the barrier.`);
+    coord.child.stdin.write(`SELECT 'UNLOCK=' || pg_advisory_unlock(${EL_BARRIER_KEY})::text; SELECT 'COORD_UNLOCKED';\n`);
+    coord.child.stdin.end();
+    const [cr, rx, ry] = await Promise.all([
+      withTimeout(coord.done, PROBE_COORD_EXIT_MS, `evidence lifecycle race ${label} coordinator exit`),
+      withTimeout(wx.done, PROBE_WORKER_MS, `evidence lifecycle race ${label} worker X exit`),
+      withTimeout(wy.done, PROBE_WORKER_MS, `evidence lifecycle race ${label} worker Y exit`),
+    ]);
+    coord = null;
+    wx = null;
+    wy = null;
+    if (cr.code !== 0 || cr.signal !== null || !/UNLOCK=t/.test(cr.out) || !/COORD_UNLOCKED/.test(cr.out)) {
+      throw new Error(`evidence lifecycle race ${label}: the coordinator did not release the barrier cleanly (code=${cr.code}).`);
+    }
+    for (const [nm, r] of [["X", rx], ["Y", ry]]) {
+      if (r.code !== 0 || r.signal !== null) {
+        throw new Error(`evidence lifecycle race ${label}: worker ${nm} did not exit cleanly (code=${r.code}).`);
+      }
+    }
+    return { x: plOutcome(rx.out, "X"), y: plOutcome(ry.out, "Y") };
+  } catch (err) {
+    await killPsql(wx);
+    await killPsql(wy);
+    await killPsql(coord);
+    throw err;
+  }
+}
+
+/**
+ * True-concurrency probe of the study-record lifecycle RPCs
+ * (EVIDENCE-RECORDS-001A2; FK-PROOF-001 I-1). Forced orders, each a held
+ * transaction and a waiter observed blocked on the expected lock:
+ *
+ *   L1 identical creates (one request id, one body) -> the second replays the first
+ *   L2 identical updates                            -> the second replays the first
+ *   L3 two updates at one version, two request ids  -> the second gets a version conflict
+ *   L4 an update holds the study, a delete waits    -> the delete gets a version conflict
+ *   L5 a delete holds the study, an update waits    -> the update finds no study
+ *   L6 one request id, two bodies                   -> the second is refused as reused
+ *   L7 a create holds the paper, the paper delete RPC waits -> refused by the new link
+ *   L8 the paper delete RPC holds the paper, a create waits -> the paper is not found
+ *   L9 one user's creates with two request ids      -> serialized (the exact study limit)
+ *
+ * then a REPEATABLE READ caller refused, an aborted attempt retried afresh and
+ * then replayed across sessions, and EL_FREE_ROUNDS barrier-released rounds
+ * each of identical creates and of conflicting updates, every round required
+ * to match one serial outcome.
+ */
+async function runEvidenceLifecycleRaceProbe(container) {
+  log("running true-concurrency evidence lifecycle race probe (L1-L9, free rounds)…");
+
+  const setup = await dockerPsql(
+    container,
+    `INSERT INTO auth.users (id, email) VALUES ('${EL_OWNER}','evidence-lifecycle-race@paperlume.test');\n` +
+      `INSERT INTO public.internal_user_access (user_id, role) VALUES ('${EL_OWNER}','owner');\n` +
+      `INSERT INTO public.papers (id, user_id, title, abstract, keywords, insert_order) VALUES\n` +
+      `  ('${EL_PAPER_A}','${EL_OWNER}','Lifecycle race A','Lifecycle race abstract.','[]'::jsonb,1),\n` +
+      `  ('${EL_PAPER_B}','${EL_OWNER}','Lifecycle race B','Protected paper abstract.','[]'::jsonb,2),\n` +
+      `  ('${EL_PAPER_C}','${EL_OWNER}','Lifecycle race C','Vanishing paper abstract.','[]'::jsonb,3);\n`,
+  );
+  if (setup.code !== 0) throw new Error(`evidence lifecycle race fixture setup failed: ${setup.err.trim()}`);
+
+  // L1 — identical creates: one study, one header, and the second answer replays the first.
+  let r = await runElForcedOrder(container, "L1",
+    elCall.create(EL_PAPER_A, "Race study", elRq(1)), elCall.create(EL_PAPER_A, "Race study", elRq(1)),
+    ["advisory"], /^OK \{"status": "replayed"/);
+  const study = elStudyOf(r.held);
+  if (!study || elStatusOf(r.held) !== "applied" || elStudyOf(r.waited) !== study) {
+    throw new Error(`evidence lifecycle race L1: the create answered ${r.held}, the replay ${r.waited}.`);
+  }
+  if ((await elHeaders(container, elRq(1))) !== "1" || (await elLabelled(container, "Race study")) !== "1") {
+    throw new Error("evidence lifecycle race L1: identical creates did not leave exactly one study and one header.");
+  }
+  log(`evidence lifecycle race L1 OK: the second create waited on the ${r.waitingOn} lock, then replayed the first (one study, one header).`);
+
+  // L2 — identical updates: applied once, replayed once.
+  r = await runElForcedOrder(container, "L2",
+    elCall.update(study, 1, "Race study 2", elRq(2)), elCall.update(study, 1, "Race study 2", elRq(2)),
+    ["advisory"], /^OK \{"status": "replayed", "study_id": "[0-9a-f-]{36}", "study_version": 2\}$/);
+  if ((await elVersion(container, study)) !== "2:Race study 2" || (await elHeaders(container, elRq(2))) !== "1") {
+    throw new Error("evidence lifecycle race L2: identical updates were not applied exactly once.");
+  }
+  log(`evidence lifecycle race L2 OK: the second update waited on the ${r.waitingOn} lock, then replayed version 2 (applied once).`);
+
+  // L3 — two request ids prepared against one version: the first wins.
+  r = await runElForcedOrder(container, "L3",
+    elCall.update(study, 2, "Writer one", elRq(3)), elCall.update(study, 2, "Writer two", elRq(4)),
+    ["transactionid"], /^ERR P0001 evidence_version_conflict$/);
+  if ((await elVersion(container, study)) !== "3:Writer one" || (await elHeaders(container, elRq(4))) !== "0") {
+    throw new Error("evidence lifecycle race L3: the losing update changed the study or left a header.");
+  }
+  log(`evidence lifecycle race L3 OK: the second writer waited on the study row (${r.waitingOn}), then got a version conflict; nothing of it was written.`);
+
+  // L4 — an update holds the study; a delete at the old version waits, then conflicts.
+  r = await runElForcedOrder(container, "L4",
+    elCall.update(study, 3, "Before delete", elRq(5)), elCall.remove(study, 3, elRq(6)),
+    ["transactionid"], /^ERR P0001 evidence_version_conflict$/);
+  if ((await elVersion(container, study)) !== "4:Before delete") {
+    throw new Error("evidence lifecycle race L4: the delete that lost the race removed or changed the study.");
+  }
+  log("evidence lifecycle race L4 OK: a delete racing an update waited, then got a version conflict; the study kept version 4.");
+
+  // L5 — a delete holds the study; an update waits, then finds nothing.
+  r = await runElForcedOrder(container, "L5",
+    elCall.remove(study, 4, elRq(7)), elCall.update(study, 4, "Too late", elRq(8)),
+    ["transactionid"], /^ERR P0002 evidence_not_found$/);
+  if (r.held !== '{"status": "deleted"}' || (await elVersion(container, study)) !== "GONE"
+      || (await elStudyRows(container, study)) !== "0") {
+    throw new Error(`evidence lifecycle race L5: the delete answered ${r.held} or left rows of the study.`);
+  }
+  log("evidence lifecycle race L5 OK: an update racing a delete waited, then found no study; nothing of the study remains.");
+
+  // L6 — one request id, two bodies: never applied twice.
+  r = await runElForcedOrder(container, "L6",
+    elCall.create(EL_PAPER_A, "Payload one", elRq(9)), elCall.create(EL_PAPER_A, "Payload two", elRq(9)),
+    ["advisory"], /^ERR P0001 evidence_request_id_reused$/);
+  if ((await elLabelled(container, "Payload one")) !== "1" || (await elLabelled(container, "Payload two")) !== "0") {
+    throw new Error("evidence lifecycle race L6: a reused request id applied its second body.");
+  }
+  log("evidence lifecycle race L6 OK: a request id reused with another body waited, then was refused; only the first body exists.");
+
+  // L7 — a create holds the paper (KEY SHARE); the client paper delete waits, then meets the new link.
+  r = await runElForcedOrder(container, "L7",
+    elCall.create(EL_PAPER_B, "Protects B", elRq(10)), elCall.deletePaper(EL_PAPER_B),
+    ["transactionid"], /^ERR 23503 .*evidence_study_reports_paper_fkey/);
+  if ((await elCount(container, `public.papers WHERE id='${EL_PAPER_B}'`)) !== "1"
+      || (await elCount(container, `public.evidence_study_reports WHERE paper_id='${EL_PAPER_B}'`)) !== "1"
+      || (await elCount(container, `public.attachment_cleanup_queue WHERE user_id='${EL_OWNER}'`)) !== "0") {
+    throw new Error("evidence lifecycle race L7: the refused paper delete left something partial.");
+  }
+  log("evidence lifecycle race L7 OK: the paper delete waited on the create, then was refused by the new link; paper and link kept.");
+
+  // L8 — the paper delete holds the paper; a create waits, then finds no paper.
+  r = await runElForcedOrder(container, "L8",
+    elCall.deletePaper(EL_PAPER_C), elCall.create(EL_PAPER_C, "Too late", elRq(11)),
+    ["transactionid"], /^ERR P0002 evidence_paper_not_found$/);
+  if (r.held !== "1/0" || (await elCount(container, `public.papers WHERE id='${EL_PAPER_C}'`)) !== "0"
+      || (await elLabelled(container, "Too late")) !== "0") {
+    throw new Error("evidence lifecycle race L8: the create racing a paper delete wrote something.");
+  }
+  log("evidence lifecycle race L8 OK: a create racing the paper delete waited, then found no paper; nothing was written.");
+
+  // L9 — one user's creates run one at a time, so the 2,000-study limit is exact.
+  r = await runElForcedOrder(container, "L9",
+    elCall.create(EL_PAPER_A, "Serial one", elRq(12)), elCall.create(EL_PAPER_A, "Serial two", elRq(13)),
+    ["advisory"], /^OK \{"status": "applied"/);
+  const serialOne = elStudyOf(r.held);
+  if ((await elLabelled(container, "Serial one")) !== "1" || (await elLabelled(container, "Serial two")) !== "1") {
+    throw new Error("evidence lifecycle race L9: two creates by one user did not both apply once.");
+  }
+  log(`evidence lifecycle race L9 OK: a second create by the same user waited on the per-user ${r.waitingOn} lock, then applied.`);
+
+  // L10 — REPEATABLE READ is refused, not silently raced.
+  for (const [nm, call] of [["create", elCall.create(EL_PAPER_A, "Repeatable read", elRq(14))],
+                            ["delete", elCall.remove(serialOne, 1, elRq(15))]]) {
+    const rr = await dockerPsql(container, elSessionSql("RR", call, { isolation: "REPEATABLE READ" }));
+    const said = plOutcome(rr.out, "RR");
+    if (rr.code !== 0 || said !== "ERR P0001 evidence_requires_read_committed") {
+      throw new Error(`evidence lifecycle race L10 (${nm}): a REPEATABLE READ caller got "${said}" (code=${rr.code}).`);
+    }
+  }
+  if ((await elLabelled(container, "Repeatable read")) !== "0" || (await elVersion(container, serialOne)) !== "1:Serial one") {
+    throw new Error("evidence lifecycle race L10: a refused REPEATABLE READ call changed something.");
+  }
+  log("evidence lifecycle race L10 OK: create and delete refuse REPEATABLE READ (evidence_requires_read_committed) and change nothing.");
+
+  // L11 — an attempt rolled back before commit leaves nothing; its retry is applied
+  // afresh, and a retry of THAT from another session (a lost response) replays it.
+  const aborted = await dockerPsql(container,
+    "BEGIN;\n" + `SELECT ${elClaimsSql()};\n` + "SET LOCAL ROLE authenticated;\n" +
+      `SELECT 'ABORTED=' || (${elCall.create(EL_PAPER_A, "Abort me", elRq(16))})::text;\n` + "ROLLBACK;\n");
+  if (aborted.code !== 0 || elStatusOf(plOutcome(aborted.out, "ABORTED")) !== "applied"
+      || (await elHeaders(container, elRq(16))) !== "0" || (await elLabelled(container, "Abort me")) !== "0") {
+    throw new Error("evidence lifecycle race L11: the rolled-back attempt left a trace.");
+  }
+  const retried = plOutcome((await dockerPsql(container,
+    elSessionSql("RETRY", elCall.create(EL_PAPER_A, "Abort me", elRq(16))))).out, "RETRY");
+  const replayed = plOutcome((await dockerPsql(container,
+    elSessionSql("REPLAY", elCall.create(EL_PAPER_A, "Abort me", elRq(16))))).out, "REPLAY");
+  if (elStatusOf(retried) !== "applied" || elStatusOf(replayed) !== "replayed"
+      || elStudyOf(retried) === null || elStudyOf(replayed) !== elStudyOf(retried)) {
+    throw new Error(`evidence lifecycle race L11: the retry answered ${retried} and its replay ${replayed}.`);
+  }
+  log("evidence lifecycle race L11 OK: a rolled-back attempt left nothing; its retry applied afresh; a later retry from a new session replayed it.");
+
+  // Free rounds — identical creates. Each must be one applied + one replayed of one study.
+  for (let i = 1; i <= EL_FREE_ROUNDS; i++) {
+    const req = elRq(0x100 + i);
+    const label = `Free create ${i}`;
+    const { x, y } = await runElFreeRound(container, `free create ${i}`,
+      elCall.create(EL_PAPER_A, label, req), elCall.create(EL_PAPER_A, label, req));
+    const statuses = [elStatusOf(x), elStatusOf(y)].sort().join(",");
+    if (statuses !== "applied,replayed" || elStudyOf(x) === null || elStudyOf(x) !== elStudyOf(y)
+        || (await elHeaders(container, req)) !== "1" || (await elLabelled(container, label)) !== "1") {
+      throw new Error(`evidence lifecycle race (free create ${i}): got "${x}" and "${y}".`);
+    }
+  }
+  log(`evidence lifecycle race free creates OK: ${EL_FREE_ROUNDS}/${EL_FREE_ROUNDS} barrier-released rounds each produced one study, one applied and one replayed answer.`);
+
+  // Free rounds — two writers at one version. Each must be one applied + one conflict.
+  const target = elStudyOf(plOutcome((await dockerPsql(container,
+    elSessionSql("TARGET", elCall.create(EL_PAPER_A, "Free target", elRq(0x200))))).out, "TARGET"));
+  if (!target) throw new Error("evidence lifecycle race: could not create the free-update target.");
+  for (let i = 1; i <= EL_FREE_ROUNDS; i++) {
+    const { x, y } = await runElFreeRound(container, `free update ${i}`,
+      elCall.update(target, i, `Writer X ${i}`, elRq(0x200 + 2 * i)),
+      elCall.update(target, i, `Writer Y ${i}`, elRq(0x201 + 2 * i)));
+    const winner = elStatusOf(x) === "applied" ? "X" : elStatusOf(y) === "applied" ? "Y" : null;
+    const loser = winner === "X" ? y : x;
+    const now = await elVersion(container, target);
+    if (winner === null || loser !== "ERR P0001 evidence_version_conflict" || now !== `${i + 1}:Writer ${winner} ${i}`) {
+      throw new Error(`evidence lifecycle race (free update ${i}): got "${x}" and "${y}", study now ${now}.`);
+    }
+  }
+  log(`evidence lifecycle race free updates OK: ${EL_FREE_ROUNDS}/${EL_FREE_ROUNDS} barrier-released rounds each applied exactly one writer and refused the other.`);
+
+  // Remove the fixture through the account cascade, and prove it is gone.
+  const cleanup = await dockerPsql(container, `DELETE FROM auth.users WHERE id='${EL_OWNER}';\n`);
+  if (cleanup.code !== 0) throw new Error(`evidence lifecycle race fixture cleanup failed: ${cleanup.err.trim()}`);
+  const residual = await dbScalar(container,
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${EL_OWNER}') + ` +
+      `(SELECT count(*) FROM public.papers WHERE user_id='${EL_OWNER}') + ` +
+      `(SELECT count(*) FROM public.internal_user_access WHERE user_id='${EL_OWNER}') + ` +
+      ["evidence_studies", "evidence_study_reports", "evidence_source_snapshots", "evidence_arms",
+        "evidence_outcomes", "evidence_field_values", "evidence_field_anchors", "evidence_events"]
+        .map((t) => `(SELECT count(*) FROM public.${t} WHERE user_id='${EL_OWNER}')`).join(" + ") + " + " +
+      `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${EL_BARRIER_CLASSID} AND objid=${EL_BARRIER_OBJID});`);
+  if (residual !== "0") throw new Error(`evidence lifecycle race fixture not fully removed (${residual} row(s) or lock(s) remain).`);
 }
 
 // ── AI-MULTI-PROVIDER-001C-REVIEW-FIX-01 ─────────────────────────────────────
@@ -5201,6 +5637,7 @@ async function cmdDbTests() {
     await runAttachmentFinalizationProbe(container);
     await runPaperDeleteFinalizationProbe(container);
     await runEvidenceForeignKeyRaceProbe(container);
+    await runEvidenceLifecycleRaceProbe(container);
     await runPreferenceLockProbe(container);
     await runAclParityProbe(container);
     await runMigrationCutoverProbe(container);

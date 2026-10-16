@@ -2,10 +2,12 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 32 SECURITY DEFINER functions (24 directly callable + 1 server-
+--   * exactly 36 SECURITY DEFINER functions (28 directly callable + 1 server-
 --     only + 5 trigger-only + 2 internal-only); no unexpected privileged
 --     function or overload; and the authenticated-executable definer set is
---     exactly the 24 directly-callable ones;
+--     exactly the 28 directly-callable ones;
+--   * internal-only helpers, SECURITY DEFINER or INVOKER, reachable by nobody
+--     but their owner (the study-record gate and normalization included);
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
 --   * directly-callable INVOKER RPCs: the five caller-scoped read RPCs
@@ -78,7 +80,7 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (24).
+-- The complete directly-callable SECURITY DEFINER RPC surface (28).
 -- `refund_ai_quota` left this list for server_rpcs() below with C47, the five
 -- caller-scoped read RPCs left it for invoker_rpcs() below with C49,
 -- bulk_update_keywords / bulk_update_study_types followed them with C52, and
@@ -142,7 +144,16 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     -- posture as every other entry: authenticated only, no PUBLIC / anon /
     -- service_role, owner retained. Its activated behaviour is owned by
     -- 019_manual_reasoning_activation.test.sql.
-    'public.set_current_user_ai_reasoning(text)'
+    'public.set_current_user_ai_reasoning(text)',
+    -- EVIDENCE-RECORDS-001A2. The study-record lifecycle: each derives its
+    -- caller from auth.uid() and takes no user id; the first three are also
+    -- owner-gated inside their bodies, and delete deliberately is not. Their
+    -- gate, ownership, idempotency and history contracts are owned by
+    -- 031_evidence_records_lifecycle.test.sql.
+    'public.evidence_create_study_from_paper(uuid,text,text,text,uuid)',
+    'public.evidence_update_study(uuid,integer,text,text,text,uuid)',
+    'public.evidence_set_link(uuid,uuid,text,integer,uuid)',
+    'public.evidence_delete_study(uuid,integer,uuid)'
   ]);
 $hlp$;
 
@@ -150,10 +161,17 @@ $hlp$;
 -- Internal 001C helpers: called only from inside other SECURITY DEFINER
 -- functions, which execute as the owner, so no role needs EXECUTE on them. Same
 -- required posture as a trigger-only function, different reason for it.
+-- EVIDENCE-RECORDS-001A2 added two more of the same kind, both SECURITY
+-- INVOKER (so outside the definer counts below, and in 015's INVOKER
+-- inventory): the owner-only pilot gate, which only the gated study-record RPCs
+-- call, and match normalization v1, which only they call. Granting either to a
+-- client would turn an internal decision into a browser API.
 CREATE FUNCTION pg_temp.internal_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT * FROM (VALUES
     ('public.author_identity_effective_root(uuid,uuid)'),
-    ('public.validate_author_mention_for_identity(uuid,uuid,integer,text)')
+    ('public.validate_author_mention_for_identity(uuid,uuid,integer,text)'),
+    ('public.evidence_records_assert_writable()'),
+    ('public.evidence_normalize_v1(text)')
   ) v(sig)
 $hlp$;
 
@@ -242,9 +260,9 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(315);
+SELECT plan(341);
 
--- ══ 1. Inventory: exactly 32 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
 -- internal helpers and one trigger function; 31 after AI-MODEL-SELECTION-001A
 -- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
@@ -282,12 +300,15 @@ SELECT plan(315);
 -- DB-SAFE-BULK-INSERT-INVOKER-001 (C53) then converted the caller-owned bulk
 -- import — safe_bulk_insert_papers — the same way: 32 definer functions, 24
 -- directly callable.
+-- EVIDENCE-RECORDS-001A2 then added the four study-record lifecycle RPCs: 36
+-- definer functions, 28 directly callable. Its two helpers are SECURITY
+-- INVOKER and are classified in internal_fns() above, not counted here.
 -- The count is deliberately exact: a new definer function that nobody registered
 -- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  32, 'exactly 32 SECURITY DEFINER functions in public');
+  36, 'exactly 36 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -323,21 +344,26 @@ SELECT is(
        'public.reject_attachment_over_cleanup_intent()'::regprocedure,
        'public.attachment_object_has_live_metadata(text)'::regprocedure,
        'public.set_current_user_ai_reasoning(text)'::regprocedure,
-       'public.clear_current_user_ai_reasoning()'::regprocedure
+       'public.clear_current_user_ai_reasoning()'::regprocedure,
+       'public.evidence_create_study_from_paper(uuid,text,text,text,uuid)'::regprocedure,
+       'public.evidence_update_study(uuid,integer,text,text,text,uuid)'::regprocedure,
+       'public.evidence_set_link(uuid,uuid,text,integer,uuid)'::regprocedure,
+       'public.evidence_delete_study(uuid,integer,uuid)'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 -- The classification, stated as a set rather than implied by the two counts:
 -- the definer functions `authenticated` can execute are exactly client_rpcs().
 -- This is the set the Security Advisor's
 -- authenticated_security_definer_function_executable lint reports (27 after
--- C49; 25 once C52 is applied; 24 once C53 is applied).
+-- C49; 25 once C52 is applied; 24 once C53 is applied; 28 once
+-- EVIDENCE-RECORDS-001A2 is applied).
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ',' ORDER BY p.oid::regprocedure::text), '')
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.prosecdef
       AND has_function_privilege('authenticated', p.oid, 'EXECUTE')),
   (SELECT string_agg(sig::regprocedure::text, ',' ORDER BY sig::regprocedure::text) FROM pg_temp.client_rpcs() sig),
-  'the authenticated-executable SECURITY DEFINER functions are exactly the 24 directly-callable RPCs');
+  'the authenticated-executable SECURITY DEFINER functions are exactly the 28 directly-callable RPCs');
 
 -- ══ 1b. The directly-callable SECURITY INVOKER RPCs (C49, C52, C53) ═════════
 -- Same EXECUTE matrix as a client RPC, pinned byte-for-byte on the ACL itself
@@ -362,7 +388,7 @@ SELECT ok(
      FROM pg_proc p WHERE p.oid = sig::regprocedure),
   'directly-callable INVOKER RPC owner (postgres) retained with EXECUTE: ' || sig) FROM pg_temp.invoker_rpcs() sig;
 
--- ══ 2. EXECUTE matrix over the 24 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 28 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -411,7 +437,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 24) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 28) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(
