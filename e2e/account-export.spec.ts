@@ -51,6 +51,17 @@ const EXPECTED_JSON_PATHS = [
   // shape later CHANGED (AI-MULTI-PROVIDER-001C added
   // `preferred_reasoning_level`), which is what moved the version to 3.
   "data/user_ai_preferences.json",
+  // EVIDENCE-RECORDS-001A1. Eight additive collection files, empty for the
+  // seeded account (no study-record write path exists yet); no existing file
+  // changed shape, so the manifest version stays 3.
+  "data/evidence_studies.json",
+  "data/evidence_study_reports.json",
+  "data/evidence_source_snapshots.json",
+  "data/evidence_arms.json",
+  "data/evidence_outcomes.json",
+  "data/evidence_field_values.json",
+  "data/evidence_field_anchors.json",
+  "data/evidence_events.json",
 ];
 
 /**

@@ -84,6 +84,14 @@ export const ACCOUNT_EXPORT_FORMAT = "paperlume-account-export" as const;
  * tell "this export predates reasoning" from "this user is on Automatic", and
  * the version is the only thing that can tell it.
  *
+ * DELIBERATELY STILL 3 FOR EVIDENCE-RECORDS-001A1.
+ *
+ * The study-record foundation adds eight whole new category files — the
+ * `data/evidence_*.json` collections — and reshapes nothing: no existing file
+ * gains, loses or redefines a field. That is the additive case the rule above
+ * decides, exactly as it was for 001C's four identity files; `manifest.json`
+ * gains eight `categories` entries, which is inherent to adding a category.
+ *
  * The next bump belongs to the next change that alters an existing file.
  */
 export const ACCOUNT_EXPORT_VERSION = 3 as const;
@@ -134,6 +142,22 @@ export const ACCOUNT_EXPORT_COLLECTIONS = [
   "author_identity_aliases",
   "author_identity_links",
   "author_identity_merges",
+  // EVIDENCE-RECORDS-001A1. Study records: the user's own structured reading of
+  // their papers — studies, which papers report them, saved copies of the
+  // abstracts they quoted, groups, outcomes, recorded values and missing-value
+  // states, the sources each value cites or was checked against, and the
+  // history of every change. None of it is reconstructible from anything else
+  // in the archive, so all eight travel from the moment a row can exist —
+  // including the copies (a superseded copy is still the text a quote points
+  // at) and the history (001 Q6).
+  "evidence_studies",
+  "evidence_study_reports",
+  "evidence_source_snapshots",
+  "evidence_arms",
+  "evidence_outcomes",
+  "evidence_field_values",
+  "evidence_field_anchors",
+  "evidence_events",
 ] as const;
 
 /**
@@ -482,6 +506,228 @@ export type AuthorIdentityMergeColumnsAreExported = Exclude<
   : never;
 
 /* -------------------------------------------------------------------------
+ * study records (EVIDENCE-RECORDS-001A1) — explicit column lists
+ * ---------------------------------------------------------------------- */
+
+/**
+ * The eight study-record tables are listed column by column for the same reason
+ * `papers` and the 001C tables are: the contract stays reviewable in one place,
+ * and a column added later must be classified rather than silently joining the
+ * archive or silently vanishing from it.
+ *
+ * Every column of all eight is exported. None holds a secret. The fingerprints
+ * (`exact_sha256`, `normalized_sha256`, `payload_sha256`) are derived, but they
+ * are provenance the user may need to prove what a saved copy or a request
+ * contained, so they travel too; `bytea` values arrive as PostgREST's `\x`
+ * hex text and are exported verbatim. Ids stay the raw UUIDs they are: a
+ * reference is only meaningful as a precise pointer to its value, report and
+ * copy.
+ */
+export const EVIDENCE_STUDY_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "label",
+  "design_profile",
+  "notes",
+  "row_version",
+  "created_at",
+  "updated_at",
+] as const;
+
+export const EVIDENCE_STUDY_REPORT_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "study_id",
+  "paper_id",
+  "link_status",
+  "link_basis",
+  "created_at",
+  "updated_at",
+] as const;
+
+export const EVIDENCE_SOURCE_SNAPSHOT_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "study_id",
+  "paper_id",
+  "seq",
+  "source_kind",
+  "exact_text",
+  "exact_sha256",
+  "normalized_sha256",
+  "normalization_version",
+  "char_count",
+  "captured_at",
+] as const;
+
+export const EVIDENCE_ARM_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "study_id",
+  "arm_role",
+  "display_label",
+  "position",
+  "created_at",
+  "updated_at",
+] as const;
+
+export const EVIDENCE_OUTCOME_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "study_id",
+  "display_label",
+  "position",
+  "created_at",
+  "updated_at",
+] as const;
+
+export const EVIDENCE_FIELD_VALUE_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "study_id",
+  "arm_id",
+  "outcome_id",
+  "field_key",
+  "value_state",
+  "state_reason",
+  "value_text",
+  "value_code",
+  "value_int",
+  "value_list",
+  "note",
+  "extraction_method",
+  "review_status",
+  "review_reason",
+  "review_note",
+  "reviewed_at",
+  "reviewed_version",
+  "value_version",
+  "created_at",
+  "updated_at",
+] as const;
+
+export const EVIDENCE_FIELD_ANCHOR_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "study_id",
+  "value_id",
+  "paper_id",
+  "snapshot_id",
+  "purpose",
+  "source_kind",
+  "position",
+  "quote_text",
+  "match_start",
+  "match_end",
+  "match_occurrence",
+  "match_count",
+  "normalization_version",
+  "matched_at",
+  "locator_kind",
+  "locator_text",
+  "created_at",
+] as const;
+
+export const EVIDENCE_EVENT_EXPORT_COLUMNS = [
+  "id",
+  "user_id",
+  "study_id",
+  "study_version",
+  "ordinal",
+  "event_type",
+  "request_id",
+  "op",
+  "payload_sha256",
+  "result",
+  "target_id",
+  "field_key",
+  "before",
+  "after",
+  "note",
+  "occurred_at",
+] as const;
+
+export type ExportedEvidenceStudy = Pick<
+  Tables["evidence_studies"]["Row"],
+  (typeof EVIDENCE_STUDY_EXPORT_COLUMNS)[number]
+>;
+export type ExportedEvidenceStudyReport = Pick<
+  Tables["evidence_study_reports"]["Row"],
+  (typeof EVIDENCE_STUDY_REPORT_EXPORT_COLUMNS)[number]
+>;
+export type ExportedEvidenceSourceSnapshot = Pick<
+  Tables["evidence_source_snapshots"]["Row"],
+  (typeof EVIDENCE_SOURCE_SNAPSHOT_EXPORT_COLUMNS)[number]
+>;
+export type ExportedEvidenceArm = Pick<
+  Tables["evidence_arms"]["Row"],
+  (typeof EVIDENCE_ARM_EXPORT_COLUMNS)[number]
+>;
+export type ExportedEvidenceOutcome = Pick<
+  Tables["evidence_outcomes"]["Row"],
+  (typeof EVIDENCE_OUTCOME_EXPORT_COLUMNS)[number]
+>;
+export type ExportedEvidenceFieldValue = Pick<
+  Tables["evidence_field_values"]["Row"],
+  (typeof EVIDENCE_FIELD_VALUE_EXPORT_COLUMNS)[number]
+>;
+export type ExportedEvidenceFieldAnchor = Pick<
+  Tables["evidence_field_anchors"]["Row"],
+  (typeof EVIDENCE_FIELD_ANCHOR_EXPORT_COLUMNS)[number]
+>;
+export type ExportedEvidenceEvent = Pick<
+  Tables["evidence_events"]["Row"],
+  (typeof EVIDENCE_EVENT_EXPORT_COLUMNS)[number]
+>;
+
+/** `true` while every column of table `T` is in its export list `C`; `never` otherwise. */
+type ExportsEveryColumn<T extends keyof Tables, C extends readonly string[]> = Exclude<
+  keyof Tables[T]["Row"],
+  C[number]
+> extends never
+  ? true
+  : never;
+
+/**
+ * Compile-time exhaustiveness guards — see `ProfileColumnsAreClassified`. There
+ * is no "deliberately excluded" counterpart because nothing in these tables is
+ * a secret; if that ever changes, add the excluded list rather than dropping
+ * the guard.
+ */
+export type EvidenceStudyColumnsAreExported = ExportsEveryColumn<
+  "evidence_studies",
+  typeof EVIDENCE_STUDY_EXPORT_COLUMNS
+>;
+export type EvidenceStudyReportColumnsAreExported = ExportsEveryColumn<
+  "evidence_study_reports",
+  typeof EVIDENCE_STUDY_REPORT_EXPORT_COLUMNS
+>;
+export type EvidenceSourceSnapshotColumnsAreExported = ExportsEveryColumn<
+  "evidence_source_snapshots",
+  typeof EVIDENCE_SOURCE_SNAPSHOT_EXPORT_COLUMNS
+>;
+export type EvidenceArmColumnsAreExported = ExportsEveryColumn<
+  "evidence_arms",
+  typeof EVIDENCE_ARM_EXPORT_COLUMNS
+>;
+export type EvidenceOutcomeColumnsAreExported = ExportsEveryColumn<
+  "evidence_outcomes",
+  typeof EVIDENCE_OUTCOME_EXPORT_COLUMNS
+>;
+export type EvidenceFieldValueColumnsAreExported = ExportsEveryColumn<
+  "evidence_field_values",
+  typeof EVIDENCE_FIELD_VALUE_EXPORT_COLUMNS
+>;
+export type EvidenceFieldAnchorColumnsAreExported = ExportsEveryColumn<
+  "evidence_field_anchors",
+  typeof EVIDENCE_FIELD_ANCHOR_EXPORT_COLUMNS
+>;
+export type EvidenceEventColumnsAreExported = ExportsEveryColumn<
+  "evidence_events",
+  typeof EVIDENCE_EVENT_EXPORT_COLUMNS
+>;
+
+/* -------------------------------------------------------------------------
  * AI model preference (AI-MODEL-SELECTION-001A) — explicit column list
  * ---------------------------------------------------------------------- */
 
@@ -588,6 +834,19 @@ export interface AccountExportData {
   author_identity_aliases: ExportedAuthorIdentityAlias[];
   author_identity_links: ExportedAuthorIdentityLink[];
   author_identity_merges: ExportedAuthorIdentityMerge[];
+  /**
+   * Study records (EVIDENCE-RECORDS-001A1). Present but empty when the account
+   * has none — and, during the rollout window, when this environment predates
+   * the migration that creates them.
+   */
+  evidence_studies: ExportedEvidenceStudy[];
+  evidence_study_reports: ExportedEvidenceStudyReport[];
+  evidence_source_snapshots: ExportedEvidenceSourceSnapshot[];
+  evidence_arms: ExportedEvidenceArm[];
+  evidence_outcomes: ExportedEvidenceOutcome[];
+  evidence_field_values: ExportedEvidenceFieldValue[];
+  evidence_field_anchors: ExportedEvidenceFieldAnchor[];
+  evidence_events: ExportedEvidenceEvent[];
   /**
    * The user's saved AI-model choice, or `null` when they have none.
    *

@@ -43,6 +43,14 @@ function emptyData(): AccountExportData {
     author_identity_aliases: [],
     author_identity_links: [],
     author_identity_merges: [],
+    evidence_studies: [],
+    evidence_study_reports: [],
+    evidence_source_snapshots: [],
+    evidence_arms: [],
+    evidence_outcomes: [],
+    evidence_field_values: [],
+    evidence_field_anchors: [],
+    evidence_events: [],
     user_ai_preferences: null,
   };
 }

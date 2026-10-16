@@ -123,6 +123,18 @@ INSERT INTO acl_expected (relname, auth_privs, svc_privs) VALUES
   ('author_identity_aliases',     'DELETE,INSERT,SELECT',              ''),
   ('author_identity_links',       'SELECT',                            ''),
   ('author_identity_merges',      'SELECT',                            ''),
+  -- EVIDENCE-RECORDS-001A1. Study records are read-only to the browser: every
+  -- write will go through reviewed SECURITY DEFINER RPCs (none exist yet), so
+  -- no client role may insert, update or delete a row, and service_role holds
+  -- nothing — account deletion clears them through the foreign-key cascade.
+  ('evidence_arms',               'SELECT',                            ''),
+  ('evidence_events',             'SELECT',                            ''),
+  ('evidence_field_anchors',      'SELECT',                            ''),
+  ('evidence_field_values',       'SELECT',                            ''),
+  ('evidence_outcomes',           'SELECT',                            ''),
+  ('evidence_source_snapshots',   'SELECT',                            ''),
+  ('evidence_studies',            'SELECT',                            ''),
+  ('evidence_study_reports',      'SELECT',                            ''),
   ('filter_presets',              'DELETE,INSERT,SELECT,UPDATE',       ''),
   ('internal_user_access',        '',                                  ''),
   ('keyword_exclusion_pool',      'DELETE,INSERT,SELECT',              ''),
@@ -162,7 +174,7 @@ CREATE TEMP TABLE acl_relation_allowlist (relname text PRIMARY KEY, why text NOT
 -- deliberately — section K fails on it until it is.
 CREATE TEMP TABLE acl_invoker_public_exec_allowlist (sig text PRIMARY KEY, why text NOT NULL);
 
-SELECT plan(119);
+SELECT plan(135);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(

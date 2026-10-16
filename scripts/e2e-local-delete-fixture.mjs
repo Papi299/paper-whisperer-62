@@ -122,20 +122,80 @@ function fixtureBytes() {
   return new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]);
 }
 
+/** Every study-record table (EVIDENCE-RECORDS-001A1), all of them user-owned. */
+const EVIDENCE_TABLES = [
+  "evidence_studies",
+  "evidence_study_reports",
+  "evidence_source_snapshots",
+  "evidence_arms",
+  "evidence_outcomes",
+  "evidence_field_values",
+  "evidence_field_anchors",
+  "evidence_events",
+];
+
+/**
+ * Plant one complete study record on the disposable paper, as the local
+ * database owner (EVIDENCE-RECORDS-001A1). No client write path exists yet —
+ * the RPCs come later, and even then this account is not the pilot owner — so
+ * the owner connection is the permanent way to give the deletion E2E evidence.
+ *
+ * It populates all three ON DELETE NO ACTION edges (link -> paper, reference ->
+ * link, quote -> copy) and proves it did, so the post-run "everything is gone"
+ * check is a real account-deletion proof through the served delete-account
+ * function and GoTrue, not a check on tables that were empty anyway.
+ */
+async function plantDisposableStudyRecord(ownerSql, userId, paperId) {
+  const uid = sqlLiteral(assertUuid(userId));
+  const pid = sqlLiteral(assertUuid(paperId));
+  const id = () => sqlLiteral(randomUUID());
+  const [study, copy, arm, outcome, value, request] = [id(), id(), id(), id(), id(), id()];
+  const text = sqlLiteral("Disposable saved abstract for the account-deletion E2E.");
+  const out = await ownerSql(
+    "BEGIN;\n" +
+      `INSERT INTO public.evidence_studies (id, user_id, label, design_profile) VALUES (${study}, ${uid}, 'Disposable study record', 'rct_parallel');\n` +
+      `INSERT INTO public.evidence_study_reports (user_id, study_id, paper_id, link_status, link_basis) VALUES (${uid}, ${study}, ${pid}, 'user_confirmed', 'created_from_paper');\n` +
+      "INSERT INTO public.evidence_source_snapshots (id, user_id, study_id, paper_id, seq, source_kind, exact_text, exact_sha256, normalized_sha256, normalization_version, char_count) " +
+      `VALUES (${copy}, ${uid}, ${study}, ${pid}, 1, 'library_abstract', ${text}, sha256(convert_to(${text}, 'UTF8')), sha256(convert_to(${text}, 'UTF8')), 'v1', char_length(${text}));\n` +
+      `INSERT INTO public.evidence_arms (id, user_id, study_id, arm_role, display_label, position) VALUES (${arm}, ${uid}, ${study}, 'intervention', 'Disposable group', 0);\n` +
+      `INSERT INTO public.evidence_outcomes (id, user_id, study_id, display_label, position) VALUES (${outcome}, ${uid}, ${study}, 'Disposable outcome', 0);\n` +
+      `INSERT INTO public.evidence_field_values (id, user_id, study_id, field_key, value_state, value_text) VALUES (${value}, ${uid}, ${study}, 'population_description', 'reported', 'Disposable population');\n` +
+      "INSERT INTO public.evidence_field_anchors (user_id, study_id, value_id, paper_id, snapshot_id, purpose, source_kind, position, quote_text, match_start, match_end, match_occurrence, match_count, normalization_version, matched_at) " +
+      `VALUES (${uid}, ${study}, ${value}, ${pid}, ${copy}, 'supports', 'abstract', 0, 'Disposable saved abstract', 0, 25, 1, 1, 'v1', now());\n` +
+      "INSERT INTO public.evidence_field_anchors (user_id, study_id, value_id, paper_id, purpose, source_kind, position, locator_kind, locator_text) " +
+      `VALUES (${uid}, ${study}, ${value}, ${pid}, 'supports', 'full_text', 1, 'page', '4');\n` +
+      "INSERT INTO public.evidence_events (user_id, study_id, study_version, ordinal, event_type, request_id, op, payload_sha256, result, target_id) VALUES " +
+      `(${uid}, ${study}, 1, 0, 'request', ${request}, 'create_study', sha256('disposable'::bytea), '{"status":"applied","study_version":1}'::jsonb, NULL), ` +
+      `(${uid}, ${study}, 1, 1, 'study_created', ${request}, NULL, NULL, NULL, ${study});\n` +
+      "COMMIT;\n" +
+      "SELECT json_build_object(" +
+      `'link_paper', (SELECT count(*) FROM public.evidence_study_reports WHERE user_id = ${uid} AND paper_id = ${pid}), ` +
+      `'ref_link', (SELECT count(*) FROM public.evidence_field_anchors WHERE user_id = ${uid} AND paper_id = ${pid}), ` +
+      `'quote_copy', (SELECT count(*) FROM public.evidence_field_anchors WHERE user_id = ${uid} AND snapshot_id = ${copy})` +
+      ")::text;",
+  );
+  const edges = JSON.parse(out.split("\n").pop());
+  if (edges.link_paper !== 1 || edges.ref_link !== 2 || edges.quote_copy !== 1) {
+    throw new Error(`disposable study record does not populate every NO ACTION edge (${JSON.stringify(edges)}).`);
+  }
+}
+
 /**
  * Create the disposable account and populate it with representative data:
  * a profile + entitlement (signup trigger), one paper, one attachment whose
- * metadata row exists, and one **orphan** Storage object with no metadata row —
+ * metadata row exists, one **orphan** Storage object with no metadata row —
  * the case that makes Storage-sourced enumeration necessary rather than
- * convenient.
+ * convenient — and one study record whose three ON DELETE NO ACTION edges are
+ * all populated (EVIDENCE-RECORDS-001A1).
  *
  * Storage uploads run through an authenticated client so ownership and the
  * `<userId>/<paperId>/<name>` path contract match the real product path.
  *
- * @param {{ apiUrl: string, anonKey: string, serviceRoleKey: string, log?: (m: string) => void }} opts
+ * @param {{ apiUrl: string, anonKey: string, serviceRoleKey: string, ownerSql: (sql: string) => Promise<string>, log?: (m: string) => void }} opts
  */
-export async function provisionDisposableAccount({ apiUrl, anonKey, serviceRoleKey, log = () => {} }) {
+export async function provisionDisposableAccount({ apiUrl, anonKey, serviceRoleKey, ownerSql, log = () => {} }) {
   assertLoopbackApiUrl(apiUrl);
+  assertOwnerSql(ownerSql);
   if (!serviceRoleKey || !anonKey) {
     throw new Error("Account-deletion fixture refused: missing local service-role or anon key.");
   }
@@ -220,7 +280,12 @@ export async function provisionDisposableAccount({ apiUrl, anonKey, serviceRoleK
     );
   }
 
-  log(`  provisioned disposable deletion account (1 paper, 1 attachment, 1 orphan object)`);
+  await plantDisposableStudyRecord(ownerSql, userId, paperId);
+
+  log(
+    "  provisioned disposable deletion account (1 paper, 1 attachment, 1 orphan object, " +
+      "1 study record with all three NO ACTION edges populated)",
+  );
   return { email, password, userId, paperId, attachmentPath, orphanPath };
 }
 
@@ -257,6 +322,9 @@ export async function assertDisposableAccountRemoved({
     "user_entitlements",
     "usage_counters",
     "user_storage_usage",
+    // EVIDENCE-RECORDS-001A1: the study record, its saved abstract copy and its
+    // history must all leave with the account.
+    ...EVIDENCE_TABLES,
   ];
   const uid = sqlLiteral(assertUuid(account.userId));
   let counts;
