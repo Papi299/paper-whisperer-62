@@ -1,6 +1,6 @@
 # Study records — lifecycle RPC contract (EVIDENCE-RECORDS-001A2)
 
-> **Status:** implemented in the repository by migration `20261016104232_add_evidence_records_lifecycle_rpcs.sql`. Applying it to Production is a separately authorized step; until then Production has the eight evidence tables of `20261012031537` (PR-A1) and no write path to them. There is no UI: the browser does not call these functions yet.
+> **Status:** implemented in the repository by migration `20261016104232_add_evidence_records_lifecycle_rpcs.sql`. Applying it to Production is a separately authorized step; until then Production has the eight evidence tables of `20261012031537` (PR-A1) and no write path to them. There is no UI: the browser does not call these functions yet. A typed client for them exists in `src/lib/evidence/` (EVIDENCE-RECORDS-001B, [evidence-domain-library.md](evidence-domain-library.md)), but nothing in the app calls it.
 
 This document is the client contract for the four functions that create, edit, link and delete study records, and the two internal helpers behind them. The migration header holds the database-level detail; suite `031_evidence_records_lifecycle.test.sql` and the db-tests lifecycle's evidence lifecycle race probe (`scripts/e2e-local.mjs`) are the executable specification.
 
@@ -76,9 +76,9 @@ The payload fingerprint is SHA-256 over the UTF-8 text of a jsonb object holding
 
 Create reads the paper's stored abstract on the server and saves a byte-exact copy for the new link (`source_kind = library_abstract`, `seq = 1`), with `exact_sha256` over its UTF-8 bytes, `normalized_sha256` after match normalization v1, `normalization_version = 'v1'` and `char_count`. The browser never sends the text. A NULL abstract, or one that is empty after v1 (white space and invisible format characters only), gets no copy. A copy is the abstract **as stored in the user's library** — nothing checks it against a publisher or PubMed.
 
-**Match normalization v1** is REQUIREMENTS-001 §I3, applied in this order: Unicode NFC (never NFKC or NFKD, which would read `10⁵` as `105`); remove U+00AD, U+200B, U+2060 and U+FEFF; map every Unicode `White_Space` character to a space, collapse runs and trim; map ‘ ’ ‚ ‛ to `'` and “ ” „ ‟ to `"`; map U+2010–U+2015 and U+2212 to `-`; map U+2026 to `...` and U+00B5 to U+03BC; nothing else. The order matters at the edges: a soft hyphen between `e` and a combining accent is removed only after NFC, so that pair stays decomposed. Suite 031 pins 30 golden vectors whose expected outputs and SHA-256 values were computed outside PostgreSQL.
+**Match normalization v1** is REQUIREMENTS-001 §I3, applied in this order: Unicode NFC (never NFKC or NFKD, which would read `10⁵` as `105`); remove U+00AD, U+200B, U+2060 and U+FEFF; map every Unicode `White_Space` character to a space, collapse runs and trim; map ‘ ’ ‚ ‛ to `'` and “ ” „ ‟ to `"`; map U+2010–U+2015 and U+2212 to `-`; map U+2026 to `...` and U+00B5 to U+03BC; nothing else. The order matters at the edges: a soft hyphen between `e` and a combining accent is removed only after NFC, so that pair stays decomposed. Suite 031 pins 30 golden vectors whose expected outputs and SHA-256 values were computed outside PostgreSQL. The shared fixture of EVIDENCE-RECORDS-001B carries those vectors and more; suite 032 runs it against the installed function and Vitest against the TypeScript normalizer ([evidence-domain-library.md](evidence-domain-library.md) §6).
 
-**Phase order.** The staged plan put `evidence_normalize_v1` in PR-A3 (001A3). PR-A1's schema already requires a v1 fingerprint on every copy, so only that function moved into this phase. Quote location and matching, every source-reference write, and the TypeScript normalizer with its shared fixture and parity check stay in 001A3 and 001B.
+**Phase order.** The staged plan put `evidence_normalize_v1` in PR-A3 (001A3). PR-A1's schema already requires a v1 fingerprint on every copy, so only that function moved into this phase. Server-side quote location and matching, and every source-reference write, stay in 001A3. The TypeScript normalizer, its shared fixture and the parity check are 001B ([evidence-domain-library.md](evidence-domain-library.md) §6).
 
 ## 7. History
 
@@ -106,4 +106,4 @@ No event holds abstract text or notes text: notes can be 10,000 characters, whic
 - Owner-only pilot. Widening it is one reviewed change to `evidence_records_assert_writable()` plus a separate Production authorization (001A G7).
 - No write path yet for groups, outcomes, values, source references, review states or rebasing a copy (001A3).
 - A request id is remembered only while its study exists (§5).
-- Generated TypeScript types list every argument as required and non-null (`p_notes: string`); the database accepts NULL for `p_notes`.
+- Generated TypeScript types list every argument as required and non-null (`p_notes: string`); the database accepts NULL for `p_notes`. `src/lib/evidence/lifecycleRequests.ts` widens only that argument.
