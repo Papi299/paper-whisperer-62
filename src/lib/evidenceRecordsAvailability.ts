@@ -16,8 +16,9 @@
  *
  * One error is evidence about ONE table. Whether the schema as a whole is
  * absent is decided by the caller from every table's read together — see
- * `fetchEvidenceExportTables`. The RPCs of later PRs will be added here when
- * they exist.
+ * `fetchEvidenceExportTables`. A missing lifecycle RPC is recognized per RPC,
+ * with the same shared matching, by `classifyLifecycleError` in
+ * `src/lib/evidence/errors.ts`.
  */
 
 import { isMissingDatabaseObjectError } from "./missingDatabaseObject";
