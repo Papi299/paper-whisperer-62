@@ -6,6 +6,9 @@ import { VALUE_STATE_RULES } from "../states";
 import { VALUE_STATES, type FieldContent, type ValueState } from "../types";
 import {
   btrimSpaces,
+  checkStateReferences,
+  countReferencePurposes,
+  MAX_SUPPORTING_REFERENCES,
   trimListEntries,
   validateStudyLabel,
   validateStudyNotes,
@@ -16,6 +19,7 @@ import {
   type ValueContext,
   type ValueDraft,
 } from "../validation";
+import { SECTION_J_ALLOWS } from "./fixtures/sectionJ";
 import { cp } from "./fixtures/vectors";
 
 /**
@@ -290,6 +294,81 @@ describe("which sources each state takes (FK-PROOF-001 §J)", () => {
   it("allows one assessment per report and source kind", () => {
     const twice: ReferenceDraft[] = [examinedFullText, { purpose: "unavailable", sourceKind: "full_text", paperId: PAPER_A }];
     expect(state("not_reported", twice)).toContain("references.duplicate_assessment");
+  });
+});
+
+describe("the shared state-reference rule (checkStateReferences)", () => {
+  it("refuses exactly what FK-PROOF-001 §J refuses, for every count of every purpose", () => {
+    let cells = 0;
+    for (const s of VALUE_STATES) {
+      for (let supports = 0; supports <= 5; supports++) {
+        for (let examined = 0; examined <= 3; examined++) {
+          for (let unavailable = 0; unavailable <= 3; unavailable++) {
+            const counts = { supports, examined, unavailable };
+            const broken = checkStateReferences(s, counts);
+            expect(broken.length === 0, `${s} with ${supports}/${examined}/${unavailable}: ${broken.join(", ")}`).toBe(SECTION_J_ALLOWS[s](counts));
+            cells += 1;
+          }
+        }
+      }
+    }
+    expect(cells).toBe(VALUE_STATES.length * 6 * 4 * 4);
+  });
+
+  it("is what validateValueDraft reports for a draft's sources", () => {
+    const state = (s: ValueState, references: ReferenceDraft[]) =>
+      errorCodes(
+        validateValueDraft(
+          draft({ state: s, content: s === "reported" ? text("Type 2 diabetes") : null, stateReason: s === "unclear" ? "incomplete" : null, note: "long enough note", references }),
+          CONTEXT,
+        ),
+      );
+    const drafts: [ValueState, ReferenceDraft[]][] = [
+      ["reported", [examinedAbstract, unavailableFullText]],
+      ["not_reported", [quote("type 2 diabetes")]],
+      ["unclear", [unavailableAbstractB]],
+      ["source_unavailable", [locator(), examinedAbstract]],
+      ["not_applicable", [examinedAbstract, unavailableAbstractB]],
+    ];
+    for (const [s, references] of drafts) {
+      const reported = state(s, references).filter((c) => c.startsWith("references.") && c !== "references.duplicate_assessment");
+      expect(reported, s).toEqual([...checkStateReferences(s, countReferencePurposes(references))]);
+      expect(reported.length, s).toBeGreaterThan(0);
+    }
+  });
+
+  it("names a purpose the state forbids, one it requires, and the Unclear minimum, in a fixed order", () => {
+    expect(checkStateReferences("source_unavailable", { supports: 4, examined: 1, unavailable: 0 })).toEqual([
+      "references.too_many_supporting",
+      "references.supporting_not_allowed",
+      "references.examined_not_allowed",
+      "references.unavailable_required",
+    ]);
+    expect(checkStateReferences("not_applicable", { supports: 1, examined: 1, unavailable: 1 })).toEqual(["references.not_allowed"]);
+    expect(checkStateReferences("unclear", { supports: 0, examined: 0, unavailable: 2 })).toEqual(["references.basis_required"]);
+    expect(Object.isFrozen(checkStateReferences("reported", { supports: 0, examined: 0, unavailable: 0 }))).toBe(true);
+  });
+
+  it("reads a rule table whose only bounds are none, at least one, and PR-A1's cap of three supporting", () => {
+    for (const s of VALUE_STATES) {
+      const rule = VALUE_STATE_RULES[s];
+      expect([0, MAX_SUPPORTING_REFERENCES], s).toContain(rule.supports.max);
+      expect(rule.supports.min, s).toBe(0);
+      for (const purpose of ["examined", "unavailable"] as const) {
+        expect([0, null], `${s} ${purpose}`).toContain(rule[purpose].max);
+        expect([0, 1], `${s} ${purpose}`).toContain(rule[purpose].min);
+      }
+    }
+  });
+
+  it("counts references by purpose", () => {
+    expect(countReferencePurposes([quote("a b c"), locator(), examinedAbstract, unavailableAbstractB, unavailableFullText])).toEqual({
+      supports: 2,
+      examined: 1,
+      unavailable: 2,
+    });
+    expect(countReferencePurposes([])).toEqual({ supports: 0, examined: 0, unavailable: 0 });
+    expect(countReferencePurposes([{ purpose: "cites" } as never])).toEqual({ supports: 0, examined: 0, unavailable: 0 });
   });
 });
 

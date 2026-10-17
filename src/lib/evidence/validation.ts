@@ -42,6 +42,7 @@ import { isCanonicalUuid, type AnchorId, type PaperId, type SnapshotId } from ".
 import { locateQuote, QUOTE_MAX_LENGTH } from "./matcher";
 import { codePointLength, findPostgresTextProblem, isNormalizationEmpty, WHITE_SPACE_CODE_POINTS } from "./normalization";
 import { checkCountInQuote } from "./numbers";
+import { VALUE_STATE_RULES } from "./states";
 import {
   isLocatorKind,
   isReferencePurpose,
@@ -555,35 +556,65 @@ function validateQuote(issues: Issues, draft: Record<string, unknown>, path: Iss
   return quoteText;
 }
 
-function validateReferencesForState(issues: Issues, state: ValueState, references: readonly CheckedReference[]): void {
-  const count = (purpose: ReferencePurpose) => references.filter((r) => r.purpose === purpose).length;
-  const supports = count("supports");
-  const examined = count("examined");
-  const unavailable = count("unavailable");
-  const path = ["references"];
+/** A value's references, counted by purpose. */
+export interface ReferencePurposeCounts {
+  readonly supports: number;
+  readonly examined: number;
+  readonly unavailable: number;
+}
 
-  if (supports > MAX_SUPPORTING_REFERENCES) issues.error("references.too_many_supporting", path);
-  switch (state) {
-    case "reported":
-      if (examined > 0) issues.error("references.examined_not_allowed", path);
-      if (unavailable > 0) issues.error("references.unavailable_not_allowed", path);
-      break;
-    case "not_reported":
-      if (supports > 0) issues.error("references.supporting_not_allowed", path);
-      if (examined === 0) issues.error("references.examined_required", path);
-      break;
-    case "unclear":
-      if (supports + examined === 0) issues.error("references.basis_required", path);
-      break;
-    case "source_unavailable":
-      if (supports > 0) issues.error("references.supporting_not_allowed", path);
-      if (examined > 0) issues.error("references.examined_not_allowed", path);
-      if (unavailable === 0) issues.error("references.unavailable_required", path);
-      break;
-    case "not_applicable":
-      if (references.length > 0) issues.error("references.not_allowed", path);
-      break;
+export function countReferencePurposes(references: readonly { readonly purpose: ReferencePurpose }[]): ReferencePurposeCounts {
+  const counts = { supports: 0, examined: 0, unavailable: 0 };
+  for (const { purpose } of references) if (isReferencePurpose(purpose)) counts[purpose] += 1;
+  return Object.freeze(counts);
+}
+
+/** A reference-count rule of a value's state, by the code `validateValueDraft` reports for it. */
+export type StateReferenceCode =
+  | "references.too_many_supporting"
+  | "references.supporting_not_allowed"
+  | "references.examined_required"
+  | "references.examined_not_allowed"
+  | "references.unavailable_required"
+  | "references.unavailable_not_allowed"
+  | "references.basis_required"
+  | "references.not_allowed";
+
+// No state requires a supporting source (VALUE_STATE_RULES), so it has no "required" code.
+const PURPOSE_RULE_CODES = [
+  { purpose: "supports", required: null, forbidden: "references.supporting_not_allowed" },
+  { purpose: "examined", required: "references.examined_required", forbidden: "references.examined_not_allowed" },
+  { purpose: "unavailable", required: "references.unavailable_required", forbidden: "references.unavailable_not_allowed" },
+] as const;
+
+/**
+ * The reference-count rules of `state` that `counts` break: PR-A1's cap of
+ * three supporting references (positions 0-2), then FK-PROOF-001 §J as
+ * `VALUE_STATE_RULES` holds it — a purpose the state forbids, a purpose it
+ * requires, and Unclear's "at least one supporting or examined source". A
+ * state that takes no source at all says so once. This is the one statement
+ * of these rules for both `validateValueDraft` and `checkConfirm`, so a value
+ * whose sources break its state is refused by both. Codes come in a fixed
+ * order: the cap, supporting, examined, unavailable, then the Unclear minimum.
+ */
+export function checkStateReferences(state: ValueState, counts: ReferencePurposeCounts): readonly StateReferenceCode[] {
+  const rule = VALUE_STATE_RULES[state];
+  const codes: StateReferenceCode[] = [];
+  if (counts.supports > MAX_SUPPORTING_REFERENCES) codes.push("references.too_many_supporting");
+  if (PURPOSE_RULE_CODES.every(({ purpose }) => rule[purpose].max === 0)) {
+    if (counts.supports + counts.examined + counts.unavailable > 0) codes.push("references.not_allowed");
+  } else {
+    for (const { purpose, required, forbidden } of PURPOSE_RULE_CODES) {
+      if (rule[purpose].max === 0 && counts[purpose] > 0) codes.push(forbidden);
+      else if (required !== null && counts[purpose] < rule[purpose].min) codes.push(required);
+    }
+    if (counts.supports + counts.examined < rule.supportsOrExaminedMin) codes.push("references.basis_required");
   }
+  return Object.freeze(codes);
+}
+
+function validateReferencesForState(issues: Issues, state: ValueState, references: readonly CheckedReference[]): void {
+  for (const code of checkStateReferences(state, countReferencePurposes(references))) issues.error(code, ["references"]);
 
   // One assessment (examined or unavailable) per report and source kind.
   const assessed = new Set<string>();

@@ -14,7 +14,8 @@ import {
   REVIEW_STATUS_LABELS,
   saveClearsReview,
 } from "../review";
-import { validateValueDraft } from "../validation";
+import { VALUE_STATES, type RecordedValue, type StoredReference, type ValueState } from "../types";
+import { validateValueDraft, type LinkSources, type ValueContext } from "../validation";
 import {
   abstractQuote,
   COPY_A,
@@ -32,6 +33,7 @@ import {
   reviewed,
   unavailable,
 } from "./fixtures/records";
+import { SECTION_J_ALLOWS, SECTION_J_FORBIDDEN, sectionJConfirmable, type PurposeCounts } from "./fixtures/sectionJ";
 import { cp } from "./fixtures/vectors";
 
 /**
@@ -118,6 +120,212 @@ describe("Confirm: one value, one exact version", () => {
   it("lets a flagged or needs-re-review value be confirmed when its preconditions hold", () => {
     expect(checkConfirm(recordedValue({ review: FLAGGED }), 1, LINKS).kind).toBe("allowed");
     expect(checkConfirm(recordedValue({ review: NEEDS_REREVIEW }), 1, LINKS).kind).toBe("allowed");
+  });
+});
+
+/**
+ * The sources each state must and must not have. Expectations come from
+ * FK-PROOF-001 §J as transcribed in `fixtures/sectionJ.ts`, never from the
+ * rule table under test. Every reference here is on its link's current copy
+ * unless a test says otherwise, so §J alone decides.
+ */
+describe("Confirm needs the sources its state requires (FK-PROOF-001 §J)", () => {
+  const CONTEXT: ValueContext = { designProfile: "rct_parallel", target: { scope: "study" }, links: LINKS };
+  /** Paper B's first copy has been saved since the value was recorded. */
+  const B_CAPTURED: readonly LinkSources[] = LINKS.map((l) => (l.paperId === PAPER_B ? { ...l, currentSnapshotId: COPY_B, snapshotIds: [COPY_B] } : l));
+
+  /** A value in `state` whose value, reason and note are all in order, so only its sources can block it. */
+  const valueIn = (state: ValueState, references: StoredReference[], extra: Parameters<typeof recordedValue>[0] = {}) =>
+    recordedValue({
+      state,
+      content: state === "reported" ? { shape: "text", text: "Type 2 diabetes" } : null,
+      stateReason: state === "unclear" ? "ambiguous" : null,
+      note: state === "unclear" ? "abstract gives 120 and 118" : state === "not_applicable" ? "Not a trial" : null,
+      references,
+      ...extra,
+    });
+  const confirm = (value: RecordedValue, links: readonly LinkSources[] = LINKS) => checkConfirm(value, value.valueVersion, links);
+  const validatorErrors = (value: RecordedValue) =>
+    validateValueDraft(draftFromRecordedValue(value), CONTEXT).issues.filter((i) => i.severity === "error").map((i) => i.code);
+
+  /** A minimal valid set of sources per state, from §J's table. */
+  const VALID: Record<ValueState, () => StoredReference[]> = {
+    reported: () => [abstractQuote()],
+    not_reported: () => [examinedAbstract()],
+    unclear: () => [examinedAbstract()],
+    source_unavailable: () => [unavailable("abstract", PAPER_B)],
+    not_applicable: () => [],
+  };
+  /** One more source of each purpose, on a report and source kind none of the VALID sets uses. */
+  const ONE_MORE: Record<keyof PurposeCounts, () => StoredReference> = {
+    supports: () => fullTextLocator(PAPER_A),
+    examined: () => examinedFullText(PAPER_A),
+    unavailable: () => unavailable("full_text", PAPER_B),
+  };
+
+  it.each(VALUE_STATES)("confirms a %s value that has the sources §J requires", (state) => {
+    const value = valueIn(state, VALID[state]());
+    expect(validatorErrors(value)).toEqual([]);
+    expect(confirm(value)).toEqual({ kind: "allowed", item: { valueId: value.id, valueVersion: 1 } });
+  });
+
+  it("refuses Not reported without an examined source: an unavailable source is not an examination", () => {
+    for (const references of [[], [unavailable("full_text", PAPER_B)], [unavailable("abstract", PAPER_B)]]) {
+      const value = valueIn("not_reported", references);
+      expect(confirm(value)).toEqual({ kind: "blocked", reasons: ["examined_source_missing"] });
+      expect(validatorErrors(value)).toContain("references.examined_required");
+    }
+    expect(CONFIRM_BLOCK_MESSAGES.examined_source_missing).toBe("Say which source you examined before confirming.");
+  });
+
+  it("refuses Unclear with neither a supporting nor an examined source", () => {
+    for (const references of [[], [unavailable("full_text", PAPER_B)], [unavailable("abstract", PAPER_B)]]) {
+      const value = valueIn("unclear", references);
+      expect(confirm(value)).toEqual({ kind: "blocked", reasons: ["unclear_source_missing"] });
+      expect(validatorErrors(value)).toContain("references.basis_required");
+    }
+    expect(CONFIRM_BLOCK_MESSAGES.unclear_source_missing).toBe("Quote the unclear text, or say which source you examined, before confirming.");
+  });
+
+  it("refuses Couldn't check without an unavailable source", () => {
+    const value = valueIn("source_unavailable", []);
+    expect(confirm(value)).toEqual({ kind: "blocked", reasons: ["unavailable_source_missing"] });
+    expect(validatorErrors(value)).toContain("references.unavailable_required");
+    expect(CONFIRM_BLOCK_MESSAGES.unavailable_source_missing).toBe("Say which source you couldn't check before confirming.");
+  });
+
+  it.each(SECTION_J_FORBIDDEN)("refuses %s with a %s source, though everything else is in order", (state, purpose) => {
+    expect(confirm(valueIn(state, VALID[state]())).kind).toBe("allowed");
+    const value = valueIn(state, [...VALID[state](), ONE_MORE[purpose]()]);
+    expect(confirm(value)).toEqual({ kind: "blocked", reasons: ["sources_not_allowed"] });
+    expect(validateValueDraft(draftFromRecordedValue(value), CONTEXT).ok).toBe(false);
+  });
+
+  it("refuses more than three supporting sources", () => {
+    const four = [abstractQuote(), fullTextLocator(PAPER_A), abstractQuote(COPY_A, PAPER_A, "randomized"), fullTextLocator(PAPER_B)];
+    expect(confirm(valueIn("reported", four.slice(0, 3))).kind).toBe("allowed");
+    expect(confirm(valueIn("reported", four))).toEqual({ kind: "blocked", reasons: ["sources_not_allowed"] });
+    expect(CONFIRM_BLOCK_MESSAGES.sources_not_allowed).toBe("This field's sources don't fit its state. Edit them before confirming.");
+  });
+
+  it("gives every reason at once, in a fixed order", () => {
+    const value = valueIn("not_reported", [abstractQuote(), unavailable("abstract", PAPER_B)], { note: null });
+    expect(confirm(value, B_CAPTURED)).toEqual({
+      kind: "blocked",
+      reasons: ["sources_not_allowed", "examined_source_missing", "unavailable_abstract_has_copy"],
+    });
+  });
+
+  describe("current versus superseded copies", () => {
+    it("Reported: only a quote on the current copy, or a full-text locator, counts", () => {
+      expect(confirm(valueIn("reported", [abstractQuote(COPY_A)])).kind).toBe("allowed");
+      expect(confirm(valueIn("reported", [abstractQuote(COPY_A_OLD)]))).toEqual({ kind: "blocked", reasons: ["no_current_support"] });
+      expect(confirm(valueIn("reported", [abstractQuote(COPY_A_OLD), abstractQuote(COPY_A)])).kind).toBe("allowed");
+      expect(confirm(valueIn("reported", [abstractQuote(COPY_A_OLD), fullTextLocator()])).kind).toBe("allowed");
+    });
+
+    it("Not reported: an examined abstract must be the current copy; an examined full text always is", () => {
+      expect(confirm(valueIn("not_reported", [examinedAbstract(COPY_A)])).kind).toBe("allowed");
+      expect(confirm(valueIn("not_reported", [examinedAbstract(COPY_A_OLD)]))).toEqual({ kind: "blocked", reasons: ["examined_abstract_not_current"] });
+      expect(confirm(valueIn("not_reported", [examinedAbstract(COPY_A_OLD), examinedFullText(PAPER_B)]))).toEqual({
+        kind: "blocked",
+        reasons: ["examined_abstract_not_current"],
+      });
+      expect(confirm(valueIn("not_reported", [examinedFullText()])).kind).toBe("allowed");
+    });
+
+    it("Unclear: a quote on a superseded copy does not count toward Confirm; an examined source does", () => {
+      // Requirements-001A's J1 amendment: only current-copy quotes count toward Confirm.
+      const stale = valueIn("unclear", [abstractQuote(COPY_A_OLD)]);
+      expect(validatorErrors(stale)).toEqual([]); // a carried-over quote may stay on its copy...
+      expect(confirm(stale)).toEqual({ kind: "blocked", reasons: ["unclear_source_not_current"] }); // ...but is not current support
+      expect(CONFIRM_BLOCK_MESSAGES.unclear_source_not_current).toBe(
+        "Quote the unclear text in the current saved copy, or say which source you examined, before confirming.",
+      );
+      expect(confirm(valueIn("unclear", [abstractQuote(COPY_A)])).kind).toBe("allowed");
+      expect(confirm(valueIn("unclear", [abstractQuote(COPY_A_OLD), fullTextLocator()])).kind).toBe("allowed");
+      expect(confirm(valueIn("unclear", [abstractQuote(COPY_A_OLD), examinedFullText()])).kind).toBe("allowed");
+      expect(confirm(valueIn("unclear", [examinedAbstract(COPY_A_OLD)]))).toEqual({ kind: "blocked", reasons: ["examined_abstract_not_current"] });
+    });
+
+    it("Couldn't check: an unavailable abstract holds only while its link has no copy; an unavailable full text does not depend on it", () => {
+      const value = valueIn("source_unavailable", [unavailable("abstract", PAPER_B)]);
+      expect(confirm(value).kind).toBe("allowed");
+      expect(confirm(value, B_CAPTURED)).toEqual({ kind: "blocked", reasons: ["unavailable_abstract_has_copy"] });
+      expect(confirm(valueIn("source_unavailable", [unavailable("full_text", PAPER_A)])).kind).toBe("allowed");
+    });
+
+    it("applies the copy rules in every state that has such a source, not only in Couldn't check", () => {
+      for (const state of ["not_reported", "unclear"] as const) {
+        const value = valueIn(state, [examinedFullText(), unavailable("abstract", PAPER_B)]);
+        expect(confirm(value).kind, state).toBe("allowed");
+        expect(confirm(value, B_CAPTURED), state).toEqual({ kind: "blocked", reasons: ["unavailable_abstract_has_copy"] });
+      }
+    });
+  });
+
+  describe("version and earlier reviews", () => {
+    it("refuses a stale version before judging sources: the user must reload first", () => {
+      const lacking = valueIn("not_reported", [], { valueVersion: 3 });
+      expect(checkConfirm(lacking, 2, LINKS)).toEqual({ kind: "blocked", reasons: ["stale_version"] });
+      expect(checkConfirm(lacking, 3, LINKS)).toEqual({ kind: "blocked", reasons: ["examined_source_missing"] });
+    });
+
+    it("treats a version already reviewed as a no-op that binds nothing", () => {
+      const value = valueIn("not_reported", [examinedAbstract()], { valueVersion: 3, review: reviewed(3) });
+      expect(checkConfirm(value, 3, LINKS)).toEqual({ kind: "already_reviewed" });
+    });
+
+    it("does not carry a review of an earlier version over: the current version is judged afresh", () => {
+      const lacking = valueIn("not_reported", [], { valueVersion: 3, review: reviewed(2) });
+      expect(checkConfirm(lacking, 3, LINKS)).toEqual({ kind: "blocked", reasons: ["examined_source_missing"] });
+      const complete = valueIn("not_reported", [examinedAbstract()], { valueVersion: 3, review: reviewed(2) });
+      expect(checkConfirm(complete, 3, LINKS)).toEqual({ kind: "allowed", item: { valueId: complete.id, valueVersion: 3 } });
+    });
+
+    it("blocks a flagged or needs-re-review value that lacks the sources its state requires", () => {
+      for (const review of [FLAGGED, NEEDS_REREVIEW]) {
+        expect(confirm(valueIn("not_reported", [], { review }))).toEqual({ kind: "blocked", reasons: ["examined_source_missing"] });
+        expect(confirm(valueIn("unclear", [], { review }))).toEqual({ kind: "blocked", reasons: ["unclear_source_missing"] });
+        expect(confirm(valueIn("source_unavailable", [], { review }))).toEqual({ kind: "blocked", reasons: ["unavailable_source_missing"] });
+      }
+    });
+  });
+
+  it("counts a required note only when it is well formed and not blank after v1, as the validator requires", () => {
+    const blankNa = valueIn("not_applicable", [], { note: cp(0x00a0).repeat(3) });
+    expect(validatorErrors(blankNa)).toContain("note.blank");
+    expect(confirm(blankNa)).toEqual({ kind: "blocked", reasons: ["note_missing"] });
+    expect(confirm(valueIn("unclear", [examinedAbstract()], { note: cp(0x00a0).repeat(10) }))).toEqual({ kind: "blocked", reasons: ["note_missing"] });
+    // Malformed text is refused, not thrown on.
+    expect(confirm(valueIn("not_applicable", [], { note: `n/a${String.fromCharCode(0xd800)}` }))).toEqual({ kind: "blocked", reasons: ["note_missing"] });
+  });
+
+  it("agrees with §J, and with validateValueDraft, for every count of every purpose", () => {
+    // Current sources of each purpose, each on its own report and source kind, as stored values are.
+    const SUPPORTS = [() => abstractQuote(), () => fullTextLocator(PAPER_A), () => abstractQuote(COPY_A, PAPER_A, "randomized"), () => fullTextLocator(PAPER_B)];
+    const EXAMINED = [() => examinedAbstract(), () => examinedFullText(PAPER_A)];
+    const UNAVAILABLE = [() => unavailable("full_text", PAPER_B), () => unavailable("abstract", PAPER_B)];
+    let cells = 0;
+    for (const state of VALUE_STATES) {
+      for (let supports = 0; supports <= SUPPORTS.length; supports++) {
+        for (let examined = 0; examined <= EXAMINED.length; examined++) {
+          for (let unavailableCount = 0; unavailableCount <= UNAVAILABLE.length; unavailableCount++) {
+            const counts: PurposeCounts = { supports, examined, unavailable: unavailableCount };
+            const make = [...SUPPORTS.slice(0, supports), ...EXAMINED.slice(0, examined), ...UNAVAILABLE.slice(0, unavailableCount)];
+            const value = valueIn(state, make.map((build) => build()));
+            const at = `${state} with ${supports}/${examined}/${unavailableCount}`;
+            const validation = validateValueDraft(draftFromRecordedValue(value), CONTEXT);
+            const result = confirm(value);
+            expect(validation.ok, at).toBe(SECTION_J_ALLOWS[state](counts));
+            expect(result.kind, at).toBe(sectionJConfirmable(state, counts) ? "allowed" : "blocked");
+            if (!validation.ok) expect(result.kind, at).toBe("blocked");
+            cells += 1;
+          }
+        }
+      }
+    }
+    expect(cells).toBe(VALUE_STATES.length * 5 * 3 * 3);
   });
 });
 

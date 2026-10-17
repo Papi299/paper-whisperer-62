@@ -7,11 +7,18 @@
  *     value at ONE exact `value_version`. There is no bulk confirmation, no
  *     automatic confirmation, no confirmation because validation passed, and no
  *     record-level reviewed, complete or verified state (001A PD-7, §I6).
- *   * Confirm needs current support: a Reported value needs an abstract quote on
- *     its link's CURRENT copy or a full-text locator (quotes on superseded
- *     copies do not count), and a number needs its confirmed integer. Every
- *     examined abstract must be the current copy; an unavailable abstract must
- *     still have no copy.
+ *   * Confirm needs the sources the value's state requires and none it forbids
+ *     (FK-PROOF-001 §J), checked by `checkStateReferences` — the rule
+ *     `validateValueDraft` applies: Not reported needs an examined source,
+ *     Unclear a supporting or examined one, Couldn't check an unavailable one,
+ *     Not applicable none at all, and no state more than three supporting.
+ *   * Only current sources count. A Reported value needs an abstract quote on
+ *     its link's CURRENT copy or a full-text locator; an Unclear value's
+ *     supporting quotes count only on the current copy (001A's amendment to
+ *     001 §J1). In every state, an examined abstract must be the current copy
+ *     and an unavailable abstract's link must still have no copy. A number
+ *     needs its confirmed integer, and a required note must be well formed and
+ *     not blank after normalization v1, as the validator requires.
  *   * Flag needs a note of at least 3 characters, in any state.
  *   * Any change to a value — its state, reason, content, note or sources —
  *     returns it to Not reviewed.
@@ -32,11 +39,14 @@ import { codePointLength, findPostgresTextProblem, isNormalizationEmpty } from "
 import type { FieldContent, RecordedValue, ReviewState, ReviewStatus, StoredReference } from "./types";
 import {
   btrimSpaces,
+  checkStateReferences,
+  countReferencePurposes,
   NOT_APPLICABLE_NOTE_MIN_LENGTH,
   UNCLEAR_NOTE_MIN_LENGTH,
   VALUE_NOTE_MAX_LENGTH,
   type LinkSources,
   type ReferenceDraft,
+  type StateReferenceCode,
   type ValueDraft,
 } from "./validation";
 
@@ -59,7 +69,12 @@ export const FLAG_NOTE_MIN_LENGTH = 3;
 export type ConfirmBlock =
   | "not_recorded"
   | "stale_version"
+  | "sources_not_allowed"
+  | "examined_source_missing"
+  | "unclear_source_missing"
+  | "unavailable_source_missing"
   | "no_current_support"
+  | "unclear_source_not_current"
   | "count_not_confirmed"
   | "examined_abstract_not_current"
   | "unavailable_abstract_has_copy"
@@ -70,7 +85,12 @@ export type ConfirmBlock =
 export const CONFIRM_BLOCK_MESSAGES: Readonly<Record<ConfirmBlock, string>> = Object.freeze({
   not_recorded: "Record this field before confirming it.",
   stale_version: "This field changed since you opened it.",
+  sources_not_allowed: "This field's sources don't fit its state. Edit them before confirming.",
+  examined_source_missing: "Say which source you examined before confirming.",
+  unclear_source_missing: "Quote the unclear text, or say which source you examined, before confirming.",
+  unavailable_source_missing: "Say which source you couldn't check before confirming.",
   no_current_support: "Add a quote or a full-text reference before confirming.",
+  unclear_source_not_current: "Quote the unclear text in the current saved copy, or say which source you examined, before confirming.",
   count_not_confirmed: "Confirm the number before confirming this value.",
   examined_abstract_not_current: "Check the current saved copy of the abstract, then save, before confirming.",
   unavailable_abstract_has_copy: "This paper now has a saved copy of its abstract. Record what it says before confirming.",
@@ -94,11 +114,28 @@ function isCurrentSupport(reference: StoredReference, links: readonly LinkSource
   return current !== null && reference.snapshotId === current;
 }
 
+/** How each broken rule of `checkStateReferences` blocks Confirm. */
+const STATE_REFERENCE_BLOCKS: Readonly<Record<StateReferenceCode, ConfirmBlock>> = Object.freeze({
+  "references.too_many_supporting": "sources_not_allowed",
+  "references.supporting_not_allowed": "sources_not_allowed",
+  "references.examined_not_allowed": "sources_not_allowed",
+  "references.unavailable_not_allowed": "sources_not_allowed",
+  "references.not_allowed": "sources_not_allowed",
+  "references.examined_required": "examined_source_missing",
+  "references.basis_required": "unclear_source_missing",
+  "references.unavailable_required": "unavailable_source_missing",
+});
+
 /**
  * Whether the user may confirm `value` as they loaded it. `loadedVersion` is
  * the `value_version` on screen when the user pressed Confirm; it is what the
  * review is bound to. On success, `item` is the one binding the PR-A3 review
  * RPC needs (001A L2: a value id and its version).
+ *
+ * A stale version is refused before anything else, because the user must
+ * reload; a version already reviewed is a no-op that binds nothing (001A §I5).
+ * Otherwise every reason is given at once, in a fixed order: the sources the
+ * state takes, whether they are current, then the number, reason and note.
  */
 export function checkConfirm(value: RecordedValue | null, loadedVersion: number, links: readonly LinkSources[]): ConfirmCheck {
   if (!value) return { kind: "blocked", reasons: ["not_recorded"] };
@@ -107,39 +144,35 @@ export function checkConfirm(value: RecordedValue | null, loadedVersion: number,
     return { kind: "already_reviewed" };
   }
 
+  const { state, references } = value;
   const reasons: ConfirmBlock[] = [];
-  const examinedAbstractsCurrent = value.references.every(
-    (r) => !(r.purpose === "examined" && r.sourceKind === "abstract") || r.snapshotId === currentCopyOf(links, r.paperId),
-  );
-  const noteLength = value.note === null ? 0 : codePointLength(btrimSpaces(value.note));
+  const block = (reason: ConfirmBlock) => {
+    if (!reasons.includes(reason)) reasons.push(reason);
+  };
 
-  switch (value.state) {
-    case "reported": {
-      if (!value.references.some((r) => isCurrentSupport(r, links))) reasons.push("no_current_support");
-      if (EVIDENCE_FIELDS[value.fieldKey].shape === "integer_with_reported_text" && !hasConfirmedCount(value.content)) {
-        reasons.push("count_not_confirmed");
-      }
-      break;
+  for (const code of checkStateReferences(state, countReferencePurposes(references))) block(STATE_REFERENCE_BLOCKS[code]);
+
+  if (state === "reported" && !references.some((r) => isCurrentSupport(r, links))) block("no_current_support");
+  if (state === "unclear") {
+    // An examined source always counts here; whether an examined abstract is current is checked below.
+    const basis = references.filter((r) => r.purpose !== "unavailable");
+    if (basis.length > 0 && !basis.some((r) => r.purpose === "examined" || isCurrentSupport(r, links))) {
+      block("unclear_source_not_current");
     }
-    case "not_reported":
-      if (!examinedAbstractsCurrent) reasons.push("examined_abstract_not_current");
-      break;
-    case "source_unavailable": {
-      const stale = value.references.some(
-        (r) => r.purpose === "unavailable" && r.sourceKind === "abstract" && currentCopyOf(links, r.paperId) !== null,
-      );
-      if (stale) reasons.push("unavailable_abstract_has_copy");
-      break;
-    }
-    case "unclear":
-      if (value.stateReason === null) reasons.push("state_reason_missing");
-      if (noteLength < UNCLEAR_NOTE_MIN_LENGTH) reasons.push("note_missing");
-      if (!examinedAbstractsCurrent) reasons.push("examined_abstract_not_current");
-      break;
-    case "not_applicable":
-      if (noteLength < NOT_APPLICABLE_NOTE_MIN_LENGTH) reasons.push("note_missing");
-      break;
   }
+  if (references.some((r) => r.purpose === "examined" && r.sourceKind === "abstract" && r.snapshotId !== currentCopyOf(links, r.paperId))) {
+    block("examined_abstract_not_current");
+  }
+  if (references.some((r) => r.purpose === "unavailable" && r.sourceKind === "abstract" && currentCopyOf(links, r.paperId) !== null)) {
+    block("unavailable_abstract_has_copy");
+  }
+
+  if (state === "reported" && EVIDENCE_FIELDS[value.fieldKey].shape === "integer_with_reported_text" && !hasConfirmedCount(value.content)) {
+    block("count_not_confirmed");
+  }
+  if (state === "unclear" && value.stateReason === null) block("state_reason_missing");
+  const noteMinLength = state === "unclear" ? UNCLEAR_NOTE_MIN_LENGTH : state === "not_applicable" ? NOT_APPLICABLE_NOTE_MIN_LENGTH : 0;
+  if (noteMinLength > 0 && !isUsableNote(value.note, noteMinLength)) block("note_missing");
 
   if (reasons.length > 0) return { kind: "blocked", reasons: Object.freeze(reasons) };
   return { kind: "allowed", item: Object.freeze({ valueId: value.id, valueVersion: value.valueVersion }) };
@@ -147,6 +180,15 @@ export function checkConfirm(value: RecordedValue | null, loadedVersion: number,
 
 function hasConfirmedCount(content: FieldContent | null): boolean {
   return content?.shape === "integer_with_reported_text" && Number.isInteger(content.value);
+}
+
+/**
+ * Whether a required note counts: well formed and not blank after
+ * normalization v1, as `validateValueDraft` requires, and at least `minLength`
+ * long as the PR-A1 CHECK measures it, after trimming spaces only.
+ */
+function isUsableNote(note: string | null, minLength: number): boolean {
+  return typeof note === "string" && !findPostgresTextProblem(note) && !isNormalizationEmpty(note) && codePointLength(btrimSpaces(note)) >= minLength;
 }
 
 export type FlagBlock = "not_recorded" | "stale_version" | "note_too_short" | "note_too_long" | "note_malformed";

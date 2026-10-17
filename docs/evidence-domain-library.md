@@ -75,6 +75,8 @@ Each reference follows the PR-A1 matrix:
 
 A value holds at most one examined-or-unavailable assessment per report and source kind. A Reported value with no supporting source gets the derived warning **No source given** and cannot be confirmed.
 
+`checkStateReferences` states the table's count rules once, from `VALUE_STATE_RULES`, together with PR-A1's cap of three supporting sources. `validateValueDraft` and `checkConfirm` both use it, so a value whose sources break its state's row can be neither saved from the browser nor confirmed. The tests check it against a transcription of §J (`__tests__/fixtures/sectionJ.ts`), not against the table.
+
 Validation never rewrites input. Untrimmed list entries are an error; `trimListEntries` is an explicit fix the UI shows. "Blank" means empty after normalization v1, the rule PR-A2 applies to labels and notes; for values, PR-A3 decides whether its RPCs adopt it. Note minimums are measured as the CHECK measures them, after trimming spaces only.
 
 ## 5. Review
@@ -85,14 +87,14 @@ Validation never rewrites input. Untrimmed list entries are an error; `trimListE
 - **already reviewed**, when Confirm would change nothing;
 - **blocked**, with reasons to show beside the button.
 
-Confirm is blocked when:
+A stale version is refused first, because the user must reload. Otherwise Confirm is blocked, with every reason at once, when:
 
-- the version is stale;
+- the sources break the state's row in the table above: Not reported without an examined source, Unclear without a supporting or examined one, Couldn't check without an unavailable one, a source the state forbids (Not applicable takes none), or more than three supporting sources;
 - a Reported value has no current support — an abstract quote on the link's current copy, or a full-text locator; quotes on superseded copies do not count;
+- an Unclear value's only basis is quotes on superseded copies (001A's amendment to 001 §J1: only current-copy quotes count toward Confirm);
+- in any state, an examined abstract is not the current copy, or an "abstract unavailable" claim now has a copy;
 - a number has no confirmed integer;
-- an examined abstract is not the current copy;
-- an "abstract unavailable" claim now has a copy;
-- an Unclear or Not applicable note is too short.
+- an Unclear value has no reason, or an Unclear or Not applicable note is too short or blank after v1.
 
 Flag needs a note of at least 3 characters, in any state. Any change to state, reason, content, note or sources returns a value to Not reviewed (`predictReviewAfterSave`).
 
@@ -188,6 +190,6 @@ Kinds are classified by SQLSTATE and message, never by HTTP status alone: PostgR
 - **"A letter or digit".** Pin the server's definition; PostgreSQL `[[:alnum:]]` depends on the collation provider.
 - **Blank and trim rules for values.** Decide whether "blank" means empty after v1, and which white space a list entry is trimmed of.
 - **Confirming a judgement field.** Requirements-001 §H2 lets `design_classification` be confirmed with a note. FK-PROOF-001 §J requires current support for every Reported value. This library applies §J.
-- **Unclear with only superseded quotes.** No rule yet decides whether such a value can be confirmed.
+- **Unclear with only superseded quotes.** FK-PROOF-001 §J is silent. The browser applies 001A's amendment to 001 §J1, that only current-copy quotes count toward Confirm, so such a value cannot be confirmed until a quote is on the current copy or a source is marked examined. PR-A3's review RPC should adopt or amend this.
 - **Counts.** Requirements-001 L10 proposes 20 groups, 50 outcomes, 400 values, 20 copies per link, and 64 KB / 200 changes per call. Q11 is still open, so none is enforced here.
 - **The reserved errors.** Assign their SQLSTATEs.

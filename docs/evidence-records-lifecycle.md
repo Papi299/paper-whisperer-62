@@ -1,6 +1,6 @@
 # Study records — lifecycle RPC contract (EVIDENCE-RECORDS-001A2)
 
-> **Status:** implemented in the repository by migration `20261016104232_add_evidence_records_lifecycle_rpcs.sql`. Applying it to Production is a separately authorized step; until then Production has the eight evidence tables of `20261012031537` (PR-A1) and no write path to them. There is no UI: the browser does not call these functions yet. A typed client for them exists in `src/lib/evidence/` (EVIDENCE-RECORDS-001B, [evidence-domain-library.md](evidence-domain-library.md)), but nothing in the app calls it.
+> **Status:** applied to Production. Migration `20261016104232_add_evidence_records_lifecycle_rpcs.sql` (PR #344) was merged on 2026-10-16 and applied to Supabase Production the same day. The four RPCs and the two internal helpers below are installed in the Production database, beside the eight evidence tables of `20261012031537` (PR-A1). There is still no user-facing Study Record interface: nothing in the app calls these functions. The typed client for them in `src/lib/evidence/` (EVIDENCE-RECORDS-001B, [evidence-domain-library.md](evidence-domain-library.md)) is not used by application code either.
 
 This document is the client contract for the four functions that create, edit, link and delete study records, and the two internal helpers behind them. The migration header holds the database-level detail; suite `031_evidence_records_lifecycle.test.sql` and the db-tests lifecycle's evidence lifecycle race probe (`scripts/e2e-local.mjs`) are the executable specification.
 
