@@ -2374,8 +2374,8 @@ const elCall = {
     `(SELECT deleted_count || '/' || queued_count FROM public.delete_papers_with_attachment_cleanup(ARRAY['${paper}']::uuid[]))`,
 };
 
-function elClaimsSql() {
-  return `set_config('request.jwt.claims', '{"sub":"${EL_OWNER}","role":"authenticated"}', true)`;
+function elClaimsSql(owner = EL_OWNER) {
+  return `set_config('request.jwt.claims', '{"sub":"${owner}","role":"authenticated"}', true)`;
 }
 
 /**
@@ -2384,13 +2384,13 @@ function elClaimsSql() {
  * call succeeded or raised — so an expected refusal is data, not a psql
  * failure. A refused call rolls back in its own subtransaction.
  */
-function elSessionSql(tag, callExpr, { isolation = null } = {}) {
+function elSessionSql(tag, callExpr, { isolation = null, owner = EL_OWNER } = {}) {
   return (
     "SELECT 'PID=' || pg_backend_pid();\n" +
     "CREATE TEMP TABLE el_outcome (v text);\n" +
     (isolation ? `BEGIN ISOLATION LEVEL ${isolation};\n` : "") +
     "DO $w$\nDECLARE v_out text; v_state text; v_msg text;\nBEGIN\n  BEGIN\n" +
-    `    PERFORM ${elClaimsSql()};\n` +
+    `    PERFORM ${elClaimsSql(owner)};\n` +
     "    SET LOCAL ROLE authenticated;\n" +
     `    v_out := 'OK ' || (${callExpr})::text;\n` +
     "    RESET ROLE;\n" +
@@ -2404,10 +2404,10 @@ function elSessionSql(tag, callExpr, { isolation = null } = {}) {
 }
 
 /** The held transaction: one call as the owner, then stay open. */
-function elHolderSql(callExpr) {
+function elHolderSql(callExpr, owner = EL_OWNER) {
   return (
     "BEGIN;\n" +
-    `SELECT ${elClaimsSql()};\n` +
+    `SELECT ${elClaimsSql(owner)};\n` +
     "SET LOCAL ROLE authenticated;\n" +
     `SELECT 'HELD=' || (${callExpr})::text;\n` +
     "RESET ROLE;\n" +
@@ -2464,54 +2464,55 @@ function elStudyRows(container, study) {
  * commits must report a line matching `expected`. Every process is tracked and
  * bounded. Returns both sessions' result lines and the lock waited on.
  */
-async function runElForcedOrder(container, label, holderCall, waiterCall, lockTypes, expected) {
+async function runElForcedOrder(container, label, holderCall, waiterCall, lockTypes, expected,
+  { holderSql = null, waiterSql = null, name = "evidence lifecycle race" } = {}) {
   let held = null;
   let waiter = null;
   try {
     held = spawnDockerPsql(container);
-    held.child.stdin.write(elHolderSql(holderCall));
+    held.child.stdin.write(holderSql ?? elHolderSql(holderCall));
     await waitUntil(() => /HELD_READY/.test(held.readOut()), PROBE_WORKER_MS,
-      `evidence lifecycle race ${label}: the held transaction never completed its call.`);
+      `${name} ${label}: the held transaction never completed its call.`);
     const holderPid = plPid(held.readOut());
     const heldLine = plOutcome(held.readOut(), "HELD");
 
     waiter = spawnDockerPsql(container);
-    waiter.child.stdin.write(elSessionSql("WAITER", waiterCall));
+    waiter.child.stdin.write(waiterSql ?? elSessionSql("WAITER", waiterCall));
     waiter.child.stdin.end();
     await waitUntil(() => plPid(waiter.readOut()) !== null, PROBE_WORKER_MS,
-      `evidence lifecycle race ${label}: the waiter never reported its pid.`);
+      `${name} ${label}: the waiter never reported its pid.`);
     const waiterPid = plPid(waiter.readOut());
     await waitUntil(
       async () => (await dbScalar(container, `SELECT ${holderPid} = ANY (pg_blocking_pids(${waiterPid}));`)) === "t",
       PROBE_BARRIER_MS,
-      `evidence lifecycle race ${label}: the waiter was never blocked by the held transaction.`,
+      `${name} ${label}: the waiter was never blocked by the held transaction.`,
     );
     const waitingOn = await dbScalar(container,
       `SELECT coalesce(string_agg(DISTINCT locktype, ','), '') FROM pg_locks WHERE pid = ${waiterPid} AND NOT granted;`);
     if (!lockTypes.includes(waitingOn)) {
-      throw new Error(`evidence lifecycle race ${label}: the waiter waits on "${waitingOn}", expected ${lockTypes.join(" or ")}.`);
+      throw new Error(`${name} ${label}: the waiter waits on "${waitingOn}", expected ${lockTypes.join(" or ")}.`);
     }
     if (/WAITER=/.test(waiter.readOut())) {
-      throw new Error(`evidence lifecycle race ${label}: the waiter finished while the holder was still open.`);
+      throw new Error(`${name} ${label}: the waiter finished while the holder was still open.`);
     }
 
     held.child.stdin.write("COMMIT;\nSELECT 'HELD_COMMITTED';\n");
     held.child.stdin.end();
     const [heldRes, waitRes] = await Promise.all([
-      withTimeout(held.done, FIN_HOLD_MS, `evidence lifecycle race ${label} held-transaction exit`),
-      withTimeout(waiter.done, FIN_HOLD_MS, `evidence lifecycle race ${label} waiter exit`),
+      withTimeout(held.done, FIN_HOLD_MS, `${name} ${label} held-transaction exit`),
+      withTimeout(waiter.done, FIN_HOLD_MS, `${name} ${label} waiter exit`),
     ]);
     held = null;
     waiter = null;
     if (heldRes.code !== 0 || heldRes.signal !== null || !/HELD_COMMITTED/.test(heldRes.out)) {
-      throw new Error(`evidence lifecycle race ${label}: the held transaction did not commit cleanly (code=${heldRes.code}).`);
+      throw new Error(`${name} ${label}: the held transaction did not commit cleanly (code=${heldRes.code}).`);
     }
     if (waitRes.code !== 0 || waitRes.signal !== null) {
-      throw new Error(`evidence lifecycle race ${label}: the waiter did not exit cleanly (code=${waitRes.code}).`);
+      throw new Error(`${name} ${label}: the waiter did not exit cleanly (code=${waitRes.code}).`);
     }
     const waited = plOutcome(waitRes.out, "WAITER");
     if (!expected.test(waited)) {
-      throw new Error(`evidence lifecycle race ${label}: the waiter reported "${waited}", expected ${expected}.`);
+      throw new Error(`${name} ${label}: the waiter reported "${waited}", expected ${expected}.`);
     }
     return { held: heldLine, waited, waitingOn };
   } catch (err) {
@@ -2531,7 +2532,8 @@ async function countElBarrierWaiters(container) {
  * One free round: both calls wait on a shared barrier and start together when
  * the coordinator releases it. No order is forced; the caller judges the pair.
  */
-async function runElFreeRound(container, label, callX, callY) {
+async function runElFreeRound(container, label, callX, callY,
+  { xSql = null, ySql = null, name = "evidence lifecycle race" } = {}) {
   let coord = null;
   let wx = null;
   let wy = null;
@@ -2539,31 +2541,31 @@ async function runElFreeRound(container, label, callX, callY) {
     coord = spawnDockerPsql(container);
     coord.child.stdin.write(`SELECT pg_advisory_lock(${EL_BARRIER_KEY}); SELECT 'COORD_LOCKED';\n`);
     await waitUntil(() => /COORD_LOCKED/.test(coord.readOut()), PROBE_COORD_ACQUIRE_MS,
-      `evidence lifecycle race ${label}: the coordinator never acquired the barrier.`);
+      `${name} ${label}: the coordinator never acquired the barrier.`);
     wx = spawnDockerPsql(container);
     wy = spawnDockerPsql(container);
-    wx.child.stdin.write(`SELECT pg_advisory_lock_shared(${EL_BARRIER_KEY});\n` + elSessionSql("X", callX));
+    wx.child.stdin.write(`SELECT pg_advisory_lock_shared(${EL_BARRIER_KEY});\n` + (xSql ?? elSessionSql("X", callX)));
     wx.child.stdin.end();
-    wy.child.stdin.write(`SELECT pg_advisory_lock_shared(${EL_BARRIER_KEY});\n` + elSessionSql("Y", callY));
+    wy.child.stdin.write(`SELECT pg_advisory_lock_shared(${EL_BARRIER_KEY});\n` + (ySql ?? elSessionSql("Y", callY)));
     wy.child.stdin.end();
     await waitUntil(async () => (await countElBarrierWaiters(container)) >= 2, PROBE_BARRIER_MS,
-      `evidence lifecycle race ${label}: both workers did not reach the barrier.`);
+      `${name} ${label}: both workers did not reach the barrier.`);
     coord.child.stdin.write(`SELECT 'UNLOCK=' || pg_advisory_unlock(${EL_BARRIER_KEY})::text; SELECT 'COORD_UNLOCKED';\n`);
     coord.child.stdin.end();
     const [cr, rx, ry] = await Promise.all([
-      withTimeout(coord.done, PROBE_COORD_EXIT_MS, `evidence lifecycle race ${label} coordinator exit`),
-      withTimeout(wx.done, PROBE_WORKER_MS, `evidence lifecycle race ${label} worker X exit`),
-      withTimeout(wy.done, PROBE_WORKER_MS, `evidence lifecycle race ${label} worker Y exit`),
+      withTimeout(coord.done, PROBE_COORD_EXIT_MS, `${name} ${label} coordinator exit`),
+      withTimeout(wx.done, PROBE_WORKER_MS, `${name} ${label} worker X exit`),
+      withTimeout(wy.done, PROBE_WORKER_MS, `${name} ${label} worker Y exit`),
     ]);
     coord = null;
     wx = null;
     wy = null;
     if (cr.code !== 0 || cr.signal !== null || !/UNLOCK=t/.test(cr.out) || !/COORD_UNLOCKED/.test(cr.out)) {
-      throw new Error(`evidence lifecycle race ${label}: the coordinator did not release the barrier cleanly (code=${cr.code}).`);
+      throw new Error(`${name} ${label}: the coordinator did not release the barrier cleanly (code=${cr.code}).`);
     }
     for (const [nm, r] of [["X", rx], ["Y", ry]]) {
       if (r.code !== 0 || r.signal !== null) {
-        throw new Error(`evidence lifecycle race ${label}: worker ${nm} did not exit cleanly (code=${r.code}).`);
+        throw new Error(`${name} ${label}: worker ${nm} did not exit cleanly (code=${r.code}).`);
       }
     }
     return { x: plOutcome(rx.out, "X"), y: plOutcome(ry.out, "Y") };
@@ -2775,6 +2777,514 @@ async function runEvidenceLifecycleRaceProbe(container) {
         .map((t) => `(SELECT count(*) FROM public.${t} WHERE user_id='${EL_OWNER}')`).join(" + ") + " + " +
       `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${EL_BARRIER_CLASSID} AND objid=${EL_BARRIER_OBJID});`);
   if (residual !== "0") throw new Error(`evidence lifecycle race fixture not fully removed (${residual} row(s) or lock(s) remain).`);
+}
+
+// ── EVIDENCE-RECORDS-001A3 ───────────────────────────────────────────────────
+// The field, review and rebase RPCs (20261017155445) under real concurrency,
+// called exactly as a client calls them: as `authenticated`, with an owner's
+// JWT claims. Its own owner, papers and request ids. It reuses the lifecycle
+// probe's forced-order and free-round runners and their barrier; the two
+// probes run one after the other, never at once.
+const EF_OWNER = "cc0000fa-0000-0000-0000-0000000000a0";
+const EF_PAPER_A = "cc0000fa-0000-0000-0000-0000000000c1"; // the study's first link: values, reviews, rebases
+const EF_PAPER_B = "cc0000fa-0000-0000-0000-0000000000c2"; // a second link: link operations against saves
+const EF_FREE_ROUNDS = 5; // barrier-released rounds per free race, after the forced orders.
+const EF_NAME = "evidence field race";
+
+/** One deterministic request id per probe step. */
+function efRq(n) {
+  return `cc0000fb-0000-0000-0000-${n.toString(16).padStart(12, "0")}`;
+}
+
+/** A JSON value as a SQL jsonb literal. Every payload here is plain ASCII. */
+function efJson(value) {
+  return `'${JSON.stringify(value).replace(/'/g, "''")}'::jsonb`;
+}
+
+/** The RPC calls, as SQL expressions. */
+const efCall = {
+  create: (paper, label, req) =>
+    `public.evidence_create_study_from_paper('${paper}'::uuid, '${label}', 'rct_parallel', 'user_confirmed', '${req}'::uuid)`,
+  save: (study, version, changes, req) =>
+    `public.evidence_save_changes('${study}'::uuid, ${version}, ${efJson(changes)}, '${req}'::uuid)`,
+  review: (study, version, value, valueVersion, action, note, req) =>
+    `public.evidence_review_fields('${study}'::uuid, ${version}, '${value}'::uuid, ${valueVersion}, '${action}', ` +
+    `${note === null ? "NULL" : `'${note}'`}, '${req}'::uuid)`,
+  rebase: (study, paper, version, sha, req) =>
+    `public.evidence_rebase_source('${study}'::uuid, '${paper}'::uuid, ${version}, '${sha}', '${req}'::uuid)`,
+  setLink: (study, paper, action, version, req) =>
+    `public.evidence_set_link('${study}'::uuid, '${paper}'::uuid, '${action}', ${version}, '${req}'::uuid)`,
+};
+
+/** The wire format of the changes the probe sends (docs/evidence-records-field-operations.md §3). */
+const efChange = {
+  text: (field, text, expected, references = []) => ({
+    op: "set_value", target: { scope: "study" }, field_key: field, expected_value_version: expected,
+    value_state: "reported", state_reason: null, content: { shape: "text", text }, note: null, references,
+  }),
+  unavailable: (field, expected, paper) => ({
+    op: "set_value", target: { scope: "study" }, field_key: field, expected_value_version: expected,
+    value_state: "source_unavailable", state_reason: null, content: null, note: null,
+    references: [{ purpose: "unavailable", source_kind: "full_text", paper_id: paper }],
+  }),
+  addArm: (ref, position) => ({ op: "add_arm", ref, arm_role: "intervention", display_label: `Arm ${position}`, position }),
+  quote: (paper, snapshot, quote) => ({
+    purpose: "supports", source_kind: "abstract", paper_id: paper, snapshot_id: snapshot, quote_text: quote,
+    occurrence: null, expected_match_count: null,
+  }),
+  keep: (anchor) => ({ anchor_id: anchor }),
+};
+
+/**
+ * The owner's abstract edit, as the client makes it — an UPDATE of their own
+ * paper under RLS — printing `${tag}=OK edited=<rows>`.
+ */
+function efEditSql(tag, paper, text) {
+  return `WITH u AS (UPDATE public.papers SET abstract = '${text}' WHERE id = '${paper}' RETURNING 1) ` +
+    `SELECT '${tag}=OK edited=' || count(*) FROM u;\n`;
+}
+
+/** A session that makes the abstract edit and commits it. */
+function efEditSessionSql(tag, paper, text) {
+  return "SELECT 'PID=' || pg_backend_pid();\n" + "BEGIN;\n" + `SELECT ${elClaimsSql(EF_OWNER)};\n` +
+    "SET LOCAL ROLE authenticated;\n" + efEditSql(tag, paper, text) + "RESET ROLE;\nCOMMIT;\n";
+}
+
+/** The held transaction for an abstract edit: the edit, then stay open. */
+function efEditHolderSql(paper, text) {
+  return "BEGIN;\n" + `SELECT ${elClaimsSql(EF_OWNER)};\n` + "SET LOCAL ROLE authenticated;\n" +
+    efEditSql("HELD", paper, text) + "RESET ROLE;\n" + "SELECT 'PID=' || pg_backend_pid();\n" + "SELECT 'HELD_READY';\n";
+}
+
+/** A numeric field of an answer, or null. */
+function efNumberOf(line, key) {
+  const m = new RegExp(`"${key}": (\\d+)`).exec(`${line}`);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * True-concurrency probe of the PR-A3 RPCs (EVIDENCE-RECORDS-001A3;
+ * FK-PROOF-001 I-1). Forced orders, each a held transaction and a waiter
+ * observed blocked by it on the expected lock:
+ *
+ *   F1  identical saves (one request id, one body)       -> the second replays the first
+ *   F2  one request id, two bodies                        -> the second is refused as reused
+ *   F3  two saves at one study version, two request ids   -> the second gets a version conflict
+ *   F4  a save holds; a Confirm of the version it replaced waits -> a value version conflict
+ *   F5  a Confirm holds; a save of that value waits       -> applied after it, and the review is reset
+ *   F6  a rebase holds; a Confirm of the old version waits -> a value version conflict
+ *   F7  a Confirm holds; a rebase waits                   -> applied after it: Needs re-review again
+ *   F8  a rebase holds the paper; the owner's abstract edit waits -> the copy is the text displayed
+ *   F9  an abstract edit holds the paper; a rebase waits  -> evidence_source_changed_again
+ *   F10 a link removal holds; a save citing that link waits -> evidence_link_not_found
+ *   F11 a save citing a link holds; its removal waits     -> evidence_link_in_use
+ *   F12 a save adds the 20th group; another adds a 21st   -> evidence_arm_limit
+ *   F13 a save reaches 5,000 events; another would pass it -> evidence_history_limit
+ *   F15 a rebase takes a link's 20th copy; one of the same text waits -> unchanged,
+ *       and the next text is refused (evidence_snapshot_limit)
+ *
+ *   F14 an attempt rolled back, retried afresh, then replayed from another
+ *       session (a lost response); a review retried after a lost answer
+ *
+ * and EF_FREE_ROUNDS barrier-released rounds each of identical saves,
+ * conflicting saves, Confirm against a save, and a rebase against an abstract
+ * edit — every round required to match one serial outcome. F1-F11 and F14 run
+ * in that order on one study, then the free rounds, then F15, F12 and F13,
+ * which leave the study at its limits.
+ */
+async function runEvidenceFieldRaceProbe(container) {
+  log("running true-concurrency evidence field race probe (F1-F15, free rounds)…");
+  const q = (sql) => dbScalar(container, sql);
+  const A = (n) => `Adults with asthma were randomized. Group A received drug X. Group B received placebo. Revision ${n}.`;
+  const owner = async (sql, what) => {
+    const r = await dockerPsql(container, sql);
+    if (r.code !== 0) throw new Error(`${EF_NAME}: ${what} failed: ${r.err.trim()}`);
+  };
+  await owner(
+    `INSERT INTO auth.users (id, email) VALUES ('${EF_OWNER}','evidence-field-race@paperlume.test');\n` +
+      `INSERT INTO public.internal_user_access (user_id, role) VALUES ('${EF_OWNER}','owner');\n` +
+      `INSERT INTO public.papers (id, user_id, title, abstract, keywords, insert_order) VALUES\n` +
+      `  ('${EF_PAPER_A}','${EF_OWNER}','Field race A','${A(0)}','[]'::jsonb,1),\n` +
+      `  ('${EF_PAPER_B}','${EF_OWNER}','Field race B','Second report abstract.','[]'::jsonb,2);\n`,
+    "fixture setup");
+
+  const once = async (tag, call) =>
+    plOutcome((await dockerPsql(container, elSessionSql(tag, call, { owner: EF_OWNER }))).out, tag);
+  const held = (call) => elHolderSql(call, EF_OWNER);
+  const waits = (call) => elSessionSql("WAITER", call, { owner: EF_OWNER });
+  const forced = (label, holderSql, waiterSql, lockTypes, expected) =>
+    runElForcedOrder(container, label, null, null, lockTypes, expected, { holderSql, waiterSql, name: EF_NAME });
+
+  const created = await once("CREATE", efCall.create(EF_PAPER_A, "Field race study", efRq(1)));
+  const study = elStudyOf(created);
+  if (!study || elStatusOf(created) !== "applied") throw new Error(`${EF_NAME}: the study was not created (${created}).`);
+  // A second report, linked by the owner (there is no client RPC that adds a link yet).
+  const plantLinkB = () => owner(
+    `INSERT INTO public.evidence_study_reports (user_id, study_id, paper_id, link_status, link_basis) ` +
+      `VALUES ('${EF_OWNER}','${study}','${EF_PAPER_B}','user_confirmed','user_linked');\n`,
+    "linking the second report");
+  await plantLinkB();
+
+  const version = async () => Number(await q(`SELECT row_version FROM public.evidence_studies WHERE id='${study}';`));
+  const value = async (field) => {
+    const row = await q(
+      "SELECT coalesce((SELECT v.id || '|' || v.value_version || '|' || v.review_status || '|' || " +
+        "coalesce(v.review_reason, '-') || '|' || coalesce(v.value_text, '-') FROM public.evidence_field_values v " +
+        `WHERE v.study_id='${study}' AND v.field_key='${field}' AND v.arm_id IS NULL AND v.outcome_id IS NULL), 'NONE');`);
+    if (row === "NONE") return null;
+    const [id, vv, status, reason, text] = row.split("|");
+    return { id, vv: Number(vv), status, reason, text };
+  };
+  const current = async (paper) => {
+    const [id, seq] = (await q(`SELECT id || '|' || seq FROM public.evidence_source_snapshots ` +
+      `WHERE study_id='${study}' AND paper_id='${paper}' ORDER BY seq DESC LIMIT 1;`)).split("|");
+    return { id, seq: Number(seq) };
+  };
+  const copies = async (paper) => Number(await q(`SELECT count(*) FROM public.evidence_source_snapshots WHERE study_id='${study}' AND paper_id='${paper}';`));
+  const anchorCopy = (anchor) => q(`SELECT snapshot_id FROM public.evidence_field_anchors WHERE id='${anchor}';`);
+  const sha = (paper) => q(`SELECT encode(sha256(convert_to(abstract, 'UTF8')), 'hex') FROM public.papers WHERE id='${paper}';`);
+  const headers = (req) => q(`SELECT count(*) FROM public.evidence_events WHERE user_id='${EF_OWNER}' AND request_id='${req}' AND ordinal=0;`);
+  const events = async () => Number(await q(`SELECT count(*) FROM public.evidence_events WHERE study_id='${study}';`));
+  const setAbstract = (text) => owner(`UPDATE public.papers SET abstract='${text}' WHERE id='${EF_PAPER_A}';\n`, "an abstract edit");
+  const fail = (label, detail) => { throw new Error(`${EF_NAME} ${label}: ${detail}`); };
+
+  // F1 — identical saves: applied once, replayed once.
+  let v = await version();
+  let r = await forced("F1",
+    held(efCall.save(study, v, [efChange.text("condition", "Asthma", null)], efRq(2))),
+    waits(efCall.save(study, v, [efChange.text("condition", "Asthma", null)], efRq(2))),
+    ["advisory"], /^OK \{.*"status": "replayed"/);
+  if (elStatusOf(r.held) !== "applied" || r.waited.replace('"replayed"', '"applied"') !== `OK ${r.held}`
+      || (await headers(efRq(2))) !== "1" || (await version()) !== v + 1) {
+    fail("F1", `the save answered ${r.held}, the replay ${r.waited}.`);
+  }
+  log(`${EF_NAME} F1 OK: the second save waited on the ${r.waitingOn} lock, then replayed the first (applied once, one header).`);
+
+  // F2 — one request id, two bodies: the second body is never applied.
+  v = await version();
+  r = await forced("F2",
+    held(efCall.save(study, v, [efChange.text("demographics", "Mean age 54", null)], efRq(3))),
+    waits(efCall.save(study, v, [efChange.text("demographics", "Mean age 45", null)], efRq(3))),
+    ["advisory"], /^ERR P0001 evidence_request_id_reused$/);
+  if ((await value("demographics"))?.text !== "Mean age 54" || (await headers(efRq(3))) !== "1") {
+    fail("F2", "a reused request id applied its second body.");
+  }
+  log(`${EF_NAME} F2 OK: a request id reused with another body waited, then was refused; only the first body exists.`);
+
+  // F3 — two request ids prepared against one study version: the first wins.
+  v = await version();
+  r = await forced("F3",
+    held(efCall.save(study, v, [efChange.text("eligibility_criteria", "Writer one", null)], efRq(4))),
+    waits(efCall.save(study, v, [efChange.text("eligibility_criteria", "Writer two", null)], efRq(5))),
+    ["transactionid"], /^ERR P0001 evidence_version_conflict$/);
+  if ((await value("eligibility_criteria"))?.text !== "Writer one" || (await headers(efRq(5))) !== "0") {
+    fail("F3", "the losing save changed the value or left a header.");
+  }
+  log(`${EF_NAME} F3 OK: the second save waited on the study row (${r.waitingOn}), then got a version conflict; nothing of it was written.`);
+
+  // The value the review races use: Reported, quoted on the current copy, so Confirm is allowed.
+  v = await version();
+  let copyA = await current(EF_PAPER_A);
+  const seeded = await once("SEED", efCall.save(study, v,
+    [efChange.text("setting", "Two clinics", null, [efChange.quote(EF_PAPER_A, copyA.id, "were randomized")])], efRq(6)));
+  if (elStatusOf(seeded) !== "applied") fail("setup", `the reviewed value was not saved (${seeded}).`);
+  let val = await value("setting");
+  const anchor = await q(`SELECT id FROM public.evidence_field_anchors WHERE value_id='${val.id}';`);
+
+  // F4 — a save holds; a Confirm bound to the version it replaced waits, then conflicts.
+  v = await version();
+  r = await forced("F4",
+    held(efCall.save(study, v, [efChange.text("setting", "Two clinics, urban", val.vv, [efChange.keep(anchor)])], efRq(7))),
+    waits(efCall.review(study, v + 1, val.id, val.vv, "confirm", null, efRq(8))),
+    ["transactionid"], /^ERR P0001 evidence_version_conflict$/);
+  let after = await value("setting");
+  if (after.vv !== val.vv + 1 || after.status !== "unreviewed" || (await headers(efRq(8))) !== "0") {
+    fail("F4", `the value is ${JSON.stringify(after)} after a Confirm of a replaced version.`);
+  }
+  log(`${EF_NAME} F4 OK: a Confirm of the version a save replaced waited on the study row, then got a version conflict; the value stays Not reviewed.`);
+
+  // F5 — a Confirm holds; a save of that value at the confirmed version waits, then applies and resets the review.
+  v = await version();
+  val = after;
+  r = await forced("F5",
+    held(efCall.review(study, v, val.id, val.vv, "confirm", null, efRq(9))),
+    waits(efCall.save(study, v + 1, [efChange.text("setting", "Two clinics, rural", val.vv, [efChange.keep(anchor)])], efRq(10))),
+    ["transactionid"], /^OK \{.*"status": "applied"/);
+  after = await value("setting");
+  if (elStatusOf(r.held) !== "applied" || after.status !== "unreviewed" || after.vv !== val.vv + 1 || after.text !== "Two clinics, rural") {
+    fail("F5", `the Confirm answered ${r.held}; the value is ${JSON.stringify(after)}.`);
+  }
+  log(`${EF_NAME} F5 OK: a save racing a Confirm waited, then applied at the next version and returned the value to Not reviewed.`);
+
+  // F6 — a rebase holds; a Confirm of the version before it waits, then conflicts.
+  v = await version();
+  val = after;
+  const confirmed = await once("CONFIRM", efCall.review(study, v, val.id, val.vv, "confirm", null, efRq(11)));
+  if (elStatusOf(confirmed) !== "applied") fail("F6", `the value could not be confirmed first (${confirmed}).`);
+  await setAbstract(A(1));
+  v = await version();
+  r = await forced("F6",
+    held(efCall.rebase(study, EF_PAPER_A, v, await sha(EF_PAPER_A), efRq(12))),
+    waits(efCall.review(study, v + 1, val.id, val.vv, "confirm", null, efRq(13))),
+    ["transactionid"], /^ERR P0001 evidence_version_conflict$/);
+  after = await value("setting");
+  copyA = await current(EF_PAPER_A);
+  if (efNumberOf(r.held, "rematched") !== 1 || efNumberOf(r.held, "needs_rereview") !== 1
+      || after.status !== "needs_rereview" || after.reason !== "source_changed" || (await anchorCopy(anchor)) !== copyA.id) {
+    fail("F6", `the rebase answered ${r.held}; the value is ${JSON.stringify(after)}.`);
+  }
+  log(`${EF_NAME} F6 OK: the rebase re-pointed the quote and set Needs re-review; a Confirm of the old version waited, then got a version conflict.`);
+
+  // F7 — a Confirm holds; a rebase waits, then applies: the fresh Confirm needs re-review again (001A §E5).
+  await setAbstract(A(2));
+  v = await version();
+  val = after;
+  r = await forced("F7",
+    held(efCall.review(study, v, val.id, val.vv, "confirm", null, efRq(14))),
+    waits(efCall.rebase(study, EF_PAPER_A, v + 1, await sha(EF_PAPER_A), efRq(15))),
+    ["transactionid"], /^OK \{.*"status": "applied"/);
+  after = await value("setting");
+  if (elStatusOf(r.held) !== "applied" || efNumberOf(r.waited, "needs_rereview") !== 1 || after.status !== "needs_rereview") {
+    fail("F7", `the Confirm answered ${r.held}, the rebase ${r.waited}; the value is ${JSON.stringify(after)}.`);
+  }
+  log(`${EF_NAME} F7 OK: a rebase racing a Confirm waited, then applied; the value needs re-review even though its quote was found again.`);
+
+  // F8 — a rebase holds the paper FOR SHARE; the owner's abstract edit waits for it.
+  await setAbstract(A(3));
+  v = await version();
+  const shown = await sha(EF_PAPER_A);
+  r = await forced("F8",
+    held(efCall.rebase(study, EF_PAPER_A, v, shown, efRq(16))),
+    efEditSessionSql("WAITER", EF_PAPER_A, A(4)),
+    ["transactionid"], /^OK edited=1$/);
+  copyA = await current(EF_PAPER_A);
+  const copied = await q(`SELECT encode(sha256(convert_to(exact_text, 'UTF8')), 'hex') FROM public.evidence_source_snapshots WHERE id='${copyA.id}';`);
+  if (elStatusOf(r.held) !== "applied" || copied !== shown || (await sha(EF_PAPER_A)) === shown) {
+    fail("F8", `the rebase answered ${r.held}; the copy is not the text displayed, or the edit was lost.`);
+  }
+  const stale = await once("STALE", efCall.rebase(study, EF_PAPER_A, v + 1, shown, efRq(17)));
+  if (stale !== "ERR P0001 evidence_source_changed_again") fail("F8", `a rebase of the text displayed before the edit answered ${stale}.`);
+  log(`${EF_NAME} F8 OK: the abstract edit waited for the rebase; the copy is exactly the text displayed, and a rebase of that text now answers source_changed_again.`);
+
+  // F9 — an abstract edit holds the paper; a rebase of the text displayed before it waits, then is refused.
+  v = await version();
+  const before = await copies(EF_PAPER_A);
+  const displayed = await sha(EF_PAPER_A);
+  r = await forced("F9",
+    efEditHolderSql(EF_PAPER_A, A(5)),
+    waits(efCall.rebase(study, EF_PAPER_A, v, displayed, efRq(18))),
+    ["transactionid"], /^ERR P0001 evidence_source_changed_again$/);
+  if (r.held !== "OK edited=1" || (await copies(EF_PAPER_A)) !== before || (await version()) !== v) {
+    fail("F9", "a rebase that lost the race to an abstract edit saved a copy or moved the study.");
+  }
+  log(`${EF_NAME} F9 OK: a rebase racing an abstract edit waited on the paper row, then answered source_changed_again; nothing was saved.`);
+
+  // F10 — removing a link holds the study; a save citing that link waits, then finds no link.
+  v = await version();
+  r = await forced("F10",
+    held(efCall.setLink(study, EF_PAPER_B, "remove", v, efRq(19))),
+    waits(efCall.save(study, v + 1, [efChange.unavailable("population_description", null, EF_PAPER_B)], efRq(20))),
+    ["transactionid"], /^ERR P0002 evidence_link_not_found$/);
+  if (elStatusOf(r.held) !== "applied" || (await value("population_description")) !== null) {
+    fail("F10", `the removal answered ${r.held}, or the save left a value citing a removed link.`);
+  }
+  log(`${EF_NAME} F10 OK: a save citing a link being removed waited, then answered link_not_found; no reference to a removed link exists.`);
+
+  // F11 — a save citing a link holds; removing that link waits, then is refused.
+  await plantLinkB();
+  v = await version();
+  r = await forced("F11",
+    held(efCall.save(study, v, [efChange.unavailable("population_description", null, EF_PAPER_B)], efRq(21))),
+    waits(efCall.setLink(study, EF_PAPER_B, "remove", v + 1, efRq(22))),
+    ["transactionid"], /^ERR P0001 evidence_link_in_use$/);
+  const linked = await q(`SELECT count(*) FROM public.evidence_study_reports WHERE study_id='${study}' AND paper_id='${EF_PAPER_B}';`);
+  if (elStatusOf(r.held) !== "applied" || linked !== "1" || (await value("population_description"))?.status !== "unreviewed") {
+    fail("F11", `the save answered ${r.held}; the link count is ${linked}.`);
+  }
+  log(`${EF_NAME} F11 OK: removing a link a save had just cited waited, then answered link_in_use; link and reference kept.`);
+
+  // F14 — an attempt rolled back leaves nothing; its retry applies afresh; a retry of that
+  // from another session (a lost response) replays it. The same for a review.
+  v = await version();
+  const retryCall = efCall.save(study, v, [efChange.text("design_as_reported", "Parallel trial", null)], efRq(23));
+  const aborted = await dockerPsql(container,
+    "BEGIN;\n" + `SELECT ${elClaimsSql(EF_OWNER)};\n` + "SET LOCAL ROLE authenticated;\n" +
+      `SELECT 'ABORTED=' || (${retryCall})::text;\n` + "ROLLBACK;\n");
+  if (aborted.code !== 0 || elStatusOf(plOutcome(aborted.out, "ABORTED")) !== "applied"
+      || (await headers(efRq(23))) !== "0" || (await value("design_as_reported")) !== null || (await version()) !== v) {
+    fail("F14", "the rolled-back attempt left a trace.");
+  }
+  const retried = await once("RETRY", retryCall);
+  const replayed = await once("REPLAY", retryCall);
+  if (elStatusOf(retried) !== "applied" || replayed.replace('"replayed"', '"applied"') !== retried || (await headers(efRq(23))) !== "1") {
+    fail("F14", `the retry answered ${retried} and its replay ${replayed}.`);
+  }
+  val = await value("setting");
+  v = await version();
+  const flagCall = efCall.review(study, v, val.id, val.vv, "flag", "Wrong arm", efRq(24));
+  const flagged = await once("FLAG", flagCall);
+  const reflagged = await once("REFLAG", flagCall);
+  if (elStatusOf(flagged) !== "applied" || reflagged.replace('"replayed"', '"applied"') !== flagged
+      || (await headers(efRq(24))) !== "1" || (await value("setting")).status !== "disputed") {
+    fail("F14", `the flag answered ${flagged} and its retry ${reflagged}.`);
+  }
+  log(`${EF_NAME} F14 OK: a rolled-back save left nothing; its retry applied afresh and replayed from a new session; a review retried after a lost answer replayed once.`);
+
+  // Free rounds — identical saves. Each must be one applied + one replayed answer, one header.
+  for (let i = 1; i <= EF_FREE_ROUNDS; i++) {
+    const req = efRq(0x100 + i);
+    v = await version();
+    const call = efCall.save(study, v, [efChange.text("condition", `Asthma ${i}`, (await value("condition")).vv)], req);
+    const { x, y } = await runElFreeRound(container, `free save ${i}`, null, null,
+      { xSql: elSessionSql("X", call, { owner: EF_OWNER }), ySql: elSessionSql("Y", call, { owner: EF_OWNER }), name: EF_NAME });
+    const statuses = [elStatusOf(x), elStatusOf(y)].sort().join(",");
+    if (statuses !== "applied,replayed" || (await headers(req)) !== "1" || (await value("condition"))?.text !== `Asthma ${i}`
+        || (await version()) !== v + 1) {
+      fail(`(free save ${i})`, `got "${x}" and "${y}".`);
+    }
+  }
+  log(`${EF_NAME} free saves OK: ${EF_FREE_ROUNDS}/${EF_FREE_ROUNDS} barrier-released rounds each applied once and replayed once.`);
+
+  // Free rounds — two saves at one version. Each must apply exactly one writer.
+  const wins = { X: 0, Y: 0 };
+  for (let i = 1; i <= EF_FREE_ROUNDS; i++) {
+    v = await version();
+    const prior = await value("eligibility_criteria");
+    const { x, y } = await runElFreeRound(container, `free conflict ${i}`, null, null, {
+      xSql: elSessionSql("X", efCall.save(study, v, [efChange.text("eligibility_criteria", `Writer X ${i}`, prior.vv)], efRq(0x200 + 2 * i)), { owner: EF_OWNER }),
+      ySql: elSessionSql("Y", efCall.save(study, v, [efChange.text("eligibility_criteria", `Writer Y ${i}`, prior.vv)], efRq(0x201 + 2 * i)), { owner: EF_OWNER }),
+      name: EF_NAME,
+    });
+    const winner = elStatusOf(x) === "applied" ? "X" : elStatusOf(y) === "applied" ? "Y" : null;
+    const loser = winner === "X" ? y : x;
+    const now = await value("eligibility_criteria");
+    if (winner === null || loser !== "ERR P0001 evidence_version_conflict" || now.text !== `Writer ${winner} ${i}` || now.vv !== prior.vv + 1) {
+      fail(`(free conflict ${i})`, `got "${x}" and "${y}", the value is now ${JSON.stringify(now)}.`);
+    }
+    wins[winner] += 1;
+  }
+  log(`${EF_NAME} free conflicts OK: ${EF_FREE_ROUNDS}/${EF_FREE_ROUNDS} barrier-released rounds each applied exactly one save and refused the other (X won ${wins.X}, Y won ${wins.Y}).`);
+
+  // Free rounds — Confirm against a save of the same value at one study version.
+  const reviewOrders = { confirm: 0, save: 0 };
+  for (let i = 1; i <= EF_FREE_ROUNDS; i++) {
+    v = await version();
+    const prior = await value("setting");
+    const { x, y } = await runElFreeRound(container, `free review ${i}`, null, null, {
+      xSql: elSessionSql("X", efCall.review(study, v, prior.id, prior.vv, "confirm", null, efRq(0x300 + 2 * i)), { owner: EF_OWNER }),
+      ySql: elSessionSql("Y", efCall.save(study, v, [efChange.text("setting", `Clinic ${i}`, prior.vv, [efChange.keep(anchor)])], efRq(0x301 + 2 * i)), { owner: EF_OWNER }),
+      name: EF_NAME,
+    });
+    const now = await value("setting");
+    const confirmWon = elStatusOf(x) === "applied" && y === "ERR P0001 evidence_version_conflict"
+      && now.status === "user_reviewed" && now.vv === prior.vv && now.text === prior.text;
+    const saveWon = elStatusOf(y) === "applied" && x === "ERR P0001 evidence_version_conflict"
+      && now.status === "unreviewed" && now.vv === prior.vv + 1 && now.text === `Clinic ${i}`;
+    if (!confirmWon && !saveWon) fail(`(free review ${i})`, `got "${x}" and "${y}", the value is now ${JSON.stringify(now)}.`);
+    reviewOrders[confirmWon ? "confirm" : "save"] += 1;
+    if (confirmWon) {
+      // Leave the value unreviewed, and editable, for the next round.
+      const reset = await once("RESET", efCall.save(study, v + 1, [efChange.text("setting", `Clinic reset ${i}`, now.vv, [efChange.keep(anchor)])], efRq(0x380 + i)));
+      if (elStatusOf(reset) !== "applied") fail(`(free review ${i})`, `could not reset the value (${reset}).`);
+    }
+  }
+  log(`${EF_NAME} free reviews OK: ${EF_FREE_ROUNDS}/${EF_FREE_ROUNDS} barrier-released rounds of Confirm against a save each ended as one of the two serial orders (Confirm first ${reviewOrders.confirm}, save first ${reviewOrders.save}).`);
+
+  // Free rounds — a rebase against an abstract edit.
+  const rebaseOrders = { rebase: 0, edit: 0 };
+  for (let i = 1; i <= EF_FREE_ROUNDS; i++) {
+    v = await version();
+    const text = await q(`SELECT abstract FROM public.papers WHERE id='${EF_PAPER_A}';`);
+    const shownNow = await sha(EF_PAPER_A);
+    const n = await copies(EF_PAPER_A);
+    const { x, y } = await runElFreeRound(container, `free rebase ${i}`, null, null, {
+      xSql: elSessionSql("X", efCall.rebase(study, EF_PAPER_A, v, shownNow, efRq(0x400 + i)), { owner: EF_OWNER }),
+      ySql: efEditSessionSql("Y", EF_PAPER_A, A(100 + i)),
+      name: EF_NAME,
+    });
+    const nowCopies = await copies(EF_PAPER_A);
+    const latest = await q(`SELECT exact_text FROM public.evidence_source_snapshots WHERE study_id='${study}' AND paper_id='${EF_PAPER_A}' ORDER BY seq DESC LIMIT 1;`);
+    const rebaseFirst = elStatusOf(x) === "applied" && nowCopies === n + 1 && latest === text;
+    const editFirst = x === "ERR P0001 evidence_source_changed_again" && nowCopies === n;
+    if (y !== "OK edited=1" || (!rebaseFirst && !editFirst)) {
+      fail(`(free rebase ${i})`, `got "${x}" and "${y}", ${nowCopies - n} new copy(ies).`);
+    }
+    rebaseOrders[rebaseFirst ? "rebase" : "edit"] += 1;
+  }
+  log(`${EF_NAME} free rebases OK: ${EF_FREE_ROUNDS}/${EF_FREE_ROUNDS} barrier-released rounds of a rebase against an abstract edit each ended as one serial order, never a copy of text that was not displayed (rebase first ${rebaseOrders.rebase}, edit first ${rebaseOrders.edit}).`);
+
+  // F15 — the last copy slot. At 19 copies a rebase takes the 20th; a rebase of the
+  // same displayed text waiting on the study row is then unchanged, not a 21st copy;
+  // any further text is refused at the limit.
+  const top = (await current(EF_PAPER_A)).seq;
+  if ((await copies(EF_PAPER_A)) !== top || top >= 19) fail("F15", `unexpected copy sequence (count ${await copies(EF_PAPER_A)}, top ${top}).`);
+  await owner(
+    "INSERT INTO public.evidence_source_snapshots (user_id, study_id, paper_id, seq, source_kind, exact_text, " +
+      "exact_sha256, normalized_sha256, normalization_version, char_count) " +
+      `SELECT '${EF_OWNER}', '${study}', '${EF_PAPER_A}', ${top} + g, 'library_abstract', c.t, sha256(convert_to(c.t, 'UTF8')), ` +
+      "sha256(convert_to(public.evidence_normalize_v1(c.t), 'UTF8')), 'v1', char_length(c.t) " +
+      `FROM generate_series(1, ${19 - top}) g, LATERAL (SELECT 'Planted copy ' || g || '.' AS t) c;\n`,
+    "planting copies");
+  await setAbstract(A(200));
+  v = await version();
+  const last = await sha(EF_PAPER_A);
+  r = await forced("F15",
+    held(efCall.rebase(study, EF_PAPER_A, v, last, efRq(29))),
+    waits(efCall.rebase(study, EF_PAPER_A, v + 1, last, efRq(30))),
+    ["transactionid"], /^OK \{.*"status": "unchanged"/);
+  if (elStatusOf(r.held) !== "applied" || efNumberOf(r.held, "seq") !== 20 || efNumberOf(r.waited, "seq") !== 20
+      || (await copies(EF_PAPER_A)) !== 20 || (await version()) !== v + 1) {
+    fail("F15", `the 20th copy answered ${r.held}, the racing rebase ${r.waited}; the link has ${await copies(EF_PAPER_A)} copies.`);
+  }
+  await setAbstract(A(201));
+  const over = await once("OVER", efCall.rebase(study, EF_PAPER_A, v + 1, await sha(EF_PAPER_A), efRq(31)));
+  if (over !== "ERR P0001 evidence_snapshot_limit" || (await copies(EF_PAPER_A)) !== 20) {
+    fail("F15", `a rebase past 20 copies answered ${over}.`);
+  }
+  log(`${EF_NAME} F15 OK: a rebase of the same text racing the one taking the 20th copy waited, then answered unchanged; the next text was refused (evidence_snapshot_limit); 20 copies.`);
+
+  // F12 — the 20th group fits; a 21st, waiting on the study row, is refused.
+  await owner(
+    `INSERT INTO public.evidence_arms (user_id, study_id, arm_role, display_label, position) ` +
+      `SELECT '${EF_OWNER}', '${study}', 'intervention', 'Planted arm ' || g, g FROM generate_series(0, 18) g;\n`,
+    "planting 19 groups");
+  v = await version();
+  r = await forced("F12",
+    held(efCall.save(study, v, [efChange.addArm("g20", 19)], efRq(25))),
+    waits(efCall.save(study, v + 1, [efChange.addArm("g21", 20)], efRq(26))),
+    ["transactionid"], /^ERR P0001 evidence_arm_limit$/);
+  const arms = await q(`SELECT count(*) FROM public.evidence_arms WHERE study_id='${study}';`);
+  if (elStatusOf(r.held) !== "applied" || arms !== "20") fail("F12", `the 20th group answered ${r.held}; the study has ${arms} groups.`);
+  log(`${EF_NAME} F12 OK: the save adding the 21st group waited for the one adding the 20th, then was refused (evidence_arm_limit); 20 groups.`);
+
+  // F13 — 4,998 events; a save makes 5,000; the next, waiting on the study row, is refused.
+  const have = await events();
+  await owner(
+    `INSERT INTO public.evidence_events (user_id, study_id, study_version, ordinal, event_type, request_id, target_id, after) ` +
+      `SELECT '${EF_OWNER}', '${study}', 1, 1000 + g, 'study_updated', gen_random_uuid(), '${study}', '{}'::jsonb ` +
+      `FROM generate_series(1, ${4998 - have}) g;\n`,
+    "planting history");
+  v = await version();
+  r = await forced("F13",
+    held(efCall.save(study, v, [efChange.text("condition", "Asthma, final", (await value("condition")).vv)], efRq(27))),
+    waits(efCall.save(study, v + 1, [efChange.text("demographics", "Mean age 55", (await value("demographics")).vv)], efRq(28))),
+    ["transactionid"], /^ERR P0001 evidence_history_limit$/);
+  if (elStatusOf(r.held) !== "applied" || (await events()) !== 5000) {
+    fail("F13", `the save reaching the limit answered ${r.held}; the study has ${await events()} events.`);
+  }
+  log(`${EF_NAME} F13 OK: a save that would pass 5,000 events waited for the one reaching it, then was refused (evidence_history_limit); exactly 5,000 events.`);
+
+  // Remove the fixture through the account cascade, and prove it is gone.
+  await owner(`DELETE FROM auth.users WHERE id='${EF_OWNER}';\n`, "fixture cleanup");
+  const residual = await q(
+    `SELECT (SELECT count(*) FROM auth.users WHERE id='${EF_OWNER}') + ` +
+      `(SELECT count(*) FROM public.papers WHERE user_id='${EF_OWNER}') + ` +
+      `(SELECT count(*) FROM public.internal_user_access WHERE user_id='${EF_OWNER}') + ` +
+      ["evidence_studies", "evidence_study_reports", "evidence_source_snapshots", "evidence_arms",
+        "evidence_outcomes", "evidence_field_values", "evidence_field_anchors", "evidence_events"]
+        .map((t) => `(SELECT count(*) FROM public.${t} WHERE user_id='${EF_OWNER}')`).join(" + ") + " + " +
+      `(SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=${EL_BARRIER_CLASSID} AND objid=${EL_BARRIER_OBJID});`);
+  if (residual !== "0") throw new Error(`${EF_NAME} fixture not fully removed (${residual} row(s) or lock(s) remain).`);
 }
 
 // ── AI-MULTI-PROVIDER-001C-REVIEW-FIX-01 ─────────────────────────────────────
@@ -5638,6 +6148,7 @@ async function cmdDbTests() {
     await runPaperDeleteFinalizationProbe(container);
     await runEvidenceForeignKeyRaceProbe(container);
     await runEvidenceLifecycleRaceProbe(container);
+    await runEvidenceFieldRaceProbe(container);
     await runPreferenceLockProbe(container);
     await runAclParityProbe(container);
     await runMigrationCutoverProbe(container);
