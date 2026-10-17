@@ -1679,8 +1679,50 @@ export type Database = {
         }
         Returns: Json
       }
+      evidence_locate_quote: {
+        Args: { p_quotes: string[]; p_snapshot: string }
+        Returns: {
+          match_count: number
+          normalized_length: number
+          ord: number
+          problems: string[]
+          starts: number[]
+          status: string
+        }[]
+      }
       evidence_normalize_v1: { Args: { p_text: string }; Returns: string }
+      evidence_rebase_source: {
+        Args: {
+          p_expected_abstract_sha256: string
+          p_expected_version: number
+          p_paper_id: string
+          p_request_id: string
+          p_study_id: string
+        }
+        Returns: Json
+      }
       evidence_records_assert_writable: { Args: never; Returns: undefined }
+      evidence_review_fields: {
+        Args: {
+          p_action: string
+          p_expected_value_version: number
+          p_expected_version: number
+          p_note: string
+          p_request_id: string
+          p_study_id: string
+          p_value_id: string
+        }
+        Returns: Json
+      }
+      evidence_save_changes: {
+        Args: {
+          p_changes: Json
+          p_expected_version: number
+          p_request_id: string
+          p_study_id: string
+        }
+        Returns: Json
+      }
       evidence_set_link: {
         Args: {
           p_action: string
@@ -1691,6 +1733,15 @@ export type Database = {
         }
         Returns: Json
       }
+      evidence_state_reference_problems: {
+        Args: {
+          p_examined: number
+          p_state: string
+          p_supports: number
+          p_unavailable: number
+        }
+        Returns: string[]
+      }
       evidence_update_study: {
         Args: {
           p_design_profile: string
@@ -1700,6 +1751,10 @@ export type Database = {
           p_request_id: string
           p_study_id: string
         }
+        Returns: Json
+      }
+      evidence_value_digest: {
+        Args: { p_user_id: string; p_value_id: string }
         Returns: Json
       }
       filter_papers_by_keywords: {

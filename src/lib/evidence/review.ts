@@ -29,8 +29,13 @@
  *     (001A §E5, PD-6).
  *
  * These are browser-side preconditions: they decide what the UI offers and
- * explain why. The PR-A3 review RPC re-checks all of them, binds the review to
- * the version, and its answer stands.
+ * explain why. The PR-A3 review RPC (`evidence_review_fields`,
+ * EVIDENCE-RECORDS-001A3) re-checks all of them, binds the review to the
+ * version, and its answer stands: a refusal names the same `ConfirmBlock`
+ * codes, in the same order (`EvidenceError.blocks`). One difference is
+ * deliberate: the RPC treats Confirm of an already-confirmed version as a no-op
+ * only when the note is the same too, so a new note re-confirms; the browser
+ * offers no Confirm there at all.
  */
 
 import { EVIDENCE_FIELDS } from "./fieldDictionary";
@@ -318,8 +323,9 @@ export function draftChangesValue(value: RecordedValue, draft: ValueDraft): bool
 
 /**
  * The review a value will have after saving `draft`: unchanged when nothing
- * changes, otherwise Not reviewed. The review note's fate on an edit is the
- * PR-A3 RPC's to decide, so it is not predicted here.
+ * changes, otherwise Not reviewed. The PR-A3 save RPC also clears the review
+ * note with the review (its `value_saved` event keeps a digest of the review
+ * it cleared); the note is left out here as before.
  */
 export function predictReviewAfterSave(value: RecordedValue, draft: ValueDraft): Omit<ReviewState, "note"> {
   if (!draftChangesValue(value, draft)) {

@@ -18,8 +18,9 @@
  * the sources differ and must not be confused:
  *   * `pr_a1_check` — a CHECK constraint of the applied PR-A1 migration;
  *   * `pr_a2_rpc` — an applied PR-A2 RPC (`20261016104232`);
- *   * `pr_a3_planned` — a rule the requirements give to a PR-A3 RPC that does
- *     not exist yet; until it does, nothing on the server enforces it;
+ *   * `pr_a3_rpc` — the PR-A3 save RPC `evidence_save_changes`
+ *     (`20261017155445`, EVIDENCE-RECORDS-001A3), whose own copy of this
+ *     dictionary `fieldDictionary.parity.test.ts` compares with this one;
  *   * `none` — there is no rule (every design family allows the field).
  * Labels, sections and core/optional status are presentation metadata from
  * Requirements-001 §E3, §E13 and §H2-H5.
@@ -74,7 +75,7 @@ export type ValueShape = (typeof VALUE_SHAPES)[number];
 
 export type FieldTier = "core" | "optional";
 export type FieldSection = "study_design" | "participants" | "interventions" | "outcomes";
-export type RuleSource = "pr_a1_check" | "pr_a2_rpc" | "pr_a3_planned" | "none";
+export type RuleSource = "pr_a1_check" | "pr_a2_rpc" | "pr_a3_rpc" | "none";
 
 /** The integer range of a confirmed number (`value_int BETWEEN 0 AND 10000000`). */
 export const COUNT_MIN = 0;
@@ -146,12 +147,12 @@ const STUDY_RULES = {
 } as const;
 
 // Groups exist only in the intervention families. PR-A2 refuses moving a study
-// that has any group to non_intervention; a PR-A3 save RPC must refuse adding a
+// that has any group to non_intervention; the PR-A3 save RPC refuses adding a
 // group, or any group value, to a non_intervention study.
 const ARM_RULES = {
   scope: "pr_a1_check",
   shapeAndBounds: "pr_a1_check",
-  designFamily: ["pr_a2_rpc", "pr_a3_planned"],
+  designFamily: ["pr_a2_rpc", "pr_a3_rpc"],
   armRole: "none",
   listHygiene: "none",
 } as const;
@@ -208,7 +209,7 @@ const DEFINITIONS = {
     designProfiles: ALL_PROFILES,
     armRoles: null,
     tier: "optional",
-    enforcement: { ...STUDY_RULES, listHygiene: "pr_a3_planned" },
+    enforcement: { ...STUDY_RULES, listHygiene: "pr_a3_rpc" },
   },
   // ── Population fields, study level (§H3) ───────────────────────────────────
   population_description: {
@@ -271,8 +272,8 @@ const DEFINITIONS = {
     armRoles: null,
     tier: "core",
     // PR-A2 refuses moving to non_intervention while an n_randomized value
-    // exists; a PR-A3 save RPC must refuse recording one there.
-    enforcement: { ...STUDY_RULES, designFamily: ["pr_a2_rpc", "pr_a3_planned"] },
+    // exists; the PR-A3 save RPC refuses recording one there.
+    enforcement: { ...STUDY_RULES, designFamily: ["pr_a2_rpc", "pr_a3_rpc"] },
   },
   n_enrolled: {
     key: "n_enrolled",
@@ -323,8 +324,9 @@ const DEFINITIONS = {
     armRoles: ["comparator"],
     tier: "core",
     // Comparator groups only: Requirements-001 §H4/§H6 give this to an RPC, and
-    // PR-A1's header lists it among the rules it does not enforce.
-    enforcement: { ...ARM_RULES, armRole: "pr_a3_planned" },
+    // PR-A1's header lists it among the rules it does not enforce. The PR-A3
+    // save RPC enforces it, on the batch's final state.
+    enforcement: { ...ARM_RULES, armRole: "pr_a3_rpc" },
   },
   dose_or_intensity: {
     key: "dose_or_intensity",
@@ -445,7 +447,7 @@ const DEFINITIONS = {
     designProfiles: ALL_PROFILES,
     armRoles: null,
     tier: "core",
-    enforcement: { ...OUTCOME_RULES, listHygiene: "pr_a3_planned" },
+    enforcement: { ...OUTCOME_RULES, listHygiene: "pr_a3_rpc" },
   },
 } as const satisfies Record<string, FieldDefinition>;
 

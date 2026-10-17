@@ -121,7 +121,7 @@ export const EVENT_TYPES = [
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
-/** `evidence_events_op_check`. The last three have no RPC yet (PR-A3). */
+/** `evidence_events_op_check`: the request op each RPC records (delete records none). */
 export const REQUEST_OPS = [
   "create_study",
   "update_study",
