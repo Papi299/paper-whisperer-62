@@ -1,6 +1,6 @@
 # Study records — lifecycle RPC contract (EVIDENCE-RECORDS-001A2)
 
-> **Status:** applied to Production. Migration `20261016104232_add_evidence_records_lifecycle_rpcs.sql` (PR #344) was merged on 2026-10-16 and applied to Supabase Production the same day. The four RPCs and the two internal helpers below are installed in the Production database, beside the eight evidence tables of `20261012031537` (PR-A1). There is still no user-facing Study Record interface: nothing in the app calls these functions. The typed client for them in `src/lib/evidence/` (EVIDENCE-RECORDS-001B, [evidence-domain-library.md](evidence-domain-library.md)) is not used by application code either.
+> **Status:** applied to Production. Migration `20261016104232_add_evidence_records_lifecycle_rpcs.sql` (PR #344) was merged on 2026-10-16 and applied to Supabase Production the same day. The four RPCs and the two internal helpers below are installed in the Production database, beside the eight evidence tables of `20261012031537` (PR-A1). There is still no user-facing Study Record interface: nothing in the app calls these functions. The typed client for them in `src/lib/evidence/` (EVIDENCE-RECORDS-001B, [evidence-domain-library.md](evidence-domain-library.md)) is not used by application code either. The write path inside a study — groups, outcomes, values, references, review and rebase — is EVIDENCE-RECORDS-001A3 ([evidence-records-field-operations.md](evidence-records-field-operations.md)), implemented in the repository and not applied to Production.
 
 This document is the client contract for the four functions that create, edit, link and delete study records, and the two internal helpers behind them. The migration header holds the database-level detail; suite `031_evidence_records_lifecycle.test.sql` and the db-tests lifecycle's evidence lifecycle race probe (`scripts/e2e-local.mjs`) are the executable specification.
 
@@ -78,7 +78,7 @@ Create reads the paper's stored abstract on the server and saves a byte-exact co
 
 **Match normalization v1** is REQUIREMENTS-001 §I3, applied in this order: Unicode NFC (never NFKC or NFKD, which would read `10⁵` as `105`); remove U+00AD, U+200B, U+2060 and U+FEFF; map every Unicode `White_Space` character to a space, collapse runs and trim; map ‘ ’ ‚ ‛ to `'` and “ ” „ ‟ to `"`; map U+2010–U+2015 and U+2212 to `-`; map U+2026 to `...` and U+00B5 to U+03BC; nothing else. The order matters at the edges: a soft hyphen between `e` and a combining accent is removed only after NFC, so that pair stays decomposed. Suite 031 pins 30 golden vectors whose expected outputs and SHA-256 values were computed outside PostgreSQL. The shared fixture of EVIDENCE-RECORDS-001B carries those vectors and more; suite 032 runs it against the installed function and Vitest against the TypeScript normalizer ([evidence-domain-library.md](evidence-domain-library.md) §6).
 
-**Phase order.** The staged plan put `evidence_normalize_v1` in PR-A3 (001A3). PR-A1's schema already requires a v1 fingerprint on every copy, so only that function moved into this phase. Server-side quote location and matching, and every source-reference write, stay in 001A3. The TypeScript normalizer, its shared fixture and the parity check are 001B ([evidence-domain-library.md](evidence-domain-library.md) §6).
+**Phase order.** The staged plan put `evidence_normalize_v1` in PR-A3 (001A3). PR-A1's schema already requires a v1 fingerprint on every copy, so only that function moved into this phase. Server-side quote location and matching, and every source-reference write, are 001A3, which reuses this function unchanged ([evidence-records-field-operations.md](evidence-records-field-operations.md) §6). The TypeScript normalizer, its shared fixture and the parity check are 001B ([evidence-domain-library.md](evidence-domain-library.md) §6).
 
 ## 7. History
 
@@ -104,6 +104,6 @@ No event holds abstract text or notes text: notes can be 10,000 characters, whic
 ## 9. Limitations
 
 - Owner-only pilot. Widening it is one reviewed change to `evidence_records_assert_writable()` plus a separate Production authorization (001A G7).
-- No write path yet for groups, outcomes, values, source references, review states or rebasing a copy (001A3).
+- Groups, outcomes, values, source references, review and rebasing a copy have no write path in Production. EVIDENCE-RECORDS-001A3 adds it ([evidence-records-field-operations.md](evidence-records-field-operations.md)); it is implemented in the repository and not applied to Production.
 - A request id is remembered only while its study exists (§5).
 - Generated TypeScript types list every argument as required and non-null (`p_notes: string`); the database accepts NULL for `p_notes`. `src/lib/evidence/lifecycleRequests.ts` widens only that argument.

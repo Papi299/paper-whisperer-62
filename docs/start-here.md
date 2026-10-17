@@ -269,6 +269,7 @@ Meaningful open items. This is a pointer list, not a backlog database — none o
 | [deployment.md](deployment.md) | Deployment runbook, env vars, domains, smoke checklists |
 | [architecture-read-path.md](architecture-read-path.md) | Read-path architecture detail |
 | [evidence-records-lifecycle.md](evidence-records-lifecycle.md) | Study-record lifecycle RPCs: client contract, owner gate, idempotency, history, limitations |
+| [evidence-records-field-operations.md](evidence-records-field-operations.md) | Study-record field, review and rebase RPCs (001A3, not applied to Production): payload, matching, review, rebase, errors, limits, rollout prerequisites |
 | [evidence-domain-library.md](evidence-domain-library.md) | Study-record domain library: field dictionary, validation, review rules, normalization v1 parity, advisory matcher, typed RPC client |
 | [dependency-security.md](dependency-security.md) | npm dependency-security posture, remediation policy and triggers |
 | [schema-reconciliation.md](schema-reconciliation.md) | Schema drift inventory, canonical decisions C20–C26 |
