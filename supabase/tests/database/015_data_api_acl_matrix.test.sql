@@ -58,7 +58,9 @@
 --     for them the relation matrix in section C is part of their security
 --     boundary. Section L pins the six study-record functions
 --     `20261016104232_add_evidence_records_lifecycle_rpcs.sql`
---     (EVIDENCE-RECORDS-001A2) added — the only write path to the evidence
+--     (EVIDENCE-RECORDS-001A2) added and the six
+--     `20261017155445_add_evidence_records_field_review_rebase_rpcs.sql`
+--     (EVIDENCE-RECORDS-001A3) added — the only write path to the evidence
 --     tables, which section C keeps SELECT-only.
 
 BEGIN;
@@ -177,7 +179,7 @@ CREATE TEMP TABLE acl_relation_allowlist (relname text PRIMARY KEY, why text NOT
 -- deliberately — section K fails on it until it is.
 CREATE TEMP TABLE acl_invoker_public_exec_allowlist (sig text PRIMARY KEY, why text NOT NULL);
 
-SELECT plan(141);
+SELECT plan(147);
 
 -- ══ A. Inventory and classification guards ══════════════════════════════════
 SELECT is(
@@ -384,21 +386,26 @@ SELECT is(
 -- DB-IMMUTABLE-TSVECTOR-WRAPPER-RETIREMENT-001 (C55) dropped the three
 -- immutable_english_tsvector_* helpers, so a re-created one fails here.
 -- Thirteen since EVIDENCE-RECORDS-001A2 added two owner-only helpers, the
--- study-record gate and match normalization v1, pinned in section L. Ordered
--- under the "C" collation so the expected string does not depend on the
--- database's default collation (which sorts `search_papers_short` first).
+-- study-record gate and match normalization v1, pinned in section L. Sixteen
+-- since EVIDENCE-RECORDS-001A3 added three more owner-only helpers — quote
+-- location, the FK-PROOF-001 section J rule and the value digest — also pinned
+-- in section L. Ordered under the "C" collation so the expected string does not
+-- depend on the database's default collation (which sorts `search_papers_short`
+-- first).
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND NOT p.prosecdef),
   'attachment_cleanup_path_is_safe(uuid,text,uuid), bulk_update_keywords(jsonb), '
-  || 'bulk_update_study_types(jsonb), evidence_normalize_v1(text), evidence_records_assert_writable(), '
+  || 'bulk_update_study_types(jsonb), evidence_locate_quote(text[],text), evidence_normalize_v1(text), '
+  || 'evidence_records_assert_writable(), evidence_state_reference_problems(text,integer,integer,integer), '
+  || 'evidence_value_digest(uuid,uuid), '
   || 'filter_papers_by_keywords(uuid,text[]), '
   || 'get_duplicate_papers(), get_keyword_options(uuid,uuid[],integer,integer,text[]), '
   || 'safe_bulk_insert_papers(uuid,jsonb), '
   || 'search_papers(uuid,text,integer,integer), search_papers_short(uuid,text), '
   || 'set_updated_at(), update_updated_at_column()',
-  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified thirteen');
+  'ACL-H1 the SECURITY INVOKER routine inventory in public is exactly the classified sixteen');
 
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text), '')
@@ -685,14 +692,14 @@ DROP FUNCTION zz_acl_probe_schema.zz_acl_probe_fn();
 DROP SCHEMA zz_acl_probe_schema;
 DROP FUNCTION public.zz_acl_probe_fn();
 
--- ══ L. The study-record functions (EVIDENCE-RECORDS-001A2) ══════════════════
+-- ══ L. The study-record functions (EVIDENCE-RECORDS-001A2, 001A3) ═══════════
 -- The only write path to the eight evidence tables, whose SELECT-only matrix is
--- section C. Four client RPCs, SECURITY DEFINER and executable by
--- authenticated alone, and two internal SECURITY INVOKER helpers executable by
+-- section C. Seven client RPCs, SECURITY DEFINER and executable by
+-- authenticated alone, and five internal SECURITY INVOKER helpers executable by
 -- their owner alone. Each is pinned in one line — owner, security mode,
 -- search_path, stored ACL, and which of the four grantees that matter can
 -- execute it — so a failure names the attribute that moved. Behaviour is owned
--- by 031; the definer inventory by 003 and 021.
+-- by 031 and 033; the definer inventory by 003 and 021.
 SELECT is(
   (SELECT pg_get_userbyid(p.proowner)
           || ' | ' || CASE WHEN p.prosecdef THEN 'SECURITY DEFINER' ELSE 'SECURITY INVOKER' END
@@ -719,7 +726,19 @@ FROM (VALUES
   ('public.evidence_records_assert_writable()',
    'postgres | SECURITY INVOKER | search_path=public, pg_temp | acl {postgres=X/postgres} | exec <nobody>'),
   ('public.evidence_normalize_v1(text)',
-   'postgres | SECURITY INVOKER | search_path=pg_catalog, pg_temp | acl {postgres=X/postgres} | exec <nobody>')
+   'postgres | SECURITY INVOKER | search_path=pg_catalog, pg_temp | acl {postgres=X/postgres} | exec <nobody>'),
+  ('public.evidence_save_changes(uuid,integer,jsonb,uuid)',
+   'postgres | SECURITY DEFINER | search_path=public, pg_temp | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated'),
+  ('public.evidence_review_fields(uuid,integer,uuid,integer,text,text,uuid)',
+   'postgres | SECURITY DEFINER | search_path=public, pg_temp | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated'),
+  ('public.evidence_rebase_source(uuid,uuid,integer,text,uuid)',
+   'postgres | SECURITY DEFINER | search_path=public, pg_temp | acl {postgres=X/postgres,authenticated=X/postgres} | exec authenticated'),
+  ('public.evidence_locate_quote(text[],text)',
+   'postgres | SECURITY INVOKER | search_path=pg_catalog, pg_temp | acl {postgres=X/postgres} | exec <nobody>'),
+  ('public.evidence_state_reference_problems(text,integer,integer,integer)',
+   'postgres | SECURITY INVOKER | search_path=pg_catalog, pg_temp | acl {postgres=X/postgres} | exec <nobody>'),
+  ('public.evidence_value_digest(uuid,uuid)',
+   'postgres | SECURITY INVOKER | search_path=public, pg_temp | acl {postgres=X/postgres} | exec <nobody>')
 ) AS e(sig, expected)
 ORDER BY e.sig;
 

@@ -4,8 +4,9 @@
 -- client RPCs (create, update, set_link, delete), the owner-only pilot gate and
 -- match normalization v1. Every call below runs as `authenticated` (or anon, or
 -- service_role) with JWT claims, exactly as PostgREST would make it. Proves:
---   A. the function contract — exactly six functions, with their signatures,
---      results, security modes, volatility, owner and search_path; stored and
+--   A. the function contract — PR-A2's six functions, with their signatures,
+--      results, security modes, volatility, owner and search_path (the full
+--      evidence inventory, with PR-A3's six, is pinned by 030 and 033); stored and
 --      effective EXECUTE; no overloads; the gate and lock order in each body;
 --      the evidence tables still SELECT-only;
 --   B. the pilot gate (001A G6, P1-P14) — the owner allowed; a manager, an
@@ -40,9 +41,10 @@
 --      so the vectors test the SQL function rather than restate it.
 --
 -- Every non-ASCII character in this file is written as chr(<code point>).
--- Groups, outcomes, values and references have no write RPC yet (001A3), so
--- the fully populated study, the second report and the other users' studies are
--- planted by the database owner (FK-PROOF-001 K, layer 1). Everything runs in
+-- Groups, outcomes, values and references had no write RPC in PR-A2 (their
+-- RPCs are 001A3's, owned by suite 033), so the fully populated study, the
+-- second report and the other users' studies are planted by the database owner
+-- (FK-PROOF-001 K, layer 1). Everything runs in
 -- one transaction and rolls back. Deterministic ids; synthetic data only; no
 -- remote calls; no Production data; no real credentials.
 
@@ -367,7 +369,9 @@ SELECT is(
                      || ' | ' || coalesce(array_to_string(p.proconfig, ';'), '<no config>'),
                      E'\n' ORDER BY p.proname)
      FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
-    WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'evidence\_%'),
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname IN ('evidence_create_study_from_paper', 'evidence_delete_study', 'evidence_normalize_v1',
+                        'evidence_records_assert_writable', 'evidence_set_link', 'evidence_update_study')),
   'evidence_create_study_from_paper(p_paper_id uuid, p_label text, p_design_profile text, p_link_status text, p_request_id uuid) -> jsonb'
   || ' | plpgsql | definer | vol=v strict=f parallel=u | owner=postgres | search_path=public, pg_temp' || E'\n'
   || 'evidence_delete_study(p_study_id uuid, p_expected_version integer, p_request_id uuid) -> jsonb'
@@ -380,7 +384,7 @@ SELECT is(
   || ' | plpgsql | definer | vol=v strict=f parallel=u | owner=postgres | search_path=public, pg_temp' || E'\n'
   || 'evidence_update_study(p_study_id uuid, p_expected_version integer, p_label text, p_design_profile text, p_notes text, p_request_id uuid) -> jsonb'
   || ' | plpgsql | definer | vol=v strict=f parallel=u | owner=postgres | search_path=public, pg_temp',
-  'A1 exactly six evidence functions, each with its reviewed signature, result, language, security mode, volatility, owner and search_path');
+  'A1 PR-A2''s six evidence functions, each with its reviewed signature, result, language, security mode, volatility, owner and search_path');
 
 SELECT is((SELECT count(*)::int FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = nm),
   1, 'A2 exactly one overload of ' || nm)
@@ -1106,8 +1110,8 @@ SELECT is(
   (SELECT coalesce(string_agg(p.proname, ',' ORDER BY p.proname), '') FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace
       AND pg_temp.code(p.oid::regprocedure) ~* 'insert[[:space:]]+into[[:space:]]+(public\.)?evidence_events'),
-  'evidence_create_study_from_paper,evidence_set_link,evidence_update_study',
-  'E5 exactly the three gated RPCs append history');
+  'evidence_create_study_from_paper,evidence_rebase_source,evidence_review_fields,evidence_save_changes,evidence_set_link,evidence_update_study',
+  'E5 exactly the six gated RPCs append history: PR-A2''s three and PR-A3''s three');
 SELECT is(
   (SELECT coalesce(string_agg(p.proname, ',' ORDER BY p.proname), '') FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace

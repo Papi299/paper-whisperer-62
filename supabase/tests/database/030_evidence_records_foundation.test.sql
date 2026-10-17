@@ -13,7 +13,8 @@
 --      key carries user_id; every table cascades from auth.users; every child
 --      of a study cascades from it directly), the supporting indexes, the
 --      durable request-header key, that no trigger was added, and that the
---      only evidence functions are the six EVIDENCE-RECORDS-001A2 reviewed;
+--      only evidence functions are the twelve EVIDENCE-RECORDS-001A2 and
+--      001A3 reviewed;
 --   B. the privilege surface — anon and service_role reach nothing, and a
 --      signed-in user can read only their own rows and write none (catalog AND
 --      real attempts);
@@ -570,16 +571,21 @@ SELECT is(
   'A9 no trigger of any kind sits on an evidence table (nothing runs on the account-deletion cascade path)');
 
 -- EVIDENCE-RECORDS-001A1 added no function. EVIDENCE-RECORDS-001A2 later added
--- exactly these six — four RPCs and two internal helpers, owned by suite 031 —
--- so any other evidence function, or an overload of one of these, fails here.
+-- six — four RPCs and two internal helpers, owned by suite 031 — and
+-- EVIDENCE-RECORDS-001A3 six more — three RPCs and three internal helpers,
+-- owned by suite 033 — so any other evidence function, or an overload of one of
+-- these, fails here.
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text COLLATE "C"), '')
      FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'evidence\_%'),
   'evidence_create_study_from_paper(uuid,text,text,text,uuid), evidence_delete_study(uuid,integer,uuid), '
-  || 'evidence_normalize_v1(text), evidence_records_assert_writable(), '
-  || 'evidence_set_link(uuid,uuid,text,integer,uuid), evidence_update_study(uuid,integer,text,text,text,uuid)',
-  'A10 the evidence functions are exactly the six EVIDENCE-RECORDS-001A2 reviewed; nothing else writes evidence');
+  || 'evidence_locate_quote(text[],text), evidence_normalize_v1(text), '
+  || 'evidence_rebase_source(uuid,uuid,integer,text,uuid), evidence_records_assert_writable(), '
+  || 'evidence_review_fields(uuid,integer,uuid,integer,text,text,uuid), evidence_save_changes(uuid,integer,jsonb,uuid), '
+  || 'evidence_set_link(uuid,uuid,text,integer,uuid), evidence_state_reference_problems(text,integer,integer,integer), '
+  || 'evidence_update_study(uuid,integer,text,text,text,uuid), evidence_value_digest(uuid,uuid)',
+  'A10 the evidence functions are exactly the twelve EVIDENCE-RECORDS-001A2 and 001A3 reviewed; nothing else writes evidence');
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- B. Privilege surface (suite 015 owns the whole-schema matrix; these are the
