@@ -8,7 +8,9 @@
  *   * the normalized quote must have 3 to 1,000 characters and contain at least
  *     one letter or digit; the stored quote text itself must have 3 to 1,000
  *     characters (PR-A1 CHECK `evidence_field_anchors_quote_text_check`);
- *   * every occurrence counts, overlapping ones included, in position order;
+ *   * every occurrence counts, overlapping ones included, in position order —
+ *     up to 100: a quote found more often is `too_many`, which a save refuses
+ *     as ambiguous (draft EVIDENCE-RECORDS-001A3 limit);
  *   * an ellipsis is three full stops, never a wildcard; punctuation and case
  *     always count; nothing approximate or "similar" ever matches.
  *
@@ -23,9 +25,12 @@
  * `matched_at`, claim a server match count, mark a value reviewed, or say that
  * the quotation supports the value — a match proves only that the passage
  * occurs in the saved copy (§I6). Every result carries `attestation:
- * "browser_advisory"`. The future PR-A3 save RPC re-matches on the server and
- * decides what is stored; when the two disagree, the server's refusal stands
- * and the user resolves it — the browser never overrides it.
+ * "browser_advisory"`. The server's `evidence_locate_quote` (EVIDENCE-RECORDS-
+ * 001A3, `20261017155445`) applies the same rules and is the authority:
+ * `evidence_save_changes` re-matches every new quote and decides what is
+ * stored; when the two disagree, the server's refusal stands and the user
+ * resolves it — the browser never overrides it. Suite 032 runs the shared
+ * fixture's matching vectors through both.
  */
 
 import {
@@ -40,14 +45,19 @@ import {
 
 export const QUOTE_MIN_LENGTH = 3;
 export const QUOTE_MAX_LENGTH = 1000;
+/** More occurrences than this are not enumerated (draft EVIDENCE-RECORDS-001A3 limit). */
+export const QUOTE_OCCURRENCE_LIMIT = 100;
 export const DEFAULT_CONTEXT_LENGTH = 40;
 
 /**
- * "A letter or a digit": any Unicode letter (L) or number (N). This is the
- * browser's reading; the server-side definition is a PR-A3 contract still to
- * be pinned, and the server's answer wins.
+ * "A letter or a digit", as EVIDENCE-RECORDS-001A3 pins it: Unicode
+ * Alphabetic, or an ASCII digit — PostgreSQL's `[[:alnum:]]` under the builtin
+ * `pg_c_utf8` collation, which the server uses whatever the database's own
+ * collation is. A digit of another script (Arabic-Indic, say) is not one; a
+ * letter number (a Roman numeral) and a circled letter are. Where the
+ * browser's Unicode version and the server's differ, the server's answer wins.
  */
-const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+const LETTER_OR_DIGIT = /[\p{Alphabetic}0-9]/u;
 const MARK = /\p{M}/u;
 
 export type QuoteProblem =
@@ -99,14 +109,19 @@ export type AdvisoryQuoteMatch =
       readonly normalizedQuote: string;
       readonly count: number;
       readonly occurrences: readonly QuoteOccurrence[];
-    });
+    })
+  /** Found more than `QUOTE_OCCURRENCE_LIMIT` times: no count and no occurrence is claimed. */
+  | (AdvisoryBase & { readonly kind: "too_many"; readonly normalizedQuote: string });
 
 const BASE: AdvisoryBase = Object.freeze({ attestation: "browser_advisory", normalizationVersion: "v1" });
 
-/** Every start position of `pattern` in `text`, overlapping ones included (Knuth-Morris-Pratt). */
-export function findAllOccurrences(text: readonly number[], pattern: readonly number[]): number[] {
+/**
+ * Every start position of `pattern` in `text`, overlapping ones included
+ * (Knuth-Morris-Pratt) — or the first `limit` of them.
+ */
+export function findAllOccurrences(text: readonly number[], pattern: readonly number[], limit = Infinity): number[] {
   const m = pattern.length;
-  if (m === 0 || m > text.length) return [];
+  if (m === 0 || m > text.length || limit <= 0) return [];
   const failure: number[] = new Array(m).fill(0);
   for (let i = 1, k = 0; i < m; i++) {
     while (k > 0 && pattern[i] !== pattern[k]) k = failure[k - 1];
@@ -119,6 +134,7 @@ export function findAllOccurrences(text: readonly number[], pattern: readonly nu
     if (text[i] === pattern[k]) k += 1;
     if (k === m) {
       starts.push(i - m + 1);
+      if (starts.length >= limit) break;
       k = failure[k - 1];
     }
   }
@@ -182,7 +198,11 @@ export function locateQuote(
   const copy = normalizeEvidenceV1WithMap(snapshotText);
   const copyChars = Array.from(snapshotText);
   const contextLength = Math.max(0, Math.floor(options.contextLength ?? DEFAULT_CONTEXT_LENGTH));
-  const starts = findAllOccurrences(copy.normalizedCodePoints, quote.normalizedCodePoints);
+  // One more than the limit is enough to know the limit is passed.
+  const starts = findAllOccurrences(copy.normalizedCodePoints, quote.normalizedCodePoints, QUOTE_OCCURRENCE_LIMIT + 1);
+  if (starts.length > QUOTE_OCCURRENCE_LIMIT) {
+    return Object.freeze({ ...BASE, kind: "too_many", normalizedQuote: quote.normalized });
+  }
   const occurrences = starts.map((start, index): QuoteOccurrence => {
     const end = start + quote.normalizedLength;
     const exact = mapNormalizedRange(copy, start, end) as NonNullable<ReturnType<typeof mapNormalizedRange>>;

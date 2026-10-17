@@ -34,7 +34,7 @@ export interface MatchingVector {
   readonly title: string;
   readonly quote: string;
   readonly snapshot: string;
-  readonly expected_kind: "invalid" | "not_found" | "unique" | "multiple";
+  readonly expected_kind: "invalid" | "not_found" | "unique" | "multiple" | "too_many";
   readonly invalid_problems: readonly string[];
   readonly normalized_quote_length: number;
   readonly expected_normalized: readonly (readonly [number, number])[];

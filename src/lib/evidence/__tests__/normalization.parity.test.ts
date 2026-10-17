@@ -9,10 +9,12 @@ import { FIXTURE, FIXTURE_REPO_PATH, FIXTURE_TEXT, readRepoFile } from "./fixtur
  * The parity links between TypeScript and the deployed SQL normalizer.
  *
  * Running both implementations on the same vectors happens in two places:
- * `normalization.test.ts` runs normalizeEvidenceV1 on the fixture, and pgTAP
- * suite 032 runs the INSTALLED public.evidence_normalize_v1 on the very same
- * fixture, embedded verbatim. This file pins what makes that a real parity
- * check rather than two unrelated test lists:
+ * `normalization.test.ts` and `matcher.test.ts` run normalizeEvidenceV1 and
+ * locateQuote on the fixture, and pgTAP suite 032 runs the INSTALLED
+ * public.evidence_normalize_v1 and public.evidence_locate_quote
+ * (EVIDENCE-RECORDS-001A3) on the very same fixture, embedded verbatim. This
+ * file pins what makes that a real parity check rather than two unrelated test
+ * lists:
  *
  *   1. suite 032 embeds the fixture byte for byte (the drift check of
  *      Requirements-001 §I3);
@@ -177,12 +179,15 @@ describe("suite 032 embeds the shared fixture verbatim", () => {
     expect(/^[\x20-\x7e\n]*$/.test(FIXTURE_TEXT)).toBe(true);
   });
 
-  it("runs the installed function on every normalization and matching vector", () => {
+  it("runs the installed functions on every normalization and matching vector", () => {
     expect(sql).toContain("public.evidence_normalize_v1(nv.input)");
     expect(sql).toContain("public.evidence_normalize_v1(public.evidence_normalize_v1(nv.input))");
     expect(sql).toContain("public.evidence_normalize_v1(mv.quote)");
     expect(sql).toContain("public.evidence_normalize_v1(mv.snapshot)");
-    expect(sql).toMatch(/SELECT plan\(\s*4\s*\+ \(SELECT 3 \* count\(\*\)::integer \+ count\(second_pass\)::integer FROM nv\)\s*\+ \(SELECT 2 \* count\(\*\)::integer FROM mv\)\);/);
+    // Section L: the server's quote location, twice per matching vector (kind, count
+    // and problems; every offset), so four assertions per matching vector in all.
+    expect(sql.split("FROM public.evidence_locate_quote(ARRAY[mv.quote], mv.snapshot) AS l")).toHaveLength(3);
+    expect(sql).toMatch(/SELECT plan\(\s*4\s*\+ \(SELECT 3 \* count\(\*\)::integer \+ count\(second_pass\)::integer FROM nv\)\s*\+ \(SELECT 4 \* count\(\*\)::integer FROM mv\)\);/);
   });
 });
 

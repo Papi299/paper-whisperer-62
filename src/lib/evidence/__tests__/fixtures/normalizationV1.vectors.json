@@ -1,10 +1,12 @@
 {
   "fixture": "evidence-normalization-v1",
-  "fixture_version": 1,
+  "fixture_version": 2,
   "normalization_version": "v1",
-  "authority": "public.evidence_normalize_v1(text), supabase/migrations/20261016104232_add_evidence_records_lifecycle_rpcs.sql",
+  "authority": "public.evidence_normalize_v1(text), supabase/migrations/20261016104232_add_evidence_records_lifecycle_rpcs.sql; public.evidence_locate_quote(text[], text), supabase/migrations/20261017155445_add_evidence_records_field_review_rebase_rpcs.sql",
+  "letter_or_digit": "Unicode Alphabetic or an ASCII digit: PostgreSQL [[:alnum:]] under the builtin pg_c_utf8 collation, whatever the database collation.",
   "expected_values": "Hand-written, then re-derived outside both implementations by Python unicodedata NFC plus the six v1 steps; identical under Unicode 13.0 and 16.0.",
   "offsets": "0-based, half-open, in Unicode code points. expected_normalized indexes the v1-normalized snapshot; expected_exact indexes the original snapshot; expected_exact_utf16 gives the same exact range as JavaScript string indices.",
+  "occurrence_limit": "At most 100 occurrences are enumerated. Beyond that the kind is too_many: expected_normalized still lists every occurrence (the oracle's answer), but no matcher reports an offset or a count, exactly as for an invalid quote.",
   "consumers": [
     "src/lib/evidence/__tests__/normalization.test.ts",
     "src/lib/evidence/__tests__/normalization.parity.test.ts",
@@ -1569,6 +1571,2153 @@
           2
         ]
       ]
+    },
+    {
+      "id": "M34",
+      "title": "a zero-width space inside the quote is removed before matching",
+      "quote": "type 2\u200b diabetes",
+      "snapshot": "Adults with type 2 diabetes were randomized (n = 120).",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 15,
+      "expected_normalized": [
+        [
+          12,
+          27
+        ]
+      ],
+      "expected_exact": [
+        [
+          12,
+          27
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          12,
+          27
+        ]
+      ]
+    },
+    {
+      "id": "M35",
+      "title": "a word joiner inside a word is removed",
+      "quote": "dia\u2060betes",
+      "snapshot": "Adults with type 2 diabetes were randomized (n = 120).",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 8,
+      "expected_normalized": [
+        [
+          19,
+          27
+        ]
+      ],
+      "expected_exact": [
+        [
+          19,
+          27
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          19,
+          27
+        ]
+      ]
+    },
+    {
+      "id": "M36",
+      "title": "a subscript is not a digit",
+      "quote": "H2O",
+      "snapshot": "Water (H\u2082O) was given.",
+      "expected_kind": "not_found",
+      "invalid_problems": [],
+      "normalized_quote_length": 3,
+      "expected_normalized": [],
+      "expected_exact": [],
+      "expected_exact_snapped": [],
+      "expected_exact_utf16": []
+    },
+    {
+      "id": "M37",
+      "title": "a subscript quote finds its subscript",
+      "quote": "H\u2082O",
+      "snapshot": "Water (H\u2082O) was given.",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          7,
+          10
+        ]
+      ],
+      "expected_exact": [
+        [
+          7,
+          10
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          7,
+          10
+        ]
+      ]
+    },
+    {
+      "id": "M38",
+      "title": "a degree sign is not a masculine ordinal",
+      "quote": "37 \u00baC",
+      "snapshot": "Incubated at 37 \u00b0C.",
+      "expected_kind": "not_found",
+      "invalid_problems": [],
+      "normalized_quote_length": 5,
+      "expected_normalized": [],
+      "expected_exact": [],
+      "expected_exact_snapped": [],
+      "expected_exact_utf16": []
+    },
+    {
+      "id": "M39",
+      "title": "a unit with a superscript matches exactly",
+      "quote": "10\u2079/L",
+      "snapshot": "Platelets 150 \u00d7 10\u2079/L.",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 5,
+      "expected_normalized": [
+        [
+          16,
+          21
+        ]
+      ],
+      "expected_exact": [
+        [
+          16,
+          21
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          16,
+          21
+        ]
+      ]
+    },
+    {
+      "id": "M40",
+      "title": "circled letters are letters (Unicode Alphabetic)",
+      "quote": "\u24d0\u24d1\u24d2",
+      "snapshot": "Groups \u24d0\u24d1\u24d2 were compared.",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          7,
+          10
+        ]
+      ],
+      "expected_exact": [
+        [
+          7,
+          10
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          7,
+          10
+        ]
+      ]
+    },
+    {
+      "id": "M41",
+      "title": "Arabic-Indic digits alone are not a letter or an ASCII digit",
+      "quote": "\u0661\u0662\u0660",
+      "snapshot": "n = \u0661\u0662\u0660 randomized",
+      "expected_kind": "invalid",
+      "invalid_problems": [
+        "no_letter_or_digit"
+      ],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          4,
+          7
+        ]
+      ],
+      "expected_exact": [],
+      "expected_exact_snapped": [],
+      "expected_exact_utf16": []
+    },
+    {
+      "id": "M42",
+      "title": "vulgar fractions alone are not digits",
+      "quote": "\u00bd \u00bd",
+      "snapshot": "\u00bd \u00bd dose",
+      "expected_kind": "invalid",
+      "invalid_problems": [
+        "no_letter_or_digit"
+      ],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          0,
+          3
+        ]
+      ],
+      "expected_exact": [],
+      "expected_exact_snapped": [],
+      "expected_exact_utf16": []
+    },
+    {
+      "id": "M43",
+      "title": "a Roman numeral is a letter number (Alphabetic)",
+      "quote": "\u216b\u216b\u216b",
+      "snapshot": "Phase \u216b\u216b\u216b.",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          6,
+          9
+        ]
+      ],
+      "expected_exact": [
+        [
+          6,
+          9
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          6,
+          9
+        ]
+      ]
+    },
+    {
+      "id": "M44",
+      "title": "invisible characters only: empty once normalized",
+      "quote": "\u200b\u200b\u200b\u2060",
+      "snapshot": "Adults with type 2 diabetes were randomized (n = 120).",
+      "expected_kind": "invalid",
+      "invalid_problems": [
+        "normalized_too_short",
+        "no_letter_or_digit"
+      ],
+      "normalized_quote_length": 0,
+      "expected_normalized": [],
+      "expected_exact": [],
+      "expected_exact_snapped": [],
+      "expected_exact_utf16": []
+    },
+    {
+      "id": "M45",
+      "title": "a match at the very start of the copy",
+      "quote": "Adults with",
+      "snapshot": "Adults with type 2 diabetes were randomized (n = 120).",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 11,
+      "expected_normalized": [
+        [
+          0,
+          11
+        ]
+      ],
+      "expected_exact": [
+        [
+          0,
+          11
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          0,
+          11
+        ]
+      ]
+    },
+    {
+      "id": "M46",
+      "title": "a match at the very end of the copy",
+      "quote": "(n = 120).",
+      "snapshot": "Adults with type 2 diabetes were randomized (n = 120).",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 10,
+      "expected_normalized": [
+        [
+          44,
+          54
+        ]
+      ],
+      "expected_exact": [
+        [
+          44,
+          54
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          44,
+          54
+        ]
+      ]
+    },
+    {
+      "id": "M47",
+      "title": "leading white space of the copy is trimmed before offsets",
+      "quote": "Adults",
+      "snapshot": "  \u00a0Adults first.",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 6,
+      "expected_normalized": [
+        [
+          0,
+          6
+        ]
+      ],
+      "expected_exact": [
+        [
+          3,
+          9
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          3,
+          9
+        ]
+      ]
+    },
+    {
+      "id": "M48",
+      "title": "a decomposed letter in the middle of a quote",
+      "quote": "nai\u0308ve",
+      "snapshot": "A na\u00efve design.",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 5,
+      "expected_normalized": [
+        [
+          2,
+          7
+        ]
+      ],
+      "expected_exact": [
+        [
+          2,
+          7
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          2,
+          7
+        ]
+      ]
+    },
+    {
+      "id": "M49",
+      "title": "an astral letter in the quote is one character",
+      "quote": "x\ud835\udc00y",
+      "snapshot": "Model x\ud835\udc00y fitted.",
+      "expected_kind": "unique",
+      "invalid_problems": [],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          6,
+          9
+        ]
+      ],
+      "expected_exact": [
+        [
+          6,
+          9
+        ]
+      ],
+      "expected_exact_snapped": [
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          6,
+          10
+        ]
+      ]
+    },
+    {
+      "id": "M50",
+      "title": "100 overlapping occurrences are all enumerated",
+      "quote": "aaa",
+      "snapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_kind": "multiple",
+      "invalid_problems": [],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          0,
+          3
+        ],
+        [
+          1,
+          4
+        ],
+        [
+          2,
+          5
+        ],
+        [
+          3,
+          6
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          5,
+          8
+        ],
+        [
+          6,
+          9
+        ],
+        [
+          7,
+          10
+        ],
+        [
+          8,
+          11
+        ],
+        [
+          9,
+          12
+        ],
+        [
+          10,
+          13
+        ],
+        [
+          11,
+          14
+        ],
+        [
+          12,
+          15
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          14,
+          17
+        ],
+        [
+          15,
+          18
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          17,
+          20
+        ],
+        [
+          18,
+          21
+        ],
+        [
+          19,
+          22
+        ],
+        [
+          20,
+          23
+        ],
+        [
+          21,
+          24
+        ],
+        [
+          22,
+          25
+        ],
+        [
+          23,
+          26
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          25,
+          28
+        ],
+        [
+          26,
+          29
+        ],
+        [
+          27,
+          30
+        ],
+        [
+          28,
+          31
+        ],
+        [
+          29,
+          32
+        ],
+        [
+          30,
+          33
+        ],
+        [
+          31,
+          34
+        ],
+        [
+          32,
+          35
+        ],
+        [
+          33,
+          36
+        ],
+        [
+          34,
+          37
+        ],
+        [
+          35,
+          38
+        ],
+        [
+          36,
+          39
+        ],
+        [
+          37,
+          40
+        ],
+        [
+          38,
+          41
+        ],
+        [
+          39,
+          42
+        ],
+        [
+          40,
+          43
+        ],
+        [
+          41,
+          44
+        ],
+        [
+          42,
+          45
+        ],
+        [
+          43,
+          46
+        ],
+        [
+          44,
+          47
+        ],
+        [
+          45,
+          48
+        ],
+        [
+          46,
+          49
+        ],
+        [
+          47,
+          50
+        ],
+        [
+          48,
+          51
+        ],
+        [
+          49,
+          52
+        ],
+        [
+          50,
+          53
+        ],
+        [
+          51,
+          54
+        ],
+        [
+          52,
+          55
+        ],
+        [
+          53,
+          56
+        ],
+        [
+          54,
+          57
+        ],
+        [
+          55,
+          58
+        ],
+        [
+          56,
+          59
+        ],
+        [
+          57,
+          60
+        ],
+        [
+          58,
+          61
+        ],
+        [
+          59,
+          62
+        ],
+        [
+          60,
+          63
+        ],
+        [
+          61,
+          64
+        ],
+        [
+          62,
+          65
+        ],
+        [
+          63,
+          66
+        ],
+        [
+          64,
+          67
+        ],
+        [
+          65,
+          68
+        ],
+        [
+          66,
+          69
+        ],
+        [
+          67,
+          70
+        ],
+        [
+          68,
+          71
+        ],
+        [
+          69,
+          72
+        ],
+        [
+          70,
+          73
+        ],
+        [
+          71,
+          74
+        ],
+        [
+          72,
+          75
+        ],
+        [
+          73,
+          76
+        ],
+        [
+          74,
+          77
+        ],
+        [
+          75,
+          78
+        ],
+        [
+          76,
+          79
+        ],
+        [
+          77,
+          80
+        ],
+        [
+          78,
+          81
+        ],
+        [
+          79,
+          82
+        ],
+        [
+          80,
+          83
+        ],
+        [
+          81,
+          84
+        ],
+        [
+          82,
+          85
+        ],
+        [
+          83,
+          86
+        ],
+        [
+          84,
+          87
+        ],
+        [
+          85,
+          88
+        ],
+        [
+          86,
+          89
+        ],
+        [
+          87,
+          90
+        ],
+        [
+          88,
+          91
+        ],
+        [
+          89,
+          92
+        ],
+        [
+          90,
+          93
+        ],
+        [
+          91,
+          94
+        ],
+        [
+          92,
+          95
+        ],
+        [
+          93,
+          96
+        ],
+        [
+          94,
+          97
+        ],
+        [
+          95,
+          98
+        ],
+        [
+          96,
+          99
+        ],
+        [
+          97,
+          100
+        ],
+        [
+          98,
+          101
+        ],
+        [
+          99,
+          102
+        ]
+      ],
+      "expected_exact": [
+        [
+          0,
+          3
+        ],
+        [
+          1,
+          4
+        ],
+        [
+          2,
+          5
+        ],
+        [
+          3,
+          6
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          5,
+          8
+        ],
+        [
+          6,
+          9
+        ],
+        [
+          7,
+          10
+        ],
+        [
+          8,
+          11
+        ],
+        [
+          9,
+          12
+        ],
+        [
+          10,
+          13
+        ],
+        [
+          11,
+          14
+        ],
+        [
+          12,
+          15
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          14,
+          17
+        ],
+        [
+          15,
+          18
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          17,
+          20
+        ],
+        [
+          18,
+          21
+        ],
+        [
+          19,
+          22
+        ],
+        [
+          20,
+          23
+        ],
+        [
+          21,
+          24
+        ],
+        [
+          22,
+          25
+        ],
+        [
+          23,
+          26
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          25,
+          28
+        ],
+        [
+          26,
+          29
+        ],
+        [
+          27,
+          30
+        ],
+        [
+          28,
+          31
+        ],
+        [
+          29,
+          32
+        ],
+        [
+          30,
+          33
+        ],
+        [
+          31,
+          34
+        ],
+        [
+          32,
+          35
+        ],
+        [
+          33,
+          36
+        ],
+        [
+          34,
+          37
+        ],
+        [
+          35,
+          38
+        ],
+        [
+          36,
+          39
+        ],
+        [
+          37,
+          40
+        ],
+        [
+          38,
+          41
+        ],
+        [
+          39,
+          42
+        ],
+        [
+          40,
+          43
+        ],
+        [
+          41,
+          44
+        ],
+        [
+          42,
+          45
+        ],
+        [
+          43,
+          46
+        ],
+        [
+          44,
+          47
+        ],
+        [
+          45,
+          48
+        ],
+        [
+          46,
+          49
+        ],
+        [
+          47,
+          50
+        ],
+        [
+          48,
+          51
+        ],
+        [
+          49,
+          52
+        ],
+        [
+          50,
+          53
+        ],
+        [
+          51,
+          54
+        ],
+        [
+          52,
+          55
+        ],
+        [
+          53,
+          56
+        ],
+        [
+          54,
+          57
+        ],
+        [
+          55,
+          58
+        ],
+        [
+          56,
+          59
+        ],
+        [
+          57,
+          60
+        ],
+        [
+          58,
+          61
+        ],
+        [
+          59,
+          62
+        ],
+        [
+          60,
+          63
+        ],
+        [
+          61,
+          64
+        ],
+        [
+          62,
+          65
+        ],
+        [
+          63,
+          66
+        ],
+        [
+          64,
+          67
+        ],
+        [
+          65,
+          68
+        ],
+        [
+          66,
+          69
+        ],
+        [
+          67,
+          70
+        ],
+        [
+          68,
+          71
+        ],
+        [
+          69,
+          72
+        ],
+        [
+          70,
+          73
+        ],
+        [
+          71,
+          74
+        ],
+        [
+          72,
+          75
+        ],
+        [
+          73,
+          76
+        ],
+        [
+          74,
+          77
+        ],
+        [
+          75,
+          78
+        ],
+        [
+          76,
+          79
+        ],
+        [
+          77,
+          80
+        ],
+        [
+          78,
+          81
+        ],
+        [
+          79,
+          82
+        ],
+        [
+          80,
+          83
+        ],
+        [
+          81,
+          84
+        ],
+        [
+          82,
+          85
+        ],
+        [
+          83,
+          86
+        ],
+        [
+          84,
+          87
+        ],
+        [
+          85,
+          88
+        ],
+        [
+          86,
+          89
+        ],
+        [
+          87,
+          90
+        ],
+        [
+          88,
+          91
+        ],
+        [
+          89,
+          92
+        ],
+        [
+          90,
+          93
+        ],
+        [
+          91,
+          94
+        ],
+        [
+          92,
+          95
+        ],
+        [
+          93,
+          96
+        ],
+        [
+          94,
+          97
+        ],
+        [
+          95,
+          98
+        ],
+        [
+          96,
+          99
+        ],
+        [
+          97,
+          100
+        ],
+        [
+          98,
+          101
+        ],
+        [
+          99,
+          102
+        ]
+      ],
+      "expected_exact_snapped": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "expected_exact_utf16": [
+        [
+          0,
+          3
+        ],
+        [
+          1,
+          4
+        ],
+        [
+          2,
+          5
+        ],
+        [
+          3,
+          6
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          5,
+          8
+        ],
+        [
+          6,
+          9
+        ],
+        [
+          7,
+          10
+        ],
+        [
+          8,
+          11
+        ],
+        [
+          9,
+          12
+        ],
+        [
+          10,
+          13
+        ],
+        [
+          11,
+          14
+        ],
+        [
+          12,
+          15
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          14,
+          17
+        ],
+        [
+          15,
+          18
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          17,
+          20
+        ],
+        [
+          18,
+          21
+        ],
+        [
+          19,
+          22
+        ],
+        [
+          20,
+          23
+        ],
+        [
+          21,
+          24
+        ],
+        [
+          22,
+          25
+        ],
+        [
+          23,
+          26
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          25,
+          28
+        ],
+        [
+          26,
+          29
+        ],
+        [
+          27,
+          30
+        ],
+        [
+          28,
+          31
+        ],
+        [
+          29,
+          32
+        ],
+        [
+          30,
+          33
+        ],
+        [
+          31,
+          34
+        ],
+        [
+          32,
+          35
+        ],
+        [
+          33,
+          36
+        ],
+        [
+          34,
+          37
+        ],
+        [
+          35,
+          38
+        ],
+        [
+          36,
+          39
+        ],
+        [
+          37,
+          40
+        ],
+        [
+          38,
+          41
+        ],
+        [
+          39,
+          42
+        ],
+        [
+          40,
+          43
+        ],
+        [
+          41,
+          44
+        ],
+        [
+          42,
+          45
+        ],
+        [
+          43,
+          46
+        ],
+        [
+          44,
+          47
+        ],
+        [
+          45,
+          48
+        ],
+        [
+          46,
+          49
+        ],
+        [
+          47,
+          50
+        ],
+        [
+          48,
+          51
+        ],
+        [
+          49,
+          52
+        ],
+        [
+          50,
+          53
+        ],
+        [
+          51,
+          54
+        ],
+        [
+          52,
+          55
+        ],
+        [
+          53,
+          56
+        ],
+        [
+          54,
+          57
+        ],
+        [
+          55,
+          58
+        ],
+        [
+          56,
+          59
+        ],
+        [
+          57,
+          60
+        ],
+        [
+          58,
+          61
+        ],
+        [
+          59,
+          62
+        ],
+        [
+          60,
+          63
+        ],
+        [
+          61,
+          64
+        ],
+        [
+          62,
+          65
+        ],
+        [
+          63,
+          66
+        ],
+        [
+          64,
+          67
+        ],
+        [
+          65,
+          68
+        ],
+        [
+          66,
+          69
+        ],
+        [
+          67,
+          70
+        ],
+        [
+          68,
+          71
+        ],
+        [
+          69,
+          72
+        ],
+        [
+          70,
+          73
+        ],
+        [
+          71,
+          74
+        ],
+        [
+          72,
+          75
+        ],
+        [
+          73,
+          76
+        ],
+        [
+          74,
+          77
+        ],
+        [
+          75,
+          78
+        ],
+        [
+          76,
+          79
+        ],
+        [
+          77,
+          80
+        ],
+        [
+          78,
+          81
+        ],
+        [
+          79,
+          82
+        ],
+        [
+          80,
+          83
+        ],
+        [
+          81,
+          84
+        ],
+        [
+          82,
+          85
+        ],
+        [
+          83,
+          86
+        ],
+        [
+          84,
+          87
+        ],
+        [
+          85,
+          88
+        ],
+        [
+          86,
+          89
+        ],
+        [
+          87,
+          90
+        ],
+        [
+          88,
+          91
+        ],
+        [
+          89,
+          92
+        ],
+        [
+          90,
+          93
+        ],
+        [
+          91,
+          94
+        ],
+        [
+          92,
+          95
+        ],
+        [
+          93,
+          96
+        ],
+        [
+          94,
+          97
+        ],
+        [
+          95,
+          98
+        ],
+        [
+          96,
+          99
+        ],
+        [
+          97,
+          100
+        ],
+        [
+          98,
+          101
+        ],
+        [
+          99,
+          102
+        ]
+      ]
+    },
+    {
+      "id": "M51",
+      "title": "101 occurrences are too many to enumerate",
+      "quote": "aaa",
+      "snapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_kind": "too_many",
+      "invalid_problems": [],
+      "normalized_quote_length": 3,
+      "expected_normalized": [
+        [
+          0,
+          3
+        ],
+        [
+          1,
+          4
+        ],
+        [
+          2,
+          5
+        ],
+        [
+          3,
+          6
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          5,
+          8
+        ],
+        [
+          6,
+          9
+        ],
+        [
+          7,
+          10
+        ],
+        [
+          8,
+          11
+        ],
+        [
+          9,
+          12
+        ],
+        [
+          10,
+          13
+        ],
+        [
+          11,
+          14
+        ],
+        [
+          12,
+          15
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          14,
+          17
+        ],
+        [
+          15,
+          18
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          17,
+          20
+        ],
+        [
+          18,
+          21
+        ],
+        [
+          19,
+          22
+        ],
+        [
+          20,
+          23
+        ],
+        [
+          21,
+          24
+        ],
+        [
+          22,
+          25
+        ],
+        [
+          23,
+          26
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          25,
+          28
+        ],
+        [
+          26,
+          29
+        ],
+        [
+          27,
+          30
+        ],
+        [
+          28,
+          31
+        ],
+        [
+          29,
+          32
+        ],
+        [
+          30,
+          33
+        ],
+        [
+          31,
+          34
+        ],
+        [
+          32,
+          35
+        ],
+        [
+          33,
+          36
+        ],
+        [
+          34,
+          37
+        ],
+        [
+          35,
+          38
+        ],
+        [
+          36,
+          39
+        ],
+        [
+          37,
+          40
+        ],
+        [
+          38,
+          41
+        ],
+        [
+          39,
+          42
+        ],
+        [
+          40,
+          43
+        ],
+        [
+          41,
+          44
+        ],
+        [
+          42,
+          45
+        ],
+        [
+          43,
+          46
+        ],
+        [
+          44,
+          47
+        ],
+        [
+          45,
+          48
+        ],
+        [
+          46,
+          49
+        ],
+        [
+          47,
+          50
+        ],
+        [
+          48,
+          51
+        ],
+        [
+          49,
+          52
+        ],
+        [
+          50,
+          53
+        ],
+        [
+          51,
+          54
+        ],
+        [
+          52,
+          55
+        ],
+        [
+          53,
+          56
+        ],
+        [
+          54,
+          57
+        ],
+        [
+          55,
+          58
+        ],
+        [
+          56,
+          59
+        ],
+        [
+          57,
+          60
+        ],
+        [
+          58,
+          61
+        ],
+        [
+          59,
+          62
+        ],
+        [
+          60,
+          63
+        ],
+        [
+          61,
+          64
+        ],
+        [
+          62,
+          65
+        ],
+        [
+          63,
+          66
+        ],
+        [
+          64,
+          67
+        ],
+        [
+          65,
+          68
+        ],
+        [
+          66,
+          69
+        ],
+        [
+          67,
+          70
+        ],
+        [
+          68,
+          71
+        ],
+        [
+          69,
+          72
+        ],
+        [
+          70,
+          73
+        ],
+        [
+          71,
+          74
+        ],
+        [
+          72,
+          75
+        ],
+        [
+          73,
+          76
+        ],
+        [
+          74,
+          77
+        ],
+        [
+          75,
+          78
+        ],
+        [
+          76,
+          79
+        ],
+        [
+          77,
+          80
+        ],
+        [
+          78,
+          81
+        ],
+        [
+          79,
+          82
+        ],
+        [
+          80,
+          83
+        ],
+        [
+          81,
+          84
+        ],
+        [
+          82,
+          85
+        ],
+        [
+          83,
+          86
+        ],
+        [
+          84,
+          87
+        ],
+        [
+          85,
+          88
+        ],
+        [
+          86,
+          89
+        ],
+        [
+          87,
+          90
+        ],
+        [
+          88,
+          91
+        ],
+        [
+          89,
+          92
+        ],
+        [
+          90,
+          93
+        ],
+        [
+          91,
+          94
+        ],
+        [
+          92,
+          95
+        ],
+        [
+          93,
+          96
+        ],
+        [
+          94,
+          97
+        ],
+        [
+          95,
+          98
+        ],
+        [
+          96,
+          99
+        ],
+        [
+          97,
+          100
+        ],
+        [
+          98,
+          101
+        ],
+        [
+          99,
+          102
+        ],
+        [
+          100,
+          103
+        ]
+      ],
+      "expected_exact": [],
+      "expected_exact_snapped": [],
+      "expected_exact_utf16": []
     }
   ]
 }
