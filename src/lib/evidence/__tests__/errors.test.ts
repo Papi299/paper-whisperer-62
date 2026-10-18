@@ -9,13 +9,24 @@ import {
   transportUncertainError,
   type EvidenceErrorKind,
 } from "../errors";
+import { EVIDENCE_FIELD_RPCS } from "../fieldRequests";
 import { EVIDENCE_LIFECYCLE_RPCS } from "../lifecycleRequests";
 import { readRepoFile } from "./fixtures/vectors";
 
 /**
- * Error classification for the four lifecycle RPCs: the fixed PR-A2 refusals,
- * PostgREST's own codes, transport failures, and the evidence foreign keys.
+ * Error classification for the seven client RPCs: the fixed PR-A2 and PR-A3
+ * refusals and their DETAIL, PostgREST's own codes, transport failures, and
+ * the evidence foreign keys.
  */
+
+const PR_A3_MIGRATION = "supabase/migrations/20261017155445_add_evidence_records_field_review_rebase_rpcs.sql";
+const SQLSTATES: Readonly<Record<string, string>> = {
+  insufficient_privilege: "42501",
+  invalid_parameter_value: "22023",
+  no_data_found: "P0002",
+  raise_exception: "P0001",
+  internal_error: "XX000",
+};
 
 const RPC = "evidence_update_study" as const;
 const pg = (code: string, message: string, details: string | null = null) => ({ code, message, details, hint: null });
@@ -40,7 +51,7 @@ describe("the fixed PR-A2 refusals", () => {
     ["XX000", "evidence_internal_invariant", "internal_invariant", 500],
   ])("%s %s -> %s (applied: no)", (code, message, kind, status) => {
     const error = classifyLifecycleError(pg(code, message), status, RPC);
-    expect(error).toMatchObject({ kind, applied: "no", code, status, reserved: false });
+    expect(error).toMatchObject({ kind, applied: "no", code, status, detail: null, blocks: null });
     expect(error.userMessage).toBe(EVIDENCE_ERROR_SPECS[kind].userMessage);
     expect(error.userMessage).not.toContain("evidence_");
   });
@@ -156,26 +167,119 @@ describe("the evidence foreign keys (paper delete, duplicate merge, unlink backs
   });
 });
 
-describe("reserved PR-A3 contracts", () => {
-  it("recognizes them only as reserved, not as deployed endpoints", () => {
-    expect(classifyLifecycleError(pg("P0001", "evidence_quote_not_found"), 400, RPC)).toMatchObject({ kind: "quote_not_found", reserved: true });
-    expect(classifyLifecycleError(pg("P0001", "evidence_source_changed_again"), 400, RPC)).toMatchObject({ kind: "source_changed_again", reserved: true });
-    expect(classifyLifecycleError(pg("P0001", "evidence_snapshot_limit"), 400, RPC)).toMatchObject({ kind: "snapshot_limit", reserved: true });
-    const sql = readRepoFile("supabase/migrations/20261016104232_add_evidence_records_lifecycle_rpcs.sql");
-    for (const message of ["evidence_quote_not_found", "evidence_source_changed_again", "evidence_snapshot_limit"]) {
-      expect(sql.includes(`RAISE EXCEPTION '${message}'`), `${message} must not be deployed yet`).toBe(false);
+describe("the fixed PR-A3 refusals (EVIDENCE-RECORDS-001A3)", () => {
+  const SAVE = "evidence_save_changes" as const;
+
+  it.each<[string, string, EvidenceErrorKind, string]>([
+    ["P0002", "evidence_target_not_found", "target_not_found", "not_found"],
+    ["P0001", "evidence_quote_not_found", "quote_not_found", "validation"],
+    ["P0001", "evidence_quote_ambiguous", "quote_ambiguous", "validation"],
+    ["P0001", "evidence_confirm_blocked", "confirm_blocked", "validation"],
+    ["P0001", "evidence_source_changed_again", "source_changed_again", "conflict"],
+    ["P0001", "evidence_snapshot_limit", "snapshot_limit", "limit"],
+    ["P0001", "evidence_arm_limit", "arm_limit", "limit"],
+    ["P0001", "evidence_outcome_limit", "outcome_limit", "limit"],
+    ["P0001", "evidence_value_limit", "value_limit", "limit"],
+  ])("%s %s -> %s", (code, message, kind, category) => {
+    expect(classifyLifecycleError(pg(code, message), 400, SAVE)).toMatchObject({ kind, category, applied: "no", code });
+  });
+
+  it("covers every refusal the PR-A3 migration raises, with the SQLSTATE it raises it with", () => {
+    const sql = readRepoFile(PR_A3_MIGRATION);
+    const raised = new Map<string, Set<string>>();
+    for (const m of sql.matchAll(/RAISE EXCEPTION '(evidence_[a-z_]+)'\s+USING ERRCODE = '([a-z_]+)'/g)) {
+      raised.set(m[1], (raised.get(m[1]) ?? new Set()).add(m[2]));
     }
+    expect(raised.size).toBe(18);
+    for (const [message, codes] of raised) {
+      expect(codes.size, message).toBe(1);
+      const sqlstate = SQLSTATES[[...codes][0]];
+      expect(sqlstate, message).toBeDefined();
+      const kind = classifyLifecycleError(pg(sqlstate, message), 400, SAVE).kind;
+      expect(kind, message).not.toBe("database_error");
+      // The same message under another SQLSTATE is not that refusal.
+      expect(classifyLifecycleError(pg(sqlstate === "P0001" ? "P0002" : "P0001", message), 400, SAVE).kind, message).toBe("database_error");
+    }
+  });
+
+  it("reads a payload DETAIL into the argument, the path and the rules", () => {
+    const error = classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_changes[3].references[1].snapshot_id: not_current"), 400, SAVE);
+    expect(error).toMatchObject({ kind: "invalid_input", field: "changes", detail: { parameter: "changes", path: [3, "references", 1, "snapshot_id"], rules: ["not_current"] } });
+    expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_changes[0].references: too_many_supporting,basis_required"), 400, SAVE).detail).toEqual({
+      parameter: "changes",
+      path: [0, "references"],
+      rules: ["too_many_supporting", "basis_required"],
+    });
+    expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_changes: too_large"), 400, SAVE).detail).toEqual({ parameter: "changes", path: [], rules: ["too_large"] });
+    expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_changes: empty"), 400, SAVE)).toMatchObject({
+      kind: "invalid_input",
+      field: "changes",
+      detail: { parameter: "changes", path: [], rules: ["empty"] },
+    });
+    expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_expected_abstract_sha256: source_empty"), 400, "evidence_rebase_source")).toMatchObject({
+      field: "expectedAbstractSha256",
+      detail: { rules: ["source_empty"] },
+    });
+    expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_note"), 400, "evidence_review_fields")).toMatchObject({ field: "note", detail: { path: [], rules: [] } });
+  });
+
+  it("reads where a not-found, a version conflict and a quote refusal point", () => {
+    expect(classifyLifecycleError(pg("P0002", "evidence_target_not_found", "p_changes[2].target.arm_id"), 500, SAVE).detail).toEqual({ parameter: "changes", path: [2, "target", "arm_id"], rules: [] });
+    expect(classifyLifecycleError(pg("P0002", "evidence_link_not_found", "p_changes[0].references[2].paper_id"), 500, SAVE).detail?.path).toEqual([0, "references", 2, "paper_id"]);
+    expect(classifyLifecycleError(pg("P0001", "evidence_version_conflict", "p_changes[1].expected_value_version"), 400, SAVE)).toMatchObject({
+      kind: "version_conflict",
+      retry: "new_request_after_reload",
+      detail: { path: [1, "expected_value_version"] },
+    });
+    expect(classifyLifecycleError(pg("P0001", "evidence_version_conflict", "p_expected_value_version"), 400, "evidence_review_fields").field).toBe("expectedValueVersion");
+    expect(classifyLifecycleError(pg("P0001", "evidence_version_conflict"), 400, SAVE).detail).toBeNull();
+    expect(classifyLifecycleError(pg("P0001", "evidence_quote_ambiguous", "p_changes[4].references[0]"), 400, SAVE).detail?.path).toEqual([4, "references", 0]);
+  });
+
+  it("reads what Confirm still needs, in checkConfirm's codes", () => {
+    const blocked = classifyLifecycleError(pg("P0001", "evidence_confirm_blocked", "examined_source_missing,examined_abstract_not_current,note_missing"), 400, "evidence_review_fields");
+    expect(blocked).toMatchObject({ kind: "confirm_blocked", blocks: ["examined_source_missing", "examined_abstract_not_current", "note_missing"], detail: null, field: null });
+    for (const details of [null, "", "not_recorded", "stale_version", "note_missing,note_missing", "note_missing, count_not_confirmed", "made_up"]) {
+      expect(classifyLifecycleError(pg("P0001", "evidence_confirm_blocked", details), 400, "evidence_review_fields").blocks, String(details)).toBeNull();
+    }
+  });
+
+  it("drops a DETAIL that is not in the RPCs' grammar, and never echoes one", () => {
+    for (const details of [
+      "p_changes[3].references[1].quote_text: <script>",
+      "p_changes[01]: invalid",
+      "p_changes[3] : invalid",
+      "p_unknown: invalid",
+      "changes[3]: invalid",
+      "p_changes[3].Quote: invalid",
+      "p_changes[3]: invalid trailing",
+      "Key (id)=(0310dead-0000-0000-0000-000000000000) is not present",
+    ]) {
+      const error = classifyLifecycleError(pg("22023", "evidence_invalid_input", details), 400, SAVE);
+      expect(error, details).toMatchObject({ kind: "invalid_input", field: null, detail: null });
+      expect(JSON.stringify(error)).not.toContain("0310dead");
+      expect(JSON.stringify(error)).not.toContain("script");
+    }
+  });
+
+  it("reports function_unavailable for a PR-A3 RPC only when its own function is missing", () => {
+    const missing = pg("PGRST202", "Could not find the function public.evidence_save_changes(p_changes, p_expected_version, p_request_id, p_study_id) in the schema cache");
+    expect(classifyLifecycleError(missing, 404, SAVE).kind).toBe("function_unavailable");
+    expect(classifyLifecycleError(missing, 404, "evidence_review_fields").kind).toBe("invalid_request");
+    expect(classifyLifecycleError(pg("42501", "permission denied for function evidence_locate_quote"), 403, SAVE).kind).toBe("permission_denied");
   });
 });
 
 describe("the RPC names", () => {
-  it("are exactly the four deployed client RPCs", () => {
+  it("are exactly the seven client RPCs the migrations grant", () => {
     expect([...EVIDENCE_LIFECYCLE_RPCS]).toEqual(["evidence_create_study_from_paper", "evidence_update_study", "evidence_set_link", "evidence_delete_study"]);
+    expect([...EVIDENCE_FIELD_RPCS]).toEqual(["evidence_save_changes", "evidence_review_fields", "evidence_rebase_source"]);
     expect(isEvidenceLifecycleRpc("evidence_normalize_v1")).toBe(false);
     expect(isEvidenceLifecycleRpc("evidence_records_assert_writable")).toBe(false);
-    const sql = readRepoFile("supabase/migrations/20261016104232_add_evidence_records_lifecycle_rpcs.sql");
-    const granted = Array.from(sql.matchAll(/GRANT EXECUTE ON FUNCTION public\.([a-z_0-9]+)\(/g), (m) => m[1]);
-    expect(granted.sort()).toEqual([...EVIDENCE_LIFECYCLE_RPCS].sort());
+    expect(isEvidenceLifecycleRpc("evidence_save_changes")).toBe(false);
+    const grants = (path: string) => Array.from(readRepoFile(path).matchAll(/GRANT EXECUTE ON FUNCTION public\.([a-z_0-9]+)\(/g), (m) => m[1]).sort();
+    expect(grants("supabase/migrations/20261016104232_add_evidence_records_lifecycle_rpcs.sql")).toEqual([...EVIDENCE_LIFECYCLE_RPCS].sort());
+    expect(grants(PR_A3_MIGRATION)).toEqual([...EVIDENCE_FIELD_RPCS].sort());
   });
 
   it("has a specification for every error kind", () => {

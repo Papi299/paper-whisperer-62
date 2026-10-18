@@ -1,17 +1,19 @@
 /**
  * Advisory validation of study-record input (EVIDENCE-RECORDS-001B).
  *
- * Pure checks for the PR-A1 schema and for preparing what the future PR-A3
- * save RPC will receive. The browser's answer is advisory; the server's RPCs
- * remain the authority. Each check names its source:
+ * Pure checks for the PR-A1 schema and for preparing what the PR-A3 save RPC
+ * (`evidence_save_changes`, EVIDENCE-RECORDS-001A3) receives. The browser's
+ * answer is advisory; the server's RPCs remain the authority. Each check names
+ * its source:
  *
  *   * the PR-A1 single-row CHECKs — value shapes and bounds, "reported if and
  *     only if a value is present", the state-reason and note rules, and the
  *     source-reference matrix (purpose x source kind);
- *   * PR-A2 — "blank" means empty after normalization v1, the rule its RPCs
- *     apply to labels and notes (accepted decision 9). This module applies it
- *     to every free text: whether the PR-A3 RPCs adopt it for values is theirs
- *     to decide, and until then the browser is the stricter side;
+ *   * PR-A2 and PR-A3 — "blank" means empty after normalization v1. PR-A2's
+ *     RPCs apply it to labels and notes (accepted decision 9); PR-A3's apply it
+ *     to every value text, list entry, note and locator, and store the text
+ *     exactly as written (Product Owner decision 4). This module applies it to
+ *     every free text too;
  *   * FK-PROOF-001 §J — which reference purposes each value state takes;
  *   * Requirements-001 §H4/§H6 and 001A §D1 — design family, comparator-only,
  *     list hygiene, and that a new quote targets its link's current copy.
@@ -39,7 +41,7 @@ import {
   type FieldKey,
 } from "./fieldDictionary";
 import { isCanonicalUuid, type AnchorId, type PaperId, type SnapshotId } from "./ids";
-import { locateQuote, QUOTE_MAX_LENGTH } from "./matcher";
+import { locateQuote, QUOTE_MAX_LENGTH, QUOTE_OCCURRENCE_LIMIT } from "./matcher";
 import { codePointLength, findPostgresTextProblem, isNormalizationEmpty, WHITE_SPACE_CODE_POINTS } from "./normalization";
 import { checkCountInQuote } from "./numbers";
 import { VALUE_STATE_RULES } from "./states";
@@ -83,6 +85,20 @@ export const VALIDATION_MESSAGES = Object.freeze({
   "request.expected_version_invalid": "This study record's version isn't valid. Reload it.",
   "request.link_action_invalid": "Choose confirm, mark as provisional or remove.",
   "request.notes_missing": "Say whether the study has notes: null means none.",
+  "request.changes_not_list": "Couldn't send these changes. Reload the page and try again.",
+  "request.changes_empty": "There are no changes to save.",
+  "request.too_many_changes": "Save at most 200 changes at a time.",
+  "request.change_invalid": "Couldn't send this change. Reload the page and try again.",
+  "request.value_id_invalid": "This field's id isn't valid. Reload the study record.",
+  "request.expected_value_version_invalid": "This field's version isn't valid. Reload the study record.",
+  "request.review_action_invalid": "Choose Confirm or Flag.",
+  "request.review_note_missing": "Say whether the review has a note: null means none.",
+  "request.abstract_sha256_invalid": "The abstract shown couldn't be identified. Reload the paper and try again.",
+  "review.flag_note_required": "Say what's wrong, in at least 3 characters.",
+  "arm.label_required": "Give the group a name.",
+  "arm.label_too_long": "Group names can be up to 120 characters.",
+  "outcome.label_required": "Give the outcome a name.",
+  "outcome.label_too_long": "Outcome names can be up to 200 characters.",
   "field.unknown": "This field doesn't exist in study records.",
   "field.wrong_scope": "This field belongs to a different part of the study record.",
   "field.not_allowed_for_design": "This field isn't part of the form for this kind of study.",
@@ -288,7 +304,7 @@ export interface LocatorDraft {
 
 /**
  * One source reference as drafted in the browser — a domain shape, not a wire
- * format (the PR-A3 payload is defined by PR-A3). It carries no match columns:
+ * format (`fieldRequests.ts` builds the PR-A3 payload). It carries no match columns:
  * the server computes `match_start`, `match_end`, `match_occurrence`,
  * `match_count` and `matched_at`. `anchorId` marks an existing, unchanged
  * reference carried over; anything without one is new. `occurrence` is the
@@ -544,7 +560,13 @@ function validateQuote(issues: Issues, draft: Record<string, unknown>, path: Iss
   if (snapshotText === undefined) return quoteText;
 
   if (match.kind === "not_found") issues.error("reference.quote_not_found", at);
-  else if (occurrenceOk && !isAbsent(occurrence) && (occurrence as number) > match.count) {
+  else if (match.kind === "too_many") {
+    issues.error(
+      "reference.quote_ambiguous",
+      at,
+      `This text appears more than ${QUOTE_OCCURRENCE_LIMIT} times in the abstract. Add a few words so it appears fewer times.`,
+    );
+  } else if (occurrenceOk && !isAbsent(occurrence) && (occurrence as number) > match.count) {
     issues.error("reference.occurrence_out_of_range", [...path, "occurrence"]);
   } else if (match.kind === "multiple" && isAbsent(occurrence)) {
     issues.error(

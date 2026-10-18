@@ -1,9 +1,11 @@
 /**
- * Study-record errors, classified (EVIDENCE-RECORDS-001B).
+ * Study-record errors, classified (EVIDENCE-RECORDS-001B; 001A3).
  *
- * The four lifecycle RPCs raise fixed messages with fixed SQLSTATEs that never
- * echo input, ids or SQL (PR-A2 header; docs/evidence-records-lifecycle.md §4).
- * This module turns what supabase-js returns into one typed error with:
+ * The seven client RPCs — PR-A2's four lifecycle RPCs and PR-A3's three field
+ * RPCs — raise fixed messages with fixed SQLSTATEs that never echo input, ids,
+ * text or SQL (docs/evidence-records-lifecycle.md §4;
+ * docs/evidence-records-field-operations.md §7). This module turns what
+ * supabase-js returns into one typed error with:
  *
  *   * `kind` — exactly which refusal it was;
  *   * `category` — validation, conflict, permission, not_found, limit,
@@ -16,7 +18,12 @@
  *     id, same arguments — safe, because the server replays an applied request
  *     instead of applying it twice), a NEW request after reloading (a version
  *     conflict), or nothing;
- *   * `userMessage` — fixed copy, never built from the server's text.
+ *   * `userMessage` — fixed copy, never built from the server's text;
+ *   * `detail` — where a PR-A3 refusal points: the argument, the path inside
+ *     `p_changes` and the rule, parsed from DETAIL by a strict grammar (an
+ *     unparseable DETAIL is dropped, never shown);
+ *   * `blocks` — for `confirm_blocked`, what Confirm still needs, in the codes
+ *     and order of `checkConfirm` (`review.ts`).
  *
  * Classification is by SQLSTATE and message, not by HTTP status: PostgREST
  * answers `P0002 evidence_not_found` with HTTP 500, so "5xx" does not mean
@@ -24,12 +31,17 @@
  * for a request with no session and 403 for a signed-in one.
  *
  * A permission failure is never reported as a missing schema: only
- * PGRST202/42883 naming one of the four RPCs is `function_unavailable`.
+ * PGRST202/42883 naming the RPC that was called is `function_unavailable`.
  */
 
 import { isMissingDatabaseObjectError } from "@/lib/missingDatabaseObject";
+import type { EvidenceFieldRpc } from "./fieldRequests";
 import { LAST_LINK_EXPLANATION, LINK_IN_USE_EXPLANATION, LINK_NOT_FOUND_EXPLANATION, PAPER_HELD_BY_STUDY_EXPLANATION } from "./identity";
 import { EVIDENCE_LIFECYCLE_RPCS, type EvidenceLifecycleRpc } from "./lifecycleRequests";
+import type { ConfirmBlock } from "./review";
+
+/** Any of the seven client RPCs. */
+export type EvidenceRpc = EvidenceLifecycleRpc | EvidenceFieldRpc;
 
 export type EvidenceErrorCategory =
   | "validation"
@@ -69,7 +81,27 @@ export type EvidenceErrorKind =
   | "database_error"
   | "quote_not_found"
   | "source_changed_again"
-  | "snapshot_limit";
+  | "snapshot_limit"
+  | "target_not_found"
+  | "quote_ambiguous"
+  | "confirm_blocked"
+  | "arm_limit"
+  | "outcome_limit"
+  | "value_limit";
+
+/**
+ * Where a PR-A3 refusal points (its DETAIL): `p_changes[3].references[1].snapshot_id:
+ * not_current` is `{ parameter: "changes", path: [3, "references", 1, "snapshot_id"],
+ * rules: ["not_current"] }`. Path keys are the server's wire keys.
+ */
+export interface EvidenceErrorDetail {
+  /** The argument, as the client calls it. */
+  readonly parameter: string;
+  /** Below the argument: change and reference indices (0-based) and wire keys. */
+  readonly path: readonly (string | number)[];
+  /** The rules broken, in the server's order; empty when it named only the place. */
+  readonly rules: readonly string[];
+}
 
 export interface EvidenceError {
   readonly kind: EvidenceErrorKind;
@@ -77,13 +109,14 @@ export interface EvidenceError {
   readonly applied: "no" | "unknown";
   readonly retry: "same_request" | "new_request_after_reload" | "none";
   readonly userMessage: string;
-  /** For `invalid_input`: the argument the server named, as the client calls it. */
+  /** The argument the server named, as the client calls it (`invalid_input` and the PR-A3 refusals with a DETAIL). */
   readonly field: string | null;
+  readonly detail: EvidenceErrorDetail | null;
+  /** For `confirm_blocked`: what Confirm still needs; null when the server's list could not be read. */
+  readonly blocks: readonly ConfirmBlock[] | null;
   /** The SQLSTATE or PostgREST code, for diagnostics. Never message text, ids or SQL. */
   readonly code: string | null;
   readonly status: number | null;
-  /** True for a reserved PR-A3 error: a contract, not a deployed endpoint. */
-  readonly reserved: boolean;
 }
 
 interface KindSpec {
@@ -170,11 +203,25 @@ export const EVIDENCE_ERROR_SPECS: Readonly<Record<EvidenceErrorKind, KindSpec>>
     retry: "new_request_after_reload",
     userMessage: "The abstract in your library changed again. Review it, then save a copy.",
   },
-  snapshot_limit: { category: "limit", retry: "none", userMessage: "This paper has reached its limit of saved abstract copies." },
+  snapshot_limit: { category: "limit", retry: "none", userMessage: "This paper has reached its limit of 20 saved abstract copies." },
+  target_not_found: {
+    category: "not_found",
+    retry: "none",
+    userMessage: "Part of this study record no longer exists. Reload it to see its current state.",
+  },
+  quote_ambiguous: {
+    category: "validation",
+    retry: "none",
+    userMessage: "This text appears several times in the abstract. Select the one you mean, or add a few words.",
+  },
+  confirm_blocked: { category: "validation", retry: "none", userMessage: "This value can't be confirmed yet. Check what it still needs." },
+  arm_limit: { category: "limit", retry: "none", userMessage: "A study record can have up to 20 groups." },
+  outcome_limit: { category: "limit", retry: "none", userMessage: "A study record can have up to 50 outcomes." },
+  value_limit: { category: "limit", retry: "none", userMessage: "A study record can hold up to 400 recorded fields." },
 });
 
-/** The fixed PR-A2 refusals: SQLSTATE and message, exactly as raised. */
-const DEPLOYED: ReadonlyArray<readonly [string, string, EvidenceErrorKind]> = [
+/** The fixed refusals of the PR-A2 and PR-A3 RPCs: SQLSTATE and message, exactly as raised. */
+const RAISED: ReadonlyArray<readonly [string, string, EvidenceErrorKind]> = [
   ["42501", "evidence_auth_required", "auth_required"],
   ["42501", "evidence_records_not_enabled", "records_not_enabled"],
   ["22023", "evidence_invalid_input", "invalid_input"],
@@ -191,21 +238,19 @@ const DEPLOYED: ReadonlyArray<readonly [string, string, EvidenceErrorKind]> = [
   ["P0001", "evidence_history_limit", "history_limit"],
   ["P0001", "evidence_requires_read_committed", "requires_read_committed"],
   ["XX000", "evidence_internal_invariant", "internal_invariant"],
-];
-
-/**
- * RESERVED, NOT DEPLOYED: refusals the requirements give to PR-A3's RPCs
- * (Requirements-001 §L9; 001A §E3). No deployed function raises them, and
- * their SQLSTATE is not pinned yet; they are recognized only as P0001, the
- * convention every PR-A2 refusal follows, and marked `reserved`.
- */
-const RESERVED: ReadonlyArray<readonly [string, string, EvidenceErrorKind]> = [
+  // EVIDENCE-RECORDS-001A3 (20261017155445).
+  ["P0002", "evidence_target_not_found", "target_not_found"],
   ["P0001", "evidence_quote_not_found", "quote_not_found"],
+  ["P0001", "evidence_quote_ambiguous", "quote_ambiguous"],
+  ["P0001", "evidence_confirm_blocked", "confirm_blocked"],
   ["P0001", "evidence_source_changed_again", "source_changed_again"],
   ["P0001", "evidence_snapshot_limit", "snapshot_limit"],
+  ["P0001", "evidence_arm_limit", "arm_limit"],
+  ["P0001", "evidence_outcome_limit", "outcome_limit"],
+  ["P0001", "evidence_value_limit", "value_limit"],
 ];
 
-/** `evidence_invalid_input` DETAIL (the parameter) mapped to the client's field name. */
+/** A DETAIL's parameter mapped to the client's field name. Any other parameter is not read. */
 const PARAMETER_FIELDS: Readonly<Record<string, string>> = Object.freeze({
   p_paper_id: "paperId",
   p_study_id: "studyId",
@@ -216,7 +261,51 @@ const PARAMETER_FIELDS: Readonly<Record<string, string>> = Object.freeze({
   p_action: "action",
   p_expected_version: "expectedVersion",
   p_request_id: "requestId",
+  p_changes: "changes",
+  p_value_id: "valueId",
+  p_expected_value_version: "expectedValueVersion",
+  p_note: "note",
+  p_expected_abstract_sha256: "expectedAbstractSha256",
 });
+
+/**
+ * DETAIL as the RPCs write it: a parameter, then `[n]` indices and `.key`
+ * names, then optionally `: rule[,rule...]`. Nothing else is accepted.
+ */
+const DETAIL_GRAMMAR = /^(p_[a-z0-9_]+)((?:\[(?:0|[1-9][0-9]{0,8})\]|\.[a-z_]+)*)(?:: ([a-z_]+(?:,[a-z_]+)*))?$/;
+
+/** The Confirm preconditions the server can name — every ConfirmBlock but the two only the browser sees. */
+const SERVER_CONFIRM_BLOCKS: ReadonlySet<string> = new Set<ConfirmBlock>([
+  "sources_not_allowed",
+  "examined_source_missing",
+  "unclear_source_missing",
+  "unavailable_source_missing",
+  "no_current_support",
+  "unclear_source_not_current",
+  "examined_abstract_not_current",
+  "unavailable_abstract_has_copy",
+  "count_not_confirmed",
+  "state_reason_missing",
+  "note_missing",
+]);
+
+function parseDetail(details: unknown): EvidenceErrorDetail | null {
+  if (typeof details !== "string") return null;
+  const match = DETAIL_GRAMMAR.exec(details);
+  const parameter = match ? PARAMETER_FIELDS[match[1]] : undefined;
+  if (!match || !parameter) return null;
+  const path = Array.from(match[2].matchAll(/\[([0-9]+)\]|\.([a-z_]+)/g), (segment) =>
+    segment[1] !== undefined ? Number(segment[1]) : segment[2],
+  );
+  return Object.freeze({ parameter, path: Object.freeze(path), rules: Object.freeze(match[3] ? match[3].split(",") : []) });
+}
+
+function parseBlocks(details: unknown): readonly ConfirmBlock[] | null {
+  if (typeof details !== "string" || !/^[a-z_]+(?:,[a-z_]+)*$/.test(details)) return null;
+  const blocks = details.split(",");
+  if (!blocks.every((block) => SERVER_CONFIRM_BLOCKS.has(block)) || new Set(blocks).size !== blocks.length) return null;
+  return Object.freeze(blocks as ConfirmBlock[]);
+}
 
 /** SQLSTATEs of a transaction that failed for a transient reason and rolled back. */
 const TRANSIENT_SQLSTATES = new Set(["40001", "40P01", "55P03", "57014"]);
@@ -234,7 +323,16 @@ interface PostgrestLikeError {
   details?: unknown;
 }
 
-function build(kind: EvidenceErrorKind, extra: { code?: string | null; status?: number | null; field?: string | null; applied?: "no" | "unknown"; reserved?: boolean } = {}): EvidenceError {
+interface BuildExtra {
+  readonly code?: string | null;
+  readonly status?: number | null;
+  readonly field?: string | null;
+  readonly detail?: EvidenceErrorDetail | null;
+  readonly blocks?: readonly ConfirmBlock[] | null;
+  readonly applied?: "no" | "unknown";
+}
+
+function build(kind: EvidenceErrorKind, extra: BuildExtra = {}): EvidenceError {
   const spec = EVIDENCE_ERROR_SPECS[kind];
   return Object.freeze({
     kind,
@@ -243,9 +341,10 @@ function build(kind: EvidenceErrorKind, extra: { code?: string | null; status?: 
     retry: spec.retry,
     userMessage: spec.userMessage,
     field: extra.field ?? null,
+    detail: extra.detail ?? null,
+    blocks: extra.blocks ?? null,
     code: extra.code ?? null,
     status: extra.status ?? null,
-    reserved: extra.reserved ?? false,
   });
 }
 
@@ -286,10 +385,10 @@ export function invalidRequestError(): EvidenceError {
 
 /**
  * Classify the `error` (and HTTP `status`) supabase-js returned for one of the
- * four lifecycle RPCs. `functionName` lets a missing-function error be
+ * seven client RPCs. `functionName` lets a missing-function error be
  * recognized only when it names that RPC.
  */
-export function classifyLifecycleError(error: unknown, status: number | null, functionName: EvidenceLifecycleRpc): EvidenceError {
+export function classifyLifecycleError(error: unknown, status: number | null, functionName: EvidenceRpc): EvidenceError {
   if (!error || typeof error !== "object") return transportUncertainError(status);
   const e = error as PostgrestLikeError;
   const code = typeof e.code === "string" && e.code !== "" ? e.code : null;
@@ -303,14 +402,12 @@ export function classifyLifecycleError(error: unknown, status: number | null, fu
     return transportUncertainError(status);
   }
 
-  for (const [sqlstate, text, kind] of DEPLOYED) {
+  for (const [sqlstate, text, kind] of RAISED) {
     if (code === sqlstate && message === text) {
-      const field = kind === "invalid_input" && typeof e.details === "string" ? PARAMETER_FIELDS[e.details] ?? null : null;
-      return build(kind, { code, status, field });
+      if (kind === "confirm_blocked") return build(kind, { code, status, blocks: parseBlocks(e.details) });
+      const detail = parseDetail(e.details);
+      return build(kind, { code, status, field: detail?.parameter ?? null, detail });
     }
-  }
-  for (const [sqlstate, text, kind] of RESERVED) {
-    if (code === sqlstate && message === text) return build(kind, { code, status, reserved: true });
   }
 
   if (isMissingDatabaseObjectError(error, [functionName])) return build("function_unavailable", { code, status });

@@ -8,7 +8,7 @@
 -- three trigger functions at `search_path=public` (C50). This suite owns that
 -- decision end to end:
 --
---   1. the hardened 33 — each carries exactly `search_path=public, pg_temp`
+--   1. the hardened 36 — each carries exactly `search_path=public, pg_temp`
 --      (`public` first, `pg_temp` present and LAST, no other schema, no second
 --      GUC); every public SECURITY DEFINER function is classified into exactly
 --      one of the two groups, so a new one cannot arrive unreviewed;
@@ -22,7 +22,7 @@
 --      (updating the digest here and in docs/decisions-and-triggers.md C50) or
 --      move the function into the hardened group. The exemption is never by
 --      name alone;
---   4. the hardened 33 kept their security posture — SECURITY DEFINER, owner
+--   4. the hardened 36 kept their security posture — SECURITY DEFINER, owner
 --      postgres, literal EXECUTE ACL and effective EXECUTE class (so C47's
 --      service-role-only refund_ai_quota and the authenticated-only
 --      attachment_object_has_live_metadata are pinned here too);
@@ -58,10 +58,15 @@
 -- qualified, so for them the path is Tier 2 defense in depth. Their behaviour
 -- is owned by 031.
 --
+-- EVIDENCE-RECORDS-001A3 then added save_changes, review_fields and
+-- rebase_source, each SECURITY DEFINER at exactly `public, pg_temp` from the
+-- migration that creates it, so the hardened group is 36. Every relation they
+-- name is schema-qualified as well (Tier 2). Their behaviour is owned by 033.
+--
 -- This is local, rolled-back regression evidence for a defense-in-depth
 -- change. It is not a Production exploit: the audit found no route by which an
 -- ordinary PaperLume caller can run the arbitrary SQL (CREATE TEMP TABLE) that
--- section 5 runs directly. Per-function behaviour of the 33 stays owned by the
+-- section 5 runs directly. Per-function behaviour of the 36 stays owned by the
 -- suites that already cover them; the definer inventory counts and EXECUTE
 -- matrix stay owned by 003; C49's INVOKER read RPCs by 020; C52's INVOKER bulk
 -- metadata writes by 022; C53's INVOKER bulk import by 023; the pg_catalog
@@ -78,7 +83,7 @@ CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO extensions, public, pg_temp;
 
 -- ── Helpers ─────────────────────────────────────────────────────────────────
--- The hardened 33, by exact signature, with the effective EXECUTE class each
+-- The hardened 36, by exact signature, with the effective EXECUTE class each
 -- must keep ('authenticated', '<nobody>' beyond the owner, or 'service_role').
 CREATE FUNCTION pg_temp.hardened()
 RETURNS TABLE (sig text, exec text) LANGUAGE sql AS $hlp$
@@ -118,7 +123,11 @@ RETURNS TABLE (sig text, exec text) LANGUAGE sql AS $hlp$
     ('public.evidence_create_study_from_paper(uuid,text,text,text,uuid)',         'authenticated'),
     ('public.evidence_delete_study(uuid,integer,uuid)',                           'authenticated'),
     ('public.evidence_set_link(uuid,uuid,text,integer,uuid)',                     'authenticated'),
-    ('public.evidence_update_study(uuid,integer,text,text,text,uuid)',            'authenticated');
+    ('public.evidence_update_study(uuid,integer,text,text,text,uuid)',            'authenticated'),
+    -- EVIDENCE-RECORDS-001A3 — every relation schema-qualified; Tier 2
+    ('public.evidence_rebase_source(uuid,uuid,integer,text,uuid)',                'authenticated'),
+    ('public.evidence_review_fields(uuid,integer,uuid,integer,text,text,uuid)',  'authenticated'),
+    ('public.evidence_save_changes(uuid,integer,jsonb,uuid)',                     'authenticated');
 $hlp$;
 
 -- The 3 audited exceptions, each with the digest of the exact body the audit
@@ -207,11 +216,11 @@ CREATE FUNCTION pg_temp.tag_ids(p_paper uuid) RETURNS uuid[] LANGUAGE sql AS $hl
     FROM public.paper_tags WHERE paper_id = p_paper
 $hlp$;
 
--- 33 + 3 (section 1) + 3 (section 1b) + 8 (section 2) + 9 (section 3)
---   + 33 (section 4) + 16 (section 5) + 1 (section 6) = 106
-SELECT plan(106);
+-- 36 + 3 (section 1) + 3 (section 1b) + 8 (section 2) + 9 (section 3)
+--   + 36 (section 4) + 16 (section 5) + 1 (section 6) = 112
+SELECT plan(112);
 
--- ══ 1. The hardened 33: exactly `public, pg_temp` ═══════════════════════════
+-- ══ 1. The hardened 36: exactly `public, pg_temp` ═══════════════════════════
 -- Literal array equality: `public` first, `pg_temp` present and last, no other
 -- schema, and no second GUC in proconfig.
 SELECT ok(pg_temp.hardened_ok(to_regprocedure(h.sig)),
@@ -225,7 +234,7 @@ SELECT set_eq(
   $$SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef$$,
   $$SELECT to_regprocedure(sig)::oid FROM pg_temp.hardened()
     UNION ALL SELECT to_regprocedure(sig)::oid FROM pg_temp.exceptions()$$,
-  'classified: the public SECURITY DEFINER functions are exactly the hardened 33 plus the 3 audited exceptions');
+  'classified: the public SECURITY DEFINER functions are exactly the hardened 36 plus the 3 audited exceptions');
 
 -- The rule, stated generally over the whole inventory: outside the audited
 -- exceptions, a definer's search_path is trusted schemas with `pg_temp` last —
@@ -249,8 +258,8 @@ SELECT is(
   (SELECT string_agg(cfg || '=' || n, ' ' ORDER BY cfg)
      FROM (SELECT coalesce(proconfig::text, '<none>') AS cfg, count(*) AS n FROM pg_proc
             WHERE pronamespace = 'public'::regnamespace AND prosecdef GROUP BY 1) d),
-  '{"search_path=public, pg_temp"}=33 {search_path=public}=3',
-  'distribution: 33 definers at public, pg_temp and exactly 3 at public');
+  '{"search_path=public, pg_temp"}=36 {search_path=public}=3',
+  'distribution: 36 definers at public, pg_temp and exactly 3 at public');
 
 -- ══ 1b. Left the definer group with C52 and C53, C50's path intact ═════════
 -- The two bulk metadata writes (C52) and the bulk import (C53) are no longer
@@ -309,7 +318,7 @@ SELECT ok(NOT pg_temp.check_under(
 SELECT ok(
   (SELECT bool_and(pg_temp.hardened_ok(to_regprocedure(sig))) FROM pg_temp.hardened())
   AND (SELECT bool_and(pg_temp.exception_ok(to_regprocedure(sig), body_md5)) FROM pg_temp.exceptions()),
-  'sensitivity: every probe rolled back — all 33 hardened and all 3 exceptions intact');
+  'sensitivity: every probe rolled back — all 36 hardened and all 3 exceptions intact');
 
 -- ══ 3. The 3 audited exceptions: path AND body, together ════════════════════
 SELECT is(
@@ -343,7 +352,7 @@ SELECT is(
   'exception: ' || x.sig || ' keeps its owner, mode, owner-only ACL and trigger binding')
 FROM pg_temp.exceptions() x ORDER BY x.sig;
 
--- ══ 4. The hardened 33 kept their security posture ══════════════════════════
+-- ══ 4. The hardened 36 kept their security posture ══════════════════════════
 -- SECURITY DEFINER stays intentional (C50 changes only the path); owner
 -- postgres; the literal ACL; and who can execute, across the four grantees that
 -- matter. refund_ai_quota keeps C47's service-role-only contract.

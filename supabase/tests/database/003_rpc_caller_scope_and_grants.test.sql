@@ -2,12 +2,13 @@
 --
 -- Inventories the complete public SECURITY DEFINER surface and pins least-
 -- privilege EXECUTE and caller-identity boundaries:
---   * exactly 36 SECURITY DEFINER functions (28 directly callable + 1 server-
+--   * exactly 39 SECURITY DEFINER functions (31 directly callable + 1 server-
 --     only + 5 trigger-only + 2 internal-only); no unexpected privileged
 --     function or overload; and the authenticated-executable definer set is
---     exactly the 28 directly-callable ones;
+--     exactly the 31 directly-callable ones;
 --   * internal-only helpers, SECURITY DEFINER or INVOKER, reachable by nobody
---     but their owner (the study-record gate and normalization included);
+--     but their owner (the study-record gate, normalization, quote location,
+--     the section J rule and the value digest included);
 --   * directly-callable RPCs: {authenticated} EXECUTE only — no PUBLIC / anon /
 --     service_role; owner retained;
 --   * directly-callable INVOKER RPCs: the five caller-scoped read RPCs
@@ -80,7 +81,7 @@ BEGIN
 END;
 $hlp$;
 
--- The complete directly-callable SECURITY DEFINER RPC surface (28).
+-- The complete directly-callable SECURITY DEFINER RPC surface (31).
 -- `refund_ai_quota` left this list for server_rpcs() below with C47, the five
 -- caller-scoped read RPCs left it for invoker_rpcs() below with C49,
 -- bulk_update_keywords / bulk_update_study_types followed them with C52, and
@@ -153,7 +154,13 @@ CREATE FUNCTION pg_temp.client_rpcs() RETURNS SETOF text LANGUAGE sql AS $hlp$
     'public.evidence_create_study_from_paper(uuid,text,text,text,uuid)',
     'public.evidence_update_study(uuid,integer,text,text,text,uuid)',
     'public.evidence_set_link(uuid,uuid,text,integer,uuid)',
-    'public.evidence_delete_study(uuid,integer,uuid)'
+    'public.evidence_delete_study(uuid,integer,uuid)',
+    -- EVIDENCE-RECORDS-001A3. Field operations, review and rebase: each derives
+    -- its caller from auth.uid(), takes no user id and is owner-gated inside its
+    -- body. Their contracts are owned by 033_evidence_field_review_rebase.test.sql.
+    'public.evidence_save_changes(uuid,integer,jsonb,uuid)',
+    'public.evidence_review_fields(uuid,integer,uuid,integer,text,text,uuid)',
+    'public.evidence_rebase_source(uuid,uuid,integer,text,uuid)'
   ]);
 $hlp$;
 
@@ -166,12 +173,18 @@ $hlp$;
 -- inventory): the owner-only pilot gate, which only the gated study-record RPCs
 -- call, and match normalization v1, which only they call. Granting either to a
 -- client would turn an internal decision into a browser API.
+-- EVIDENCE-RECORDS-001A3 added three more INVOKER helpers of the same kind,
+-- called only from inside its RPCs: quote location, the FK-PROOF-001 section J
+-- rule, and the bounded history digest of a value.
 CREATE FUNCTION pg_temp.internal_fns() RETURNS SETOF text LANGUAGE sql AS $hlp$
   SELECT * FROM (VALUES
     ('public.author_identity_effective_root(uuid,uuid)'),
     ('public.validate_author_mention_for_identity(uuid,uuid,integer,text)'),
     ('public.evidence_records_assert_writable()'),
-    ('public.evidence_normalize_v1(text)')
+    ('public.evidence_normalize_v1(text)'),
+    ('public.evidence_locate_quote(text[],text)'),
+    ('public.evidence_state_reference_problems(text,integer,integer,integer)'),
+    ('public.evidence_value_digest(uuid,uuid)')
   ) v(sig)
 $hlp$;
 
@@ -260,9 +273,9 @@ INSERT INTO public.tags (id, user_id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a3','aa000000-0000-0000-0000-000000000001','Tag A'),
   ('b0000000-0000-0000-0000-0000000000b3','bb000000-0000-0000-0000-000000000002','Tag B');
 
-SELECT plan(341);
+SELECT plan(365);
 
--- ══ 1. Inventory: exactly 36 SECURITY DEFINER functions, none unexpected ═════
+-- ══ 1. Inventory: exactly 39 SECURITY DEFINER functions, none unexpected ═════
 -- 20 before AUTHOR-IDENTITY-RESOLUTION-001C, which added six client RPCs, two
 -- internal helpers and one trigger function; 31 after AI-MODEL-SELECTION-001A
 -- added set_current_user_ai_model and clear_current_user_ai_model; 33 after
@@ -303,12 +316,15 @@ SELECT plan(341);
 -- EVIDENCE-RECORDS-001A2 then added the four study-record lifecycle RPCs: 36
 -- definer functions, 28 directly callable. Its two helpers are SECURITY
 -- INVOKER and are classified in internal_fns() above, not counted here.
+-- EVIDENCE-RECORDS-001A3 then added save_changes, review_fields and
+-- rebase_source: 39 definer functions, 31 directly callable. Its three helpers
+-- are SECURITY INVOKER, classified in internal_fns(), not counted here.
 -- The count is deliberately exact: a new definer function that nobody registered
 -- here is the single easiest way to widen the privileged surface unnoticed.
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef),
-  36, 'exactly 36 SECURITY DEFINER functions in public');
+  39, 'exactly 39 SECURITY DEFINER functions in public');
 SELECT is(
   (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.prosecdef
@@ -348,7 +364,10 @@ SELECT is(
        'public.evidence_create_study_from_paper(uuid,text,text,text,uuid)'::regprocedure,
        'public.evidence_update_study(uuid,integer,text,text,text,uuid)'::regprocedure,
        'public.evidence_set_link(uuid,uuid,text,integer,uuid)'::regprocedure,
-       'public.evidence_delete_study(uuid,integer,uuid)'::regprocedure
+       'public.evidence_delete_study(uuid,integer,uuid)'::regprocedure,
+       'public.evidence_save_changes(uuid,integer,jsonb,uuid)'::regprocedure,
+       'public.evidence_review_fields(uuid,integer,uuid,integer,text,text,uuid)'::regprocedure,
+       'public.evidence_rebase_source(uuid,uuid,integer,text,uuid)'::regprocedure
      )),
   0, 'no unexpected/unclassified SECURITY DEFINER function or overload in public');
 -- The classification, stated as a set rather than implied by the two counts:
@@ -356,14 +375,14 @@ SELECT is(
 -- This is the set the Security Advisor's
 -- authenticated_security_definer_function_executable lint reports (27 after
 -- C49; 25 once C52 is applied; 24 once C53 is applied; 28 once
--- EVIDENCE-RECORDS-001A2 is applied).
+-- EVIDENCE-RECORDS-001A2 is applied; 31 once EVIDENCE-RECORDS-001A3 is applied).
 SELECT is(
   (SELECT coalesce(string_agg(p.oid::regprocedure::text, ',' ORDER BY p.oid::regprocedure::text), '')
      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.prosecdef
       AND has_function_privilege('authenticated', p.oid, 'EXECUTE')),
   (SELECT string_agg(sig::regprocedure::text, ',' ORDER BY sig::regprocedure::text) FROM pg_temp.client_rpcs() sig),
-  'the authenticated-executable SECURITY DEFINER functions are exactly the 28 directly-callable RPCs');
+  'the authenticated-executable SECURITY DEFINER functions are exactly the 31 directly-callable RPCs');
 
 -- ══ 1b. The directly-callable SECURITY INVOKER RPCs (C49, C52, C53) ═════════
 -- Same EXECUTE matrix as a client RPC, pinned byte-for-byte on the ACL itself
@@ -388,7 +407,7 @@ SELECT ok(
      FROM pg_proc p WHERE p.oid = sig::regprocedure),
   'directly-callable INVOKER RPC owner (postgres) retained with EXECUTE: ' || sig) FROM pg_temp.invoker_rpcs() sig;
 
--- ══ 2. EXECUTE matrix over the 28 directly-callable RPCs ═════════════════════
+-- ══ 2. EXECUTE matrix over the 31 directly-callable RPCs ═════════════════════
 SELECT ok(NOT has_function_privilege('anon', sig::regprocedure, 'EXECUTE'),
   'anon cannot execute ' || sig) FROM pg_temp.client_rpcs() sig;
 SELECT ok(NOT EXISTS (
@@ -437,7 +456,7 @@ SELECT ok(has_function_privilege(
     sig::regprocedure, 'EXECUTE'),
   'internal-only owner execution preserved: ' || sig) FROM pg_temp.internal_fns() sig;
 
--- ══ 3b. Directly-callable RPCs: owner execution preserved (all 28) ═══════════
+-- ══ 3b. Directly-callable RPCs: owner execution preserved (all 31) ═══════════
 -- Completes the EXECUTE matrix: for every direct RPC the defining owner retains
 -- EXECUTE (owner true; authenticated true above; PUBLIC/anon/service_role false).
 SELECT ok(

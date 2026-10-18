@@ -10,9 +10,10 @@ import { describe, expect, it } from "vitest";
  *
  * The library is pure by contract — deterministic, side-effect free, no
  * network, no storage, no browser globals, no AI or Edge path, no Supabase
- * client — except one module, the lifecycle adapter, which may call exactly the
- * four deployed lifecycle RPCs on the client injected into it, and nothing
- * else. This suite parses the library's source with the TypeScript parser (so a
+ * client — except one module, the adapter, which may call exactly the seven
+ * client RPCs (PR-A2's four lifecycle RPCs and PR-A3's three field RPCs) on
+ * the client injected into it, and nothing else — never an internal helper
+ * such as `evidence_normalize_v1` or `evidence_locate_quote`. This suite parses the library's source with the TypeScript parser (so a
  * forbidden name in a comment or a string can neither hide nor fake a match)
  * and fails on, in EVERY library module:
  *   * an import outside the allow-list — so no client, React, query cache,
@@ -30,15 +31,15 @@ import { describe, expect, it } from "vitest";
  *   * in a pure module, ANY use of a member named `rpc` — call, alias,
  *     destructuring, `.call`/`.apply`/`.bind`;
  *   * in the adapter, anything but a direct call `client.rpc("<name>", …)` on
- *     the injected client with one of the four approved literal names — and
- *     each of the four exactly once.
+ *     the injected client with one of the seven approved literal names — and
+ *     each of the seven exactly once.
  * Across all product sources (web app, extension, Edge Functions) it also
  * fails on any `.rpc()` naming an `evidence_` function outside the adapter, and
  * on any mutation of an evidence table through `.from()`.
  *
  * It is a review-time tripwire like `junctionWriteBoundary.test.ts` and
  * `paperComparisonReadOnlyBoundary.test.ts`, not the enforcement: the database
- * grants (SELECT-only tables, EXECUTE on four RPCs) and the RPCs' own checks
+ * grants (SELECT-only tables, EXECUTE on seven RPCs) and the RPCs' own checks
  * are what refuse a write. It does not follow data flow across files.
  */
 
@@ -51,6 +52,9 @@ const APPROVED_RPCS = new Set([
   "evidence_update_study",
   "evidence_set_link",
   "evidence_delete_study",
+  "evidence_save_changes",
+  "evidence_review_fields",
+  "evidence_rebase_source",
 ]);
 const EVIDENCE_TABLE = /^evidence_/;
 
@@ -310,19 +314,19 @@ const libraryFiles = listSources(join(ROOT, LIBRARY_DIR))
 describe("study-record domain boundary — the real library", () => {
   it("scans every module of the library", () => {
     for (const expected of [
-      "errors.ts", "fieldDictionary.ts", "freeze.ts", "identity.ts", "ids.ts", "lifecycleClient.ts", "lifecycleRequests.ts",
+      "errors.ts", "fieldDictionary.ts", "fieldRequests.ts", "freeze.ts", "identity.ts", "ids.ts", "lifecycleClient.ts", "lifecycleRequests.ts",
       "matcher.ts", "normalization.ts", "numbers.ts", "records.ts", "review.ts", "sources.ts", "states.ts", "types.ts", "validation.ts",
     ]) {
       expect(libraryFiles).toContain(`${LIBRARY_DIR}/${expected}`);
     }
   });
 
-  it("keeps every pure module pure, and the adapter to its four RPCs", () => {
+  it("keeps every pure module pure, and the adapter to its seven RPCs", () => {
     const violations = libraryFiles.flatMap((file) => scanLibraryModule(file, readFileSync(join(ROOT, file), "utf8"), file === ADAPTER).violations);
     expect(violations).toEqual([]);
   });
 
-  it("calls each of the four approved RPCs exactly once, only in the adapter", () => {
+  it("calls each of the seven approved RPCs exactly once, only in the adapter", () => {
     const calls = libraryFiles.flatMap((file) => scanLibraryModule(file, readFileSync(join(ROOT, file), "utf8"), file === ADAPTER).rpcCalls);
     expect(calls.sort()).toEqual([...APPROVED_RPCS].sort());
   });
@@ -409,10 +413,14 @@ describe("study-record domain boundary — negative controls", () => {
     expect(pure(source).length).toBeGreaterThan(0);
   });
 
-  it("allows the adapter its four literal RPC calls on the injected client, and nothing else", () => {
+  it("allows the adapter its seven literal RPC calls on the injected client, and nothing else", () => {
     expect(adapter(`async function call() { return client.rpc("evidence_update_study", request.args); }`)).toEqual({ violations: [], rpcCalls: ["evidence_update_study"] });
+    expect(adapter(`client.rpc("evidence_save_changes", request.args);`)).toEqual({ violations: [], rpcCalls: ["evidence_save_changes"] });
     for (const source of [
       `client.rpc("evidence_normalize_v1", { p_text: "x" });`,
+      `client.rpc("evidence_locate_quote", { p_quotes: ["x"], p_snapshot: "x" });`,
+      `client.rpc("evidence_state_reference_problems", {});`,
+      `client.rpc("evidence_value_digest", {});`,
       `client.rpc("evidence_records_assert_writable");`,
       `client.rpc("search_papers", {});`,
       `client.rpc(request.rpc, request.args);`,
@@ -430,6 +438,8 @@ describe("study-record domain boundary — negative controls", () => {
     expect(scanProductSource("src/components/X.tsx", `await supabase.rpc("evidence_set_link", args);`)).toHaveLength(1);
     expect(scanProductSource("src/hooks/useX.ts", `const FN = "evidence_delete_study";\nawait supabase.rpc(FN, args);`)).toHaveLength(1);
     expect(scanProductSource(ADAPTER, `client.rpc("evidence_normalize_v1", {});`)).toHaveLength(1);
+    expect(scanProductSource(ADAPTER, `client.rpc("evidence_locate_quote", {});`)).toHaveLength(1);
+    expect(scanProductSource("src/hooks/useX.ts", `await supabase.rpc("evidence_review_fields", args);`)).toHaveLength(1);
     expect(scanProductSource("src/hooks/useX.ts", `await supabase.from("evidence_field_values").update({ value_text: "x" }).eq("id", id);`)).toHaveLength(1);
     expect(scanProductSource("src/hooks/useX.ts", `const T = "evidence_events";\nawait supabase.from(T).delete();`)).toHaveLength(1);
     expect(scanProductSource("src/hooks/useX.ts", `await supabase.from("evidence_studies").select("*").eq("id", id);`)).toEqual([]);

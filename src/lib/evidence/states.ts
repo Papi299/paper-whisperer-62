@@ -38,8 +38,11 @@ export interface ValueStateRule {
 
 /**
  * The rule table, one row per state. The value, reason and note columns are
- * PR-A1 CHECKs; the reference columns are FK-PROOF-001 §J, which a PR-A3 RPC
- * will enforce on the server (PR-A1 enforces only the 3-supports cap).
+ * PR-A1 CHECKs; the reference columns are FK-PROOF-001 §J, which the PR-A3
+ * RPCs enforce on the server through one helper,
+ * `evidence_state_reference_problems`, for save and for Confirm alike (PR-A1
+ * enforces only the 3-supports cap; suite 033 section J runs the helper over
+ * every count against an independent transcription).
  */
 export const VALUE_STATE_RULES: Readonly<Record<ValueState, ValueStateRule>> = deepFreeze({
   reported: {

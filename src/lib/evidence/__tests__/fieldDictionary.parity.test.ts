@@ -51,13 +51,15 @@ import { readRepoFile } from "./fixtures/vectors";
  * and prove that a missing key, an extra key, a wrong scope, shape, code list,
  * bound or design-family restriction each makes the comparison fail.
  *
- * Rules the requirements give to a later RPC are not in any SQL yet; they are
- * checked against the dictionary's own `enforcement` annotations, which must
- * say so.
+ * The rules the requirements give to the PR-A3 save RPC — design families,
+ * comparator-only, list hygiene — are in its own copy of the dictionary, the
+ * `$fields$` constant of `evidence_save_changes`, which is compared here key
+ * by key, bound by bound, with negative controls of its own.
  */
 
 const PR_A1 = "supabase/migrations/20261012031537_add_evidence_records_foundation.sql";
 const PR_A2 = "supabase/migrations/20261016104232_add_evidence_records_lifecycle_rpcs.sql";
+const PR_A3 = "supabase/migrations/20261017155445_add_evidence_records_field_review_rebase_rpcs.sql";
 
 // ── SQL reading ──────────────────────────────────────────────────────────────
 
@@ -317,17 +319,17 @@ describe("the dictionary equals the PR-A1 field CHECKs and the PR-A2 family rule
     expect(prose(pra1)).toContain("`n_randomized_arm` is deferred");
   });
 
-  it("annotates the comparator-only rule as a planned RPC rule, as the migration says it is", () => {
+  it("annotates the comparator-only rule as the PR-A3 RPC's, as the PR-A1 migration says it is", () => {
     expect(EVIDENCE_FIELDS.comparator_type.armRoles).toEqual(["comparator"]);
-    expect(EVIDENCE_FIELDS.comparator_type.enforcement.armRole).toBe("pr_a3_planned");
+    expect(EVIDENCE_FIELDS.comparator_type.enforcement.armRole).toBe("pr_a3_rpc");
     expect(prose(pra1)).toContain("`comparator_type` appears only on comparator groups");
     for (const key of FIELD_KEYS.filter((k) => k !== "comparator_type")) expect(EVIDENCE_FIELDS[key].enforcement.armRole).toBe("none");
   });
 
-  it("annotates list hygiene (trim, de-duplicate) as a planned RPC rule", () => {
+  it("annotates list hygiene (trim, de-duplicate) as the PR-A3 RPC's", () => {
     expect(prose(pra1)).toContain("Trimming and de-duplication are the RPC's");
     for (const key of FIELD_KEYS) {
-      const expected = EVIDENCE_FIELDS[key].shape === "text_list" ? "pr_a3_planned" : "none";
+      const expected = EVIDENCE_FIELDS[key].shape === "text_list" ? "pr_a3_rpc" : "none";
       expect(EVIDENCE_FIELDS[key].enforcement.listHygiene).toBe(expected);
       expect(EVIDENCE_FIELDS[key].enforcement.scope).toBe("pr_a1_check");
       expect(EVIDENCE_FIELDS[key].enforcement.shapeAndBounds).toBe("pr_a1_check");
@@ -443,5 +445,100 @@ describe("negative controls: the comparison is not tautological", () => {
     );
     expect(commented).not.toBe(pra1);
     expect(parseFieldFacts(commented)).toEqual(facts);
+  });
+});
+
+// ── The PR-A3 save RPC's own copy (EVIDENCE-RECORDS-001A3) ───────────────────
+
+const pra3 = readRepoFile(PR_A3);
+
+/** The `$fields$` constant of evidence_save_changes, read as the JSON it is. */
+function parseServerDictionary(sql: string): Record<string, Record<string, unknown>> {
+  const open = sql.indexOf("$fields${");
+  const close = sql.indexOf("}$fields$", open);
+  if (open === -1 || close === -1 || sql.indexOf("$fields${", open + 1) !== -1) throw new Error("expected exactly one $fields$ constant");
+  return JSON.parse(sql.slice(open + "$fields$".length, close + 1));
+}
+
+const SERVER_WHITESPACE: Readonly<Record<string, string>> = { none: "none", inner: "inner_only" };
+
+function compareServerDictionary(dictionary: Dictionary, server: Record<string, Record<string, unknown>>): string[] {
+  const problems: string[] = [];
+  const keys = Object.keys(dictionary);
+  for (const key of Object.keys(server)) if (!keys.includes(key)) problems.push(`extra server key ${key}`);
+  if (JSON.stringify(Object.keys(server).filter((k) => keys.includes(k))) !== JSON.stringify(keys.filter((k) => k in server))) problems.push("server key order differs");
+  for (const key of keys) {
+    const d = (dictionary as unknown as Record<string, FieldDefinition>)[key];
+    const s = server[key];
+    if (!s) {
+      problems.push(`missing server key ${key}`);
+      continue;
+    }
+    const expected: Record<string, unknown> = { scope: d.scope, shape: d.shape };
+    switch (d.shape) {
+      case "text":
+        expected.max = d.text.maxLength;
+        break;
+      case "integer_with_reported_text":
+        expected.max = d.reportedText.maxLength;
+        break;
+      case "code":
+        expected.codes = [...d.codes];
+        break;
+      case "text_list":
+        Object.assign(expected, {
+          min_entries: d.list.minEntries,
+          max_entries: d.list.maxEntries,
+          entry_min: d.list.entry.minLength,
+          entry_max: d.list.entry.maxLength,
+          whitespace: Object.keys(SERVER_WHITESPACE).find((w) => SERVER_WHITESPACE[w] === d.list.entry.whitespace),
+        });
+        break;
+    }
+    // A study or outcome field limited to some design families says so; a group
+    // field is limited by its scope, because a group cannot exist elsewhere.
+    if (d.scope !== "arm" && d.designProfiles.length !== DESIGN_PROFILES.length) expected.families = [...d.designProfiles];
+    if (d.armRoles !== null && d.armRoles.length !== ARM_ROLES.length) expected.roles = [...d.armRoles];
+    for (const property of new Set([...Object.keys(expected), ...Object.keys(s)])) {
+      if (JSON.stringify(s[property]) !== JSON.stringify(expected[property])) {
+        problems.push(`${key}: ${property} ${JSON.stringify(expected[property])}, server ${JSON.stringify(s[property])}`);
+      }
+    }
+  }
+  return problems;
+}
+
+describe("the PR-A3 save RPC holds the same dictionary", () => {
+  const server = parseServerDictionary(pra3);
+
+  it("reads all 23 keys from the RPC's constant", () => {
+    expect(Object.keys(server)).toHaveLength(23);
+  });
+
+  it("agrees on every key, scope, shape, bound, code list, design family and group role", () => {
+    expect(compareServerDictionary(EVIDENCE_FIELDS as unknown as Dictionary, server)).toEqual([]);
+  });
+
+  it("enforces what the dictionary attributes to it", () => {
+    expect(server.comparator_type.roles).toEqual(["comparator"]);
+    expect(server.n_randomized.families).toEqual(["rct_parallel", "intervention_other"]);
+    const save = stripComments(pra3.slice(pra3.indexOf("CREATE FUNCTION public.evidence_save_changes"), pra3.indexOf("CREATE FUNCTION public.evidence_review_fields")));
+    for (const rule of ["not_allowed_for_design", "not_allowed_for_arm_role", "comparator_type_present", "untrimmed", "contains_whitespace", "forbidden_character"]) {
+      expect(save, rule).toContain(`: ${rule}'`);
+    }
+    expect(save).toContain(": duplicate'");
+  });
+
+  it.each([
+    ["a changed text bound", (s: string) => s.replace('"design_as_reported":       {"scope": "study", "shape": "text", "max": 500}', '"design_as_reported":       {"scope": "study", "shape": "text", "max": 501}'), "design_as_reported: max 500, server 501"],
+    ["a dropped role rule", (s: string) => s.replace(', "roles": ["comparator"]', ""), 'comparator_type: roles ["comparator"], server undefined'],
+    ["a changed family rule", (s: string) => s.replace('"families": ["rct_parallel", "intervention_other"]', '"families": ["rct_parallel"]'), 'n_randomized: families ["rct_parallel","intervention_other"], server ["rct_parallel"]'],
+    ["a changed list rule", (s: string) => s.replace('"entry_max": 100, "whitespace": "inner"', '"entry_max": 100, "whitespace": "none"'), 'time_points: whitespace "inner", server "none"'],
+    ["a reordered code list", (s: string) => s.replace('"codes": ["primary", "secondary"]', '"codes": ["secondary", "primary"]'), 'outcome_designation: codes ["primary","secondary"], server ["secondary","primary"]'],
+    ["an extra key", (s: string) => s.replace('"setting":', '"effect_size":              {"scope": "study", "shape": "text", "max": 50},\n    "setting":'), "extra server key effect_size"],
+  ])("catches %s", (_label, mutate, expected) => {
+    const mutated = mutate(pra3);
+    expect(mutated).not.toBe(pra3);
+    expect(compareServerDictionary(EVIDENCE_FIELDS as unknown as Dictionary, parseServerDictionary(mutated))).toContain(expected);
   });
 });

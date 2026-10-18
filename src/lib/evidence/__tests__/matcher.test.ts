@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   findAllOccurrences,
   locateQuote,
+  QUOTE_OCCURRENCE_LIMIT,
   quoteFromSelection,
   resolveSelectedOccurrence,
   selectOccurrence,
@@ -14,7 +15,8 @@ import { cp, FIXTURE } from "./fixtures/vectors";
 /**
  * The advisory quote matcher. The matching vectors of the shared fixture fix
  * every offset; suite 032 checks the same normalized offsets against
- * PostgreSQL's own character positions on the installed normalizer.
+ * PostgreSQL's own character positions on the installed normalizer, and runs
+ * every vector through the server's evidence_locate_quote (EVIDENCE-RECORDS-001A3).
  */
 
 const occurrencesOf = (match: AdvisoryQuoteMatch) => (match.kind === "unique" || match.kind === "multiple" ? match.occurrences : []);
@@ -29,6 +31,14 @@ describe("locateQuote — the shared fixture's matching vectors", () => {
       return;
     }
     expect(vector.invalid_problems).toEqual([]);
+    if (match.kind === "too_many") {
+      // The oracle still lists every occurrence; no matcher claims one.
+      expect([...match.normalizedQuote]).toHaveLength(vector.normalized_quote_length);
+      expect(vector.expected_normalized.length).toBeGreaterThan(QUOTE_OCCURRENCE_LIMIT);
+      expect(vector.expected_exact).toEqual([]);
+      expect(JSON.stringify(match)).not.toContain("occurrences");
+      return;
+    }
     expect([...match.normalizedQuote]).toHaveLength(vector.normalized_quote_length);
     const found = occurrencesOf(match);
     expect(found.map((o) => [o.normalized.start, o.normalized.end])).toEqual(vector.expected_normalized);
@@ -41,7 +51,7 @@ describe("locateQuote — the shared fixture's matching vectors", () => {
 
   it("covers every outcome and the edges the brief names", () => {
     const kinds = new Set(FIXTURE.matching.map((v) => v.expected_kind));
-    expect([...kinds].sort()).toEqual(["invalid", "multiple", "not_found", "unique"]);
+    expect([...kinds].sort()).toEqual(["invalid", "multiple", "not_found", "too_many", "unique"]);
     const titles = FIXTURE.matching.map((v) => v.title).join("\n");
     for (const edge of ["overlapping", "case", "decomposed", "soft hyphen", "ellipsis", "punctuation", "code points", "emoji", "normalized exactly once"]) {
       expect(titles).toContain(edge);
@@ -69,9 +79,30 @@ describe("locateQuote — rules", () => {
     expect(locateQuote("x".repeat(1001), copy).kind).toBe("invalid");
   });
 
-  it("counts letters and digits of any script", () => {
+  it("counts a letter of any script, or an ASCII digit, as the server does (Alphabetic or 0-9)", () => {
     expect(locateQuote(`${cp(0x03b1)}${cp(0x03b2)}${cp(0x03b3)}`, `x ${cp(0x03b1)}${cp(0x03b2)}${cp(0x03b3)} y`).kind).toBe("unique");
-    expect(locateQuote(`${cp(0x0661)}${cp(0x0662)}${cp(0x0663)}`, `${cp(0x0661)}${cp(0x0662)}${cp(0x0663)}`).kind).toBe("unique");
+    expect(locateQuote(`${cp(0x216b)}${cp(0x216b)}${cp(0x216b)}`, `Phase ${cp(0x216b)}${cp(0x216b)}${cp(0x216b)}.`).kind).toBe("unique");
+    // A digit of another script is not an ASCII digit and not Alphabetic.
+    expect(locateQuote(`${cp(0x0661)}${cp(0x0662)}${cp(0x0663)}`, `${cp(0x0661)}${cp(0x0662)}${cp(0x0663)}`)).toMatchObject({
+      kind: "invalid",
+      problems: ["no_letter_or_digit"],
+    });
+    expect(locateQuote(`n=${cp(0x0661)}${cp(0x0662)}`, `n=${cp(0x0661)}${cp(0x0662)}`).kind).toBe("unique");
+  });
+
+  it("enumerates up to 100 occurrences; beyond that a quote is too_many, with no count or offsets", () => {
+    const hundred = locateQuote("aaa", "a".repeat(102));
+    expect(hundred.kind).toBe("multiple");
+    if (hundred.kind !== "multiple") return;
+    expect(hundred.count).toBe(QUOTE_OCCURRENCE_LIMIT);
+    expect(hundred.occurrences[99].normalized).toEqual({ start: 99, end: 102 });
+    expect(locateQuote("aaa", "a".repeat(103))).toEqual({
+      attestation: "browser_advisory",
+      normalizationVersion: "v1",
+      kind: "too_many",
+      normalizedQuote: "aaa",
+    });
+    expect(selectOccurrence(locateQuote("aaa", "a".repeat(103)), 1)).toBeNull();
   });
 
   it("refuses text PostgreSQL cannot store as a quote, without throwing", () => {
@@ -165,8 +196,10 @@ describe("choosing among several occurrences", () => {
 describe("findAllOccurrences", () => {
   const codes = (text: string) => Array.from(text, (ch) => ch.codePointAt(0) as number);
 
-  it("finds every occurrence, overlapping ones included", () => {
+  it("finds every occurrence, overlapping ones included, or the first `limit`", () => {
     expect(findAllOccurrences(codes("aaaaa"), codes("aa"))).toEqual([0, 1, 2, 3]);
+    expect(findAllOccurrences(codes("aaaaa"), codes("aa"), 2)).toEqual([0, 1]);
+    expect(findAllOccurrences(codes("aaaaa"), codes("aa"), 0)).toEqual([]);
     expect(findAllOccurrences(codes("abababa"), codes("aba"))).toEqual([0, 2, 4]);
     expect(findAllOccurrences(codes("abc"), codes("abcd"))).toEqual([]);
     expect(findAllOccurrences(codes("abc"), [])).toEqual([]);

@@ -1,8 +1,8 @@
 # Study records — domain library (EVIDENCE-RECORDS-001B)
 
-> **Status:** implemented in `src/lib/evidence/`. Pure TypeScript with no UI, and nothing in the application imports it yet. Every rule here is advisory: the database CHECKs and the RPCs decide. The RPC contract itself is in [evidence-records-lifecycle.md](evidence-records-lifecycle.md).
+> **Status:** implemented in `src/lib/evidence/`. Pure TypeScript with no UI, and nothing in the application imports it yet. Every rule here is advisory: the database CHECKs and the RPCs decide. The RPC contracts are in [evidence-records-lifecycle.md](evidence-records-lifecycle.md) (PR-A2, applied to Production) and [evidence-records-field-operations.md](evidence-records-field-operations.md) (PR-A3, implemented in the repository, **not** applied to Production).
 
-The library gives PR-A3 (the save, review and rebase RPCs) and PR-C1/C2 (the Study record dialog) one typed, tested implementation of the study-record domain. It covers the field dictionary, validation, the value and review state rules, match normalization v1, quote matching, number suggestions, identity and link rules, error classification, and a client for the four deployed lifecycle RPCs.
+The library gives PR-C1/C2 (the Study record dialog) one typed, tested implementation of the study-record domain, and the PR-A3 RPCs enforce the same rules on the server. It covers the field dictionary, validation, the value and review state rules, match normalization v1, quote matching, number suggestions, identity and link rules, error classification, and a client for the seven client RPCs: PR-A2's four lifecycle RPCs and PR-A3's three field RPCs.
 
 ## 1. Modules
 
@@ -21,14 +21,15 @@ The library gives PR-A3 (the save, review and rebase RPCs) and PR-C1/C2 (the Stu
 | `matcher.ts` | The advisory abstract-quote matcher | none |
 | `numbers.ts` | Number suggestions and the digit-not-in-quote warning | none |
 | `errors.ts` | The error taxonomy and classification | none |
-| `lifecycleRequests.ts` | Prepared, validated requests for the four RPCs | none |
-| `lifecycleClient.ts` | The only module that calls `.rpc()`: four literal names, on an injected client | one RPC per call to `send` |
+| `lifecycleRequests.ts` | Prepared, validated requests for the four lifecycle RPCs | none |
+| `fieldRequests.ts` | Prepared, validated requests for the three PR-A3 RPCs, in the server's wire format | none |
+| `lifecycleClient.ts` | The only module that calls `.rpc()`: seven literal names, on an injected client | one RPC per call to `send` |
 
 `src/test/evidenceDomainBoundary.test.ts` enforces the last column (§9).
 
 ## 2. Sources and precedence
 
-Rules come from, in this order: accepted Product Owner decisions; the applied PR-A1 and PR-A2 migrations; FK-PROOF-001's corrections; Requirements-001A; and Requirements-001 where it is not superseded. Each field records where its rules are enforced. `pr_a1_check` is a CHECK constraint. `pr_a2_rpc` is an applied RPC. `pr_a3_planned` is a rule the requirements give to an RPC that does not exist yet, so nothing on the server enforces it today.
+Rules come from, in this order: accepted Product Owner decisions; the PR-A1, PR-A2 and PR-A3 migrations; FK-PROOF-001's corrections; Requirements-001A; and Requirements-001 where it is not superseded. Each field records where its rules are enforced. `pr_a1_check` is a CHECK constraint. `pr_a2_rpc` is an applied PR-A2 RPC. `pr_a3_rpc` is the PR-A3 save RPC, `evidence_save_changes` (`20261017155445`), which is not yet applied to Production.
 
 These parts of Requirements-001 are superseded, and are **not** implemented:
 
@@ -51,13 +52,13 @@ These parts of Requirements-001 are superseded, and are **not** implemented:
 
 Characters are Unicode code points, as PostgreSQL's `char_length` counts them.
 
-**Design families.** Groups and `n_randomized` exist only in `rct_parallel` and `intervention_other`. PR-A2 refuses moving a study that has either to `non_intervention`, and a PR-A3 save must refuse adding them there. `comparator_type` applies to comparator groups only (`pr_a3_planned`). Labels and core/optional status are Requirements-001 §H2–H5 and §E13; `n_enrolled` is core only for `non_intervention`. The code-list labels are provisional copy for PR-C1.
+**Design families.** Groups and `n_randomized` exist only in `rct_parallel` and `intervention_other`. PR-A2 refuses moving a study that has either to `non_intervention`, and the PR-A3 save refuses adding them there. `comparator_type` applies to comparator groups only (`pr_a3_rpc`). Labels and core/optional status are Requirements-001 §H2–H5 and §E13; `n_enrolled` is core only for `non_intervention`. The code-list labels are provisional copy for PR-C1.
 
-**Parity.** `fieldDictionary.parity.test.ts` re-derives every key, scope, shape, bound and code list from the PR-A1 SQL text. It takes the family rule from PR-A2's `evidence_update_study`, and the other closed vocabularies and bounds from their CHECKs and argument checks. It then compares them with the dictionary. Negative controls mutate either side and must be caught. A new key, or a new meaning for an old one, therefore needs a migration first.
+**Parity.** `fieldDictionary.parity.test.ts` re-derives every key, scope, shape, bound and code list from the PR-A1 SQL text. It takes the family rule from PR-A2's `evidence_update_study`, and the other closed vocabularies and bounds from their CHECKs and argument checks. It then compares them with the dictionary. It also reads the PR-A3 save RPC's own copy of the dictionary — the `$fields$` constant of `evidence_save_changes`, with its design families and group roles — and compares that key by key. Negative controls mutate either side and must be caught. A new key, or a new meaning for an old one, therefore needs a migration first.
 
 ## 4. Values, states and sources
 
-No row means **Not yet recorded**, which is never stored. Which sources a value may name depends on its state (FK-PROOF-001 §J; a PR-A3 RPC will enforce it):
+No row means **Not yet recorded**, which is never stored. Which sources a value may name depends on its state (FK-PROOF-001 §J; the PR-A3 RPCs enforce it, through one helper for save and Confirm):
 
 | State | Supporting | Examined | Unavailable | Also required |
 |---|---|---|---|---|
@@ -77,7 +78,7 @@ A value holds at most one examined-or-unavailable assessment per report and sour
 
 `checkStateReferences` states the table's count rules once, from `VALUE_STATE_RULES`, together with PR-A1's cap of three supporting sources. `validateValueDraft` and `checkConfirm` both use it, so a value whose sources break its state's row can be neither saved from the browser nor confirmed. The tests check it against a transcription of §J (`__tests__/fixtures/sectionJ.ts`), not against the table.
 
-Validation never rewrites input. Untrimmed list entries are an error; `trimListEntries` is an explicit fix the UI shows. "Blank" means empty after normalization v1, the rule PR-A2 applies to labels and notes; for values, PR-A3 decides whether its RPCs adopt it. Note minimums are measured as the CHECK measures them, after trimming spaces only.
+Validation never rewrites input. Untrimmed list entries are an error; `trimListEntries` is an explicit fix the UI shows. "Blank" means empty after normalization v1: PR-A2 applies it to labels and notes, and PR-A3 to every value text, list entry, note and locator, storing the text exactly as written (Product Owner decision 4). Note minimums are measured as the CHECK measures them, after trimming spaces only.
 
 ## 5. Review
 
@@ -97,6 +98,8 @@ A stale version is refused first, because the user must reload. Otherwise Confir
 - an Unclear value has no reason, or an Unclear or Not applicable note is too short or blank after v1.
 
 Flag needs a note of at least 3 characters, in any state. Any change to state, reason, content, note or sources returns a value to Not reviewed (`predictReviewAfterSave`).
+
+The PR-A3 review RPC re-checks these preconditions and refuses with the same codes, in the same order (`EvidenceError.blocks`). It differs in one deliberate place: Confirm of a version already confirmed is a no-op only when the note is the same too, so a new note re-confirms; the browser offers no Confirm there at all.
 
 When a link's copy is replaced or first saved, `deriveSourceChangeTransitions` applies 001A §E5 to every value with any abstract reference on that link. Reviewed, flagged and needs-re-review values go to **Needs re-review** (`source_changed`), even if every quote is found again; not-reviewed values stay. A typography-only difference keeps the saved copy by default (`deriveSourceState`), so nothing changes unless the user chooses the current abstract.
 
@@ -118,10 +121,10 @@ Text PostgreSQL cannot store — a lone surrogate, or U+0000 — throws `Evidenc
 **Parity.** The fixture `src/lib/evidence/__tests__/fixtures/normalizationV1.vectors.json` holds normalization and matching vectors. Among them are suite 031's 30 golden vectors and the migration's 6 self-checks. Expected values were written by hand and re-derived outside both implementations (Python `unicodedata`, identical under Unicode 13.0 and 16.0). The file is printable ASCII; every other character is a JSON `\u` escape.
 
 - Vitest runs the TypeScript normalizer and matcher on every vector.
-- pgTAP suite `032_evidence_normalization_parity.test.sql` embeds the file **byte for byte** and runs the installed function on every vector, SHA-256 included. It also uses built-in `substr`/`char_length` as an oracle for the matching offsets; it creates no function.
+- pgTAP suite `032_evidence_normalization_parity.test.sql` embeds the file **byte for byte** and runs the installed function on every vector, SHA-256 included. It also uses built-in `substr`/`char_length` as an oracle for the matching offsets, and runs every matching vector through the installed `evidence_locate_quote` (PR-A3): kind, count, problems and every offset. It creates no function.
 - `normalization.parity.test.ts` fails if the embedded copy drifts. It also parses suite 031's `chr()` vectors and the migration's checks from their SQL text and requires them to equal the fixture.
 
-To change a vector, edit the JSON, then replace everything between the two dollar-quote tags in suite 032 with the file's exact contents.
+To change a vector, edit `scripts/evidence-fixtures/gen_normalization_fixture.py`, which re-derives every expected value and refuses to write on any disagreement, then regenerate the fixture and suite 032 with the two commands in its docstring; `compose_parity_suite.py` embeds the fixture byte for byte.
 
 **Limitation.** Each NFC follows its own Unicode tables: PostgreSQL 17 its built-in Unicode 15.1, a browser or Node its ICU. They agree for every character both versions assign. Text with characters assigned later can normalize differently, so the browser's answer is advisory.
 
@@ -130,9 +133,9 @@ To change a vector, edit the JSON, then replace everything between the two dolla
 `locateQuote(quote, copy)` normalizes each input once. A match is a contiguous occurrence of the normalized quote in the normalized copy.
 
 - The stored quote must be 3–1,000 characters.
-- The normalized quote must be 3–1,000 characters and contain a letter or digit (Unicode L or N).
-- Every occurrence counts, overlapping ones included, in position order.
-- The result is `invalid` (with its problems), `not_found`, `unique` or `multiple`.
+- The normalized quote must be 3–1,000 characters and contain a letter or digit: Unicode Alphabetic or an ASCII digit, which is the server's `[[:alnum:]]` under the builtin `pg_c_utf8` collation. A digit of another script is not one.
+- Every occurrence counts, overlapping ones included, in position order, up to 100.
+- The result is `invalid` (with its problems), `not_found`, `unique`, `multiple`, or `too_many` — found more than 100 times, with no count and no occurrences, which a save refuses as ambiguous.
 
 Each occurrence has:
 
@@ -167,13 +170,15 @@ The user always confirms the integer. `checkCountInQuote` warns, and never block
 
 A study is never a paper: the branded types differ, one paper can report several studies (`studiesOfPaper`), and nothing infers identity. `checkLinkAction` follows `evidence_set_link`. It acts on **existing** links only, since there is no add. It refuses removing the last link before checking references, as the RPC does. A study keeps at least one paper; deleting the study frees its only paper. `papersHeldByStudies` names the papers a delete or duplicate merge would be refused for.
 
-The boundary test parses the library's source. Every module must stay inside an import allow-list, with the generated types usable for types only. None may use a network, storage, browser, clock, randomness, crypto or reflection global, a dynamic import, `eval`, a write method, or a computed call. Pure modules may not touch `rpc` at all. The adapter may call only the four approved names, once each, as literals on the injected client. Across the web app, the extension and the Edge Functions, no other source may call an `evidence_` RPC or write an evidence table.
+The boundary test parses the library's source. Every module must stay inside an import allow-list, with the generated types usable for types only. None may use a network, storage, browser, clock, randomness, crypto or reflection global, a dynamic import, `eval`, a write method, or a computed call. Pure modules may not touch `rpc` at all. The adapter may call only the seven approved names — the four lifecycle RPCs and the three PR-A3 RPCs — once each, as literals on the injected client; an internal helper such as `evidence_locate_quote` is refused. Across the web app, the extension and the Edge Functions, no other source may call an `evidence_` RPC or write an evidence table.
 
-## 10. Lifecycle client and errors
+## 10. The RPC client and errors
 
 `prepareCreateStudy`, `prepareUpdateStudy`, `prepareSetLink` and `prepareDeleteStudy` build frozen requests. Each holds the deployed argument names, typed by the generated function types, and the caller's request id. `p_notes` is the one widened argument: `null` means no notes.
 
-`createEvidenceLifecycleClient(client)` sends only requests a `prepare*` function built. It returns the server's status (`applied`, `replayed`, `unchanged`, `deleted`, `already_absent`) or a classified error, and it checks each answer's exact shape, ids and version. A retry resends the **same** prepared request; the client never retries by itself.
+`prepareSaveChanges`, `prepareReviewField` and `prepareRebaseSource` do the same for the PR-A3 RPCs. `prepareSaveChanges` turns typed changes (`SaveChange`, `ReferenceChange`) into the server's wire format — snake_case keys, every key present, `null` where allowed — and refuses what can be refused without the study: shapes, ids, batch refs, closed vocabularies, labels, positions, duplicates, and changes to a group or outcome the batch removes. Study-dependent rules stay with `validateValueDraft` and the server. A new quote with several occurrences carries the `occurrence` chosen and the `expectedMatchCount` the user saw. No wire key exists for anything the server computes. `prepareReviewField` binds one value id and one value version; there is no list, and its `p_note` is widened like `p_notes`: `null` means no note. `prepareRebaseSource` takes the displayed abstract's SHA-256, which the caller computes (the library uses no crypto).
+
+`createEvidenceLifecycleClient(client)` sends only requests a `prepare*` function built — `isPreparedRequest` and `isPreparedFieldRequest` rebuild each one from its own arguments. It returns the server's status (`applied`, `replayed`, `unchanged`, `deleted`, `already_absent`) or a classified error, and it checks each answer's exact shape, ids and version: a save must return exactly the ids of the groups and outcomes it added, a review the value version it was bound to, a rebase a consistent copy sequence. A retry resends the **same** prepared request; the client never retries by itself.
 
 | Error | `applied` | Retry |
 |---|---|---|
@@ -182,14 +187,24 @@ The boundary test parses the library's source. Every module must stay inside an 
 | `evidence_version_conflict` | no | a new request after reloading |
 | `evidence_request_id_reused` | no | none |
 
-Kinds are classified by SQLSTATE and message, never by HTTP status alone: PostgREST answers `P0002 evidence_not_found` with 500. `42501` is a sign-in problem when the status is 401 and a permission problem when it is 403. Only `PGRST202`/`42883` naming the RPC means the function is unavailable. `classifyEvidenceForeignKeyError` explains a `23503` on `evidence_study_reports_paper_fkey` (a paper with a study record) or on the two anchor keys, and returns null for any other key. `evidence_quote_not_found`, `evidence_source_changed_again` and `evidence_snapshot_limit` are **reserved** PR-A3 contracts, marked `reserved`, and not deployed.
+Kinds are classified by SQLSTATE and message, never by HTTP status alone: PostgREST answers `P0002 evidence_not_found` with 500. `42501` is a sign-in problem when the status is 401 and a permission problem when it is 403. Only `PGRST202`/`42883` naming the RPC means the function is unavailable. `classifyEvidenceForeignKeyError` explains a `23503` on `evidence_study_reports_paper_fkey` (a paper with a study record) or on the two anchor keys, and returns null for any other key. The PR-A3 refusals are classified like PR-A2's, by SQLSTATE and message. Where one points at something, its DETAIL is parsed by a strict grammar into `detail` — the argument, the 0-based path inside `p_changes` and the rules broken — and `confirm_blocked` carries `blocks` in `checkConfirm`'s codes. A DETAIL outside the grammar is dropped, never shown.
 
-## 11. Open contracts for PR-A3 and PR-C
+## 11. Decisions recorded
 
-- **Offsets.** Pin `match_start`/`match_end` as 0-based, half-open character offsets of the v1-normalized copy, as the TypeScript matcher and suite 032 use.
-- **"A letter or digit".** Pin the server's definition; PostgreSQL `[[:alnum:]]` depends on the collation provider.
-- **Blank and trim rules for values.** Decide whether "blank" means empty after v1, and which white space a list entry is trimmed of.
-- **Confirming a judgement field.** Requirements-001 §H2 lets `design_classification` be confirmed with a note. FK-PROOF-001 §J requires current support for every Reported value. This library applies §J.
-- **Unclear with only superseded quotes.** FK-PROOF-001 §J is silent. The browser applies 001A's amendment to 001 §J1, that only current-copy quotes count toward Confirm, so such a value cannot be confirmed until a quote is on the current copy or a source is marked examined. PR-A3's review RPC should adopt or amend this.
-- **Counts.** Requirements-001 L10 proposes 20 groups, 50 outcomes, 400 values, 20 copies per link, and 64 KB / 200 changes per call. Q11 is still open, so none is enforced here.
-- **The reserved errors.** Assign their SQLSTATEs.
+The Product Owner settled these on 2026-10-17, at the PR-B merge; PR-A3 implements them on the server.
+
+- **Unclear with only superseded quotes** (decision 1). Such a value cannot be confirmed: it needs a quote on the current copy, or a source marked examined (`unclear_source_not_current`).
+- **`design_classification`** (decision 2). It may be recorded without a source. Confirming it needs a current abstract quote or a full-text locator; a note alone is not source attestation (`no_current_support`).
+- **Reported without a source** (decision 3). It may be saved, shows **No source given**, and cannot be confirmed until current support exists.
+- **Blank values** (decision 4). Empty after normalization v1 is blank, for value text and notes as for labels; the original text is stored unchanged. The difference from the PR-A1 CHECKs, which measure `btrim` of spaces, is enforced and documented on the server.
+- **Confirm messages** (decision 5). The five block messages PR-B added are provisional, to be refined in the Study Record UI phase.
+- **Offsets.** `match_start`/`match_end` are 0-based, half-open code point offsets of the v1-normalized copy. PostgreSQL is authoritative, and suite 032 pins it against both matchers.
+
+PR-A3 settled the engineering details that were still open:
+
+- **"A letter or digit"** is `[[:alnum:]]` under the builtin `pg_c_utf8` collation: Unicode Alphabetic or an ASCII digit, whatever the database's collation. `matcher.ts` mirrors it.
+- **List entries** are never trimmed. An entry with a leading or trailing White_Space character (the 25 code points of v1) is refused, as is an exact duplicate.
+- **Confirm's no-op** is checked after the version check and before the preconditions, as the browser does (001A §I5).
+- **The reserved errors** are raised with P0001, the convention of every PR-A2 refusal; PR-A3 adds `evidence_target_not_found` (P0002), `evidence_quote_ambiguous`, `evidence_confirm_blocked` and the errors of the three proposed count limits ([evidence-records-field-operations.md](evidence-records-field-operations.md) §7).
+
+**Not settled: the limits.** The server enforces the earlier Q11 proposal, Requirements-001 L10 as amended by 001A §L: 20 groups, 50 outcomes and 400 values per study, 20 copies per link, and 64 KB / 200 changes per call. It also enforces two limits that PR-A3 added and that proposal does not contain: 10 assessments per value and 100 enumerated occurrences per quote. Q11 is still open. Every one of these is proposed policy that needs explicit acceptance at the Production rollout, and neither addition is a Product Owner decision ([evidence-records-field-operations.md](evidence-records-field-operations.md) §10).
