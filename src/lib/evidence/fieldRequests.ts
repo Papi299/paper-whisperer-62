@@ -71,7 +71,11 @@ export const EVIDENCE_FIELD_RPCS = ["evidence_save_changes", "evidence_review_fi
 export type EvidenceFieldRpc = (typeof EVIDENCE_FIELD_RPCS)[number];
 
 /**
- * The draft PR-A3 limits (Requirements-001 Q11), as the server enforces them.
+ * The PR-A3 limits, as the server enforces them. `supportingPerValue` and
+ * `eventsPerStudy` are kept from PR-A1/PR-A2; the rest are proposed policy
+ * awaiting explicit acceptance at the Production rollout: the earlier Q11
+ * proposal (Requirements-001 L10), plus PR-A3's own assessment and occurrence
+ * limits (docs/evidence-records-field-operations.md §10).
  * Mirrored for early refusal and for messages; the server's answer stands.
  */
 export const EVIDENCE_FIELD_LIMITS = Object.freeze({
