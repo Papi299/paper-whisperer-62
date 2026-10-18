@@ -72,10 +72,11 @@ export type EvidenceFieldRpc = (typeof EVIDENCE_FIELD_RPCS)[number];
 
 /**
  * The PR-A3 limits, as the server enforces them. `supportingPerValue` and
- * `eventsPerStudy` are kept from PR-A1/PR-A2; the rest are proposed policy
- * awaiting explicit acceptance at the Production rollout: the earlier Q11
- * proposal (Requirements-001 L10), plus PR-A3's own assessment and occurrence
- * limits (docs/evidence-records-field-operations.md §10).
+ * `eventsPerStudy` are kept from PR-A1/PR-A2. The Product Owner accepted the
+ * rest for the owner-only MVP at the 2026-10-18 Production rollout: the earlier
+ * Q11 proposal (Requirements-001 L10), plus PR-A3's own assessment and
+ * occurrence limits (docs/evidence-records-field-operations.md §10). Changing
+ * one is a new migration.
  * Mirrored for early refusal and for messages; the server's answer stands.
  */
 export const EVIDENCE_FIELD_LIMITS = Object.freeze({

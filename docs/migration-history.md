@@ -4631,7 +4631,36 @@ Decision **C60**, its 2026-10-10 filter extension. This entry is **release histo
 
 No rollback has been performed. This record holds no research question, result, DOI or account identity.
 
+## 2026-10-16 — EVIDENCE-RECORDS-001A1: study-record database foundation (`20261012031537`) — **APPLIED / PRODUCTION-VERIFIED**
+
+*Recorded on 2026-10-18 by EVIDENCE-RECORDS-001A3-DOCS-RECONCILIATION-001, which closed this file's gap for 001A1, 001A2 and 001B. Sources: GitHub's PR records, the migration files, and the gated push transcripts and read-only verification records kept from each rollout.*
+
+- **Merge.** PR #343 merged on 2026-10-16 at 07:21:54Z as the two-parent `47c7affaa6cb7c0f9ce53bd83b559b7a25cea921` (head `d6e94bcb`).
+- **Migration `20261012031537_add_evidence_records_foundation`.** The eight owner-scoped study-record tables: `evidence_studies`, `evidence_study_reports` (links to papers), `evidence_source_snapshots` (saved abstract copies), `evidence_arms`, `evidence_outcomes`, `evidence_field_values`, `evidence_field_anchors` and `evidence_events`. Each is RLS-forced, owned by `postgres`, SELECT-only for `authenticated` and closed to `anon` and `service_role`, with one owner SELECT policy. Every foreign key carries `user_id`. Three NO ACTION keys protect what a study relies on: a link's paper, and a reference's link and copy. No function, trigger or write path.
+- **Applied — 2026-10-16, 09:36:43–09:36:58 UTC.** One gated `supabase db push`; ledger **100 → 101**; the new row holds 70 statements.
+- **Verified read-only.** The `$verify$` checks passed, except its assertion that the transaction holds SHARE ROW EXCLUSIVE on `auth.users` and `papers`, which only the applying transaction can satisfy; each table carries the ACL, RLS and single policy above and holds no row; 22 foreign keys (19 CASCADE, 3 NO ACTION, none deferrable); every non-evidence catalog fingerprint unchanged. An anonymous request to each of the eight tables was refused (401 / `42501`), so PostgREST had loaded them.
+
+## 2026-10-16 — EVIDENCE-RECORDS-001A2: study-record lifecycle RPCs and the owner-only pilot gate (`20261016104232`) — **APPLIED / PRODUCTION-VERIFIED**
+
+*Recorded on 2026-10-18 with the 001A1 entry above, from the same kinds of source.* The client contract is [evidence-records-lifecycle.md](evidence-records-lifecycle.md).
+
+- **Merge.** PR #344 merged on 2026-10-16 at 16:07:33Z as the two-parent `26b7a141cb812c1d42db1457bdf22c4173f0fbd0` (head `e44c831d`).
+- **Migration `20261016104232_add_evidence_records_lifecycle_rpcs`.** Four SECURITY DEFINER RPCs — `evidence_create_study_from_paper`, `evidence_update_study`, `evidence_set_link`, `evidence_delete_study` — executable by `authenticated` only, and two owner-only SECURITY INVOKER helpers: `evidence_records_assert_writable`, the owner-only pilot gate that create, update and set_link call first, and `evidence_normalize_v1`. Delete is not gated: a study's owner can always delete it. No table, policy or table privilege changed.
+- **Applied — 2026-10-16, 22:17:41–22:17:48 UTC.** One gated `supabase db push`; ledger **101 → 102**; the new row holds 29 statements.
+- **Verified read-only.** The migration's `$verify$` block passed verbatim; the 36 normalization vectors passed through the installed `evidence_normalize_v1`; bodies and comments are byte-identical to the file; only the ledger and function digests moved, and the 43 pre-existing functions are unchanged. The Security Advisor's warnings for SECURITY DEFINER functions callable by signed-in users went from 24 to 28, the four RPCs; the evidence tables still held no row. PostgREST visibility was **not** verified (no request to it was authorized); a new PostgREST connection started right after the commit.
+
+## 2026-10-17 — EVIDENCE-RECORDS-001B: study-record TypeScript domain library — **MERGED; no database change**
+
+*Recorded on 2026-10-18 with the 001A1 entry above.* Release history, not a migration: the ledger stayed at 102. The library is described in [evidence-domain-library.md](evidence-domain-library.md).
+
+- **Merge.** PR #345 merged on 2026-10-17 at 15:00:21Z as the two-parent `aa608890c64fb6d9acf7184d56c675f6fae7d964` (head `1aa2de2b`). No migration, no Edge Function.
+- **What it adds.** `src/lib/evidence/`: the field dictionary and validation contracts, the value and review state rules, match normalization v1 in TypeScript with a parity test against the installed `evidence_normalize_v1` on one shared fixture (pgTAP 032 and Vitest), an advisory quote matcher, and a typed client for the PR-A2 RPCs (PR-A3 later added its three).
+- **Not used by the application.** No application module imports the library, and the bundle deployed from the merge contains none of it.
+- **Decisions.** The Product Owner's decisions 1–5 for PR-A3 were recorded at this merge ([evidence-domain-library.md](evidence-domain-library.md) §11).
+
 ## 2026-10-17 — EVIDENCE-RECORDS-001A3: authoritative field, review and rebase RPCs (`20261017155445`) — **PREPARED in the repository; NOT applied**
+
+> **Superseded on 2026-10-18 by the entry below**, which records the migration applied to Production and its acceptance. This entry is kept as written: it records the state reviewed at PR time. The chronology gap its last bullet names is closed by the 001A1, 001A2 and 001B entries above.
 
 The write path inside a study record. Production is unchanged; applying the migration needs its own authorization ([evidence-records-field-operations.md](evidence-records-field-operations.md) §13).
 
@@ -4639,3 +4668,20 @@ The write path inside a study record. Production is unchanged; applying the migr
 - **Contract.** FK-PROOF-001 §J and the current-copy rule on every reference; server-side quote matching with 0-based half-open code point offsets of the v1-normalized copy; one value per Confirm, with PR-B's block codes; strict re-review on every rebase; the Product Owner's decisions 1–5 of 2026-10-17; proposed limits, each needing explicit acceptance at the Production rollout: the earlier Q11 proposal (Requirements-001 L10), plus two PR-A3 additions that are not Product Owner decisions, 10 assessments per value and 100 enumerated occurrences per quote.
 - **Local evidence.** New pgTAP suite 033; suite 032 runs the shared fixture through `evidence_locate_quote`; inventory suites 003, 007, 015, 021, 030 and 031 updated; a new two-session race probe in the db-tests lifecycle; negative controls of three locks and three rules, each caught and restored.
 - **Chronology gap, not reconciled here.** This file has no record of `20261012031537` (PR-A1) or `20261016104232` (PR-A2), both applied to Production on 2026-10-16, nor of EVIDENCE-RECORDS-001B. Reconciling them is a separate docs-only task.
+
+## 2026-10-18 — EVIDENCE-RECORDS-001A3: field, review and rebase RPCs (`20261017155445`) — **APPLIED / PRODUCTION-VERIFIED**
+
+This entry **supersedes the 2026-10-17 entry above**, which recorded the migration as prepared and not applied. The client contract and the rollout record are [evidence-records-field-operations.md](evidence-records-field-operations.md) §10 and §13.
+
+- **Merge.** PR #346 merged on 2026-10-18 at 06:28:01Z as the two-parent `420beaa6bd60a678718cdadd46b474c2a1851006` (head `91bf71a5`, tree `bdf541ab`). Merged-`main` Validate (`39104130876`), DB Tests (`39104130851`) and Extension (`39104130889`) passed. The automatic Vercel Production deployment `dpl_GaTB4cUQX7mTRCaaTjdJQGJhoX3r` serves `app.paperlume.app`, and its bundle contains no evidence RPC name or library string.
+- **Authorization.** EVIDENCE-RECORDS-001A3-PROD-APPLY-001: one controlled attempt, with the Product Owner's explicit acceptance of the eight resource limits — 20 groups, 50 outcomes and 400 values per study, 20 copies per link, 200 changes and 65,536 bytes per save, 10 assessments per value, 100 enumerated occurrences per quote — and of the operational risks.
+- **Preflight — read-only, 08:29–08:34 UTC.** Ledger 102, the latest `20261016104232`; the pending set computed from it was exactly `20261017155445`; the file's `$ctx$` and `$pre$` blocks passed verbatim; the catalog fingerprint was unchanged since the earlier preflight; no lock, open transaction or maintenance.
+- **Applied — 08:34:38–08:34:47 UTC.** One gated `supabase db push`, no retry. Ledger **102 → 103**; the new row holds 28 statements, each equal to the CLI's split of the approved file (`md5(statements::text)` `baa336d39fd73ba1f95fe71bb2e5bf90`). The functions committed in the file's own transaction and the ledger row in the CLI's insert that follows it, with no interruption. The ACCESS SHARE locks the migration takes on three empty evidence tables (field-operations §13) caused no observed contention.
+- **Verified read-only.**
+  - Twelve evidence functions with exactly the reviewed attributes: three SECURITY DEFINER RPCs (`evidence_save_changes`, `evidence_review_fields`, `evidence_rebase_source`) executable by `authenticated` only, and three owner-only SECURITY INVOKER helpers (`evidence_locate_quote`, `evidence_state_reference_problems`, `evidence_value_digest`). `anon`, `service_role` and PUBLIC execute no evidence function.
+  - The six new bodies and comments are byte-identical to the file, and the migration's `$verify$` block passed verbatim. The shared fixture's 51 matching vectors pass through the installed `evidence_locate_quote`.
+  - Only the ledger and function digests moved: the 49 pre-existing functions are unchanged, and so are every table, column, policy, trigger, index, constraint and relation privilege. The eight evidence tables still hold no row.
+  - The Security Advisor's warnings for SECURITY DEFINER functions callable by signed-in users went from 28 to 31, the three new RPCs; no other advisor finding changed.
+  - PostgREST's logs show a schema-cache reload right after the commit, loading six more functions than before.
+  - Expected side effects only: the CLI's temporary `cli_login_postgres` credential was refreshed; network bans were zero before and after; GitHub `main` and the Vercel alias were unchanged.
+- **Not verified.** No authenticated or HTTP call has exercised the new RPCs in Production, and no study record has been written there. The application does not call them, and there is no Study Record interface; PR-C1 is the next planned phase.

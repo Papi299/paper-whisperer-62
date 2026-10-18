@@ -1,6 +1,6 @@
 # Study records — field, review and rebase RPC contract (EVIDENCE-RECORDS-001A3)
 
-> **Status:** implemented in this repository; **not applied to Production**. Migration `20261017155445_add_evidence_records_field_review_rebase_rpcs.sql` adds the write path for everything inside a study: groups, outcomes, values and their source references, human review, and rebasing a saved abstract copy. Applying it to Production needs a separate authorization (§13). There is no user-facing Study Record interface, and nothing in the application calls these functions; the typed client for them in `src/lib/evidence/` ([evidence-domain-library.md](evidence-domain-library.md) §10) is not used by application code either.
+> **Status:** installed in Production. Migration `20261017155445_add_evidence_records_field_review_rebase_rpcs.sql` (PR #346) was merged and applied to Supabase Production on 2026-10-18, after a read-only preflight, and accepted by read-only verification (§13). It adds the write path for everything inside a study: groups, outcomes, values and their source references, human review, and rebasing a saved abstract copy. There is no user-facing Study Record interface. The repository's typed client for these RPCs in `src/lib/evidence/` ([evidence-domain-library.md](evidence-domain-library.md) §10) is imported by no application code, so the deployed application never calls them. **Installation is not functional acceptance:** no authenticated call to these RPCs has been made in Production.
 
 This document is the client contract. The migration header holds the database-level detail. The executable specification is pgTAP suite `033_evidence_field_review_rebase.test.sql`, section L of suite `032_evidence_normalization_parity.test.sql`, and the db-tests lifecycle's evidence field race probe (`runEvidenceFieldRaceProbe` in `scripts/e2e-local.mjs`). The study lifecycle — create, update, link and delete — is [evidence-records-lifecycle.md](evidence-records-lifecycle.md), and everything there about the pilot gate, request ids and history applies here unchanged.
 
@@ -92,7 +92,7 @@ A broken row is refused with DETAIL `p_changes[i].references: <rules>`, the rule
 - the paper must be linked to this study (`evidence_link_not_found` otherwise);
 - an abstract quote or examined abstract names a copy **of that link** (`evidence_target_not_found` otherwise), and a **new** one names the link's **current** copy — its highest `seq` (`not_current`; 001A §D1 R5). A kept reference may stay on a superseded copy;
 - an unavailable abstract names a link with no copy (`unavailable_abstract_has_copy`);
-- one examined-or-unavailable assessment per paper and source kind (`duplicate_assessment`), and at most 10 per value (`too_many_assessments`, a proposed limit PR-A3 added to bound history, §10);
+- one examined-or-unavailable assessment per paper and source kind (`duplicate_assessment`), and at most 10 per value (`too_many_assessments`, a limit PR-A3 added to bound history, §10);
 - full-text references are locator-only; no full-text text is stored;
 - a Reported value with no supporting reference may be saved — the derived **No source given** (Product Owner decision 3) — and cannot be confirmed.
 
@@ -133,7 +133,7 @@ The five block messages PR-B added are provisional copy, to be refined in the St
 1. The caller sends `p_expected_abstract_sha256`: the lowercase hex SHA-256 of the UTF-8 abstract it displayed. The paper is then read with the owner predicate `FOR SHARE`, so an edit or merge already in flight finishes first and one that starts waits for this commit. A NULL abstract, or one whose hash differs, is `evidence_source_changed_again`: the user reviews the abstract again before saving it.
 2. An abstract over 50,000 characters is `evidence_abstract_too_long`; one that is empty after v1 is `22023` with DETAIL `p_expected_abstract_sha256: source_empty`.
 3. The same text as the current copy, byte for byte, is `unchanged`.
-4. At most 20 copies per link (`evidence_snapshot_limit`, a proposed limit, §10). A new copy, `seq` n + 1, is inserted with both fingerprints; no copy is ever updated or removed.
+4. At most 20 copies per link (`evidence_snapshot_limit`, §10). A new copy, `seq` n + 1, is inserted with both fingerprints; no copy is ever updated or removed.
 5. Each abstract quote on the previous current copy is located in the new one. Exactly one occurrence re-points it (`anchor_rematched`); none, several or more than the cap leave it on its earlier copy (`anchor_not_rematched`, with the reason). Examined abstracts are never re-pointed. The order is deterministic.
 6. **Strict re-review (001A §E5, PD-6).** Every value with any abstract reference on that link that was Reviewed by you, Flagged or Needs re-review is **Needs re-review** (`source_changed`) afterwards — **even if every quote was found again**. Not-reviewed values stay Not reviewed. A first capture moves values holding an "abstract unavailable" reference on that link the same way (FK-PROOF-001 §J). `value_version` increments wherever a reference moved or the status changed.
 
@@ -146,7 +146,7 @@ REQUIREMENTS-001 §I4 with the Product Owner's offset convention:
 - The search compares UTF-8 bytes. UTF-8 is prefix-free and a continuation byte never starts a character, so a byte match is exactly a code point match.
 - **Offsets** are 0-based, half-open `[start, end)` code point offsets of the v1-normalized copy — PostgreSQL character positions.
 - A quote is invalid when it has fewer than 3 or more than 1,000 characters as stored or once normalized, or contains **no letter or digit**: `[[:alnum:]]` under the builtin `pg_c_utf8` collation — Unicode Alphabetic, or an ASCII digit — whatever the database's own collation provider is. A digit of another script is not one; a letter number (a Roman numeral) is.
-- At most 100 occurrences are enumerated (a proposed limit PR-A3 added, §10); beyond that the status is `too_many`, with no count and no offsets.
+- At most 100 occurrences are enumerated (a limit PR-A3 added, §10); beyond that the status is `too_many`, with no count and no offsets.
 - Statuses are `invalid` (with problems `quote_missing`, `quote_too_short`, `quote_too_long`, `normalized_too_short`, `normalized_too_long`, `no_letter_or_digit`, in that order), `not_found`, `unique`, `multiple` and `too_many`.
 
 The TypeScript `locateQuote` applies the same rules and is advisory. Suite 032 runs every matching vector of the shared fixture through both, offsets included; the vectors' expected values were derived outside both implementations.
@@ -212,22 +212,28 @@ Groups and outcomes are recorded with their labels, as PR-A2 records the study l
 
 ## 10. Limits
 
-The limits PR-A3 introduces are **proposed policy**. This migration enforces them, but none is a Product Owner decision, Q11 is still open, and each needs explicit acceptance as part of an authorized Production rollout (§13).
+The Product Owner accepted all eight limits PR-A3 introduces, for the owner-only MVP, as part of authorizing the Production migration on 2026-10-18 (§13). They are enforced in Production. The limits PR-A1 and PR-A2 set are unchanged.
 
-| Limit | Value | Status |
+| Limit | Value | Origin |
 |---|---|---|
 | History events per study | 5,000 | kept: in Production since PR-A2 |
 | Supporting references per value | 3 | kept: in Production since PR-A1 (CHECK) |
 | Abstract length | 50,000 characters | kept: in Production since PR-A1 (CHECK) and PR-A2 |
-| Groups / outcomes / values per study | 20 / 50 / 400 | **proposed**: the earlier Q11 proposal |
-| Copies per study–report link | 20 | **proposed**: the earlier Q11 proposal |
-| Changes / bytes per save | 200 / 65,536 | **proposed**: the earlier Q11 proposal |
-| Assessments per value | 10 | **proposed**: added by PR-A3 |
-| Occurrences enumerated per quote | 100 | **proposed**: added by PR-A3 |
+| Groups / outcomes / values per study | 20 / 50 / 400 | the earlier Q11 proposal, accepted |
+| Copies per study–report link | 20 | the earlier Q11 proposal, accepted |
+| Changes / bytes per save | 200 / 65,536 | the earlier Q11 proposal, accepted |
+| Assessments per value | 10 | added by PR-A3, accepted |
+| Occurrences enumerated per quote | 100 | added by PR-A3, accepted |
 
-- **The earlier Q11 proposal** is Requirements-001 L10, as amended by 001A §L ("per study–report link: 20 copies" in place of "per paper: 20 snapshots"). It is Q11's recommended default, and Q11 has not been decided. PR-A3 enforces its per-study, per-link and per-call counts as listed. Its other entries were already enforced by PR-A1/PR-A2 and are unchanged here: 2,000 studies per user, 5,000 events per study, and 3 sources per value (PR-A1's cap of 3 supporting references).
-- **The two additions are PR-A3's own.** L10 sets no bound on a value's examined-or-unavailable assessments, nor on how many occurrences of a quote are enumerated. PR-A3 caps assessments at 10 per value, to bound a value's history digest, and enumerated occurrences at 100 per quote, to bound the work and the answer of one match. They are engineering proposals, not Product Owner decisions.
-- **Acceptance and change.** Each proposed value is accepted, or changed, explicitly at the Production rollout. Until this migration is applied anywhere, a change amends it; after that, a change is a new migration.
+- **The earlier Q11 proposal** is Requirements-001 L10, as amended by 001A §L ("per study–report link: 20 copies" in place of "per paper: 20 snapshots"). It was Q11's recommended default, and the Product Owner accepted it at the Production rollout. PR-A3 enforces its per-study, per-link and per-call counts as listed. Its other entries were already enforced by PR-A1/PR-A2 and are unchanged: 2,000 studies per user, 5,000 events per study, and 3 sources per value (PR-A1's cap of 3 supporting references).
+- **The two additions are PR-A3's own.** L10 sets no bound on a value's examined-or-unavailable assessments, nor on how many occurrences of a quote are enumerated. PR-A3 caps assessments at 10 per value, to bound a value's history digest, and enumerated occurrences at 100 per quote, to bound the work and the answer of one match. Both began as engineering proposals; the Product Owner accepted them with the rest.
+- **What they refuse.** The limits can refuse an unusually large but legitimate study record:
+  - 400 values is deliberately below the theoretical maximum of 420 field positions, which needs 20 groups, all comparators, and 50 outcomes, with every field filled.
+  - A link's 20th copy is its last: after it, "Use current abstract" is refused on that link and work continues on the current copy.
+  - A large edit is split into several saves, each of at most 200 changes and 65,536 bytes.
+  - A quote found more than 100 times in its copy is refused on save as `evidence_quote_ambiguous` (§3.5), and a rebase leaves it on its earlier copy (§5); a longer quote resolves it.
+  - The kept 5,000-event history limit can bind first on a very large study that is rebased and re-reviewed repeatedly (§12).
+- **Changing a limit** is a new reviewed migration that replaces the function enforcing it, with its own Production authorization. Actual study sizes and limit refusals should be monitored during the pilot.
 
 ## 11. Client privilege model
 
@@ -242,23 +248,29 @@ The limits PR-A3 introduces are **proposed policy**. This migration enforces the
 - No UI, and no application caller (PR-C1/C2).
 - No RPC adds a link: a study's further reports are planted only by the owner in tests. Linking further reports belongs to a later phase.
 - Full-text references are locator-only; non-library sources are deferred (001A PD-3, PD-4).
-- The proposed limits (§10) need explicit acceptance at the Production rollout; Q11 is still open.
+- The accepted limits (§10) can refuse an unusually large but legitimate study record; changing one is a new migration.
+- Installed, not functionally accepted: no authenticated call has exercised these RPCs in Production (§13).
 - "Letter or digit" and NFC follow PostgreSQL 17's built-in Unicode 15.1 tables. A browser's newer Unicode version can disagree on characters assigned since; the server's answer stands.
 - Strict re-review resets every review that depends on a link's abstract on every rebase, including typographic-only changes. That is the accepted 001A §E5 rule, not a defect.
 - A rebase writes one event per re-checked quote and per changed value. On a study near 5,000 events it can be refused by the history limit; delete still works.
 - A request id is remembered only while its study exists (lifecycle §5).
 - The generated types list `p_note` as non-null; `src/lib/evidence/fieldRequests.ts` widens only that argument.
 
-## 13. Production migration prerequisites
+## 13. Production rollout record
 
-Applying `20261017155445` to Production is **not** authorized by EVIDENCE-RECORDS-001A3. Before an authorized application:
+`20261017155445` was **applied to Production on 2026-10-18** under a separate Product Owner authorization (EVIDENCE-RECORDS-001A3-PROD-APPLY-001), which also accepted the §10 limits. The identities and the evidence are in [migration-history.md](migration-history.md).
 
-- **Dependencies.** PR-A1 (`20261012031537`) and PR-A2 (`20261016104232`) applied, and nothing in between. The file's `$pre$` block checks and refuses otherwise: UTF-8 encoding; an applying role that holds BYPASSRLS; exactly PR-A2's six evidence functions with their reviewed bodies (pinned `md5(prosrc)`) and the helpers' attributes; `get_current_user_access()` and `auth.uid()`; the eight tables with PR-A1's CHECK and UNIQUE constraints (pinned digest); the request-header unique index; the `pg_c_utf8` collation.
-- **The proposed limits (§10)** are accepted, or changed, explicitly as part of that authorization. Neither EVIDENCE-RECORDS-001A3 nor its review accepted them.
-- **A read-only preflight first**, as for 001A1/001A2: the pending-migration plan computed against the ledger, the `$pre$` conditions, and a catalog fingerprint to compare after. A `supabase db push --dry-run` is not side-effect-free (it mints a login role), so the plan is computed instead.
-- **The apply.** The file is one explicit transaction and its `$verify$` block fails closed. It creates functions, grants and comments only, and takes no lock on any user table. As with PR-A1/PR-A2, the CLI's ledger insert runs after the file's own `COMMIT`; a connection lost between the two leaves the functions installed with no ledger row, which needs a separately authorized `migration repair`.
-- **After.** Read-only catalog verification: the six functions, their attributes, owners, ACLs and bodies; the table privileges unchanged. An authenticated smoke test is a separate authorization.
-- Nothing in the application calls these RPCs, so applying them changes no user-facing behaviour.
+- **Preconditions, checked read-only first.** The pending set computed from the live ledger was exactly this version: PR-A1 (`20261012031537`) and PR-A2 (`20261016104232`) applied, and nothing in between. The file's own `$ctx$` and `$pre$` blocks, re-run verbatim in a read-only transaction, passed. They require UTF-8 encoding; an applying role that holds BYPASSRLS; exactly PR-A2's six evidence functions with their reviewed bodies (pinned `md5(prosrc)`) and the helpers' attributes; `get_current_user_access()` and `auth.uid()`; the eight tables with PR-A1's CHECK and UNIQUE constraints (pinned digest); the request-header unique index; the `pg_c_utf8` collation. A catalog fingerprint was taken to compare after. `supabase db push --dry-run` was not used: it is not side-effect-free (it mints a login role).
+- **The apply.** One gated `supabase db push`, 08:34:38–08:34:47 UTC. The file is one explicit transaction whose `$verify$` block fails closed; it created the six functions, their grants and their comments. The ledger records `20261017155445` with its 28 statements and holds 103 migrations. As with PR-A1/PR-A2, the CLI's ledger insert ran after the file's own `COMMIT`; there was no interruption between the two.
+- **Locks.** Creating `evidence_value_digest`, a SQL-language function whose body is checked at creation, takes ACCESS SHARE on `evidence_field_values`, `evidence_field_anchors` and `evidence_source_snapshots` until the commit, besides catalog locks (measured on a local replica of this migration). ACCESS SHARE conflicts only with ACCESS EXCLUSIVE; no table was rewritten and no application row was written. No relevant contention was observed: the database was quiet just before the apply, the apply hit no lock timeout, and the deadlock counter stayed at zero.
+- **Verified read-only afterwards.**
+  - The twelve evidence functions carry exactly the attributes `$verify$` expects, and the six new bodies and comments are byte-identical to the file.
+  - `authenticated` executes exactly the seven RPCs; `anon`, `service_role` and PUBLIC execute none.
+  - The migration's `$verify$` block, re-run verbatim, passed, and the shared fixture's 51 matching vectors pass through the installed `evidence_locate_quote`.
+  - Table privileges, RLS, policies, constraints and indexes are unchanged, and the eight tables still hold no row.
+  - The Security Advisor's warnings for SECURITY DEFINER functions callable by signed-in users went from 28 to 31, the three new RPCs; no other advisor finding changed.
+  - PostgREST's logs show a schema-cache reload right after the commit.
+- **Not yet verified.** No authenticated call has exercised these RPCs in Production, and no study record exists there: installation and catalog integrity are verified, the RPCs' behaviour in Production is not. An authenticated functional acceptance needs its own authorization. Nothing in the application calls these RPCs, so the migration changed no user-facing behaviour.
 
 ## 14. Rollback
 
