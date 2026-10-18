@@ -57,10 +57,11 @@
 -- fingerprint is SHA-256 over the UTF-8 text of a jsonb object holding the
 -- operation and every argument except the request id.
 --
--- evidence_save_changes — p_changes, a JSON array of at most 200 changes and at
--- most 65,536 bytes of jsonb text (draft PR-A3 limits). Every key listed for an
--- operation is required (JSON null where the operation allows it); any other
--- key is refused, and a key the server computes is refused as forged:
+-- evidence_save_changes — p_changes, a JSON array of 1 to 200 changes and at
+-- most 65,536 bytes of jsonb text (proposed PR-A3 limits); an empty array is
+-- refused with DETAIL "p_changes: empty". Every key listed for an operation is
+-- required (JSON null where the operation allows it); any other key is
+-- refused, and a key the server computes is refused as forged:
 --   {op:"add_arm",    ref, arm_role, display_label, position}
 --   {op:"update_arm", arm_id, arm_role, display_label, position}
 --   {op:"remove_arm", arm_id}
@@ -200,14 +201,18 @@
 --           review_needs_rereview (before/after digests), source_rebased
 -- review_reset is not emitted: value_saved records the review it cleared.
 --
--- LIMITS — existing limits are kept; new ones are draft PR-A3 policy (Q11)
+-- LIMITS — existing limits are kept; new ones are proposed policy, each to be
+-- accepted explicitly at the Production rollout (Q11 is still open)
 -- ─────────────────────────────────────────────────────────────────────────────
---   kept     5,000 events per study (evidence_history_limit); 3 supporting
---            references per value (CHECK); 50,000-character abstracts
---   draft    20 groups, 50 outcomes, 400 values per study (evidence_arm_limit,
---            evidence_outcome_limit, evidence_value_limit); 20 copies per link
---            (evidence_snapshot_limit); 200 changes and 65,536 bytes per save;
---            10 assessments per value; 100 occurrences per quote
+--   kept      5,000 events per study (evidence_history_limit); 3 supporting
+--             references per value (CHECK); 50,000-character abstracts
+--   proposed  the earlier Q11 proposal (Requirements-001 L10, as amended by
+--             001A §L): 20 groups, 50 outcomes, 400 values per study
+--             (evidence_arm_limit, evidence_outcome_limit, evidence_value_limit);
+--             20 copies per link (evidence_snapshot_limit); 200 changes and
+--             65,536 bytes per save
+--   proposed  added by PR-A3, not part of that proposal: 10 assessments per
+--             value; 100 enumerated occurrences per quote
 -- Every count is checked on the final state of the batch, under the study row
 -- lock, so neither a large batch nor concurrent requests can pass a limit.
 --
@@ -791,6 +796,9 @@ BEGIN
     RAISE EXCEPTION 'evidence_invalid_input' USING ERRCODE = 'invalid_parameter_value', DETAIL = 'p_changes: too_large';
   END IF;
   v_n := jsonb_array_length(p_changes);
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'evidence_invalid_input' USING ERRCODE = 'invalid_parameter_value', DETAIL = 'p_changes: empty';
+  END IF;
   IF v_n > 200 THEN
     RAISE EXCEPTION 'evidence_invalid_input' USING ERRCODE = 'invalid_parameter_value', DETAIL = 'p_changes: too_many_changes';
   END IF;

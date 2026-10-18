@@ -19,8 +19,9 @@
 --   D. values — every field key in its scope, every shape and bound, every
 --      state, the PO blank rule (v1-empty), lists never rewritten, FK-PROOF-001
 --      §J through the RPC, the per-row matrix, forged and unknown keys, the
---      current-copy rule, server quote matching, no-ops, value versions, the
---      review reset, kept references, clearing, history digests;
+--      current-copy rule, server quote matching, no-ops, the refused empty
+--      batch, value versions, the review reset, kept references, clearing,
+--      history digests;
 --   E. review — Confirm and Flag of one value at one version, every reachable
 --      block reason in PR-B's order, the already-reviewed no-op, notes, PO
 --      decisions 1-3, no bulk parameter;
@@ -467,7 +468,7 @@ SELECT pg_temp.plant_copy('0336a004-0000-0000-0000-000000000002', pg_temp.u('O')
                           'Second report, revised: participants were followed for 6 months.');
 SELECT pg_temp.plant_link(pg_temp.u('O'), pg_temp.sid('s1'), pg_temp.p(x)) FROM unnest(ARRAY['PE1', 'PE2', 'PE3', 'PE4', 'PE5']) x;
 
-SELECT plan(456);
+SELECT plan(469);
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- A. The function contract
@@ -1330,10 +1331,70 @@ FROM (VALUES
   ('expected version 0',      pg_temp.q_save(pg_temp.sid('s1'), 0, '[]'::jsonb, pg_temp.rq(110)),           'ERR 22023 evidence_invalid_input [p_expected_version]'),
   ('NULL changes',            pg_temp.q_save(pg_temp.sid('s1'), 1, NULL, pg_temp.rq(110)),                  'ERR 22023 evidence_invalid_input [p_changes]'),
   ('changes as an object',    pg_temp.q_save(pg_temp.sid('s1'), 1, '{"op": "add_arm"}'::jsonb, pg_temp.rq(110)), 'ERR 22023 evidence_invalid_input [p_changes]'),
-  ('a NULL request id',       pg_temp.q_save(pg_temp.sid('s1'), 1, '[]'::jsonb, NULL),                      'ERR 22023 evidence_invalid_input [p_request_id]'),
+  ('a NULL request id',       pg_temp.q_save(pg_temp.sid('s1'), 1, jsonb_build_array(pg_temp.add_out('late', 'Weight', 9)), NULL), 'ERR 22023 evidence_invalid_input [p_request_id]'),
   ('a stale study version',   pg_temp.q_save(pg_temp.sid('s1'), 1, jsonb_build_array(pg_temp.add_out('late', 'Weight', 9)), pg_temp.rq(110)), 'ERR P0001 evidence_version_conflict')
 ) AS f(nm, q, expected);
-SELECT is(pg_temp.status(pg_temp.save('O', pg_temp.sid('s1'), '[]'::jsonb, 111)), 'unchanged', 'D17 an empty batch changes nothing');
+
+-- D17 — a batch holds 1 to 200 changes. An empty one is refused before any
+-- table is read or locked, so it writes nothing, creates no request header and
+-- consumes no request id. A batch of no-ops is not empty: it answers unchanged.
+SELECT pg_temp.keep('v_d17', pg_temp.ver(pg_temp.sid('s1'))::text);
+SELECT pg_temp.keep('dig_d17', pg_temp.digest(pg_temp.u('O')));
+SELECT is(pg_temp.call('authenticated', pg_temp.claims('O'), f.q), 'ERR 22023 evidence_invalid_input [p_changes: empty]',
+  'D17 an empty batch is refused ' || f.nm)
+FROM (VALUES
+  ('at the current version',     pg_temp.q_save(pg_temp.sid('s1'), pg_temp.kept('v_d17')::int, '[]'::jsonb, pg_temp.rq(111))),
+  ('at a stale version',         pg_temp.q_save(pg_temp.sid('s1'), 1, '[]'::jsonb, pg_temp.rq(111))),
+  ('for an unknown study',       pg_temp.q_save(pg_temp.s('unknown'), 1, '[]'::jsonb, pg_temp.rq(111))),
+  ('with a committed request id', pg_temp.q_save(pg_temp.sid('s1'), pg_temp.kept('v_d17')::int, '[]'::jsonb, pg_temp.rq(108)))
+) AS f(nm, q);
+SELECT pg_temp.keep('d17_noop', jsonb_build_array(
+    (SELECT pg_temp.upd_arm(a.id, a.arm_role, a.display_label, a.position) FROM public.evidence_arms a WHERE a.id = pg_temp.kept('arm_met')::uuid),
+    (SELECT pg_temp.upd_out(o.id, o.display_label, o.position) FROM public.evidence_outcomes o WHERE o.id = pg_temp.kept('out_hba1c')::uuid),
+    pg_temp.rv(pg_temp.st(), 'demographics', pg_temp.vv(pg_temp.vid(pg_temp.sid('s1'), 'demographics')), pg_temp.txt('Mean age 58.2'),
+      (SELECT jsonb_agg(pg_temp.kp(a.id) ORDER BY a.position) FROM public.evidence_field_anchors a
+        WHERE a.value_id = pg_temp.vid(pg_temp.sid('s1'), 'demographics'))))::text);
+SELECT is(pg_temp.save('O', pg_temp.sid('s1'), jsonb_build_array(pg_temp.kept('d17_noop')::jsonb -> 2), 112),
+  jsonb_build_object('status', 'unchanged', 'study_id', pg_temp.sid('s1'), 'study_version', pg_temp.kept('v_d17')::int,
+                     'arm_ids', '{}'::jsonb, 'outcome_ids', '{}'::jsonb)::text,
+  'D17 a batch of one unchanged change is not empty: unchanged, at the current version');
+SELECT is(pg_temp.status(pg_temp.save('O', pg_temp.sid('s1'), pg_temp.kept('d17_noop')::jsonb, 113)), 'unchanged',
+  'D17 nor is a batch of unchanged changes of every kind: a group, an outcome and a value');
+SELECT is(pg_temp.digest(pg_temp.u('O')) || ' ' || pg_temp.ver(pg_temp.sid('s1')),
+  pg_temp.kept('dig_d17') || ' ' || pg_temp.kept('v_d17'),
+  'D17 none of these calls wrote anything: the owner''s rows, history and study version are as they were');
+SELECT is((SELECT count(*)::int FROM public.evidence_events WHERE request_id IN (pg_temp.rq(111), pg_temp.rq(112), pg_temp.rq(113))), 0,
+  'D17 and no request header exists for any of their ids');
+
+-- The refused id is still free: it carries a batch mixing those no-ops with
+-- one real change, of which only the real change is written. Afterwards an
+-- empty batch on that id is still refused, neither replayed nor reused, and
+-- the batch itself replays its original answer.
+SELECT pg_temp.keep('d17_rows',
+  (SELECT a::text FROM public.evidence_arms a WHERE a.id = pg_temp.kept('arm_met')::uuid) || ' '
+  || (SELECT o::text FROM public.evidence_outcomes o WHERE o.id = pg_temp.kept('out_hba1c')::uuid) || ' '
+  || (SELECT v::text FROM public.evidence_field_values v WHERE v.id = pg_temp.vid(pg_temp.sid('s1'), 'demographics')));
+SELECT pg_temp.keep('d17_mixed', (pg_temp.kept('d17_noop')::jsonb || jsonb_build_array(pg_temp.add_out('d17', 'Waist circumference', 11)))::text);
+SELECT is(pg_temp.status(pg_temp.run('d17', 'authenticated', pg_temp.claims('O'),
+    pg_temp.q_save(pg_temp.sid('s1'), pg_temp.kept('v_d17')::int, pg_temp.kept('d17_mixed')::jsonb, pg_temp.rq(111)))),
+  'applied', 'D17 the refused request id then carries a mixed batch: applied');
+SELECT is((SELECT string_agg(e.event_type || ':' || coalesce(e.field_key, '-'), ',' ORDER BY e.ordinal) FROM public.evidence_events e WHERE e.request_id = pg_temp.rq(111))
+          || ' ' || pg_temp.ver(pg_temp.sid('s1')),
+  'request:-,outcome_added:- ' || (pg_temp.kept('v_d17')::int + 1),
+  'D17 one new version, one header and one event: only the real change is recorded');
+SELECT is(
+  (SELECT a::text FROM public.evidence_arms a WHERE a.id = pg_temp.kept('arm_met')::uuid) || ' '
+  || (SELECT o::text FROM public.evidence_outcomes o WHERE o.id = pg_temp.kept('out_hba1c')::uuid) || ' '
+  || (SELECT v::text FROM public.evidence_field_values v WHERE v.id = pg_temp.vid(pg_temp.sid('s1'), 'demographics')),
+  pg_temp.kept('d17_rows'), 'D17 and the group, outcome and value it left unchanged are untouched');
+SELECT pg_temp.keep('dig_d17b', pg_temp.digest(pg_temp.u('O')));
+SELECT is(pg_temp.call('authenticated', pg_temp.claims('O'),
+    pg_temp.q_save(pg_temp.sid('s1'), pg_temp.kept('v_d17')::int, '[]'::jsonb, pg_temp.rq(111))),
+  'ERR 22023 evidence_invalid_input [p_changes: empty]', 'D17 an empty batch on that id, now committed, is still refused');
+SELECT is(pg_temp.call('authenticated', pg_temp.claims('O'),
+    pg_temp.q_save(pg_temp.sid('s1'), pg_temp.kept('v_d17')::int, pg_temp.kept('d17_mixed')::jsonb, pg_temp.rq(111))),
+  (pg_temp.j('d17') || '{"status": "replayed"}')::text, 'D17 and the batch itself still replays its original answer');
+SELECT is(pg_temp.digest(pg_temp.u('O')), pg_temp.kept('dig_d17b'), 'D17 neither the refusal nor the replay wrote anything');
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- E. Review

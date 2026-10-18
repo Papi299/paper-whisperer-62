@@ -211,6 +211,11 @@ describe("the fixed PR-A3 refusals (EVIDENCE-RECORDS-001A3)", () => {
       rules: ["too_many_supporting", "basis_required"],
     });
     expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_changes: too_large"), 400, SAVE).detail).toEqual({ parameter: "changes", path: [], rules: ["too_large"] });
+    expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_changes: empty"), 400, SAVE)).toMatchObject({
+      kind: "invalid_input",
+      field: "changes",
+      detail: { parameter: "changes", path: [], rules: ["empty"] },
+    });
     expect(classifyLifecycleError(pg("22023", "evidence_invalid_input", "p_expected_abstract_sha256: source_empty"), 400, "evidence_rebase_source")).toMatchObject({
       field: "expectedAbstractSha256",
       detail: { rules: ["source_empty"] },
