@@ -13,8 +13,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useStudyRecordCreationStore } from "@/hooks/useStudyRecordCreations";
 import { usePaperStudyRecords, useStudyRecordWriteAccess } from "@/hooks/useStudyRecords";
 import { canOfferStudyRecordWrites, type StudyRecordWriteAccess } from "@/lib/studyRecord/access";
+import type { PendingCreateStore } from "@/lib/studyRecord/pendingCreates";
 import { StudyRecordList } from "./StudyRecordList";
 import { StudyRecordStart } from "./StudyRecordStart";
 import { StudyRecordEditor } from "./StudyRecordEditor";
@@ -50,7 +52,11 @@ export interface StudyRecordDialogProps {
  * screen on a phone.
  *
  * Closing with unsaved changes asks first. Nothing is kept after it closes:
- * no draft survives in memory or in browser storage.
+ * no draft survives in memory or in browser storage. The one exception is a
+ * create whose outcome is unknown (C1-R1): this component keeps it, in memory
+ * and for the signed-in user only, across openings — so that reopening the
+ * paper retries that same request instead of offering a new one. Leaving
+ * while such an attempt is open is allowed, and says so.
  */
 export function StudyRecordDialog({ target, userId, onClose }: StudyRecordDialogProps) {
   const open = target !== null && !!userId;
@@ -59,11 +65,21 @@ export function StudyRecordDialog({ target, userId, onClose }: StudyRecordDialog
   if (target !== null && target !== shown) setShown(target);
   const session = target ?? shown;
 
+  const { toast } = useToast();
+  const creations = useStudyRecordCreationStore(userId);
   const [dirty, setDirty] = useState(false);
   // Where the user asked to go while the draft had unsaved changes: closing,
   // or another view of this paper's studies. It happens only once they discard.
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+
+  const paperId = session?.paperId ?? null;
+  const close = useCallback(() => {
+    if (userId && paperId && creations.get(userId, paperId)) {
+      toast({ title: STUDY_RECORD_COPY.unconfirmedTitle, description: STUDY_RECORD_COPY.unconfirmedBody });
+    }
+    onClose();
+  }, [creations, onClose, paperId, toast, userId]);
 
   const requestLeave = useCallback(
     (leave: () => void) => {
@@ -72,7 +88,7 @@ export function StudyRecordDialog({ target, userId, onClose }: StudyRecordDialog
     },
     [dirty],
   );
-  const requestClose = useCallback(() => requestLeave(onClose), [requestLeave, onClose]);
+  const requestClose = useCallback(() => requestLeave(close), [requestLeave, close]);
 
   const discard = useCallback(() => {
     const leave = pendingLeave;
@@ -102,8 +118,9 @@ export function StudyRecordDialog({ target, userId, onClose }: StudyRecordDialog
             key={session.session}
             target={session}
             userId={userId}
+            creations={creations}
             titleRef={titleRef}
-            onClose={onClose}
+            onClose={close}
             onRequestClose={requestClose}
             onRequestLeave={requestLeave}
             onDirtyChange={setDirty}
@@ -131,6 +148,7 @@ export function StudyRecordDialog({ target, userId, onClose }: StudyRecordDialog
 interface StudyRecordBodyProps {
   readonly target: StudyRecordTarget;
   readonly userId: string;
+  readonly creations: PendingCreateStore;
   readonly titleRef: React.RefObject<HTMLHeadingElement>;
   readonly onClose: () => void;
   readonly onRequestClose: () => void;
@@ -140,12 +158,17 @@ interface StudyRecordBodyProps {
 }
 
 /** One opening of the dialog. Keyed by the session, so its state never carries over. */
-function StudyRecordBody({ target, userId, titleRef, onClose, onRequestClose, onRequestLeave, onDirtyChange }: StudyRecordBodyProps) {
+function StudyRecordBody({ target, userId, creations, titleRef, onClose, onRequestClose, onRequestLeave, onDirtyChange }: StudyRecordBodyProps) {
   const { toast } = useToast();
   const access = useStudyRecordWriteAccess(userId);
   const canWrite = canOfferStudyRecordWrites(access);
-  const [view, setView] = useState<View>(target.studyId ? { kind: "study", studyId: target.studyId } : { kind: "auto" });
-  const studies = usePaperStudyRecords(userId, target.paperId, true);
+  // A paper whose earlier create is unresolved opens on that attempt's recovery (C1-R1).
+  const [view, setView] = useState<View>(() =>
+    target.studyId ? { kind: "study", studyId: target.studyId } : creations.get(userId, target.paperId) ? { kind: "start" } : { kind: "auto" },
+  );
+  // Read afresh on every opening: a cached "none" may predate a create that committed.
+  const studies = usePaperStudyRecords(userId, target.paperId, true, { freshOnMount: true });
+  const freshStudies = studies.isFetchedAfterMount && studies.isSuccess ? studies.data : null;
 
   const show = useCallback(
     (next: View) => {
@@ -157,11 +180,12 @@ function StudyRecordBody({ target, userId, titleRef, onClose, onRequestClose, on
     [onDirtyChange, titleRef],
   );
 
-  // "auto" resolves once, from the first answer, and is then pinned: a later
-  // refetch of the paper's studies must never swap the view under an open
-  // editor — that would unmount a draft without asking.
-  const resolvedCount = view.kind === "auto" && studies.data ? studies.data.length : null;
-  const onlyStudy = resolvedCount === 1 ? studies.data![0].studyId : null;
+  // "auto" resolves once, from this opening's own read of the server (never
+  // from a cached list), and is then pinned: a later refetch of the paper's
+  // studies must never swap the view under an open editor — that would
+  // unmount a draft without asking.
+  const resolvedCount = view.kind === "auto" && freshStudies && !studies.isFetching ? freshStudies.length : null;
+  const onlyStudy = resolvedCount === 1 ? freshStudies![0].studyId : null;
   useEffect(() => {
     if (resolvedCount === null) return;
     setView(resolvedCount === 1 && onlyStudy ? { kind: "study", studyId: onlyStudy } : resolvedCount === 0 ? { kind: "start" } : { kind: "list" });
@@ -205,6 +229,10 @@ function StudyRecordBody({ target, userId, titleRef, onClose, onRequestClose, on
         paperTitle={target.paperTitle}
         labelSuggestion={target.labelSuggestion}
         access={access}
+        creations={creations}
+        existing={freshStudies}
+        existingFailed={studies.isError}
+        onRefreshExisting={studies.refetch}
         titleRef={titleRef}
         onCreated={(studyId) => show({ kind: "study", studyId })}
         onCancel={(studies.data?.length ?? 0) > 0 ? () => show({ kind: "list" }) : onClose}
@@ -213,7 +241,8 @@ function StudyRecordBody({ target, userId, titleRef, onClose, onRequestClose, on
     );
   }
 
-  if (studies.isPending || (studies.isFetching && !studies.data)) {
+  // Until this opening's read answers, a cached list is not shown as the paper's studies.
+  if (!studies.isError && (studies.isPending || view.kind === "auto" || (studies.isFetching && !studies.data))) {
     return (
       <StatusFrame title={STUDY_RECORD_COPY.listTitle(target.paperTitle)} titleRef={titleRef}>
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -237,10 +266,6 @@ function StudyRecordBody({ target, userId, titleRef, onClose, onRequestClose, on
   }
 
   const list = studies.data;
-  if (view.kind === "auto") {
-    // Resolved once (see the effect above); until that commits, show nothing new.
-    return null;
-  }
   return (
     <StudyRecordList
       paperTitle={target.paperTitle}

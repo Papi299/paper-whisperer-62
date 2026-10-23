@@ -39,6 +39,28 @@ export const STUDY_RECORD_COPY = {
   noRecordCreated: "No study record created.",
   notAvailable: "Study records aren't available for your account yet.",
   accessUnknown: "Couldn't check whether your account can create study records. Close this and try again.",
+  // Before creating: what the paper already has, read afresh (C1-R1)
+  existingChecking: "Checking this paper's study records…",
+  existingFailed: "Couldn't check this paper's study records, so a new one can't be created yet.",
+  existingNotice: (labels: readonly string[]) =>
+    `This paper already has ${labels.length === 1 ? "1 study record" : `${labels.length} study records`}: ${labels.join("; ")}. Create another only if the paper reports a separate study.`,
+  // A create whose outcome is unknown (C1-R1)
+  recoveryHeading: "An earlier attempt to create a study record didn't finish",
+  recoveryBody:
+    "PaperLume hasn't confirmed whether this study record was created — it might already exist. Trying again sends the same request, so it can't be created twice: if it was created, you'll get that record; if not, it's created now.",
+  recoveryName: "Study name",
+  recoveryFamily: "Kind of study",
+  recoveryOriginal: "Reports an original study",
+  recoveryWaiting: "Waiting for an answer to the earlier attempt…",
+  recoveryCheck: "Check this paper's study records",
+  recoveryCheckNone:
+    "This paper has no study records yet. That doesn't show the earlier attempt failed — its answer may still be on the way. Try again to find out.",
+  recoveryCheckSome: (labels: readonly string[]) =>
+    `This paper has ${labels.length === 1 ? "1 study record" : `${labels.length} study records`}: ${labels.join("; ")}. If one of them is the record you were creating, Try again opens it — it won't be created twice.`,
+  recoveryCheckFailed: "Couldn't check this paper's study records. Try again in a moment.",
+  unconfirmedTitle: "This study record isn't confirmed yet",
+  unconfirmedBody:
+    "PaperLume hasn't confirmed whether it was created. Open this paper's study records again to finish — trying again won't create it twice.",
   noRecordForPaper: "There's no study record for this paper.",
   addAnotherStudy: "Add another study from this paper",
   addAnotherHelp: "One paper can report more than one study. Each study gets its own record and its own copy of the abstract.",

@@ -26,13 +26,24 @@ export function useStudyRecordWriteAccess(userId: string | null | undefined): St
   return studyRecordWriteAccess(useCurrentUserAccess(userId));
 }
 
-/** The studies `paperId` reports, while `enabled`. */
-export function usePaperStudyRecords(userId: string | null | undefined, paperId: string | null | undefined, enabled: boolean) {
+/**
+ * The studies `paperId` reports, while `enabled`. With `freshOnMount`, every
+ * mount reads the server again however recent the cached list is — what the
+ * Study Record dialog needs before it offers to create a record (C1-R1): a
+ * cached "none" may predate a create that committed.
+ */
+export function usePaperStudyRecords(
+  userId: string | null | undefined,
+  paperId: string | null | undefined,
+  enabled: boolean,
+  { freshOnMount = false }: { readonly freshOnMount?: boolean } = {},
+) {
   return useQuery<readonly PaperStudySummary[], Error>({
     queryKey: queryKeys.studyRecords.paper(userId ?? "anonymous", paperId ?? "none"),
     queryFn: ({ signal }) => fetchPaperStudies(supabase, userId!, paperId!, signal),
     enabled: enabled && !!userId && !!paperId,
     staleTime: 30_000,
+    refetchOnMount: freshOnMount ? "always" : true,
     retry: retryTransient,
   });
 }

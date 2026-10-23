@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 /**
  * Architecture-fitness guard for the Study Record UI (EVIDENCE-RECORDS-001C1):
  * the components in `src/components/papers/study-record/`, the hooks
- * `useStudyRecords` and `useStudyRecordEditor`, and `src/lib/studyRecord/`.
+ * `useStudyRecords`, `useStudyRecordEditor` and `useStudyRecordCreations`, and
+ * `src/lib/studyRecord/`.
  *
  * Every write must go through PR-B's typed adapter, which `src/lib/studyRecord/
  * client.ts` creates once over the shared client; everything else is a read.
@@ -31,7 +32,9 @@ import { describe, expect, it } from "vitest";
  *     source rebase (`rebaseSource`), or their RPC names.
  * And it checks the positive relationships: the adapter is created exactly
  * once, the editor's default client is that adapter, and the writes the UI
- * makes are exactly the five C1 adapter methods.
+ * makes are exactly the five C1 adapter methods — a create only from the store
+ * of unresolved creates (C1-R1), which the Start view reaches through `start`
+ * and `retry` alone.
  *
  * A review-time tripwire like `evidenceDomainBoundary.test.ts`, not the
  * enforcement: RLS, the SELECT-only grants and the RPCs' own checks refuse a
@@ -41,7 +44,8 @@ import { describe, expect, it } from "vitest";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const UI_DIRECTORY = "src/components/papers/study-record";
 const LIB_DIRECTORY = "src/lib/studyRecord";
-const HOOK_FILES = ["src/hooks/useStudyRecords.ts", "src/hooks/useStudyRecordEditor.ts"];
+const HOOK_FILES = ["src/hooks/useStudyRecords.ts", "src/hooks/useStudyRecordEditor.ts", "src/hooks/useStudyRecordCreations.ts"];
+const CREATIONS_FILE = "src/hooks/useStudyRecordCreations.ts";
 const CLIENT_FILE = "src/lib/studyRecord/client.ts";
 const READS_FILE = "src/hooks/useStudyRecords.ts";
 
@@ -64,6 +68,7 @@ const ALLOWED_IMPORTS = new Set([
   "@/hooks/useAbstract",
   "@/hooks/useCurrentUserAccess",
   "@/hooks/useStudyRecords",
+  "@/hooks/useStudyRecordCreations",
   "@/hooks/useStudyRecordEditor",
   "@/lib/queryKeys",
   "@/lib/evidenceRecordsAvailability",
@@ -89,6 +94,7 @@ const ALLOWED_IMPORTS = new Set([
   "@/lib/studyRecord/labelSuggestion",
   "@/lib/studyRecord/paperGuards",
   "@/lib/studyRecord/paperLinks",
+  "@/lib/studyRecord/pendingCreates",
   "@/lib/studyRecord/quotes",
   "@/lib/studyRecord/read",
   "@/lib/studyRecord/savePlan",
@@ -370,6 +376,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/editorContext.ts",
       "src/components/papers/study-record/sourcePaneModel.ts",
       "src/components/papers/study-record/studyRecordCopy.ts",
+      "src/hooks/useStudyRecordCreations.ts",
       "src/hooks/useStudyRecordEditor.ts",
       "src/hooks/useStudyRecords.ts",
       "src/lib/studyRecord/access.ts",
@@ -379,6 +386,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/lib/studyRecord/labelSuggestion.ts",
       "src/lib/studyRecord/paperGuards.ts",
       "src/lib/studyRecord/paperLinks.ts",
+      "src/lib/studyRecord/pendingCreates.ts",
       "src/lib/studyRecord/quotes.ts",
       "src/lib/studyRecord/read.ts",
       "src/lib/studyRecord/savePlan.ts",
@@ -421,10 +429,29 @@ describe("Study Record UI boundary — the real modules", () => {
   });
 
   it("makes exactly the five C1 writes, through the adapter's typed methods", () => {
-    const start = callsOn(read("src/components/papers/study-record/StudyRecordStart.tsx"), "start.tsx", new Set(["studyRecordClient"]));
+    const creations = callsOn(read(CREATIONS_FILE), "creations.ts", new Set(["studyRecordClient"]));
     const editor = callsOn(read("src/hooks/useStudyRecordEditor.ts"), "editor.ts", new Set(["client"]));
-    expect(start).toEqual(["createStudyFromPaper"]);
+    expect(creations).toEqual(["createStudyFromPaper"]);
     expect([...new Set(editor)].sort()).toEqual(["deleteStudy", "saveChanges", "setLink", "updateStudy"]);
+    // No other module calls the adapter itself.
+    for (const file of scannedFiles.filter((path) => path !== CREATIONS_FILE)) {
+      expect(callsOn(read(file), file, new Set(["studyRecordClient"])), file).toEqual([]);
+    }
+  });
+
+  it("creates only through the store of unresolved creates, which sends the request it is given (C1-R1)", () => {
+    const start = callsOn(read("src/components/papers/study-record/StudyRecordStart.tsx"), "start.tsx", new Set(["creations"]));
+    expect([...new Set(start)].sort()).toEqual(["retry", "start"]);
+    // The store's only network path is the injected sender, called with the stored request.
+    const store = parse("pendingCreates.ts", read("src/lib/studyRecord/pendingCreates.ts"));
+    const sends: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "send") sends.push(node.arguments.map((argument) => argument.getText(store)).join(","));
+      ts.forEachChild(node, visit);
+    };
+    visit(store);
+    expect(sends).toEqual(["request"]);
+    expect(read("src/lib/studyRecord/pendingCreates.ts")).not.toMatch(/newStudyRecordRequestId|randomUUID/);
   });
 
   it("reads only the evidence tables and paper titles", () => {
