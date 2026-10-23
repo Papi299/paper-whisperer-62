@@ -4685,3 +4685,29 @@ This entry **supersedes the 2026-10-17 entry above**, which recorded the migrati
   - PostgREST's logs show a schema-cache reload right after the commit, loading six more functions than before.
   - Expected side effects only: the CLI's temporary `cli_login_postgres` credential was refreshed; network bans were zero before and after; GitHub `main` and the Vercel alias were unchanged.
 - **Not verified.** No authenticated or HTTP call has exercised the new RPCs in Production, and no study record has been written there. The application does not call them, and there is no Study Record interface; PR-C1 is the next planned phase.
+
+## 2026-10-23 — EVIDENCE-RECORDS-001C1: the Study Record interface — **MERGED / DEPLOYED / PRODUCTION-ACCEPTED WITH QUALIFICATIONS**
+
+Release history, not a migration. PR-C1 introduced no migration, and Production stayed at **103** applied migrations (latest `20261017155445`). The interface and its acceptance record are [evidence-records-study-record-ui.md](evidence-records-study-record-ui.md) (§13). The 2026-10-18 entry's "Not verified" bullet stands as written for the state then. This entry records the first authenticated calls: one each of `evidence_create_study_from_paper`, `evidence_save_changes` and `evidence_delete_study`.
+
+- **Merge.** PR #348 merged on 2026-10-23 at 10:20:18Z as the two-parent `ec4bdbde57b470d9dc59b022976d852f6a0cdb33`. Its parents are `f69f4f2a` and the head `8d97c294`, and its tree is `1be90a93`. Merged-`main` Validate (`39938381951`), DB Tests (`39938381945`) and Extension (`39938382025`) passed on the first attempt. The head's E2E (local) run `39927475954` failed its first attempt and passed its second: in attempt 1 the account-deletion spec timed out three times and the job hit its 30-minute cap.
+- **Deployment.** The automatic Vercel Production deployment `dpl_4YyReWiYhe1FG6eMw8HHH4ywNxUm` (`main` at `ec4bdbde`) serves `app.paperlume.app`. Its entry chunk matched a local build of tree `1be90a93` token for token, apart from the 19 build values Vercel injects. The previous deployment, `dpl_3gWkd9uidPBYUvc6ZZuwejHfJaqe` (`f69f4f2a`), stays READY without aliases. No Edge Function, secret or Supabase setting changed.
+- **Production functional acceptance — EVIDENCE-RECORDS-001C1-PROD-ACCEPTANCE-EXEC-001, 2026-10-23.** The report's verdict is `EVIDENCE_RECORDS_001C1_PROD_ACCEPTANCE_PASSED`, with four disclosed qualifications; the documentation classifies the result as `EVIDENCE_RECORDS_001C1_PROD_ACCEPTANCE_PASSED_WITH_QUALIFICATIONS`. The Product Owner performed every action in their own browser through the normal interface, on a synthetic canary paper. The audits were read-only: SQL inside read-only transactions, and content-free log counts. No test automation, service-role browser access or direct database write was used.
+  - **Attempt 1 — stopped at paper creation.** The canary was created with a 32-character MD5 check value as its abstract: a test-instruction error, not an application defect. No study-record write happened. The paper was deleted through the interface, and a read-only audit found no residue.
+  - **Attempt 2 — passed, under a separate Product Owner authorization.** Its steps:
+    - one paper added by hand;
+    - one create: one study at version 1, one `user_confirmed` link, one abstract copy and four events;
+    - one save: version 2, and one Reported study-level value, `unreviewed`, with one supporting abstract anchor that the server matched at normalized offsets `[215,274)`; six events in all;
+    - persistence after a reload, and the interface's refusal to delete the linked paper;
+    - one study delete and one paper delete;
+    - in the API logs, exactly one request for each of these writes, and no Edge Function call.
+  - **The thin space was not exercised.** Attempt 2's paper stored U+0020 where the fixture had U+2009 THIN SPACE. The Product Owner authorized continuing with that amended fixture, which was re-verified against the installed matcher. U+2265 `≥` and U+00B2 `²` were exercised. No application-level cause has been established, and the substitution is not recorded as a defect.
+  - **The server-side paper key was not exercised.** The refusal came from the interface's precheck: no paper-delete RPC was sent while the link existed. `evidence_study_reports_paper_fkey` (NO ACTION) and the race after the check rest on the installed definition and the disposable local E2E.
+  - **The audit connector dropped** between source capture and Save. The run paused, and after reconnection a read-only check found no change.
+- **Cleanup — audited read-only.** No evidence row and no `SR-C1-CANARY-%` paper remain. The final snapshot equals the pre-run baseline in all of these:
+  - the ledger, the function bodies, table privileges and RLS, the paper key and the Security Advisor findings;
+  - the owner's 669 papers and their latest update;
+  - Project and Tag assignments, attachments, the cleanup queue, storage bytes and AI usage.
+- **Not exercised in Production.** Unknown create and save outcomes and their recovery, the reload limit, a multi-step save, version-conflict recovery, full-text references, several studies on one paper, link and header edits, the selection and duplicate-merge safeguards, and review and rebase (PR-C2, not started).
+
+This record holds no research data, no paper content beyond the canary's title prefix, and no account identity.

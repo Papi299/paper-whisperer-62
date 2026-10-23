@@ -1,6 +1,6 @@
 # Study records — field, review and rebase RPC contract (EVIDENCE-RECORDS-001A3)
 
-> **Status:** installed in Production. Migration `20261017155445_add_evidence_records_field_review_rebase_rpcs.sql` (PR #346) was merged and applied to Supabase Production on 2026-10-18, after a read-only preflight, and accepted by read-only verification (§13). It adds the write path for everything inside a study: groups, outcomes, values and their source references, human review, and rebasing a saved abstract copy. The repository's typed client for these RPCs in `src/lib/evidence/` ([evidence-domain-library.md](evidence-domain-library.md) §10) is first used by the Study Record interface of EVIDENCE-RECORDS-001C1 ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md)), which calls `evidence_save_changes` and neither review nor rebase; it is a **Draft PR, not merged or deployed**, so the deployed application never calls these RPCs. **Installation is not functional acceptance:** no authenticated call to these RPCs has been made in Production.
+> **Status:** installed in Production. Migration `20261017155445_add_evidence_records_field_review_rebase_rpcs.sql` (PR #346) was merged and applied to Supabase Production on 2026-10-18, after a read-only preflight, and accepted by read-only verification (§13). It adds the write path for everything inside a study: groups, outcomes, values and their source references, human review, and rebasing a saved abstract copy. The repository's typed client for these RPCs in `src/lib/evidence/` ([evidence-domain-library.md](evidence-domain-library.md) §10) is used by the Study Record interface of EVIDENCE-RECORDS-001C1 ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md)), merged as PR #348 and deployed on 2026-10-23. The interface calls `evidence_save_changes`, and neither review nor rebase: those two RPCs are installed, but their interface is PR-C2, which is not built. **One authenticated save has run in Production.** The owner-pilot acceptance of 2026-10-23 saved one Reported value with one abstract quote, which the server matched (UI document §13). No other contract here has been exercised in Production, review and rebase included.
 
 This document is the client contract. The migration header holds the database-level detail. The executable specification is pgTAP suite `033_evidence_field_review_rebase.test.sql`, section L of suite `032_evidence_normalization_parity.test.sql`, and the db-tests lifecycle's evidence field race probe (`runEvidenceFieldRaceProbe` in `scripts/e2e-local.mjs`). The study lifecycle — create, update, link and delete — is [evidence-records-lifecycle.md](evidence-records-lifecycle.md), and everything there about the pilot gate, request ids and history applies here unchanged.
 
@@ -245,11 +245,11 @@ The Product Owner accepted all eight limits PR-A3 introduces, for the owner-only
 ## 12. Known limitations
 
 - Owner-only pilot; delete stays ungated (PR-A2).
-- No UI, and no application caller (PR-C1/C2).
+- The deployed Study Record interface (PR-C1) calls only `evidence_save_changes`. Review and rebase have no interface and no application caller until PR-C2.
 - No RPC adds a link: a study's further reports are planted only by the owner in tests. Linking further reports belongs to a later phase.
 - Full-text references are locator-only; non-library sources are deferred (001A PD-3, PD-4).
 - The accepted limits (§10) can refuse an unusually large but legitimate study record; changing one is a new migration.
-- Installed, not functionally accepted: no authenticated call has exercised these RPCs in Production (§13).
+- Functionally exercised in Production only by one owner-pilot save on 2026-10-23 (§13). Review, rebase, multi-change and multi-step saves, the limits and the refusals have not run there.
 - "Letter or digit" and NFC follow PostgreSQL 17's built-in Unicode 15.1 tables. A browser's newer Unicode version can disagree on characters assigned since; the server's answer stands.
 - Strict re-review resets every review that depends on a link's abstract on every rebase, including typographic-only changes. That is the accepted 001A §E5 rule, not a defect.
 - A rebase writes one event per re-checked quote and per changed value. On a study near 5,000 events it can be refused by the history limit; delete still works.
@@ -270,7 +270,8 @@ The Product Owner accepted all eight limits PR-A3 introduces, for the owner-only
   - Table privileges, RLS, policies, constraints and indexes are unchanged, and the eight tables still hold no row.
   - The Security Advisor's warnings for SECURITY DEFINER functions callable by signed-in users went from 28 to 31, the three new RPCs; no other advisor finding changed.
   - PostgREST's logs show a schema-cache reload right after the commit.
-- **Not yet verified.** No authenticated call has exercised these RPCs in Production, and no study record exists there: installation and catalog integrity are verified, the RPCs' behaviour in Production is not. An authenticated functional acceptance needs its own authorization. Nothing in the application calls these RPCs, so the migration changed no user-facing behaviour.
+- **Not verified at the rollout.** No authenticated call had exercised these RPCs in Production, and no study record existed there: installation and catalog integrity were verified, the RPCs' behaviour in Production was not. An authenticated functional acceptance needed its own authorization. Nothing in the application called these RPCs, so the migration changed no user-facing behaviour.
+- **Since then (2026-10-23).** The deployed PR-C1 interface calls `evidence_save_changes`. Its owner-pilot Production acceptance made one authenticated save on a synthetic canary: one Reported study-level value, `unreviewed`, with one supporting abstract quote matched by the server at normalized offsets `[215,274)`. The canary was then deleted, and the cleanup was audited read-only. Review and rebase have not been called in Production ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md) §13).
 
 ## 14. Rollback
 

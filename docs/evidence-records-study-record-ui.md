@@ -1,6 +1,6 @@
 # Study records — the Study Record interface (EVIDENCE-RECORDS-001C1)
 
-> **Status: Draft PR, not merged, not deployed, not Production-accepted.** PR-C1 (branch `feat/evidence-records-study-ui-foundation`) adds the first application code that calls the study-record RPCs. The backend it uses is merged and applied to Production: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). Until PR-C1 is merged, the deployed application has no Study Record interface. Merging it needs no migration, secret or Edge Function — Vercel publishes it with `main` — and it then still needs an authenticated Production acceptance before it can be called accepted.
+> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3).
 
 This document describes what a user can do, what the interface sends, and what it deliberately leaves to PR-C2. The executable specification is the Vitest suites under `src/lib/studyRecord/__tests__/`, `src/components/papers/study-record/__tests__/`, `src/hooks/__tests__/useStudyRecordEditor.test.tsx`, the paper-safeguard suites, `src/test/studyRecordUiBoundary.test.ts`, and `e2e/study-records.spec.ts`.
 
@@ -114,6 +114,39 @@ C1 limitations:
 - A multi-step save is not one transaction (§8).
 - **Creation across a reload is not exactly-once.** An unresolved create (§4) lives in memory only — browser persistence of request material is excluded by design — so a hard reload, closing the tab, signing out or leaving the Dashboard forgets it. Afterwards the dialog reads the paper's studies afresh and names those that exist before offering a creation, so a record the lost attempt created is found and opened rather than silently created again. It cannot disprove an attempt the server was still processing at that moment, and a user may still create another deliberately. Exactly-once creation across a reload would need a durable request identity (a persistent operation journal), which needs its own privacy and lifecycle review and is not built.
 - The server remembers a request id only while its study exists ([evidence-records-lifecycle.md](evidence-records-lifecycle.md) §5): if the study an unresolved attempt created is deleted elsewhere before the retry, the retry creates it again.
-- The interface has not run against Production with an authenticated user.
+- Production has exercised one owner-pilot workflow (§13). Everything else in this document rests on the Vitest suites and the disposable local E2E.
 
 PR-C2 (not started): Confirm and Flag (`evidence_review_fields`) with the review checklist; the history viewer (`evidence_events`); the source-change comparison and **Use current abstract** (`evidence_rebase_source`); review-history displays. The Evidence Matrix integration is later still. The C1 boundary test fails if any of these appear in the Study Record UI before then.
+
+## 13. Production acceptance (2026-10-23)
+
+The report of EVIDENCE-RECORDS-001C1-PROD-ACCEPTANCE-EXEC-001 gives the verdict `EVIDENCE_RECORDS_001C1_PROD_ACCEPTANCE_PASSED` and discloses four qualifications. The documentation classifies the result as **`EVIDENCE_RECORDS_001C1_PROD_ACCEPTANCE_PASSED_WITH_QUALIFICATIONS`**: the owner-pilot workflow below succeeded, and nothing beyond it was accepted. The Product Owner performed every action in their own browser, through the normal Production interface. The audits between stages were read-only. No test automation, service-role browser access or direct database write was used. The identities and the cleanup record are in [migration-history.md](migration-history.md).
+
+**Verified Production operation.** On one synthetic canary paper (title prefix `SR-C1-CANARY-`, a fictional abstract), the owner:
+
+1. added the paper by hand;
+2. started a study record: *Yes*, the paper reports an original study, in the `non_intervention` family;
+3. created it, which saved an immutable copy of the abstract;
+4. recorded **Who took part** (`population_description`) as Reported, with one supporting quote selected in the saved copy;
+5. saved explicitly with **Save draft**, reloaded the page and reopened the record, which still held the value and its quote;
+6. tried to delete the paper, and the interface refused, offering no Delete (§10);
+7. deleted the study record: the dialog closed, and the paper stayed;
+8. deleted the canary paper.
+
+**Verified database state** (read-only, after each stage):
+
+- **Create:** one study at version 1, one `user_confirmed` link, and one saved abstract copy byte-identical to the library abstract. Four events: the request header, `study_created`, `link_created` and `source_captured`.
+- **Save:** study version 2, and one Reported study-level value, `unreviewed`. It has one supporting abstract anchor, the server's match: the unique occurrence at normalized offsets `[215,274)`. Six events in all.
+- **API logs:** exactly one create, one save and one study-delete RPC. The refused paper delete sent only the precheck's read, never the delete RPC.
+- **After cleanup:** no evidence row and no `SR-C1-CANARY-%` paper. The owner's library, storage and usage counts, the ledger, the function bodies, privileges and advisors all equal the baseline taken before the run.
+
+**Qualifications.**
+
+- **Attempt 1 stopped.** The first canary paper was created with a 32-character MD5 check value as its abstract. That was a test-instruction error, not an application defect. The run stopped before any study-record write, the paper was deleted through the interface, and its cleanup was audited. Attempt 2 ran under a separate Product Owner authorization.
+- **The thin space was not exercised.** In attempt 2 the fixture's U+2009 THIN SPACE was stored as U+0020 SPACE. The Product Owner authorized continuing with that amended fixture, whose abstract and quote were re-verified against the installed matcher, still at `[215,274)`. U+2265 `≥` and U+00B2 `²` were exercised; **thin-space preservation was not**. No application-level cause of the substitution has been established, and it is not recorded as a defect.
+- **Paper deletion: frontend precheck only.** The refusal came from the interface's check (§10). The server's NO ACTION key, and the race in which a link appears after the check, were not exercised in Production. They rest on the installed key definition and the disposable local E2E.
+- **The audit connection dropped** between source capture and Save. The test paused, and after reconnection a read-only check found nothing had changed. No Study Record defect was shown.
+
+**Not exercised in Production, so covered only by the Vitest suites and the disposable local E2E:** an unknown create outcome and its recovery (§4); an unknown save outcome; a multi-step save (§8); version-conflict recovery; full-text references; several study records on one paper; link and header-only edits (`evidence_set_link`, `evidence_update_study`); the selection and duplicate-merge safeguards; the paper-delete race (§10); thin-space preservation. The reload limit (§12) was not exercised either, and it remains a limit.
+
+**Not yet implemented:** PR-C2's review, history and rebase interface (§12).
