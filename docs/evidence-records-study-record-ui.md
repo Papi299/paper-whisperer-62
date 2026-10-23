@@ -8,8 +8,8 @@ This document describes what a user can do, what the interface sends, and what i
 
 | Layer | Files | Role |
 |---|---|---|
-| Pure logic | `src/lib/studyRecord/` | Reads (`read.ts`, `paperLinks.ts`), the in-memory draft (`draft.ts`), checks (`validateDraft.ts`), save planning (`savePlan.ts`, `jsonbSize.ts`), quotes (`quotes.ts`), the pilot mirror (`access.ts`), paper safeguards (`paperGuards.ts`), the one write client (`client.ts`) |
-| Hooks | `src/hooks/useStudyRecords.ts`, `src/hooks/useStudyRecordEditor.ts` | Owner-scoped queries; the editor's save state machine |
+| Pure logic | `src/lib/studyRecord/` | Reads (`read.ts`, `paperLinks.ts`), the in-memory draft (`draft.ts`), checks (`validateDraft.ts`), save planning (`savePlan.ts`, `jsonbSize.ts`), quotes (`quotes.ts`), the pilot mirror (`access.ts`), paper safeguards (`paperGuards.ts`), creates whose outcome is unknown (`pendingCreates.ts`), the one write client (`client.ts`) |
+| Hooks | `src/hooks/useStudyRecords.ts`, `src/hooks/useStudyRecordEditor.ts`, `src/hooks/useStudyRecordCreations.ts` | Owner-scoped queries; the editor's save state machine; the dialog's store of unresolved creates |
 | UI | `src/components/papers/study-record/` | The dialog, the start screen, the study list, the editor (record and source panes), the entry point |
 | Entry points | `PaperList.tsx`, `EditPaperDialog.tsx`, `Dashboard.tsx` | Expanded row details, Edit Paper, the delete confirmation |
 | Safeguards | `PaperList.tsx`, `BulkActionsToolbar.tsx`, `DeduplicationDialog.tsx`, `useDeduplication.ts`, `usePaperMutations.ts`, `useBulkMutations.ts` | Checks before paper delete and duplicate merge; the database refusal explained |
@@ -22,7 +22,7 @@ One dialog is mounted by the Dashboard, beside Compare. It is never stacked on a
 - **Edit Paper**: the same entry. Choosing it closes Edit Paper first (unsaved Edit Paper changes are not kept — the entry says so) and opens the Study Record dialog once Edit Paper has finished closing.
 - **A refused paper delete** offers **Open study record** for the paper that blocks it, again after the confirmation closes.
 
-With one study the dialog opens it; with several it lists them (each a separate record — nothing suggests two are the same study). The pilot owner can add another study from the list. A failed read says so and offers Try again; it is never shown as "None".
+Every opening reads the paper's studies from the server again before it chooses what to show — a cached list, however recent, is never taken as the answer. With one study the dialog opens it; with several it lists them (each a separate record — nothing suggests two are the same study). The pilot owner can add another study from the list. A failed read says so and offers Try again; it is never shown as "None", and nothing can be created until a read succeeds. A paper with an unresolved create opens on its recovery instead (§4).
 
 ## 3. The owner-only pilot
 
@@ -44,7 +44,17 @@ Delete is ungated on the server, so a former owner keeps View and Delete. If the
 3. **Study name**, prefilled as "‹first author› ‹year›" (else the title, else "Study 1"), editable, checked by the label rules.
 4. **Source notice**: the server will save an immutable copy of the abstract; without one, full-text references can still support values.
 
-Create calls `evidence_create_study_from_paper` through PR-B's client with one request id per action. An unknown outcome resends the same request (the server replays it), never a new id.
+Create waits for this opening's read of the paper's studies, and names any the paper already has ("This paper already has 1 study record: …. Create another only if the paper reports a separate study."). It calls `evidence_create_study_from_paper` through PR-B's client with one request id per action.
+
+**When the outcome is unknown** (EVIDENCE-RECORDS-001C1-REVIEW-FIX-001, finding C1-R1) — a lost or unreadable answer, `applied: "unknown"`, after which the database may hold the new study — the attempt is kept with its exact prepared request (user, paper, arguments, request id) in the dialog's in-memory store of unresolved creates (`pendingCreates.ts`). The dialog, mounted once by the Dashboard, owns the store, so it outlives every opening:
+
+- **Leaving is allowed**, also while the request is still on its way; a notice says the record isn't confirmed yet.
+- **Reopening the paper** — at once or later in the session, whatever a cached list says — shows *An earlier attempt to create a study record didn't finish* instead of the form: the attempt's answers, why its outcome is unknown, **Try again** and **Check this paper's study records**. Try again resends the same request object: the server answers with the original record if it was created (`replayed`) and creates it otherwise. An attempt still on its way is waited for, never sent twice. A fresh list is shown on request but proves nothing about the attempt, and nothing is retried automatically.
+- **A further unknown outcome** keeps the attempt; no replacement request id is ever generated for it.
+- **Only that paper waits**: other papers create normally. Once the attempt is resolved, **Add another study** is an intentional new action with a new request id.
+- **Isolation**: an attempt is found only by the user who made it, and every other user's attempts are forgotten when the signed-in user changes or signs out.
+
+An answer that says nothing was applied (any refusal with a SQLSTATE) retires the attempt: the form returns with its answers and the message, and the same answers resend the same request. Nothing of this reaches browser storage, cookies or the URL.
 
 ## 5. Reading a record
 
@@ -102,6 +112,8 @@ C1 limitations:
 - Links: only *Mark as confirmed* / *Mark as provisional* on existing links. Linking further reports, and removing a link, are not offered.
 - Quotes from an earlier copy are labelled "From an earlier copy of the abstract"; there is no comparison or rebase.
 - A multi-step save is not one transaction (§8).
+- **Creation across a reload is not exactly-once.** An unresolved create (§4) lives in memory only — browser persistence of request material is excluded by design — so a hard reload, closing the tab, signing out or leaving the Dashboard forgets it. Afterwards the dialog reads the paper's studies afresh and names those that exist before offering a creation, so a record the lost attempt created is found and opened rather than silently created again. It cannot disprove an attempt the server was still processing at that moment, and a user may still create another deliberately. Exactly-once creation across a reload would need a durable request identity (a persistent operation journal), which needs its own privacy and lifecycle review and is not built.
+- The server remembers a request id only while its study exists ([evidence-records-lifecycle.md](evidence-records-lifecycle.md) §5): if the study an unresolved attempt created is deleted elsewhere before the retry, the retry creates it again.
 - The interface has not run against Production with an authenticated user.
 
 PR-C2 (not started): Confirm and Flag (`evidence_review_fields`) with the review checklist; the history viewer (`evidence_events`); the source-change comparison and **Use current abstract** (`evidence_rebase_source`); review-history displays. The Evidence Matrix integration is later still. The C1 boundary test fails if any of these appear in the Study Record UI before then.
