@@ -34,7 +34,10 @@ import { ResizableTableHeader, SortDirection } from "./ResizableTableHeader";
 import { HighlightedAbstract } from "./HighlightedAbstract";
 import { toSafeExternalHref } from "@/lib/externalUrl";
 import { useAbstract } from "@/hooks/useAbstract";
+import { usePaperLinkCheck } from "@/hooks/useStudyRecords";
 import type { MatchFlags } from "@/hooks/papers/types";
+import { STUDY_RECORD_DELETE_COPY } from "@/lib/studyRecord/paperGuards";
+import { StudyRecordEntry } from "./study-record/StudyRecordEntry";
 
 /**
  * Fixed UI order for the "Matched in:" badge row, paired with the boolean
@@ -202,6 +205,12 @@ interface PaperListProps {
   onAddPapers: () => void;
   /** Dashboard's `handleClearFilters`, offered from the no-results state. */
   onClearFilters: () => void;
+  /**
+   * EVIDENCE-RECORDS-001C1 — open the Study Record dialog for a paper. Offered
+   * from the expanded details (never as another icon in the row's actions),
+   * and from a delete confirmation the paper's study record blocks.
+   */
+  onOpenStudyRecord?: (paper: PaperWithTags) => void;
 }
 
 const BASE_ROW_HEIGHT = 52;
@@ -286,11 +295,29 @@ export function PaperList({
   hasActiveFilters,
   onAddPapers,
   onClearFilters,
+  onOpenStudyRecord,
 }: PaperListProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // EVIDENCE-RECORDS-001C1. A paper a study record links to cannot be deleted
+  // (the database's NO ACTION key refuses it), so the confirmation checks first
+  // and offers Delete only when the check is clear — fresh each time it opens.
+  const deleteTarget = deleteConfirmId ? papers.find((paper) => paper.id === deleteConfirmId) ?? null : null;
+  const deleteTitles = useMemo(
+    () => (deleteTarget ? new Map([[deleteTarget.id.toLowerCase(), deleteTarget.title]]) : undefined),
+    [deleteTarget],
+  );
+  const { check: deleteCheck, retry: retryDeleteCheck } = usePaperLinkCheck(
+    userId,
+    deleteConfirmId ? [deleteConfirmId] : [],
+    !!deleteConfirmId,
+    deleteTitles,
+  );
+  /** "Open study record" from the confirmation, run once the confirmation has closed. */
+  const pendingStudyRecordRef = useRef<PaperWithTags | null>(null);
 
   // IntersectionObserver sentinel for lazy loading
   useEffect(() => {
@@ -406,7 +433,7 @@ export function PaperList({
 
   const handleConfirmDelete = useCallback(() => {
     const paperId = deleteConfirmId;
-    if (!paperId) return;
+    if (!paperId || deleteCheck.status !== "clear") return;
     const index = papers.findIndex((p) => p.id === paperId);
     pendingDeleteFocusRef.current =
       index === -1
@@ -419,7 +446,7 @@ export function PaperList({
           };
     onDelete(paperId);
     setDeleteConfirmId(null);
-  }, [deleteConfirmId, papers, onDelete]);
+  }, [deleteConfirmId, deleteCheck.status, papers, onDelete]);
 
   useEffect(() => {
     const pending = pendingDeleteFocusRef.current;
@@ -649,6 +676,7 @@ export function PaperList({
               onAnalyzePaper={onAnalyzePaper}
               isAnalyzing={analyzingPaperId === paper.id}
               searchMatchFlags={searchMatchFlags}
+              onOpenStudyRecord={onOpenStudyRecord}
             />
           );
         })}
@@ -676,21 +704,58 @@ export function PaperList({
           the id — they never arm a post-deletion handoff, so their restoration
           behaviour is exactly what it was. */}
       <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
-        <AlertDialogContent ref={confirmContentRef}>
+        <AlertDialogContent
+          ref={confirmContentRef}
+          onCloseAutoFocus={() => {
+            // Opened from here, the Study Record dialog waits until this
+            // confirmation has closed, so two modals never stack.
+            const paper = pendingStudyRecordRef.current;
+            pendingStudyRecordRef.current = null;
+            if (paper) onOpenStudyRecord?.(paper);
+          }}
+        >
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Paper</AlertDialogTitle>
+            <AlertDialogTitle>{deleteCheck.status === "held" ? STUDY_RECORD_DELETE_COPY.singleTitle : "Delete Paper"}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this paper? This action cannot be undone.
+              {deleteCheck.status === "held"
+                ? STUDY_RECORD_DELETE_COPY.single(deleteTarget?.title ?? "This paper")
+                : deleteCheck.status === "error"
+                  ? STUDY_RECORD_DELETE_COPY.checkFailedSingle
+                  : "Are you sure you want to delete this paper? This action cannot be undone."}
             </AlertDialogDescription>
+            {deleteCheck.status === "checking" && (
+              <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                {STUDY_RECORD_DELETE_COPY.checking}
+              </p>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={handleConfirmDelete}
-            >
-              Delete
-            </AlertDialogAction>
+            <AlertDialogCancel>{deleteCheck.status === "held" ? "Close" : "Cancel"}</AlertDialogCancel>
+            {deleteCheck.status === "held" ? (
+              onOpenStudyRecord &&
+              deleteTarget && (
+                <AlertDialogAction
+                  onClick={() => {
+                    pendingStudyRecordRef.current = deleteTarget;
+                  }}
+                >
+                  Open study record
+                </AlertDialogAction>
+              )
+            ) : deleteCheck.status === "error" ? (
+              <Button type="button" variant="outline" onClick={retryDeleteCheck}>
+                Try again
+              </Button>
+            ) : (
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={handleConfirmDelete}
+                disabled={deleteCheck.status !== "clear"}
+              >
+                Delete
+              </AlertDialogAction>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -740,6 +805,8 @@ interface PaperRowProps {
    * cell renders a "Matched in:" sub-line listing the matching fields.
    */
   searchMatchFlags?: Map<string, MatchFlags> | null;
+  /** Open the Study Record dialog for this paper (EVIDENCE-RECORDS-001C1). */
+  onOpenStudyRecord?: (paper: PaperWithTags) => void;
 }
 
 function PaperRow({
@@ -767,6 +834,7 @@ function PaperRow({
   onAnalyzePaper,
   isAnalyzing,
   searchMatchFlags,
+  onOpenStudyRecord,
 }: PaperRowProps) {
   // On-demand abstract: only fetch when the row is expanded
   const { data: fetchedAbstract, isLoading: abstractLoading } = useAbstract(isExpanded ? paper.id : null, userId);
@@ -1164,6 +1232,18 @@ function PaperRow({
                 </p>
               ) : (
                 <p className="text-sm text-muted-foreground italic">No abstract available.</p>
+              )}
+              {/* EVIDENCE-RECORDS-001C1: the paper's study records, read only while
+                  this row is expanded. Renders nothing for a user who can't create
+                  study records and holds none for this paper. */}
+              {onOpenStudyRecord && (
+                <StudyRecordEntry
+                  className="mt-3 border-t border-border pt-3"
+                  userId={userId}
+                  paperId={paper.id}
+                  enabled={isExpanded}
+                  onOpen={() => onOpenStudyRecord(paper)}
+                />
               )}
             </div>
           </td>

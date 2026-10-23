@@ -5,6 +5,7 @@ import { DuplicateGroup, DuplicatePaperInfo, DuplicatePaperSet } from "@/types/d
 import { useToast } from "@/hooks/use-toast";
 import { queryKeys } from "@/lib/queryKeys";
 import { parseDuplicateGroups } from "@/lib/parseDuplicateGroups";
+import { isPaperHeldByStudyError, STUDY_RECORD_MERGE_COPY } from "@/lib/studyRecord/paperGuards";
 
 /** Type guard proving an array holds at least two elements (a `DuplicatePaperSet`). */
 function hasAtLeastTwo(items: DuplicatePaperInfo[]): items is DuplicatePaperSet {
@@ -154,9 +155,16 @@ function scorePaper(paper: DuplicatePaperInfo): number {
 }
 
 /**
- * Returns the paper ID with the highest metadata completeness score.
+ * Returns the paper ID to suggest keeping: the one paper a study record links
+ * to, when there is exactly one (EVIDENCE-RECORDS-001C1 — merging it away would
+ * be refused, and the suggestion must never propose that), otherwise the paper
+ * with the highest metadata completeness score.
  */
-export function suggestKeepPaper(group: DuplicateGroup): string {
+export function suggestKeepPaper(group: DuplicateGroup, linkedPaperIds?: ReadonlySet<string>): string {
+  if (linkedPaperIds) {
+    const held = group.papers.filter((paper) => linkedPaperIds.has(paper.id.toLowerCase()));
+    if (held.length === 1) return held[0].id;
+  }
   let bestId = group.papers[0].id;
   let bestScore = -1;
 
@@ -227,11 +235,14 @@ export function useDeduplication(userId: string | undefined) {
       });
 
       if (error) {
-        toast({
-          title: "Error merging duplicates",
-          description: error.message,
-          variant: "destructive",
-        });
+        // EVIDENCE-RECORDS-001C1: a discarded paper a study record links to is
+        // refused by the database key, in one transaction (nothing was moved).
+        // Only that key is explained this way; every other error keeps its message.
+        toast(
+          isPaperHeldByStudyError(error)
+            ? { title: "Group not merged", description: STUDY_RECORD_MERGE_COPY.refused, variant: "destructive" }
+            : { title: "Error merging duplicates", description: error.message, variant: "destructive" },
+        );
         return false;
       }
 
@@ -251,9 +262,14 @@ export function useDeduplication(userId: string | undefined) {
     [userId, queryClient, toast],
   );
 
-  /** Merge all groups sequentially with the given keep selections. */
+  /**
+   * Merge all groups sequentially with the given keep selections.
+   * `skippedForStudyRecords` counts the groups the caller left out because a
+   * study record holds a paper that would have been discarded; they are named
+   * in the result rather than merged.
+   */
   const mergeAllGroups = useCallback(
-    async (selections: Map<number, string>) => {
+    async (selections: Map<number, string>, options?: { readonly skippedForStudyRecords?: number }) => {
       if (!userId) return;
       setMerging(true);
 
@@ -298,10 +314,13 @@ export function useDeduplication(userId: string | undefined) {
 
       setMerging(false);
 
+      const skipped = options?.skippedForStudyRecords ?? 0;
+      const skippedNote =
+        skipped > 0 ? ` ${skipped} group${skipped !== 1 ? "s" : ""} with a study record ${skipped !== 1 ? "weren't" : "wasn't"} merged.` : "";
       if (failCount === 0) {
         toast({
           title: "Duplicates merged",
-          description: `Successfully merged ${successCount} duplicate group${successCount !== 1 ? "s" : ""}.`,
+          description: `Successfully merged ${successCount} duplicate group${successCount !== 1 ? "s" : ""}.${skippedNote}`,
         });
       } else {
         toast({

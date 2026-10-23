@@ -59,6 +59,10 @@ function renderToolbar(overrides: Partial<Parameters<typeof BulkActionsToolbar>[
     onBulkAnalyze: vi.fn().mockResolvedValue(undefined),
     projects: [PROJECT],
     tags: [TAG],
+    deleteCheck: { status: "clear" } as const,
+    onDeleteCheckOpenChange: vi.fn(),
+    onRetryDeleteCheck: vi.fn(),
+    onDeselectPapers: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<BulkActionsToolbar {...props} />) };
@@ -364,6 +368,10 @@ function SelectionHarness() {
         onBulkSetTags={async () => setCount(0)}
         projects={[PROJECT]}
         tags={[TAG]}
+        deleteCheck={{ status: "clear" }}
+        onDeleteCheckOpenChange={() => {}}
+        onRetryDeleteCheck={() => {}}
+        onDeselectPapers={() => {}}
       />
     </>
   );

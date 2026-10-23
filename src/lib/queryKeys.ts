@@ -59,6 +59,21 @@ export const queryKeys = {
     /** The key a closed comparison observes. It is never enabled, so it never holds data. */
     inactive: () => ["paperComparison", "inactive"] as const,
   },
+  studyRecords: {
+    /**
+     * Every study-record read of this user (EVIDENCE-RECORDS-001C1). Invalidated
+     * after any study-record write, so every entry point re-reads what it shows.
+     * User-scoped, like every key here, so one account can never be shown
+     * another's cached records.
+     */
+    all: (userId: string) => ["studyRecords", userId] as const,
+    /** The studies one paper reports — the entry points and the study list. */
+    paper: (userId: string, paperId: string) => ["studyRecords", userId, "paper", paperId] as const,
+    /** One study record, as the editor shows it. */
+    study: (userId: string, studyId: string) => ["studyRecords", userId, "study", studyId] as const,
+    /** Which of these papers a study links to — the checks before a delete or a merge. */
+    paperLinks: (userId: string, paperIds: readonly string[]) => ["studyRecords", userId, "paperLinks", paperIds] as const,
+  },
   projects: {
     all: (userId: string) => ["projects", userId] as const,
   },

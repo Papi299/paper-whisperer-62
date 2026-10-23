@@ -13,6 +13,8 @@ import { Trash2, FolderOpen, Tags, X, Loader2, FolderMinus, TagsIcon, Sparkles, 
 import { cn } from "@/lib/utils";
 import { MAX_COMPARISON_PAPERS, MIN_COMPARISON_PAPERS } from "@/lib/paperComparison/constants";
 import { Project, Tag } from "@/types/database";
+import type { PaperLinkCheck } from "@/hooks/useStudyRecords";
+import { STUDY_RECORD_DELETE_COPY } from "@/lib/studyRecord/paperGuards";
 
 /**
  * Where the floating toolbar may sit: inside the viewport on every side, and
@@ -88,7 +90,22 @@ interface BulkActionsToolbarProps {
   bulkAnalyzeProgress?: { current: number; total: number };
   projects: Project[];
   tags: Tag[];
+  /**
+   * EVIDENCE-RECORDS-001C1 — whether any selected paper has a study record,
+   * checked by the caller while the delete confirmation is open
+   * (`onDeleteCheckOpenChange`). Delete is offered only once the check is
+   * clear: a selection holding a paper with a study record is never sent to the
+   * deletion RPC, which would refuse it anyway.
+   */
+  deleteCheck: PaperLinkCheck;
+  onDeleteCheckOpenChange: (open: boolean) => void;
+  onRetryDeleteCheck: () => void;
+  /** Take the given papers out of the selection (the ones with study records). */
+  onDeselectPapers: (paperIds: readonly string[]) => void;
 }
+
+/** At most this many held papers are named in the delete confirmation. */
+const HELD_TITLES_SHOWN = 8;
 
 export function BulkActionsToolbar({
   selectedCount,
@@ -102,9 +119,17 @@ export function BulkActionsToolbar({
   bulkAnalyzeProgress = { current: 0, total: 0 },
   projects,
   tags,
+  deleteCheck,
+  onDeleteCheckOpenChange,
+  onRetryDeleteCheck,
+  onDeselectPapers,
 }: BulkActionsToolbarProps) {
   const [loading, setLoading] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpenState] = useState(false);
+  const setDeleteConfirmOpen = (open: boolean) => {
+    setDeleteConfirmOpenState(open);
+    onDeleteCheckOpenChange(open);
+  };
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [tagDialogOpen, setTagDialogOpen] = useState(false);
   const [clearProjectsConfirmOpen, setClearProjectsConfirmOpen] = useState(false);
@@ -186,6 +211,7 @@ export function BulkActionsToolbar({
   };
 
   const handleDelete = async () => {
+    if (deleteCheck.status !== "clear") return;
     setLoading(true);
     try {
       await onBulkDelete();
@@ -453,15 +479,60 @@ export function BulkActionsToolbar({
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete {selectedCount} paper{selectedCount !== 1 ? "s" : ""}?</DialogTitle>
+            <DialogTitle>
+              {deleteCheck.status === "held"
+                ? STUDY_RECORD_DELETE_COPY.bulkTitle
+                : `Delete ${selectedCount} paper${selectedCount !== 1 ? "s" : ""}?`}
+            </DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+          {deleteCheck.status === "held" ? (
+            <div className="space-y-2 text-sm" data-testid="bulk-delete-held">
+              <p>{STUDY_RECORD_DELETE_COPY.bulk(deleteCheck.held.length, selectedCount)}</p>
+              <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                {deleteCheck.held.slice(0, HELD_TITLES_SHOWN).map((paper) => (
+                  <li key={paper.paperId} className="break-words [overflow-wrap:anywhere]">
+                    {paper.title ?? "A paper in your selection"}
+                  </li>
+                ))}
+                {deleteCheck.held.length > HELD_TITLES_SHOWN && <li>and {deleteCheck.held.length - HELD_TITLES_SHOWN} more</li>}
+              </ul>
+            </div>
+          ) : deleteCheck.status === "error" ? (
+            <p role="alert" className="text-sm">{STUDY_RECORD_DELETE_COPY.checkFailed}</p>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+              {deleteCheck.status !== "clear" && (
+                <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  {STUDY_RECORD_DELETE_COPY.checking}
+                </p>
+              )}
+            </>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)} disabled={loading}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={loading}>
-              {loading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Delete
-            </Button>
+            {deleteCheck.status === "held" ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  // Deselecting every selected paper empties the selection and
+                  // the toolbar leaves with this dialog: close it first, or it
+                  // would come back open with the next selection.
+                  if (deleteCheck.held.length >= selectedCount) setDeleteConfirmOpen(false);
+                  onDeselectPapers(deleteCheck.held.map((paper) => paper.paperId));
+                }}
+              >
+                Deselect papers with study records
+              </Button>
+            ) : deleteCheck.status === "error" ? (
+              <Button variant="outline" onClick={onRetryDeleteCheck}>Try again</Button>
+            ) : (
+              <Button variant="destructive" onClick={handleDelete} disabled={loading || deleteCheck.status !== "clear"}>
+                {loading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                Delete
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

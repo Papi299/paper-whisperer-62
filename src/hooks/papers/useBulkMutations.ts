@@ -33,6 +33,7 @@ import {
   noteAttachmentCleanupObjectPresent,
 } from "@/lib/attachmentCleanupAvailability";
 import { legacyDeletePapersWithBestEffortCleanup } from "./deletePapersCompat";
+import { isPaperHeldByStudyError, STUDY_RECORD_DELETE_COPY } from "@/lib/studyRecord/paperGuards";
 
 /**
  * Study-type re-evaluation reads exactly the columns it evaluates on — never
@@ -626,6 +627,13 @@ export function useBulkMutations(
       if (rpcError) {
         if (!isAttachmentCleanupSchemaMissing(rpcError)) {
           rollbackCache(snapshot);
+          // EVIDENCE-RECORDS-001C1: a selected paper has a study record, and the
+          // NO ACTION key refused the whole call — nothing was deleted. Only that
+          // key is explained this way.
+          if (isPaperHeldByStudyError(rpcError)) {
+            toast({ title: "Papers not deleted", description: STUDY_RECORD_DELETE_COPY.refusedBulk, variant: "destructive" });
+            return;
+          }
           // Bounded copy: the RPC's guards describe paths, namespaces and
         // ownership, none of which belongs in a toast.
         toast({
