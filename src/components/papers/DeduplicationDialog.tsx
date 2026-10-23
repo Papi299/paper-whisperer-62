@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -12,8 +12,10 @@ import { Badge } from "@/components/ui/badge";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Loader2, CheckCircle2, AlertTriangle, BookOpenCheck } from "lucide-react";
 import { useDeduplication, suggestKeepPaper } from "@/hooks/useDeduplication";
+import { usePaperLinkCheck } from "@/hooks/useStudyRecords";
+import { mergeBlock, STUDY_RECORD_MERGE_COPY, type MergeBlock } from "@/lib/studyRecord/paperGuards";
 import { DuplicateGroup, DuplicatePaperInfo } from "@/types/database";
 
 interface DeduplicationDialogProps {
@@ -79,20 +81,35 @@ function DuplicateGroupCard({
   groupIndex,
   selectedKeepId,
   onSelectKeep,
+  held,
+  block,
 }: {
   group: DuplicateGroup;
   groupIndex: number;
   selectedKeepId: string;
   onSelectKeep: (groupIdx: number, paperId: string) => void;
+  /** Papers of this group a study record links to (EVIDENCE-RECORDS-001C1). */
+  held: ReadonlySet<string>;
+  /** Why this group can't be merged as chosen; null when it can. */
+  block: MergeBlock | null;
 }) {
+  const titleOf = (id: string) => group.papers.find((paper) => paper.id === id)?.title ?? "This paper";
   return (
-    <div className="rounded-lg border p-4 space-y-3">
+    <div className="rounded-lg border p-4 space-y-3" data-testid="duplicate-group">
       <div className="flex items-center justify-between gap-2">
         <MatchBadge group={group} />
         <span className="shrink-0 text-xs text-muted-foreground">
           {group.papers.length} copies
         </span>
       </div>
+
+      {block && (
+        <p role="note" className="rounded-md border border-amber-500/50 bg-amber-50 p-2 text-xs dark:bg-amber-950/30" data-testid="duplicate-group-block">
+          {block.kind === "several_held"
+            ? STUDY_RECORD_MERGE_COPY.severalHeld(block.paperIds.length)
+            : STUDY_RECORD_MERGE_COPY.discardHeld(titleOf(block.paperIds[0]))}
+        </p>
+      )}
 
       <RadioGroup
         value={selectedKeepId}
@@ -144,11 +161,19 @@ function DuplicateGroupCard({
                   )}
                 </div>
               </div>
-              {isSelected && (
-                <Badge variant="default" className="shrink-0 text-xs">
-                  Keep
-                </Badge>
-              )}
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                {isSelected && (
+                  <Badge variant="default" className="shrink-0 text-xs">
+                    Keep
+                  </Badge>
+                )}
+                {held.has(paper.id.toLowerCase()) && (
+                  <Badge variant="outline" className="shrink-0 gap-1 text-xs font-normal">
+                    <BookOpenCheck className="h-3 w-3" aria-hidden="true" />
+                    Study record
+                  </Badge>
+                )}
+              </div>
             </label>
           );
         })}
@@ -210,9 +235,33 @@ export function DeduplicationDialog({
     }
   }, [open, scanForDuplicates]);
 
+  // EVIDENCE-RECORDS-001C1. Which of these papers a study record links to,
+  // checked fresh once the scan has groups. A merge that would discard such a
+  // paper is refused by the database; this check explains it first and keeps
+  // it out of "Merge All". Advisory: a link made after it is still refused.
+  const groupPaperIds = useMemo(
+    () => duplicateGroups.flatMap((group) => group.papers.map((paper) => paper.id)),
+    [duplicateGroups],
+  );
+  const { check: linkCheck, retry: retryLinkCheck } = usePaperLinkCheck(
+    userId,
+    groupPaperIds,
+    open && !scanning && duplicateGroups.length > 0,
+  );
+  const linkCheckSettled = linkCheck.status === "clear" || linkCheck.status === "held";
+  const held = useMemo(
+    () => new Set(linkCheck.status === "held" ? linkCheck.held.map((paper) => paper.paperId.toLowerCase()) : []),
+    [linkCheck],
+  );
+  const heldKey = [...held].sort().join(",");
+
+  // Groups whose keeper the user chose, so a later suggestion never overrides it.
+  const chosenByUser = useRef<Set<number>>(new Set());
+
   // Auto-populate suggested keeps when groups arrive
   useEffect(() => {
     if (duplicateGroups.length > 0) {
+      chosenByUser.current = new Set();
       const defaults = new Map<number, string>();
       duplicateGroups.forEach((group, idx) => {
         defaults.set(idx, suggestKeepPaper(group));
@@ -221,7 +270,22 @@ export function DeduplicationDialog({
     }
   }, [duplicateGroups]);
 
+  // Once the study records are known, suggest keeping the paper that has one
+  // in every group the user hasn't decided themselves.
+  useEffect(() => {
+    if (!heldKey || duplicateGroups.length === 0) return;
+    const linked = new Set(heldKey.split(","));
+    setSelections((previous) => {
+      const next = new Map(previous);
+      duplicateGroups.forEach((group, idx) => {
+        if (!chosenByUser.current.has(idx)) next.set(idx, suggestKeepPaper(group, linked));
+      });
+      return next;
+    });
+  }, [duplicateGroups, heldKey]);
+
   const handleSelectKeep = (groupIdx: number, paperId: string) => {
+    chosenByUser.current.add(groupIdx);
     setSelections((prev) => {
       const next = new Map(prev);
       next.set(groupIdx, paperId);
@@ -229,8 +293,19 @@ export function DeduplicationDialog({
     });
   };
 
+  const blocks = useMemo(
+    () =>
+      duplicateGroups.map((group, idx) =>
+        mergeBlock(group, selections.get(idx) || group.papers[0].id, held),
+      ),
+    [duplicateGroups, selections, held],
+  );
+  const mergeableCount = blocks.filter((block) => block === null).length;
+
   const handleMergeAll = async () => {
-    await mergeAllGroups(selections);
+    if (!linkCheckSettled) return;
+    const mergeable = new Map([...selections].filter(([idx]) => blocks[idx] === null));
+    await mergeAllGroups(mergeable, { skippedForStudyRecords: selections.size - mergeable.size });
     onOpenChange(false);
   };
 
@@ -241,8 +316,8 @@ export function DeduplicationDialog({
 
   const papersToRemove = useMemo(
     () =>
-      duplicateGroups.reduce((sum, g) => sum + (g.papers.length - 1), 0),
-    [duplicateGroups],
+      duplicateGroups.reduce((sum, g, idx) => sum + (blocks[idx] === null ? g.papers.length - 1 : 0), 0),
+    [duplicateGroups, blocks],
   );
 
   // Determine dialog state for rendering
@@ -288,6 +363,11 @@ export function DeduplicationDialog({
           <>
             <ScrollArea className={`flex-1 pr-4 ${RESULTS_SCROLL_CAP}`}>
               <div className="space-y-4">
+                {held.size > 0 && (
+                  <p className="text-xs text-muted-foreground" data-testid="duplicate-study-record-notice">
+                    {STUDY_RECORD_MERGE_COPY.notice}
+                  </p>
+                )}
                 {duplicateGroups.map((group, idx) => (
                   <DuplicateGroupCard
                     key={`${group.match_type}-${group.match_value}`}
@@ -295,6 +375,8 @@ export function DeduplicationDialog({
                     groupIndex={idx}
                     selectedKeepId={selections.get(idx) || group.papers[0].id}
                     onSelectKeep={handleSelectKeep}
+                    held={held}
+                    block={linkCheckSettled ? blocks[idx] : null}
                   />
                 ))}
               </div>
@@ -303,12 +385,29 @@ export function DeduplicationDialog({
             <Separator />
 
             <DialogFooter className="flex items-center justify-between sm:justify-between">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <AlertTriangle className="h-4 w-4 text-yellow-500" />
-                <span>
-                  {papersToRemove} paper{papersToRemove !== 1 ? "s" : ""} will
-                  be removed
-                </span>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+                {linkCheck.status === "checking" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    <span>{STUDY_RECORD_MERGE_COPY.checking}</span>
+                  </>
+                ) : linkCheck.status === "error" ? (
+                  <>
+                    <AlertTriangle className="h-4 w-4 text-yellow-500" aria-hidden="true" />
+                    <span>{STUDY_RECORD_MERGE_COPY.checkFailed}</span>
+                    <Button variant="outline" size="sm" onClick={retryLinkCheck}>
+                      Try again
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                    <span>
+                      {papersToRemove} paper{papersToRemove !== 1 ? "s" : ""} will
+                      be removed
+                    </span>
+                  </>
+                )}
               </div>
               <div className="flex gap-2">
                 <Button
@@ -318,9 +417,13 @@ export function DeduplicationDialog({
                 >
                   Cancel
                 </Button>
+                {/* Until the study records are known, Merge does nothing — said by the
+                    status beside it. `aria-disabled` rather than `disabled`, so the
+                    control keeps its place and pointer target while the check runs. */}
                 <Button
                   onClick={handleMergeAll}
-                  disabled={merging || selections.size === 0}
+                  disabled={merging || selections.size === 0 || mergeableCount === 0}
+                  aria-disabled={!linkCheckSettled || undefined}
                 >
                   {merging ? (
                     <>
@@ -328,7 +431,7 @@ export function DeduplicationDialog({
                       Merging...
                     </>
                   ) : (
-                    `Merge All (${duplicateGroups.length} group${duplicateGroups.length !== 1 ? "s" : ""})`
+                    `Merge All (${mergeableCount} group${mergeableCount !== 1 ? "s" : ""})`
                   )}
                 </Button>
               </div>

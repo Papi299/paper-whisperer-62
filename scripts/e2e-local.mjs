@@ -68,6 +68,11 @@ import {
   provisionEntitledModelAccount,
   removeModelAccount,
 } from "./e2e-local-model-fixture.mjs";
+import {
+  assertStudyRecordOutcomeAndRemove,
+  provisionStudyRecordAccounts,
+  removeStudyRecordAccounts,
+} from "./e2e-local-evidence-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -216,6 +221,17 @@ const DEFAULT_SPECS = [
   // Function is served and no provider request is made — this spec tests
   // preference persistence and UI only.
   "e2e/ai-model-settings.spec.ts",
+  // EVIDENCE-RECORDS-001C1 Study Record UI. Mutating, but only within two
+  // disposable per-run accounts it owns outright (provisioned below only when
+  // this spec is scheduled): a pilot owner — the role written server-side into
+  // the LOCAL `internal_user_access`, never into Production — and a former
+  // owner demoted to manager. It creates, edits and deletes study records
+  // through the real lifecycle and field RPCs, deletes one of its own papers,
+  // and is refused one delete and one merge by the NO ACTION key; the lifecycle
+  // then proves as the database owner that the refused operations changed no
+  // assignment, attachment or cleanup job, and removes both accounts. The seed
+  // is never touched. No Edge Function, AI provider or external service.
+  "e2e/study-records.spec.ts",
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
   // local delete-account Edge Function. The lifecycle proves afterwards that the
@@ -478,6 +494,9 @@ async function cmdRun(specArgs) {
   // Set once the disposable ENTITLED model account exists; cleared once its
   // final state is proven and it is removed.
   let modelAccount = null;
+  // Set once the EVIDENCE-RECORDS-001C1 study-record accounts exist; cleared
+  // once the post-run proof has passed and they are removed.
+  let studyAccounts = null;
   try {
     await startStack();
     await resetLocalDb();
@@ -510,6 +529,15 @@ async function cmdRun(specArgs) {
       ? await provisionEntitledModelAccount({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
       : null;
 
+    // EVIDENCE-RECORDS-001C1 study-record accounts: the pilot owner role is a
+    // server-side row in the LOCAL `internal_user_access`, granted to disposable
+    // users only — never to a seed identity, never in Production. Provisioned
+    // only when the study-record spec is actually scheduled.
+    const runsStudyRecordSpec = specs.some((spec) => spec.includes("study-records"));
+    studyAccounts = runsStudyRecordSpec
+      ? await provisionStudyRecordAccounts({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
+      : null;
+
     // Explicit, in-memory backend contract for the guarded Playwright run.
     const childEnv = {
       ...process.env,
@@ -529,6 +557,14 @@ async function cmdRun(specArgs) {
         ? {
             E2E_MODEL_USER_EMAIL: modelAccount.email,
             E2E_MODEL_USER_PASSWORD: modelAccount.password,
+          }
+        : {}),
+      ...(studyAccounts
+        ? {
+            E2E_STUDY_OWNER_EMAIL: studyAccounts.owner.email,
+            E2E_STUDY_OWNER_PASSWORD: studyAccounts.owner.password,
+            E2E_STUDY_FORMER_EMAIL: studyAccounts.former.email,
+            E2E_STUDY_FORMER_PASSWORD: studyAccounts.former.password,
           }
         : {}),
     };
@@ -566,12 +602,21 @@ async function cmdRun(specArgs) {
       modelAccount = null; // proven reset and removed
       log("ai-model-settings E2E verified: preference cleared and fixture account removed.");
     }
+
+    // What only the database can see: the refused delete and merge changed no
+    // assignment, attachment or cleanup job; the deleted records are gone and
+    // their papers stay. Then both accounts are removed.
+    if (studyAccounts) {
+      await assertStudyRecordOutcomeAndRemove({ apiUrl, serviceRoleKey, ownerSql, accounts: studyAccounts, log });
+      studyAccounts = null; // proven and removed
+      log("study-records E2E verified: refusals left the papers intact and fixture accounts removed.");
+    }
   } catch (err) {
     primaryError = err;
     // A failed run may have left the disposable account behind. Remove it
     // best-effort so a debugging session with E2E_KEEP_LOCAL_STACK=1 does not
     // accumulate residue; the deterministic fixtures are never touched.
-    if (disposable || modelAccount) {
+    if (disposable || modelAccount || studyAccounts) {
       const target = await readLocalStatus().catch(() => null);
       if (target && disposable) {
         await cleanupDisposableAccount({
@@ -586,6 +631,14 @@ async function cmdRun(specArgs) {
           apiUrl: target.apiUrl,
           serviceRoleKey: target.serviceRoleKey,
           account: modelAccount,
+          log,
+        });
+      }
+      if (target && studyAccounts) {
+        await removeStudyRecordAccounts({
+          apiUrl: target.apiUrl,
+          serviceRoleKey: target.serviceRoleKey,
+          accounts: studyAccounts,
           log,
         });
       }

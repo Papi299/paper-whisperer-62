@@ -289,3 +289,93 @@ describe("deletePaper — the pre-migration path", () => {
     );
   });
 });
+
+/**
+ * EVIDENCE-RECORDS-001C1 — a study record holds the paper. The NO ACTION key
+ * `evidence_study_reports_paper_fkey` refuses the whole transaction with 23503;
+ * the refusal is explained as a study record, by the constraint's name only.
+ */
+describe("deletePaper — a study record holds the paper", () => {
+  const heldError = {
+    code: "23503",
+    message:
+      'update or delete on table "papers" violates foreign key constraint "evidence_study_reports_paper_fkey" on table "evidence_study_reports"',
+    details: "Key (id)=(33333333-3333-3333-3333-333333333333) is still referenced from table \"evidence_study_reports\".",
+  };
+
+  function studyToast() {
+    const call = mockToast.mock.calls.find((c) => (c[0] as { title?: string })?.title === "Paper not deleted");
+    return call?.[0] as { title: string; description?: string; variant?: string } | undefined;
+  }
+
+  it("rolls back, explains the study record, and cleans nothing up", async () => {
+    state.rpcResult = { data: null, error: heldError };
+    const { result } = renderMutations();
+
+    await act(async () => {
+      await result.current.deletePaper(PAPER);
+    });
+
+    expect(cache.rollbackCache).toHaveBeenCalledWith({ marker: "snapshot" });
+    expect(studyToast()).toEqual({
+      title: "Paper not deleted",
+      description: expect.stringMatching(/study record/i),
+      variant: "destructive",
+    });
+    // The paper still exists: the optimistic removal is undone (above), and
+    // there is no success toast, no legacy path and no Storage work.
+    expect(deleteToast()).toBeUndefined();
+    expect(state.legacyDeleteIn).toEqual([]);
+    expect(mockStorageRemove).not.toHaveBeenCalled();
+    // The toast never echoes the database's message, ids or table names.
+    expect(JSON.stringify(studyToast())).not.toMatch(/evidence_|violates|Key \(id\)|33333333/);
+  });
+
+  it("keeps the existing handling for every other foreign-key violation", async () => {
+    state.rpcResult = {
+      data: null,
+      error: {
+        code: "23503",
+        message: 'update or delete on table "papers" violates foreign key constraint "paper_tags_paper_id_fkey" on table "paper_tags"',
+      },
+    };
+    const { result } = renderMutations();
+
+    await act(async () => {
+      await result.current.deletePaper(PAPER);
+    });
+
+    expect(studyToast()).toBeUndefined();
+    expect(deleteToast()).toEqual(expect.objectContaining({ title: "Error deleting paper", variant: "destructive" }));
+    expect(cache.rollbackCache).toHaveBeenCalled();
+  });
+
+  it("does not take the anchor-link key for a paper refusal", async () => {
+    // The other evidence key PR-B classifies (an unlink a reference still uses)
+    // is not about deleting a paper, so it is not explained as one.
+    state.rpcResult = {
+      data: null,
+      error: { code: "23503", message: 'insert or update violates foreign key constraint "evidence_field_anchors_link_fkey"' },
+    };
+    const { result } = renderMutations();
+
+    await act(async () => {
+      await result.current.deletePaper(PAPER);
+    });
+
+    expect(studyToast()).toBeUndefined();
+    expect(deleteToast()).toEqual(expect.objectContaining({ title: "Error deleting paper" }));
+  });
+
+  it("needs the 23503 code, not just the constraint name in a message", async () => {
+    state.rpcResult = { data: null, error: { code: "P0001", message: 'violates foreign key constraint "evidence_study_reports_paper_fkey"' } };
+    const { result } = renderMutations();
+
+    await act(async () => {
+      await result.current.deletePaper(PAPER);
+    });
+
+    expect(studyToast()).toBeUndefined();
+    expect(deleteToast()).toEqual(expect.objectContaining({ title: "Error deleting paper" }));
+  });
+});

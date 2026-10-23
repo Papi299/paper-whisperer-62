@@ -19,6 +19,7 @@ import {
   noteAttachmentCleanupObjectPresent,
 } from "@/lib/attachmentCleanupAvailability";
 import { legacyDeletePapersWithBestEffortCleanup } from "./deletePapersCompat";
+import { isPaperHeldByStudyError, STUDY_RECORD_DELETE_COPY } from "@/lib/studyRecord/paperGuards";
 
 export function usePaperMutations(
   userId: string | undefined,
@@ -476,6 +477,14 @@ export function usePaperMutations(
           // Nothing committed. The paper is still there, so the optimistic
           // removal must be undone.
           rollbackCache(snapshot);
+          // EVIDENCE-RECORDS-001C1: a study record links to this paper, and the
+          // NO ACTION key refused the whole transaction (the check before the
+          // confirmation is advisory, so a link made since lands here). Only that
+          // key is explained this way.
+          if (isPaperHeldByStudyError(rpcError)) {
+            toast({ title: "Paper not deleted", description: STUDY_RECORD_DELETE_COPY.refusedSingle, variant: "destructive" });
+            return;
+          }
           // Bounded copy: the RPC's guards describe paths, namespaces and
           // ownership, none of which belongs in a toast.
           toast({

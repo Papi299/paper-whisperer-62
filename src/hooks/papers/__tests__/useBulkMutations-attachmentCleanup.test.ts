@@ -250,3 +250,55 @@ describe("bulkDeletePapers — the pre-migration path", () => {
     expect(deleteToast()?.variant).toBe("destructive");
   });
 });
+
+/**
+ * EVIDENCE-RECORDS-001C1 — a selected paper has a study record (a link made
+ * after the confirmation's check). The key refuses the whole call: nothing was
+ * deleted, and the refusal is explained by the constraint's name only.
+ */
+describe("bulkDeletePapers — a study record holds a selected paper", () => {
+  const heldError = {
+    code: "23503",
+    message:
+      'update or delete on table "papers" violates foreign key constraint "evidence_study_reports_paper_fkey" on table "evidence_study_reports"',
+  };
+
+  function studyToast() {
+    const call = mockToast.mock.calls.find((c) => (c[0] as { title?: string })?.title === "Papers not deleted");
+    return call?.[0] as { title: string; description?: string; variant?: string } | undefined;
+  }
+
+  it("rolls back every paper and says nothing was deleted", async () => {
+    state.rpcResult = { data: null, error: heldError };
+    const { result } = renderBulk();
+
+    await act(async () => {
+      await result.current.bulkDeletePapers(IDS);
+    });
+
+    expect(cache.rollbackCache).toHaveBeenCalledWith({ marker: "snapshot" });
+    expect(studyToast()).toEqual({
+      title: "Papers not deleted",
+      description: expect.stringMatching(/nothing was deleted/i),
+      variant: "destructive",
+    });
+    expect(deleteToast()).toBeUndefined();
+    expect(state.legacyDeleteIn).toEqual([]);
+    expect(mockStorageRemove).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing handling for an unrelated foreign-key violation", async () => {
+    state.rpcResult = {
+      data: null,
+      error: { code: "23503", message: 'violates foreign key constraint "paper_projects_paper_id_fkey" on table "paper_projects"' },
+    };
+    const { result } = renderBulk();
+
+    await act(async () => {
+      await result.current.bulkDeletePapers(IDS);
+    });
+
+    expect(studyToast()).toBeUndefined();
+    expect(deleteToast()).toEqual(expect.objectContaining({ title: "Error deleting papers", variant: "destructive" }));
+  });
+});

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -26,6 +26,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { PaperList } from "@/components/papers/PaperList";
 import { BulkActionsToolbar } from "@/components/papers/BulkActionsToolbar";
 import { PaperComparisonDialog } from "@/components/papers/PaperComparisonDialog";
+import { StudyRecordDialog, type StudyRecordTarget } from "@/components/papers/study-record/StudyRecordDialog";
 import { AddPaperDialog } from "@/components/papers/AddPaperDialog";
 import { searchPubMed } from "@/lib/searchPubMedEdge";
 import { searchConsensus } from "@/lib/searchConsensusEdge";
@@ -51,6 +52,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { PoolsProvider, usePools } from "@/contexts/PoolsContext";
 import { useNormalizationConfig } from "@/hooks/useNormalizationConfig";
 import { useAttachmentCleanupRecovery } from "@/hooks/useAttachmentCleanupRecovery";
+import { usePaperLinkCheck } from "@/hooks/useStudyRecords";
+import { suggestStudyLabel } from "@/lib/studyRecord/labelSuggestion";
 
 /**
  * Outer Dashboard shell: handles auth redirect and provides PoolsProvider.
@@ -504,6 +507,7 @@ function DashboardContent() {
     handleToggleSelect,
     handleToggleSelectAll,
     handleClearSelection,
+    handleDeselectPapers,
     handleBulkDelete,
     handleBulkSetProjects,
     handleBulkSetTags,
@@ -527,6 +531,44 @@ function DashboardContent() {
   const handleCompare = useCallback(() => {
     openComparison(selectedPaperIds);
   }, [openComparison, selectedPaperIds]);
+
+  /**
+   * EVIDENCE-RECORDS-001C1 — whether a selected paper has a study record,
+   * checked fresh while the bulk delete confirmation is open. A paper a study
+   * record holds is never sent to the deletion RPC (which would refuse the
+   * whole batch); the confirmation names it and offers to deselect it.
+   */
+  const [bulkDeleteCheckOpen, setBulkDeleteCheckOpen] = useState(false);
+  const selectedTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    for (const paper of papers) if (selectedPaperIds.has(paper.id)) titles.set(paper.id.toLowerCase(), paper.title);
+    return titles;
+  }, [papers, selectedPaperIds]);
+  const bulkDeleteCheck = usePaperLinkCheck(
+    userId,
+    bulkDeleteCheckOpen ? [...selectedPaperIds] : [],
+    bulkDeleteCheckOpen,
+    selectedTitles,
+  );
+
+  /**
+   * EVIDENCE-RECORDS-001C1 — the open Study Record dialog, if any. Like the
+   * comparison it lives here, mounted once: a paper's expanded details and
+   * Edit Paper only ask for it to open, after their own dialog has closed, so
+   * it is never stacked on another modal.
+   */
+  const [studyRecordTarget, setStudyRecordTarget] = useState<StudyRecordTarget | null>(null);
+  const studyRecordSessionRef = useRef(0);
+  const openStudyRecord = useCallback((paper: PaperWithTags) => {
+    studyRecordSessionRef.current += 1;
+    setStudyRecordTarget({
+      session: studyRecordSessionRef.current,
+      paperId: paper.id,
+      paperTitle: paper.title,
+      labelSuggestion: suggestStudyLabel(paper),
+    });
+  }, []);
+  const closeStudyRecord = useCallback(() => setStudyRecordTarget(null), []);
 
   // Dialog state
   const [addPaperOpen, setAddPaperOpen] = useState(false);
@@ -867,6 +909,7 @@ function DashboardContent() {
             hasActiveFilters={hasActiveFilters}
             onAddPapers={() => setAddPaperOpen(true)}
             onClearFilters={handleClearFilters}
+            onOpenStudyRecord={openStudyRecord}
           />
 
           <BulkActionsToolbar
@@ -881,6 +924,10 @@ function DashboardContent() {
             bulkAnalyzeProgress={bulkAnalyzeProgress}
             projects={projects}
             tags={tags}
+            deleteCheck={bulkDeleteCheck.check}
+            onDeleteCheckOpenChange={setBulkDeleteCheckOpen}
+            onRetryDeleteCheck={bulkDeleteCheck.retry}
+            onDeselectPapers={handleDeselectPapers}
           />
         </div>
       </main>
@@ -921,6 +968,7 @@ function DashboardContent() {
         onAiQuotaRefresh={refetchAiQuota}
         onCreateProject={createProject}
         onCreateTag={createTag}
+        onOpenStudyRecord={openStudyRecord}
       />
 
       <EditProjectDialog
@@ -940,6 +988,10 @@ function DashboardContent() {
       {/* Read-only and ephemeral: no AI, no provider, no write, nothing kept
           after it closes. See `PaperComparisonDialog`. */}
       <PaperComparisonDialog request={comparison.request} currentUserId={userId} onClose={comparison.close} />
+
+      {/* No autosave and no browser storage: an unsaved draft asks before the
+          dialog closes and is gone after. See `StudyRecordDialog`. */}
+      <StudyRecordDialog target={studyRecordTarget} userId={userId} onClose={closeStudyRecord} />
 
       {dedupMounted && userId && (
         <DeduplicationDialog

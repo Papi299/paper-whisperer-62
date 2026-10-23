@@ -36,6 +36,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { PaperOrganizationSuggestions } from "@/components/papers/PaperOrganizationSuggestions";
 import { parseAnalyzeError, formatQuotaExceededMessage } from "@/lib/analyzeError";
 import type { AiQuotaStatus } from "@/hooks/useAiQuota";
+import { StudyRecordEntry } from "@/components/papers/study-record/StudyRecordEntry";
+import { STUDY_RECORD_COPY } from "@/components/papers/study-record/studyRecordCopy";
 
 interface EditPaperDialogProps {
   paper: PaperWithTags | null;
@@ -71,6 +73,13 @@ interface EditPaperDialogProps {
    */
   onCreateProject?: (name: string, description?: string | null) => Promise<Project | null>;
   onCreateTag?: (name: string) => Promise<Tag | null>;
+  /**
+   * EVIDENCE-RECORDS-001C1 — open this paper's Study Record dialog. Edit Paper
+   * closes first and asks only once its closing has finished, so the two
+   * modals are never stacked. Unsaved edits here are not kept (the entry says
+   * so). Absent: no Study Record entry.
+   */
+  onOpenStudyRecord?: (paper: PaperWithTags) => void;
 }
 
 export function EditPaperDialog({
@@ -86,6 +95,7 @@ export function EditPaperDialog({
   onAiQuotaRefresh,
   onCreateProject,
   onCreateTag,
+  onOpenStudyRecord,
 }: EditPaperDialogProps) {
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
@@ -131,6 +141,8 @@ export function EditPaperDialog({
    * unlock path instead of the lock path.
    */
   const creationOwnerTokenRef = useRef<number | null>(null);
+  /** The paper whose Study Record dialog opens once this dialog has closed. */
+  const pendingStudyRecordRef = useRef<PaperWithTags | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const [tagOpen, setTagOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -446,6 +458,13 @@ export function EditPaperDialog({
         className="sm:max-w-4xl max-h-[90vh] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         style={{ maxHeight: "90dvh" }}
         onOpenAutoFocus={onDialogAutoFocus}
+        onCloseAutoFocus={() => {
+          // Focus goes back to where Edit Paper was opened from first, so the
+          // Study Record dialog returns it there too when it closes.
+          const parked = pendingStudyRecordRef.current;
+          pendingStudyRecordRef.current = null;
+          if (parked) onOpenStudyRecord?.(parked);
+        }}
       >
         <DialogHeader>
           <DialogTitle ref={headingRef} tabIndex={-1} className="outline-none">
@@ -796,6 +815,21 @@ export function EditPaperDialog({
             </div>
           </div>
         </div>
+
+        {/* ── Study records (EVIDENCE-RECORDS-001C1) ── */}
+        {onOpenStudyRecord && paper && (
+          <StudyRecordEntry
+            className="rounded-md border border-border p-3"
+            userId={userId}
+            paperId={paper.id}
+            enabled={open}
+            note={STUDY_RECORD_COPY.entryEditPaperNote}
+            onOpen={() => {
+              pendingStudyRecordRef.current = paper;
+              onOpenChange(false);
+            }}
+          />
+        )}
 
         {/* ── Visuals & Attachments (full width) ── */}
         {userId && paper && (

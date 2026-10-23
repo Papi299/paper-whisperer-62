@@ -47,6 +47,12 @@ export function useBulkSelection({
     setSelectedPaperIds(new Set());
   }, []);
 
+  /** Take these papers out of the selection (EVIDENCE-RECORDS-001C1: the ones a study record holds). */
+  const handleDeselectPapers = useCallback((paperIds: readonly string[]) => {
+    const remove = new Set(paperIds.map((id) => id.toLowerCase()));
+    setSelectedPaperIds((prev) => new Set([...prev].filter((id) => !remove.has(id.toLowerCase()))));
+  }, []);
+
   const handleBulkDelete = useCallback(async () => {
     await bulkDeletePapers(Array.from(selectedPaperIds));
     setSelectedPaperIds(new Set());
@@ -74,6 +80,7 @@ export function useBulkSelection({
     handleToggleSelect,
     handleToggleSelectAll,
     handleClearSelection,
+    handleDeselectPapers,
     handleBulkDelete,
     handleBulkSetProjects,
     handleBulkSetTags,
