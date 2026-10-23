@@ -18,7 +18,9 @@ import { waitForDashboard } from "./helpers";
  * 3 quote selected and matched · 4 field saved · 5 invalid quote refused ·
  * 6 repeated passage needs a choice · 7 no create/edit without the pilot ·
  * 8 a linked paper is not deleted · 9 a linked discard is not merged ·
- * 10 deleting the record frees the paper · 11 Record/Source on a phone.
+ * 10 deleting the record frees the paper · 11 Record/Source on a phone. And
+ * C1-R1: a create whose answer is lost after the database committed it is
+ * found again on reopening and retried with the same request — one study.
  *
  * Writes go only through the real RPCs. After the run, the lifecycle proves as
  * the database owner that the refused delete and merge changed no assignment,
@@ -44,6 +46,7 @@ const TITLES = {
   mergeDiscard: "SR-E2E Merge race (sparse)",
   formerHeld: "SR-E2E Former owner's paper",
   formerFree: "SR-E2E Paper without a record",
+  lostAnswer: "SR-E2E Lost answer",
 };
 
 const DESKTOP = { width: 1280, height: 800 };
@@ -584,6 +587,69 @@ test.describe("Study records — the pilot owner", () => {
     await expect(confirmation.getByRole("heading", { name: "Delete Paper" })).toBeVisible();
     await confirmation.getByRole("button", { name: "Delete" }).click();
     await expect(page.getByRole("button", { name: `Delete ${TITLES.main}` })).toHaveCount(0);
+  });
+
+  test("C1-R1 · a create whose answer is lost is found on reopening, and retrying sends the same request — one study", async () => {
+    await page.reload({ waitUntil: "networkidle" });
+    await waitForDashboard(page);
+    const CREATE_RPC = "**/rest/v1/rpc/evidence_create_study_from_paper";
+    const sent: unknown[] = [];
+    const onRequest = (request: Request) => {
+      if (request.method() === "POST" && request.url().includes("/rest/v1/rpc/evidence_create_study_from_paper")) sent.push(request.postDataJSON());
+    };
+    page.on("request", onRequest);
+    const traffic = watchDialogTraffic(page);
+    // The first create reaches the database and commits; its answer never reaches the page.
+    await page.route(
+      CREATE_RPC,
+      async (route) => {
+        await route.fetch();
+        await route.abort("failed");
+      },
+      { times: 1 },
+    );
+
+    await expandRow(page, TITLES.lostAnswer);
+    const entry = page.getByTestId("study-record-entry");
+    await entry.getByRole("button", { name: "Start a study record" }).click();
+    const dialog = studyDialog(page);
+    await dialog.getByRole("radio", { name: /^Yes/ }).click();
+    await dialog.getByRole("radio", { name: /^Randomized trial, parallel groups/ }).click();
+    await dialog.getByLabel("Study name").fill("Lost answer trial");
+    await dialog.getByRole("button", { name: "Create study record" }).click();
+
+    const recovery = dialog.getByTestId("study-record-create-recovery");
+    await expect(recovery.getByRole("alert")).toContainText("We couldn't confirm whether your change was saved.");
+    const [created] = await studiesOf(page, TITLES.lostAnswer);
+    expect(created.version).toBe(1);
+
+    // The user leaves — allowed, and told the attempt is still open.
+    await closeStudyDialog(page);
+    await expect(page.getByText("This study record isn't confirmed yet")).toBeVisible();
+    await expect(entry.getByTestId("study-record-entry-status")).toHaveText("Study records — 1");
+
+    // Reopening at once offers the recovery, not a new creation.
+    await entry.getByRole("button", { name: "Open study record" }).click();
+    await expect(recovery).toBeVisible();
+    await expect(recovery).toContainText("it might already exist");
+    await expect(recovery).toContainText("Lost answer trial");
+    await expect(dialog.getByRole("button", { name: "Create study record" })).toHaveCount(0);
+    expect(sent).toHaveLength(1);
+
+    const replay = page.waitForResponse((response) => response.url().includes("/rest/v1/rpc/evidence_create_study_from_paper"));
+    await recovery.getByRole("button", { name: "Try again" }).click();
+    expect(await (await replay).json()).toMatchObject({ status: "replayed", study_id: created.id });
+    await expect(dialog.getByRole("heading", { name: "Study record: Lost answer trial" })).toBeVisible();
+
+    // The exact original request, sent twice; the database holds one study.
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(await studiesOf(page, TITLES.lostAnswer)).toEqual([created]);
+    page.off("request", onRequest);
+    traffic.stop();
+    expect(traffic.forbidden).toEqual([]);
+    await closeStudyDialog(page);
+    await collapseRow(page, TITLES.lostAnswer);
   });
 
   test("11 · on a phone, Record and Source switch, and nothing scrolls sideways", async () => {

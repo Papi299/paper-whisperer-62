@@ -81,6 +81,7 @@ export const TITLES = Object.freeze({
   mergeDiscard: "SR-E2E Merge race (sparse)",
   formerHeld: "SR-E2E Former owner's paper",
   formerFree: "SR-E2E Paper without a record",
+  lostAnswer: "SR-E2E Lost answer",
 });
 
 const EMPTY_LISTS = { keywords: [], raw_keywords: [], mesh_terms: [], substances: [] };
@@ -105,6 +106,8 @@ function ownerPapers(userId) {
     sparse(TITLES.duplicateHeld, "10.5555/sr-e2e.0003 "),
     complete(TITLES.mergeKept, "10.5555/sr-e2e.0005", "Synthetic abstract for the merge race."),
     sparse(TITLES.mergeDiscard, "10.5555/sr-e2e.0005 "),
+    // C1-R1: created once while the spec loses the create's answer.
+    complete(TITLES.lostAnswer, "10.5555/sr-e2e.0006", "Synthetic abstract for the lost answer: adults cycled for eight weeks."),
   ];
 }
 
@@ -357,10 +360,11 @@ export async function assertStudyRecordOutcomeAndRemove({ apiUrl, serviceRoleKey
       `'owner_titles', ${titles(uid)}, ` +
       `'former_titles', ${titles(fid)}, ` +
       `'former_studies', (SELECT count(*) FROM public.evidence_studies WHERE user_id = ${fid}), ` +
-      `'held_study', (SELECT count(*) FROM public.evidence_studies WHERE user_id = ${uid} AND id = ${sqlLiteral(assertUuid(owner.heldStudyId))})` +
+      `'held_study', (SELECT count(*) FROM public.evidence_studies WHERE user_id = ${uid} AND id = ${sqlLiteral(assertUuid(owner.heldStudyId))}), ` +
+      `'lost_answer_studies', (SELECT count(*) FROM public.evidence_study_reports WHERE user_id = ${uid} AND paper_id = ${sqlLiteral(assertUuid(owner.papers[TITLES.lostAnswer]))})` +
       ")::text;",
   );
-  const expectedOwnerTitles = [TITLES.deleteRace, TITLES.duplicateHeld, TITLES.duplicateKept, TITLES.mergeDiscard, TITLES.mergeKept].sort();
+  const expectedOwnerTitles = [TITLES.deleteRace, TITLES.duplicateHeld, TITLES.duplicateKept, TITLES.lostAnswer, TITLES.mergeDiscard, TITLES.mergeKept].sort();
   if (JSON.stringify(summary.owner_titles) !== JSON.stringify(expectedOwnerTitles)) {
     throw new Error(`study-records E2E: unexpected owner library after the run (${JSON.stringify(summary.owner_titles)}).`);
   }
@@ -369,7 +373,11 @@ export async function assertStudyRecordOutcomeAndRemove({ apiUrl, serviceRoleKey
   }
   if (summary.former_studies !== 0) throw new Error("study-records E2E: the former owner's study record was not deleted.");
   if (summary.held_study !== 1) throw new Error("study-records E2E: the duplicate pair's study record changed.");
-  log("  verified: refused delete and merge left assignments, attachments and the cleanup queue unchanged; deleted records are gone, papers stay");
+  // C1-R1: the create whose answer was lost, retried after reopening, made exactly one study.
+  if (summary.lost_answer_studies !== 1) {
+    throw new Error(`study-records E2E: the lost-answer paper has ${summary.lost_answer_studies} study records; the retried create must make exactly one.`);
+  }
+  log("  verified: refused delete and merge left assignments, attachments and the cleanup queue unchanged; deleted records are gone, papers stay; the lost-answer create made one study");
 
   await removeStudyRecordAccounts({ apiUrl, serviceRoleKey, accounts: { list: [owner, former] }, log });
 }
