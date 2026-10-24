@@ -221,17 +221,14 @@ const DEFAULT_SPECS = [
   // Function is served and no provider request is made — this spec tests
   // preference persistence and UI only.
   "e2e/ai-model-settings.spec.ts",
-  // EVIDENCE-RECORDS-001C1 Study Record UI. Mutating, but only within two
-  // disposable per-run accounts it owns outright (provisioned below only when
-  // this spec is scheduled): a pilot owner — the role written server-side into
-  // the LOCAL `internal_user_access`, never into Production — and a former
-  // owner demoted to manager. It creates, edits and deletes study records
-  // through the real lifecycle and field RPCs, deletes one of its own papers,
-  // and is refused one delete and one merge by the NO ACTION key; the lifecycle
-  // then proves as the database owner that the refused operations changed no
-  // assignment, attachment or cleanup job, and removes both accounts. The seed
-  // is never touched. No Edge Function, AI provider or external service.
-  "e2e/study-records.spec.ts",
+  // EVIDENCE-RECORDS-001C1's Study Record spec, `e2e/study-records.spec.ts`, is
+  // deliberately NOT in this set (CI-E2E-EVIDENCE-LANE-001). The `e2e-evidence`
+  // job in .github/workflows/e2e-local.yml runs it on its own runner and stack
+  // with `npm run test:e2e:local -- e2e/study-records.spec.ts`, so the Evidence
+  // Records suite can grow without spending this lane's 30-minute cap. It
+  // mutates only the two disposable accounts `cmdRun` provisions when a spec
+  // path contains `study-records` (scripts/e2e-local-evidence-fixture.mjs); the
+  // seed is never touched.
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
   // local delete-account Edge Function. The lifecycle proves afterwards that the

@@ -10,6 +10,10 @@ name: E2E (local)
 # stack, never touches Production or any cloud/linked project, requires no GitHub
 # secret / variable / Environment, and uses only the read-only default token.
 #
+# It has two independent jobs, each on its own runner with its own ephemeral
+# stack: `e2e-local` runs the default spec set, and `e2e-evidence` runs the
+# Evidence Records specs (CI-E2E-EVIDENCE-LANE-001).
+#
 # It is intentionally independent of the two required merge gates for `main` —
 # `Validate` (.github/workflows/validate.yml) and `DB Tests`
 # (.github/workflows/db-tests.yml). This lane is evidence, never a gate.
@@ -37,16 +41,17 @@ on:
     # this workflow; it is not a merge gate.
     - cron: '17 2 * * *'
 
-# Read-only token: the job never mutates GitHub state.
+# Read-only token: neither job mutates GitHub state.
 permissions:
   contents: read
 
 # One E2E run per PR, and otherwise one per ref: `github.ref` is
 # `refs/heads/main` for both a scheduled run and a `main` `workflow_dispatch`, so
 # the two share a group and a superseded `main` health run is cancelled rather
-# than stacking concurrent ephemeral Supabase stacks on the same ref. This group
-# is deliberately distinct from the `Validate` concurrency group so the two lanes
-# never cancel or serialise one another.
+# than stacking concurrent ephemeral Supabase stacks on the same ref. Cancelling
+# a run cancels both of its jobs. This group is deliberately distinct from the
+# `Validate` concurrency group so the two lanes never cancel or serialise one
+# another.
 concurrency:
   group: e2e-local-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -123,7 +128,8 @@ jobs:
         # The merged lifecycle is the sole owner of local stack startup, migration
         # replay, status parsing, local credentials, deterministic seed, Playwright
         # environment injection, ordinary teardown, and signal cleanup. It runs the
-        # default read-only spec set; no broader spec list is passed.
+        # default read-only spec set; no broader spec list is passed. That set
+        # excludes the Evidence Records specs, which `e2e-evidence` runs.
         run: npm run test:e2e:local
 
       - name: Enforce local stack teardown
@@ -161,6 +167,104 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-failure-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Evidence Records lane (CI-E2E-EVIDENCE-LANE-001). The Study Record specs run
+  # here rather than in `e2e-local`, so the Evidence Records suite can grow
+  # without spending that lane's 30-minute budget. It runs the same guarded
+  # lifecycle on its own GitHub-hosted runner — its own ephemeral local stack,
+  # Docker state, generated auth state and disposable accounts — and neither
+  # job `needs:` the other, so a failure or cancellation stays on the job it
+  # happened in. Keep the two jobs' steps identical apart from the spec list
+  # and the artifact name.
+  e2e-evidence:
+    name: e2e-evidence
+    # The same same-repository restriction as `e2e-local`: fork-origin pull
+    # requests skip before anything is installed or executed.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    # The same ceiling as `e2e-local`, for the same reason: it absorbs runner
+    # variance and is not licence for the suite to grow into it.
+    timeout-minutes: 30
+
+    env:
+      CI: true
+
+    steps:
+      - name: Checkout
+        # The same pinned actions and CLI version as `e2e-local`.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
+        with:
+          version: 2.111.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Report tool versions
+        # Safe version information only, as in `e2e-local`.
+        run: |
+          node --version
+          npm --version
+          docker version --format '{{.Server.Version}}'
+          supabase --version
+          npx --no-install playwright --version
+
+      - name: Install Playwright Chromium
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Verify backend guards
+        # The same two-layer fail-closed guard proof, on this job's own runner.
+        run: npm run test:e2e:local:verify-guards
+
+      - name: Run local E2E lifecycle
+        # The same lifecycle, given an explicit spec list instead of the default
+        # set. A spec path containing `study-records` makes it provision the
+        # disposable study-record accounts, prove their outcome as the local
+        # database owner after Playwright, and remove them. Further Evidence
+        # Records specs join this list, not `DEFAULT_SPECS`.
+        run: npm run test:e2e:local -- e2e/study-records.spec.ts
+
+      - name: Enforce local stack teardown
+        # As in `e2e-local`: runs even on failure/cancellation, with no
+        # `continue-on-error`, so a cleanup failure fails the job.
+        if: always()
+        run: npm run test:e2e:local:stop
+
+      - name: Assert clean local state
+        # As in `e2e-local`: fails the job if generated auth state remains or a
+        # local stack is still running, and never prints `supabase status`.
+        if: always()
+        run: |
+          if [ -e e2e/.auth/user.json ]; then
+            echo "::error::Generated auth state e2e/.auth/user.json still present after cleanup." >&2
+            exit 1
+          fi
+          echo "Confirmed: no generated auth state (e2e/.auth/user.json absent)."
+          if supabase status -o json >/dev/null 2>&1; then
+            echo "::error::A local Supabase stack is still running after cleanup." >&2
+            exit 1
+          fi
+          echo "Confirmed: no running local Supabase stack."
+
+      - name: Upload failure screenshots
+        # As in `e2e-local`: failure PNGs only, and only when this job failed.
+        # The job's own artifact name keeps the two jobs' uploads apart.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-evidence-failure-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/**/*.png
           if-no-files-found: ignore
           retention-days: 7
