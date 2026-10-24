@@ -4711,3 +4711,46 @@ Release history, not a migration. PR-C1 introduced no migration, and Production 
 - **Not exercised in Production.** Unknown create and save outcomes and their recovery, the reload limit, a multi-step save, version-conflict recovery, full-text references, several studies on one paper, link and header edits, the selection and duplicate-merge safeguards, and review and rebase (PR-C2, not started).
 
 This record holds no research data, no paper content beyond the canary's title prefix, and no account identity.
+
+## 2026-10-24 — EVIDENCE-RECORDS-001C2A: Review — **MERGED / DEPLOYED / PRODUCTION-ACCEPTED WITH QUALIFICATIONS**
+
+This is release history, not a migration. C2A introduced no migration, and Production stayed at **103** applied migrations (latest `20261017155445`). The interface and its acceptance record are in [evidence-records-study-record-ui.md](evidence-records-study-record-ui.md) (§14 and §15). The 2026-10-23 entry stands as written for the state then. This entry records the first authenticated calls of `evidence_review_fields`.
+
+- **Merge.**
+  - PR #355 merged on 2026-10-24 at 13:15:27Z as the two-parent `0ba43a1798815e8853daa49c211d6379197c96a0`. Its parents are `8a0d3f4e` and the head `26e48b04`. Its tree, `7ea4430d`, equals the reviewed head's.
+  - Merged-`main` Validate (`40097356586`), DB Tests (`40097356579`), Extension (`40097356584`) and CodeQL (`40097356518`) passed on the first attempt.
+  - The head's E2E (local) run `40094536600` passed both jobs on its first attempt: `e2e-local` ran 293 tests, and `e2e-evidence` ran 21 (1 setup, 11 C1, 9 review).
+- **Deployment.**
+  - The automatic Vercel Production deployment `dpl_5Rx1S5rNhW1uXPr2tsrVXiFRmJmX` serves `app.paperlume.app`. It is `main` at `0ba43a17` and was READY at 13:16:00Z.
+  - Its public entry bundle contains Review's wording, which is absent from the previous `main`'s source.
+  - The previous deployment, `dpl_BWZbQiUAHw8NUudusnZ4YPy3RsZq` (`8a0d3f4e`), stays READY.
+  - No Edge Function, secret or Supabase setting changed.
+- **Decisions before the merge.** The Product Owner accepted three things:
+  - the Review wording: the Confirm-block messages and `reviewCopy.ts`;
+  - the phone layout: no Source tab inside Review, and each card shows its saved sources and **Show the saved abstract**;
+  - a bounded owner-only Production acceptance right after the merge.
+- **Production functional acceptance — EVIDENCE-RECORDS-001C2A-PRODUCTION-ACCEPTANCE-001, 2026-10-24.** The verdict is `EVIDENCE_RECORDS_001C2A_PROD_ACCEPTANCE_PASSED_WITH_QUALIFICATIONS`.
+  - **Method.** The Product Owner performed every action in their own browser, through the normal interface: on a computer, and on their own phone for the phone check. They used one synthetic canary paper, with title prefix `SR-C2A-CANARY-` and a fictional plain-ASCII abstract. The audits were read-only: SQL inside read-only transactions, and content-free log counts. No test automation, service-role browser access or direct database write was used.
+  - **Steps.**
+    - One paper was added by hand. Its abstract was byte-identical to the fixture.
+    - One create gave version 1, with one `user_confirmed` link, one abstract copy and four events.
+    - One save of two Reported study-level values gave version 2: **Who took part**, with one supporting quote the server matched at normalized offsets `[115,185)`, and **Setting**, with no source.
+    - Review opened without sending anything. Setting's held Confirm showed its reason and sent nothing.
+    - Confirm of Who took part gave version 3: `user_reviewed`, with `reviewed_version` 1. It was still recorded after a reload.
+    - Flag of Setting gave version 4, and a changed note gave version 5. A too-short note and an unchanged note sent nothing.
+    - An unsaved edit of Who took part left its card on the saved value and held its actions.
+    - Saving that edit gave version 6. It reset the review (`value_version` 2, `unreviewed`) and kept the quote and the saved copy.
+    - Confirm of the new version, on a phone, gave version 7, with `reviewed_version` 2.
+    - The study and then the paper were deleted.
+  - **Database and logs.** The study had 17 events, with one request id per request. The API logs show one request for each deliberate write: one paper insert, two saves, four reviews, one study delete and one paper delete. There was no Edge Function call.
+  - **One log row is missing.** The API log has no row for the create RPC's POST, only its CORS preflight. The database holds exactly one create request.
+  - **The phone check is observational.** It rests on the Product Owner's report, one screenshot and the API log.
+  - **One check was interface-only.** Reviewing another field during an unsaved edit was checked in the interface only, so as not to record a redundant review event. The disposable local E2E covers it.
+- **Cleanup — audited read-only.** No evidence row and no `SR-C2A-CANARY-%` paper remain, checked by exact identifiers. The final snapshot equals the pre-run baseline in every compared field:
+  - the ledger, the function bodies, table privileges and RLS, the paper key and the Security Advisor findings;
+  - the owner's 669 papers and their latest update;
+  - Project and Tag assignments, attachments, author links, the cleanup queue, storage bytes and objects, and AI usage;
+  - the account count.
+- **Not exercised in Production.** An unknown review outcome and Try again, version-conflict refusals, the server's own Confirm refusal, Confirm of a flagged value, full-text references, Needs re-review, history (C2B, not started) and rebase (C2C, not started).
+
+This record holds no research data, no paper content beyond the canary's title prefix, and no account identity.
