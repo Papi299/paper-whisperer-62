@@ -1,16 +1,16 @@
-# Study records — the Study Record interface (EVIDENCE-RECORDS-001C1)
+# Study records — the Study Record interface (EVIDENCE-RECORDS-001C1, 001C2A)
 
-> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3).
+> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3). **EVIDENCE-RECORDS-001C2A** adds Review (§14): Confirm and Flag of one saved value at a time. It needs no migration, secret or Edge Function, and it has not been exercised or accepted in Production.
 
-This document describes what a user can do, what the interface sends, and what it deliberately leaves to PR-C2. The executable specification is the Vitest suites under `src/lib/studyRecord/__tests__/`, `src/components/papers/study-record/__tests__/`, `src/hooks/__tests__/useStudyRecordEditor.test.tsx`, the paper-safeguard suites, `src/test/studyRecordUiBoundary.test.ts`, and `e2e/study-records.spec.ts`.
+This document describes what a user can do, what the interface sends, and what it deliberately leaves to C2B and C2C. The executable specification is the Vitest suites under `src/lib/studyRecord/__tests__/`, `src/components/papers/study-record/__tests__/`, `src/hooks/__tests__/useStudyRecordEditor.test.tsx` and `useStudyRecordReview.test.tsx`, the paper-safeguard suites, `src/test/studyRecordUiBoundary.test.ts`, `e2e/study-records.spec.ts` and `e2e/study-records-review.spec.ts`.
 
 ## 1. Where it lives
 
 | Layer | Files | Role |
 |---|---|---|
-| Pure logic | `src/lib/studyRecord/` | Reads (`read.ts`, `paperLinks.ts`), the in-memory draft (`draft.ts`), checks (`validateDraft.ts`), save planning (`savePlan.ts`, `jsonbSize.ts`), quotes (`quotes.ts`), the pilot mirror (`access.ts`), paper safeguards (`paperGuards.ts`), creates whose outcome is unknown (`pendingCreates.ts`), the one write client (`client.ts`) |
-| Hooks | `src/hooks/useStudyRecords.ts`, `src/hooks/useStudyRecordEditor.ts`, `src/hooks/useStudyRecordCreations.ts` | Owner-scoped queries; the editor's save state machine; the dialog's store of unresolved creates |
-| UI | `src/components/papers/study-record/` | The dialog, the start screen, the study list, the editor (record and source panes), the entry point |
+| Pure logic | `src/lib/studyRecord/` | Reads (`read.ts`, `paperLinks.ts`), the in-memory draft (`draft.ts`), checks (`validateDraft.ts`), save planning (`savePlan.ts`, `jsonbSize.ts`), quotes (`quotes.ts`), the pilot mirror (`access.ts`), paper safeguards (`paperGuards.ts`), creates whose outcome is unknown (`pendingCreates.ts`), Review's items, holds and summary (`reviewModel.ts`), the one write client (`client.ts`) |
+| Hooks | `src/hooks/useStudyRecords.ts`, `src/hooks/useStudyRecordEditor.ts`, `src/hooks/useStudyRecordCreations.ts` | Owner-scoped queries; the editor's save and review state machine; the dialog's store of unresolved creates |
+| UI | `src/components/papers/study-record/` | The dialog, the start screen, the study list, the editor (Edit: record and source panes; Review: the review pane, its cards and the Flag form), the entry point |
 | Entry points | `PaperList.tsx`, `EditPaperDialog.tsx`, `Dashboard.tsx` | Expanded row details, Edit Paper, the delete confirmation |
 | Safeguards | `PaperList.tsx`, `BulkActionsToolbar.tsx`, `DeduplicationDialog.tsx`, `useDeduplication.ts`, `usePaperMutations.ts`, `useBulkMutations.ts` | Checks before paper delete and duplicate merge; the database refusal explained |
 
@@ -65,13 +65,13 @@ Plain SELECTs under the owner-only RLS policies, each also filtered by `user_id`
 - **Sections**: Study design, Participants, Interventions and comparators (intervention families only), Outcomes, Notes — collapsible. Core fields show; optional ones sit behind **More details** unless they hold something.
 - **Fields**: PR-B's 23-key dictionary. Five state radios — Reported, Not reported, Unclear, Not applicable, Couldn't check — and "Not yet recorded" when no value exists. Unclear needs a reason and an explanation; Not applicable an explanation. Values are typed as the dictionary says; a confirmed number is never filled in for the user (a suggestion needs an explicit "Use").
 - **Groups and outcomes**: add, rename, Move up / Move down, remove. Removing one with recorded values asks first and can be undone until Save. Changing a comparator to an intervention group asks before clearing its comparator type; moving to `non_intervention` asks before removing the groups and the number randomized.
-- **No source given**: a Reported value without a supporting source is marked, savable, and not reviewable later.
-- **Review status** is shown read-only (and "Saving a change to this value clears your review of it"); there is no Confirm or Flag (§12).
+- **No source given**: a Reported value without a supporting source is marked and savable; it can't be confirmed until a source is added ("You can save this, but you can't confirm it until you add a source.").
+- **Review status** is shown read-only in Edit (and "Saving a change to this value clears your review of it"); Confirm and Flag exist only in Review (§14).
 
 ## 7. Source capture
 
 - **The saved copy** is shown as plain text with `white-space: pre-wrap` — thin spaces, superscripts and line breaks intact, nothing interpreted as HTML. Passages already quoted are highlighted with an underline as well as a colour.
-- **Use as quote**: select text in the copy and choose the field. The selection itself says which occurrence it is; when it cannot, the user chooses. The quote text is sent exactly as selected.
+- **Use as quote**: select text in the copy and choose the field. The selection itself says which occurrence it is; when it cannot, the user chooses. The quote text is sent exactly as selected. Edit only: Review shows saved quotes and offers no quoting (§14).
 - **Add quote** (keyboard and phone path): type or paste; PR-B's browser matcher says found once, found N times (choose one), not found, too short or too many — advice only.
 - **Never sent**: offsets, match counts or times, normalization versions. The server matches every new quote itself, against the copy it names, and refuses one that is absent or ambiguous.
 - **Full-text references**: a linked paper and a location (page, section, table, figure, paragraph, other) — "Your reference — not checked by PaperLume". No full-text quotation is stored.
@@ -101,7 +101,7 @@ Explicit **Save draft**; no autosave; the draft lives in memory only. Unsaved ch
 
 ## 11. Accessibility and phones
 
-The dialog title takes focus on open and focus returns to the opener on close. Refusals are announced (`role="alert"`) and focused. State choices are radio groups; sections and More details are disclosure buttons; quoting works without a pointer. Status is never colour alone. On a phone the dialog is full screen with a **Record / Source** switch, no sideways scroll, and a sticky footer padded for the safe area; touch targets follow the app's `coarse:` sizing.
+The dialog title takes focus on open and focus returns to the opener on close. Refusals are announced (`role="alert"`) and focused. State choices are radio groups; sections and More details are disclosure buttons; quoting works without a pointer. Status is never colour alone. On a phone the dialog is full screen, with no sideways scroll and a sticky footer padded for the safe area; Edit has a **Record / Source** switch, and Review shows each card's source in the card (§14). Touch targets follow the app's `coarse:` sizing.
 
 ## 12. Known C1 limitations and the PR-C2 handoff
 
@@ -116,7 +116,7 @@ C1 limitations:
 - The server remembers a request id only while its study exists ([evidence-records-lifecycle.md](evidence-records-lifecycle.md) §5): if the study an unresolved attempt created is deleted elsewhere before the retry, the retry creates it again.
 - Production has exercised one owner-pilot workflow (§13). Everything else in this document rests on the Vitest suites and the disposable local E2E.
 
-PR-C2 (not started): Confirm and Flag (`evidence_review_fields`) with the review checklist; the history viewer (`evidence_events`); the source-change comparison and **Use current abstract** (`evidence_rebase_source`); review-history displays. The Evidence Matrix integration is later still. The C1 boundary test fails if any of these appear in the Study Record UI before then.
+PR-C2 is three phases. **C2A — Review** (Confirm and Flag, `evidence_review_fields`) is §14. **C2B** (the history viewer, `evidence_events`) and **C2C** (the source-change comparison, earlier copies and **Use current abstract**, `evidence_rebase_source`) are not started, and the Evidence Matrix integration is later still. The boundary test fails if the Study Record UI reads `evidence_events` or names the rebase before then.
 
 ## 13. Production acceptance (2026-10-23)
 
@@ -150,3 +150,61 @@ The report of EVIDENCE-RECORDS-001C1-PROD-ACCEPTANCE-EXEC-001 gives the verdict 
 **Not exercised in Production, so covered only by the Vitest suites and the disposable local E2E:** an unknown create outcome and its recovery (§4); an unknown save outcome; a multi-step save (§8); version-conflict recovery; full-text references; several study records on one paper; link and header-only edits (`evidence_set_link`, `evidence_update_study`); the selection and duplicate-merge safeguards; the paper-delete race (§10); thin-space preservation. The reload limit (§12) was not exercised either, and it remains a limit.
 
 **Not yet implemented:** PR-C2's review, history and rebase interface (§12).
+
+## 14. Review (EVIDENCE-RECORDS-001C2A)
+
+> **Status:** implemented by EVIDENCE-RECORDS-001C2A, with no migration, secret or Edge Function. It is the first interface that calls `evidence_review_fields`. It is covered by the Vitest suites and the disposable local E2E, and has not been exercised or accepted in Production.
+
+**What a review means.** "Reviewed by you" records that the user pressed **Confirm against this source** on one saved value, at its exact `value_version`, while the value and its source were shown together (001A §I2). It does not mean PaperLume verified anything, and nothing says "verified", "accurate" or "correct". There is no automatic, bulk or record-level confirmation, and saving is never a review. Changing a saved value resets its review on the server; replacing a saved copy sends abstract-dependent values to Needs re-review ([evidence-records-field-operations.md](evidence-records-field-operations.md) §4–§5).
+
+**Modes.** The dialog opens in **Edit**; the **Review** tab sits beside it ("Study record mode"). Both stay mounted, so a draft and a half-typed Flag note survive switching. There is no History tab yet (C2B).
+
+**What Review shows.** Everything comes from the record as saved (`reviewModel.ts`), never from the draft.
+
+- **The summary** counts the recorded fields by their own status: Not reviewed, Reviewed by you, Flagged, Needs re-review. It also says how many can't be confirmed yet, with the standing sentence "Saving is never a review, and PaperLume doesn't check your interpretation." There is no percentage and no verdict on the record.
+- **The filter** is *Needs your review* (the default: everything not reviewed at its current version) or *All recorded*. It changes only what is shown.
+- **One card per saved value**, grouped by the dictionary's sections, then by group and outcome in saved order and under their saved names. A card shows:
+  - the value and state as saved, with its note;
+  - the status as an icon and in words ("Reviewed by you on ‹date›", from the server's `reviewed_at`), the flag's note, or the earlier note of a value needing re-review;
+  - its sources, each naming its paper and copy ("copy 1 of 2, saved ‹date›"). Quotes carry about a sentence of context, located by the server's stored offsets and not by a new search. Full-text references read "your reference — check it in your copy; PaperLume doesn't". Examined and couldn't-check sources are listed too, with "From the abstract only" where it applies.
+- **The Source pane** (desktop) highlights only the SAVED quotes of the card being reviewed and offers no "Use as quote". A source on an earlier copy is named as such and never highlighted in the current copy: this view does not load earlier copies (C2C).
+- **On a phone** Review has no Source tab. Each card shows its quotes in context and **Show the saved abstract**, which puts the copy beside the claim (001A §I3), as a Not reported or Couldn't check claim needs.
+
+**Actions.** Only the pilot owner gets them. A manager or a former owner sees every value and status, and no action; the server refuses a direct call (`42501 evidence_records_not_enabled`).
+
+- **Confirm against this source** is for one value at the version shown. It is offered only when all of these hold:
+  - the user may write, and nothing else is in flight or in doubt;
+  - the record has not changed elsewhere;
+  - the value has no unsaved edit, and its group or outcome is not waiting to be removed;
+  - PR-B's `checkConfirm` allows it, with an empty list of sources never counting as the support a state needs.
+
+  Otherwise the button stays focusable (`aria-disabled`), and the reason is written beside it and linked to it ("This field has unsaved changes. Save or undo them to review it.", "Add a quote from the saved abstract or a full-text reference, then save."). A version already reviewed has no Confirm. On a flagged value the button says "Confirming replaces your flag and its note." Once recorded, the result is announced, and focus moves to the next value that needs review (Confirm & next), or to the summary when none is left.
+- **Flag…** opens a labelled note of 3–2,000 characters, checked by `checkFlag`. An existing flag prefills it, and **Update flag** waits until the note changes. Escape cancels and returns focus to the button.
+- **Edit** switches to Edit, opens the field's section (and More details), and focuses the field.
+
+**Requests.** Every press is one `evidence_review_fields` call, prepared once with a new request id, from the editor hook (`useStudyRecordEditor`) and nowhere else. It sends the study version the editor knows and the card's value version, and the record is read back after the answer. The answers:
+
+| Answer | What happens |
+|---|---|
+| `applied`, `replayed`, `unchanged` | the record is read back, and every unsaved edit stays exactly as it was (a review changes no `value_version`) |
+| outcome unknown, database busy or unreachable, session ended | The prepared request is kept and every other write waits. The editor says "We couldn't tell whether your review was recorded. Try again — it won't be recorded twice." (or, when nothing was applied, why). **Try again** resends the same request, which the server replays if it was recorded; **Reload** abandons it. Nothing is retried automatically. |
+| `version_conflict` | nothing is recorded; Reload (asking first if the draft has unsaved changes) |
+| `confirm_blocked` | the server's reasons replace the browser's, on the card |
+| `records_not_enabled`, `study_not_found` | read-only from then on; the record is gone |
+
+**Locks.** A review in flight or in doubt holds Save, link changes, Delete, typing and every other review. A save, link change or deletion in flight or in doubt holds every review. A conflict or a change seen elsewhere holds them until Reload.
+
+**Wording.** Review's sentences are in `reviewCopy.ts`; the Confirm-block messages are PR-B's ([evidence-domain-library.md](evidence-domain-library.md) §5). The Product Owner accepts the final wording at C2A's review.
+
+**Tests.**
+
+- **Vitest:** `reviewModel.test.ts`, `useStudyRecordReview.test.tsx`, `StudyRecordReview.test.tsx` and `reviewCopy.test.ts`, plus the boundary test. That test allows `reviewField` and `prepareReviewField` in the editor hook only, and still forbids the rebase and any history read.
+- **E2E:** `e2e/study-records-review.spec.ts` has its own disposable fixture, `scripts/e2e-local-review-fixture.mjs`. Afterwards it proves, as the database owner, each value's status, note, versions and review events, then removes its accounts and verifies they are gone. The `e2e-evidence` job runs it after the C1 spec: `npm run test:e2e:local -- e2e/study-records.spec.ts e2e/study-records-review.spec.ts`.
+- **Fixture selection:** the lifecycle asks Playwright which files it will run, and gives each Evidence Records spec its own fixture (`scripts/e2e-local-spec-selection.mjs`). An Evidence Records spec without one fails closed.
+
+**Limits.**
+
+- Earlier copies are named, not shown (C2C), and there is no history view (C2B).
+- An unknown outcome is abandoned if the dialog closes or the page reloads. The re-read shows whether it was recorded, and pressing again is safe: a version already reviewed has no Confirm, and the same Flag note sends nothing.
+- Each review reads the whole record back.
+- The record is read by several parallel SELECTs. A change made at that moment can show a mixed view, but any write is then refused as a version conflict.

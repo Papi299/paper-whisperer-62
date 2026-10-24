@@ -1,6 +1,6 @@
 # Study records — field, review and rebase RPC contract (EVIDENCE-RECORDS-001A3)
 
-> **Status:** installed in Production. Migration `20261017155445_add_evidence_records_field_review_rebase_rpcs.sql` (PR #346) was merged and applied to Supabase Production on 2026-10-18, after a read-only preflight, and accepted by read-only verification (§13). It adds the write path for everything inside a study: groups, outcomes, values and their source references, human review, and rebasing a saved abstract copy. The repository's typed client for these RPCs in `src/lib/evidence/` ([evidence-domain-library.md](evidence-domain-library.md) §10) is used by the Study Record interface of EVIDENCE-RECORDS-001C1 ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md)), merged as PR #348 and deployed on 2026-10-23. The interface calls `evidence_save_changes`, and neither review nor rebase: those two RPCs are installed, but their interface is PR-C2, which is not built. **One authenticated save has run in Production.** The owner-pilot acceptance of 2026-10-23 saved one Reported value with one abstract quote, which the server matched (UI document §13). No other contract here has been exercised in Production, review and rebase included.
+> **Status:** installed in Production. Migration `20261017155445_add_evidence_records_field_review_rebase_rpcs.sql` (PR #346) was merged and applied to Supabase Production on 2026-10-18, after a read-only preflight, and accepted by read-only verification (§13). It adds the write path for everything inside a study: groups, outcomes, values and their source references, human review, and rebasing a saved abstract copy. The repository's typed client for these RPCs in `src/lib/evidence/` ([evidence-domain-library.md](evidence-domain-library.md) §10) is used by the Study Record interface of EVIDENCE-RECORDS-001C1 ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md)), merged as PR #348 and deployed on 2026-10-23. The interface calls `evidence_save_changes`. Its Review mode, from EVIDENCE-RECORDS-001C2A (UI document §14), calls `evidence_review_fields` for one value per press; rebase still has no interface (C2C). **One authenticated save has run in Production.** The owner-pilot acceptance of 2026-10-23 saved one Reported value with one abstract quote, which the server matched (UI document §13). No other contract here has been exercised in Production, review and rebase included.
 
 This document is the client contract. The migration header holds the database-level detail. The executable specification is pgTAP suite `033_evidence_field_review_rebase.test.sql`, section L of suite `032_evidence_normalization_parity.test.sql`, and the db-tests lifecycle's evidence field race probe (`runEvidenceFieldRaceProbe` in `scripts/e2e-local.mjs`). The study lifecycle — create, update, link and delete — is [evidence-records-lifecycle.md](evidence-records-lifecycle.md), and everything there about the pilot gate, request ids and history applies here unchanged.
 
@@ -124,7 +124,7 @@ One value, one `value_version`, one action per call. There is no array parameter
 | `state_reason_missing` | an Unclear value has no reason |
 | `note_missing` | a required Unclear or Not applicable note is missing, too short or blank after v1 |
 
-The five block messages PR-B added are provisional copy, to be refined in the Study Record UI phase (Product Owner decision 5).
+The five block messages PR-B added are provisional copy, to be refined in the Study Record UI phase (Product Owner decision 5). EVIDENCE-RECORDS-001C2A refines every message, in the browser only ([evidence-domain-library.md](evidence-domain-library.md) §5); the codes, their order and this RPC are unchanged.
 
 ## 5. `evidence_rebase_source`
 
@@ -245,7 +245,7 @@ The Product Owner accepted all eight limits PR-A3 introduces, for the owner-only
 ## 12. Known limitations
 
 - Owner-only pilot; delete stays ungated (PR-A2).
-- The deployed Study Record interface (PR-C1) calls only `evidence_save_changes`. Review and rebase have no interface and no application caller until PR-C2.
+- The Study Record interface calls `evidence_save_changes` (PR-C1) and, from EVIDENCE-RECORDS-001C2A's Review mode, `evidence_review_fields`: one value per press, from the editor hook only, the request kept and resent unchanged while its outcome is unknown. Rebase has no interface and no application caller until C2C.
 - No RPC adds a link: a study's further reports are planted only by the owner in tests. Linking further reports belongs to a later phase.
 - Full-text references are locator-only; non-library sources are deferred (001A PD-3, PD-4).
 - The accepted limits (§10) can refuse an unusually large but legitimate study record; changing one is a new migration.
