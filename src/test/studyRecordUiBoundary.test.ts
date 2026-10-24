@@ -27,14 +27,20 @@ import { describe, expect, it } from "vitest";
  *   * an object literal that writes a field only the server may set — match
  *     offsets, counts and times, the normalization version, review and
  *     extraction state, versions, capture metadata — so no trusted provenance
- *     or quote offset is ever built in the browser;
- *   * anything of PR-C2's: Confirm/Flag (`reviewField`, `checkConfirm`), the
- *     source rebase (`rebaseSource`), or their RPC names.
+ *     or quote offset, and no review status, time or version, is ever built in
+ *     the browser;
+ *   * a review write outside the editor hook: `reviewField` and
+ *     `prepareReviewField` are used by `useStudyRecordEditor` alone
+ *     (EVIDENCE-RECORDS-001C2A), and no UI module names the review RPC;
+ *   * anything of PR-C2C's: the source rebase (`rebaseSource`,
+ *     `prepareRebaseSource`) or its RPC name.
  * And it checks the positive relationships: the adapter is created exactly
  * once, the editor's default client is that adapter, and the writes the UI
- * makes are exactly the five C1 adapter methods — a create only from the store
- * of unresolved creates (C1-R1), which the Start view reaches through `start`
- * and `retry` alone.
+ * makes are exactly the five C1 adapter methods and C2A's `reviewField` — a
+ * create only from the store of unresolved creates (C1-R1), which the Start
+ * view reaches through `start` and `retry` alone, and every other write from
+ * the editor hook. History (C2B) is not read yet: `evidence_events` is not
+ * among the tables the UI may read.
  *
  * A review-time tripwire like `evidenceDomainBoundary.test.ts`, not the
  * enforcement: RLS, the SELECT-only grants and the RPCs' own checks refuse a
@@ -48,6 +54,7 @@ const HOOK_FILES = ["src/hooks/useStudyRecords.ts", "src/hooks/useStudyRecordEdi
 const CREATIONS_FILE = "src/hooks/useStudyRecordCreations.ts";
 const CLIENT_FILE = "src/lib/studyRecord/client.ts";
 const READS_FILE = "src/hooks/useStudyRecords.ts";
+const EDITOR_FILE = "src/hooks/useStudyRecordEditor.ts";
 
 const ALLOWED_IMPORTS = new Set([
   "react",
@@ -97,6 +104,7 @@ const ALLOWED_IMPORTS = new Set([
   "@/lib/studyRecord/pendingCreates",
   "@/lib/studyRecord/quotes",
   "@/lib/studyRecord/read",
+  "@/lib/studyRecord/reviewModel",
   "@/lib/studyRecord/savePlan",
   "@/lib/studyRecord/validateDraft",
 ]);
@@ -180,9 +188,12 @@ const SERVER_KEYS = new Set([
   "captured_at",
   "char_count",
 ]);
-/** PR-C2: review, Confirm/Flag and the source rebase. */
-const DEFERRED_NAMES = new Set(["reviewField", "rebaseSource", "prepareReviewField", "prepareRebaseSource", "checkConfirm"]);
-const DEFERRED_STRINGS = new Set(["evidence_review_fields", "evidence_rebase_source", "user_reviewed", "rebase_source", "review_fields"]);
+/** PR-C2C: the source rebase. */
+const DEFERRED_NAMES = new Set(["rebaseSource", "prepareRebaseSource"]);
+const DEFERRED_STRINGS = new Set(["evidence_rebase_source", "rebase_source"]);
+/** C2A's review write: the editor hook's alone. Its RPC name is the adapter's alone (never a UI string). */
+const REVIEW_WRITE_NAMES = new Set(["reviewField", "prepareReviewField"]);
+const REVIEW_RPC_STRINGS = new Set(["evidence_review_fields", "review_fields"]);
 
 interface Violation {
   readonly file: string;
@@ -310,23 +321,29 @@ export function scanStudyRecordSource(file: string, source: string): Violation[]
       }
     }
 
+    const reviewWriter = file === EDITOR_FILE;
     const access = memberOf(node);
     if (access) {
       if (FORBIDDEN_MEMBERS.has(access.member)) report(node, `member .${access.member}`);
-      if (DEFERRED_NAMES.has(access.member)) report(node, `PR-C2 .${access.member}`);
+      if (DEFERRED_NAMES.has(access.member)) report(node, `PR-C2C .${access.member}`);
+      if (REVIEW_WRITE_NAMES.has(access.member) && !reviewWriter) report(node, `review write .${access.member} outside the editor hook`);
       if (ts.isIdentifier(access.object) && GLOBAL_OBJECTS.has(access.object.text) && FORBIDDEN_GLOBAL_MEMBERS.has(access.member)) {
         report(node, `${access.object.text}.${access.member}`);
       }
     }
     if (ts.isBindingElement(node)) {
       const name = node.propertyName ?? node.name;
-      if (ts.isIdentifier(name) && (FORBIDDEN_MEMBERS.has(name.text) || DEFERRED_NAMES.has(name.text))) report(node, `destructured ${name.text}`);
+      if (ts.isIdentifier(name) && (FORBIDDEN_MEMBERS.has(name.text) || DEFERRED_NAMES.has(name.text) || (REVIEW_WRITE_NAMES.has(name.text) && !reviewWriter))) {
+        report(node, `destructured ${name.text}`);
+      }
     }
     if (ts.isIdentifier(node) && isValueReference(node)) {
       if (FORBIDDEN_GLOBALS.has(node.text)) report(node, `global ${node.text}`);
-      if (DEFERRED_NAMES.has(node.text)) report(node, `PR-C2 ${node.text}`);
+      if (DEFERRED_NAMES.has(node.text)) report(node, `PR-C2C ${node.text}`);
+      if (REVIEW_WRITE_NAMES.has(node.text) && !reviewWriter) report(node, `review write ${node.text} outside the editor hook`);
     }
-    if (ts.isStringLiteralLike(node) && DEFERRED_STRINGS.has(node.text)) report(node, `PR-C2 "${node.text}"`);
+    if (ts.isStringLiteralLike(node) && DEFERRED_STRINGS.has(node.text)) report(node, `PR-C2C "${node.text}"`);
+    if (ts.isStringLiteralLike(node) && REVIEW_RPC_STRINGS.has(node.text)) report(node, `review RPC name "${node.text}"`);
 
     if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && ts.isObjectLiteralExpression(node.parent)) {
       const name = keyName(node.name);
@@ -366,7 +383,11 @@ describe("Study Record UI boundary — the real modules", () => {
     expect(scannedFiles).toEqual([
       "src/components/papers/study-record/FieldEditor.tsx",
       "src/components/papers/study-record/FieldSources.tsx",
+      "src/components/papers/study-record/FlagForm.tsx",
       "src/components/papers/study-record/RecordPane.tsx",
+      "src/components/papers/study-record/ReviewCard.tsx",
+      "src/components/papers/study-record/ReviewPane.tsx",
+      "src/components/papers/study-record/SavedCopyText.tsx",
       "src/components/papers/study-record/SourcePane.tsx",
       "src/components/papers/study-record/StudyRecordDialog.tsx",
       "src/components/papers/study-record/StudyRecordEditor.tsx",
@@ -374,8 +395,10 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/StudyRecordList.tsx",
       "src/components/papers/study-record/StudyRecordStart.tsx",
       "src/components/papers/study-record/editorContext.ts",
+      "src/components/papers/study-record/reviewCopy.ts",
       "src/components/papers/study-record/sourcePaneModel.ts",
       "src/components/papers/study-record/studyRecordCopy.ts",
+      "src/components/papers/study-record/useReviewFlow.ts",
       "src/hooks/useStudyRecordCreations.ts",
       "src/hooks/useStudyRecordEditor.ts",
       "src/hooks/useStudyRecords.ts",
@@ -389,6 +412,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/lib/studyRecord/pendingCreates.ts",
       "src/lib/studyRecord/quotes.ts",
       "src/lib/studyRecord/read.ts",
+      "src/lib/studyRecord/reviewModel.ts",
       "src/lib/studyRecord/savePlan.ts",
       "src/lib/studyRecord/validateDraft.ts",
     ]);
@@ -428,14 +452,39 @@ describe("Study Record UI boundary — the real modules", () => {
     expect(read(file)).toMatch(/import \{ newStudyRecordRequestId, studyRecordClient \} from "@\/lib\/studyRecord\/client";/);
   });
 
-  it("makes exactly the five C1 writes, through the adapter's typed methods", () => {
+  it("makes exactly the five C1 writes and C2A's review, through the adapter's typed methods", () => {
     const creations = callsOn(read(CREATIONS_FILE), "creations.ts", new Set(["studyRecordClient"]));
-    const editor = callsOn(read("src/hooks/useStudyRecordEditor.ts"), "editor.ts", new Set(["client"]));
+    const editor = callsOn(read(EDITOR_FILE), "editor.ts", new Set(["client"]));
     expect(creations).toEqual(["createStudyFromPaper"]);
-    expect([...new Set(editor)].sort()).toEqual(["deleteStudy", "saveChanges", "setLink", "updateStudy"]);
+    expect([...new Set(editor)].sort()).toEqual(["deleteStudy", "reviewField", "saveChanges", "setLink", "updateStudy"]);
     // No other module calls the adapter itself.
     for (const file of scannedFiles.filter((path) => path !== CREATIONS_FILE)) {
       expect(callsOn(read(file), file, new Set(["studyRecordClient"])), file).toEqual([]);
+    }
+  });
+
+  it("prepares and sends a review only in the editor hook, once each (C2A)", () => {
+    const uses = (name: string) =>
+      scannedFiles.flatMap((file) => {
+        const sourceFile = parse(file, read(file));
+        const found: string[] = [];
+        const visit = (node: ts.Node) => {
+          if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            const called = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+            if (called === name) found.push(file);
+          }
+          ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+        return found;
+      });
+    // One preparation, one send: a press and its "Try again" both go through the one `sendReview`.
+    expect(uses("prepareReviewField")).toEqual([EDITOR_FILE]);
+    expect(uses("reviewField")).toEqual([EDITOR_FILE]);
+    // Components reach a review only through the hook's `review` and `retryReview`.
+    for (const file of scannedFiles.filter((path) => path !== EDITOR_FILE)) {
+      expect(read(file).includes("prepareReviewField"), file).toBe(false);
     }
   });
 
@@ -550,13 +599,31 @@ describe("Study Record UI boundary — negative controls", () => {
     ["a forged version", `const row = { value_version: 2 };`],
     ["a forged capture", `const copy = { captured_at: now, char_count: 10 };`],
     ["a shorthand server field", `const matchedAt = now; const m = { matchedAt };`],
-    ["Confirm", `client.reviewField(request);`],
-    ["a review request", `const request = prepareReviewField(input);`],
-    ["the source rebase", `client.rebaseSource(request);`],
-    ["a confirm precheck", `const blocks = checkConfirm(value);`],
+    ["a review sent from a component", `client.reviewField(request);`],
+    ["a review sent through the shared adapter", `studyRecordClient.reviewField(request);`],
+    ["a review request prepared in a component", `const request = prepareReviewField(input);`],
+    ["an aliased review send", `const { reviewField } = client; reviewField(request);`],
     ["a review RPC name", `const fn = "evidence_review_fields";`],
+    ["a review op name", `const op = "review_fields";`],
+    ["a forged review status", `const shown = { ...value, review: { status: "user_reviewed", reviewedAt: now, reviewedVersion: 3 } };`],
+    ["the source rebase", `client.rebaseSource(request);`],
+    ["a rebase request", `const request = prepareRebaseSource(input);`],
     ["a rebase RPC name", `const fn = "evidence_rebase_source";`],
+    ["a rebase op name", `const op = "rebase_source";`],
   ])("flags %s", (_label, source) => {
     expect(scanStudyRecordSource(COMPONENT, source).length).toBeGreaterThan(0);
+  });
+
+  it("lets the editor hook — and only it — prepare and send a review; lets anyone read a review status or ask checkConfirm", () => {
+    const send = `const prepared = prepareReviewField(input); await client.reviewField(prepared.request);`;
+    expect(scanStudyRecordSource(EDITOR_FILE, send)).toEqual([]);
+    expect(scanStudyRecordSource(COMPONENT, send).length).toBe(2);
+    expect(scanStudyRecordSource(LIB, send).length).toBe(2);
+    const advisory = `const check = checkConfirm(value, value.valueVersion, links); const done = value.review.status === "user_reviewed";`;
+    expect(scanStudyRecordSource(COMPONENT, advisory)).toEqual([]);
+    expect(scanStudyRecordSource(LIB, advisory)).toEqual([]);
+    // The rebase stays C2C's everywhere, the editor hook included.
+    expect(scanStudyRecordSource(EDITOR_FILE, `client.rebaseSource(request);`).length).toBeGreaterThan(0);
+    expect(scanStudyRecordSource(EDITOR_FILE, `const fn = "evidence_review_fields";`).length).toBeGreaterThan(0);
   });
 });

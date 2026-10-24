@@ -23,12 +23,46 @@ import { IDENTITY_CAVEAT, LINK_STATUS_LABELS } from "@/lib/evidence/identity";
 import { NOT_REPORTED_EXPLANATION } from "@/lib/evidence/states";
 import { parseTargetKey, parseValueKey, setValueEdit, viewValue } from "@/lib/studyRecord/draft";
 import { StudyRecordReadError, type StudyRecordData } from "@/lib/studyRecord/read";
-import { hasErrors } from "@/lib/studyRecord/validateDraft";
-import { EditorContext, issueTargetKey, useEditor, type ConfirmRequest, type EditorContextValue } from "./editorContext";
+import type { ReviewItem } from "@/lib/studyRecord/reviewModel";
+import { hasErrors, type IssueTarget } from "@/lib/studyRecord/validateDraft";
+import {
+  EditorContext,
+  issueTargetKey,
+  useEditor,
+  type ConfirmRequest,
+  type EditorContextValue,
+  type EditorMode,
+  type RevealRequest,
+} from "./editorContext";
 import { RecordPane } from "./RecordPane";
-import { SourcePane } from "./SourcePane";
+import { REVIEW_COPY, reviewErrorText } from "./reviewCopy";
+import { ReviewPane } from "./ReviewPane";
+import { SourcePane, type SourceDisplay } from "./SourcePane";
 import { StatusFrame } from "./StudyRecordDialog";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
+import { useReviewFlow, type ReviewFlow } from "./useReviewFlow";
+
+/** What a field's first control is, for focusing it: its chosen state, else its first input. */
+const FOCUSABLE =
+  "[role='radio'][data-state='checked']:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex='-1']";
+
+/**
+ * Focus the element marked `data-issue-target="<key>"` once it is on screen:
+ * the mode switch and the reveal its section and field list make take a
+ * render or two, so this waits up to a few frames, never longer.
+ */
+function focusWhenShown(container: React.RefObject<HTMLElement>, key: string, framesLeft = 6) {
+  requestAnimationFrame(() => {
+    const host = container.current?.querySelector<HTMLElement>(`[data-issue-target="${key}"]`);
+    if (!host || host.closest("[hidden], [data-state='inactive']")) {
+      if (framesLeft > 0) focusWhenShown(container, key, framesLeft - 1);
+      return;
+    }
+    host.scrollIntoView({ block: "nearest" });
+    const focusable = host.matches("input, textarea, select, button") ? host : host.querySelector<HTMLElement>(FOCUSABLE);
+    focusable?.focus();
+  });
+}
 
 export interface StudyRecordEditorProps {
   readonly userId: string;
@@ -126,6 +160,7 @@ function EditorWorkspace({
   const editor = useStudyRecordEditor({ userId, studyId, base, refetch, canWrite });
   const { draft, baseValues, issues, save, dirty, canEdit, update } = editor;
   const isMobile = useIsMobile();
+  const [mode, setMode] = useState<EditorMode>("edit");
   const [tab, setTab] = useState<"record" | "source">("record");
   const [sourcePaperId, setSourcePaperId] = useState<string>(() =>
     base.links.some((link) => link.link.paperId === paperId.toLowerCase()) ? paperId.toLowerCase() : base.links[0]?.link.paperId ?? paperId,
@@ -134,9 +169,14 @@ function EditorWorkspace({
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [reloadOpen, setReloadOpen] = useState(false);
+  const [revealRequest, setRevealRequest] = useState<RevealRequest | null>(null);
+  // The Review card whose source the Source pane shows (desktop).
+  const [selectedReviewKey, setSelectedReviewKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const alertRef = useRef<HTMLDivElement>(null);
   const localIdRef = useRef(0);
+  const revealNonce = useRef(0);
+  const flow = useReviewFlow(editor, titleRef);
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
@@ -146,8 +186,23 @@ function EditorWorkspace({
       alertRef.current?.focus();
     }
   }, [save]);
+  // And after a review whose outcome is unknown (C2A): the alert with Try again and Reload.
+  useEffect(() => {
+    if (editor.reviewAction.status === "uncertain") alertRef.current?.focus();
+  }, [editor.reviewAction]);
 
   const sourceLink = base.links.find((link) => link.link.paperId === sourcePaperId) ?? base.links[0] ?? null;
+  const reviewItem =
+    editor.reviewItems.find((item) => item.key === selectedReviewKey) ?? editor.reviewItems.find((item) => item.needsReview) ?? editor.reviewItems[0] ?? null;
+  const sourceDisplay: SourceDisplay = mode === "review" ? { mode: "review", item: reviewItem } : { mode: "edit" };
+
+  const focusReviewItem = useCallback(
+    (item: ReviewItem) => {
+      setSelectedReviewKey(item.key);
+      if (item.abstractPaperIds.length > 0 && !item.abstractPaperIds.some((id) => id === sourcePaperId)) setSourcePaperId(item.abstractPaperIds[0]);
+    },
+    [sourcePaperId],
+  );
 
   const updateValue = useCallback<EditorContextValue["updateValue"]>(
     (key, change) => update((current) => setValueEdit(baseValues, current, key, change(viewValue(baseValues, current, key).edit))),
@@ -173,17 +228,12 @@ function EditorWorkspace({
   );
 
   const focusTarget = useCallback<EditorContextValue["focusTarget"]>(
-    (target) => {
+    (target: IssueTarget) => {
+      setMode("edit");
       if (isMobile) setTab("record");
-      requestAnimationFrame(() => {
-        const host = containerRef.current?.querySelector<HTMLElement>(`[data-issue-target="${issueTargetKey(target)}"]`);
-        if (!host) return;
-        host.scrollIntoView({ block: "nearest" });
-        const focusable = host.matches("input, textarea, select, button")
-          ? host
-          : host.querySelector<HTMLElement>("input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex='-1']");
-        focusable?.focus();
-      });
+      // Open the collapsed section and "More details" that hold it (C2 audit K4), then focus it.
+      setRevealRequest({ target, nonce: ++revealNonce.current });
+      focusWhenShown(containerRef, issueTargetKey(target));
     },
     [isMobile],
   );
@@ -209,12 +259,14 @@ function EditorWorkspace({
       lastFocusedKey,
       setLastFocusedKey,
       focusTarget,
+      revealRequest,
+      mode,
       confirm: setConfirmRequest,
       newLocalId: () => `ref_${++localIdRef.current}`,
       describeField,
       isMobile,
     }),
-    [base, baseValues, draft, issues, canEdit, refusal, update, updateValue, sourceLink, lastFocusedKey, focusTarget, describeField, isMobile],
+    [base, baseValues, draft, issues, canEdit, refusal, update, updateValue, sourceLink, lastFocusedKey, focusTarget, revealRequest, mode, describeField, isMobile],
   );
 
   const errorCount = issues.filter((issue) => issue.severity === "error").length;
@@ -227,7 +279,14 @@ function EditorWorkspace({
 
   return (
     <EditorContext.Provider value={context}>
-      <div ref={containerRef} className="flex min-h-0 flex-1 flex-col" data-testid="study-record-editor">
+      <Tabs
+        ref={containerRef}
+        value={mode}
+        onValueChange={(value) => setMode(value as EditorMode)}
+        className="flex min-h-0 flex-1 flex-col"
+        data-testid="study-record-editor"
+        data-mode={mode}
+      >
         <div className="shrink-0 border-b py-3 pl-4 pr-14 sm:pl-6">
           <DialogTitle ref={titleRef} tabIndex={-1} className="break-words leading-7 focus:outline-none [overflow-wrap:anywhere]">
             {STUDY_RECORD_COPY.editorTitle(base.header.label)}
@@ -241,41 +300,64 @@ function EditorWorkspace({
               {STUDY_RECORD_COPY.backToList}
             </Button>
           )}
+          {/* Edit holds the draft; Review shows the saved values (C2A). Both stay mounted. */}
+          <TabsList className="mt-2 grid w-full grid-cols-2 sm:w-64" aria-label={REVIEW_COPY.modeLabel}>
+            <TabsTrigger value="edit" className="coarse:min-h-10">
+              {REVIEW_COPY.editMode}
+            </TabsTrigger>
+            <TabsTrigger value="review" className="coarse:min-h-10" data-testid="study-record-review-tab">
+              {REVIEW_COPY.reviewMode}
+            </TabsTrigger>
+          </TabsList>
         </div>
 
         {isMobile ? (
-          <Tabs value={tab} onValueChange={(value) => setTab(value as "record" | "source")} className="flex min-h-0 flex-1 flex-col">
-            <TabsList className="mx-4 mt-2 grid shrink-0 grid-cols-2" aria-label="Study record view">
-              <TabsTrigger value="record" className="coarse:min-h-10">
-                {STUDY_RECORD_COPY.recordPane}
-              </TabsTrigger>
-              <TabsTrigger value="source" className="coarse:min-h-10">
-                {STUDY_RECORD_COPY.sourcePane}
-              </TabsTrigger>
-            </TabsList>
-            {/* Both stay mounted so switching keeps what each holds (a selection, an open form). */}
-            <TabsContent value="record" forceMount className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain data-[state=inactive]:hidden">
-              <RecordFacts editor={editor} canWrite={canWrite} />
-              <RecordPane />
+          <>
+            <TabsContent value="edit" forceMount className="mt-0 flex min-h-0 flex-1 flex-col focus-visible:ring-inset data-[state=inactive]:hidden">
+              <Tabs value={tab} onValueChange={(value) => setTab(value as "record" | "source")} className="flex min-h-0 flex-1 flex-col">
+                <TabsList className="mx-4 mt-2 grid shrink-0 grid-cols-2" aria-label="Study record view">
+                  <TabsTrigger value="record" className="coarse:min-h-10">
+                    {STUDY_RECORD_COPY.recordPane}
+                  </TabsTrigger>
+                  <TabsTrigger value="source" className="coarse:min-h-10">
+                    {STUDY_RECORD_COPY.sourcePane}
+                  </TabsTrigger>
+                </TabsList>
+                {/* Both stay mounted so switching keeps what each holds (a selection, an open form). */}
+                <TabsContent value="record" forceMount className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
+                  <RecordFacts editor={editor} canWrite={canWrite} />
+                  <RecordPane />
+                </TabsContent>
+                <TabsContent value="source" forceMount className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
+                  <SourcePane onQuoteAdded={(key) => focusTarget({ kind: "value", key })} />
+                </TabsContent>
+              </Tabs>
             </TabsContent>
-            <TabsContent value="source" forceMount className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain data-[state=inactive]:hidden">
-              <SourcePane onQuoteAdded={(key) => focusTarget({ kind: "value", key })} />
+            {/* On a phone each card shows its own source (001A §I3), so Review needs no Source tab. */}
+            <TabsContent value="review" forceMount className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
+              <ReviewPane editor={editor} flow={flow} canWrite={canWrite} onFocusItem={focusReviewItem} onReload={requestReload} />
             </TabsContent>
-          </Tabs>
+          </>
         ) : (
           <div className="grid min-h-0 flex-1 grid-cols-2">
             <section aria-label={STUDY_RECORD_COPY.sourcePane} className="relative min-h-0 overflow-y-auto overscroll-contain border-r">
-              <SourcePane onQuoteAdded={() => undefined} />
+              <SourcePane onQuoteAdded={() => undefined} display={sourceDisplay} />
             </section>
-            <section aria-label={STUDY_RECORD_COPY.recordPane} className="relative min-h-0 overflow-y-auto overscroll-contain">
-              <RecordFacts editor={editor} canWrite={canWrite} />
-              <RecordPane />
-            </section>
+            <TabsContent value="edit" forceMount className="relative mt-0 min-h-0 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
+              <section aria-label={STUDY_RECORD_COPY.recordPane}>
+                <RecordFacts editor={editor} canWrite={canWrite} />
+                <RecordPane />
+              </section>
+            </TabsContent>
+            <TabsContent value="review" forceMount className="relative mt-0 min-h-0 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
+              <ReviewPane editor={editor} flow={flow} canWrite={canWrite} onFocusItem={focusReviewItem} onReload={requestReload} />
+            </TabsContent>
           </div>
         )}
 
         <SaveMessages
           editor={editor}
+          flow={flow}
           alertRef={alertRef}
           errorCount={errorCount}
           onReload={requestReload}
@@ -289,7 +371,7 @@ function EditorWorkspace({
             variant="outline"
             className="text-destructive coarse:min-h-10"
             onClick={() => setDeleteOpen(true)}
-            disabled={saving || save.status === "uncertain"}
+            disabled={saving || save.status === "uncertain" || editor.reviewPending}
           >
             <Trash2 className="mr-2 h-4 w-4" aria-hidden="true" />
             {STUDY_RECORD_COPY.deleteButton}
@@ -298,13 +380,15 @@ function EditorWorkspace({
             <p role="status" aria-live="polite" className="text-xs text-muted-foreground" data-testid="study-record-save-status">
               {saving
                 ? STUDY_RECORD_COPY.saving(save.step, save.total)
-                : save.status === "saved"
-                  ? STUDY_RECORD_COPY.saved
-                  : canWrite
-                    ? dirty
-                      ? STUDY_RECORD_COPY.unsavedChanges
-                      : STUDY_RECORD_COPY.noChanges
-                    : ""}
+                : editor.reviewAction.status === "working"
+                  ? REVIEW_COPY.working
+                  : save.status === "saved"
+                    ? STUDY_RECORD_COPY.saved
+                    : canWrite
+                      ? dirty
+                        ? STUDY_RECORD_COPY.unsavedChanges
+                        : STUDY_RECORD_COPY.noChanges
+                      : ""}
             </p>
             {canWrite && (
               <Button
@@ -327,7 +411,7 @@ function EditorWorkspace({
             )}
           </div>
         </footer>
-      </div>
+      </Tabs>
 
       <DeleteStudyRecordDialog
         open={deleteOpen}
@@ -443,6 +527,7 @@ function ReadOnlyNotice() {
 
 interface SaveMessagesProps {
   readonly editor: Editor;
+  readonly flow: ReviewFlow;
   readonly alertRef: React.RefObject<HTMLDivElement>;
   readonly errorCount: number;
   readonly onReload: () => void;
@@ -450,11 +535,30 @@ interface SaveMessagesProps {
   readonly onClose: () => void;
 }
 
-/** The outcome of the last save, as a message with its next step. Shown above the footer. */
-function SaveMessages({ editor, alertRef, errorCount, onReload, onFocusTarget, onClose }: SaveMessagesProps) {
-  const { save, externalChange, issues } = editor;
+/**
+ * The outcome of the last save — or of a review whose outcome is unknown,
+ * which holds every write until it is tried again or abandoned by a reload —
+ * as a message with its next step. Shown above the footer, in both modes.
+ */
+function SaveMessages({ editor, flow, alertRef, errorCount, onReload, onFocusTarget, onClose }: SaveMessagesProps) {
+  const { save, externalChange, issues, reviewAction } = editor;
   const box = "mx-4 mb-2 shrink-0 rounded-md border p-3 text-sm focus:outline-none sm:mx-6";
   const firstError = issues.find((issue) => issue.severity === "error");
+  if (reviewAction.status === "uncertain") {
+    return (
+      <div ref={alertRef} tabIndex={-1} role="alert" className={`${box} border-amber-500/50 bg-amber-50 dark:bg-amber-950/30`} data-testid="review-uncertain-alert">
+        <p>{reviewErrorText(reviewAction.error)}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button type="button" size="sm" className="coarse:min-h-10" onClick={() => void flow.retry()}>
+            {REVIEW_COPY.tryAgain}
+          </Button>
+          <Button type="button" size="sm" variant="outline" className="coarse:min-h-10" onClick={onReload}>
+            {REVIEW_COPY.reload}
+          </Button>
+        </div>
+      </div>
+    );
+  }
   if (save.status === "invalid") {
     const count = hasErrors(save.issues) ? save.issues.filter((issue) => issue.severity === "error").length : errorCount;
     const first = save.issues.find((issue) => issue.severity === "error") ?? firstError;
@@ -511,9 +615,13 @@ function SaveMessages({ editor, alertRef, errorCount, onReload, onFocusTarget, o
     );
   }
   if (save.status === "conflict" || save.status === "reload_failed" || externalChange) {
+    // A review refused for a version conflict recorded nothing, and touched no draft: it says so in its own words.
+    const reviewConflict = reviewAction.status === "failed" && reviewAction.failure.kind === "refused" && reviewAction.failure.error.kind === "version_conflict" ? reviewAction.failure.error : null;
     const message =
       save.status === "conflict"
-        ? `${STUDY_RECORD_COPY.conflict}${STUDY_RECORD_COPY.partialSaved(save.applied, save.total)}`
+        ? reviewConflict
+          ? reviewErrorText(reviewConflict)
+          : `${STUDY_RECORD_COPY.conflict}${STUDY_RECORD_COPY.partialSaved(save.applied, save.total)}`
         : save.status === "reload_failed"
           ? STUDY_RECORD_COPY.reloadFailed
           : STUDY_RECORD_COPY.externalChange;

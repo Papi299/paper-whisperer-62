@@ -51,7 +51,58 @@ describe("labels", () => {
       needs_rereview: "Needs re-review",
     });
     expect(JSON.stringify(review)).not.toMatch(/verified/i);
-    expect(review.REVIEWED_BY_YOU_MEANING).toContain("PaperLume hasn't checked your interpretation");
+    // Requirements-001A §I7, dated (EVIDENCE-RECORDS-001C2A).
+    expect(review.reviewedByYouMeaning("Oct 24, 2026")).toBe(
+      "Reviewed by you — you confirmed this value against the source shown, on Oct 24, 2026. PaperLume hasn't checked your interpretation.",
+    );
+  });
+});
+
+describe("Confirm-block messages (EVIDENCE-RECORDS-001C2A)", () => {
+  // Transcribed from the C2A brief §13 and the C2 audit §E12, not from the table under test.
+  const EXPECTED: Readonly<Record<keyof typeof CONFIRM_BLOCK_MESSAGES, string>> = {
+    not_recorded: "Record this field, then save.",
+    stale_version: "This field changed after this record was loaded. Reload to review the latest version.",
+    sources_not_allowed: "This field's sources don't fit its state. Edit them, then save.",
+    examined_source_missing: "Say which source you examined, then save.",
+    unclear_source_missing: "Quote the unclear text, or say which source you examined, then save.",
+    unavailable_source_missing: "Say which source you couldn't check, then save.",
+    no_current_support: "Add a quote from the saved abstract or a full-text reference, then save.",
+    unclear_source_not_current:
+      "Its only quotes are in an earlier copy of the abstract. Quote the unclear passage in the current saved copy, or mark a source you examined, then save.",
+    count_not_confirmed: "Enter the whole number this text reports, then save.",
+    examined_abstract_not_current: "You examined an earlier copy of the abstract. Read the current saved copy, mark it as examined, then save.",
+    unavailable_abstract_has_copy:
+      "A copy of this paper's abstract was saved after you said it couldn't be checked. Read it, record what it says, then save.",
+    note_missing: "Add the required note, then save.",
+    state_reason_missing: "Say why this is unclear, then save.",
+  };
+
+  it("says what to fix and that the fix must be saved — or, for a stale version, to reload", () => {
+    expect(CONFIRM_BLOCK_MESSAGES).toEqual(EXPECTED);
+    for (const [block, message] of Object.entries(CONFIRM_BLOCK_MESSAGES)) {
+      expect(message, block).toMatch(block === "stale_version" ? /Reload to review the latest version\.$/ : /then save\.$/);
+      expect(message, block).not.toMatch(/verif|accurate|correct|confirm/i);
+    }
+  });
+
+  it("tells a value whose only quotes are on earlier copies that, instead of asking for a quote", () => {
+    const earlierOnly = recordedValue({ references: [abstractQuote(COPY_A_OLD)] });
+    expect(checkConfirm(earlierOnly, 1, LINKS)).toEqual({ kind: "blocked", reasons: ["no_current_support"] });
+    expect(review.confirmBlockMessage("no_current_support", earlierOnly, LINKS)).toBe(review.NO_CURRENT_SUPPORT_EARLIER_COPY_MESSAGE);
+    expect(review.NO_CURRENT_SUPPORT_EARLIER_COPY_MESSAGE).toBe(
+      "Its quotes are in an earlier copy of the abstract. Quote the passage in the current saved copy, or add a full-text reference, then save.",
+    );
+    // No quote at all, or only an examined copy: the plain message.
+    expect(review.confirmBlockMessage("no_current_support", recordedValue({ references: [] }), LINKS)).toBe(EXPECTED.no_current_support);
+    expect(review.confirmBlockMessage("no_current_support", recordedValue({ references: [examinedAbstract(COPY_A_OLD)] }), LINKS)).toBe(EXPECTED.no_current_support);
+    expect(review.confirmBlockMessage("no_current_support", null, LINKS)).toBe(EXPECTED.no_current_support);
+    // A block the shown references don't explain (the server saw something else): never "earlier copy".
+    expect(review.confirmBlockMessage("no_current_support", recordedValue({ references: [abstractQuote(COPY_A)] }), LINKS)).toBe(EXPECTED.no_current_support);
+    // Every other block reads from the table, whatever the references.
+    for (const block of Object.keys(EXPECTED) as (keyof typeof EXPECTED)[]) {
+      if (block !== "no_current_support") expect(review.confirmBlockMessage(block, earlierOnly, LINKS)).toBe(EXPECTED[block]);
+    }
   });
 });
 
@@ -63,7 +114,7 @@ describe("Confirm: one value, one exact version", () => {
 
   it("refuses a stale version: the field changed since it was opened", () => {
     expect(checkConfirm(recordedValue({ valueVersion: 5 }), 4, LINKS)).toEqual({ kind: "blocked", reasons: ["stale_version"] });
-    expect(CONFIRM_BLOCK_MESSAGES.stale_version).toBe("This field changed since you opened it.");
+    expect(CONFIRM_BLOCK_MESSAGES.stale_version).toBe("This field changed after this record was loaded. Reload to review the latest version.");
   });
 
   it("does nothing for a version already reviewed (idempotent)", () => {
@@ -175,7 +226,7 @@ describe("Confirm needs the sources its state requires (FK-PROOF-001 §J)", () =
       expect(confirm(value)).toEqual({ kind: "blocked", reasons: ["examined_source_missing"] });
       expect(validatorErrors(value)).toContain("references.examined_required");
     }
-    expect(CONFIRM_BLOCK_MESSAGES.examined_source_missing).toBe("Say which source you examined before confirming.");
+    expect(CONFIRM_BLOCK_MESSAGES.examined_source_missing).toBe("Say which source you examined, then save.");
   });
 
   it("refuses Unclear with neither a supporting nor an examined source", () => {
@@ -184,14 +235,14 @@ describe("Confirm needs the sources its state requires (FK-PROOF-001 §J)", () =
       expect(confirm(value)).toEqual({ kind: "blocked", reasons: ["unclear_source_missing"] });
       expect(validatorErrors(value)).toContain("references.basis_required");
     }
-    expect(CONFIRM_BLOCK_MESSAGES.unclear_source_missing).toBe("Quote the unclear text, or say which source you examined, before confirming.");
+    expect(CONFIRM_BLOCK_MESSAGES.unclear_source_missing).toBe("Quote the unclear text, or say which source you examined, then save.");
   });
 
   it("refuses Couldn't check without an unavailable source", () => {
     const value = valueIn("source_unavailable", []);
     expect(confirm(value)).toEqual({ kind: "blocked", reasons: ["unavailable_source_missing"] });
     expect(validatorErrors(value)).toContain("references.unavailable_required");
-    expect(CONFIRM_BLOCK_MESSAGES.unavailable_source_missing).toBe("Say which source you couldn't check before confirming.");
+    expect(CONFIRM_BLOCK_MESSAGES.unavailable_source_missing).toBe("Say which source you couldn't check, then save.");
   });
 
   it.each(SECTION_J_FORBIDDEN)("refuses %s with a %s source, though everything else is in order", (state, purpose) => {
@@ -205,7 +256,7 @@ describe("Confirm needs the sources its state requires (FK-PROOF-001 §J)", () =
     const four = [abstractQuote(), fullTextLocator(PAPER_A), abstractQuote(COPY_A, PAPER_A, "randomized"), fullTextLocator(PAPER_B)];
     expect(confirm(valueIn("reported", four.slice(0, 3))).kind).toBe("allowed");
     expect(confirm(valueIn("reported", four))).toEqual({ kind: "blocked", reasons: ["sources_not_allowed"] });
-    expect(CONFIRM_BLOCK_MESSAGES.sources_not_allowed).toBe("This field's sources don't fit its state. Edit them before confirming.");
+    expect(CONFIRM_BLOCK_MESSAGES.sources_not_allowed).toBe("This field's sources don't fit its state. Edit them, then save.");
   });
 
   it("gives every reason at once, in a fixed order", () => {
@@ -240,7 +291,7 @@ describe("Confirm needs the sources its state requires (FK-PROOF-001 §J)", () =
       expect(validatorErrors(stale)).toEqual([]); // a carried-over quote may stay on its copy...
       expect(confirm(stale)).toEqual({ kind: "blocked", reasons: ["unclear_source_not_current"] }); // ...but is not current support
       expect(CONFIRM_BLOCK_MESSAGES.unclear_source_not_current).toBe(
-        "Quote the unclear text in the current saved copy, or say which source you examined, before confirming.",
+        "Its only quotes are in an earlier copy of the abstract. Quote the unclear passage in the current saved copy, or mark a source you examined, then save.",
       );
       expect(confirm(valueIn("unclear", [abstractQuote(COPY_A)])).kind).toBe("allowed");
       expect(confirm(valueIn("unclear", [abstractQuote(COPY_A_OLD), fullTextLocator()])).kind).toBe("allowed");
