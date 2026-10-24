@@ -9,7 +9,9 @@
  *   verify-guards  Run the pure guard unit tests and the bounded Layer 1
  *                  negative control (a Production/remote target must fail
  *                  during Playwright config, before Vite starts and before any
- *                  credential is entered), plus a static Layer 2 ordering check.
+ *                  credential is entered), plus a static Layer 2 ordering check,
+ *                  and check the Evidence Records fixture selection against
+ *                  Playwright's own test listing (EVIDENCE-RECORDS-001C2A).
  *   db-tests       Start local stack → reset+replay migrations → capture a
  *                  pgTAP + expanded catalog baseline → run a transaction-only
  *                  catalog-fingerprint sensitivity probe (prove same-name
@@ -73,6 +75,12 @@ import {
   provisionStudyRecordAccounts,
   removeStudyRecordAccounts,
 } from "./e2e-local-evidence-fixture.mjs";
+import {
+  assertStudyReviewOutcomeAndRemove,
+  provisionStudyReviewAccounts,
+  removeStudyReviewAccounts,
+} from "./e2e-local-review-fixture.mjs";
+import { resolveSpecSelection } from "./e2e-local-spec-selection.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -221,14 +229,14 @@ const DEFAULT_SPECS = [
   // Function is served and no provider request is made — this spec tests
   // preference persistence and UI only.
   "e2e/ai-model-settings.spec.ts",
-  // EVIDENCE-RECORDS-001C1's Study Record spec, `e2e/study-records.spec.ts`, is
-  // deliberately NOT in this set (CI-E2E-EVIDENCE-LANE-001). The `e2e-evidence`
-  // job in .github/workflows/e2e-local.yml runs it on its own runner and stack
-  // with `npm run test:e2e:local -- e2e/study-records.spec.ts`, so the Evidence
-  // Records suite can grow without spending this lane's 30-minute cap. It
-  // mutates only the two disposable accounts `cmdRun` provisions when a spec
-  // path contains `study-records` (scripts/e2e-local-evidence-fixture.mjs); the
-  // seed is never touched.
+  // The Evidence Records specs — EVIDENCE-RECORDS-001C1's `e2e/study-records.spec.ts`
+  // and 001C2A's `e2e/study-records-review.spec.ts` — are deliberately NOT in
+  // this set (CI-E2E-EVIDENCE-LANE-001). The `e2e-evidence` job in
+  // .github/workflows/e2e-local.yml runs them on their own runner and stack, so
+  // the Evidence Records suite can grow without spending this lane's 30-minute
+  // cap. Each mutates only the disposable accounts of its own fixture, which
+  // `cmdRun` provisions when Playwright will run that exact file
+  // (scripts/e2e-local-spec-selection.mjs); the seed is never touched.
   // DESTRUCTIVE — always last. Deletes a disposable per-run account (never the
   // deterministic primary/secondary fixtures) through the real UI and the real
   // local delete-account Edge Function. The lifecycle proves afterwards that the
@@ -484,6 +492,16 @@ async function cmdRun(specArgs) {
   installSignalCleanup();
 
   const specs = specArgs.length > 0 ? specArgs : DEFAULT_SPECS;
+  // Which files Playwright will actually run decides which Evidence Records
+  // fixtures exist (EVIDENCE-RECORDS-001C2A): resolved with Playwright's own
+  // matcher and inert placeholder credentials, before any stack starts — an
+  // Evidence Records spec without a fixture of its own fails closed here.
+  const selection = await resolveSpecSelection({ specArgs: specs, run: runCapture });
+  log(
+    `Playwright will run ${selection.files.length} test files; Evidence Records fixtures: ${
+      selection.fixtures.size > 0 ? [...selection.fixtures].sort().join(", ") : "none"
+    }`,
+  );
   let primaryError = null;
   // Set once the disposable PFA-C04 account exists; cleared once it is proven
   // deleted, so the failure path only ever cleans up an account that survived.
@@ -494,6 +512,11 @@ async function cmdRun(specArgs) {
   // Set once the EVIDENCE-RECORDS-001C1 study-record accounts exist; cleared
   // once the post-run proof has passed and they are removed.
   let studyAccounts = null;
+  // The same for EVIDENCE-RECORDS-001C2A's study-review accounts.
+  let reviewAccounts = null;
+  // Fixture rows are written and verified as the local database owner, never
+  // through the secret key (C57): see openLocalOwnerSql.
+  let ownerSql = null;
   try {
     await startStack();
     await resetLocalDb();
@@ -501,9 +524,7 @@ async function cmdRun(specArgs) {
     const { apiUrl, anonKey, serviceRoleKey } = await readLocalStatus();
     log(`validated local API origin: ${apiUrl}`);
 
-    // Fixture rows are written and verified as the local database owner, never
-    // through the secret key (C57): see openLocalOwnerSql.
-    const ownerSql = await openLocalOwnerSql();
+    ownerSql = await openLocalOwnerSql();
 
     const creds = await seedLocalStack({ apiUrl, anonKey, serviceRoleKey, ownerSql, log });
 
@@ -529,10 +550,16 @@ async function cmdRun(specArgs) {
     // EVIDENCE-RECORDS-001C1 study-record accounts: the pilot owner role is a
     // server-side row in the LOCAL `internal_user_access`, granted to disposable
     // users only — never to a seed identity, never in Production. Provisioned
-    // only when the study-record spec is actually scheduled.
-    const runsStudyRecordSpec = specs.some((spec) => spec.includes("study-records"));
-    studyAccounts = runsStudyRecordSpec
+    // only when Playwright will run `study-records.spec.ts` itself.
+    studyAccounts = selection.fixtures.has("study-records")
       ? await provisionStudyRecordAccounts({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
+      : null;
+
+    // EVIDENCE-RECORDS-001C2A study-review accounts: the same pilot role, on
+    // accounts of their own, provisioned only when Playwright will run
+    // `study-records-review.spec.ts`.
+    reviewAccounts = selection.fixtures.has("study-records-review")
+      ? await provisionStudyReviewAccounts({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
       : null;
 
     // Explicit, in-memory backend contract for the guarded Playwright run.
@@ -562,6 +589,14 @@ async function cmdRun(specArgs) {
             E2E_STUDY_OWNER_PASSWORD: studyAccounts.owner.password,
             E2E_STUDY_FORMER_EMAIL: studyAccounts.former.email,
             E2E_STUDY_FORMER_PASSWORD: studyAccounts.former.password,
+          }
+        : {}),
+      ...(reviewAccounts
+        ? {
+            E2E_STUDY_REVIEW_OWNER_EMAIL: reviewAccounts.owner.email,
+            E2E_STUDY_REVIEW_OWNER_PASSWORD: reviewAccounts.owner.password,
+            E2E_STUDY_REVIEW_FORMER_EMAIL: reviewAccounts.former.email,
+            E2E_STUDY_REVIEW_FORMER_PASSWORD: reviewAccounts.former.password,
           }
         : {}),
     };
@@ -608,12 +643,22 @@ async function cmdRun(specArgs) {
       studyAccounts = null; // proven and removed
       log("study-records E2E verified: refusals left the papers intact and fixture accounts removed.");
     }
+
+    // What only the database can see of Review: each value's review status,
+    // note, versions and review events, the refused reviews recording nothing,
+    // and the former owner's record unchanged. Then both accounts are removed,
+    // and their removal is verified.
+    if (reviewAccounts) {
+      await assertStudyReviewOutcomeAndRemove({ apiUrl, serviceRoleKey, ownerSql, accounts: reviewAccounts, log });
+      reviewAccounts = null; // proven, removed, and the removal verified
+      log("study-records-review E2E verified: reviews recorded exactly as made, refusals recorded nothing, fixture accounts removed.");
+    }
   } catch (err) {
     primaryError = err;
     // A failed run may have left the disposable account behind. Remove it
     // best-effort so a debugging session with E2E_KEEP_LOCAL_STACK=1 does not
     // accumulate residue; the deterministic fixtures are never touched.
-    if (disposable || modelAccount || studyAccounts) {
+    if (disposable || modelAccount || studyAccounts || reviewAccounts) {
       const target = await readLocalStatus().catch(() => null);
       if (target && disposable) {
         await cleanupDisposableAccount({
@@ -638,6 +683,16 @@ async function cmdRun(specArgs) {
           accounts: studyAccounts,
           log,
         });
+      }
+      if (target && reviewAccounts && ownerSql) {
+        // Verified removal: a survivor is reported (the run has failed already; the first error is kept).
+        await removeStudyReviewAccounts({
+          apiUrl: target.apiUrl,
+          serviceRoleKey: target.serviceRoleKey,
+          ownerSql,
+          accounts: reviewAccounts,
+          log,
+        }).catch((cleanupErr) => fail(`study-review fixture cleanup: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`));
       }
     }
   }
@@ -678,13 +733,14 @@ async function cmdStop() {
 async function cmdVerifyGuards() {
   assertRepoRoot();
 
-  // 1. Pure guard unit tests.
+  // 1. Pure guard unit tests, and the Evidence Records fixture selection's (C2A).
   log("running pure guard unit tests…");
   const unit = await runInherit("npx", [
     "--no-install",
     "vitest",
     "run",
     "e2e/support/backend-guard.test.ts",
+    "e2e/support/spec-selection.test.ts",
   ]);
   if (unit !== 0) throw new Error("Guard unit tests failed.");
 
@@ -749,6 +805,26 @@ async function cmdVerifyGuards() {
     }
   }
   log("Layer 2 ordering OK: browser backend guard precedes both credential reads, the fill, and sign-in.");
+
+  // 4. Evidence Records fixture selection against Playwright's own listing
+  //    (EVIDENCE-RECORDS-001C2A): a run's fixtures follow the files it will
+  //    execute — by exact file and case-insensitively, never by a substring of
+  //    the arguments. Inert placeholder credentials only; nothing is printed.
+  log("checking Evidence Records fixture selection against Playwright's listing…");
+  const selections = [
+    [["e2e/study-records.spec.ts"], ["study-records"]],
+    [["e2e/study-records-review.spec.ts"], ["study-records-review"]],
+    [["E2E/STUDY-RECORDS"], ["study-records", "study-records-review"]],
+    [["e2e/auth.spec.ts"], []],
+  ];
+  for (const [specArgs, expected] of selections) {
+    const { fixtures } = await resolveSpecSelection({ specArgs, run: runCapture });
+    const got = [...fixtures].sort();
+    if (got.join(",") !== expected.join(",")) {
+      throw new Error(`Fixture selection for ${JSON.stringify(specArgs)} is [${got.join(", ")}]; expected [${expected.join(", ")}].`);
+    }
+  }
+  log("fixture selection OK: each Evidence Records spec gets its own fixture, and only when Playwright will run it.");
 
   log("verify-guards: all controls passed.");
 }
