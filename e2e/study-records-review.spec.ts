@@ -1,5 +1,6 @@
-import { test, expect, type BrowserContext, type Locator, type Page, type Request } from "@playwright/test";
+import { test, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { assertLocalSupabaseUrl, assertOriginsMatch } from "./support/backend-guard";
+import { watchStudyRecordTraffic } from "./support/study-record-traffic";
 import { waitForDashboard } from "./helpers";
 
 /**
@@ -190,25 +191,12 @@ async function changeTextDirectly(page: Page, value: SavedValue, fieldKey: strin
 /**
  * Every review RPC the page sends, by request body, and anything the dialog
  * must never send: an Edge Function, a direct table write, an RPC other than
- * the study-record ones.
+ * the study-record ones and the dashboard's audited reads
+ * (`support/study-record-traffic.ts`).
  */
 function watchTraffic(page: Page) {
-  const reviews: Record<string, unknown>[] = [];
-  const forbidden: string[] = [];
-  const allowed = new Set(["evidence_save_changes", "evidence_update_study", "evidence_set_link", REVIEW_RPC, "get_current_user_access"]);
-  const onRequest = (request: Request) => {
-    const url = decodeURIComponent(request.url());
-    if (url.includes("/functions/v1/")) forbidden.push(`${request.method()} ${url}`);
-    const rpc = /\/rest\/v1\/rpc\/([a-z_]+)/.exec(url);
-    if (rpc) {
-      if (!allowed.has(rpc[1])) forbidden.push(`rpc ${rpc[1]}`);
-      if (rpc[1] === REVIEW_RPC && request.method() === "POST") reviews.push(request.postDataJSON() as Record<string, unknown>);
-    } else if (url.includes("/rest/v1/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) {
-      forbidden.push(`${request.method()} ${url.split("?")[0]}`);
-    }
-  };
-  page.on("request", onRequest);
-  return { reviews, forbidden, stop: () => page.off("request", onRequest) };
+  const traffic = watchStudyRecordTraffic(page, ["evidence_save_changes", "evidence_update_study", "evidence_set_link", REVIEW_RPC]);
+  return { reviews: traffic.bodiesOf(REVIEW_RPC), forbidden: traffic.forbidden, stop: traffic.stop };
 }
 
 function studyDialog(page: Page) {
@@ -323,6 +311,15 @@ test.describe("Review — the pilot owner", () => {
   });
 
   test("R1 · Confirm one quoted value; it persists after reopening, and focus moves to the next", async () => {
+    // R1's Confirm is this group's first write, and CI retries a failed group
+    // from the top against what the failed attempt left: once that Confirm has
+    // committed, a retry can't repeat R1. Say so here, not later on the counts.
+    const provisioned = await savedValue(page, TITLES.review, "condition");
+    expect(
+      [provisioned.review_status, provisioned.events.review_confirmed ?? 0],
+      "R1's value is as provisioned; if not, an earlier attempt of this group confirmed it, and that attempt's error is the one to read",
+    ).toEqual(["unreviewed", 0]);
+
     const traffic = watchTraffic(page);
     await openStudy(page, TITLES.review, "SRR Review trial");
     const dialog = studyDialog(page);
@@ -342,6 +339,9 @@ test.describe("Review — the pilot owner", () => {
     await condition.getByRole("heading", { name: LABELS.condition }).click();
     await expect(dialog.getByTestId("review-source-focus")).toContainText(`Source for: ${LABELS.condition}`);
     await expect(dialog.getByTestId("study-record-saved-abstract").locator("mark")).toHaveText(["adults with type 2 diabetes and obesity"]);
+    // Opening the record and Review sent no review and nothing forbidden — checked before the Confirm writes.
+    expect(traffic.reviews).toEqual([]);
+    expect(traffic.forbidden).toEqual([]);
 
     await confirmButton(condition).click();
     await expect(dialog.getByTestId("review-announcement")).toHaveText(`Confirmed ${LABELS.condition}. Next: ${LABELS.eligibility}.`);
@@ -355,7 +355,8 @@ test.describe("Review — the pilot owner", () => {
     const saved = await savedValue(page, TITLES.review, "condition");
     expect([saved.review_status, saved.reviewed_version, saved.value_version, saved.reviewed_at !== null]).toEqual(["user_reviewed", 1, 1, true]);
     expect(saved.events.review_confirmed).toBe(1);
-    // Watched while the dialog is open, as in the C1 spec: the dashboard around it is not under test.
+    // Watched from before the record opened, so the dashboard's startup reads may land in it: the watch
+    // allows those by name and arguments, and nothing else the dialog must not send.
     traffic.stop();
     expect(traffic.forbidden).toEqual([]);
 

@@ -1,5 +1,6 @@
 import { test, expect, type BrowserContext, type Locator, type Page, type Request } from "@playwright/test";
 import { assertLocalSupabaseUrl, assertOriginsMatch } from "./support/backend-guard";
+import { watchStudyRecordTraffic } from "./support/study-record-traffic";
 import { waitForDashboard } from "./helpers";
 
 /**
@@ -264,37 +265,19 @@ async function holdings(page: Page, title: string): Promise<{ projects: number; 
 // ── UI helpers ──
 
 /**
- * What the Study Record dialog may send while it is open: reads, and the
- * study-record RPCs — never an Edge Function, another RPC, or a direct write.
+ * What the Study Record dialog may send while it is open: reads — the
+ * dashboard's audited RPC reads among them (`support/study-record-traffic.ts`)
+ * — and the study-record RPCs; never an Edge Function, another RPC, or a
+ * direct write.
  */
 function watchDialogTraffic(page: Page) {
-  const forbidden: string[] = [];
-  const rpcs: string[] = [];
-  const allowedRpcs = new Set([
+  return watchStudyRecordTraffic(page, [
     "evidence_create_study_from_paper",
     "evidence_update_study",
     "evidence_save_changes",
     "evidence_set_link",
     "evidence_delete_study",
-    "get_current_user_access",
   ]);
-  const onRequest = (request: Request) => {
-    const url = decodeURIComponent(request.url());
-    if (url.includes("/functions/v1/")) forbidden.push(`${request.method()} ${url}`);
-    const rpc = /\/rest\/v1\/rpc\/([a-z_]+)/.exec(url);
-    if (rpc) {
-      rpcs.push(rpc[1]);
-      if (!allowedRpcs.has(rpc[1])) forbidden.push(`rpc ${rpc[1]}`);
-    } else if (url.includes("/rest/v1/") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) {
-      forbidden.push(`${request.method()} ${url.split("?")[0]}`);
-    }
-  };
-  page.on("request", onRequest);
-  return {
-    rpcs,
-    forbidden,
-    stop: () => page.off("request", onRequest),
-  };
 }
 
 async function expandRow(page: Page, title: string) {
@@ -381,6 +364,13 @@ test.describe("Study records — the pilot owner", () => {
   });
 
   test("1 · the entry point is in the paper's expanded details, not the row's icons", async () => {
+    // Test 2's create is this group's first write, and CI retries a failed
+    // group from the top against what the failed attempt left: say so here.
+    expect(
+      await studiesOf(page, TITLES.main).catch(() => null),
+      "the paper is as provisioned, with no study record; if not, an earlier attempt of this group changed it, and that attempt's error is the one to read",
+    ).toEqual([]);
+
     const rowButtons = await page.getByRole("row").filter({ hasText: TITLES.main }).getByRole("button").evaluateAll((buttons) =>
       buttons.map((button) => button.getAttribute("aria-label") ?? button.textContent ?? ""),
     );
