@@ -1,6 +1,6 @@
 # Study records — the Study Record interface (EVIDENCE-RECORDS-001C1, 001C2A)
 
-> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3). **EVIDENCE-RECORDS-001C2A** adds Review (§14): Confirm and Flag of one saved value at a time. It needs no migration, secret or Edge Function, and it has not been exercised or accepted in Production.
+> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3). **EVIDENCE-RECORDS-001C2A** adds Review (§14): Confirm and Flag of one saved value at a time. It merged on 2026-10-24 (PR #355, `0ba43a17`) with no migration, secret or Edge Function, and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary Review workflow in Production, and it passed with three qualifications (§15).
 
 This document describes what a user can do, what the interface sends, and what it deliberately leaves to C2B and C2C. The executable specification is the Vitest suites under `src/lib/studyRecord/__tests__/`, `src/components/papers/study-record/__tests__/`, `src/hooks/__tests__/useStudyRecordEditor.test.tsx` and `useStudyRecordReview.test.tsx`, the paper-safeguard suites, `src/test/studyRecordUiBoundary.test.ts`, `e2e/study-records.spec.ts` and `e2e/study-records-review.spec.ts`.
 
@@ -153,7 +153,7 @@ The report of EVIDENCE-RECORDS-001C1-PROD-ACCEPTANCE-EXEC-001 gives the verdict 
 
 ## 14. Review (EVIDENCE-RECORDS-001C2A)
 
-> **Status:** implemented by EVIDENCE-RECORDS-001C2A, with no migration, secret or Edge Function. It is the first interface that calls `evidence_review_fields`. It is covered by the Vitest suites and the disposable local E2E, and has not been exercised or accepted in Production.
+> **Status:** merged and deployed (EVIDENCE-RECORDS-001C2A, PR #355, 2026-10-24), with no migration, secret or Edge Function. It is the first interface that calls `evidence_review_fields`. It is covered by the Vitest suites and the disposable local E2E. On 2026-10-24 one synthetic-canary Review workflow passed in Production, with qualifications (§15).
 
 **What a review means.** "Reviewed by you" records that the user pressed **Confirm against this source** on one saved value, at its exact `value_version`, while the value and its source were shown together (001A §I2). It does not mean PaperLume verified anything, and nothing says "verified", "accurate" or "correct". There is no automatic, bulk or record-level confirmation, and saving is never a review. Changing a saved value resets its review on the server; replacing a saved copy sends abstract-dependent values to Needs re-review ([evidence-records-field-operations.md](evidence-records-field-operations.md) §4–§5).
 
@@ -194,7 +194,7 @@ The report of EVIDENCE-RECORDS-001C1-PROD-ACCEPTANCE-EXEC-001 gives the verdict 
 
 **Locks.** A review in flight or in doubt holds Save, link changes, Delete, typing and every other review. A save, link change or deletion in flight or in doubt holds every review. A conflict or a change seen elsewhere holds them until Reload.
 
-**Wording.** Review's sentences are in `reviewCopy.ts`; the Confirm-block messages are PR-B's ([evidence-domain-library.md](evidence-domain-library.md) §5). The Product Owner accepts the final wording at C2A's review.
+**Wording.** Review's sentences are in `reviewCopy.ts`; the Confirm-block messages are PR-B's ([evidence-domain-library.md](evidence-domain-library.md) §5). Before C2A merged (EVIDENCE-RECORDS-001C2A-MERGE-001, 2026-10-24), the Product Owner accepted this wording and the phone layout above: Edit and Review modes, no Source tab inside Review, and each card's saved sources and **Show the saved abstract**.
 
 **Tests.**
 
@@ -208,3 +208,65 @@ The report of EVIDENCE-RECORDS-001C1-PROD-ACCEPTANCE-EXEC-001 gives the verdict 
 - An unknown outcome is abandoned if the dialog closes or the page reloads. The re-read shows whether it was recorded, and pressing again is safe: a version already reviewed has no Confirm, and the same Flag note sends nothing.
 - Each review reads the whole record back.
 - The record is read by several parallel SELECTs. A change made at that moment can show a mixed view, but any write is then refused as a version conflict.
+
+## 15. Review — Production acceptance (2026-10-24)
+
+The report of EVIDENCE-RECORDS-001C2A-PRODUCTION-ACCEPTANCE-001 gives the verdict **`EVIDENCE_RECORDS_001C2A_PROD_ACCEPTANCE_PASSED_WITH_QUALIFICATIONS`**: the Review workflow below succeeded, and nothing beyond it was accepted. It ran on the deployed C2A build (PR #355, `main` at `0ba43a17`). The Product Owner performed every action in their own browser, through the normal Production interface: on a computer, and on their own phone for the phone check. The audits between stages were read-only. No test automation, service-role browser access or direct database write was used. The identities and the cleanup record are in [migration-history.md](migration-history.md).
+
+**Verified Production operation.** On one synthetic canary paper (title prefix `SR-C2A-CANARY-`, a fictional abstract), the owner:
+
+1. added the paper by hand and created a study record: *Yes*, in the `non_intervention` family;
+2. saved **Who took part** as Reported, with one quote selected in the saved copy, and **Setting** as Reported, with no source;
+3. opened the record, which started in Edit, and switched to Review:
+   - the summary counted two fields Not reviewed, and *Needs your review* was the default filter;
+   - Setting gave its reason: "Add a quote from the saved abstract or a full-text reference, then save.";
+   - pressing Setting's held Confirm sent nothing;
+4. pressed **Confirm against this source** on Who took part. It showed "Reviewed by you on ‹date›", and after a reload it still did, with no Confirm for that version;
+5. flagged Setting:
+   - a two-character note was refused;
+   - a valid note was recorded;
+   - the reopened form was prefilled, and sent nothing while the note was unchanged;
+   - a changed note updated the flag;
+6. edited Who took part without saving. Review still showed the saved value and quote, and held the card's actions ("This field has unsaved changes. Save or undo them to review it."). The draft survived switching back to Edit;
+7. saved the edit. Who took part returned to Not reviewed at its next version, still citing the same quote, and Setting kept its flag;
+8. on a phone:
+   - saw one row of mode tabs and no sideways scroll;
+   - opened **Show the saved abstract**;
+   - opened the Flag form and cancelled it;
+   - confirmed the new version of Who took part;
+9. deleted the study record, then the canary paper.
+
+**Verified database state** (read-only, after each stage):
+
+- **Create and save:** the create made version 1, with four events; the save made version 2, with two `value_saved` events. The saved copy is byte-identical to the library abstract. The quote is the server's own match: the unique occurrence at normalized offsets `[115,185)`.
+- **Reviews:** each press is one request at the next study version, with one event, and the value itself is unchanged.
+  - Confirm: `review_confirmed`; `user_reviewed`, with `reviewed_version` 1 (version 3).
+  - Flag: `review_flagged`; `disputed`, with the note (version 4).
+  - Changed note: `review_flagged` (version 5). Each event stores its note as a digest.
+  - Save of the edited value: `value_saved`; `value_version` 2, review back to `unreviewed`, and no review event (version 6).
+  - Confirm of the new version: `review_confirmed`, with `reviewed_version` 2 (version 7).
+- **API logs:**
+  - **Reviews:** four `evidence_review_fields` calls, one per deliberate press. None came from opening Review, the held Confirm, the refused or unchanged notes, or the cancelled phone form.
+  - **Other writes:** one paper insert, two saves, one study delete and one paper delete.
+  - **Excluded:** no Edge Function or Storage call.
+- **After cleanup:** no evidence row and no `SR-C2A-CANARY-%` paper remain, checked by exact identifiers. Everything else equals the baseline taken before the run:
+  - the owner's library, storage and usage counts;
+  - the ledger, the function bodies and the privileges;
+  - the Security Advisor findings.
+
+**Qualifications.**
+
+- **One log row is missing.** The API log never showed the create RPC's POST, only its CORS preflight. The database holds exactly one create request, so the gap is in the log, not in the application.
+- **The phone check is observational.** It rests on the Product Owner's report, one screenshot and the API log. Touch-target sizes were not measured in Production; the phone E2E measures them locally.
+- **Reviewing another field during an unsaved edit was checked in the interface only.** That was allowed, so as not to record a redundant review event. The disposable local E2E covers it (R4).
+
+**Not exercised in Production, so covered only by the Vitest suites and the disposable local E2E:**
+
+- an unknown review outcome and Try again;
+- version-conflict refusals, and the server's own Confirm refusal (`confirm_blocked`);
+- Confirm of a flagged value;
+- full-text references, and examined or couldn't-check sources;
+- Needs re-review;
+- the read-only view of a non-owner.
+
+History (C2B) and rebase (C2C) are not implemented.
