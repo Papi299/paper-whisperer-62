@@ -65,9 +65,10 @@ export const REVIEW_STATUS_LABELS: Readonly<Record<ReviewStatus, string>> = Obje
 /** Requirements-001 §E7: the label of a field whose review an edit cleared. */
 export const CHANGED_AFTER_REVIEW_LABEL = "Not reviewed (changed after review)";
 
-/** Requirements-001A §I7. */
-export const REVIEWED_BY_YOU_MEANING =
-  "Reviewed by you — you confirmed this value against the source shown. PaperLume hasn't checked your interpretation.";
+/** Requirements-001A §I7, with the date of the review (`reviewed_at`, as the caller formats it). */
+export function reviewedByYouMeaning(date: string): string {
+  return `Reviewed by you — you confirmed this value against the source shown, on ${date}. PaperLume hasn't checked your interpretation.`;
+}
 
 export const FLAG_NOTE_MIN_LENGTH = 3;
 
@@ -86,22 +87,48 @@ export type ConfirmBlock =
   | "note_missing"
   | "state_reason_missing";
 
-/** Shown beside the Confirm button, not in a tooltip (Requirements-001 §E6). */
+/**
+ * Shown beside the Confirm button, not in a tooltip (Requirements-001 §E6).
+ * Confirm reviews the SAVED value, so each says what to fix and that the fix
+ * must be saved first (EVIDENCE-RECORDS-001C2A).
+ */
 export const CONFIRM_BLOCK_MESSAGES: Readonly<Record<ConfirmBlock, string>> = Object.freeze({
-  not_recorded: "Record this field before confirming it.",
-  stale_version: "This field changed since you opened it.",
-  sources_not_allowed: "This field's sources don't fit its state. Edit them before confirming.",
-  examined_source_missing: "Say which source you examined before confirming.",
-  unclear_source_missing: "Quote the unclear text, or say which source you examined, before confirming.",
-  unavailable_source_missing: "Say which source you couldn't check before confirming.",
-  no_current_support: "Add a quote or a full-text reference before confirming.",
-  unclear_source_not_current: "Quote the unclear text in the current saved copy, or say which source you examined, before confirming.",
-  count_not_confirmed: "Confirm the number before confirming this value.",
-  examined_abstract_not_current: "Check the current saved copy of the abstract, then save, before confirming.",
-  unavailable_abstract_has_copy: "This paper now has a saved copy of its abstract. Record what it says before confirming.",
-  note_missing: "Add the required note before confirming.",
-  state_reason_missing: "Say why this is unclear before confirming.",
+  not_recorded: "Record this field, then save.",
+  stale_version: "This field changed after this record was loaded. Reload to review the latest version.",
+  sources_not_allowed: "This field's sources don't fit its state. Edit them, then save.",
+  examined_source_missing: "Say which source you examined, then save.",
+  unclear_source_missing: "Quote the unclear text, or say which source you examined, then save.",
+  unavailable_source_missing: "Say which source you couldn't check, then save.",
+  no_current_support: "Add a quote from the saved abstract or a full-text reference, then save.",
+  unclear_source_not_current:
+    "Its only quotes are in an earlier copy of the abstract. Quote the unclear passage in the current saved copy, or mark a source you examined, then save.",
+  count_not_confirmed: "Enter the whole number this text reports, then save.",
+  examined_abstract_not_current: "You examined an earlier copy of the abstract. Read the current saved copy, mark it as examined, then save.",
+  unavailable_abstract_has_copy:
+    "A copy of this paper's abstract was saved after you said it couldn't be checked. Read it, record what it says, then save.",
+  note_missing: "Add the required note, then save.",
+  state_reason_missing: "Say why this is unclear, then save.",
 });
+
+/** `no_current_support` when the value's only quotes are on earlier copies of the abstract. */
+export const NO_CURRENT_SUPPORT_EARLIER_COPY_MESSAGE =
+  "Its quotes are in an earlier copy of the abstract. Quote the passage in the current saved copy, or add a full-text reference, then save.";
+
+/**
+ * The message for one Confirm block, as precise as `value`'s own references
+ * allow. A value blocked for lack of current support whose abstract quotes are
+ * all on earlier copies of their links (`links`, as `checkConfirm` takes them)
+ * is told that, rather than to add a quote. Anything else — including a block
+ * the server reports that the references shown do not explain — gets the
+ * plain message.
+ */
+export function confirmBlockMessage(block: ConfirmBlock, value: Pick<RecordedValue, "references"> | null, links: readonly LinkSources[]): string {
+  if (block === "no_current_support" && value) {
+    const quoted = value.references.some((r) => r.purpose === "supports" && r.sourceKind === "abstract");
+    if (quoted && !value.references.some((r) => isCurrentSupport(r, links))) return NO_CURRENT_SUPPORT_EARLIER_COPY_MESSAGE;
+  }
+  return CONFIRM_BLOCK_MESSAGES[block];
+}
 
 export type ConfirmCheck =
   | { readonly kind: "allowed"; readonly item: { readonly valueId: ValueId; readonly valueVersion: ValueVersion } }
@@ -199,8 +226,8 @@ function isUsableNote(note: string | null, minLength: number): boolean {
 export type FlagBlock = "not_recorded" | "stale_version" | "note_too_short" | "note_too_long" | "note_malformed";
 
 export const FLAG_BLOCK_MESSAGES: Readonly<Record<FlagBlock, string>> = Object.freeze({
-  not_recorded: "Record this field before flagging it.",
-  stale_version: "This field changed since you opened it.",
+  not_recorded: "Record this field, then save, before flagging it.",
+  stale_version: "This field changed after this record was loaded. Reload to review the latest version.",
   note_too_short: "Say what's wrong, in at least 3 characters.",
   note_too_long: "Flag notes can be up to 2,000 characters.",
   note_malformed: "This note contains characters that can't be saved.",

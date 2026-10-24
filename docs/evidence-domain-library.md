@@ -1,6 +1,6 @@
 # Study records — domain library (EVIDENCE-RECORDS-001B)
 
-> **Status:** implemented in `src/lib/evidence/`. Pure TypeScript with no UI. Every rule here is advisory: the database CHECKs and the RPCs decide. The RPC contracts are in [evidence-records-lifecycle.md](evidence-records-lifecycle.md) (PR-A2) and [evidence-records-field-operations.md](evidence-records-field-operations.md) (PR-A3), both applied to Production. Its first consumer is the Study Record interface of EVIDENCE-RECORDS-001C1 ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md)), merged as PR #348 and deployed on 2026-10-23: it uses the library unchanged, writes only through `createEvidenceLifecycleClient`, and calls neither `reviewField` nor `rebaseSource`.
+> **Status:** implemented in `src/lib/evidence/`. Pure TypeScript with no UI. Every rule here is advisory: the database CHECKs and the RPCs decide. The RPC contracts are in [evidence-records-lifecycle.md](evidence-records-lifecycle.md) (PR-A2) and [evidence-records-field-operations.md](evidence-records-field-operations.md) (PR-A3), both applied to Production. Its first consumer is the Study Record interface of EVIDENCE-RECORDS-001C1 ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md)), merged as PR #348 and deployed on 2026-10-23: it writes only through `createEvidenceLifecycleClient`. EVIDENCE-RECORDS-001C2A adds the interface's Review mode (UI document §14), which calls `reviewField` — from the editor hook only, one value per press — and still not `rebaseSource`; it refines the Confirm-block wording here (§5).
 
 The library gives PR-C1/C2 (the Study record dialog) one typed, tested implementation of the study-record domain, and the PR-A3 RPCs enforce the same rules on the server. It covers the field dictionary, validation, the value and review state rules, match normalization v1, quote matching, number suggestions, identity and link rules, error classification, and a client for the seven client RPCs: PR-A2's four lifecycle RPCs and PR-A3's three field RPCs.
 
@@ -29,7 +29,7 @@ The library gives PR-C1/C2 (the Study record dialog) one typed, tested implement
 
 ## 2. Sources and precedence
 
-Rules come from, in this order: accepted Product Owner decisions; the PR-A1, PR-A2 and PR-A3 migrations; FK-PROOF-001's corrections; Requirements-001A; and Requirements-001 where it is not superseded. Each field records where its rules are enforced. `pr_a1_check` is a CHECK constraint. `pr_a2_rpc` is an applied PR-A2 RPC. `pr_a3_rpc` is the PR-A3 save RPC, `evidence_save_changes` (`20261017155445`), which is not yet applied to Production.
+Rules come from, in this order: accepted Product Owner decisions; the PR-A1, PR-A2 and PR-A3 migrations; FK-PROOF-001's corrections; Requirements-001A; and Requirements-001 where it is not superseded. Each field records where its rules are enforced. `pr_a1_check` is a CHECK constraint. `pr_a2_rpc` is an applied PR-A2 RPC. `pr_a3_rpc` is the PR-A3 save RPC, `evidence_save_changes` (`20261017155445`), applied to Production on 2026-10-18 ([evidence-records-field-operations.md](evidence-records-field-operations.md) §13).
 
 These parts of Requirements-001 are superseded, and are **not** implemented:
 
@@ -101,6 +101,8 @@ Flag needs a note of at least 3 characters, in any state. Any change to state, r
 
 The PR-A3 review RPC re-checks these preconditions and refuses with the same codes, in the same order (`EvidenceError.blocks`). It differs in one deliberate place: Confirm of a version already confirmed is a no-op only when the note is the same too, so a new note re-confirms; the browser offers no Confirm there at all.
 
+**Wording (EVIDENCE-RECORDS-001C2A).** `CONFIRM_BLOCK_MESSAGES` are shown beside the Confirm button. Because Confirm reviews the saved value, each says what to fix and ends "then save", except a stale version, which says to reload ("This field changed after this record was loaded. Reload to review the latest version."). None uses the word "confirm". `confirmBlockMessage(block, value, links)` is the one place that picks a message. It tells a Reported value whose abstract quotes are all on earlier copies of their links that, rather than to add a quote (`NO_CURRENT_SUPPORT_EARLIER_COPY_MESSAGE`). A block the shown references do not explain, as when the server saw something else, keeps the plain message. `reviewedByYouMeaning(date)` is 001A §I7's sentence with the review's date. The Product Owner accepts the final wording at C2A's review.
+
 When a link's copy is replaced or first saved, `deriveSourceChangeTransitions` applies 001A §E5 to every value with any abstract reference on that link. Reviewed, flagged and needs-re-review values go to **Needs re-review** (`source_changed`), even if every quote is found again; not-reviewed values stay. A typography-only difference keeps the saved copy by default (`deriveSourceState`), so nothing changes unless the user chooses the current abstract.
 
 ## 6. Normalization v1 and the shared fixture
@@ -146,6 +148,8 @@ Each occurrence has:
 - `context` — up to 40 characters on each side.
 
 `selectOccurrence` and `resolveSelectedOccurrence` / `quoteFromSelection` let the user choose an occurrence explicitly, or from their selection.
+
+`storedMatchContext(map, start, end, length)` gives a STORED quote's passage and context from the server's normalized offsets on the copy it names (its v1 map). It never searches again: Review shows saved evidence this way (EVIDENCE-RECORDS-001C2A).
 
 Offsets are typed `CodePointOffset` and `Utf16Offset`, so one cannot be passed for the other.
 
@@ -197,7 +201,7 @@ The Product Owner settled these on 2026-10-17, at the PR-B merge; PR-A3 implemen
 - **`design_classification`** (decision 2). It may be recorded without a source. Confirming it needs a current abstract quote or a full-text locator; a note alone is not source attestation (`no_current_support`).
 - **Reported without a source** (decision 3). It may be saved, shows **No source given**, and cannot be confirmed until current support exists.
 - **Blank values** (decision 4). Empty after normalization v1 is blank, for value text and notes as for labels; the original text is stored unchanged. The difference from the PR-A1 CHECKs, which measure `btrim` of spaces, is enforced and documented on the server.
-- **Confirm messages** (decision 5). The five block messages PR-B added are provisional, to be refined in the Study Record UI phase.
+- **Confirm messages** (decision 5). The five block messages PR-B added are provisional, to be refined in the Study Record UI phase. EVIDENCE-RECORDS-001C2A refines all thirteen (§5), for the Product Owner to accept at its review.
 - **Offsets.** `match_start`/`match_end` are 0-based, half-open code point offsets of the v1-normalized copy. PostgreSQL is authoritative, and suite 032 pins it against both matchers.
 
 PR-A3 settled the engineering details that were still open:

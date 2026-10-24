@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +44,7 @@ import {
   type DraftOutcome,
   type TargetKey,
 } from "@/lib/studyRecord/draft";
+import type { IssueTarget } from "@/lib/studyRecord/validateDraft";
 import { useEditor, type EditorContextValue } from "./editorContext";
 import { FieldEditor, FieldIssues } from "./FieldEditor";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
@@ -89,10 +90,32 @@ function studyKeys(editor: EditorContextValue, section: FieldSection): FieldKey[
   return fieldKeysFor("study", editor.draft.header.designProfile).filter((key) => EVIDENCE_FIELDS[key].section === section);
 }
 
+/** Opens the section a component sits in. */
+const SectionContext = createContext<{ readonly open: () => void } | null>(null);
+
+/**
+ * Open the enclosing section — and run `onMatch` first, for "More details" —
+ * when the editor asks to reveal a target `matches` accepts (C2A: Edit from a
+ * Review card, and "Go to the field"). Each request is handled once, so the
+ * user can collapse the section again afterwards.
+ */
+function useReveal(matches: (target: IssueTarget) => boolean, onMatch?: () => void) {
+  const { revealRequest } = useEditor();
+  const section = useContext(SectionContext);
+  const handled = useRef<number | null>(null);
+  useEffect(() => {
+    if (!revealRequest || handled.current === revealRequest.nonce || !matches(revealRequest.target)) return;
+    handled.current = revealRequest.nonce;
+    onMatch?.();
+    section?.open();
+  }, [revealRequest, matches, onMatch, section]);
+}
+
 /** A collapsible section. Collapsed content stays mounted, so nothing typed into it is lost. */
 function Section({ title, children }: { readonly title: string; readonly children: React.ReactNode }) {
   const ids = useId();
   const [open, setOpen] = useState(true);
+  const reveal = useMemo(() => ({ open: () => setOpen(true) }), []);
   return (
     <section aria-labelledby={`${ids}-heading`} className="rounded-lg border">
       <h3 id={`${ids}-heading`} className="text-sm font-semibold">
@@ -108,7 +131,7 @@ function Section({ title, children }: { readonly title: string; readonly childre
         </button>
       </h3>
       <div id={`${ids}-content`} hidden={!open} className="space-y-3 border-t p-3">
-        {children}
+        <SectionContext.Provider value={reveal}>{children}</SectionContext.Provider>
       </div>
     </section>
   );
@@ -130,6 +153,13 @@ function FieldList({ target, keys }: { readonly target: TargetKey; readonly keys
   const kept = optional.filter((key) => inUse(editor, valueKey(target, key)));
   const hidden = optional.filter((key) => !kept.includes(key));
   const shown = [...core, ...kept, ...(more ? hidden : [])];
+  const revealedKey = editor.revealRequest?.target.kind === "value" ? editor.revealRequest.target.key : null;
+  useReveal(
+    (candidate) => candidate.kind === "value" && keys.some((key) => valueKey(target, key) === candidate.key),
+    () => {
+      if (hidden.some((key) => valueKey(target, key) === revealedKey)) setMore(true);
+    },
+  );
   return (
     <div className="space-y-3">
       {keys
@@ -154,6 +184,7 @@ function StudyHeaderFields() {
   const disabled = !editor.canEdit;
   const labelIssues = editor.issues.filter((issue) => issue.target.kind === "header" && issue.target.field === "label");
   const familyIssues = editor.issues.filter((issue) => issue.target.kind === "header" && issue.target.field === "designProfile");
+  useReveal((target) => target.kind === "header" && target.field !== "notes");
 
   const chooseFamily = (profile: DesignProfile) => {
     const impact = familyChangeImpact(editor.baseValues, editor.draft, profile);
@@ -212,6 +243,7 @@ function NotesField() {
   const editor = useEditor();
   const ids = useId();
   const issues = editor.issues.filter((issue) => issue.target.kind === "header" && issue.target.field === "notes");
+  useReveal((target) => target.kind === "header" && target.field === "notes");
   return (
     <div className="space-y-1" data-issue-target="header:notes">
       <Label htmlFor={`${ids}-notes`}>{STUDY_RECORD_COPY.notesLabel}</Label>
@@ -295,6 +327,7 @@ function GroupCard({ arm, index, count }: { readonly arm: DraftArm; readonly ind
   const target = armTarget(arm.key);
   const issues = editor.issues.filter((issue) => issue.target.kind === "arm" && issue.target.key === arm.key);
   const name = arm.displayLabel || STUDY_RECORD_COPY.groupRole[arm.role];
+  useReveal((candidate) => candidate.kind === "arm" && candidate.key === arm.key);
 
   const setRole = (role: ArmRole) => {
     if (valuesDisallowedForRole(editor.baseValues, editor.draft, arm.key, role).length > 0) {
@@ -464,6 +497,7 @@ function OutcomeCard({ outcome, index, count }: { readonly outcome: DraftOutcome
   const target = outcomeTarget(outcome.key);
   const issues = editor.issues.filter((issue) => issue.target.kind === "outcome" && issue.target.key === outcome.key);
   const name = outcome.displayLabel || "Outcome";
+  useReveal((candidate) => candidate.kind === "outcome" && candidate.key === outcome.key);
   const remove = () => {
     const values = recordedValueCount(editor, target);
     if (values === 0) {

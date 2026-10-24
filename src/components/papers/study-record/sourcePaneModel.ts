@@ -6,12 +6,39 @@
  */
 
 import { EVIDENCE_FIELDS, fieldKeysFor } from "@/lib/evidence/fieldDictionary";
+import { mapNormalizedRange, type NormalizationMap } from "@/lib/evidence/normalization";
+import type { RecordedValue, ServerAttestedMatch } from "@/lib/evidence/types";
 import { armTarget, outcomeTarget, STUDY_TARGET, valueKey, type StudyRecordDraft } from "@/lib/studyRecord/draft";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
 
 export interface TextRange {
   readonly start: number;
   readonly end: number;
+}
+
+/**
+ * Where a STORED quote lies in the copy it names, as string indices of that
+ * copy: the server's normalized offsets mapped back through the copy's v1 map
+ * (`map`). Null when the offsets do not fit the copy.
+ */
+export function storedQuoteRange(map: NormalizationMap, match: Pick<ServerAttestedMatch, "normalizedStart" | "normalizedEnd">): TextRange | null {
+  const exact = mapNormalizedRange(map, match.normalizedStart, match.normalizedEnd);
+  return exact ? { start: map.originalUtf16Offsets[exact.start], end: map.originalUtf16Offsets[exact.end] } : null;
+}
+
+/**
+ * The passages one SAVED value quotes in the copy `copyId` (EVIDENCE-RECORDS-
+ * 001C2A): its persisted supporting quotes on that copy, located by their
+ * stored offsets. A draft's quotes are never read here.
+ */
+export function savedQuoteRanges(value: Pick<RecordedValue, "references">, copyId: string, map: NormalizationMap): TextRange[] {
+  const ranges: TextRange[] = [];
+  for (const reference of value.references) {
+    if (reference.purpose !== "supports" || reference.sourceKind !== "abstract" || reference.snapshotId !== copyId) continue;
+    const range = storedQuoteRange(map, reference.match);
+    if (range) ranges.push(range);
+  }
+  return ranges;
 }
 
 /** The fields "Use as quote" can target, grouped as the record shows them. */

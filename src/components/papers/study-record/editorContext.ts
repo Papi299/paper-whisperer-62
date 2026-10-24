@@ -13,6 +13,19 @@ export interface ConfirmRequest {
   readonly onConfirm: () => void;
 }
 
+/** Edit holds the draft; Review shows the saved values, one card each (EVIDENCE-RECORDS-001C2A). */
+export type EditorMode = "edit" | "review";
+
+/**
+ * A request to open what holds a target — its collapsed section, and "More
+ * details" for an optional field — so it can take focus. `nonce` makes a
+ * repeated request for the same target a new one.
+ */
+export interface RevealRequest {
+  readonly target: IssueTarget;
+  readonly nonce: number;
+}
+
 /** What every part of the Study Record editor reads and changes. */
 export interface EditorContextValue {
   readonly base: StudyRecordData;
@@ -34,8 +47,14 @@ export interface EditorContextValue {
   /** The field that last had focus: the default target of "Use as quote". */
   readonly lastFocusedKey: string | null;
   readonly setLastFocusedKey: (key: string) => void;
-  /** Move to a field (after "Use as quote" on a phone, or from an error). */
+  /**
+   * Move to a field in Edit (after "Use as quote" on a phone, from an error,
+   * or from a Review card): switches to Edit, opens what holds it, focuses it.
+   */
   readonly focusTarget: (target: IssueTarget) => void;
+  /** The last reveal `focusTarget` asked for; sections and field lists open for it. */
+  readonly revealRequest: RevealRequest | null;
+  readonly mode: EditorMode;
   readonly confirm: (request: ConfirmRequest) => void;
   readonly newLocalId: () => string;
   /** A field's label, with its group or outcome name when it has one. */
@@ -49,6 +68,11 @@ export function useEditor(): EditorContextValue {
   const context = useContext(EditorContext);
   if (!context) throw new Error("Study record editor context is missing");
   return context;
+}
+
+/** Whether `request` asks to reveal `target`. */
+export function revealsTarget(request: RevealRequest | null, target: IssueTarget): boolean {
+  return request !== null && issueTargetKey(request.target) === issueTargetKey(target);
 }
 
 /** The DOM key of an issue target, for `data-issue-target` and focusing. */

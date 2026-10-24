@@ -4,11 +4,14 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { FieldKey } from "@/lib/evidence/fieldDictionary";
 import { locateQuote, type QuoteOccurrence } from "@/lib/evidence/matcher";
-import { mapNormalizedRange, normalizeEvidenceV1WithMap } from "@/lib/evidence/normalization";
+import { normalizeEvidenceV1WithMap } from "@/lib/evidence/normalization";
 import { parseValueKey, setValueEdit, viewValue } from "@/lib/studyRecord/draft";
 import { addQuoteToEdit, quoteChoiceFromSelection } from "@/lib/studyRecord/quotes";
+import { reviewCopyFocus, type ReviewItem } from "@/lib/studyRecord/reviewModel";
 import { useEditor } from "./editorContext";
-import { highlightSegments, quoteFieldGroups, type TextRange } from "./sourcePaneModel";
+import { formatRecordDate, REVIEW_COPY, reviewItemLabel } from "./reviewCopy";
+import { SavedCopyText } from "./SavedCopyText";
+import { quoteFieldGroups, savedQuoteRanges, storedQuoteRange, type TextRange } from "./sourcePaneModel";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
 
 type Range = TextRange;
@@ -17,22 +20,36 @@ const SELECT_CLASS =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
+ * What the Source pane shows (EVIDENCE-RECORDS-001C2A). In Edit, the draft's
+ * quotes — saved and unsaved — and "Use as quote". In Review, only the SAVED
+ * quotes of the card being reviewed, and no way to add one: a quote added,
+ * changed or removed in the draft is never shown as what a Confirm is made
+ * against.
+ */
+export type SourceDisplay = { readonly mode: "edit" } | { readonly mode: "review"; readonly item: ReviewItem | null };
+
+/**
  * The Source pane (Requirements-001 §E3–§E4): the study's IMMUTABLE saved copy
  * of the abstract — never the live library abstract — as plain text nodes,
  * `white-space: pre-wrap`, so superscripts, punctuation, line breaks and every
  * space survive and nothing is interpreted as HTML. Quotes already used on
  * this copy are highlighted (an underline as well as a colour).
  *
- * Selecting text offers "Use as quote for…" a chosen field. The selection's
- * occurrence comes from the selection itself; when the selection cannot tell
- * which of several identical passages it is, the user is asked. The browser's
- * match is advisory; the server matches again when the record is saved.
+ * In Edit, selecting text offers "Use as quote for…" a chosen field. The
+ * selection's occurrence comes from the selection itself; when the selection
+ * cannot tell which of several identical passages it is, the user is asked.
+ * The browser's match is advisory; the server matches again when the record
+ * is saved. In Review (`display`), the pane shows the saved quotes of one
+ * value and says what it cannot show — an earlier copy is never stood in for
+ * by the current one.
  */
-export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: string) => void }) {
+export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { readonly onQuoteAdded: (key: string) => void; readonly display?: SourceDisplay }) {
   const editor = useEditor();
   const ids = useId();
   const link = editor.sourceLink;
   const copy = link?.currentCopy ?? null;
+  const reviewing = display.mode === "review";
+  const quoting = editor.canEdit && !reviewing;
   const textRef = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<Range | null>(null);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
@@ -50,8 +67,11 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
     null;
 
   const map = useMemo(() => (copy ? normalizeEvidenceV1WithMap(copy.exactText) : null), [copy]);
+  const reviewItem = display.mode === "review" ? display.item : null;
   const highlights = useMemo(() => {
     if (!copy || !map) return [];
+    // Review: the saved quotes of the card under review, and nothing else.
+    if (reviewing) return reviewItem ? savedQuoteRanges(reviewItem.value, copy.id, map) : [];
     const ranges: Range[] = [];
     const keys = new Set([...editor.baseValues.keys(), ...editor.draft.values.keys()]);
     for (const key of keys) {
@@ -61,9 +81,8 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
         const r = reference.reference;
         if (r.purpose !== "supports" || r.sourceKind !== "abstract" || r.snapshotId !== copy.id) continue;
         if (reference.kind === "kept" && reference.reference.purpose === "supports" && reference.reference.sourceKind === "abstract") {
-          const { normalizedStart, normalizedEnd } = reference.reference.match;
-          const exact = mapNormalizedRange(map, normalizedStart, normalizedEnd);
-          if (exact) ranges.push({ start: map.originalUtf16Offsets[exact.start], end: map.originalUtf16Offsets[exact.end] });
+          const range = storedQuoteRange(map, reference.reference.match);
+          if (range) ranges.push(range);
         } else if (reference.kind === "new" && reference.reference.purpose === "supports" && reference.reference.sourceKind === "abstract") {
           const match = locateQuote(reference.reference.quoteText, copy.exactText);
           const occurrence =
@@ -73,11 +92,11 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
       }
     }
     return ranges;
-  }, [copy, map, editor.baseValues, editor.draft]);
-  const segments = useMemo(() => (copy ? highlightSegments(copy.exactText, highlights) : []), [copy, highlights]);
+  }, [copy, map, reviewing, reviewItem, editor.baseValues, editor.draft]);
 
-  /** The selection, as UTF-16 indices of the copy, when it lies inside the copy's text. */
+  /** The selection, as UTF-16 indices of the copy, when it lies inside the copy's text. Ignored in Review. */
   const captureSelection = useCallback(() => {
+    if (reviewing) return;
     const container = textRef.current;
     const current = window.getSelection();
     if (!container || !current || current.rangeCount === 0 || current.isCollapsed) return;
@@ -94,7 +113,7 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
       setChosen(null);
       setMessage(null);
     }
-  }, []);
+  }, [reviewing]);
 
   useEffect(() => {
     const onChange = () => captureSelection();
@@ -103,7 +122,7 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
   }, [captureSelection]);
 
   const applySelectionAsQuote = () => {
-    if (!copy || !selection || !targetKey) return;
+    if (!quoting || !copy || !selection || !targetKey) return;
     const choice = pending
       ? chosen !== null
         ? { kind: "ready" as const, quoteText: pending.quoteText, occurrence: chosen, count: pending.occurrences.length }
@@ -152,10 +171,12 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
 
   const selectedText = copy && selection ? copy.exactText.slice(selection.start, selection.end) : "";
   const preview = Array.from(selectedText).length > 160 ? `${Array.from(selectedText).slice(0, 160).join("")}…` : selectedText;
+  const copyInfo = copy && link ? link.snapshots.find((snapshot) => snapshot.id === copy.id) ?? null : null;
 
   return (
-    <div className="flex min-h-full flex-col" data-testid="study-record-source-pane">
+    <div className="flex min-h-full flex-col" data-testid="study-record-source-pane" data-source-mode={display.mode}>
       <div className="flex-1 space-y-3 px-4 py-4 sm:px-6">
+        {reviewing && <ReviewSourceFocus item={reviewItem} paperId={link?.link.paperId ?? null} />}
         {editor.links.length > 1 && (
           <div className="space-y-1">
             <Label htmlFor={`${ids}-paper`} className="text-xs">
@@ -174,27 +195,20 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
         {copy ? (
           <>
             <p className="text-xs text-muted-foreground">
-              {STUDY_RECORD_COPY.savedCopyDate(new Date(copy.capturedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }))}
+              {reviewing && copyInfo && link
+                ? REVIEW_COPY.sourceCopy(copyInfo.seq, link.snapshots.length, formatRecordDate(copy.capturedAt))
+                : STUDY_RECORD_COPY.savedCopyDate(formatRecordDate(copy.capturedAt))}
             </p>
-            <div
+            <SavedCopyText
               ref={textRef}
               data-testid="study-record-saved-abstract"
-              className="whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
+              text={copy.exactText}
+              ranges={highlights}
               onMouseUp={captureSelection}
               onKeyUp={captureSelection}
               onTouchEnd={captureSelection}
-            >
-              {segments.map((segment, index) =>
-                segment.highlighted ? (
-                  <mark key={index} className="bg-amber-100 underline decoration-dotted underline-offset-2 dark:bg-amber-900/50">
-                    {segment.text}
-                  </mark>
-                ) : (
-                  segment.text
-                ),
-              )}
-            </div>
-            {editor.canEdit && !selection && <p className="text-xs text-muted-foreground">{STUDY_RECORD_COPY.selectionPrompt}</p>}
+            />
+            {quoting && !selection && <p className="text-xs text-muted-foreground">{STUDY_RECORD_COPY.selectionPrompt}</p>}
           </>
         ) : (
           <p className="text-sm">{STUDY_RECORD_COPY.noSavedCopy}</p>
@@ -205,7 +219,7 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
         </p>
       </div>
 
-      {editor.canEdit && copy && selection && (
+      {quoting && copy && selection && (
         <div className="sticky bottom-0 space-y-2 border-t bg-background px-4 py-3 sm:px-6" role="region" aria-label={STUDY_RECORD_COPY.useAsQuote} data-testid="use-as-quote-bar">
           <p className="text-xs">
             <span className="font-medium">{STUDY_RECORD_COPY.selectedText}: </span>
@@ -271,6 +285,32 @@ export function SourcePane({ onQuoteAdded }: { readonly onQuoteAdded: (key: stri
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Review: which field's source this is, and what of it the copy shown can and cannot show. */
+function ReviewSourceFocus({ item, paperId }: { readonly item: ReviewItem | null; readonly paperId: string | null }) {
+  if (!item) {
+    return (
+      <p className="rounded-md border p-3 text-sm" data-testid="review-source-focus">
+        {REVIEW_COPY.sourcePickPrompt}
+      </p>
+    );
+  }
+  const focus = paperId ? reviewCopyFocus(item, paperId) : null;
+  return (
+    <div className="space-y-1 rounded-md border p-3 text-sm" data-testid="review-source-focus" aria-live="polite">
+      <p className="break-words font-medium [overflow-wrap:anywhere]">{REVIEW_COPY.sourceFor(reviewItemLabel(item))}</p>
+      {focus && !focus.refersToAbstract && <p className="text-xs text-muted-foreground">{REVIEW_COPY.sourceNotAbstract}</p>}
+      {focus && focus.currentQuotes > 0 && <p className="text-xs">{REVIEW_COPY.sourceHighlighted(focus.currentQuotes)}</p>}
+      {focus?.examinedCurrent && <p className="text-xs">{REVIEW_COPY.sourceExamined}</p>}
+      {focus?.unavailable && <p className="text-xs">{REVIEW_COPY.sourceUnavailable}</p>}
+      {focus?.earlierCopies.map((snapshot) => (
+        <p key={snapshot.id} className="text-xs" data-testid="review-source-earlier-copy">
+          {REVIEW_COPY.sourceEarlierCopy(snapshot.seq, formatRecordDate(snapshot.capturedAt))}
+        </p>
+      ))}
     </div>
   );
 }

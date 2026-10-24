@@ -153,26 +153,41 @@ function quoteProblems(quoteText: string, normalized: NormalizationMap): QuotePr
   return problems;
 }
 
-function contextAround(
-  map: NormalizationMap,
-  chars: readonly string[],
-  start: number,
-  end: number,
-  length: number,
-): QuoteContext {
+/** The original code point range [start, end) of `map`, with `length` code points of context on each side. */
+function contextAround(map: NormalizationMap, start: number, end: number, length: number): QuoteContext {
+  const u16 = map.originalUtf16Offsets;
+  const total = map.originalLength;
+  const charAt = (index: number) => map.original.slice(u16[index], u16[index + 1]);
   let from = Math.max(0, start - length);
   // Never open the context on a combining mark cut off from its base.
-  while (from < start && MARK.test(chars[from])) from += 1;
-  let to = Math.min(chars.length, end + length);
-  while (to < chars.length && MARK.test(chars[to])) to += 1;
-  const u16 = map.originalUtf16Offsets;
+  while (from < start && MARK.test(charAt(from))) from += 1;
+  let to = Math.min(total, end + length);
+  while (to < total && MARK.test(charAt(to))) to += 1;
   return Object.freeze({
     before: map.original.slice(u16[from], u16[start]),
     match: map.original.slice(u16[start], u16[end]),
     after: map.original.slice(u16[end], u16[to]),
     truncatedBefore: from > 0,
-    truncatedAfter: to < chars.length,
+    truncatedAfter: to < total,
   });
+}
+
+/**
+ * The passage a STORED quote covers in its saved copy, with `contextLength`
+ * characters of context on each side (EVIDENCE-RECORDS-001C2A). It starts from
+ * the server's normalized offsets (`ServerAttestedMatch`) on `copy` — the v1
+ * map of the copy the quote names — and never searches again. Null when the
+ * offsets do not fit the copy.
+ */
+export function storedMatchContext(
+  copy: NormalizationMap,
+  normalizedStart: number,
+  normalizedEnd: number,
+  contextLength = DEFAULT_CONTEXT_LENGTH,
+): QuoteContext | null {
+  const exact = mapNormalizedRange(copy, normalizedStart, normalizedEnd);
+  if (!exact) return null;
+  return contextAround(copy, exact.start, exact.end, Math.max(0, Math.floor(contextLength)));
 }
 
 /**
@@ -196,7 +211,6 @@ export function locateQuote(
   // The saved copy is server text, so it is always storable; text that is not
   // throws EvidenceTextError rather than being matched.
   const copy = normalizeEvidenceV1WithMap(snapshotText);
-  const copyChars = Array.from(snapshotText);
   const contextLength = Math.max(0, Math.floor(options.contextLength ?? DEFAULT_CONTEXT_LENGTH));
   // One more than the limit is enough to know the limit is passed.
   const starts = findAllOccurrences(copy.normalizedCodePoints, quote.normalizedCodePoints, QUOTE_OCCURRENCE_LIMIT + 1);
@@ -214,7 +228,7 @@ export function locateQuote(
         start: copy.originalUtf16Offsets[exact.start],
         end: copy.originalUtf16Offsets[exact.end],
       }),
-      context: contextAround(copy, copyChars, exact.start, exact.end, contextLength),
+      context: contextAround(copy, exact.start, exact.end, contextLength),
     });
   });
 

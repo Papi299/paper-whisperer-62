@@ -189,7 +189,7 @@ export const STUDY_RECORD_COPY = {
   // Sources
   sourcesLabel: "Sources",
   noSourceGiven: "No source given",
-  noSourceGivenHelp: "You can save this, but a value without a source can't be reviewed later.",
+  noSourceGivenHelp: "You can save this, but you can't confirm it until you add a source.",
   addQuote: "Add quote",
   addFullTextReference: "Add full-text reference",
   removeSource: "Remove",

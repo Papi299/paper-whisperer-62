@@ -112,6 +112,10 @@ export function StudyRecordDialog({ target, userId, onClose }: StudyRecordDialog
           event.preventDefault();
           titleRef.current?.focus();
         }}
+        onEscapeKeyDown={(event) => {
+          // Escape inside a form that cancels itself on Escape (the Flag note, C2A) closes that form, not the dialog.
+          if (event.target instanceof Element && event.target.closest("[data-escape-closes-form]")) event.preventDefault();
+        }}
       >
         {session && userId && (
           <StudyRecordBody
