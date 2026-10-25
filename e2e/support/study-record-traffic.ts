@@ -19,6 +19,8 @@
  * Everything refused before is still refused: an Edge Function call, a direct
  * table write (anything but GET, HEAD or OPTIONS under /rest/v1/), and any RPC
  * that is neither one of the spec's own study-record RPCs nor an audited read.
+ * One of the spec's own RPCs is a call only as a POST with a JSON-object body:
+ * its CORS preflight is only a preflight, and any other method is refused.
  * Auth and Storage requests are outside the watch, as they were.
  */
 
@@ -76,8 +78,10 @@ export const AUDITED_READ_RPCS: Readonly<Record<string, ReadAudit>> = Object.fre
 });
 
 export type TrafficVerdict =
-  /** One of the spec's own study-record RPCs, with its JSON body when sent with POST. */
-  | { readonly kind: "study-record"; readonly rpc: string; readonly body?: Record<string, unknown> }
+  /** A call to one of the spec's own study-record RPCs: a POST, with its JSON-object body. */
+  | { readonly kind: "study-record"; readonly rpc: string; readonly body: Record<string, unknown> }
+  /** A CORS preflight for one of them: no call and no body, so the watch records nothing. */
+  | { readonly kind: "preflight"; readonly rpc: string }
   /** One of the dashboard's audited reads, sent as its audit allows. */
   | { readonly kind: "audited-read"; readonly rpc: string }
   /** Not the watch's business: a table read, Auth, Storage, the app's own files. */
@@ -138,8 +142,11 @@ export function classifyStudyRecordRequest(request: WatchedRequest, studyRecordR
     const rpc = path.slice(at + RPC_PREFIX.length);
     if (rpc === "" || rpc.includes("/")) return { kind: "forbidden", what: `${method} ${path}` };
     if (studyRecordRpcs.has(rpc)) {
-      if (method !== "POST") return { kind: "study-record", rpc };
-      const body = jsonObject(request.postData());
+      if (method === "OPTIONS") return { kind: "preflight", rpc };
+      if (method !== "POST") return { kind: "forbidden", rpc, what: `rpc ${rpc} (sent with ${method})` };
+      // A call carries its arguments; an empty body is not read as `{}`.
+      const postData = request.postData();
+      const body = postData ? jsonObject(postData) : null;
       return body === null ? { kind: "forbidden", rpc, what: `rpc ${rpc} (body is not a JSON object)` } : { kind: "study-record", rpc, body };
     }
     if (Object.prototype.hasOwnProperty.call(AUDITED_READ_RPCS, rpc)) {
@@ -153,7 +160,7 @@ export function classifyStudyRecordRequest(request: WatchedRequest, studyRecordR
 }
 
 export interface StudyRecordTraffic {
-  /** Every RPC the page sent while watched, by name, in order — allowed or not. */
+  /** Every RPC the page sent while watched, by name, in order — allowed or not. A study-record preflight is not a call, and is not listed. */
   readonly rpcs: string[];
   /** The audited reads among them, by name, in order: the dashboard's, kept apart from the study-record calls. */
   readonly reads: string[];
@@ -174,9 +181,9 @@ export function watchStudyRecordTraffic(page: WatchedPage, studyRecordRpcs: read
   const bodies = new Map(studyRecordRpcs.map((rpc): [string, Record<string, unknown>[]] => [rpc, []]));
   const onRequest = (request: WatchedRequest) => {
     const verdict = classifyStudyRecordRequest(request, own);
-    if (verdict.kind !== "pass" && verdict.rpc !== undefined) rpcs.push(verdict.rpc);
+    if (verdict.kind !== "pass" && verdict.kind !== "preflight" && verdict.rpc !== undefined) rpcs.push(verdict.rpc);
     if (verdict.kind === "audited-read") reads.push(verdict.rpc);
-    if (verdict.kind === "study-record" && verdict.body) bodies.get(verdict.rpc)!.push(verdict.body);
+    if (verdict.kind === "study-record") bodies.get(verdict.rpc)!.push(verdict.body);
     if (verdict.kind === "forbidden") forbidden.push(verdict.what);
   };
   page.on("request", onRequest);

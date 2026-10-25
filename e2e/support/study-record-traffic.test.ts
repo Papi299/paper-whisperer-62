@@ -151,6 +151,54 @@ describe("the study-record RPCs", () => {
   });
 });
 
+describe("the study-record RPCs, by method", () => {
+  /** The write RPCs this matrix covers, each with the spec whose list allows it. */
+  const OWN: [string, string, ReadonlySet<string>][] = [
+    ["evidence_save_changes", "review", REVIEW_SPEC],
+    ["evidence_review_fields", "review", REVIEW_SPEC],
+    ["evidence_save_changes", "C1", C1_SPEC],
+    ["evidence_create_study_from_paper", "C1", C1_SPEC],
+    ["evidence_delete_study", "C1", C1_SPEC],
+  ];
+  const BODY = { p_note: "SECRET-BODY-CONTENT" };
+
+  it.each(OWN)("%s (%s spec): a POST with a JSON-object body is a call, with its body", (name, _label, spec) => {
+    expect(classify("POST", rpc(name), BODY, spec)).toEqual({ kind: "study-record", rpc: name, body: BODY });
+  });
+
+  it.each(OWN.flatMap(([name, label, spec]) => ["GET", "HEAD", "PUT", "PATCH", "DELETE", "PURGE"].map((method) => [name, label, method, spec] as const)))(
+    "%s (%s spec): %s is refused, named by the RPC and the method only",
+    (name, _label, method, spec) => {
+      const verdict = classify(method, rpc(name), BODY, spec);
+      expect(verdict).toEqual({ kind: "forbidden", rpc: name, what: `rpc ${name} (sent with ${method})` });
+      expect(JSON.stringify(verdict)).not.toContain("SECRET");
+    },
+  );
+
+  it.each(OWN)("%s (%s spec): a CORS preflight is only a preflight — not a call, not a body, not a refusal", (name, _label, spec) => {
+    expect(classify("OPTIONS", rpc(name), undefined, spec)).toEqual({ kind: "preflight", rpc: name });
+  });
+
+  it.each(OWN)("%s (%s spec): a POST without a JSON-object body is refused, an empty one included", (name, _label, spec) => {
+    for (const body of [undefined, "", `p_study_id=${USER}`, "[]", "null", '"text"', "42"]) {
+      expect(classify("POST", rpc(name), body, spec)).toEqual({ kind: "forbidden", rpc: name, what: `rpc ${name} (body is not a JSON object)` });
+    }
+  });
+
+  it("are still each spec's own: another spec's write RPC is refused by name, whatever the method", () => {
+    for (const method of ["POST", "GET", "OPTIONS"]) {
+      for (const name of ["evidence_create_study_from_paper", "evidence_delete_study"]) {
+        expect(classify(method, rpc(name), {}, REVIEW_SPEC)).toEqual({ kind: "forbidden", rpc: name, what: `rpc ${name}` });
+      }
+      expect(classify(method, rpc("evidence_review_fields"), {}, C1_SPEC)).toEqual({
+        kind: "forbidden",
+        rpc: "evidence_review_fields",
+        what: "rpc evidence_review_fields",
+      });
+    }
+  });
+});
+
 describe("everything else the watch sees", () => {
   it.each(["POST", "PATCH", "PUT", "DELETE"])("refuses a direct table write: %s", (method) => {
     for (const table of ["papers", "evidence_field_values", "evidence_events"]) {
@@ -226,7 +274,24 @@ describe("watchStudyRecordTraffic", () => {
     send(request("GET", rpc("evidence_save_changes")));
     send(request("POST", rpc("evidence_save_changes"), { p_changes: [] }));
     expect(bodies).toEqual([{ p_changes: [] }]);
+    expect(traffic.forbidden).toEqual(["rpc evidence_save_changes (sent with GET)"]);
     expect(() => traffic.bodiesOf("evidence_review_fields")).toThrow("evidence_review_fields is not one of this watch's study-record RPCs.");
+  });
+
+  it("never captures a review sent with another method, refuses it without its body, and doesn't count a preflight", () => {
+    const { page, send } = fakePage();
+    const traffic = watchStudyRecordTraffic(page, [...REVIEW_SPEC]);
+    const review = { p_action: "confirm", p_note: "SECRET-BODY-CONTENT" };
+    for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE"]) send(request(method, rpc("evidence_review_fields"), review));
+    send(request("OPTIONS", rpc("evidence_review_fields")));
+    expect(traffic.bodiesOf("evidence_review_fields")).toEqual([]);
+    expect(traffic.forbidden).toEqual(["GET", "HEAD", "PUT", "PATCH", "DELETE"].map((method) => `rpc evidence_review_fields (sent with ${method})`));
+    expect(JSON.stringify(traffic.forbidden)).not.toContain("SECRET");
+    expect(traffic.rpcs).toHaveLength(5); // the five refused calls; the preflight is not a call
+
+    send(request("POST", rpc("evidence_review_fields"), review));
+    expect(traffic.bodiesOf("evidence_review_fields")).toEqual([review]);
+    expect(traffic.forbidden).toHaveLength(5);
   });
 });
 
