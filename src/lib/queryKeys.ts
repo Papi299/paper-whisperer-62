@@ -73,6 +73,19 @@ export const queryKeys = {
     study: (userId: string, studyId: string) => ["studyRecords", userId, "study", studyId] as const,
     /** Which of these papers a study links to — the checks before a delete or a merge. */
     paperLinks: (userId: string, paperIds: readonly string[]) => ["studyRecords", userId, "paperLinks", paperIds] as const,
+    /**
+     * One study's history, as the History pane pages it (EVIDENCE-RECORDS-001C2B):
+     * its committed operations, newest first. Under `all`, so every study-record
+     * write marks it stale.
+     */
+    history: (userId: string, studyId: string) => ["studyRecords", userId, "history", studyId] as const,
+    /**
+     * The change events of one committed operation, by the study version it
+     * produced. Not under `history`'s key, so resetting the list of operations
+     * never touches an operation's details, nor the reverse.
+     */
+    historyOperation: (userId: string, studyId: string, studyVersion: number) =>
+      ["studyRecords", userId, "historyOperation", studyId, studyVersion] as const,
   },
   projects: {
     all: (userId: string) => ["projects", userId] as const,

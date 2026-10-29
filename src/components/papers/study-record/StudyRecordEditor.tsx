@@ -34,6 +34,8 @@ import {
   type EditorMode,
   type RevealRequest,
 } from "./editorContext";
+import { HISTORY_COPY } from "./historyCopy";
+import { HistoryPane } from "./HistoryPane";
 import { RecordPane } from "./RecordPane";
 import { REVIEW_COPY, reviewErrorText } from "./reviewCopy";
 import { ReviewPane } from "./ReviewPane";
@@ -300,13 +302,20 @@ function EditorWorkspace({
               {STUDY_RECORD_COPY.backToList}
             </Button>
           )}
-          {/* Edit holds the draft; Review shows the saved values (C2A). Both stay mounted. */}
-          <TabsList className="mt-2 grid w-full grid-cols-2 sm:w-64" aria-label={REVIEW_COPY.modeLabel}>
+          {/*
+            Edit holds the draft; Review shows the saved values (C2A). Both stay mounted, so
+            switching keeps a draft, an open Flag note and the source selection. History (C2B)
+            mounts only while chosen: each opening reads it afresh, and it holds nothing to keep.
+          */}
+          <TabsList className="mt-2 grid w-full grid-cols-3 sm:w-96" aria-label={REVIEW_COPY.modeLabel}>
             <TabsTrigger value="edit" className="coarse:min-h-10">
               {REVIEW_COPY.editMode}
             </TabsTrigger>
             <TabsTrigger value="review" className="coarse:min-h-10" data-testid="study-record-review-tab">
               {REVIEW_COPY.reviewMode}
+            </TabsTrigger>
+            <TabsTrigger value="history" className="coarse:min-h-10" data-testid="study-record-history-tab">
+              {HISTORY_COPY.mode}
             </TabsTrigger>
           </TabsList>
         </div>
@@ -337,10 +346,17 @@ function EditorWorkspace({
             <TabsContent value="review" forceMount className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
               <ReviewPane editor={editor} flow={flow} canWrite={canWrite} onFocusItem={focusReviewItem} onReload={requestReload} />
             </TabsContent>
+            <TabsContent value="history" className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:ring-inset">
+              <HistoryPane userId={userId} studyId={studyId} base={base} />
+            </TabsContent>
           </>
         ) : (
           <div className="grid min-h-0 flex-1 grid-cols-2">
-            <section aria-label={STUDY_RECORD_COPY.sourcePane} className="relative min-h-0 overflow-y-auto overscroll-contain border-r">
+            {/* History cites no source text: it takes the full width, and the Source pane is hidden — still mounted, so its selection is kept. */}
+            <section
+              aria-label={STUDY_RECORD_COPY.sourcePane}
+              className={`relative min-h-0 overflow-y-auto overscroll-contain border-r${mode === "history" ? " hidden" : ""}`}
+            >
               <SourcePane onQuoteAdded={() => undefined} display={sourceDisplay} />
             </section>
             <TabsContent value="edit" forceMount className="relative mt-0 min-h-0 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
@@ -351,6 +367,9 @@ function EditorWorkspace({
             </TabsContent>
             <TabsContent value="review" forceMount className="relative mt-0 min-h-0 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
               <ReviewPane editor={editor} flow={flow} canWrite={canWrite} onFocusItem={focusReviewItem} onReload={requestReload} />
+            </TabsContent>
+            <TabsContent value="history" className="relative col-span-2 mt-0 min-h-0 overflow-y-auto overscroll-contain focus-visible:ring-inset">
+              <HistoryPane userId={userId} studyId={studyId} base={base} />
             </TabsContent>
           </div>
         )}

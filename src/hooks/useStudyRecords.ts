@@ -16,8 +16,8 @@ import { fetchStudyRecord, StudyRecordReadError, type StudyRecordData } from "@/
  * delete or a merge is about to happen.
  */
 
-/** One automatic retry, only for a failure that could be transient. */
-function retryTransient(failureCount: number, error: Error): boolean {
+/** One automatic retry, only for a failure that could be transient. Shared with the History reads. */
+export function retryTransient(failureCount: number, error: Error): boolean {
   return error instanceof StudyRecordReadError && error.transient && failureCount < 1;
 }
 
