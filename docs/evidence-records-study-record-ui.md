@@ -1,15 +1,15 @@
-# Study records — the Study Record interface (EVIDENCE-RECORDS-001C1, 001C2A, 001C2B, 001C2C-A)
+# Study records — the Study Record interface (EVIDENCE-RECORDS-001C1, 001C2A, 001C2B, 001C2C-A, 001C2C-B)
 
-> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3). **EVIDENCE-RECORDS-001C2A** adds Review (§14): Confirm and Flag of one saved value at a time. It merged on 2026-10-24 (PR #355, `0ba43a17`) with no migration, secret or Edge Function, and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary Review workflow in Production, and it passed with three qualifications (§15). **EVIDENCE-RECORDS-001C2B** adds History (§16): a read-only, paginated view of a record's committed operations, with no migration, RPC, secret or Edge Function. It merged on 2026-10-30 (PR #358, `fe6d2b0f`) and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary History workflow in Production, and it passed with three qualifications (§17). **EVIDENCE-RECORDS-001C2C-A** adds the Source pane's read-only source comparison and earlier saved copies (§18), with no migration, RPC, grant, secret or Edge Function. It merged on 2026-10-30 (PR #360, `d41413db`) and is live on `app.paperlume.app`. Automated validation passed, but it has not had an authenticated Production acceptance (§18).
+> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3). **EVIDENCE-RECORDS-001C2A** adds Review (§14): Confirm and Flag of one saved value at a time. It merged on 2026-10-24 (PR #355, `0ba43a17`) with no migration, secret or Edge Function, and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary Review workflow in Production, and it passed with three qualifications (§15). **EVIDENCE-RECORDS-001C2B** adds History (§16): a read-only, paginated view of a record's committed operations, with no migration, RPC, secret or Edge Function. It merged on 2026-10-30 (PR #358, `fe6d2b0f`) and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary History workflow in Production, and it passed with three qualifications (§17). **EVIDENCE-RECORDS-001C2C-A** adds the Source pane's read-only source comparison and earlier saved copies (§18), with no migration, RPC, grant, secret or Edge Function. It merged on 2026-10-30 (PR #360, `d41413db`) and is live on `app.paperlume.app`. Automated validation passed, but it has not had an authenticated Production acceptance (§18). **EVIDENCE-RECORDS-001C2C-B** adds **Use current abstract** (§19), the interface for the installed `evidence_rebase_source`, with no migration, RPC, grant, secret or Edge Function. It is in a Draft PR under independent review: not merged, not deployed and not Production-accepted.
 
-This document describes what a user can do, what the interface sends, and what it deliberately leaves to C2C-B. The executable specification is the Vitest suites under `src/lib/studyRecord/__tests__/`, `src/components/papers/study-record/__tests__/`, `src/hooks/__tests__/useStudyRecordEditor.test.tsx`, `useStudyRecordReview.test.tsx`, `useStudyRecordHistory.test.tsx` and `useStudyRecordSourceReads.test.tsx`, the paper-safeguard suites, `src/test/studyRecordUiBoundary.test.ts`, `e2e/study-records.spec.ts`, `e2e/study-records-review.spec.ts`, `e2e/study-records-history.spec.ts` and `e2e/study-records-source-compare.spec.ts`.
+This document describes what a user can do and what the interface sends. The executable specification is the Vitest suites under `src/lib/studyRecord/__tests__/`, `src/components/papers/study-record/__tests__/`, `src/hooks/__tests__/useStudyRecordEditor.test.tsx`, `useStudyRecordReview.test.tsx`, `useStudyRecordHistory.test.tsx`, `useStudyRecordSourceReads.test.tsx` and `useStudyRecordRebase.test.tsx`, the paper-safeguard suites, `src/test/studyRecordUiBoundary.test.ts`, `e2e/study-records.spec.ts`, `e2e/study-records-review.spec.ts`, `e2e/study-records-history.spec.ts`, `e2e/study-records-source-compare.spec.ts` and `e2e/study-records-rebase.spec.ts`.
 
 ## 1. Where it lives
 
 | Layer | Files | Role |
 |---|---|---|
-| Pure logic | `src/lib/studyRecord/` | Reads (`read.ts`, `paperLinks.ts`), the in-memory draft (`draft.ts`), checks (`validateDraft.ts`), save planning (`savePlan.ts`, `jsonbSize.ts`), quotes (`quotes.ts`), the pilot mirror (`access.ts`), paper safeguards (`paperGuards.ts`), creates whose outcome is unknown (`pendingCreates.ts`), Review's items, holds and summary (`reviewModel.ts`), History's read and its reading of events (`historyRead.ts`, `historyModel.ts`), the one write client (`client.ts`) |
-| Hooks | `src/hooks/useStudyRecords.ts`, `src/hooks/useStudyRecordEditor.ts`, `src/hooks/useStudyRecordCreations.ts`, `src/hooks/useStudyRecordHistory.ts` | Owner-scoped queries; the editor's save and review state machine; the dialog's store of unresolved creates; History's paged, owner-scoped reads |
+| Pure logic | `src/lib/studyRecord/` | Reads (`read.ts`, `paperLinks.ts`), the in-memory draft (`draft.ts`), checks (`validateDraft.ts`), save planning (`savePlan.ts`, `jsonbSize.ts`), quotes (`quotes.ts`), the pilot mirror (`access.ts`), paper safeguards (`paperGuards.ts`), creates whose outcome is unknown (`pendingCreates.ts`), Review's items, holds and summary (`reviewModel.ts`), History's read and its reading of events (`historyRead.ts`, `historyModel.ts`), Use current abstract's eligibility, review impact and SHA-256 (`sourceUpdate.ts`), the one write client (`client.ts`) |
+| Hooks | `src/hooks/useStudyRecords.ts`, `src/hooks/useStudyRecordEditor.ts`, `src/hooks/useStudyRecordCreations.ts`, `src/hooks/useStudyRecordHistory.ts` | Owner-scoped queries; the editor's save, review and rebase state machine, and its open Flag notes; the dialog's store of unresolved creates; History's paged, owner-scoped reads |
 | UI | `src/components/papers/study-record/` | The dialog, the start screen, the study list, the editor (Edit: record and source panes; Review: the review pane, its cards and the Flag form; History: the history pane and its entries), the entry point |
 | Entry points | `PaperList.tsx`, `EditPaperDialog.tsx`, `Dashboard.tsx` | Expanded row details, Edit Paper, the delete confirmation |
 | Safeguards | `PaperList.tsx`, `BulkActionsToolbar.tsx`, `DeduplicationDialog.tsx`, `useDeduplication.ts`, `usePaperMutations.ts`, `useBulkMutations.ts` | Checks before paper delete and duplicate merge; the database refusal explained |
@@ -110,13 +110,13 @@ C1 limitations:
 - The expanded-row entry exists only for papers with an abstract (the row's expander does); every paper is reachable through Edit Paper.
 - Edit Paper has no unsaved-changes check, so opening a study record from it discards Edit Paper edits (the entry warns).
 - Links: only *Mark as confirmed* / *Mark as provisional* on existing links. Linking further reports, and removing a link, are not offered.
-- Quotes from an earlier copy are labelled "From an earlier copy of the abstract", and **Show copy N** opens that copy, read-only (§18); there is no rebase.
+- Quotes from an earlier copy are labelled "From an earlier copy of the abstract", and **Show copy N** opens that copy, read-only (§18). A new copy is saved only by **Use current abstract** (§19, in review).
 - A multi-step save is not one transaction (§8).
 - **Creation across a reload is not exactly-once.** An unresolved create (§4) lives in memory only — browser persistence of request material is excluded by design — so a hard reload, closing the tab, signing out or leaving the Dashboard forgets it. Afterwards the dialog reads the paper's studies afresh and names those that exist before offering a creation, so a record the lost attempt created is found and opened rather than silently created again. It cannot disprove an attempt the server was still processing at that moment, and a user may still create another deliberately. Exactly-once creation across a reload would need a durable request identity (a persistent operation journal), which needs its own privacy and lifecycle review and is not built.
 - The server remembers a request id only while its study exists ([evidence-records-lifecycle.md](evidence-records-lifecycle.md) §5): if the study an unresolved attempt created is deleted elsewhere before the retry, the retry creates it again.
 - Production has exercised one owner-pilot workflow (§13). Everything else in this document rests on the Vitest suites and the disposable local E2E.
 
-PR-C2 is three phases. **C2A — Review** (Confirm and Flag, `evidence_review_fields`) is §14. **C2B — History** (a read-only view of `evidence_events`) is §16, merged and deployed, with its qualified Production acceptance in §17. **C2C** is two phases: **C2C-A** (the read-only source comparison and earlier saved copies) is §18, merged and deployed but not yet Production-accepted; **C2C-B** (**Use current abstract**, `evidence_rebase_source`) is not implemented. The Evidence Matrix integration is later still. The boundary test fails if the Study Record UI reads `evidence_events` anywhere but the history read module, or names the rebase.
+PR-C2 is three phases. **C2A — Review** (Confirm and Flag, `evidence_review_fields`) is §14. **C2B — History** (a read-only view of `evidence_events`) is §16, merged and deployed, with its qualified Production acceptance in §17. **C2C** is two phases: **C2C-A** (the read-only source comparison and earlier saved copies) is §18, merged and deployed but not yet Production-accepted; **C2C-B** (**Use current abstract**, `evidence_rebase_source`) is §19, in a Draft PR under review. The Evidence Matrix integration is later still. The boundary test fails if the Study Record UI reads `evidence_events` anywhere but the history read module, or sends the rebase from anywhere but the editor hook.
 
 ## 13. Production acceptance (2026-10-23)
 
@@ -393,7 +393,7 @@ No value, note, quote or abstract text, and no identifier or fingerprint, appear
 
 ## 18. Source comparison and earlier copies (EVIDENCE-RECORDS-001C2C-A)
 
-> **Status: merged and deployed; not yet Production-accepted.** PR #360 merged on 2026-10-30 as `d41413db` and is live on `app.paperlume.app` (Vercel `dpl_HEAjLZV1NutXjjkaVQkoTDKfRDA7`). Automated validation passed, but no signed-in user has used it in Production (**Release**, at the end of this section). No migration, RPC, grant, secret or Edge Function. C2C-B — **Use current abstract**, the interface for the installed `evidence_rebase_source` — is not implemented.
+> **Status: merged and deployed; not yet Production-accepted.** PR #360 merged on 2026-10-30 as `d41413db` and is live on `app.paperlume.app` (Vercel `dpl_HEAjLZV1NutXjjkaVQkoTDKfRDA7`). Automated validation passed, but no signed-in user has used it in Production (**Release**, at the end of this section). No migration, RPC, grant, secret or Edge Function. C2C-B — **Use current abstract**, the interface for the installed `evidence_rebase_source` — is §19, in a Draft PR under review.
 
 C2C-A makes a change to the library abstract visible without changing the record. It adds three read-only things to the Source pane. Edit, Review and History stay the only modes, and nothing here writes: comparing is for information only, and the record keeps its saved copy, its quotes, its reviews and its versions.
 
@@ -457,21 +457,21 @@ A phone is a few times slower; the comparison runs only when the user opens it, 
 - `papers` is read in the two read modules only, by id, for `id, user_id, title` — or, in `read.ts` alone, `id, user_id, abstract`;
 - `evidence_source_snapshots` is read in `read.ts` only, by user and study, with a literal projection; the reads are pinned exactly, the new one by user, study, paper and id;
 - `fetchLinkedPaperAbstract`, `fetchSavedCopy` and their keys are used by `useStudyRecords.ts` alone, `papers.abstract` by no study-record module, and `useAbstract` by the create flow only;
-- the rebase stays forbidden everywhere: `rebaseSource`, `prepareRebaseSource`, `evidence_rebase_source` and `rebase_source`, in every new module and the editor hook. Negative controls cover each rule.
+- the rebase stayed forbidden everywhere: `rebaseSource`, `prepareRebaseSource`, `evidence_rebase_source` and `rebase_source`, in every new module and the editor hook. C2C-B (§19) lifts that for the editor hook's `rebaseSource` and `prepareRebaseSource` alone. Negative controls cover each rule.
 
 **Who sees it.** Every signed-in user who can read their own record — a former owner, now a manager, included. RLS returns only the user's own papers and copies.
 
 **Tests.**
 
 - **Vitest:** `sources.test.ts` (every state, exact and v1 equality, Unicode and white-space edges, the 50,000-character gate in every state that could lead to a copy); `sourceDiff.test.ts` (read-back of both texts, minimality against an independent LCS on 400 random pairs, typography-only changes, the budget); `sourceReads.test.ts` (both reads: filters, cardinality, ownership, metadata, failures); `sourceCompareModel.test.ts`; `useStudyRecordSourceReads.test.tsx` (per-user keys, reading only while shown, nothing kept, never the shared abstract cache); `StudyRecordSourceCompare.test.tsx` (every banner state, failures and Check again, Compare's readings and navigation, earlier copies from each entry point, G2 across papers, views and a reload, an unsaved draft kept, no RPC, Review, phone, a former owner); and the boundary test.
-- **E2E:** `e2e/study-records-source-compare.spec.ts`, with its own disposable fixture, `scripts/e2e-local-source-compare-fixture.mjs` (accounts `e2e-disposable-srsc-…`). The fixture writes its records through the installed RPCs and its library changes as the owner's own paper updates; it makes the earlier copies with the installed rebase, and inserts no copy, quote or event. The spec covers the six states, Compare's changes and readings, an earlier copy and its own quote, **Check again** after an edit made elsewhere, a selection dropped when another copy opens, the phone layout (no sideways scroll, reachable 40 px touch targets) and a former owner, whose direct rebase the server refuses. The traffic watch allows no study-record RPC. Afterwards the lifecycle proves, as the database owner, that both users' study records — copies, quotes and offsets, values, reviews, versions, events — are exactly as provisioned, and the library as provisioned but for the spec's own edit; then it removes the accounts and verifies nothing of theirs remains. The `e2e-evidence` job runs the four Evidence Records specs: `npm run test:e2e:local -- e2e/study-records.spec.ts e2e/study-records-review.spec.ts e2e/study-records-history.spec.ts e2e/study-records-source-compare.spec.ts`.
+- **E2E:** `e2e/study-records-source-compare.spec.ts`, with its own disposable fixture, `scripts/e2e-local-source-compare-fixture.mjs` (accounts `e2e-disposable-srsc-…`). The fixture writes its records through the installed RPCs and its library changes as the owner's own paper updates; it makes the earlier copies with the installed rebase, and inserts no copy, quote or event. The spec covers the six states, Compare's changes and readings, an earlier copy and its own quote, **Check again** after an edit made elsewhere, a selection dropped when another copy opens, the phone layout (no sideways scroll, reachable 40 px touch targets) and a former owner, whose direct rebase the server refuses. The traffic watch allows no study-record RPC. Afterwards the lifecycle proves, as the database owner, that both users' study records — copies, quotes and offsets, values, reviews, versions, events — are exactly as provisioned, and the library as provisioned but for the spec's own edit; then it removes the accounts and verifies nothing of theirs remains. The `e2e-evidence` job ran the four Evidence Records specs; since C2C-B it runs five (§19).
 - **Not in the E2E:** switching between linked papers. No installed RPC links a second paper, so only the Vitest suite covers it.
 
 **Bundle.** No new dependency and no code split (the boundary forbids dynamic imports). Measured on the files `app.paperlume.app` served before and after the release (`dpl_GkrvxtaA…` from `97558b18`, then `dpl_HEAjLZV1…` from `d41413db`), the entry script grew by 27.1 kB (7.9 kB with gzip -9) and the stylesheet by 1.1 kB (0.2 kB); every other asset was byte-identical. The 26.7 kB (7.8 kB gzip) in the PR description was a preliminary measurement, taken before its last two commits.
 
 **Limits.**
 
-- There is no way to replace the saved copy: **Use current abstract**, its warning, the rebase and its recovery are C2C-B.
+- Replacing the saved copy — **Use current abstract**, its confirmation, the rebase and its recovery — is C2C-B's (§19).
 - The library abstract can change right after it is read; **Check again** reads it again.
 - Two texts that differ too much are offered in full, not change by change.
 
@@ -494,3 +494,138 @@ Deployment alone does not accept it. **Not exercised in Production:**
 - a screen reader.
 
 The disposable local E2E covers the first three against the local stack, and the Vitest suites with fakes; the E2E also checks the phone layout in a narrow Chromium window. No physical phone or screen reader has been used. The recommended checkpoint is one authenticated Production acceptance of C2C-A and C2C-B together, once C2C-B is implemented — its rebase is what gives a record an earlier copy to open — subject to the Product Owner's separate authorization.
+
+## 19. Use current abstract (EVIDENCE-RECORDS-001C2C-B)
+
+> **Status: implemented in a Draft pull request, under independent review.** Not merged, not deployed and not Production-accepted. No migration, RPC, grant, policy, secret or Edge Function: the interface calls the installed `evidence_rebase_source` (`20261017155445`; [evidence-records-field-operations.md](evidence-records-field-operations.md) §5). Before work began, a read-only check found Production's function body equal to the repository's (md5 `910685085611df3faf4eb31072f57f3e`), executable by `authenticated` only, and never yet called there.
+
+C2C-B adds the one write the comparison left out. The user can save the library abstract the comparison shows as the link's new saved copy, or as its first copy. Edit, Review and History stay the only modes, and keeping the saved copy stays the default.
+
+**The flow.**
+
+1. In Edit, **Compare** (§18) reads the library abstract again and shows it beside the saved copy. Above the readings, a panel says the record keeps saved copy N unless the user chooses otherwise. For a first capture it says there is no copy yet, and that saving one makes the abstract quotable. It offers **Use current abstract**, or says why it can't be used now.
+2. **Use current abstract** freezes the exact text shown, with the study version, the link's current copy and the time of the read it came from. It then opens a confirmation. **Cancel** sends nothing and returns focus to the button.
+3. **Save as copy N** (or **Save as the first copy**) hands that frozen text to the editor hook, which checks everything again and sends one request. The pane then shows the new current copy, and what the server did.
+
+**When it is offered** (`sourceUpdateEligibility`, `src/lib/studyRecord/sourceUpdate.ts`, in the rebase's own order of refusal):
+
+| The library abstract | Offered? |
+|---|---|
+| differs in content (`content_change`) | yes |
+| differs only typographically (`typography_only_change`) | yes, as a secondary button; the panel and the confirmation say keeping the copy is the default |
+| exists, and the link has no copy (`abstract_now_available`) | yes: a first capture |
+| is the saved copy, character for character; removed; or empty after normalization v1 | no: nothing to choose, and no panel |
+| is over 50,000 code points | no: the button waits, with the reason |
+| would be the link's 21st copy | no: the button waits, with the reason |
+
+It also needs a library read that finished (not checking, not failed) and Web Crypto in the browser. It is shown only to the pilot owner with a record that is still writable. A former owner or a manager compares and opens copies as before, and gets no control.
+
+While something else is under way, the button stays focusable but `aria-disabled`. The reason is written beside it and linked to it, and pressing it opens nothing. The hook's `sourceUpdateHold`, in order:
+
+| Hold | When |
+|---|---|
+| `busy` | a save, link change, deletion, review or rebase is in flight |
+| `unresolved` | an earlier write's outcome is unknown, or the record must be reloaded |
+| `changed_elsewhere` | a version conflict, or a change seen on reading the record back |
+| `unsaved_changes` | the draft has unsaved edits |
+| `flag_open` | a Flag note is open in Review (G3, below) |
+| `refused` | the last attempt was refused for a reason only a reload clears |
+
+**The confirmation** (`describeSourceUpdate`). Everything it says comes from the record as loaded, never from a forecast:
+
+- the paper, and the record's current copy (copy N of M and its date), or that it has none;
+- that the library abstract shown, with its length, will be saved as copy N+1 (or as the first copy), and that a saved copy never changes afterwards;
+- that every earlier copy stays and can still be opened;
+- "PaperLume will check existing quotations against the new abstract. Quotations that cannot be matched uniquely will remain linked to their earlier saved copies." It also gives how many quotes are on the current copy, which are the ones the server looks for. Quotes on earlier copies stay as they are. A quote found again only means the same characters are in the new copy, not that they mean the same thing.
+- each field that cites this paper's abstract — a quote on any of its copies, an examined copy, or "couldn't check" — by name, in three lists. Reviewed by you and Flagged values will need re-review. Values already needing re-review stay so. Not-reviewed values stay not reviewed. This is `deriveSourceChangeTransitions`, the server's rule: it applies even when every quote is found again. Review notes are kept. On a first capture, fields that said the paper had no abstract to check are named: once a copy exists, they can't be confirmed until edited.
+
+No count of quotes that will be found, moved or kept is shown. Only the server's answer says that. The confirmation is checked again on every render. If the library text shown, the record's version, the link's copy, the user's role, Web Crypto or a hold changed while it was open, **Save** is `aria-disabled`, sends nothing and says why. While a read is on its way, it waits. Focus starts on **Cancel**. On a phone the confirmation fits the screen: its text scrolls inside it, and its buttons stay outside that scroll.
+
+**The exact text, and its SHA-256.** The candidate is the text of the user-scoped library read (`useLinkedPaperAbstract`, §18), never the shared `useAbstract` cache. It is never trimmed, normalized or re-read. `abstractSha256` computes SHA-256 over its UTF-8 bytes with the browser's Web Crypto (`crypto.subtle.digest`), as lowercase hex, in the application layer; the evidence library uses no crypto. A text with a lone surrogate or NUL has no faithful UTF-8 form, so it is not hashed. Without Web Crypto, or if the digest fails, nothing is sent ("Nothing was sent: …"). The server compares the digest with the abstract it reads in the same transaction, and its answer stands. `source_changed_again` makes the pane read the library again at once. A new choice must then come from a read finished after the refusal; a candidate from an earlier read is refused unsent. No digest is ever retried with different text.
+
+**One prepared write, and safe retries.** Only `useStudyRecordEditor` calls `prepareRebaseSource` and `client.rebaseSource`, once each (`updateSource`, and `sendSourceUpdate` for the send):
+
+- one confirmation is one request, with a new request id from `newStudyRecordRequestId`;
+- the request is kept, in memory only, while its outcome is unknown. **Try again** (`retrySourceUpdate`) resends that request unchanged — the same id, digest, version and paper — and the server replays an applied one rather than saving a second copy;
+- nothing is retried by itself. **Reload** abandons a request in doubt, and the record read back shows whether it was saved; a new attempt is a new confirmation and a new request;
+- no prepared request, digest or text is written to browser storage, and nothing is logged.
+
+**Holds both ways.** While a rebase is being prepared, is in flight or is in doubt, every other write waits: edits, Save, link changes, Confirm and Flag, and Delete (the button is disabled). A lock is set the moment it starts, so nothing slips in before a render. In turn, the rebase waits for every other write in flight or in doubt, for an unsaved edit, and for an open Flag note. Each condition is checked again in the hook at the write itself, whatever the button showed.
+
+**Answers and recovery:**
+
+| Answer | What the user sees | Next |
+|---|---|---|
+| `applied` | "Saved copy N of this paper's abstract…" with the server's counts | — |
+| `replayed` (after Try again) | the same, and "Your earlier attempt had already saved it: nothing was saved twice." | — |
+| `unchanged` | "Nothing was saved: saved copy N is already the abstract in your library…" | — |
+| unknown outcome: transport failure, gateway 5xx, malformed answer | one alert: "We couldn't tell whether the new copy was saved. Try again — it won't be saved twice." | **Try again** (the same request) or **Reload** |
+| not applied, worth resending as is: database busy or unreachable, session ended | the same alert, saying the copy wasn't saved | **Try again** or **Reload** |
+| `source_changed_again` | "Nothing was saved: the abstract in your library changed after you compared it…"; the library is read again | a new confirmation |
+| `version_conflict` | the editor's alert: "…so no copy was saved. Reload to see the latest version." | **Reload** |
+| `records_not_enabled` | the pilot role is gone: no write is offered any more | — |
+| `snapshot_limit`, `history_limit`, `abstract_too_long`, `link_not_found`, `invalid_input` (for example an abstract empty after normalization), `request_id_reused`, and any other refusal | its fixed message, with "Reload the record before trying again." | **Reload**; until then the action waits (`refused`) |
+| `study_not_found` | the record no longer exists | close |
+
+No message is built from the server's text. Refused requests are retired.
+
+**After it is saved.** The record is read back once and checked against the answer. At the answer's version, the link's current copy must be the copy it named, with the same number. If it is not, or the read fails, the pane says "Copy N was saved, but the record couldn't be read back…" and offers a reload; a confirmed write is never reported as a failure. A record read back at a later version means a change was made elsewhere, which holds the next write. The draft had no unsaved edit, and could take none while the write ran, so it starts again from the record read back: no reference to the old copy stays in it. The pane shows the new current copy, and G2 (§18) drops any selection, occurrence choice or **Add quote** panel made on the old one. Only this user's study-record queries are invalidated, as after every write: the library abstract, summaries and History. History reads the new operation when it is next opened or refreshed. Nothing of it is kept locally.
+
+The message reports the server's own counts — rematched, not found, found more than once, values sent to re-review — in words. A first capture says it is the record's first copy and that no quote was checked, never that it replaced one. A later copy says which copies are kept, and that quotes not found exactly once stay on the copy before. With no quote on the copy it replaced, it says so. With no review changed, it says so too.
+
+**G3 — the Flag note lives in the editor.** An open Flag note and its text used to be the Review card's own state, invisible to the editor. Now they are the hook's (`flagNotes`, `openFlag`, `editFlagNote`, `closeFlag`), and `FlagForm` shows the note it is given. A partly written note survives a switch between Edit and Review, a reload, and a filter that would hide its card: a card with an open note stays shown under "Needs your review". While any note is open, **Use current abstract** waits (`flag_open`), and it says the note must be sent or cancelled first. The note closes when the flag is recorded, whether on the first press or on **Try again**, or on **Cancel**. It takes focus only when the user opens it, not when its card comes back into view. An open note holds nothing else. Closing the dialog still drops an unsent note, as before: the dialog's leave check covers the draft.
+
+**G4 — History says what a rebase did.** Without changing an event or a read:
+
+- the operation's title is "Copy of the library abstract saved" for a first copy and a later one alike, since the header can't tell them apart;
+- the summary event reads `previous_snapshot_id`. A first copy says "No quotes to recheck: this was the first saved copy…". A later copy with no quote on the copy it replaced says none was rechecked. Otherwise it gives the counts, with not found apart from found more than once, and says quotes not found exactly once stay where they were;
+- the review count is the values moved to Needs re-review, and zero says "No field's review status changed.";
+- a field sent back to re-review says "needs re-review — a new copy of the abstract was saved" and that its review note is kept. The Review card's status line uses the same words, so neither says a copy "changed" when it was a first capture.
+
+History still shows no abstract, value, quote or note text.
+
+**The boundary** (`src/test/studyRecordUiBoundary.test.ts`):
+
+- `rebaseSource` and `prepareRebaseSource` are allowed in `useStudyRecordEditor.ts` alone, and are called there exactly once each;
+- every other module is refused both, as a call, a member, an alias or a destructured name;
+- `evidence_rebase_source` and `rebase_source` stay forbidden as strings in every module, the hook's included;
+- Web Crypto's `subtle` and `digest` appear in `src/lib/studyRecord/sourceUpdate.ts` alone, and no other hashing library is used.
+
+Positive tests and negative controls cover each rule; the C1–C2C-A rules are unchanged.
+
+**Tests.**
+
+- **Vitest.**
+  - `sourceUpdate.test.ts`: every eligible and ineligible state; the 50,000-code-point boundary with supplementary characters; the 20-copy limit; stale candidates; review impact by status, by copy and by link, for a first capture too; the digest against Node's for ASCII, Latin-1, composed and decomposed accents, CJK, supplementary characters and exact white space; refusals without Web Crypto, on a failed digest and for text with no UTF-8 form.
+  - `useStudyRecordRebase.test.tsx`: one request per confirmation; holds both ways; every stale and ineligible candidate; no digest; the unknown outcome and Try again, replayed; every refusal; reload; read-back failures; G3.
+  - `StudyRecordRebase.test.tsx`: the whole flow through the dialog, with a scripted server — the confirmation's lists, Cancel, the exact SHA-256, the outcome and the new copy, typography only, a first capture, a former owner, both holds, a change while open, too long, no Web Crypto, source changed again, the unknown outcome, a refusal, a conflict, the phone layout.
+  - The History and Flag-note suites cover G3 and G4.
+- **E2E:** `e2e/study-records-rebase.spec.ts`, with its own disposable fixture `scripts/e2e-local-rebase-fixture.mjs` (accounts `e2e-disposable-srrb-…`). The fixture writes every row through the installed RPCs — create, save, review, and the rebase that gives one record an earlier copy — and inserts nothing directly. The spec covers:
+  - R1: a changed abstract adopted through the UI, with the confirmation's lists, one request carrying the SHA-256 of the exact text, the server's counts, the new copy with its moved quotes, the earlier copy with its kept quotes, the reviews in Review and the operation in History;
+  - R2: a first capture;
+  - R3: typography only, cancelled;
+  - R4: an unsaved edit and an open Flag note hold the write, and lose nothing;
+  - R5: a library abstract changed while the confirmation was open is refused, and read again;
+  - R6: an answer lost in transit, then Try again with the identical request, replayed;
+  - R7: an unchanged answer to a direct rebase saves nothing;
+  - R8: the phone layout — no sideways scroll, reachable 40 px targets, a confirmation that fits;
+  - R9: a former owner gets no write, and a direct rebase is refused (42501).
+
+  The traffic watch allows `evidence_rebase_source` alone and keeps each body sent. Afterwards the lifecycle checks, as the database owner:
+  - each rebased record's version;
+  - its copies (the earlier ones byte for byte as they were);
+  - each quote's copy and offsets, which must locate the quote in its copy;
+  - each value's review status, reason, version and note;
+  - its events: one request, gapless, in order, with the server's counts;
+  - that every other record and the library are as provisioned, but for the spec's own edit.
+
+  It then removes the accounts and verifies nothing of theirs remains. The `e2e-evidence` job runs the five Evidence Records specs: `npm run test:e2e:local -- e2e/study-records.spec.ts e2e/study-records-review.spec.ts e2e/study-records-history.spec.ts e2e/study-records-source-compare.spec.ts e2e/study-records-rebase.spec.ts`.
+
+**Limits, and what is not exercised.**
+
+- The history limit is known only from the server's answer: the browser doesn't count a record's events. After that refusal the action waits for a reload.
+- An `unchanged` answer can't be reached through the interface. The action is offered only when the texts differ, and a new copy moves the version first. It is covered by a direct call in the E2E and by the Vitest suites.
+- Switching between linked papers is covered only by the Vitest suites (no installed RPC links a second paper).
+- A request in doubt lives in memory: closing the dialog or the tab abandons it, and reopening the record shows whether it was saved.
+- Strict re-review applies to every rebase, typography-only included (001A §E5); the confirmation says so before anything is sent.
+- No physical phone or screen reader has been used: the phone layout is checked in a narrow Chromium window with a coarse pointer. No rebase has run in Production; the recommended checkpoint is one authenticated Production acceptance of C2C-A and C2C-B together, subject to the Product Owner's separate authorization.
