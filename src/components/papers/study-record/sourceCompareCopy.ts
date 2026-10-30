@@ -12,6 +12,7 @@ export const SOURCE_COMPARE_COPY = {
   // The status of the library abstract, above the saved copy
   checking: "Checking the abstract in your library…",
   failed: "Couldn't read the abstract in your library, so PaperLume can't say whether it has changed since this copy was saved.",
+  failedTransient: "Couldn't reach the abstract in your library just now, so PaperLume can't say whether it has changed since this copy was saved. Check again in a moment.",
   failedIntegrity: "The abstract in your library didn't pass PaperLume's checks, so it isn't compared.",
   unavailable: "This paper couldn't be read from your library, so its abstract can't be compared.",
   current: "Same as the abstract in your library, character for character.",

@@ -21,8 +21,11 @@ describe("libraryStatus", () => {
   });
 
   it("is failed after a failed read, even when an earlier one succeeded: never 'current', never the saved copy", () => {
-    expect(libraryStatus(read({ isError: true, error: new StudyRecordReadError("transport", true), data: answer(COPY) }), COPY)).toEqual({ kind: "failed", integrity: false });
-    expect(libraryStatus(read({ isError: true, error: new StudyRecordReadError("integrity", false) }), COPY)).toEqual({ kind: "failed", integrity: true });
+    expect(libraryStatus(read({ isError: true, error: new StudyRecordReadError("transport", true), data: answer(COPY) }), COPY)).toEqual({ kind: "failed", reason: "transient" });
+    expect(libraryStatus(read({ isError: true, error: new StudyRecordReadError("transport", false) }), COPY)).toEqual({ kind: "failed", reason: "refused" });
+    expect(libraryStatus(read({ isError: true, error: new StudyRecordReadError("integrity", false) }), COPY)).toEqual({ kind: "failed", reason: "integrity" });
+    // Anything else that isn't a read error is treated as worth trying again.
+    expect(libraryStatus(read({ isError: true, error: new Error("unexpected") }), COPY)).toEqual({ kind: "failed", reason: "transient" });
   });
 
   it("is unavailable when the paper can't be read — not 'removed'", () => {

@@ -35,8 +35,14 @@ function ReadProblem({ status, onCheckAgain }: { readonly status: Exclude<Librar
   }
   return (
     <div className="space-y-2" data-testid="source-read-problem" data-source-status={status.kind}>
-      <p role="status" className="text-xs">
-        {status.kind === "failed" ? (status.integrity ? SOURCE_COMPARE_COPY.failedIntegrity : SOURCE_COMPARE_COPY.failed) : SOURCE_COMPARE_COPY.unavailable}
+      <p role="status" className="text-xs" data-failure={status.kind === "failed" ? status.reason : undefined}>
+        {status.kind === "unavailable"
+          ? SOURCE_COMPARE_COPY.unavailable
+          : status.reason === "integrity"
+            ? SOURCE_COMPARE_COPY.failedIntegrity
+            : status.reason === "transient"
+              ? SOURCE_COMPARE_COPY.failedTransient
+              : SOURCE_COMPARE_COPY.failed}
       </p>
       <CheckAgain onCheckAgain={onCheckAgain} />
     </div>

@@ -12,7 +12,12 @@ import { CHARACTER_NAMES } from "./sourceCompareCopy";
 export type LibraryStatus =
   /** A read is on its way: no earlier answer stands in for it. */
   | { readonly kind: "checking" }
-  | { readonly kind: "failed"; readonly integrity: boolean }
+  /**
+   * The last read failed: `transient` when trying again soon could help (no
+   * answer, or the server busy), `refused` when the server said no, `integrity`
+   * when the answer failed a check.
+   */
+  | { readonly kind: "failed"; readonly reason: "transient" | "refused" | "integrity" }
   /** The paper could not be read — never taken to mean its abstract was removed. */
   | { readonly kind: "unavailable" }
   | { readonly kind: "ready"; readonly abstract: string | null; readonly state: SourceState };
@@ -35,7 +40,10 @@ export interface LibraryRead {
  */
 export function libraryStatus(read: LibraryRead, copyText: string | null): LibraryStatus {
   if (read.isFetching) return { kind: "checking" };
-  if (read.isError) return { kind: "failed", integrity: read.error instanceof StudyRecordReadError && read.error.kind === "integrity" };
+  if (read.isError) {
+    const error = read.error instanceof StudyRecordReadError ? read.error : null;
+    return { kind: "failed", reason: error?.kind === "integrity" ? "integrity" : error?.transient === false ? "refused" : "transient" };
+  }
   if (read.data === undefined) return { kind: "checking" };
   if (read.data === null) return { kind: "unavailable" };
   return { kind: "ready", abstract: read.data.abstract, state: deriveSourceState(copyText, read.data.abstract) };

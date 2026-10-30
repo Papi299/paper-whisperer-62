@@ -410,7 +410,7 @@ C2C-A makes a change to the library abstract visible without changing the record
 
 - **Typography-only** is equality after normalization v1 — NFC; soft hyphen, zero-width space, word joiner and byte-order mark removed; white space collapsed; curly quotes, dashes, the ellipsis and the micro sign mapped. It never says the two texts mean the same thing.
 - **Too long (G1).** Every state that could lead to a new copy — `abstract_now_available`, `typography_only_change` and `content_change` — now carries `capture`. A library abstract over 50,000 characters (code points, as PostgreSQL's `char_length`) is `refused_too_long` whichever way it differs, and the banner adds that a copy can't hold it. Before C2C-A only `abstract_now_available` was gated.
-- **A read that hasn't answered is not an answer.** While a read is on its way the banner says "Checking…"; after a failure it says the library couldn't be read, with **Check again**, even when an earlier read succeeded; a paper that can't be read is "couldn't be read", never "removed". The saved copy never stands in for the library abstract.
+- **A read that hasn't answered is not an answer.** While a read is on its way the banner says "Checking…". After a failure it says so — one worth trying again soon (no answer, or the server busy), a refusal, or an answer that failed a check — with **Check again**, even when an earlier read succeeded. A paper that can't be read is "couldn't be read", never "removed". The saved copy never stands in for the library abstract.
 - In Review the banner shows the state only: comparing is Edit's.
 
 **Compare** (Edit only; on a phone, in the Source tab) has three readings, one at a time, each full width:

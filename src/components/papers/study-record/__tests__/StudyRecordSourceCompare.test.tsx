@@ -325,6 +325,7 @@ describe("The source status (C2C-A)", () => {
     const problem = () => within(sourcePane()).getByTestId("source-read-problem");
     await waitFor(() => expect(problem()).toHaveAttribute("data-source-status", "failed"));
     expect(problem()).toHaveTextContent("Couldn't read the abstract in your library, so PaperLume can't say whether it has changed since this copy was saved.");
+    expect(within(problem()).getByRole("status")).toHaveAttribute("data-failure", "refused");
     expect(within(sourcePane()).queryByTestId("source-status")).not.toBeInTheDocument();
     expect(sourcePane()).not.toHaveTextContent("Same as the abstract in your library");
     expect(screen.getByTestId("study-record-saved-abstract").textContent).toBe(ABSTRACT);
@@ -333,6 +334,20 @@ describe("The source status (C2C-A)", () => {
     fireEvent.click(within(problem()).getByRole("button", { name: "Check the abstract in your library again" }));
     expect(await sourceState()).toBe("current");
     expect(libraryReads()).toHaveLength(1);
+  });
+
+  it("tells a failure worth trying again from a refusal, and reads again on Check again", async () => {
+    setTables(fullRows(), { abstract: ABSTRACT });
+    refuseAbstractReads({ code: "57014", message: "canceling statement due to statement timeout" }, 500);
+    await openEditor();
+    // One automatic retry for a transient failure, then the failure is shown.
+    await waitFor(() => expect(within(sourcePane()).getByTestId("source-read-problem")).toHaveAttribute("data-source-status", "failed"), { timeout: 4000 });
+    const problem = within(sourcePane()).getByTestId("source-read-problem");
+    expect(within(problem).getByRole("status")).toHaveAttribute("data-failure", "transient");
+    expect(problem).toHaveTextContent("Couldn't reach the abstract in your library just now");
+    state.db = fakeSupabase({ tables: state.tables });
+    fireEvent.click(within(problem).getByRole("button", { name: "Check the abstract in your library again" }));
+    expect(await sourceState()).toBe("current");
   });
 
   it("is a failure, never an answer, when the read comes back malformed", async () => {
