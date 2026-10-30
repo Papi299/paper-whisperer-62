@@ -11,7 +11,10 @@
  * Saved abstract copies can be long (up to 50,000 characters, up to 20 per
  * link), and the editor needs the text of each link's CURRENT copy only — the
  * one new quotes must name. Superseded copies are read as metadata: their ids
- * and sequence numbers are what a kept reference is checked against.
+ * and sequence numbers are what a kept reference is checked against. The text
+ * of an earlier copy is read only when the user asks to see it, one copy at a
+ * time (`fetchSavedCopy`, EVIDENCE-RECORDS-001C2C-A), and so is the library
+ * abstract a link's copy is compared with (`fetchLinkedPaperAbstract`).
  *
  * Nothing is trusted. Every row is mapped by the PR-B mappers
  * (`src/lib/evidence/records.ts`), which fail closed, and then checked against
@@ -27,6 +30,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { isEvidenceRecordsTableMissing, type EvidenceRecordsTable } from "@/lib/evidenceRecordsAvailability";
 import { FIELD_KEYS } from "@/lib/evidence/fieldDictionary";
 import { toPaperId, toSnapshotId, type PaperId, type SnapshotId, type StudyId } from "@/lib/evidence/ids";
+import { findPostgresTextProblem } from "@/lib/evidence/normalization";
 import {
   mapArmRow,
   mapFieldAnchorRow,
@@ -419,6 +423,97 @@ function compareReferences(a: StoredReference, b: StoredReference): number {
   if (byPurpose !== 0) return byPurpose;
   if (a.purpose === "supports" && b.purpose === "supports") return a.position - b.position;
   return KIND_ORDER[a.sourceKind] - KIND_ORDER[b.sourceKind] || (a.paperId < b.paperId ? -1 : a.paperId > b.paperId ? 1 : 0);
+}
+
+/** The abstract one linked paper has in the library now (EVIDENCE-RECORDS-001C2C-A). */
+export interface LibraryAbstract {
+  readonly paperId: PaperId;
+  /** Null when the paper has no abstract. */
+  readonly abstract: string | null;
+}
+
+/** One paper's id, owner and abstract — nothing else of the paper. */
+const LIBRARY_ABSTRACT_COLUMNS = "id, user_id, abstract";
+
+/**
+ * The library abstract of `paperId`, as it is now, for comparing with a saved
+ * copy (EVIDENCE-RECORDS-001C2C-A). One owner-scoped SELECT of one paper, by
+ * id. Resolves to null when this user has no such paper — a linked paper
+ * cannot be deleted (the link's foreign key refuses it), so null means it
+ * could not be read, never that its abstract was removed. Informational: the
+ * text can change the moment after it is read, and nothing is decided by it.
+ */
+export async function fetchLinkedPaperAbstract(
+  client: StudyRecordClient,
+  userId: string,
+  paperId: PaperId,
+  signal: AbortSignal,
+): Promise<LibraryAbstract | null> {
+  let response: PageResponse;
+  try {
+    response = await client.from("papers").select(LIBRARY_ABSTRACT_COLUMNS).eq("user_id", userId).eq("id", paperId).abortSignal(signal);
+  } catch {
+    throw new StudyRecordReadError("transport", true);
+  }
+  if (response.error) throw readFailure(response.error, response.status);
+  if (!Array.isArray(response.data) || response.data.length > 1) throw integrity();
+  const row = response.data[0] as Pick<Row<"papers">, "id" | "user_id" | "abstract"> | undefined;
+  if (!row) return null;
+  if (row.user_id !== userId || row.id !== paperId) throw integrity();
+  const { abstract } = row;
+  // Text no PostgreSQL value can hold is not an abstract from the database.
+  if (abstract !== null && (typeof abstract !== "string" || findPostgresTextProblem(abstract) !== null)) throw integrity();
+  return Object.freeze({ paperId, abstract });
+}
+
+/**
+ * The text of one saved copy of a link's abstract — any copy, the current one
+ * or an earlier one — read when the user asks to see it
+ * (EVIDENCE-RECORDS-001C2C-A). One SELECT naming the user, the study, the
+ * paper and the copy; the answer must be exactly the copy `expected`
+ * describes, as the record already loaded it — same paper, sequence number,
+ * capture time and length — or it is an integrity failure. Resolves to null
+ * when the copy no longer exists (its link or study was removed since the
+ * record was read).
+ */
+export async function fetchSavedCopy(
+  client: StudyRecordClient,
+  userId: string,
+  studyId: StudyId,
+  expected: SnapshotInfo,
+  signal: AbortSignal,
+): Promise<SourceSnapshot | null> {
+  let response: PageResponse;
+  try {
+    response = await client
+      .from("evidence_source_snapshots")
+      .select(SNAPSHOT_COLUMNS)
+      .eq("user_id", userId)
+      .eq("study_id", studyId)
+      .eq("paper_id", expected.paperId)
+      .eq("id", expected.id)
+      .abortSignal(signal);
+  } catch {
+    throw new StudyRecordReadError("transport", true);
+  }
+  if (response.error) throw readFailure(response.error, response.status, "evidence_source_snapshots");
+  if (!Array.isArray(response.data) || response.data.length > 1) throw integrity();
+  const row = response.data[0] as Row<"evidence_source_snapshots"> | undefined;
+  if (!row) return null;
+  const mapped = mapSourceSnapshotRow(row);
+  if (row.user_id !== userId || !mapped.ok) throw integrity();
+  const copy = mapped.value;
+  if (
+    copy.studyId !== studyId ||
+    copy.paperId !== expected.paperId ||
+    copy.id !== expected.id ||
+    copy.seq !== expected.seq ||
+    copy.capturedAt !== expected.capturedAt ||
+    copy.charCount !== expected.charCount
+  ) {
+    throw integrity();
+  }
+  return copy;
 }
 
 /** "study", or the group or outcome id a value describes. */

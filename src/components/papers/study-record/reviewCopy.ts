@@ -63,7 +63,7 @@ export const REVIEW_COPY = {
   quoteFrom: (paper: string) => `Quote from the saved abstract of ${paper}`,
   copyLabel: (seq: number, total: number, date: string) => `copy ${seq} of ${total}, saved ${date}`,
   occurrence: (occurrence: number, count: number) => `occurrence ${occurrence} of ${count}`,
-  earlierCopyQuote: "This quote is in an earlier copy of the abstract, which this view doesn't show.",
+  earlierCopyQuote: "This quote is in an earlier copy of the abstract. Show that copy to see it in place.",
   quoteNotLocated: "Couldn't show this quote in its saved copy.",
   fullTextOf: (paper: string) => `Full text of ${paper}`,
   examinedAbstract: (paper: string) => `Examined: the saved abstract of ${paper}`,
@@ -74,7 +74,7 @@ export const REVIEW_COPY = {
   yourReference: "your reference — check it in your copy; PaperLume doesn't",
   yourStatement: "your statement",
   thisPaper: "this paper",
-  earlierCopyNotShown: "an earlier copy, not shown here",
+  earlierCopyNotShown: "an earlier copy",
   // Inline source on a phone
   showSavedCopy: "Show the saved abstract",
   hideSavedCopy: "Hide the saved abstract",
@@ -86,7 +86,7 @@ export const REVIEW_COPY = {
   sourceExamined: "You recorded that you examined this saved copy.",
   sourceUnavailable: "You recorded that this paper had no abstract to check.",
   sourceEarlierCopy: (seq: number, date: string) =>
-    `This field's sources include an earlier copy of the abstract (copy ${seq}, saved ${date}), which this view doesn't show. Nothing is highlighted for it in the current copy.`,
+    `This field's sources include an earlier copy of the abstract (copy ${seq}, saved ${date}). Nothing is highlighted for it in the current copy; show copy ${seq} to see it.`,
   sourceNotAbstract: "This field cites no part of this paper's saved abstract.",
   sourceCopy: (seq: number, total: number, date: string) => `Saved copy ${seq} of ${total}, saved ${date}.`,
   // Flag form
