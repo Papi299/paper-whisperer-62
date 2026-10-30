@@ -4794,3 +4794,19 @@ This is release history, not a migration. C2B introduced no migration, RPC, secr
 - **Not exercised in Production.** **Load older entries** and **Show more changes** (seven operations, at most three changes each), an operation committed elsewhere while History is open, a failed read and Try again, the consistency-check refusal, the "no longer exists" state, a former owner's History and another user's isolation, the study-details, link, group, outcome and rebase entries, and rebase (C2C, not started).
 
 This record holds no research data, no paper content beyond the canary's title prefix, and no account identity.
+
+## 2026-10-30 — EVIDENCE-RECORDS-001C2C-A: source comparison and earlier saved copies — **MERGED / DEPLOYED; NOT YET PRODUCTION-ACCEPTED**
+
+This is release history, not a migration. C2C-A introduced no migration, RPC, grant, secret or Edge Function. It is read-only: the Source pane shows when a record's saved abstract differs from the library's, compares the two and opens earlier copies, and writes nothing. The interface, its limits and its acceptance status are in [evidence-records-study-record-ui.md](evidence-records-study-record-ui.md) §18.
+
+- **Merge.**
+  - PR #360 merged on 2026-10-30 at 14:58:54Z as the two-parent `d41413dbd574358b80ca3195eb3cc7746eb90a88`. Its parents are `97558b18` and the reviewed head `bb18ab1d`. Its tree, `41d72793`, equals the head's.
+  - On the head, Validate (`41065127138`), DB Tests (`41065126982`), E2E (local) (`41065126980`: `e2e-local` 293 tests, `e2e-evidence` 42) and CodeQL (`41065122023`) passed on the first attempt.
+  - Merged-`main` Validate (`41076463972`), DB Tests (`41076463957`), Extension (`41076464222`) and CodeQL (`41076463507`) passed on the first attempt. The Dependabot `postcss-selector-parser` update job failed with `security_update_not_possible`, as on earlier `main` commits; it is not one of the repository's workflows.
+- **Deployment.**
+  - The automatic Vercel Production deployment `dpl_HEAjLZV1NutXjjkaVQkoTDKfRDA7` is `main` at `d41413db`. It was READY at 14:59:22Z and serves `app.paperlume.app`.
+  - The previous deployment, `dpl_GkrvxtaA15f5jqNdJMJyZ64on14e` (`97558b18`), stays READY.
+  - Of the public files, only the entry script and the stylesheet changed. The script's settings differ from the previous build only in Vercel's four per-build values, and it carries C2C-A's interface text, which is absent from the previous `main`'s source.
+  - The release deployed only the frontend: its diff touches no Edge Function, migration, secret or Supabase setting.
+- **Database checkpoint.** An independent read-only check after the merge (`transaction_read_only = on`) found 103 applied migrations, the latest `20261017155445`. It found `evidence_rebase_source` unchanged (md5 `910685085611df3faf4eb31072f57f3e`), and no rows in `evidence_studies`, `evidence_source_snapshots` or `evidence_events`. That is the state it observed; it does not prove that nothing was written and removed before it.
+- **Production functional acceptance: not yet.** No signed-in user has used C2C-A in Production. The recommended checkpoint is one authenticated acceptance of C2C-A and C2C-B together, once C2C-B is implemented, subject to separate Product Owner authorization.
