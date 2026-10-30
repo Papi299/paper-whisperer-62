@@ -339,9 +339,12 @@ export function reviewSummary(items: readonly ReviewItem[]): ReviewSummary {
   });
 }
 
-/** The items a filter shows. Filtering never changes anything persisted. */
-export function filterReviewItems(items: readonly ReviewItem[], filter: ReviewFilter): ReviewItem[] {
-  return filter === "all" ? [...items] : items.filter((item) => item.needsReview);
+/**
+ * The items a filter shows, and always those of `keep` (values with an open
+ * Flag note, G3). Filtering never changes anything persisted.
+ */
+export function filterReviewItems(items: readonly ReviewItem[], filter: ReviewFilter, keep: readonly string[] = []): ReviewItem[] {
+  return filter === "all" ? [...items] : items.filter((item) => item.needsReview || keep.includes(item.value.id));
 }
 
 /**

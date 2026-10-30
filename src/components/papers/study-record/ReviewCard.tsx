@@ -29,12 +29,17 @@ export interface ReviewCardProps {
   readonly linkSources: readonly LinkSources[];
   /** The editor's review action, to show this card's own progress or refusal. */
   readonly action: ReviewActionState;
+  /** This value's open Flag note, as typed; null when its Flag form is closed (G3: the editor keeps it). */
+  readonly flagNote: string | null;
   readonly registerHeading: (key: string, element: HTMLElement | null) => void;
   readonly registerStatus: (key: string, element: HTMLElement | null) => void;
   readonly onFocusItem: (item: ReviewItem) => void;
   readonly onConfirm: (item: ReviewItem) => void;
-  /** Resolves to true once the flag is recorded. */
-  readonly onFlag: (item: ReviewItem, note: string) => Promise<boolean>;
+  /** Send the flag; the editor closes the note once it is recorded. */
+  readonly onFlag: (item: ReviewItem, note: string) => void;
+  readonly onFlagOpen: (item: ReviewItem) => void;
+  readonly onFlagNoteChange: (item: ReviewItem, note: string) => void;
+  readonly onFlagClose: (item: ReviewItem) => void;
   readonly onEdit: (item: ReviewItem) => void;
   readonly onReload: () => void;
   readonly onDismiss: () => void;
@@ -57,11 +62,15 @@ export function ReviewCard({
   links,
   linkSources,
   action,
+  flagNote,
   registerHeading,
   registerStatus,
   onFocusItem,
   onConfirm,
   onFlag,
+  onFlagOpen,
+  onFlagNoteChange,
+  onFlagClose,
   onEdit,
   onReload,
   onDismiss,
@@ -69,7 +78,9 @@ export function ReviewCard({
   const ids = useId();
   const label = reviewItemLabel(item);
   const { value, confirm, flag } = item;
-  const [flagOpen, setFlagOpen] = useState(false);
+  const flagOpen = flagNote !== null;
+  // Whether this card opened its Flag form just now: only then does the note take focus.
+  const [openedHere, setOpenedHere] = useState(false);
   const flagButtonRef = useRef<HTMLButtonElement>(null);
   const alertRef = useRef<HTMLDivElement>(null);
 
@@ -181,8 +192,11 @@ export function ReviewCard({
               aria-describedby={!flagOpen ? flagHeldId : undefined}
               data-testid="review-flag"
               onClick={() => {
-                if (flagOpen) setFlagOpen(false);
-                else if (flag.kind === "offered") setFlagOpen(true);
+                if (flagOpen) onFlagClose(item);
+                else if (flag.kind === "offered") {
+                  setOpenedHere(true);
+                  onFlagOpen(item);
+                }
               }}
             >
               {REVIEW_COPY.flag}
@@ -196,21 +210,20 @@ export function ReviewCard({
               {flagHeld}
             </p>
           )}
-          {flagOpen && (
+          {flagNote !== null && (
             <FlagForm
               id={`${ids}-flag`}
               value={value}
+              note={flagNote}
+              onNoteChange={(note) => onFlagNoteChange(item, note)}
+              autoFocus={openedHere}
               working={working && action.status === "working" && action.action === "flag"}
               heldReason={flagHeld}
               onCancel={() => {
-                setFlagOpen(false);
+                onFlagClose(item);
                 requestAnimationFrame(() => flagButtonRef.current?.focus());
               }}
-              onSubmit={(note) => {
-                void onFlag(item, note).then((flagged) => {
-                  if (flagged) setFlagOpen(false);
-                });
-              }}
+              onSubmit={(note) => onFlag(item, note)}
             />
           )}
         </div>

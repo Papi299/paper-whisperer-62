@@ -42,6 +42,7 @@ import { RecordPane } from "./RecordPane";
 import { REVIEW_COPY, reviewErrorText } from "./reviewCopy";
 import { ReviewPane } from "./ReviewPane";
 import { SourcePane, type SourceDisplay } from "./SourcePane";
+import { SOURCE_UPDATE_COPY, sourceUpdateErrorText } from "./sourceUpdateCopy";
 import { StatusFrame } from "./StudyRecordDialog";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
 import { useReviewFlow, type ReviewFlow } from "./useReviewFlow";
@@ -196,6 +197,10 @@ function EditorWorkspace({
   useEffect(() => {
     if (editor.reviewAction.status === "uncertain") alertRef.current?.focus();
   }, [editor.reviewAction]);
+  // And after a rebase whose outcome is unknown (C2C-B), the same way.
+  useEffect(() => {
+    if (editor.sourceUpdate.status === "uncertain") alertRef.current?.focus();
+  }, [editor.sourceUpdate]);
 
   const sourceLink = base.links.find((link) => link.link.paperId === sourcePaperId) ?? base.links[0] ?? null;
   const reviewItem =
@@ -273,6 +278,38 @@ function EditorWorkspace({
     [save],
   );
 
+  const { reload } = editor;
+  const requestReload = useCallback(() => {
+    if (dirty) setReloadOpen(true);
+    else void reload();
+  }, [dirty, reload]);
+
+  // "Use current abstract" (C2C-B), as the Source pane reaches it: the hook's own state, holds and calls.
+  const sourceUpdate = useMemo<EditorContextValue["sourceUpdate"]>(
+    () => ({
+      state: editor.sourceUpdate,
+      writable: editor.sourceUpdateWritable,
+      hold: editor.sourceUpdateHold,
+      knownVersion: editor.knownVersion,
+      reviewItems: editor.reviewItems,
+      start: editor.updateSource,
+      retry: editor.retrySourceUpdate,
+      dismiss: editor.clearSourceUpdate,
+      reload: requestReload,
+    }),
+    [
+      editor.sourceUpdate,
+      editor.sourceUpdateWritable,
+      editor.sourceUpdateHold,
+      editor.knownVersion,
+      editor.reviewItems,
+      editor.updateSource,
+      editor.retrySourceUpdate,
+      editor.clearSourceUpdate,
+      requestReload,
+    ],
+  );
+
   const context = useMemo<EditorContextValue>(
     () => ({
       userId,
@@ -290,6 +327,7 @@ function EditorWorkspace({
       sourceView,
       setSourceView,
       showSavedCopy,
+      sourceUpdate,
       lastFocusedKey,
       setLastFocusedKey,
       focusTarget,
@@ -314,6 +352,7 @@ function EditorWorkspace({
       chooseSourcePaper,
       sourceView,
       showSavedCopy,
+      sourceUpdate,
       lastFocusedKey,
       focusTarget,
       revealRequest,
@@ -325,11 +364,6 @@ function EditorWorkspace({
 
   const errorCount = issues.filter((issue) => issue.severity === "error").length;
   const saving = save.status === "saving";
-
-  const requestReload = () => {
-    if (dirty) setReloadOpen(true);
-    else void editor.reload();
-  };
 
   return (
     <EditorContext.Provider value={context}>
@@ -443,7 +477,7 @@ function EditorWorkspace({
             variant="outline"
             className="text-destructive coarse:min-h-10"
             onClick={() => setDeleteOpen(true)}
-            disabled={saving || save.status === "uncertain" || editor.reviewPending}
+            disabled={saving || save.status === "uncertain" || editor.reviewPending || editor.sourceUpdatePending}
           >
             <Trash2 className="mr-2 h-4 w-4" aria-hidden="true" />
             {STUDY_RECORD_COPY.deleteButton}
@@ -454,7 +488,9 @@ function EditorWorkspace({
                 ? STUDY_RECORD_COPY.saving(save.step, save.total)
                 : editor.reviewAction.status === "working"
                   ? REVIEW_COPY.working
-                  : save.status === "saved"
+                  : editor.sourceUpdate.status === "preparing" || editor.sourceUpdate.status === "working"
+                    ? SOURCE_UPDATE_COPY.saving
+                    : save.status === "saved"
                     ? STUDY_RECORD_COPY.saved
                     : canWrite
                       ? dirty
@@ -608,14 +644,33 @@ interface SaveMessagesProps {
 }
 
 /**
- * The outcome of the last save — or of a review whose outcome is unknown,
- * which holds every write until it is tried again or abandoned by a reload —
- * as a message with its next step. Shown above the footer, in both modes.
+ * The outcome of the last save — or of a review or a rebase whose outcome is
+ * unknown, which holds every write until it is tried again or abandoned by a
+ * reload — as a message with its next step. Shown above the footer, in every
+ * mode.
  */
 function SaveMessages({ editor, flow, alertRef, errorCount, onReload, onFocusTarget, onClose }: SaveMessagesProps) {
-  const { save, externalChange, issues, reviewAction } = editor;
+  const { save, externalChange, issues, reviewAction, sourceUpdate } = editor;
   const box = "mx-4 mb-2 shrink-0 rounded-md border p-3 text-sm focus:outline-none sm:mx-6";
   const firstError = issues.find((issue) => issue.severity === "error");
+  if (sourceUpdate.status === "uncertain") {
+    // Try again resends the SAME request; it is offered only while the user may still write.
+    return (
+      <div ref={alertRef} tabIndex={-1} role="alert" className={`${box} border-amber-500/50 bg-amber-50 dark:bg-amber-950/30`} data-testid="source-update-uncertain-alert">
+        <p>{sourceUpdateErrorText(sourceUpdate.error)}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {editor.sourceUpdateWritable && (
+            <Button type="button" size="sm" className="coarse:min-h-10" onClick={() => void editor.retrySourceUpdate()}>
+              {SOURCE_UPDATE_COPY.tryAgain}
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="outline" className="coarse:min-h-10" onClick={onReload}>
+            {SOURCE_UPDATE_COPY.reload}
+          </Button>
+        </div>
+      </div>
+    );
+  }
   if (reviewAction.status === "uncertain") {
     return (
       <div ref={alertRef} tabIndex={-1} role="alert" className={`${box} border-amber-500/50 bg-amber-50 dark:bg-amber-950/30`} data-testid="review-uncertain-alert">
@@ -689,11 +744,14 @@ function SaveMessages({ editor, flow, alertRef, errorCount, onReload, onFocusTar
   if (save.status === "conflict" || save.status === "reload_failed" || externalChange) {
     // A review refused for a version conflict recorded nothing, and touched no draft: it says so in its own words.
     const reviewConflict = reviewAction.status === "failed" && reviewAction.failure.kind === "refused" && reviewAction.failure.error.kind === "version_conflict" ? reviewAction.failure.error : null;
+    // So is a rebase refused for one (C2C-B): no copy was saved.
     const message =
       save.status === "conflict"
         ? reviewConflict
           ? reviewErrorText(reviewConflict)
-          : `${STUDY_RECORD_COPY.conflict}${STUDY_RECORD_COPY.partialSaved(save.applied, save.total)}`
+          : sourceUpdate.status === "conflict"
+            ? SOURCE_UPDATE_COPY.conflict
+            : `${STUDY_RECORD_COPY.conflict}${STUDY_RECORD_COPY.partialSaved(save.applied, save.total)}`
         : save.status === "reload_failed"
           ? STUDY_RECORD_COPY.reloadFailed
           : STUDY_RECORD_COPY.externalChange;

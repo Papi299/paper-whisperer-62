@@ -258,7 +258,7 @@ describe("The source status (C2C-A)", () => {
     expect(banner).toHaveTextContent("only in characters PaperLume's quote matching treats as the same");
     expect(banner).toHaveTextContent("This is a technical comparison, not a check that the two say the same thing.");
     expect(banner).toHaveTextContent("Your record keeps its saved copy");
-    expect(banner).toHaveTextContent("comparing is for information only: nothing is saved or changed. Your record keeps saved copy 1");
+    expect(banner).toHaveTextContent("Comparing is for information only: nothing is saved or changed. Your record keeps saved copy 1");
     expect(within(banner).getByRole("button", { name: "Compare the saved copy with the abstract in your library" })).toBeInTheDocument();
     // The record still shows, and quotes from, its saved copy.
     expect(screen.getByTestId("study-record-saved-abstract").textContent).toBe(ABSTRACT);
@@ -292,7 +292,7 @@ describe("The source status (C2C-A)", () => {
     expect(await sourceState()).toBe("abstract_now_available");
     const banner = within(sourcePane()).getByTestId("source-status");
     expect(banner).toHaveTextContent("This paper now has an abstract in your library, but this record has no saved copy of it, so it can't be quoted.");
-    expect(banner).toHaveTextContent("showing the library abstract is for information only");
+    expect(banner).toHaveTextContent("Showing the library abstract is for information only");
     fireEvent.click(within(banner).getByRole("button", { name: "Show the library abstract" }));
     const compare = await screen.findByTestId("source-compare");
     await waitFor(() => expect(within(compare).getByRole("heading", { name: "The abstract in your library" })).toHaveFocus());

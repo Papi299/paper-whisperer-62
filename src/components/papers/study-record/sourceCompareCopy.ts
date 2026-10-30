@@ -1,9 +1,10 @@
 /**
  * Wording for the Source pane's comparison and its saved copies
  * (EVIDENCE-RECORDS-001C2C-A). Everything here describes; nothing offers a
- * write: this release has no way to replace a saved copy, and the comparison
- * never says that two texts mean the same thing. Its "typography-only" is
- * equality after normalization v1, the characters quote matching ignores.
+ * write — the one way to replace a saved copy, "Use current abstract", has its
+ * own wording (`sourceUpdateCopy.ts`, C2C-B) — and the comparison never says
+ * that two texts mean the same thing. Its "typography-only" is equality after
+ * normalization v1, the characters quote matching ignores.
  */
 
 const plural = (count: number, one: string, many: string) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
@@ -22,8 +23,8 @@ export const SOURCE_COMPARE_COPY = {
   compareLabel: "Compare the saved copy with the abstract in your library",
   showLibrary: "Show the library abstract",
   informational: (seq: number) =>
-    `In this version of PaperLume, comparing is for information only: nothing is saved or changed. Your record keeps saved copy ${seq}, and its quotes and reviews stay as they are.`,
-  informationalNoCopy: "In this version of PaperLume, showing the library abstract is for information only: nothing is saved, and the record still has no saved copy.",
+    `Comparing is for information only: nothing is saved or changed. Your record keeps saved copy ${seq}, and its quotes and reviews stay as they are.`,
+  informationalNoCopy: "Showing the library abstract is for information only: nothing is saved, and the record still has no saved copy.",
 
   // The comparison
   compareHeading: "Saved copy and library abstract",

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -62,7 +62,8 @@ function CheckAgain({ onCheckAgain, busy = false }: { readonly onCheckAgain: () 
  * How the saved copy relates to the abstract in the library now
  * (EVIDENCE-RECORDS-001C2C-A): the source states of `deriveSourceState`, in
  * words, from the last read only. Offers Compare (`onCompare`, Edit only) and
- * Check again; nothing here writes, and every state keeps the saved copy.
+ * Check again; nothing here writes, and every state keeps the saved copy until
+ * the user chooses otherwise in Compare (C2C-B).
  */
 export function SourceStatusBanner({
   link,
@@ -128,7 +129,9 @@ export function SourceStatusBanner({
  * are. Read-only: opening, switching, moving between changes and closing send
  * nothing, and the record keeps its copy. The changes are a bounded word-level
  * comparison (`diffSourceText`); past its budget, the two texts are offered in
- * full instead.
+ * full instead. The one way to replace the copy — "Use current abstract"
+ * (C2C-B) — is the `update` the pane puts above the readings, behind its own
+ * confirmation.
  */
 export function SourceCompare({
   link,
@@ -136,12 +139,15 @@ export function SourceCompare({
   status,
   onCheckAgain,
   onBack,
+  update = null,
 }: {
   readonly link: StudyRecordLink;
   readonly copy: SourceSnapshot | null;
   readonly status: LibraryStatus;
   readonly onCheckAgain: () => void;
   readonly onBack: () => void;
+  /** "Use current abstract", when the pane offers it (C2C-B). */
+  readonly update?: ReactNode;
 }) {
   const ids = useId();
   const seq = seqOf(link, copy);
@@ -168,6 +174,7 @@ export function SourceCompare({
         </Button>
         <CheckAgain onCheckAgain={onCheckAgain} busy={status.kind === "checking"} />
       </div>
+      {update}
 
       <Tabs value={reading} onValueChange={(value) => setReading(value as Reading)} className="space-y-3">
         <TabsList aria-label={SOURCE_COMPARE_COPY.readingsLabel} className={`grid h-auto w-full ${copy ? "grid-cols-3" : "grid-cols-1"}`}>
