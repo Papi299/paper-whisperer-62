@@ -1,6 +1,6 @@
 # Study records — the Study Record interface (EVIDENCE-RECORDS-001C1, 001C2A, 001C2B)
 
-> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3). **EVIDENCE-RECORDS-001C2A** adds Review (§14): Confirm and Flag of one saved value at a time. It merged on 2026-10-24 (PR #355, `0ba43a17`) with no migration, secret or Edge Function, and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary Review workflow in Production, and it passed with three qualifications (§15). **EVIDENCE-RECORDS-001C2B** adds History (§16): a read-only, paginated view of a record's committed operations, with no migration, RPC, secret or Edge Function. It is implemented on its feature branch and in independent review as a Draft PR: **not merged, not deployed and not Production-accepted**.
+> **Status: merged and deployed; the owner-pilot workflow is Production-accepted with qualifications.** PR-C1 (PR #348) merged on 2026-10-23 as `ec4bdbde` and is live on `app.paperlume.app`. It needed no migration, secret or Edge Function, and it is the first application code that calls the study-record RPCs. The backend it uses was merged, applied to Production and accepted before this rollout: the eight tables (PR-A1), the lifecycle RPCs and owner-only pilot gate (PR-A2, [evidence-records-lifecycle.md](evidence-records-lifecycle.md)), the field RPCs (PR-A3, [evidence-records-field-operations.md](evidence-records-field-operations.md)) and the domain library (PR-B, [evidence-domain-library.md](evidence-domain-library.md)). On 2026-10-23 the Product Owner ran one synthetic-canary workflow through the normal Production interface, and it passed with four qualifications (§13). That accepts the workflow exercised, not every operation, Unicode case or recovery path described below. Creating and editing remain owner-only (§3). **EVIDENCE-RECORDS-001C2A** adds Review (§14): Confirm and Flag of one saved value at a time. It merged on 2026-10-24 (PR #355, `0ba43a17`) with no migration, secret or Edge Function, and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary Review workflow in Production, and it passed with three qualifications (§15). **EVIDENCE-RECORDS-001C2B** adds History (§16): a read-only, paginated view of a record's committed operations, with no migration, RPC, secret or Edge Function. It merged on 2026-10-30 (PR #358, `fe6d2b0f`) and is live on `app.paperlume.app`. The same day the Product Owner ran one synthetic-canary History workflow in Production, and it passed with three qualifications (§17).
 
 This document describes what a user can do, what the interface sends, and what it deliberately leaves to C2C. The executable specification is the Vitest suites under `src/lib/studyRecord/__tests__/`, `src/components/papers/study-record/__tests__/`, `src/hooks/__tests__/useStudyRecordEditor.test.tsx`, `useStudyRecordReview.test.tsx` and `useStudyRecordHistory.test.tsx`, the paper-safeguard suites, `src/test/studyRecordUiBoundary.test.ts`, `e2e/study-records.spec.ts`, `e2e/study-records-review.spec.ts` and `e2e/study-records-history.spec.ts`.
 
@@ -116,7 +116,7 @@ C1 limitations:
 - The server remembers a request id only while its study exists ([evidence-records-lifecycle.md](evidence-records-lifecycle.md) §5): if the study an unresolved attempt created is deleted elsewhere before the retry, the retry creates it again.
 - Production has exercised one owner-pilot workflow (§13). Everything else in this document rests on the Vitest suites and the disposable local E2E.
 
-PR-C2 is three phases. **C2A — Review** (Confirm and Flag, `evidence_review_fields`) is §14. **C2B — History** (a read-only view of `evidence_events`) is §16, in review and not merged. **C2C** (the source-change comparison, earlier copies and **Use current abstract**, `evidence_rebase_source`) is not started, and the Evidence Matrix integration is later still. The boundary test fails if the Study Record UI reads `evidence_events` anywhere but the history read module, or names the rebase.
+PR-C2 is three phases. **C2A — Review** (Confirm and Flag, `evidence_review_fields`) is §14. **C2B — History** (a read-only view of `evidence_events`) is §16, merged and deployed, with its qualified Production acceptance in §17. **C2C** (the source-change comparison, earlier copies and **Use current abstract**, `evidence_rebase_source`) is not started, and the Evidence Matrix integration is later still. The boundary test fails if the Study Record UI reads `evidence_events` anywhere but the history read module, or names the rebase.
 
 ## 13. Production acceptance (2026-10-23)
 
@@ -273,9 +273,9 @@ History (C2B) and rebase (C2C) are not implemented.
 
 ## 16. History (EVIDENCE-RECORDS-001C2B)
 
-> **Status: implemented on the feature branch and in independent review as a Draft PR — not merged, not deployed, not Production-accepted.** No migration, RPC, secret or Edge Function. It is covered by the Vitest suites and the disposable local E2E only. A Production acceptance would follow a merge, under its own authorization.
+> **Status:** merged and deployed (EVIDENCE-RECORDS-001C2B, PR #358, 2026-10-30), with no migration, RPC, secret or Edge Function. It is covered by the Vitest suites and the disposable local E2E. On 2026-10-30 one synthetic-canary History workflow passed in Production, with qualifications (§17).
 
-**What History is.** A read-only list of the record's committed operations — every request that changed it — newest first, each with the changes it recorded. It is built from `evidence_events` alone, never from the record's current state: it shows what happened, when, and which saved field, group, outcome, link or source it touched. It is not a reconstruction of an editing session, nor a certification of anything. It sends no write, offers no Save, Confirm or Flag, and changes nothing it shows.
+**What History is.** A read-only list of the record's committed operations — every request that changed it — newest first, each with the changes it recorded. It is built from `evidence_events` alone, never from the record's current state: it shows what happened, when, and which saved field, group, outcome, link or source it touched. It is not a reconstruction of an editing session, nor a certification of anything. It sends no write, its pane offers no Save, Confirm or Flag, and it changes nothing it shows.
 
 **What history holds** ([evidence-records-field-operations.md](evidence-records-field-operations.md) §9). One header per committed request (ordinal 0) and its change events (ordinals 1..n), all at the study version the request produced. The study name and the names of groups and outcomes are stored as written; codes, whole numbers, states, review statuses, ids, versions and copy numbers in clear; every other user text — values, list entries, notes, review notes, locators — and every quote only as a SHA-256 and a length. So:
 
@@ -305,7 +305,7 @@ The cache keys are user-scoped (`queryKeys.studyRecords.history` and `historyOpe
 
 **Who sees it.** Every signed-in user who can open the record. History reads the user's own rows and is not gated by the pilot: a former owner, now a manager, reads their record's History and cannot write it (the server refuses with `evidence_records_not_enabled`). A manager's role gives no access to anyone else's History: RLS returns a user's own rows only.
 
-**Layout and accessibility.** History is the third mode tab. On a desktop it takes the full width: the Source pane is hidden, still mounted, so its selection is kept. On a phone it is a full-screen mode of its own. Edit and Review stay mounted, so a draft and an open Flag note survive switching. Entries are an ordered list of articles with headings. Each **Show details** button is named after its entry and carries `aria-expanded` and `aria-controls`. Load older moves focus to the first entry it added and announces how many; Refresh announces itself; after **Try again** focus goes to the History heading. Long names wrap, nothing scrolls sideways, and the controls follow the app's `coarse:` touch sizing.
+**Layout and accessibility.** History is the third mode tab. On a desktop it takes the full width: the Source pane is hidden, still mounted, so its selection is kept. On a phone it is a full-screen mode of its own. The dialog's footer — **Delete study record**, the save status and **Save draft** — belongs to the whole dialog and stays visible in every mode, History included. Edit and Review stay mounted, so a draft and an open Flag note survive switching. Entries are an ordered list of articles with headings. Each **Show details** button is named after its entry and carries `aria-expanded` and `aria-controls`. Load older moves focus to the first entry it added and announces how many; Refresh announces itself; after **Try again** focus goes to the History heading. Long names wrap, nothing scrolls sideways, and the controls follow the app's `coarse:` touch sizing.
 
 **Tests.**
 
@@ -319,6 +319,74 @@ The cache keys are user-scoped (`queryKeys.studyRecords.history` and `historyOpe
 - The name of a group, an outcome or a paper in a value or link event is today's, or "since removed".
 - Refresh drops the older pages read so far.
 - An operation's changes can't be filtered or searched, and a large save is shown 50 changes at a time.
-- **Production acceptance is pending:** nothing of C2B has been exercised in Production.
+- Production has exercised one owner-pilot History workflow (§17). Paging, failures and every other state rest on the Vitest suites and the disposable local E2E.
 
 C2C — the source comparison, earlier copies, **Use current abstract** and `evidence_rebase_source` — is not started.
+
+## 17. History — Production acceptance (2026-10-30)
+
+The report of EVIDENCE-RECORDS-001C2B-PRODUCTION-ACCEPTANCE-001 gives the verdict **`EVIDENCE_RECORDS_001C2B_PROD_ACCEPTANCE_PASSED_WITH_QUALIFICATIONS`**: the History workflow below succeeded, and nothing beyond it was accepted. It ran on the deployed C2B build (PR #358, `main` at `fe6d2b0f`, Vercel deployment `dpl_2MdMPQcek3izv2bife5ENVpxvi1H`). The Product Owner performed every action in their own browser, through the normal Production interface: on a computer, and on their own phone for the phone check. The audits between stages were read-only: SQL in read-only transactions, and content-free API-log counts of each request's method, path and status, which stood in for the browser's network panel. No test automation, service-role browser access or direct database write was used. The identities and the cleanup record are in [migration-history.md](migration-history.md).
+
+**Verified Production operation.** On one synthetic canary paper (title prefix `SR-C2B-CANARY-`, a fictional plain-ASCII abstract), the owner:
+
+1. added the paper by hand and created a study record: *Yes*, in the `non_intervention` family. The editor opened in **Edit**, with the tabs **Edit | Review | History**;
+2. saved **Who took part** as Reported, with one quote selected in the saved copy, and **Setting** as Reported, with no source;
+3. opened **History**, read both entries and opened their details, then went back to Edit, pressing nothing else;
+4. confirmed Who took part, flagged Setting, and changed the flag's note. The reopened Flag form sent nothing while its note was unchanged. After each review, History's newest entry was the new one;
+5. edited Who took part without saving and opened History, which still showed the previous newest entry (the Product Owner's report). Back in Edit the draft was intact, and saving it recorded exactly the draft's text;
+6. confirmed the new version of Who took part;
+7. read the full chronology with every entry open, pressed **Refresh**, reloaded the page and reopened History, and switched History → Edit → Review → History;
+8. opened the record's History on a phone (iPhone, Chrome): its details, **Refresh** and the mode switch;
+9. deleted the study record, then the canary paper.
+
+**What History showed** (the Product Owner's screenshots, checked word for word against the stored events). Each entry gave its title, its date and time with the time zone ("Oct 30, 2026, 10:38 AM GMT+2") and "Record version N". Below the seventh came "This is the beginning of this study record's history.", with no **Load older entries**.
+
+| Version | Entry | Its details |
+|---|---|---|
+| 7 | Review recorded | "Who took part: reviewed by you" |
+| 6 | Changes saved | "Who took part: text changed", then "Previously reviewed by you — saving this change reset the review." and "Earlier text isn't stored in History." |
+| 5 | Review recorded | "Setting (countries, care setting): flagged", then "The flag's note changed." and "History doesn't keep the text of notes." |
+| 4 | Review recorded | "Setting (countries, care setting): flagged", then "History doesn't keep the text of notes." |
+| 3 | Review recorded | "Who took part: reviewed by you" |
+| 2 | Changes saved | Setting "recorded as Reported — a text of 27 characters" with "No source given."; Who took part "recorded as Reported — a text of 36 characters" with "Sources: 1 quote from a saved abstract."; each with "The text itself isn't stored in History." |
+| 1 | Study record created | the creation under the canary's name, with its kind of study; the link to the paper "now titled" the canary title, "as confirmed by you"; "Copy 1, 390 characters. History doesn't keep the copy's text." |
+
+No value, note, quote or abstract text, and no identifier or fingerprint, appeared in History. The footer's **Delete study record** and **Save draft** stayed visible in History (§16); no write was sent from History.
+
+**Verified database state** (read-only, after each stage):
+
+- **Operations.** Seven requests, versions 1–7, 17 events. Each request wrote one header at ordinal 0 and its changes at gapless ordinals, under one request id and one timestamp; its operation, version and changes are the ones History showed. The create wrote `study_created`, `link_created` and `source_captured`. The first save wrote `value_saved` for Setting, then for Who took part, whose quote is the server's match at normalized offsets `[115,185)`.
+- **Reviews.** Each left its value unchanged.
+  - Confirm: `review_confirmed`, with `reviewed_version` 1.
+  - Flag: `review_flagged`; the changed note, a second `review_flagged`.
+  - Save of the edit: one `value_saved` from `user_reviewed` to `unreviewed` at `value_version` 2, with the quote reference unchanged and no review event.
+  - Confirm of the new version: `review_confirmed`, with `reviewed_version` 2.
+- **Digests.** Every value text, note and quote is stored only as `{sha256, chars}`, and each digest equals the SHA-256 of the fictional text entered.
+
+**Read-only proof.** A fingerprint of every canary row — the study, its events, values, anchor, saved copy and link, and the paper — was taken before and after the first History check, and before and after the full one (steps 7–8). Both pairs are equal.
+
+- **History's reads** in the API log were `GET /rest/v1/evidence_events` only.
+- **No write came from History.** Neither interval holds an Evidence RPC, a table insert, update or delete, or an Edge Function or Storage call. Their only POSTs are the app's three read RPCs on each page load (STABLE functions with no write statement) and one Auth token request: the owner's session doing its own sign-in bookkeeping.
+- **The draft visit** (step 5) was read before that stage's only write, the save.
+- **Across the run,** the log shows one request per deliberate write: one paper insert, one create, two saves, four reviews, one study delete and one paper delete. Postgres logged no error or warning.
+
+**After cleanup:** no evidence row and no `SR-C2B-CANARY-%` paper remain, checked by exact identifiers. These equal the baseline taken before the run:
+
+- the ledger, the function bodies, table privileges, RLS and policies, the paper key and the Security Advisor findings;
+- the owner's 703 papers and their latest update;
+- Project and Tag assignments, attachments, author links, the cleanup queue and tombstones, storage bytes and objects, and AI usage;
+- the account count.
+
+**Qualifications.**
+
+- **The phone check is observational.** It rests on the Product Owner's report and the API log, which shows only reads in that window. There is no phone screenshot, and touch-target sizes were not measured in Production; the phone E2E measures them locally.
+- **The audit connector dropped twice:** before the baseline, and before the first History check's closing fingerprint. The test paused each time. The fingerprint taken after reconnection covers the whole interval, so the read-only proof stands.
+- **One baseline value changed, not through this test.** The validity of the Supabase CLI's login role, `cli_login_postgres`, moved to 08:15 UTC that day. That is consistent with a CLI command run against the linked project at about 08:10. The test ran no CLI command, Postgres logged nothing from that role during the run, and no other compared value changed.
+
+**Not exercised in Production, so covered only by the Vitest suites and the disposable local E2E:**
+
+- **Load older entries** and **Show more changes**: the canary had seven operations, fewer than a page of ten, and no operation had more than three changes;
+- an operation committed elsewhere while History is open, and Refresh picking it up;
+- a failed read and **Try again**, the consistency-check refusal, and the "no longer exists" state;
+- a former owner's History, and another user's isolation;
+- the titles and details of **Study details updated**, **Linked paper changed**, group and outcome events, and every rebase event (C2C has no interface).

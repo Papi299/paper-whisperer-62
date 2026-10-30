@@ -4754,3 +4754,43 @@ This is release history, not a migration. C2A introduced no migration, and Produ
 - **Not exercised in Production.** An unknown review outcome and Try again, version-conflict refusals, the server's own Confirm refusal, Confirm of a flagged value, full-text references, Needs re-review, history (C2B, not started) and rebase (C2C, not started).
 
 This record holds no research data, no paper content beyond the canary's title prefix, and no account identity.
+
+## 2026-10-30 — EVIDENCE-RECORDS-001C2B: History — **MERGED / DEPLOYED / PRODUCTION-ACCEPTED WITH QUALIFICATIONS**
+
+This is release history, not a migration. C2B introduced no migration, RPC, secret or Edge Function, and Production stayed at **103** applied migrations (latest `20261017155445`). The interface and its acceptance record are in [evidence-records-study-record-ui.md](evidence-records-study-record-ui.md) (§16 and §17). The 2026-10-24 entry stands as written for the state then. This entry records the interface's first Production reads of `evidence_events`.
+
+- **Merge.**
+  - PR #358 merged on 2026-10-30 at 00:10:36Z as the two-parent `fe6d2b0fd2f20f4e251d9b6dc65d7601e5db99c3`. Its parents are `b79c2af2` and the head `98c7d188`. Its tree, `124d6981`, equals the reviewed head's.
+  - Merged-`main` Validate (`40978012645`), DB Tests (`40978012472`), Extension (`40978012613`) and CodeQL (`40978012713`) passed on the first attempt. A Dependabot update job on the same commit (`40978026797`, `postcss-selector-parser`) failed with `security_update_not_possible`, as on the two `main` commits before it; it is not one of the repository's workflows.
+  - The head's E2E (local) run `40973163449` passed both jobs on its first attempt: `e2e-local` ran 293 tests, and `e2e-evidence` 33.
+- **Deployment.**
+  - The automatic Vercel Production deployment `dpl_2MdMPQcek3izv2bife5ENVpxvi1H` serves `app.paperlume.app`. It is `main` at `fe6d2b0f` and was READY at 00:11:03Z.
+  - Its public entry bundle contains History's wording, which is absent from the previous `main`'s source.
+  - The previous deployment, `dpl_AxGu6ZgswKCsyDiKnJLjtkfU2Uys` (`b79c2af2`), stays READY.
+  - No Edge Function, secret or Supabase setting changed.
+- **Production functional acceptance — EVIDENCE-RECORDS-001C2B-PRODUCTION-ACCEPTANCE-001, 2026-10-30.** The verdict is `EVIDENCE_RECORDS_001C2B_PROD_ACCEPTANCE_PASSED_WITH_QUALIFICATIONS`.
+  - **Method.** The Product Owner performed every action in their own browser, through the normal interface: on a computer, and on their own phone (iPhone, Chrome) for the phone check. They used one synthetic canary paper, with title prefix `SR-C2B-CANARY-` and a fictional plain-ASCII abstract. The audits were read-only: SQL inside read-only transactions, and content-free log counts. No test automation, service-role browser access or direct database write was used.
+  - **Steps.**
+    - One paper was added by hand. Its abstract was byte-identical to the fixture.
+    - One create gave version 1, with one `user_confirmed` link, one abstract copy and four events.
+    - One save of two Reported study-level values gave version 2: **Who took part**, with one supporting quote the server matched at normalized offsets `[115,185)`, and **Setting**, with no source.
+    - History then showed both operations, newest first, with their record versions, local times and changes, above the line "This is the beginning of this study record's history."
+    - Confirm of Who took part gave version 3, with `reviewed_version` 1. Flag of Setting gave version 4, and a changed note gave version 5; an unchanged note sent nothing.
+    - With an unsaved edit of Who took part, History still showed version 5 as the newest. The edit survived the switch, and saving it gave version 6: `value_version` 2, review back to `unreviewed` inside `value_saved`, the quote unchanged.
+    - Confirm of the new version gave version 7, with `reviewed_version` 2.
+    - History showed all seven operations with their own changes, before and after **Refresh** and a reload, across mode switches, and on the phone.
+    - The study and then the paper were deleted.
+  - **History and the database.** The study had 17 events in 7 requests, each with one header and gapless ordinals under one request id, and History showed each operation's own changes in ordinal order. No value, note, quote or abstract text appeared in History; the events hold those only as digests, each equal to the SHA-256 of the fictional text entered.
+  - **Read-only proof.** A fingerprint of every canary row was equal before and after the first History check, and before and after the full one. In those intervals the API log shows History's `GET /rest/v1/evidence_events` reads, no Evidence RPC, no table write, no Edge Function or Storage call, and, besides the app's STABLE read RPCs on page loads, one Auth token request for the owner's session.
+  - **Writes.** The API logs show one request for each deliberate write: one paper insert, one create, two saves, four reviews, one study delete and one paper delete. Postgres logged no error or warning.
+  - **The phone check is observational.** It rests on the Product Owner's report and the API log; there is no phone screenshot.
+  - **The audit connector dropped twice.** The test paused each time; the closing fingerprint covers the whole interval.
+  - **One baseline value changed, not through this test.** The validity of the Supabase CLI's login role, `cli_login_postgres`, moved to 08:15 UTC that day, consistent with a CLI command run against the linked project at about 08:10. The test ran no CLI command, Postgres logged nothing from that role during the run, and no other compared value changed.
+- **Cleanup — audited read-only.** No evidence row and no `SR-C2B-CANARY-%` paper remain, checked by exact identifiers. The final snapshot equals the pre-run baseline in these fields:
+  - the ledger, the function bodies, table privileges, RLS and policies, the paper key and the Security Advisor findings;
+  - the owner's 703 papers and their latest update;
+  - Project and Tag assignments, attachments, author links, the cleanup queue and tombstones, storage bytes and objects, and AI usage;
+  - the account count.
+- **Not exercised in Production.** **Load older entries** and **Show more changes** (seven operations, at most three changes each), an operation committed elsewhere while History is open, a failed read and Try again, the consistency-check refusal, the "no longer exists" state, a former owner's History and another user's isolation, the study-details, link, group, outcome and rebase entries, and rebase (C2C, not started).
+
+This record holds no research data, no paper content beyond the canary's title prefix, and no account identity.
