@@ -43,7 +43,7 @@ export const REVIEW_COPY = {
   // Card
   statusLabel: "Review status",
   reviewedOn: (date: string) => `Reviewed by you on ${date}`,
-  needsRereview: "Needs re-review — the saved abstract copy changed",
+  needsRereview: "Needs re-review — a new copy of the abstract was saved",
   flagNote: "Your note",
   earlierReviewNote: "Your earlier review note",
   valueNote: "Note",

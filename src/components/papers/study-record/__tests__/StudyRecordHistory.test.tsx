@@ -195,7 +195,7 @@ describe("the History mode", () => {
     expect(versionsShown()).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
     expect(entries().map((candidate) => within(candidate).getByRole("heading").textContent)).toEqual([
       "Changes saved",
-      "Saved abstract copy updated",
+      "Copy of the library abstract saved",
       "Review recorded",
       "Changes saved",
       "Linked paper changed",
@@ -340,9 +340,12 @@ describe("an operation's details", () => {
     expect(entry(4)).toHaveTextContent("History doesn't keep the text of notes.");
     fireEvent.click(toggleOf(11));
     await waitFor(() => expect(within(entry(11)).getAllByTestId("history-change")).toHaveLength(5));
-    expect(entry(11)).toHaveTextContent("Number randomized: needs re-review — the saved abstract copy changed");
+    expect(entry(11)).toHaveTextContent("Number randomized: needs re-review — a new copy of the abstract was saved");
     expect(entry(11)).toHaveTextContent("Condition or health status: a quote wasn't found in the new copy");
     expect(entry(11)).toHaveTextContent("Earlier copies are kept; History doesn't show their text.");
+    // G4: the summary keeps not found apart from found more than once, and counts only the reviews it moved.
+    expect(entry(11)).toHaveTextContent("2 quotes rechecked: 1 found again, 1 not found, 0 found more than once.");
+    expect(entry(11)).toHaveTextContent("1 field was marked as needing re-review.");
   });
 
   it("show a large save in parts — 50, then 50, then the last 20 — none twice, none cut off; focus goes to the first change added", async () => {

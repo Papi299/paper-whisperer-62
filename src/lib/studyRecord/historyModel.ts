@@ -168,10 +168,14 @@ export type HistoryChange =
   | {
       readonly kind: "source_rebased";
       readonly paper: HistoryPaper;
+      /** No earlier copy (`previous_snapshot_id` null): this rebase saved the link's first copy, so it had no quote to recheck. */
+      readonly first: boolean;
+      /** Quotes on the copy it replaced, each looked for in the new one: `rematched + notFound + ambiguous`. */
       readonly rechecked: number;
       readonly rematched: number;
       readonly notFound: number;
       readonly ambiguous: number;
+      /** Values it moved to Needs re-review — never those already there, which it leaves as they were. */
       readonly needRereview: number;
     }
   | { readonly kind: "anchor_rematched"; readonly field: HistoryField; readonly seq: Pair<number> }
@@ -522,9 +526,11 @@ function describeSource(context: HistoryContext, event: HistoryEvent): HistoryCh
     need(isNat(value));
     return value as number;
   };
+  const previous = after.previous_snapshot_id === null ? null : need(uuid(after.previous_snapshot_id));
   return {
     kind: "source_rebased",
     paper: paperOf(context, after.paper_id),
+    first: previous === null,
     rechecked: count("quotes_rechecked"),
     rematched: count("rematched"),
     notFound: count("not_found"),
