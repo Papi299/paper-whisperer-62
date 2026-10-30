@@ -39,45 +39,65 @@ export function expectSourceCapture(abstract: string | null): CaptureExpectation
   return { kind: "copy" };
 }
 
+/**
+ * Whether the library abstract could be saved as a copy: a copy holds at most
+ * 50,000 characters, so a longer abstract is refused (`abstract_too_long`)
+ * however it differs from the saved copy.
+ */
+export type SourceCapture = "allowed" | "refused_too_long";
+
 export type SourceState =
   | { readonly kind: "no_copy_no_abstract" }
-  | { readonly kind: "abstract_now_available"; readonly capture: "allowed" | "refused_too_long" }
+  | { readonly kind: "abstract_now_available"; readonly capture: SourceCapture }
   | { readonly kind: "current" }
-  | { readonly kind: "typography_only_change"; readonly defaultAction: "keep_saved_copy" }
-  | { readonly kind: "content_change" }
+  | { readonly kind: "typography_only_change"; readonly defaultAction: "keep_saved_copy"; readonly capture: SourceCapture }
+  | { readonly kind: "content_change"; readonly capture: SourceCapture }
   | { readonly kind: "abstract_removed" };
 
 /**
  * How a link's current copy relates to the library abstract now. A
  * typography-only difference keeps the saved copy by default: nothing is sent
  * and no review changes unless the user chooses to use the current abstract.
+ * Every state that could lead to a new copy says whether the abstract fits in
+ * one (`capture`); `current` never needs one, and an equal text always fits.
  */
 export function deriveSourceState(currentCopyText: string | null, libraryAbstract: string | null): SourceState {
   const abstractEmpty = libraryAbstract === null || isNormalizationEmpty(libraryAbstract);
   if (currentCopyText === null) {
     if (abstractEmpty) return { kind: "no_copy_no_abstract" };
-    return {
-      kind: "abstract_now_available",
-      capture: codePointLength(libraryAbstract as string) > ABSTRACT_MAX_LENGTH ? "refused_too_long" : "allowed",
-    };
+    return { kind: "abstract_now_available", capture: captureOf(libraryAbstract as string) };
   }
   if (abstractEmpty) return { kind: "abstract_removed" };
   if (currentCopyText === libraryAbstract) return { kind: "current" };
   if (normalizeEvidenceV1(currentCopyText) === normalizeEvidenceV1(libraryAbstract as string)) {
-    return { kind: "typography_only_change", defaultAction: "keep_saved_copy" };
+    return { kind: "typography_only_change", defaultAction: "keep_saved_copy", capture: captureOf(libraryAbstract as string) };
   }
-  return { kind: "content_change" };
+  return { kind: "content_change", capture: captureOf(libraryAbstract as string) };
 }
 
-/** Banner copy per state (Requirements-001 §E2, §E9; 001A §E2). Null where nothing is shown. */
+function captureOf(libraryAbstract: string): SourceCapture {
+  return codePointLength(libraryAbstract) > ABSTRACT_MAX_LENGTH ? "refused_too_long" : "allowed";
+}
+
+/**
+ * Banner copy per state (Requirements-001 §E2, §E9; 001A §E2). Null where
+ * nothing is shown. Statements of fact only: what a user can do about a state
+ * is the interface's to offer, so no message promises an action.
+ * "Typography-only" is equality after normalization v1 — the characters quote
+ * matching treats as the same — never a claim that two texts mean the same.
+ */
 export const SOURCE_STATE_MESSAGES: Readonly<Record<SourceState["kind"], string | null>> = Object.freeze({
   no_copy_no_abstract:
     "This paper has no abstract in your library. You can still record values with references to the full text, which PaperLume can't check.",
-  abstract_now_available: "This paper now has an abstract. Save a copy to quote from it.",
+  abstract_now_available: "This paper now has an abstract in your library, but this record has no saved copy of it, so it can't be quoted.",
   current: null,
   typography_only_change:
-    "The abstract in your library differs only in spacing or punctuation style. Your quotes still match the saved copy.",
+    "The abstract in your library differs from the saved copy only in characters PaperLume's quote matching treats as the same: spacing and line breaks, quotation-mark, dash and ellipsis styles, invisible characters, or how accented letters and the micro sign are stored. This is a technical comparison, not a check that the two say the same thing. Your record keeps its saved copy, and your quotes stay on it.",
   content_change:
     "The abstract in your library has changed since this record's source copy was saved. Your quotes still point to the saved copy.",
   abstract_removed: "The abstract was removed from your library. Your record keeps its saved copy.",
 });
+
+/** Said with any state whose `capture` is `refused_too_long`. */
+export const SOURCE_TOO_LONG_MESSAGE =
+  "The abstract in your library is longer than 50,000 characters, the most a saved copy can hold, so PaperLume can't save a copy of it.";
