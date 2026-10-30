@@ -16,6 +16,7 @@ import { setValueEdit, viewValue, type DraftReference, type DraftValueEdit, type
 import { addQuoteToEdit, matchProblem, QUOTE_MESSAGES } from "@/lib/studyRecord/quotes";
 import type { StudyRecordLink } from "@/lib/studyRecord/read";
 import { useEditor } from "./editorContext";
+import { SOURCE_COMPARE_COPY } from "./sourceCompareCopy";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
 
 const SELECT_CLASS =
@@ -72,6 +73,7 @@ export function FieldSources({ valueKey, fieldKey, edit }: { readonly valueKey: 
               links={editor.links}
               disabled={disabled}
               onRemove={() => remove(index)}
+              onShowCopy={editor.showSavedCopy}
             />
           ))}
         </ul>
@@ -98,7 +100,8 @@ export function FieldSources({ valueKey, fieldKey, edit }: { readonly valueKey: 
       {canSupport && !disabled && atLimit && <p className="text-xs text-muted-foreground">{STUDY_RECORD_COPY.quoteLimit}</p>}
       {canSupport && !disabled && !copy && <p className="text-xs text-muted-foreground">{STUDY_RECORD_COPY.noCopyForQuotes}</p>}
       {panel === "quote" && copy && !disabled && (
-        <AddQuotePanel valueKey={valueKey} fieldKey={fieldKey} copyText={copy.exactText} snapshotId={copy.id} paperId={copy.paperId} onDone={() => setPanel(null)} />
+        // Keyed by the copy: a typed quote's chosen occurrence belongs to the copy it was chosen in (G2).
+        <AddQuotePanel key={copy.id} valueKey={valueKey} fieldKey={fieldKey} copyText={copy.exactText} snapshotId={copy.id} paperId={copy.paperId} onDone={() => setPanel(null)} />
       )}
       {panel === "full_text" && !disabled && (
         <AddFullTextPanel
@@ -164,17 +167,23 @@ function paperTitle(links: readonly StudyRecordLink[], paperId: string): string 
   return links.find((link) => link.link.paperId === paperId)?.paperTitle ?? STUDY_RECORD_COPY.thisPaper;
 }
 
-/** How one reference reads: what it is, whose statement it is, and — for an abstract quote — where it was found. */
+/**
+ * How one reference reads: what it is, whose statement it is, and — for an
+ * abstract quote — where it was found. A saved reference to an earlier copy
+ * can open that copy, read-only (C2C-A).
+ */
 function ReferenceItem({
   reference,
   links,
   disabled,
   onRemove,
+  onShowCopy,
 }: {
   readonly reference: DraftReference;
   readonly links: readonly StudyRecordLink[];
   readonly disabled: boolean;
   readonly onRemove: () => void;
+  readonly onShowCopy: (paperId: PaperId, snapshotId: SnapshotId) => void;
 }) {
   const r = reference.reference;
   const link = links.find((candidate) => candidate.link.paperId === r.paperId);
@@ -182,6 +191,9 @@ function ReferenceItem({
   let title: string;
   let detail: string | null = null;
   let quote: string | null = null;
+  // The earlier copy a saved reference names, when it does.
+  const earlier =
+    reference.kind === "kept" && "snapshotId" in r && current && r.snapshotId !== current.id ? (link?.snapshots.find((snapshot) => snapshot.id === r.snapshotId) ?? null) : null;
   if (r.purpose === "supports" && r.sourceKind === "abstract") {
     title = STUDY_RECORD_COPY.quoteFromAbstract;
     quote = r.quoteText;
@@ -213,6 +225,11 @@ function ReferenceItem({
         <p className="font-medium break-words [overflow-wrap:anywhere]">{title}</p>
         {quote !== null && <blockquote className="whitespace-pre-wrap break-words border-l-2 pl-2 text-xs [overflow-wrap:anywhere]">{quote}</blockquote>}
         {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
+        {earlier && (
+          <Button type="button" variant="outline" size="sm" className="coarse:min-h-10" onClick={() => onShowCopy(r.paperId, earlier.id)} data-testid="show-earlier-copy">
+            {SOURCE_COMPARE_COPY.showCopy(earlier.seq)}
+          </Button>
+        )}
       </div>
       {!disabled && (
         <Button type="button" variant="ghost" size="icon" className="h-10 w-10 shrink-0" aria-label={`${STUDY_RECORD_COPY.removeSource}: ${title}`} onClick={onRemove}>

@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { FieldKey } from "@/lib/evidence/fieldDictionary";
+import type { PaperId, SnapshotId } from "@/lib/evidence/ids";
 import type { RecordedValue } from "@/lib/evidence/types";
 import type { DraftValueEdit, StudyRecordDraft } from "@/lib/studyRecord/draft";
 import type { StudyRecordData, StudyRecordLink } from "@/lib/studyRecord/read";
@@ -21,6 +22,17 @@ export interface ConfirmRequest {
 export type EditorMode = "edit" | "review" | "history";
 
 /**
+ * What the Source pane shows (EVIDENCE-RECORDS-001C2C-A): the shown link's
+ * current saved copy — the one new quotes come from, and the only one "Use as
+ * quote" works on — its comparison with the library abstract, or one of the
+ * link's saved copies, read-only.
+ */
+export type SourceView =
+  | { readonly kind: "current" }
+  | { readonly kind: "compare" }
+  | { readonly kind: "copy"; readonly snapshotId: SnapshotId };
+
+/**
  * A request to open what holds a target — its collapsed section, and "More
  * details" for an optional field — so it can take focus. `nonce` makes a
  * repeated request for the same target a new one.
@@ -32,6 +44,8 @@ export interface RevealRequest {
 
 /** What every part of the Study Record editor reads and changes. */
 export interface EditorContextValue {
+  /** The signed-in user the record is read for: every read the editor makes is theirs. */
+  readonly userId: string;
   readonly base: StudyRecordData;
   readonly baseValues: ReadonlyMap<string, RecordedValue>;
   readonly draft: StudyRecordDraft;
@@ -47,7 +61,12 @@ export interface EditorContextValue {
   readonly links: readonly StudyRecordLink[];
   /** The linked paper whose saved abstract the Source pane shows, and new references name by default. */
   readonly sourceLink: StudyRecordLink | null;
+  /** Show another linked paper's current copy. */
   readonly setSourcePaperId: (paperId: string) => void;
+  readonly sourceView: SourceView;
+  readonly setSourceView: (view: SourceView) => void;
+  /** Show one saved copy of a linked paper's abstract — on a phone, in the Source tab. Read-only, and reads nothing but that copy. */
+  readonly showSavedCopy: (paperId: PaperId, snapshotId: SnapshotId) => void;
   /** The field that last had focus: the default target of "Use as quote". */
   readonly lastFocusedKey: string | null;
   readonly setLastFocusedKey: (key: string) => void;
@@ -72,6 +91,24 @@ export function useEditor(): EditorContextValue {
   const context = useContext(EditorContext);
   if (!context) throw new Error("Study record editor context is missing");
   return context;
+}
+
+/**
+ * Focus the heading of a Source-pane view the user has just opened (C2C-A) —
+ * the comparison or a saved copy — once it is on screen: a tab switch on a
+ * phone can take a frame or two, so this waits up to a few frames. Only an
+ * explicit opening moves focus; a view shown again after a mode switch keeps
+ * focus where the user put it.
+ */
+export function focusOpenedSourceView(root: () => HTMLElement | null | undefined, framesLeft = 6) {
+  requestAnimationFrame(() => {
+    const heading = root()?.querySelector<HTMLElement>("[data-source-view-heading]");
+    if (!heading || heading.closest("[hidden], [data-state='inactive']")) {
+      if (framesLeft > 0) focusOpenedSourceView(root, framesLeft - 1);
+      return;
+    }
+    heading.focus();
+  });
 }
 
 /** Whether `request` asks to reveal `target`. */

@@ -39,7 +39,20 @@ import { describe, expect, it } from "vitest";
  *     `.eq("user_id", …)` and `.eq("study_id", …)`, or whose projection is
  *     not a literal list of named columns — `*`, `payload_sha256`, `result`
  *     and `note` never among them. The general table allow-list does not
- *     include `evidence_events`: this rule is its only way in.
+ *     include `evidence_events`: this rule is its only way in;
+ *   * a read of a named table without `.eq("user_id", …)` (every read names
+ *     its user, as RLS's defense in depth);
+ *   * a read of `papers` (EVIDENCE-RECORDS-001C2C-A) outside the two read
+ *     modules, or not by id, or of anything but a title (`id, user_id,
+ *     title`) or — in `read.ts` alone — one paper's abstract (`id, user_id,
+ *     abstract`), so no comparison can reach the library beyond the paper a
+ *     record links to;
+ *   * a read of `evidence_source_snapshots` outside `read.ts`, or one whose
+ *     projection isn't a literal list of named columns, or without its
+ *     `.eq("study_id", …)` — a saved copy's text is read in one audited
+ *     module, for one user and one study;
+ *   * the shared abstract hook (`useAbstract`, whose cache is not per user)
+ *     anywhere but the create flow: the comparison reads its own.
  * And it checks the positive relationships: the adapter is created exactly
  * once, the editor's default client is that adapter, and the writes the UI
  * makes are exactly the five C1 adapter methods and C2A's `reviewField` — a
@@ -48,6 +61,9 @@ import { describe, expect, it } from "vitest";
  * the editor hook. History adds reads only: exactly two, in the history read
  * module, with the projections it reviewed; its hook is, beside
  * `useStudyRecords`, the only other module that may import the Supabase client.
+ * C2C-A adds reads only, too: one paper's abstract and one saved copy's text,
+ * each in `read.ts` with its reviewed filters, each called by one hook in
+ * `useStudyRecords`; the rebase stays forbidden everywhere.
  *
  * A review-time tripwire like `evidenceDomainBoundary.test.ts`, not the
  * enforcement: RLS, the SELECT-only grants and the RPCs' own checks refuse a
@@ -66,6 +82,12 @@ const EDITOR_FILE = "src/hooks/useStudyRecordEditor.ts";
 const HISTORY_HOOK_FILE = "src/hooks/useStudyRecordHistory.ts";
 /** C2B: the one module that reads `evidence_events`. */
 const HISTORY_READ_FILE = "src/lib/studyRecord/historyRead.ts";
+/** The study-record read module: the only one that reads a saved copy's text, or a paper's abstract (C2C-A). */
+const READ_MODULE_FILE = "src/lib/studyRecord/read.ts";
+/** The modules that read `papers` at all. */
+const PAPER_READ_FILES = [READ_MODULE_FILE, "src/lib/studyRecord/paperLinks.ts"];
+/** C2C-A: the create flow, which alone may use the shared (not per-user) abstract cache. */
+const START_FILE = "src/components/papers/study-record/StudyRecordStart.tsx";
 
 const ALLOWED_IMPORTS = new Set([
   "react",
@@ -83,7 +105,6 @@ const ALLOWED_IMPORTS = new Set([
   "@/components/ui/textarea",
   "@/hooks/use-mobile",
   "@/hooks/use-toast",
-  "@/hooks/useAbstract",
   "@/hooks/useCurrentUserAccess",
   "@/hooks/useStudyRecords",
   "@/hooks/useStudyRecordCreations",
@@ -120,6 +141,7 @@ const ALLOWED_IMPORTS = new Set([
   "@/lib/studyRecord/read",
   "@/lib/studyRecord/reviewModel",
   "@/lib/studyRecord/savePlan",
+  "@/lib/studyRecord/sourceDiff",
   "@/lib/studyRecord/validateDraft",
 ]);
 /** Only for types, anywhere. */
@@ -128,6 +150,7 @@ const TYPE_ONLY_IMPORTS = new Set(["@/integrations/supabase/types", "@/types/dat
 const VALUE_IMPORT_OWNERS: Readonly<Record<string, readonly string[]>> = {
   "@/integrations/supabase/client": [CLIENT_FILE, READS_FILE, HISTORY_HOOK_FILE],
   "@/lib/evidence/lifecycleClient": [CLIENT_FILE],
+  "@/hooks/useAbstract": [START_FILE],
 };
 
 /** The general read allow-list. `evidence_events` is not on it: History's rule below is its only way in. */
@@ -145,6 +168,10 @@ const READ_TABLES = new Set([
 const HISTORY_TABLE = "evidence_events";
 /** What a history read never selects: request idempotency (`payload_sha256`, `result`), `note`, or everything. */
 const PRIVATE_EVENT_COLUMNS = new Set(["*", "payload_sha256", "result", "note"]);
+/** C2C-A: the two things of a paper a study-record module reads — its title, and (read.ts only) its abstract. */
+const PAPER_TITLE_COLUMNS = "id, user_id, title";
+const PAPER_ABSTRACT_COLUMNS = "id, user_id, abstract";
+const SNAPSHOT_TABLE = "evidence_source_snapshots";
 const MUTATIONS = new Set(["insert", "upsert", "update", "delete"]);
 const FORBIDDEN_GLOBALS = new Set([
   "fetch",
@@ -321,18 +348,20 @@ function literalOf(node: ts.Expression | undefined, constants: ReadonlyMap<strin
   return ts.isIdentifier(node) ? constants.get(node.text) : undefined;
 }
 
-/** What one `.from(table)` call's chain filters on (`.eq` columns) and selects. */
-function chainOf(from: ts.CallExpression): { readonly eq: readonly string[]; readonly select: ts.Expression | undefined } {
+/** What one `.from(table)` call's chain filters on (`.eq` and `.in` columns) and selects. */
+function chainOf(from: ts.CallExpression): { readonly eq: readonly string[]; readonly in: readonly string[]; readonly select: ts.Expression | undefined } {
   const eq: string[] = [];
+  const inList: string[] = [];
   let select: ts.Expression | undefined;
   for (let up: ts.Node | undefined = from.parent; up && (ts.isPropertyAccessExpression(up) || ts.isElementAccessExpression(up) || ts.isCallExpression(up)); up = up.parent) {
     if (!ts.isCallExpression(up)) continue;
     const step = memberOf(up.expression);
     const [first] = up.arguments;
     if (step?.member === "eq" && first && ts.isStringLiteralLike(first)) eq.push(first.text);
+    if (step?.member === "in" && first && ts.isStringLiteralLike(first)) inList.push(first.text);
     if (step?.member === "select") select = first;
   }
-  return { eq, select };
+  return { eq, in: inList, select };
 }
 
 export function scanStudyRecordSource(file: string, source: string): Violation[] {
@@ -378,6 +407,25 @@ export function scanStudyRecordSource(file: string, source: string): Violation[]
           if (projection === undefined) report(node, `${HISTORY_TABLE} read with a projection that isn't a literal list of columns`);
           else for (const column of projection.split(",").map((name) => name.trim()).filter((name) => PRIVATE_EVENT_COLUMNS.has(name))) report(node, `${HISTORY_TABLE} read of ${column}`);
         } else if (tableName !== undefined && !READ_TABLES.has(tableName)) report(node, `from("${tableName}")`);
+        if (tableName !== undefined) {
+          const chain = chainOf(node);
+          // Every read of a named table names its user.
+          if (!chain.eq.includes("user_id")) report(node, `${tableName} read without .eq("user_id", …)`);
+          const projection = literalOf(chain.select, constants);
+          if (tableName === "papers") {
+            // C2C-A: a paper's title, or — in the read module only — one paper's abstract; by id, in the two read modules.
+            if (!PAPER_READ_FILES.includes(file)) report(node, `papers read outside ${PAPER_READ_FILES.join(" and ")}`);
+            if (!chain.eq.includes("id") && !chain.in.includes("id")) report(node, "papers read without an id filter");
+            if (projection !== PAPER_TITLE_COLUMNS && projection !== PAPER_ABSTRACT_COLUMNS) report(node, `papers read of ${projection === undefined ? "a projection that isn't a literal" : `"${projection}"`}`);
+            if (projection === PAPER_ABSTRACT_COLUMNS && file !== READ_MODULE_FILE) report(node, `papers abstract read outside ${READ_MODULE_FILE}`);
+          }
+          if (tableName === SNAPSHOT_TABLE) {
+            // C2C-A: a saved copy, text included, is read in the read module only, for one user and one study, by named columns.
+            if (file !== READ_MODULE_FILE) report(node, `${SNAPSHOT_TABLE} read outside ${READ_MODULE_FILE}`);
+            if (!chain.eq.includes("study_id")) report(node, `${SNAPSHOT_TABLE} read without .eq("study_id", …)`);
+            if (projection === undefined || projection.split(",").some((column) => column.trim() === "*")) report(node, `${SNAPSHOT_TABLE} read with a projection that isn't a literal list of columns`);
+          }
+        }
         if (table && (ts.isTemplateExpression(table) || ts.isBinaryExpression(table))) report(node, "computed table name");
         const next = node.parent;
         const nextMember = next ? memberOf(next) : null;
@@ -449,6 +497,7 @@ const read = (file: string) => readFileSync(join(ROOT, file), "utf8");
 describe("Study Record UI boundary — the real modules", () => {
   it("scans every Study Record module", () => {
     expect(scannedFiles).toEqual([
+      "src/components/papers/study-record/EarlierCopy.tsx",
       "src/components/papers/study-record/FieldEditor.tsx",
       "src/components/papers/study-record/FieldSources.tsx",
       "src/components/papers/study-record/FlagForm.tsx",
@@ -458,6 +507,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/ReviewCard.tsx",
       "src/components/papers/study-record/ReviewPane.tsx",
       "src/components/papers/study-record/SavedCopyText.tsx",
+      "src/components/papers/study-record/SourceCompare.tsx",
       "src/components/papers/study-record/SourcePane.tsx",
       "src/components/papers/study-record/StudyRecordDialog.tsx",
       "src/components/papers/study-record/StudyRecordEditor.tsx",
@@ -467,6 +517,8 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/editorContext.ts",
       "src/components/papers/study-record/historyCopy.ts",
       "src/components/papers/study-record/reviewCopy.ts",
+      "src/components/papers/study-record/sourceCompareCopy.ts",
+      "src/components/papers/study-record/sourceCompareModel.ts",
       "src/components/papers/study-record/sourcePaneModel.ts",
       "src/components/papers/study-record/studyRecordCopy.ts",
       "src/components/papers/study-record/useReviewFlow.ts",
@@ -488,6 +540,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/lib/studyRecord/read.ts",
       "src/lib/studyRecord/reviewModel.ts",
       "src/lib/studyRecord/savePlan.ts",
+      "src/lib/studyRecord/sourceDiff.ts",
       "src/lib/studyRecord/validateDraft.ts",
     ]);
   });
@@ -577,7 +630,7 @@ describe("Study Record UI boundary — the real modules", () => {
     expect(read("src/lib/studyRecord/pendingCreates.ts")).not.toMatch(/newStudyRecordRequestId|randomUUID/);
   });
 
-  it("reads only the evidence tables and paper titles", () => {
+  it("reads only the evidence tables and papers", () => {
     const tables = new Set<string>();
     for (const file of scannedFiles) {
       const sourceFile = parse(file, read(file));
@@ -623,6 +676,66 @@ describe("Study Record UI boundary — the real modules", () => {
     for (const file of scannedFiles.filter((path) => path !== HISTORY_READ_FILE)) {
       expect(read(file).includes(`"${HISTORY_TABLE}"`), file).toBe(false);
     }
+  });
+
+  /** Every read of a table named `table`, with its filters and its projection. */
+  const readsOf = (table: string) => {
+    const reads: { file: string; eq: readonly string[]; in: readonly string[]; columns: string | undefined }[] = [];
+    for (const file of scannedFiles) {
+      const sourceFile = parse(file, read(file));
+      const constants = stringConstants(sourceFile);
+      const visit = (node: ts.Node) => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "from" && literalOf(node.arguments[0], constants) === table) {
+          const chain = chainOf(node);
+          reads.push({ file, eq: chain.eq, in: chain.in, columns: literalOf(chain.select, constants) });
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+    return reads;
+  };
+
+  it("reads a paper only for its title, and — in the read module, by user and id — one linked paper's abstract (C2C-A)", () => {
+    expect(readsOf("papers")).toEqual([
+      { file: "src/lib/studyRecord/paperLinks.ts", eq: ["user_id"], in: ["id"], columns: PAPER_TITLE_COLUMNS },
+      { file: READ_MODULE_FILE, eq: ["user_id"], in: ["id"], columns: PAPER_TITLE_COLUMNS },
+      { file: READ_MODULE_FILE, eq: ["user_id", "id"], in: [], columns: PAPER_ABSTRACT_COLUMNS },
+    ]);
+  });
+
+  it("reads saved-copy text in the read module only, by user and study — one copy by its paper and id as well (C2C-A)", () => {
+    const columns = "id, user_id, study_id, paper_id, seq, source_kind, exact_text, exact_sha256, normalized_sha256, normalization_version, char_count, captured_at";
+    expect(readsOf(SNAPSHOT_TABLE)).toEqual([
+      // Each link's current copy, by id, when the record is read.
+      { file: READ_MODULE_FILE, eq: ["user_id", "study_id"], in: ["id"], columns },
+      // One saved copy, when the user opens it.
+      { file: READ_MODULE_FILE, eq: ["user_id", "study_id", "paper_id", "id"], in: [], columns },
+    ]);
+  });
+
+  it("reads the library abstract and a saved copy through one hook each, under user-scoped study-record keys — never the shared abstract cache (C2C-A)", () => {
+    const calls = (name: string) =>
+      scannedFiles.flatMap((file) => {
+        const sourceFile = parse(file, read(file));
+        const found: string[] = [];
+        const visit = (node: ts.Node) => {
+          if (ts.isCallExpression(node)) {
+            const callee = node.expression;
+            const called = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.getText(sourceFile) : null;
+            if (called === name) found.push(file);
+          }
+          ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+        return found;
+      });
+    expect(calls("fetchLinkedPaperAbstract")).toEqual([READS_FILE]);
+    expect(calls("fetchSavedCopy")).toEqual([READS_FILE]);
+    expect(calls("queryKeys.studyRecords.libraryAbstract")).toEqual([READS_FILE]);
+    expect(calls("queryKeys.studyRecords.savedCopy")).toEqual([READS_FILE]);
+    expect(calls("queryKeys.papers.abstract")).toEqual([]);
+    expect(calls("useAbstract")).toEqual([START_FILE]);
   });
 
   it("names past operations only through identifier keys: the rebase and review RPC names stay unwritten in every History module (C2B)", () => {
@@ -725,6 +838,74 @@ describe("Study Record UI boundary — negative controls", () => {
     ["a forged version", `const shown = { study_version: 3 };`],
   ])("flags %s in the history read module (C2B)", (_label, source) => {
     expect(scanStudyRecordSource(HISTORY_READ_FILE, source).length).toBeGreaterThan(0);
+  });
+
+  const ABSTRACT_READ = `
+    const LIBRARY_ABSTRACT_COLUMNS = "id, user_id, abstract";
+    const response = await client.from("papers").select(LIBRARY_ABSTRACT_COLUMNS).eq("user_id", userId).eq("id", paperId).abortSignal(signal);
+  `;
+  const COPY_READ = `
+    const COLUMNS = "id, user_id, study_id, paper_id, seq, exact_text, char_count, captured_at";
+    const response = await client.from("evidence_source_snapshots").select(COLUMNS).eq("user_id", userId).eq("study_id", studyId).eq("paper_id", paperId).eq("id", id);
+  `;
+
+  it("lets the read module — and only it — read one linked paper's abstract and one saved copy's text, each scoped (C2C-A)", () => {
+    expect(scanStudyRecordSource(LIB, ABSTRACT_READ)).toEqual([]);
+    expect(scanStudyRecordSource(LIB, COPY_READ)).toEqual([]);
+    const rules = (file: string, source: string) => scanStudyRecordSource(file, source).map((violation) => violation.rule);
+    // A title is all the other read module may read of a paper; a component, a hook or a model reads none.
+    expect(rules("src/lib/studyRecord/paperLinks.ts", ABSTRACT_READ)).toContain(`papers abstract read outside ${READ_MODULE_FILE}`);
+    for (const file of [COMPONENT, "src/components/papers/study-record/SourceCompare.tsx", "src/components/papers/study-record/sourceCompareModel.ts", READS_FILE, "src/lib/studyRecord/sourceDiff.ts"]) {
+      expect(rules(file, ABSTRACT_READ), file).toContain(`papers read outside ${PAPER_READ_FILES.join(" and ")}`);
+      expect(rules(file, COPY_READ), file).toContain(`${SNAPSHOT_TABLE} read outside ${READ_MODULE_FILE}`);
+    }
+  });
+
+  it.each([
+    ["every column of a paper", `client.from("papers").select("*").eq("user_id", userId).eq("id", paperId);`],
+    ["a paper's abstract and more", `client.from("papers").select("id, user_id, abstract, notes").eq("user_id", userId).eq("id", paperId);`],
+    ["a paper's abstract alone, without its owner", `client.from("papers").select("abstract").eq("user_id", userId).eq("id", paperId);`],
+    ["a paper read without its user", `client.from("papers").select("id, user_id, abstract").eq("id", paperId);`],
+    ["every abstract in the library", `client.from("papers").select("id, user_id, abstract").eq("user_id", userId);`],
+    ["a paper projection built at run time", `client.from("papers").select(columns.join(",")).eq("user_id", userId).eq("id", paperId);`],
+    ["a copy read without its user", `client.from("evidence_source_snapshots").select("id, exact_text").eq("study_id", studyId).eq("id", id);`],
+    ["a copy read without its study", `client.from("evidence_source_snapshots").select("id, exact_text").eq("user_id", userId).eq("id", id);`],
+    ["every column of a copy", `client.from("evidence_source_snapshots").select("*").eq("user_id", userId).eq("study_id", studyId);`],
+    ["a copy projection built at run time", `client.from("evidence_source_snapshots").select(columns).eq("user_id", userId).eq("study_id", studyId);`],
+    ["any table read without its user", `client.from("evidence_field_values").select("id").eq("study_id", studyId);`],
+  ])("flags %s, even in the read module (C2C-A)", (_label, source) => {
+    expect(scanStudyRecordSource(LIB, source).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the shared abstract cache to the create flow (C2C-A)", () => {
+    const hook = `import { useAbstract } from "@/hooks/useAbstract";`;
+    expect(scanStudyRecordSource(START_FILE, hook)).toEqual([]);
+    for (const file of [COMPONENT, "src/components/papers/study-record/SourcePane.tsx", "src/components/papers/study-record/SourceCompare.tsx", "src/components/papers/study-record/EarlierCopy.tsx", READS_FILE]) {
+      expect(scanStudyRecordSource(file, hook).length, file).toBeGreaterThan(0);
+    }
+  });
+
+  it.each([
+    "src/components/papers/study-record/SourcePane.tsx",
+    "src/components/papers/study-record/SourceCompare.tsx",
+    "src/components/papers/study-record/EarlierCopy.tsx",
+    "src/components/papers/study-record/sourceCompareModel.ts",
+    "src/components/papers/study-record/sourceCompareCopy.ts",
+    "src/lib/studyRecord/sourceDiff.ts",
+    READS_FILE,
+    EDITOR_FILE,
+  ])("keeps the rebase out of %s: comparing never writes (C2C-A)", (file) => {
+    for (const source of [
+      `client.rebaseSource(request);`,
+      `studyRecordClient.rebaseSource(request);`,
+      `const request = prepareRebaseSource(input);`,
+      `const { rebaseSource } = client; rebaseSource(request);`,
+      `const fn = "evidence_rebase_source";`,
+      `const op = "rebase_source";`,
+      `client.rpc("evidence_rebase_source", args);`,
+    ]) {
+      expect(scanStudyRecordSource(file, source).length, `${file}: ${source}`).toBeGreaterThan(0);
+    }
   });
 
   it.each([

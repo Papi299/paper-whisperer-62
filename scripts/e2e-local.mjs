@@ -85,6 +85,11 @@ import {
   provisionStudyHistoryAccounts,
   removeStudyHistoryAccounts,
 } from "./e2e-local-history-fixture.mjs";
+import {
+  assertSourceCompareOutcomeAndRemove,
+  provisionSourceCompareAccounts,
+  removeSourceCompareAccounts,
+} from "./e2e-local-source-compare-fixture.mjs";
 import { resolveSpecSelection } from "./e2e-local-spec-selection.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -235,8 +240,9 @@ const DEFAULT_SPECS = [
   // preference persistence and UI only.
   "e2e/ai-model-settings.spec.ts",
   // The Evidence Records specs — EVIDENCE-RECORDS-001C1's `e2e/study-records.spec.ts`,
-  // 001C2A's `e2e/study-records-review.spec.ts` and 001C2B's
-  // `e2e/study-records-history.spec.ts` — are deliberately NOT in this set
+  // 001C2A's `e2e/study-records-review.spec.ts`, 001C2B's
+  // `e2e/study-records-history.spec.ts` and 001C2C-A's
+  // `e2e/study-records-source-compare.spec.ts` — are deliberately NOT in this set
   // (CI-E2E-EVIDENCE-LANE-001). The `e2e-evidence` job in
   // .github/workflows/e2e-local.yml runs them on their own runner and stack, so
   // the Evidence Records suite can grow without spending this lane's 30-minute
@@ -522,6 +528,8 @@ async function cmdRun(specArgs) {
   let reviewAccounts = null;
   // And for EVIDENCE-RECORDS-001C2B's study-history accounts.
   let historyAccounts = null;
+  // And for EVIDENCE-RECORDS-001C2C-A's source-comparison accounts.
+  let sourceAccounts = null;
   // Fixture rows are written and verified as the local database owner, never
   // through the secret key (C57): see openLocalOwnerSql.
   let ownerSql = null;
@@ -578,6 +586,14 @@ async function cmdRun(specArgs) {
       ? await provisionStudyHistoryAccounts({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
       : null;
 
+    // EVIDENCE-RECORDS-001C2C-A source-comparison accounts: the same pilot
+    // role, on accounts of their own, provisioned only when Playwright will
+    // run `study-records-source-compare.spec.ts`. Their copies are made by the
+    // installed RPCs and their library edits are the owner's own, never inserted.
+    sourceAccounts = selection.fixtures.has("study-records-source-compare")
+      ? await provisionSourceCompareAccounts({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
+      : null;
+
     // Explicit, in-memory backend contract for the guarded Playwright run.
     const childEnv = {
       ...process.env,
@@ -621,6 +637,14 @@ async function cmdRun(specArgs) {
             E2E_STUDY_HISTORY_OWNER_PASSWORD: historyAccounts.owner.password,
             E2E_STUDY_HISTORY_FORMER_EMAIL: historyAccounts.former.email,
             E2E_STUDY_HISTORY_FORMER_PASSWORD: historyAccounts.former.password,
+          }
+        : {}),
+      ...(sourceAccounts
+        ? {
+            E2E_STUDY_SOURCE_OWNER_EMAIL: sourceAccounts.owner.email,
+            E2E_STUDY_SOURCE_OWNER_PASSWORD: sourceAccounts.owner.password,
+            E2E_STUDY_SOURCE_FORMER_EMAIL: sourceAccounts.former.email,
+            E2E_STUDY_SOURCE_FORMER_PASSWORD: sourceAccounts.former.password,
           }
         : {}),
     };
@@ -688,12 +712,22 @@ async function cmdRun(specArgs) {
       historyAccounts = null; // proven, removed, and the removal verified
       log("study-records-history E2E verified: every operation recorded once, in order, with its own events; the viewer wrote nothing; fixture accounts removed.");
     }
+
+    // What only the database can see of the comparison: both users' study
+    // records exactly as provisioned — no copy, quote, value, review, version
+    // or event written — and the library as provisioned but for the spec's own
+    // edit. Then both accounts are removed, and their removal is verified.
+    if (sourceAccounts) {
+      await assertSourceCompareOutcomeAndRemove({ apiUrl, serviceRoleKey, ownerSql, accounts: sourceAccounts, log });
+      sourceAccounts = null; // proven, removed, and the removal verified
+      log("study-records-source-compare E2E verified: comparing wrote nothing; fixture accounts removed.");
+    }
   } catch (err) {
     primaryError = err;
     // A failed run may have left the disposable account behind. Remove it
     // best-effort so a debugging session with E2E_KEEP_LOCAL_STACK=1 does not
     // accumulate residue; the deterministic fixtures are never touched.
-    if (disposable || modelAccount || studyAccounts || reviewAccounts || historyAccounts) {
+    if (disposable || modelAccount || studyAccounts || reviewAccounts || historyAccounts || sourceAccounts) {
       const target = await readLocalStatus().catch(() => null);
       if (target && disposable) {
         await cleanupDisposableAccount({
@@ -738,6 +772,16 @@ async function cmdRun(specArgs) {
           accounts: historyAccounts,
           log,
         }).catch((cleanupErr) => fail(`study-history fixture cleanup: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`));
+      }
+      if (target && sourceAccounts && ownerSql) {
+        // Verified removal, as for the history accounts: a survivor is reported, and the first error is kept.
+        await removeSourceCompareAccounts({
+          apiUrl: target.apiUrl,
+          serviceRoleKey: target.serviceRoleKey,
+          ownerSql,
+          accounts: sourceAccounts,
+          log,
+        }).catch((cleanupErr) => fail(`source-compare fixture cleanup: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`));
       }
     }
   }
@@ -860,7 +904,8 @@ async function cmdVerifyGuards() {
     [["e2e/study-records.spec.ts"], ["study-records"]],
     [["e2e/study-records-review.spec.ts"], ["study-records-review"]],
     [["e2e/study-records-history.spec.ts"], ["study-records-history"]],
-    [["E2E/STUDY-RECORDS"], ["study-records", "study-records-history", "study-records-review"]],
+    [["e2e/study-records-source-compare.spec.ts"], ["study-records-source-compare"]],
+    [["E2E/STUDY-RECORDS"], ["study-records", "study-records-history", "study-records-review", "study-records-source-compare"]],
     [["e2e/auth.spec.ts"], []],
   ];
   for (const [specArgs, expected] of selections) {

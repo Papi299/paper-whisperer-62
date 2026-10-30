@@ -1,19 +1,30 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useCurrentUserAccess } from "@/hooks/useCurrentUserAccess";
-import { toStudyId } from "@/lib/evidence/ids";
+import { toPaperId, toStudyId } from "@/lib/evidence/ids";
+import type { SourceSnapshot } from "@/lib/evidence/types";
 import { queryKeys } from "@/lib/queryKeys";
 import { studyRecordWriteAccess, type StudyRecordWriteAccess } from "@/lib/studyRecord/access";
 import { fetchPaperStudies, fetchPaperStudyLinks, fetchPaperTitles, type PaperStudySummary } from "@/lib/studyRecord/paperLinks";
-import { fetchStudyRecord, StudyRecordReadError, type StudyRecordData } from "@/lib/studyRecord/read";
+import {
+  fetchLinkedPaperAbstract,
+  fetchSavedCopy,
+  fetchStudyRecord,
+  StudyRecordReadError,
+  type LibraryAbstract,
+  type SnapshotInfo,
+  type StudyRecordData,
+} from "@/lib/studyRecord/read";
 
 /**
  * Study-record reads (EVIDENCE-RECORDS-001C1). Owner-scoped SELECTs only —
  * see `src/lib/studyRecord/read.ts` and `paperLinks.ts`. Every key is
  * user-scoped and nothing is read until a surface asks for it: the studies of
  * one paper when its details are expanded or Edit Paper is open, one record
- * when the Study Record dialog shows it, and the links of a selection when a
- * delete or a merge is about to happen.
+ * when the Study Record dialog shows it, the links of a selection when a
+ * delete or a merge is about to happen, and — for the Source pane's comparison
+ * (EVIDENCE-RECORDS-001C2C-A) — the library abstract of the one link it shows
+ * and the text of a saved copy the user opens.
  */
 
 /** One automatic retry, only for a failure that could be transient. Shared with the History reads. */
@@ -63,6 +74,52 @@ export function useStudyRecordData(userId: string | null | undefined, studyId: s
     queryKey: queryKeys.studyRecords.study(userId ?? "anonymous", id ?? "none"),
     queryFn: ({ signal }) => fetchStudyRecord(supabase, userId!, id!, signal),
     enabled: !!userId && !!id,
+    staleTime: "static",
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: retryTransient,
+  });
+}
+
+/**
+ * The abstract in the library now, of the one paper whose saved copy the
+ * Source pane shows (EVIDENCE-RECORDS-001C2C-A) — read only while `enabled`,
+ * that is while the pane is on screen. Never kept: not as fresh
+ * (`staleTime: 0`), so showing the pane again, Compare and Check again each
+ * read the library as it is now; and not once nothing shows it (`gcTime: 0`),
+ * so no opening, link or account ever sees another's answer. Not on focus or
+ * reconnect: the comparison changes when the user asks. Resolves to null when
+ * the paper can't be read. Informational only — nothing is written because of
+ * it, and the text can change again the moment after it is read.
+ */
+export function useLinkedPaperAbstract(userId: string | null | undefined, paperId: string | null | undefined, enabled: boolean) {
+  const id = toPaperId(paperId);
+  return useQuery<LibraryAbstract | null, Error>({
+    queryKey: queryKeys.studyRecords.libraryAbstract(userId ?? "anonymous", id ?? "none"),
+    queryFn: ({ signal }) => fetchLinkedPaperAbstract(supabase, userId!, id!, signal),
+    enabled: enabled && !!userId && !!id,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: retryTransient,
+  });
+}
+
+/**
+ * The text of one saved copy, read when the user opens it
+ * (EVIDENCE-RECORDS-001C2C-A): one copy at a time, never the link's twenty.
+ * A copy never changes, so it is never refetched while shown
+ * (`staleTime: "static"`), and it is not kept once it is closed (`gcTime: 0`).
+ * Resolves to null when the copy no longer exists.
+ */
+export function useSavedCopy(userId: string | null | undefined, studyId: string | null | undefined, copy: SnapshotInfo | null) {
+  const id = toStudyId(studyId);
+  return useQuery<SourceSnapshot | null, Error>({
+    queryKey: queryKeys.studyRecords.savedCopy(userId ?? "anonymous", id ?? "none", copy?.id ?? "none"),
+    queryFn: ({ signal }) => fetchSavedCopy(supabase, userId!, id!, copy!, signal),
+    enabled: !!userId && !!id && !!copy,
     staleTime: "static",
     gcTime: 0,
     refetchOnWindowFocus: false,

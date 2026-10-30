@@ -1,16 +1,22 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { useLinkedPaperAbstract } from "@/hooks/useStudyRecords";
 import type { FieldKey } from "@/lib/evidence/fieldDictionary";
+import type { SnapshotId } from "@/lib/evidence/ids";
 import { locateQuote, type QuoteOccurrence } from "@/lib/evidence/matcher";
 import { normalizeEvidenceV1WithMap } from "@/lib/evidence/normalization";
 import { parseValueKey, setValueEdit, viewValue } from "@/lib/studyRecord/draft";
 import { addQuoteToEdit, quoteChoiceFromSelection } from "@/lib/studyRecord/quotes";
 import { reviewCopyFocus, type ReviewItem } from "@/lib/studyRecord/reviewModel";
-import { useEditor } from "./editorContext";
+import { EarlierCopy, SavedCopiesList } from "./EarlierCopy";
+import { focusOpenedSourceView, useEditor, type SourceView } from "./editorContext";
 import { formatRecordDate, REVIEW_COPY, reviewItemLabel } from "./reviewCopy";
 import { SavedCopyText } from "./SavedCopyText";
+import { SourceCompare, SourceStatusBanner } from "./SourceCompare";
+import { SOURCE_COMPARE_COPY } from "./sourceCompareCopy";
+import { libraryStatus } from "./sourceCompareModel";
 import { quoteFieldGroups, savedQuoteRanges, storedQuoteRange, type TextRange } from "./sourcePaneModel";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
 
@@ -28,6 +34,11 @@ const SELECT_CLASS =
  */
 export type SourceDisplay = { readonly mode: "edit" } | { readonly mode: "review"; readonly item: ReviewItem | null };
 
+/** A selection in the shown copy, as UTF-16 indices of that copy's text — and the copy and view it was made in. */
+interface CopySelection extends Range {
+  readonly source: string;
+}
+
 /**
  * The Source pane (Requirements-001 §E3–§E4): the study's IMMUTABLE saved copy
  * of the abstract — never the live library abstract — as plain text nodes,
@@ -42,21 +53,76 @@ export type SourceDisplay = { readonly mode: "edit" } | { readonly mode: "review
  * is saved. In Review (`display`), the pane shows the saved quotes of one
  * value and says what it cannot show — an earlier copy is never stood in for
  * by the current one.
+ *
+ * EVIDENCE-RECORDS-001C2C-A adds three read-only things. A banner says how the
+ * saved copy relates to the abstract in the library now, read for this link
+ * while the pane is on screen (`active`). In Edit, Compare shows the two —
+ * their changes, or either in full. And any saved copy of the link can be
+ * opened, one at a time, with its own quotes marked. None of them writes, and
+ * "Use as quote" works on the current copy alone: a selection belongs to the
+ * copy and the view it was made in, and is dropped when either changes (G2).
  */
-export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { readonly onQuoteAdded: (key: string) => void; readonly display?: SourceDisplay }) {
+export function SourcePane({
+  onQuoteAdded,
+  display = { mode: "edit" },
+  active = true,
+}: {
+  readonly onQuoteAdded: (key: string) => void;
+  readonly display?: SourceDisplay;
+  /** Whether the pane is on screen: the library abstract is read only then. */
+  readonly active?: boolean;
+}) {
   const editor = useEditor();
   const ids = useId();
   const link = editor.sourceLink;
   const copy = link?.currentCopy ?? null;
   const reviewing = display.mode === "review";
-  const quoting = editor.canEdit && !reviewing;
+  const view = shownView(editor.sourceView, link, reviewing);
+  const quoting = editor.canEdit && !reviewing && view.kind === "current";
+  const rootRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
-  const [selection, setSelection] = useState<Range | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const [selection, setSelection] = useState<CopySelection | null>(null);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
   const [pending, setPending] = useState<{ readonly quoteText: string; readonly occurrences: readonly QuoteOccurrence[] } | null>(null);
   const [chosen, setChosen] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
+
+  // G2: a selection, a choice between occurrences and its message belong to one copy, shown in one view.
+  // Another paper, another copy of it, or another view — and they are dropped before anything renders.
+  const source = copy && view.kind === "current" ? `${copy.paperId}/${copy.id}` : null;
+  const [selectionSource, setSelectionSource] = useState(source);
+  if (selectionSource !== source) {
+    setSelectionSource(source);
+    setSelection(null);
+    setPending(null);
+    setChosen(null);
+    setMessage(null);
+  }
+  // And the browser's own selection, if it is still in the pane: it marked text that is no longer there.
+  useLayoutEffect(() => {
+    const current = window.getSelection();
+    if (current && current.rangeCount > 0 && rootRef.current?.contains(current.anchorNode)) current.removeAllRanges();
+  }, [source]);
+
+  const library = useLinkedPaperAbstract(editor.userId, link?.link.paperId ?? null, active && link !== null);
+  const copyText = copy?.exactText ?? null;
+  const status = useMemo(
+    () => libraryStatus({ isFetching: library.isFetching, isError: library.isError, error: library.error, data: library.data }, copyText),
+    [library.isFetching, library.isError, library.error, library.data, copyText],
+  );
+  const checkAgain = useCallback(() => void library.refetch(), [library]);
+  /** Open a view the user asked for: it takes focus, and Compare reads the library afresh (saying so while it does). */
+  const showView = (next: SourceView) => {
+    editor.setSourceView(next);
+    if (next.kind === "compare") void library.refetch();
+    focusOpenedSourceView(() => rootRef.current);
+  };
+  const backToCurrent = () => {
+    editor.setSourceView({ kind: "current" });
+    requestAnimationFrame(() => headingRef.current?.focus());
+  };
 
   const groups = useMemo(() => quoteFieldGroups(editor.draft), [editor.draft]);
   const allKeys = useMemo(() => new Set(groups.flatMap((group) => group.options.map((option) => option.key))), [groups]);
@@ -94,9 +160,9 @@ export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { reado
     return ranges;
   }, [copy, map, reviewing, reviewItem, editor.baseValues, editor.draft]);
 
-  /** The selection, as UTF-16 indices of the copy, when it lies inside the copy's text. Ignored in Review. */
+  /** The selection, as UTF-16 indices of the copy, when it lies inside the copy's text. Ignored in Review, and in every view but the current copy. */
   const captureSelection = useCallback(() => {
-    if (reviewing) return;
+    if (reviewing || source === null) return;
     const container = textRef.current;
     const current = window.getSelection();
     if (!container || !current || current.rangeCount === 0 || current.isCollapsed) return;
@@ -108,12 +174,12 @@ export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { reado
     const start = before.toString().length;
     const end = start + range.toString().length;
     if (end > start) {
-      setSelection({ start, end });
+      setSelection({ source, start, end });
       setPending(null);
       setChosen(null);
       setMessage(null);
     }
-  }, [reviewing]);
+  }, [reviewing, source]);
 
   useEffect(() => {
     const onChange = () => captureSelection();
@@ -122,7 +188,8 @@ export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { reado
   }, [captureSelection]);
 
   const applySelectionAsQuote = () => {
-    if (!quoting || !copy || !selection || !targetKey) return;
+    // The selection's own copy, or nothing: offsets from one copy never cut another (G2).
+    if (!quoting || !copy || !selection || selection.source !== source || !targetKey) return;
     const choice = pending
       ? chosen !== null
         ? { kind: "ready" as const, quoteText: pending.quoteText, occurrence: chosen, count: pending.occurrences.length }
@@ -173,10 +240,20 @@ export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { reado
   const preview = Array.from(selectedText).length > 160 ? `${Array.from(selectedText).slice(0, 160).join("")}…` : selectedText;
   const copyInfo = copy && link ? link.snapshots.find((snapshot) => snapshot.id === copy.id) ?? null : null;
 
+  const earlier = view.kind === "copy" && link ? link.snapshots.find((snapshot) => snapshot.id === view.snapshotId) ?? null : null;
+  const earlierValues = useMemo(() => (reviewItem ? [reviewItem.value] : editor.base.values), [reviewItem, editor.base.values]);
+
   return (
-    <div className="flex min-h-full flex-col" data-testid="study-record-source-pane" data-source-mode={display.mode}>
+    <div ref={rootRef} className="flex min-h-full flex-col" data-testid="study-record-source-pane" data-source-mode={display.mode} data-source-view={view.kind}>
       <div className="flex-1 space-y-3 px-4 py-4 sm:px-6">
-        {reviewing && <ReviewSourceFocus item={reviewItem} paperId={link?.link.paperId ?? null} />}
+        {reviewing && (
+          <ReviewSourceFocus
+            item={reviewItem}
+            paperId={link?.link.paperId ?? null}
+            shownCopyId={earlier?.id ?? null}
+            onShowCopy={(snapshotId) => showView({ kind: "copy", snapshotId })}
+          />
+        )}
         {editor.links.length > 1 && (
           <div className="space-y-1">
             <Label htmlFor={`${ids}-paper`} className="text-xs">
@@ -191,27 +268,48 @@ export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { reado
             </select>
           </div>
         )}
-        <h3 className="text-sm font-semibold">{STUDY_RECORD_COPY.savedCopyHeading}</h3>
-        {copy ? (
-          <>
-            <p className="text-xs text-muted-foreground">
-              {reviewing && copyInfo && link
-                ? REVIEW_COPY.sourceCopy(copyInfo.seq, link.snapshots.length, formatRecordDate(copy.capturedAt))
-                : STUDY_RECORD_COPY.savedCopyDate(formatRecordDate(copy.capturedAt))}
-            </p>
-            <SavedCopyText
-              ref={textRef}
-              data-testid="study-record-saved-abstract"
-              text={copy.exactText}
-              ranges={highlights}
-              onMouseUp={captureSelection}
-              onKeyUp={captureSelection}
-              onTouchEnd={captureSelection}
-            />
-            {quoting && !selection && <p className="text-xs text-muted-foreground">{STUDY_RECORD_COPY.selectionPrompt}</p>}
-          </>
+        {view.kind === "compare" && link ? (
+          <SourceCompare link={link} copy={copy} status={status} onCheckAgain={checkAgain} onBack={backToCurrent} />
+        ) : earlier && link ? (
+          <EarlierCopy link={link} info={earlier} values={earlierValues} reviewing={reviewing} onBack={backToCurrent} backLabel={SOURCE_COMPARE_COPY.backToCurrent} />
         ) : (
-          <p className="text-sm">{STUDY_RECORD_COPY.noSavedCopy}</p>
+          <>
+            <h3 ref={headingRef} tabIndex={-1} className="text-sm font-semibold focus:outline-none">
+              {STUDY_RECORD_COPY.savedCopyHeading}
+            </h3>
+            {link && (
+              <SourceStatusBanner
+                link={link}
+                copy={copy}
+                status={status}
+                // Review shows where the record stands; comparing is Edit's.
+                onCompare={reviewing ? null : () => showView({ kind: "compare" })}
+                onCheckAgain={checkAgain}
+              />
+            )}
+            {copy ? (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  {reviewing && copyInfo && link
+                    ? REVIEW_COPY.sourceCopy(copyInfo.seq, link.snapshots.length, formatRecordDate(copy.capturedAt))
+                    : STUDY_RECORD_COPY.savedCopyDate(formatRecordDate(copy.capturedAt))}
+                </p>
+                <SavedCopyText
+                  ref={textRef}
+                  data-testid="study-record-saved-abstract"
+                  text={copy.exactText}
+                  ranges={highlights}
+                  onMouseUp={captureSelection}
+                  onKeyUp={captureSelection}
+                  onTouchEnd={captureSelection}
+                />
+                {quoting && !selection && <p className="text-xs text-muted-foreground">{STUDY_RECORD_COPY.selectionPrompt}</p>}
+              </>
+            ) : (
+              <p className="text-sm">{STUDY_RECORD_COPY.noSavedCopy}</p>
+            )}
+            {link && <SavedCopiesList link={link} onShowCopy={(snapshotId: SnapshotId) => showView({ kind: "copy", snapshotId })} />}
+          </>
         )}
         <p className="text-xs text-muted-foreground">{STUDY_RECORD_COPY.fullTextNotice}</p>
         <p role="status" className="sr-only">
@@ -289,8 +387,29 @@ export function SourcePane({ onQuoteAdded, display = { mode: "edit" } }: { reado
   );
 }
 
-/** Review: which field's source this is, and what of it the copy shown can and cannot show. */
-function ReviewSourceFocus({ item, paperId }: { readonly item: ReviewItem | null; readonly paperId: string | null }) {
+/**
+ * What the Source pane shows of the link (C2C-A): Compare only in Edit, and an
+ * earlier copy only while it is still one of the link's copies — otherwise the
+ * current copy.
+ */
+function shownView(view: SourceView, link: { readonly snapshots: readonly { readonly id: string }[]; readonly currentCopy: { readonly id: string } | null } | null, reviewing: boolean): SourceView {
+  if (view.kind === "compare") return reviewing || !link ? { kind: "current" } : view;
+  if (view.kind === "copy") return link && link.currentCopy?.id !== view.snapshotId && link.snapshots.some((snapshot) => snapshot.id === view.snapshotId) ? view : { kind: "current" };
+  return view;
+}
+
+/** Review: which field's source this is, and what of it the copy shown can and cannot show. Its earlier copies open here (C2C-A). */
+function ReviewSourceFocus({
+  item,
+  paperId,
+  shownCopyId,
+  onShowCopy,
+}: {
+  readonly item: ReviewItem | null;
+  readonly paperId: string | null;
+  readonly shownCopyId: string | null;
+  readonly onShowCopy: (snapshotId: SnapshotId) => void;
+}) {
   if (!item) {
     return (
       <p className="rounded-md border p-3 text-sm" data-testid="review-source-focus">
@@ -307,9 +426,14 @@ function ReviewSourceFocus({ item, paperId }: { readonly item: ReviewItem | null
       {focus?.examinedCurrent && <p className="text-xs">{REVIEW_COPY.sourceExamined}</p>}
       {focus?.unavailable && <p className="text-xs">{REVIEW_COPY.sourceUnavailable}</p>}
       {focus?.earlierCopies.map((snapshot) => (
-        <p key={snapshot.id} className="text-xs" data-testid="review-source-earlier-copy">
-          {REVIEW_COPY.sourceEarlierCopy(snapshot.seq, formatRecordDate(snapshot.capturedAt))}
-        </p>
+        <div key={snapshot.id} className="space-y-1" data-testid="review-source-earlier-copy">
+          <p className="text-xs">{REVIEW_COPY.sourceEarlierCopy(snapshot.seq, formatRecordDate(snapshot.capturedAt))}</p>
+          {shownCopyId !== snapshot.id && (
+            <Button type="button" variant="outline" size="sm" className="coarse:min-h-10" onClick={() => onShowCopy(snapshot.id)}>
+              {SOURCE_COMPARE_COPY.showCopy(snapshot.seq)}
+            </Button>
+          )}
+        </div>
       ))}
     </div>
   );

@@ -18,7 +18,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useStudyRecordData } from "@/hooks/useStudyRecords";
 import { useStudyRecordEditor } from "@/hooks/useStudyRecordEditor";
 import { DESIGN_PROFILE_LABELS, EVIDENCE_FIELDS } from "@/lib/evidence/fieldDictionary";
-import { toStudyId, type StudyId } from "@/lib/evidence/ids";
+import { toStudyId, type PaperId, type SnapshotId, type StudyId } from "@/lib/evidence/ids";
 import { IDENTITY_CAVEAT, LINK_STATUS_LABELS } from "@/lib/evidence/identity";
 import { NOT_REPORTED_EXPLANATION } from "@/lib/evidence/states";
 import { parseTargetKey, parseValueKey, setValueEdit, viewValue } from "@/lib/studyRecord/draft";
@@ -27,12 +27,14 @@ import type { ReviewItem } from "@/lib/studyRecord/reviewModel";
 import { hasErrors, type IssueTarget } from "@/lib/studyRecord/validateDraft";
 import {
   EditorContext,
+  focusOpenedSourceView,
   issueTargetKey,
   useEditor,
   type ConfirmRequest,
   type EditorContextValue,
   type EditorMode,
   type RevealRequest,
+  type SourceView,
 } from "./editorContext";
 import { HISTORY_COPY } from "./historyCopy";
 import { HistoryPane } from "./HistoryPane";
@@ -174,6 +176,8 @@ function EditorWorkspace({
   const [revealRequest, setRevealRequest] = useState<RevealRequest | null>(null);
   // The Review card whose source the Source pane shows (desktop).
   const [selectedReviewKey, setSelectedReviewKey] = useState<string | null>(null);
+  // What the Source pane shows of the link (C2C-A): its current copy, the comparison, or one saved copy.
+  const [sourceView, setSourceView] = useState<SourceView>({ kind: "current" });
   const containerRef = useRef<HTMLDivElement>(null);
   const alertRef = useRef<HTMLDivElement>(null);
   const localIdRef = useRef(0);
@@ -198,12 +202,36 @@ function EditorWorkspace({
     editor.reviewItems.find((item) => item.key === selectedReviewKey) ?? editor.reviewItems.find((item) => item.needsReview) ?? editor.reviewItems[0] ?? null;
   const sourceDisplay: SourceDisplay = mode === "review" ? { mode: "review", item: reviewItem } : { mode: "edit" };
 
+  const shownReviewKey = reviewItem?.key ?? null;
   const focusReviewItem = useCallback(
     (item: ReviewItem) => {
+      // Another card: the pane goes back to the current copy, where that card's source is.
+      if (item.key !== shownReviewKey) setSourceView({ kind: "current" });
       setSelectedReviewKey(item.key);
-      if (item.abstractPaperIds.length > 0 && !item.abstractPaperIds.some((id) => id === sourcePaperId)) setSourcePaperId(item.abstractPaperIds[0]);
+      if (item.abstractPaperIds.length > 0 && !item.abstractPaperIds.some((id) => id === sourcePaperId)) {
+        setSourcePaperId(item.abstractPaperIds[0]);
+        setSourceView({ kind: "current" });
+      }
     },
-    [sourcePaperId],
+    [shownReviewKey, sourcePaperId],
+  );
+
+  // Another paper's copy: whatever was open of the last one — a comparison, an earlier copy — closes.
+  const chooseSourcePaper = useCallback((nextPaperId: string) => {
+    setSourcePaperId(nextPaperId);
+    setSourceView({ kind: "current" });
+  }, []);
+
+  const showSavedCopy = useCallback(
+    (copyPaperId: PaperId, snapshotId: SnapshotId) => {
+      const link = base.links.find((candidate) => candidate.link.paperId === copyPaperId);
+      if (!link || !link.snapshots.some((snapshot) => snapshot.id === snapshotId)) return;
+      setSourcePaperId(copyPaperId);
+      setSourceView(link.currentCopy?.id === snapshotId ? { kind: "current" } : { kind: "copy", snapshotId });
+      if (isMobile) setTab("source");
+      focusOpenedSourceView(() => containerRef.current?.querySelector<HTMLElement>("[data-testid='study-record-source-pane']"));
+    },
+    [base.links, isMobile],
   );
 
   const updateValue = useCallback<EditorContextValue["updateValue"]>(
@@ -247,6 +275,7 @@ function EditorWorkspace({
 
   const context = useMemo<EditorContextValue>(
     () => ({
+      userId,
       base,
       baseValues,
       draft,
@@ -257,7 +286,10 @@ function EditorWorkspace({
       updateValue,
       links: base.links,
       sourceLink,
-      setSourcePaperId,
+      setSourcePaperId: chooseSourcePaper,
+      sourceView,
+      setSourceView,
+      showSavedCopy,
       lastFocusedKey,
       setLastFocusedKey,
       focusTarget,
@@ -268,7 +300,27 @@ function EditorWorkspace({
       describeField,
       isMobile,
     }),
-    [base, baseValues, draft, issues, canEdit, refusal, update, updateValue, sourceLink, lastFocusedKey, focusTarget, revealRequest, mode, describeField, isMobile],
+    [
+      userId,
+      base,
+      baseValues,
+      draft,
+      issues,
+      canEdit,
+      refusal,
+      update,
+      updateValue,
+      sourceLink,
+      chooseSourcePaper,
+      sourceView,
+      showSavedCopy,
+      lastFocusedKey,
+      focusTarget,
+      revealRequest,
+      mode,
+      describeField,
+      isMobile,
+    ],
   );
 
   const errorCount = issues.filter((issue) => issue.severity === "error").length;
@@ -338,7 +390,8 @@ function EditorWorkspace({
                   <RecordPane />
                 </TabsContent>
                 <TabsContent value="source" forceMount className="relative mt-0 min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
-                  <SourcePane onQuoteAdded={(key) => focusTarget({ kind: "value", key })} />
+                  {/* The library abstract is read only while this tab is on screen (C2C-A). */}
+                  <SourcePane onQuoteAdded={(key) => focusTarget({ kind: "value", key })} active={mode === "edit" && tab === "source"} />
                 </TabsContent>
               </Tabs>
             </TabsContent>
@@ -357,7 +410,7 @@ function EditorWorkspace({
               aria-label={STUDY_RECORD_COPY.sourcePane}
               className={`relative min-h-0 overflow-y-auto overscroll-contain border-r${mode === "history" ? " hidden" : ""}`}
             >
-              <SourcePane onQuoteAdded={() => undefined} display={sourceDisplay} />
+              <SourcePane onQuoteAdded={() => undefined} display={sourceDisplay} active={mode !== "history"} />
             </section>
             <TabsContent value="edit" forceMount className="relative mt-0 min-h-0 overflow-y-auto overscroll-contain focus-visible:ring-inset data-[state=inactive]:hidden">
               <section aria-label={STUDY_RECORD_COPY.recordPane}>

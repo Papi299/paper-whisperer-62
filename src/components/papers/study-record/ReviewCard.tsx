@@ -10,9 +10,12 @@ import type { RecordedValue } from "@/lib/evidence/types";
 import type { LinkSources } from "@/lib/evidence/validation";
 import type { StudyRecordLink } from "@/lib/studyRecord/read";
 import { reviewCopyFocus, type ReviewItem, type ReviewSource } from "@/lib/studyRecord/reviewModel";
+import { EarlierCopy } from "./EarlierCopy";
+import { focusOpenedSourceView } from "./editorContext";
 import { FlagForm } from "./FlagForm";
 import { formatRecordDate, REVIEW_COPY, REVIEW_HOLD_MESSAGES, reviewErrorText, reviewItemLabel } from "./reviewCopy";
 import { SavedCopyText } from "./SavedCopyText";
+import { SOURCE_COMPARE_COPY } from "./sourceCompareCopy";
 import { savedQuoteRanges } from "./sourcePaneModel";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
 
@@ -399,6 +402,9 @@ function InlineSavedCopy({ item, links }: { readonly item: ReviewItem; readonly 
 
 function InlineCopy({ item, link }: { readonly item: ReviewItem; readonly link: StudyRecordLink }) {
   const copy = link.currentCopy;
+  // One earlier copy at a time, in the card (C2C-A): on a phone the Source pane isn't beside it.
+  const [openCopy, setOpenCopy] = useState<string | null>(null);
+  const copiesRef = useRef<HTMLDivElement>(null);
   const map = useMemo(() => (copy ? normalizeEvidenceV1WithMap(copy.exactText) : null), [copy]);
   const ranges = useMemo(() => (copy && map ? savedQuoteRanges(item.value, copy.id, map) : []), [copy, map, item.value]);
   const focus = reviewCopyFocus(item, link.link.paperId);
@@ -410,9 +416,26 @@ function InlineCopy({ item, link }: { readonly item: ReviewItem; readonly link: 
       {focus.examinedCurrent && <p className="text-xs">{REVIEW_COPY.sourceExamined}</p>}
       {focus.currentQuotes > 0 && <p className="text-xs">{REVIEW_COPY.sourceHighlighted(focus.currentQuotes)}</p>}
       {focus.earlierCopies.map((snapshot) => (
-        <p key={snapshot.id} className="text-xs">
-          {REVIEW_COPY.sourceEarlierCopy(snapshot.seq, formatRecordDate(snapshot.capturedAt))}
-        </p>
+        <div key={snapshot.id} className="space-y-1" ref={openCopy === snapshot.id ? copiesRef : undefined}>
+          <p className="text-xs">{REVIEW_COPY.sourceEarlierCopy(snapshot.seq, formatRecordDate(snapshot.capturedAt))}</p>
+          {openCopy === snapshot.id ? (
+            <EarlierCopy link={link} info={snapshot} values={[item.value]} reviewing onBack={() => setOpenCopy(null)} backLabel={SOURCE_COMPARE_COPY.hideCopy(snapshot.seq)} />
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="coarse:min-h-10"
+              onClick={() => {
+                setOpenCopy(snapshot.id);
+                focusOpenedSourceView(() => copiesRef.current);
+              }}
+              data-testid="review-show-earlier-copy"
+            >
+              {SOURCE_COMPARE_COPY.showCopy(snapshot.seq)}
+            </Button>
+          )}
+        </div>
       ))}
       {copy ? (
         <>

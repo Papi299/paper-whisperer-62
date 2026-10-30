@@ -86,6 +86,16 @@ export const queryKeys = {
      */
     historyOperation: (userId: string, studyId: string, studyVersion: number) =>
       ["studyRecords", userId, "historyOperation", studyId, studyVersion] as const,
+    /**
+     * The library abstract of one paper a record links to, as the Source pane
+     * compares it with the record's saved copy (EVIDENCE-RECORDS-001C2C-A).
+     * Its own user-scoped key, never `papers.abstract`: that one is shared by
+     * every account and kept warm by other screens, and this comparison must
+     * read the library as it is now, for this user.
+     */
+    libraryAbstract: (userId: string, paperId: string) => ["studyRecords", userId, "libraryAbstract", paperId] as const,
+    /** The text of one saved copy of an abstract, read when the user asks to see it (EVIDENCE-RECORDS-001C2C-A). */
+    savedCopy: (userId: string, studyId: string, snapshotId: string) => ["studyRecords", userId, "savedCopy", studyId, snapshotId] as const,
   },
   projects: {
     all: (userId: string) => ["projects", userId] as const,

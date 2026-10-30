@@ -367,9 +367,10 @@ describe("saved evidence, never the draft", () => {
     chooseMode("Review");
     const condition = card("study|condition");
     fireEvent.focus(within(condition).getByRole("heading", { name: "Condition or health status" }));
-    expect(within(condition).getByTestId("review-source")).toHaveTextContent("an earlier copy, not shown here — copy 1 of 2, saved Oct 1, 2026");
-    expect(within(condition).getByTestId("review-source")).toHaveTextContent("This quote is in an earlier copy of the abstract, which this view doesn't show.");
+    expect(within(condition).getByTestId("review-source")).toHaveTextContent("an earlier copy — copy 1 of 2, saved Oct 1, 2026");
+    expect(within(condition).getByTestId("review-source")).toHaveTextContent("This quote is in an earlier copy of the abstract. Show that copy to see it in place.");
     expect(screen.getByTestId("review-source-earlier-copy")).toHaveTextContent("copy 1, saved Oct 1, 2026");
+    // The Source pane can open that copy (C2C-A); the current one still highlights nothing for it.
     expect(highlighted()).toEqual([]);
     const confirm = within(condition).getByRole("button", { name: "Confirm against this source" });
     expect(description(confirm)).toBe(
