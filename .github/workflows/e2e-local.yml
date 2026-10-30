@@ -233,13 +233,13 @@ jobs:
         # set. It asks Playwright which files the list will run and provisions,
         # for each Evidence Records spec among them, that spec's own disposable
         # accounts (scripts/e2e-local-spec-selection.mjs) — the C1 study-record
-        # spec, the C2A review spec, the C2B history spec and the C2C-A
-        # source-comparison spec share nothing —
+        # spec, the C2A review spec, the C2B history spec, the C2C-A
+        # source-comparison spec and the C2C-B rebase spec share nothing —
         # then proves each one's outcome as the local database owner after
         # Playwright, and removes them. An Evidence Records spec without a
         # fixture of its own fails closed. Further Evidence Records specs join
         # this list and that registry, not `DEFAULT_SPECS`.
-        run: npm run test:e2e:local -- e2e/study-records.spec.ts e2e/study-records-review.spec.ts e2e/study-records-history.spec.ts e2e/study-records-source-compare.spec.ts
+        run: npm run test:e2e:local -- e2e/study-records.spec.ts e2e/study-records-review.spec.ts e2e/study-records-history.spec.ts e2e/study-records-source-compare.spec.ts e2e/study-records-rebase.spec.ts
 
       - name: Enforce local stack teardown
         # As in `e2e-local`: runs even on failure/cancellation, with no

@@ -38,6 +38,7 @@ describe("the fixture registry", () => {
       "study-records-review.spec.ts": "study-records-review",
       "study-records-history.spec.ts": "study-records-history",
       "study-records-source-compare.spec.ts": "study-records-source-compare",
+      "study-records-rebase.spec.ts": "study-records-rebase",
     });
     expect(Object.isFrozen(EVIDENCE_SPEC_FIXTURES)).toBe(true);
   });
@@ -58,6 +59,19 @@ describe("the fixture registry", () => {
       ["global-setup.ts", "study-records-history.spec.ts", "study-records-review.spec.ts", "study-records-source-compare.spec.ts", "study-records.spec.ts"],
       ["study-records", "study-records-history", "study-records-review", "study-records-source-compare"],
     ],
+    // EVIDENCE-RECORDS-001C2C-B: the rebase spec has its own fixture, alone or with the others.
+    [["global-setup.ts", "study-records-rebase.spec.ts"], ["study-records-rebase"]],
+    [
+      [
+        "global-setup.ts",
+        "study-records-history.spec.ts",
+        "study-records-rebase.spec.ts",
+        "study-records-review.spec.ts",
+        "study-records-source-compare.spec.ts",
+        "study-records.spec.ts",
+      ],
+      ["study-records", "study-records-history", "study-records-rebase", "study-records-review", "study-records-source-compare"],
+    ],
     [["auth.spec.ts", "account-deletion.spec.ts", "ai-model-settings.spec.ts"], []],
   ])("provisions for %j exactly %j", (files, fixtures) => {
     expect([...fixturesForFiles(files)].sort()).toEqual(fixtures);
@@ -68,6 +82,8 @@ describe("the fixture registry", () => {
       "study-records-unregistered.spec.ts",
       "study-records-history-extra.spec.ts",
       "study-records-source-compare-extra.spec.ts",
+      "study-records-rebase-extra.spec.ts",
+      "evidence/study-records-rebase.spec.ts",
       "evidence/study-records-history.spec.ts",
       "evidence/study-records-source-compare.spec.ts",
       "evidence/study-records.spec.ts",

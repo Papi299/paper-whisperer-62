@@ -457,6 +457,31 @@ describe("what is never sent", () => {
     expect(rebaseCalls()).toEqual([]);
   });
 
+  it.each([
+    ["a link change", "evidence_set_link", false, async (rendered: Rendered) => rendered.result.current.changeLinkStatus(PAPER_ID, "mark_provisional")],
+    ["a deletion", "evidence_delete_study", false, async (rendered: Rendered) => rendered.result.current.deleteStudy()],
+    ["a save of the study details", "evidence_update_study", true, async (rendered: Rendered) => rendered.result.current.runSave()],
+  ] as const)("nothing while %s is in flight, nor while its outcome is unknown", async (_label, fn, edited, start) => {
+    const rendered = renderEditor();
+    if (edited) await edit(rendered, (draft) => updateHeader(draft, { notes: "Saved" }));
+    const gate = deferred<EvidenceRpcResponse | "throw">();
+    answer = (call) => (call.fn === fn ? gate.promise : rebased(call));
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = start(rendered);
+    });
+    await waitFor(() => expect(calls.map((call) => call.fn)).toContain(fn));
+    expect(rendered.result.current.sourceUpdateHold).toBe("busy");
+    expect(await confirm(rendered)).toEqual({ kind: "not_sent" });
+    await act(async () => {
+      gate.settle("throw");
+      await pending;
+    });
+    expect(rendered.result.current.sourceUpdateHold).toBe("unresolved");
+    expect(await confirm(rendered)).toEqual({ kind: "not_sent" });
+    expect(rebaseCalls()).toEqual([]);
+  });
+
   it("nothing while a save's outcome is unknown", async () => {
     const rendered = renderEditor();
     answer = (call) => (call.fn === "evidence_rebase_source" ? rebased(call) : "throw");
